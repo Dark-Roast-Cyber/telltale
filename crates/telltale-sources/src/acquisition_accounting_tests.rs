@@ -8,7 +8,7 @@ fn options() -> AcquisitionOptions {
 }
 
 #[test]
-fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
+fn codex_developer_input_text_canonical_string_bound_quarantines_the_record() {
     use telltale_schema::observation::{JsonValue, MessageRole, ObservationBody};
     let directory = tempdir().unwrap();
     let prefix = concat!(
@@ -49,19 +49,22 @@ fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
                 );
                 assert_eq!(batch.accounting.sessions[0].counts.native_units, 3);
             } else {
-                let error = result
-                    .err()
-                    .expect("late bound failure must reject whole source");
+                // The oversized record is left out by itself; the user
+                // message before it is still acquired.
+                let batch = result.expect("late bound failure quarantines one record");
+                assert_eq!(batch.observations.len(), 1);
+                assert_eq!(batch.quarantined.len(), 1);
+                assert_eq!(batch.quarantined[0].code, "unbounded_value");
+                assert_eq!(batch.quarantined[0].source_sequence, 2);
                 assert_eq!(
-                    error,
-                    AcquisitionError::CanonicalBoundValidation {
-                        context: telltale_schema::observation::CanonicalBoundContext {
-                            category: telltale_schema::observation::CanonicalFieldCategory::MessageContentParts,
-                            dimension: telltale_schema::observation::BoundDimension::StringBytes,
-                        }
-                    }
+                    batch.quarantined[0].bound,
+                    Some(telltale_schema::observation::CanonicalBoundContext {
+                        category: telltale_schema::observation::CanonicalFieldCategory::MessageContentParts,
+                        dimension: telltale_schema::observation::BoundDimension::StringBytes,
+                    })
                 );
-                assert!(!format!("{error} {error:?}").contains(marker));
+                assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+                assert!(!format!("{:?}", batch.quarantined).contains(marker));
             }
         }
     }
@@ -217,6 +220,14 @@ fn codex_instruction_roles_preserve_order_identity_and_other_accounting() {
             ),
         ] {
             std::fs::write(&source.path, format!("{contents}\n{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"{role}\",\"content\":{content}}}}}\n")).unwrap();
+            if code == "unknown_content_block" {
+                // An unknown block quarantines its record by itself.
+                let batch = acquire_source(&source, options()).unwrap();
+                assert_eq!(batch.quarantined.len(), 1);
+                assert_eq!(batch.quarantined[0].code, code);
+                assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
+                continue;
+            }
             let error = acquire_source(&source, options())
                 .err()
                 .expect("source-atomic rejection");
@@ -238,9 +249,16 @@ fn codex_auxiliary_records() -> Vec<serde_json::Value> {
         json!({"type":"turn_context","payload":{"model":"synthetic-model","model_provider":"synthetic-provider"}}),
         json!({"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"PRIVATE reasoning"}],"content":[{"type":"reasoning_text","text":"PRIVATE reasoning"}]}}),
     ];
+    // Bookkeeping that current Codex releases write between conversation items.
+    records.extend([
+        json!({"type":"token_usage_record","payload":{"turn_id":"turn-a","response_id":"response-a","usage":{"input_tokens":1,"output_tokens":2}}}),
+        json!({"type":"compacted","payload":{"message":"PRIVATE summary","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE history"}]}]}}),
+    ]);
     for kind in [
         "task_started",
         "task_complete",
+        "turn_aborted",
+        "thread_settings_applied",
         "token_count",
         "agent_reasoning",
         "agent_reasoning_raw_content",
@@ -360,7 +378,7 @@ fn codex_auxiliary_preserves_messages_tools_ordinals_and_replay() {
                 assistant_message: 1,
                 tool_call: 1,
                 tool_result: 1,
-                other: 10
+                other: codex_auxiliary_records().len() as u64
             }
         );
         for (index, ((actual, repeated), expected)) in batch
@@ -374,7 +392,8 @@ fn codex_auxiliary_preserves_messages_tools_ordinals_and_replay() {
             assert_eq!(actual.correlation(), expected.correlation());
             assert_eq!(actual.session_id().unwrap().value(), "s");
             assert_eq!(actual.source().adapter_id(), source_id);
-            assert_eq!(actual.sequence(), Some([1, 2, 13, 14][index]));
+            let after = 3 + codex_auxiliary_records().len() as u64;
+            assert_eq!(actual.sequence(), Some([1, 2, after, after + 1][index]));
             assert_eq!(actual.observation_id(), repeated.observation_id());
             assert_eq!(actual.source(), repeated.source());
             assert_eq!(
@@ -391,7 +410,7 @@ fn codex_auxiliary_preserves_messages_tools_ordinals_and_replay() {
 }
 
 #[test]
-fn codex_auxiliary_rejects_wrong_wrappers_and_late_unknowns_atomically() {
+fn codex_auxiliary_rejects_wrong_wrappers_and_quarantines_late_unknowns() {
     use serde_json::json;
     let directory = tempdir().unwrap();
     let source = Source {
@@ -419,6 +438,9 @@ fn codex_auxiliary_rejects_wrong_wrappers_and_late_unknowns_atomically() {
         let payload = auxiliary["payload"].clone();
         rejected.extend([payload.clone(), json!({"type":"unknown_wrapper","payload":payload}), json!({"type":auxiliary["type"],"payload":{"payload":payload}}), json!({"type":if auxiliary["type"] == "event_msg" {"response_item"} else {"event_msg"},"payload":payload})]);
     }
+    // Unknown event_msg variants must quarantine by themselves, never fail
+    // the source.
+    let mut unknown_variants = Vec::new();
     for kind in [
         "exec_command_begin",
         "exec_command_end",
@@ -428,38 +450,67 @@ fn codex_auxiliary_rejects_wrong_wrappers_and_late_unknowns_atomically() {
         "turn_complete",
         "future_variant",
     ] {
-        rejected
-            .push(json!({"type":"event_msg","payload":{"type":kind,"item":{"type":"Reasoning"}}}));
+        let value = json!({"type":"event_msg","payload":{"type":kind,"item":{"type":"Reasoning"}}});
+        if kind == "item_completed" {
+            rejected.push(value);
+        } else {
+            unknown_variants.push(value);
+        }
     }
     rejected.extend([
         json!({"type":"event_msg","payload":{"type":null}}),
         json!({"type":"response_item","payload":{"type":123}}),
     ]);
-    for value in rejected {
+    let write = |value: &serde_json::Value| {
         std::fs::write(&source.path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{{\"type\":\"user\",\"content\":\"synthetic\"}}\n{accepted}\n{value}\n")).unwrap();
-        let error = acquire_source(&source, options())
-            .err()
-            .expect("whole acquisition must fail");
+    };
+    for value in unknown_variants {
+        write(&value);
+        let batch = acquire_source(&source, options())
+            .unwrap_or_else(|error| panic!("{value}: {}", error.code()));
+        assert_eq!(batch.observations.len(), 1, "{value}");
+        assert_eq!(batch.quarantined.len(), 1, "{value}");
+        assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+        assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
+    }
+    for value in rejected {
+        write(&value);
+        let result = acquire_source(&source, options());
         if value["type"] == "response_item" && value["payload"]["type"] == 123 {
-            assert_eq!(error.code(), "unsupported_record");
+            assert_eq!(result.err().unwrap().code(), "unsupported_record");
         } else if value["payload"]["type"] == "item_completed" {
             assert_eq!(
-                error.code(),
+                result.err().unwrap().code(),
                 "source_read",
                 "completed coordinates are missing"
             );
         } else {
-            assert_eq!(error.code(), "unknown_discriminator", "{value}");
+            match result {
+                // An unknown discriminator quarantines its record by itself;
+                // the user message is still acquired.
+                Ok(batch) => {
+                    assert_eq!(batch.observations.len(), 1, "{value}");
+                    assert_eq!(batch.quarantined.len(), 1, "{value}");
+                    assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+                    assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
+                }
+                // A wrong wrapper on a known type, or an untyped record, is
+                // still schema drift for the whole source.
+                Err(error) => {
+                    assert!(
+                        matches!(error.code(), "source_read" | "unsupported_record"),
+                        "{value}: {}",
+                        error.code()
+                    );
+                    assert!(!format!("{error:?}").contains("PRIVATE"));
+                }
+            }
         }
-        assert!(!format!("{error:?}").contains("PRIVATE"));
     }
     std::fs::write(&source.path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{accepted}\n{{\"type\":\"assistant\",\"content\":[{{\"type\":\"future_block\",\"text\":\"PRIVATE\"}}]}}\n")).unwrap();
-    assert!(matches!(
-        acquire_source(&source, options()),
-        Err(AcquisitionError::CanonicalMapping {
-            code: "unknown_content_block"
-        })
-    ));
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(batch.quarantined.len(), 1);
+    assert_eq!(batch.quarantined[0].code, "unknown_content_block");
 }
 
 #[test]
@@ -472,7 +523,17 @@ fn codex_auxiliary_preserves_metadata_and_session_validation() {
         kind: SourceKind::Jsonl,
         path: directory.path().join("synthetic.jsonl"),
     };
-    for auxiliary in codex_auxiliary_records() {
+    // Bookkeeping payloads are opaque: a token usage record's payload names
+    // the root session, not this thread. Their envelope is still validated.
+    let (opaque, auxiliaries): (Vec<_>, Vec<_>) = codex_auxiliary_records()
+        .into_iter()
+        .partition(|v| matches!(v["type"].as_str(), Some("token_usage_record" | "compacted")));
+    for mut value in opaque {
+        value["session_id"] = json!(42);
+        std::fs::write(&source.path, value.to_string()).unwrap();
+        assert!(acquire_source(&source, options()).is_err(), "{value}");
+    }
+    for auxiliary in auxiliaries {
         for invalid in [
             json!({"session_id":"a", "payload_session_id":"b"}),
             json!({"session_id":"a", "model":123}),
@@ -730,6 +791,7 @@ fn sqlite_accounts_suppressed_parents_selected_parts_and_unscoped_rows() {
             part_min_time_updated: Some(11),
             part_limit: 1,
             resume_high_water: None,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -845,6 +907,7 @@ fn sqlite_overlap_and_mutable_rereads_never_attest_source_replacement() {
                 part_min_time_updated: min,
                 part_limit: limit,
                 resume_high_water: None,
+                ..Default::default()
             },
         )
         .unwrap()
@@ -1468,11 +1531,17 @@ fn unscoped_native_contributions_and_private_failures() {
     let text = format!("https://PRIVATE{}", "x".repeat(4096));
     let value = serde_json::json!({"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],"sibling_context":text});
     std::fs::write(&source.path, value.to_string()).unwrap();
-    let error = acquire_source(&source, options())
-        .err()
-        .expect("oversized discarded contribution must fail");
-    assert_eq!(error, AcquisitionError::InvalidContribution);
-    assert!(!format!("{error} {error:?}").contains("PRIVATE"));
+    // Claude quarantines the record by itself, as OpenCode v2 does a row; the
+    // source is still evaluated and nothing private is reported.
+    let batch = acquire_source(&source, options()).unwrap();
+    assert!(batch.observations.is_empty());
+    assert_eq!(batch.quarantined.len(), 1);
+    assert_eq!(batch.quarantined[0].code, "invalid_native_contribution");
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 1);
+    assert!(counts.contributions.tool_calls.is_empty());
+    assert!(counts.tool_usage.is_empty());
+    assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
 }
 
 #[test]
@@ -1749,4 +1818,26 @@ fn copilot_ignored_items_cannot_attest_or_conflict_with_recognized_metadata() {
             }
         }
     }
+}
+
+#[test]
+fn codex_contribution_preflight_checks_only_tool_calls() {
+    // Only tool calls contribute activity facts, so a tool result whose name
+    // would be rejected as a contribution label must not be quarantined.
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Codex,
+        source_id: "codex.sessions".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic.jsonl"),
+    };
+    let message = serde_json::json!({"type":"tool","name":"shell\u{7}","state":{"status":"completed","output":"synthetic"}});
+    std::fs::write(
+        &source.path,
+        format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{message}\n"),
+    )
+    .unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(batch.quarantined.len(), 0);
+    assert_eq!(batch.observations.len(), 1);
 }

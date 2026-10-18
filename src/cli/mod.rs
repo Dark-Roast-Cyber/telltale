@@ -177,6 +177,24 @@ struct ScanCommandArgs {
     /// Deterministically cap discovered sources after client filtering.
     #[arg(long, value_parser = parse_nonzero_usize)]
     max_sources: Option<usize>,
+
+    /// Forensic pass over each session store's whole history. OpenCode v2
+    /// stores are read from their earliest message in overlapping windows,
+    /// and detections are deduplicated within this run. Scan state is neither
+    /// read nor written. Requires --once and an explicit --log-path.
+    #[arg(
+        long,
+        value_enum,
+        requires_all = ["once", "log_path"],
+        conflicts_with_all = ["backfill", "rebuild_baselines", "interval_seconds"]
+    )]
+    history: Option<HistoryScope>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum HistoryScope {
+    /// Everything the store still holds.
+    All,
 }
 
 #[derive(ClapArgs)]
@@ -1411,6 +1429,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             backfill,
             rebuild_baselines,
             max_sources,
+            history,
         }) => {
             let mut prepared = execution.prepare(SplunkCliOverrides {
                 endpoint: splunk_hec_endpoint.as_deref(),
@@ -1423,6 +1442,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scan_config = scan::ScanConfig {
                 execution: prepared.config(&runtime.value),
                 backfill,
+                history: history.is_some(),
                 rebuild_baselines,
                 max_sources,
             };

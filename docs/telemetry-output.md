@@ -225,6 +225,21 @@ otherwise ambiguous zero-detection result without exposing session content:
 - `source_processing` reports selected sources, successful parses, empty and
   failed parses, the number of normalized records, and fixed counts for user,
   assistant, tool-call, tool-result, session-metadata, and other records.
+  `evaluated_window_count` counts evaluated windows; it exceeds the parsed
+  source count when a backlog was drained in several windows.
+  `incomplete_window_source_count` counts sources whose last evaluated window
+  was still cut when the scan stopped draining; the next scan continues the
+  backlog. A `--history all` scan adds `"history": "all"`.
+  `quarantined_unit_count` counts native units excluded for an oversized or
+  invalid value or for exceeding evaluation capacity, once each even when an
+  overlapping window re-reads them, and `quarantined_units` lists up to 1,000
+  of them as `{source,
+  session_id, native_id, source_sequence, code, bound_category,
+  bound_dimension}`, where `code` is `unbounded_value`,
+  `invalid_native_contribution`, `invalid_body` (a value the canonical body
+  cannot hold, such as a requested tool name with a line break),
+  `oversized_native_cell` or `evaluation_capacity_exceeded`. These are coordinates only, never content. Quarantine makes
+  `selected_source_coverage` `partial`.
   Development builds after RC1 additionally report
   `evaluation_complete_source_count`, `visibility_limited_source_count`,
   `accounting_complete_source_count`, and `accounting_partial_source_count`.
@@ -326,7 +341,18 @@ Common event types include:
 - `scanner_error`: source-acquisition or scan errors that should be visible to operators.
 - `operational_alert`: operator-facing threshold and delivery alerts, including
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
-  Elastic bulk) could not be delivered to after retries.
+  Elastic bulk) could not be delivered to after retries, and
+  `alert_type=source_parse_outage` (check name `operational_alert`) once per
+  client when a full scan selected sources for that client and every one failed
+  processing (acquisition, parsing, evaluation or a later stage).
+  That client is unmonitored, so the alert is a `warning`; each per-source
+  `scanner_error` stays `informational`, as Event 3.0 fixes that family's
+  severity. Targeted (watch) scans see only changed sources and do not raise it.
+  State records the outage, so an unchanged outage alerts once. A full scan
+  in which one of the client's sources processes successfully clears it, so a
+  recurrence alerts again.
+  `--backfill` re-emits all events, so each full backfill scan repeats the
+  alert while the outage lasts.
 - `correlation`: cross-session patterns built from emitted telemetry.
 - `process_chain`: process-relationship detections with risk attribution and a
   terminally sanitized `process` context.

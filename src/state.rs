@@ -58,6 +58,11 @@ pub struct SqliteIngestionCursor {
     pub table: String,
     pub last_time_updated: i64,
     pub observed_at_unix_ms: u64,
+    /// The last read ended a cut OpenCode v2 window at `last_time_updated`:
+    /// continue strictly after it, without the overlap, until a window
+    /// completes. Absent in state written before rolling windows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub draining: bool,
 }
 
 pub use telltale_schema::source::SourceInventoryChangeSummary;
@@ -215,6 +220,20 @@ impl ScanState {
         true
     }
 
+    /// Records that a full scan saw `client` lose every source. True when the
+    /// outage is new: it stays recorded, and quiet, until a full scan sees the
+    /// client process a source successfully, so a recurrence after recovery
+    /// alerts again.
+    pub fn enter_source_outage(&mut self, client: &str) -> bool {
+        self.seen_detection_fingerprints
+            .insert(source_outage_fingerprint(client))
+    }
+
+    pub fn clear_source_outage(&mut self, client: &str) {
+        self.seen_detection_fingerprints
+            .remove(&source_outage_fingerprint(client));
+    }
+
     #[cfg(test)]
     fn replace_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
         self.baseline_snapshots = BaselineSnapshotStore {
@@ -357,6 +376,12 @@ impl ScanState {
             .map(|cursor| cursor.last_time_updated)
     }
 
+    pub fn sqlite_ingestion_cursor_draining(&self, source: &Source, table: &str) -> bool {
+        self.sqlite_ingestion_cursors
+            .get(&sqlite_ingestion_cursor_key(source, table))
+            .is_some_and(|cursor| cursor.draining)
+    }
+
     pub fn observe_sqlite_ingestion_cursor(
         &mut self,
         source: &Source,
@@ -371,8 +396,51 @@ impl ScanState {
             .map_or(last_time_updated, |prior| {
                 last_time_updated.max(prior.last_time_updated)
             });
+        self.insert_sqlite_ingestion_cursor(
+            source,
+            table,
+            last_time_updated,
+            observed_at_unix_ms,
+            false,
+        );
+    }
+
+    /// Record the end of a cut window; the next read continues strictly after
+    /// it, without the overlap. A window that began inside the overlap can end
+    /// before the prior high-water, whose rows were already evaluated, so the
+    /// position never moves backwards.
+    pub fn observe_sqlite_ingestion_drain(
+        &mut self,
+        source: &Source,
+        table: &str,
+        last_time_updated: i64,
+        observed_at_unix_ms: u64,
+    ) {
+        let last_time_updated = self
+            .sqlite_ingestion_cursors
+            .get(&sqlite_ingestion_cursor_key(source, table))
+            .map_or(last_time_updated, |prior| {
+                last_time_updated.max(prior.last_time_updated)
+            });
+        self.insert_sqlite_ingestion_cursor(
+            source,
+            table,
+            last_time_updated,
+            observed_at_unix_ms,
+            true,
+        );
+    }
+
+    fn insert_sqlite_ingestion_cursor(
+        &mut self,
+        source: &Source,
+        table: &str,
+        last_time_updated: i64,
+        observed_at_unix_ms: u64,
+        draining: bool,
+    ) {
         self.sqlite_ingestion_cursors.insert(
-            key,
+            sqlite_ingestion_cursor_key(source, table),
             SqliteIngestionCursor {
                 client: source.client.as_str().to_string(),
                 source_id: source.source_id.clone(),
@@ -380,6 +448,7 @@ impl ScanState {
                 table: table.to_string(),
                 last_time_updated,
                 observed_at_unix_ms,
+                draining,
             },
         );
     }
@@ -623,6 +692,7 @@ fn validate_state_families(
                     "table",
                     "last_time_updated",
                     "observed_at_unix_ms",
+                    "draining",
                 ],
             )?;
             if native {
@@ -1051,6 +1121,15 @@ pub fn source_fingerprint(source: &Source) -> String {
         }
     }
     format!("{:x}", hasher.finalize())
+}
+
+/// Kept among the detection fingerprints, so outage tracking needs no state
+/// schema change; the prefix keeps it apart from any event fingerprint.
+fn source_outage_fingerprint(client: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("telltale:source_parse_outage:{client}").as_bytes())
+    )
 }
 
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {

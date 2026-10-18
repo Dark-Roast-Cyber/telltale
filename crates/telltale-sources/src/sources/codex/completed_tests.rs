@@ -100,8 +100,16 @@ fn completed_rejects_late_wrong_shapes_and_ownership_atomically() {
     each(|source| {
         let good = completed("AgentMessage", "a");
         let mut invalid = Vec::new();
+        // Well-owned items this adapter cannot map are quarantined by
+        // themselves; coordinates and wrappers stay whole-source integrity.
+        let mut quarantined = Vec::new();
         for kind in ["agent_message", "Plan", "Future"] {
-            invalid.push(completed(kind, "bad"));
+            quarantined.push((completed(kind, "bad"), "unknown_discriminator"));
+        }
+        for kind in ["McpToolCall", "FileChange", "Extension"] {
+            let mut v = completed(kind, "bad");
+            v["payload"]["item"]["arguments"] = json!({"query":"PRIVATE"});
+            quarantined.push((v, "unsupported_completed_item"));
         }
         for wrapper in ["response_item", "unknown"] {
             let mut v = good.clone();
@@ -136,7 +144,13 @@ fn completed_rejects_late_wrong_shapes_and_ownership_atomically() {
                     _ => &mut v["payload"]["item"],
                 };
                 at[key] = json!("poison");
-                invalid.push(v);
+                if level == 1 && key == "thread_id" {
+                    // A consistent item of another thread, as a parent's
+                    // rollout repeats its subagent's items.
+                    quarantined.push((v, "foreign_thread_item"));
+                } else {
+                    invalid.push(v);
+                }
             }
         }
         for key in ["thread_id", "turn_id"] {
@@ -152,19 +166,19 @@ fn completed_rejects_late_wrong_shapes_and_ownership_atomically() {
         invalid.push(missing_item_id);
         let mut mismatch = good.clone();
         mismatch["payload"]["thread_id"] = json!("other");
-        invalid.push(mismatch);
+        quarantined.push((mismatch, "foreign_thread_item"));
         let mut user = completed("UserMessage", "u");
         user["payload"]["item"]["content"] =
             json!([{"type":"text","text":"ok"},{"type":"image","image_url":"PRIVATE"}]);
-        invalid.push(user);
+        quarantined.push((user, "unknown_content_block"));
         for kind in ["audio", "local_image", "skill", "Future", "Text"] {
             let mut user = completed("UserMessage", "u");
             user["payload"]["item"]["content"] = json!([{"type":kind,"text":"PRIVATE"}]);
-            invalid.push(user);
+            quarantined.push((user, "unknown_content_block"));
         }
         let mut wrong = good.clone();
         wrong["payload"]["item"]["content"] = json!([{"type":"text","text":"PRIVATE"}]);
-        invalid.push(wrong);
+        quarantined.push((wrong, "unknown_content_block"));
         let mut ordinal = good.clone();
         ordinal["ordinal"] = json!(100);
         invalid.push(ordinal);
@@ -176,6 +190,16 @@ fn completed_rejects_late_wrong_shapes_and_ownership_atomically() {
                 .err()
                 .expect("late whole-source rejection");
             assert!(!format!("{error:?} {error}").contains("PRIVATE"));
+        }
+        for (bad, code) in quarantined {
+            let batch = acquire(source, &[meta(), good.clone(), bad]).unwrap();
+            assert_eq!(batch.observations.len(), 1, "{code}");
+            assert_eq!(batch.quarantined.len(), 1, "{code}");
+            assert_eq!(batch.quarantined[0].code, code);
+            assert_eq!(batch.quarantined[0].source_sequence, 2);
+            assert_eq!(batch.quarantined[0].session_id.as_deref(), Some("child"));
+            assert!(["bad", "u", "a"].contains(&batch.quarantined[0].native_id.as_str()));
+            assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
         }
     });
 }
@@ -260,7 +284,13 @@ fn completed_command_terminal_structured_and_not_invocation() {
                     o.facets()["resource.path"].value(),
                     &JsonValue::string("/synthetic")
                 );
-                assert!(t.result().is_some());
+                // The output is the direct result; the exit code its own fact.
+                assert_eq!(t.result(), output.map(JsonValue::string).as_ref());
+                assert_eq!(t.exit_code(), Some(-1));
+                assert_eq!(
+                    o.fact_metadata()["tool.exit_code"].provenance(),
+                    telltale_schema::observation::FactProvenance::Reported
+                );
             }
         }
         let mut bad = completed("CommandExecution", "call-a");
@@ -396,21 +426,42 @@ fn completed_tool_bounds_missing_values_and_separate_stages() {
             let ObservationBody::Tool(t) = batch.observations[0].body() else {
                 panic!("tool")
             };
-            assert_eq!(
-                t.result(),
-                Some(&JsonValue::object([("exit_code".into(), JsonValue::Integer(exit))]).unwrap())
-            );
+            assert_eq!(t.result(), None);
+            assert_eq!(t.exit_code(), Some(exit));
         }
         let mut null = command(json!(["echo"]));
         null["payload"]["item"]["exit_code"] = Value::Null;
         null["payload"]["item"]["aggregated_output"] = Value::Null;
         assert!(acquire(source, &[meta(), null]).unwrap().observations.len() == 1);
-        for argv in [
-            json!(["x".repeat(4097)]),
-            json!(vec!["x".repeat(4096); 5]),
-            json!("echo joined"),
-            json!([42]),
-        ] {
+        // Command output past the ordinary 4 KB string bound is a direct
+        // result with the tool-result text budget; past that budget the
+        // record alone is quarantined.
+        for (bytes, kept) in [(20_000, true), (65_537, false)] {
+            let mut v = command(json!(["echo"]));
+            v["payload"]["item"]["aggregated_output"] = json!("x".repeat(bytes));
+            let batch = acquire(source, &[meta(), completed("AgentMessage", "valid"), v]).unwrap();
+            assert_eq!(batch.observations.len(), if kept { 2 } else { 1 });
+            assert_eq!(batch.quarantined.len(), usize::from(!kept));
+            if kept {
+                let ObservationBody::Tool(t) = batch.observations[1].body() else {
+                    panic!("tool")
+                };
+                assert_eq!(t.result(), Some(&JsonValue::string("x".repeat(bytes))));
+            } else {
+                assert_eq!(batch.quarantined[0].code, "unbounded_value");
+                assert_eq!(batch.quarantined[0].native_id, "call-a");
+            }
+        }
+        for argv in [json!(["x".repeat(4097)]), json!(vec!["x".repeat(4096); 5])] {
+            let batch = acquire(
+                source,
+                &[meta(), completed("AgentMessage", "valid"), command(argv)],
+            )
+            .unwrap();
+            assert_eq!(batch.observations.len(), 1);
+            assert_eq!(batch.quarantined[0].code, "unbounded_value");
+        }
+        for argv in [json!("echo joined"), json!([42])] {
             assert!(
                 acquire(
                     source,
@@ -971,21 +1022,48 @@ fn completed_world_state_rejects_wrong_shapes_and_late_failures_atomically() {
             }
         }
         invalid.push(good["payload"].clone());
+        // Records whose discriminator is unknown, rather than a wrong
+        // world-state shape.
+        let mut unknown = Vec::new();
         for wrapper in ["event_msg", "response_item", "unknown"] {
             let mut bad = good.clone();
             bad["type"] = json!(wrapper);
-            invalid.push(bad);
-            invalid.push(json!({"type":wrapper,"payload":good}));
+            if wrapper == "response_item" {
+                invalid.push(bad);
+            } else {
+                unknown.push(bad);
+            }
+            unknown.push(json!({"type":wrapper,"payload":good}));
         }
         invalid.push(json!({"type":"world_state","payload":{"payload":{"full":true,"state":{}}}}));
-        for bad in invalid {
-            let error = acquire(
+        let cases = invalid
+            .into_iter()
+            .map(|bad| (bad, false))
+            .chain(unknown.into_iter().map(|bad| (bad, true)));
+        for (bad, quarantines) in cases {
+            // A wrong world-state shape fails the source; a record whose
+            // discriminator is unknown is quarantined by itself. Neither is
+            // ever projected.
+            let label = bad.to_string();
+            match acquire(
                 source,
                 &[meta(), good.clone(), completed("UserMessage", "u"), bad],
-            )
-            .err()
-            .expect("late unsupported world state must reject source");
-            assert!(!format!("{error:?} {error}").contains("PRIVATE-WORLD"));
+            ) {
+                Err(error) => {
+                    assert!(!quarantines, "{label}: {}", error.code());
+                    assert!(!format!("{error:?} {error}").contains("PRIVATE-WORLD"));
+                }
+                Ok(batch) => {
+                    assert!(quarantines, "{label}");
+                    assert_eq!(batch.observations.len(), 1);
+                    assert_eq!(batch.quarantined.len(), 1);
+                    assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+                    assert!(
+                        !format!("{:?} {:?}", batch.observations, batch.quarantined)
+                            .contains("PRIVATE-WORLD")
+                    );
+                }
+            }
         }
         let mut ordinal = vec![meta(), good.clone(), completed("UserMessage", "u")];
         for (index, value) in ordinal.iter_mut().enumerate() {
@@ -1001,12 +1079,18 @@ fn completed_world_state_rejects_wrong_shapes_and_late_failures_atomically() {
             bad[0]["payload"][key] = json!(0);
             assert!(acquire(source, &bad).is_err());
         }
+        // A late unknown event is quarantined by itself, in ordinal mode at
+        // its native ordinal.
         let mut unknown =
             json!({"type":"event_msg","payload":{"type":"future_variant"},"ordinal":3});
         ordinal.push(unknown.clone());
-        assert!(acquire(source, &ordinal).is_err());
+        let batch = acquire(source, &ordinal).unwrap();
+        assert_eq!(batch.quarantined.len(), 1);
+        assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+        assert_eq!(batch.quarantined[0].source_sequence, 3);
         unknown.as_object_mut().unwrap().remove("ordinal");
-        assert!(acquire(source, &[meta(), good, unknown]).is_err());
+        let batch = acquire(source, &[meta(), good, unknown]).unwrap();
+        assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
     });
 }
 

@@ -745,16 +745,18 @@ fn investigation_failure_reasons_are_private_and_stateless() {
     for (payload, expected) in [
         (
             "{PRIVATE_PARSE_CANARY",
-            SourceUnavailableReason::MalformedSource,
+            InvestigationResult::SourceUnavailable(SourceUnavailableReason::MalformedSource),
         ),
+        // An unknown Codex record is quarantined by itself, so the source
+        // parses and the session has nothing left to show.
         (
             r#"{"type":"PRIVATE_DISCRIMINATOR_CANARY","session_id":"synthetic-session"}"#,
-            SourceUnavailableReason::MalformedSource,
+            InvestigationResult::SessionUnavailable(SessionUnavailableReason::NoTimeline),
         ),
     ] {
         fs::write(&source.path, payload).unwrap();
         let result = backend.investigate(&input);
-        assert_eq!(result, InvestigationResult::SourceUnavailable(expected));
+        assert_eq!(result, expected);
         let public = format!("{result:?} {}", result.reason_code().unwrap());
         assert!(!public.contains("PRIVATE_"));
         assert!(!public.contains(dir.path().to_str().unwrap()));

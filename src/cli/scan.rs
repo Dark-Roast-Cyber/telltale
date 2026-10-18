@@ -38,6 +38,9 @@ use telltale_schema::source::Source;
 use telltale_sources::acquisition::OpenCodeSqliteReadOptions;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
+/// OpenCode v2 progress uses its own cursor key, so a legacy part watermark
+/// never resumes, regress-checks or skips `session_message` history.
+const OPENCODE_SQLITE_SESSION_MESSAGE_TABLE: &str = "session_message";
 
 #[cfg(test)]
 mod activation_tests;
@@ -88,6 +91,9 @@ pub(crate) struct ScanExecutionConfig<'a> {
 pub(crate) struct ScanConfig<'a> {
     pub(crate) execution: ScanExecutionConfig<'a>,
     pub(crate) backfill: bool,
+    /// Forensic history pass: every OpenCode v2 message from the earliest,
+    /// deduplicated within this run only. Scan state is never read or written.
+    pub(crate) history: bool,
     pub(crate) rebuild_baselines: bool,
     pub(crate) max_sources: Option<usize>,
 }
@@ -232,7 +238,9 @@ fn run_scan_for_platform(
     } else {
         Some((sources.clone(), source_discovery.clone()))
     };
-    let state_lock = if config.execution.dry_run {
+    // A history pass never touches scan state, so it needs no lock and can
+    // run beside a routine scanner.
+    let state_lock = if config.execution.dry_run || config.history {
         None
     } else {
         Some(StateLock::acquire(config.execution.state_path)?)
@@ -259,7 +267,11 @@ fn run_scan_for_platform(
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.execution.allowlist_path)?;
-    let mut state = ScanState::load_snapshot(config.execution.state_path)?;
+    let mut state = if config.history {
+        ScanState::default()
+    } else {
+        ScanState::load_snapshot(config.execution.state_path)?
+    };
     let state_probe = match save_policy {
         StateSavePolicy::Always => None,
         StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),
@@ -269,6 +281,7 @@ fn run_scan_for_platform(
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
     let mut install_inventory_event = None;
     if config.execution.clients.is_empty()
+        && !config.history
         && let Some(interval_seconds) = install_inventory_interval_seconds
         && install_inventory_due(
             state.install_inventory.as_ref(),
@@ -305,6 +318,7 @@ fn run_scan_for_platform(
                     mcp_servers: &mcp_scan.servers,
                     dry_run: config.execution.dry_run,
                     backfill: config.backfill,
+                    history: config.history,
                     baseline_deviation: BaselineDeviationConfig {
                         enabled: config.execution.emit_activity
                             && config.execution.baseline_deviation_scoring,
@@ -323,6 +337,18 @@ fn run_scan_for_platform(
         })
         .collect::<Vec<_>>();
     let source_processing = source_processing_accounting(&processed_sources)?;
+    // Targeted scans see only changed sources, so only a full scan can say a
+    // client lost every source.
+    let parse_outcomes = if targeted {
+        Vec::new()
+    } else {
+        client_parse_outcomes(
+            sources
+                .iter()
+                .zip(&processed_sources)
+                .map(|(source, result)| (source.client, result.accounting.is_empty())),
+        )
+    };
     let policy_accounting = compute_policy_match_accounting(
         policy_active,
         pre_policy_rules.as_ref().is_some_and(Result::is_ok),
@@ -332,15 +358,20 @@ fn run_scan_for_platform(
     let mut detections = Vec::new();
     let mut rebuild = config.rebuild_baselines;
     for (source, result) in sources.iter().zip(processed_sources) {
-        if let Some(last_time_updated) =
-            result.sqlite_progress_candidate(config.execution.dry_run, config.backfill)
-        {
-            state.observe_sqlite_ingestion_cursor(
+        match result.sqlite_progress_cursor(config.execution.dry_run, config.backfill) {
+            Some((table, last_time_updated, true)) => state.observe_sqlite_ingestion_drain(
                 source,
-                OPENCODE_SQLITE_PART_TABLE,
+                table,
                 last_time_updated,
                 observed_at_unix_ms,
-            );
+            ),
+            Some((table, last_time_updated, false)) => state.observe_sqlite_ingestion_cursor(
+                source,
+                table,
+                last_time_updated,
+                observed_at_unix_ms,
+            ),
+            None => {}
         }
         if let BaselineReplacement::Replace(summaries) = result.baseline_replacement {
             state.record_baseline_source_contribution(
@@ -389,8 +420,9 @@ fn run_scan_for_platform(
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     // Targeted scans see only a slice of the source inventory; comparing that
     // slice against prior observations would misreport every unscanned source
-    // as removed, so inventory-change tracking is left to full scans.
-    let source_inventory_change = if targeted {
+    // as removed, so inventory-change tracking is left to full scans. A
+    // history scan has no prior state and would report a baseline every run.
+    let source_inventory_change = if targeted || config.history {
         None
     } else {
         Some(state.source_inventory_change_summary(&sources))
@@ -438,12 +470,26 @@ fn run_scan_for_platform(
     );
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
+    // An outage alerts when it starts, stays quiet while unchanged, and alerts
+    // again if it recurs after a full scan saw one of the client's sources
+    // process successfully.
+    let mut outage_alerts = Vec::new();
+    for &(client, selected_sources, all_failed) in &parse_outcomes {
+        if !all_failed {
+            state.clear_source_outage(client.as_str());
+        } else if state.enter_source_outage(client.as_str()) || config.backfill {
+            outage_alerts.push(source_parse_outage_alert(client, selected_sources));
+        }
+    }
+    let outage_alert_emitted = !outage_alerts.is_empty();
+    emitted_events.extend(outage_alerts);
     emitted_events.extend(selected.events);
 
     let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
         || selected.scanner_error_emitted
+        || outage_alert_emitted
         || has_operational_alerts;
     let emitted_count = emitted_events.len() as u64;
     let health = health_event_with_metadata(HealthEventInput {
@@ -469,7 +515,7 @@ fn run_scan_for_platform(
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
     let delivery_posture = config.execution.sinks.delivery_posture();
-    let should_save = if config.execution.dry_run {
+    let should_save = if config.execution.dry_run || config.history {
         false
     } else {
         match &state_probe {
@@ -483,17 +529,19 @@ fn run_scan_for_platform(
         None
     };
     if !config.execution.dry_run {
-        let state_lock = state_lock
-            .as_ref()
-            .ok_or("state lock missing before durable delivery")?;
-        state_lock.verify()?;
+        let verify_lock = || match &state_lock {
+            Some(lock) => lock.verify(),
+            None if config.history => Ok(()),
+            None => Err("state lock missing before durable delivery".into()),
+        };
+        verify_lock()?;
         if config.execution.sinks.has_persistent_replay() {
             sink_failures = config
                 .execution
                 .sinks
                 .persist_for_durable_replay_with_failures(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
-                state_lock.verify()?;
+                verify_lock()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
             sink_failures.extend(config.execution.sinks.deliver_durable()?);
@@ -506,7 +554,7 @@ fn run_scan_for_platform(
         } else {
             sink_failures = config.execution.sinks.deliver(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
-                state_lock.verify()?;
+                verify_lock()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
         }
@@ -566,6 +614,10 @@ fn run_scan_for_platform(
         effective_configuration: &effective_configuration,
         durable_health: config.execution.sinks.durable_health_json(),
     });
+    let mut summary = summary;
+    if config.history {
+        summary["history"] = "all".into();
+    }
     println!("{}", serde_json::to_string(&summary)?);
     Ok(ScanRunResult {
         full_scan_discovery,
@@ -597,6 +649,37 @@ fn scanner_health_alerts(
         }));
     }
     alerts
+}
+
+/// Per client: the selected source count and whether every selected source
+/// failed processing. Per-source `scanner_error` stays `informational` under
+/// the frozen Event 3.0 contract; losing every source of a client is a
+/// monitoring outage and is raised per client as a `warning` operational alert.
+fn client_parse_outcomes(
+    results: impl IntoIterator<Item = (ClientId, bool)>,
+) -> Vec<(ClientId, usize, bool)> {
+    let mut per_client = BTreeMap::<&'static str, (ClientId, usize, bool)>::new();
+    for (client, failed) in results {
+        let entry = per_client
+            .entry(client.as_str())
+            .or_insert((client, 0, true));
+        entry.1 += 1;
+        entry.2 &= failed;
+    }
+    per_client.into_values().collect()
+}
+
+fn source_parse_outage_alert(client: ClientId, selected: usize) -> Event {
+    operational_alert_event(OperationalAlertInput {
+        alert_type: "source_parse_outage".to_string(),
+        threshold: "min_processed_sources_per_client=1".to_string(),
+        actual_value: format!(
+            "client={}; selected_sources={selected}; processed_sources=0",
+            client.as_str()
+        ),
+        scan_duration_ms: None,
+        scanner_error_count: None,
+    })
 }
 
 struct SelectedSourceEvents {
@@ -729,7 +812,20 @@ struct SourceProcessingAccounting {
     accounting_complete_source_count: usize,
     accounting_partial_source_count: usize,
     failures: BTreeMap<SourceFailureCategory, usize>,
+    quarantined_unit_count: usize,
+    /// Sources whose last evaluated window was still cut when the scan
+    /// stopped draining, at the per-scan window limit or a failed window;
+    /// the next scan continues from the advanced cursor.
+    incomplete_window_source_count: usize,
+    /// Windows evaluated across all sources; above the parsed source count
+    /// when a backlog was drained in several windows.
+    evaluated_window_count: usize,
+    /// Coordinates only, never content; listed up to a fixed bound.
+    quarantined_units: Vec<serde_json::Value>,
 }
+
+/// Quarantined units listed in one summary; the count is always complete.
+const MAX_REPORTED_QUARANTINED_UNITS: usize = 1_000;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct SourceFailureCategory {
@@ -774,6 +870,29 @@ fn source_processing_accounting(
             }
             None => {}
         }
+        if matches!(
+            result.progress,
+            telltale_sources::acquisition::AcquisitionProgress::OpenCodeSessionMessages {
+                window_complete: false,
+                ..
+            }
+        ) {
+            accounting.incomplete_window_source_count += 1;
+        }
+        for (source_id, unit) in &result.quarantined {
+            accounting.quarantined_unit_count += 1;
+            if accounting.quarantined_units.len() < MAX_REPORTED_QUARANTINED_UNITS {
+                accounting.quarantined_units.push(serde_json::json!({
+                    "source": source_id,
+                    "session_id": unit.session_id,
+                    "native_id": unit.native_id,
+                    "source_sequence": unit.source_sequence,
+                    "code": unit.code,
+                    "bound_category": unit.bound.map(|bound| format!("{:?}", bound.category)),
+                    "bound_dimension": unit.bound.map(|bound| format!("{:?}", bound.dimension)),
+                }));
+            }
+        }
         if let Some(failure) = &result.failure {
             let context = failure.acquisition.and_then(|error| error.bound_context());
             let key = SourceFailureCategory {
@@ -784,51 +903,56 @@ fn source_processing_accounting(
             };
             *accounting.failures.entry(key).or_default() += 1;
         }
-        match &result.accounting {
-            Some(source) => {
-                match source.coverage {
-                    AccountingCoverage::CompleteSource => {
-                        accounting.accounting_complete_source_count += 1
-                    }
-                    AccountingCoverage::PartialSource => {
-                        accounting.accounting_partial_source_count += 1
-                    }
-                }
-                accounting.parse_success_source_count += 1;
-                let prior_record_count = accounting.parsed_record_count;
-                for counts in source
-                    .sessions
-                    .iter()
-                    .map(|session| &session.counts)
-                    .chain(std::iter::once(&source.unscoped))
-                {
-                    let counts = &counts.record_counts;
-                    for (kind, count) in [
-                        ("user_message", counts.user_message),
-                        ("assistant_message", counts.assistant_message),
-                        ("tool_call", counts.tool_call),
-                        ("tool_result", counts.tool_result),
-                        ("session_meta", counts.session_meta),
-                        ("other", counts.other),
-                    ] {
-                        accounting.parsed_record_count = accounting
-                            .parsed_record_count
-                            .checked_add(count)
-                            .ok_or(RiskAccountingError::Overflow)?;
-                        let total = accounting
-                            .record_kind_counts
-                            .get_mut(kind)
-                            .expect("record kind accounting key");
-                        *total = total
-                            .checked_add(count)
-                            .ok_or(RiskAccountingError::Overflow)?;
-                    }
-                }
-                if accounting.parsed_record_count == prior_record_count {
-                    accounting.empty_source_count += 1;
+        accounting.evaluated_window_count += result.accounting.len();
+        if result.accounting.is_empty() {
+            accounting.parse_error_source_count += 1;
+            continue;
+        }
+        // A drained source is one source however many windows it took; any
+        // partial window makes its coverage partial.
+        if result
+            .accounting
+            .iter()
+            .all(|source| matches!(source.coverage, AccountingCoverage::CompleteSource))
+        {
+            accounting.accounting_complete_source_count += 1;
+        } else {
+            accounting.accounting_partial_source_count += 1;
+        }
+        accounting.parse_success_source_count += 1;
+        let prior_record_count = accounting.parsed_record_count;
+        for source in &result.accounting {
+            for counts in source
+                .sessions
+                .iter()
+                .map(|session| &session.counts)
+                .chain(std::iter::once(&source.unscoped))
+            {
+                let counts = &counts.record_counts;
+                for (kind, count) in [
+                    ("user_message", counts.user_message),
+                    ("assistant_message", counts.assistant_message),
+                    ("tool_call", counts.tool_call),
+                    ("tool_result", counts.tool_result),
+                    ("session_meta", counts.session_meta),
+                    ("other", counts.other),
+                ] {
+                    accounting.parsed_record_count = accounting
+                        .parsed_record_count
+                        .checked_add(count)
+                        .ok_or(RiskAccountingError::Overflow)?;
+                    let total = accounting
+                        .record_kind_counts
+                        .get_mut(kind)
+                        .expect("record kind accounting key");
+                    *total = total
+                        .checked_add(count)
+                        .ok_or(RiskAccountingError::Overflow)?;
                 }
             }
-            None => accounting.parse_error_source_count += 1,
+        }
+        if accounting.parsed_record_count == prior_record_count {
+            accounting.empty_source_count += 1;
         }
     }
 
@@ -850,6 +974,19 @@ fn opencode_read_options_for_scan_source(
         state.sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_PART_TABLE)
     {
         options = OpenCodeSqliteReadOptions::resume_after(last_seen);
+    }
+    // The store's schema is selected in the read snapshot; each cursor applies
+    // only to its own schema, and a missing one means a bootstrap read.
+    if let Some(last_seen) =
+        state.sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
+    {
+        options = if state
+            .sqlite_ingestion_cursor_draining(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
+        {
+            options.continue_session_messages_after(last_seen)
+        } else {
+            options.resume_session_messages_after(last_seen)
+        };
     }
     options
 }
@@ -1262,6 +1399,8 @@ impl SourceProcessingAccounting {
         if self.selected_source_count == 0 {
             "no_sources"
         } else if self.parse_error_source_count > 0
+            || self.quarantined_unit_count > 0
+            || self.incomplete_window_source_count > 0
             || self.visibility_limited_source_count > 0
             || self.accounting_partial_source_count > 0
         {
@@ -1298,6 +1437,10 @@ impl SourceProcessingAccounting {
             "accounting_partial_source_count": self.accounting_partial_source_count,
             "selected_source_coverage": self.selected_source_coverage(),
             "failures": failures,
+            "incomplete_window_source_count": self.incomplete_window_source_count,
+            "evaluated_window_count": self.evaluated_window_count,
+            "quarantined_unit_count": self.quarantined_unit_count,
+            "quarantined_units": self.quarantined_units,
         })
     }
 }
@@ -1584,6 +1727,57 @@ mod tests {
     }
 
     #[test]
+    fn source_parse_outage_alerts_only_when_every_source_of_a_client_fails() {
+        let outcomes = client_parse_outcomes([
+            (ClientId::Claude, true),
+            (ClientId::Codex, true),
+            (ClientId::Claude, true),
+            (ClientId::Codex, false),
+            (ClientId::Qwen, false),
+        ]);
+        assert_eq!(
+            outcomes,
+            vec![
+                (ClientId::Claude, 2, true),
+                (ClientId::Codex, 2, false),
+                (ClientId::Qwen, 1, false),
+            ]
+        );
+        assert!(client_parse_outcomes([]).is_empty());
+
+        // New outage alerts; unchanged stays quiet; recovery re-arms it.
+        let mut state = ScanState::default();
+        assert!(state.enter_source_outage("claude"));
+        assert!(!state.enter_source_outage("claude"));
+        assert!(state.enter_source_outage("codex"));
+        state.clear_source_outage("claude");
+        assert!(state.enter_source_outage("claude"));
+        assert!(!state.enter_source_outage("codex"));
+
+        let alert = &source_parse_outage_alert(ClientId::Claude, 2);
+        assert_eq!(alert.event_type, "operational_alert");
+        assert_eq!(alert.severity, "warning");
+        assert_eq!(alert.check_name.as_deref(), Some("operational_alert"));
+        assert_eq!(alert.status.as_deref(), Some("degraded"));
+        let evidence = |field: &str| {
+            alert
+                .evidence
+                .iter()
+                .find(|evidence| evidence.field == field)
+                .map(|evidence| evidence.redacted_value.as_str())
+        };
+        assert_eq!(evidence("alert_type"), Some("source_parse_outage"));
+        assert_eq!(
+            evidence("actual_value"),
+            Some("client=claude; selected_sources=2; processed_sources=0")
+        );
+        assert!(
+            telltale_schema::event::Event3Record::from_json(&serde_json::to_vec(alert).unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn source_event_selection_preserves_order_accounting_and_backfill_state() {
         let source = Source {
             client: ClientId::OpenCode,
@@ -1744,6 +1938,7 @@ mod tests {
         let runtime = serde_json::json!({});
         let effective_configuration = serde_json::json!({});
         let config = ScanConfig {
+            history: false,
             execution: ScanExecutionConfig {
                 root: &root,
                 log_path: &log_path,
@@ -1921,9 +2116,10 @@ mod tests {
             progress: AcquisitionProgress::None,
             completion: None,
             failure: None,
-            accounting,
+            accounting: accounting.into_iter().collect(),
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
+            quarantined: Vec::new(),
         };
         let mut nonempty = SourceAccounting::default();
         nonempty.sessions.push(SessionAccounting {

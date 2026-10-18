@@ -336,7 +336,9 @@ recovers what the command line actually states and marks what it had to guess.
 - **Neither** — for anything else the parent is left empty. A POSIX command line
   gets no invented Windows shell. Only standalone indicators can match, which is
   why the standalone set carries the weight for `curl`, `rclone`, `7z`, and
-  credential-dumping command lines.
+  credential-dumping command lines. Their Event 3.0 `process.source_process_name`
+  is `unknown`, with `source_process_inferred: true`; the field is required, and
+  an empty parent previously failed projection for the whole source.
 
 An interpreter that carries a recoverable payload is not itself reported as a
 child: its payload already describes the real children and repeats the same

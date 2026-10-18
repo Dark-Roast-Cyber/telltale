@@ -318,7 +318,8 @@ fn opencode_regressed_store_fails_closed_and_keeps_cursor() {
     let failed_log = fs::read_to_string(&log).unwrap();
     let appended = failed_log.strip_prefix(&before_log).unwrap();
     // No activity or detection from the unread store; one deduplicated
-    // scanner error, without the path or any part content.
+    // scanner error, without the path or any part content, and one
+    // outage alert because the store is the only OpenCode source.
     let appended = appended
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -332,8 +333,16 @@ fn opencode_regressed_store_fails_closed_and_keeps_cursor() {
     );
     assert!(appended.iter().all(|event| matches!(
         event["event_type"].as_str(),
-        Some("scanner_error" | "health")
+        Some("scanner_error" | "health" | "operational_alert")
     )));
+    assert_eq!(
+        appended
+            .iter()
+            .filter(|event| event["event_type"] == "operational_alert")
+            .map(|event| event["evidence"][0]["redacted_value"].clone())
+            .collect::<Vec<_>>(),
+        ["source_parse_outage"]
+    );
     assert!(!failed_log.contains("synthetic-restored"));
     assert!(!failed_log.contains(database.to_str().unwrap()));
 

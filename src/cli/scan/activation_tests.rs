@@ -80,6 +80,7 @@ impl Fixture {
         let packs = RulePackPaths::default();
         let value = serde_json::json!({});
         let config = ScanConfig {
+            history: false,
             execution: ScanExecutionConfig {
                 root: self.dir.path(),
                 log_path: &self.log,

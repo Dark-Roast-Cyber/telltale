@@ -18,7 +18,13 @@ Code-style extension IDs, and globalStorage presence. On Windows, OpenCode
 Desktop also has metadata-only executable probes under
 `~/AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe` and
 `~/AppData/Roaming/ai.opencode.desktop/cli/*/opencode-cli.exe`; these do not
-require a PATH shim or Node installation. Install inventory runs on
+require a PATH shim or Node installation. The Claude desktop app bundles
+Claude Code at `~/AppData/Roaming/Claude/claude-code/<version>/<hash>/claude.exe`,
+and the MSIX package `Claude_pzs8sxrjxfjjc` mirrors it under
+`~/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code`;
+both are probed the same way (`claude-desktop`, `claude-desktop-packaged`).
+macOS and Linux desktop bundle locations are not probed until confirmed on a
+real install. Install inventory runs on
 a configurable cadence and never reads transcript/session contents.
 
 ## Host Discovery Candidates
@@ -41,10 +47,10 @@ than by exact private path or transcript content.
 
 | Client | Source Kind | Linux candidate | macOS candidate | Windows candidate | Confidence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows unvalidated | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
+| Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows bounded live validation (2026-10-14) | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
 | Codex | `codex.archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `%CODEX_HOME%\archived_sessions` or `%USERPROFILE%\.codex\archived_sessions` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
-| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows unvalidated | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. |
+| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. When `CLAUDE_CONFIG_DIR` is set in the scanner's environment, `$CLAUDE_CONFIG_DIR/projects` is searched as well; `~/.claude/projects` stays a root because a scanner service may not share the user's environment. An explicit `--root` ignores the variable. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
 | OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | Windows platform data root plus `%XDG_DATA_HOME%\opencode\opencode.db` when set and `~/.local/share/opencode/opencode.db` | Confirmed Linux/macOS; Windows discovery/inventory live-checked | Windows checks the platform data root (`LOCALAPPDATA`, then `APPDATA`, then `~/AppData/Local`) alongside XDG candidates. Desktop v2.0.24 discovery/inventory validation and the live acquisition limit are recorded below. |
@@ -112,6 +118,29 @@ Codex adapter notes:
 - JSONL entries include `session_meta`, `turn_context`, and event payloads.
 - `session_meta.payload.source == "exec"` marks headless sessions.
 - `session_meta.payload.model_provider` and `agent_nickname` can identify provider and agent.
+- A forked thread's rollout starts with `history_base` (`thread_id`,
+  `end_ordinal_exclusive`, `end_byte_offset`) and its ordinals continue from
+  `end_ordinal_exclusive`. The parent history stays in the parent's rollout
+  and is not read again. `subagent_history_start_ordinal` is still rejected.
+- Bookkeeping records are skipped: `token_usage_record`, `compacted`,
+  `turn_context`, `world_state`, lifecycle and reasoning `event_msg` payloads
+  (including `thread_settings_applied` and `turn_aborted`), and completed
+  `Reasoning`, `ContextCompaction`, `EnteredReviewMode` and
+  `ExitedReviewMode` items.
+- Code-mode `exec` and freeform `apply_patch` string inputs get the
+  authored-text budget. An all-text `custom_tool_call_output` array is joined
+  into one direct result, and a completed command's `aggregated_output` is the
+  direct result with `exit_code` as `tool.exit_code`.
+- Completed `McpToolCall`, `FileChange` and `Extension` items are not mapped
+  yet and are quarantined by themselves (`unsupported_completed_item`). A
+  parent rollout repeats its subagents' completed items under the subagent's
+  `thread_id`; those copies are quarantined (`foreign_thread_item`), and the
+  subagent's own rollout is the one evaluated.
+- An unknown record type, completed item or content part, or a record whose
+  own values exceed a canonical bound, is quarantined by itself and reported
+  by session, item or call id, sequence and bound, never content; the rest of
+  the rollout is still evaluated and coverage is reported as partial.
+  Coordinate, ownership and wrapper errors still fail the whole source.
 
 OpenCode adapter notes:
 
@@ -125,7 +154,10 @@ OpenCode adapter notes:
   and inventory, not successful full-store live ingestion or complete history.
   Detailed evidence remains local; canonical limits were not relaxed.
 
-- Newer data lives in `opencode.db`, table `message`, with JSON in `data`.
+- `opencode.db` holds the legacy `message`/`part` tables, OpenCode v2
+  `session_v2`/`session_message`, or both after a migration. One schema is
+  read per scan, and complete v2 tables take precedence; see
+  [OpenCode live ingestion](opencode-live-ingestion.md#native-schemas).
 - SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a bounded `SourceReadError::Locked` failure instead of hanging indefinitely.
 - Per-source acquisition reads are sequential; a single slow or contended source blocks the current scan (known limitation).
 - OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.
@@ -137,6 +169,15 @@ OpenCode adapter notes:
 - Telltale needs all roles and tool records, not only assistant token-usage rows.
 
 ### OpenCode incremental saturation and recovery
+
+This section describes legacy `message`/`part` stores. OpenCode v2
+(`session_message`) stores evaluate rolling windows instead: a selection over
+the row limit or the 8 MiB retained budget is drained in overlapping windows
+within one scan (up to 64), and later scans continue any remainder. Only a
+window that cannot pass its resume point fails. For a forensic pass over a
+whole v2 store, use `telltale scan --once --history all --client opencode --log-path <file>`,
+which reads from the earliest message and never touches scan state. See
+[OpenCode live ingestion](opencode-live-ingestion.md).
 
 Current development supports source-atomic recovery of an incremental selection
 up to 25,000 text/tool parts. Queries return at most 5,000 parts per page from
@@ -190,6 +231,28 @@ Claude Code adapter notes:
 - JSONL entries commonly use top-level `type` values such as `user` and `assistant`.
 - Message payloads can live under `message.role`, `message.model`, and `message.content`.
 - `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; the adapter maps `tool_use` and `tool_result` blocks to their canonical Tool semantics.
+- The Claude desktop app's Code tab writes the same transcripts as the CLI;
+  its own `%APPDATA%\Claude\claude-code-sessions` metadata only references
+  them by `cliSessionId`.
+- Bookkeeping records between turns (`attachment`, `queue-operation`,
+  `last-prompt`, `custom-title`, `ai-title`, `agent-name`, `atis-latch`,
+  `file-history-snapshot`, `file-history-delta`, `summary`, `system`,
+  `progress`) are skipped.
+- `thinking`, `redacted_thinking`, `image`, and `document` blocks are dropped
+  from messages; reasoning text is not retained.
+- A message's `tool_use`/`tool_result` part keeps only its call id, name and
+  error state. Arguments and results are carried once, on the linked Tool
+  observation. `Bash`/`PowerShell` `command`, `Write` `content`, `Edit`
+  `old_string`/`new_string`, `NotebookEdit` `new_source` and `Task`/`Agent`
+  `prompt` get the authored-text budget, and an all-text result array is
+  joined into one direct string.
+- An unknown record type or content block, or a record whose own values
+  exceed a canonical bound, is quarantined by itself and reported by session,
+  record `uuid`, sequence and bound, never content; the rest of the
+  transcript is still evaluated and coverage is reported as partial.
+- A full scan in which every selected Claude source fails processing, at
+  acquisition, parsing, evaluation or any later stage, also emits a `warning` `operational_alert` with `alert_type=source_parse_outage`; see
+  [telemetry-output.md](telemetry-output.md).
 
 Qwen adapter notes:
 

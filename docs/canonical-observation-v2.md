@@ -50,9 +50,10 @@ source-native extraction, calls the source-owned crate-private canonical mapper,
 and returns an acquisition batch. All eight use explicit caller-owned
 `observed_at`.
 
-The OpenCode-specific `acquire_opencode_sqlite` entry point accepts a part
-minimum-update coordinate and part limit, and returns separate progress as the
-selected part-row `time_updated` high-water value. These read controls and
+The OpenCode-specific `acquire_opencode_sqlite` entry point accepts part and
+`session_message` minimum-update coordinates and limits, and returns separate
+progress as the selected legacy part-row or OpenCode v2 message-row
+`time_updated` high-water value, named by its schema. These read controls and
 progress are source-specific operational metadata, not canonical evidence,
 provenance, occurrence time, or durable state; the acquisition call does not
 persist a cursor. The other seven identities return
@@ -137,7 +138,10 @@ Schema also caps the sum of encoded semantic body-field and facet **values** at
 objects, and content-part kind/value wrappers; it excludes semantic path/facet
 labels, fact metadata, identity/provenance envelopes, and local evidence (which
 retain their independent bounds). A raw string at the text maximum can therefore
-fail aggregate validation. Recursive part validation precedes the structured
+fail aggregate validation. One exception: a `command.text` facet that repeats a
+tool's authored command exactly (its `command` argument for `shell` or `bash`,
+or `shell` arguments that are the command string) counts once toward the
+aggregate, while retained bytes count both copies. Recursive part validation precedes the structured
 partition's encoded limit; observation aggregate validation follows all field
 and facet validation. Aggregate size uses canonical JSON number spelling, while
 ordinary/local finite-float validation retains its legacy `to_string` sizing.

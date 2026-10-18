@@ -6,6 +6,36 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Fix Claude Code ingestion for current 2.1.x transcripts, including the Claude
+  desktop app's Code tab on Windows. Bookkeeping records are skipped, and
+  `thinking`/media blocks are dropped. Tool arguments and results live once on
+  the Tool observation, with the authored-text budget for Claude command, file
+  body, edit and prompt fields. Previously each of these failed the whole
+  transcript. An unknown record or block, or an oversized record, is now
+  quarantined by itself and reported without content, like OpenCode v2 rows.
+- Fix Codex ingestion for current rollouts. Previously every Codex source on a
+  Windows 11 host failed as a whole. Forked threads whose ordinals continue
+  from a parent `history_base` are now read. Bookkeeping records
+  (`token_usage_record`, `compacted`, `thread_settings_applied`,
+  `turn_aborted`, compaction and review-mode items) are skipped. Code-mode
+  `exec` scripts, text-array tool output and completed-command output get the
+  direct-text budget, and a command's exit code is its own fact. An unknown or
+  unmapped record or item, a parent's copy of a subagent item, or an oversized
+  record is now quarantined by itself and reported without content.
+- Claude install inventory recognizes the Claude desktop app's bundled Claude
+  Code (`%APPDATA%\Claude\claude-code\<version>\<hash>\claude.exe` and its MSIX
+  mirror) as metadata-only `executable` evidence. On Windows these signals
+  change the inventory hash once; the next scheduled `install_inventory` event
+  carries it.
+- `claude.projects` discovery adds `$CLAUDE_CONFIG_DIR/projects` beside
+  `~/.claude/projects` when the variable is set in the scanner's environment.
+- A full scan in which every selected source of one client fails processing
+  emits one `warning` `operational_alert` per client
+  (`alert_type=source_parse_outage`, `check_name=operational_alert`).
+  Per-source `scanner_error` stays `informational`, as the Event 3.0 contract
+  requires. Outside `--backfill`, which re-emits every scan's events, an
+  unchanged outage alerts once; after a full scan in which a source of the client
+  processes successfully, a recurrence alerts again.
 - The current-user Windows installer verifies exact Release identity,
   checksums, canonical ZIP contents, binary version and source-bound attestation.
   Binary files are separate from existing per-user Logs/State defaults.

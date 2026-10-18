@@ -711,6 +711,10 @@ fn health_constructor_normalizes_blank_policy_names_for_schema() {
     }
 }
 
+#[path = "cli/claude_code_current_format.rs"]
+mod claude_code_current_format;
+#[path = "cli/codex_current_format.rs"]
+mod codex_current_format;
 #[path = "cli/export.rs"]
 mod export;
 #[path = "cli/migration.rs"]
@@ -718,6 +722,8 @@ mod migration;
 
 #[path = "cli/opencode_large_output.rs"]
 mod opencode_large_output;
+#[path = "cli/opencode_session_message.rs"]
+mod opencode_session_message;
 #[path = "cli/opencode_window_contract.rs"]
 mod opencode_window_contract;
 #[path = "cli/provenance.rs"]

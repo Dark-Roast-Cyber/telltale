@@ -1,3 +1,6 @@
+use super::session_message::{
+    NativeSchema, OpenCodeSessionMessageExtraction, extract_session_messages, select_native_schema,
+};
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 pub(crate) use crate::acquisition::{OpenCodeSqliteReadOptions, SQLITE_PART_LIMIT};
 use crate::source_read::{SourceReadError, collect_string_values};
@@ -14,6 +17,14 @@ thread_local! {
 
 #[cfg(test)]
 pub(super) struct IncrementalPageCallbackGuard;
+
+/// Runs a test callback registered for the next incremental page boundary.
+#[cfg(test)]
+pub(super) fn run_incremental_page_callback() {
+    if let Some(callback) = AFTER_INCREMENTAL_PAGE.with(|slot| slot.borrow_mut().take()) {
+        callback();
+    }
+}
 
 #[cfg(test)]
 impl Drop for IncrementalPageCallbackGuard {
@@ -227,6 +238,23 @@ pub(crate) struct OpenCodeSqliteNativeExtraction {
     pub(crate) sqlite_part_max_time_updated: Option<i64>,
 }
 
+/// One extraction reads exactly one native schema, selected inside the read
+/// snapshot that also covers every selected row.
+#[derive(Debug)]
+pub(crate) enum OpenCodeNativeExtraction {
+    Legacy(OpenCodeSqliteNativeExtraction),
+    SessionMessages(OpenCodeSessionMessageExtraction),
+}
+
+pub(crate) fn extract_opencode_native_source(
+    source: &Source,
+    options: OpenCodeSqliteReadOptions,
+) -> Result<OpenCodeNativeExtraction, SourceReadError> {
+    extract_opencode_native_source_admitted(source, options, &mut SqliteAdmission::default())
+}
+
+/// Legacy-schema extraction for characterization tests of the retained path.
+#[cfg(test)]
 pub(crate) fn extract_sqlite_native_source(
     source: &Source,
     options: OpenCodeSqliteReadOptions,
@@ -234,18 +262,51 @@ pub(crate) fn extract_sqlite_native_source(
     extract_sqlite_native_source_admitted(source, options, &mut SqliteAdmission::default())
 }
 
+#[cfg(test)]
 fn extract_sqlite_native_source_admitted(
     source: &Source,
     options: OpenCodeSqliteReadOptions,
     admission: &mut SqliteAdmission,
 ) -> Result<OpenCodeSqliteNativeExtraction, SourceReadError> {
+    match extract_opencode_native_source_admitted(source, options, admission)? {
+        OpenCodeNativeExtraction::Legacy(extraction) => Ok(extraction),
+        OpenCodeNativeExtraction::SessionMessages(_) => {
+            panic!("legacy characterization store selected the session_message schema")
+        }
+    }
+}
+
+fn extract_opencode_native_source_admitted(
+    source: &Source,
+    options: OpenCodeSqliteReadOptions,
+    admission: &mut SqliteAdmission,
+) -> Result<OpenCodeNativeExtraction, SourceReadError> {
     let mut conn = Connection::open_with_flags(&source.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
     let snapshot = conn.transaction()?;
+    // Schema selection is the first read of the snapshot, so a concurrent
+    // migration cannot split selection from the rows it governs.
+    let extraction = match select_native_schema(&snapshot)? {
+        NativeSchema::Legacy => {
+            OpenCodeNativeExtraction::Legacy(extract_legacy_schema(&snapshot, options, admission)?)
+        }
+        NativeSchema::SessionMessages => OpenCodeNativeExtraction::SessionMessages(
+            extract_session_messages(&snapshot, options, admission)?,
+        ),
+    };
+    snapshot.commit()?;
+    Ok(extraction)
+}
+
+fn extract_legacy_schema(
+    snapshot: &Connection,
+    options: OpenCodeSqliteReadOptions,
+    admission: &mut SqliteAdmission,
+) -> Result<OpenCodeSqliteNativeExtraction, SourceReadError> {
     let mut records = Vec::new();
     let mut sqlite_part_max_time_updated = None;
 
-    let has_part_table = sqlite_table_exists(&snapshot, "part")?;
+    let has_part_table = sqlite_table_exists(snapshot, "part")?;
     if let Some(high_water) = options.resume_high_water {
         // Checked in the read snapshot before any selection: a store whose
         // newest part is older than the resume position cannot be resumed.
@@ -266,17 +327,16 @@ fn extract_sqlite_native_source_admitted(
             return Err(SourceReadError::ResumeRegressed);
         }
     }
-    let has_message_table = sqlite_table_exists(&snapshot, "message")?;
+    let has_message_table = sqlite_table_exists(snapshot, "message")?;
     if has_message_table {
-        records.extend(extract_sqlite_message_records(&snapshot, admission)?);
+        records.extend(extract_sqlite_message_records(snapshot, admission)?);
     }
     if has_part_table {
         let (part_records, max_time_updated) =
-            extract_sqlite_part_records(&snapshot, options, has_message_table, admission)?;
+            extract_sqlite_part_records(snapshot, options, has_message_table, admission)?;
         records.extend(part_records);
         sqlite_part_max_time_updated = max_time_updated;
     }
-    snapshot.commit()?;
 
     Ok(OpenCodeSqliteNativeExtraction {
         records,
@@ -284,7 +344,10 @@ fn extract_sqlite_native_source_admitted(
     })
 }
 
-fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, rusqlite::Error> {
+pub(super) fn sqlite_table_exists(
+    conn: &Connection,
+    table_name: &str,
+) -> Result<bool, rusqlite::Error> {
     conn.query_row(
         "select exists(select 1 from sqlite_master where type = 'table' and name = ?1)",
         [table_name],
@@ -382,7 +445,7 @@ fn extract_sqlite_part_records(
     Ok((records, max_time_updated))
 }
 
-fn part_read_error(detail: &'static str) -> SourceReadError {
+pub(super) fn part_read_error(detail: &'static str) -> SourceReadError {
     SourceReadError::SchemaDrift {
         client: telltale_schema::clients::ClientId::OpenCode,
         source_id: "opencode.sqlite".to_owned(),
@@ -468,9 +531,7 @@ fn extract_incremental_parts_admitted(
             return Ok((records, after.map(|key| key.0)));
         }
         #[cfg(test)]
-        if let Some(callback) = AFTER_INCREMENTAL_PAGE.with(|slot| slot.borrow_mut().take()) {
-            callback();
-        }
+        run_incremental_page_callback();
     }
 }
 
@@ -542,11 +603,11 @@ fn sqlite_time_updated(value: &Value) -> Option<i64> {
     value.get("time_updated").and_then(Value::as_i64)
 }
 
-const SQLITE_CELL_BYTES: usize = 8_388_608;
+pub(super) const SQLITE_CELL_BYTES: usize = 8_388_608;
 const SQLITE_ENVELOPE_BYTES: usize = 134_217_728;
 const SQLITE_ROWS: usize = 100_000;
 
-struct SqliteAdmission {
+pub(super) struct SqliteAdmission {
     cell_limit: usize,
     byte_limit: usize,
     row_limit: usize,
@@ -562,6 +623,17 @@ impl Default for SqliteAdmission {
             row_limit: SQLITE_ROWS,
             bytes: 0,
             rows: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+impl SqliteAdmission {
+    pub(super) fn with_limits(byte_limit: usize, row_limit: usize) -> Self {
+        Self {
+            byte_limit,
+            row_limit,
+            ..Self::default()
         }
     }
 }
@@ -611,7 +683,7 @@ impl SqliteAdmission {
     }
 }
 
-fn stream_sqlite_rows<P: rusqlite::Params>(
+pub(super) fn stream_sqlite_rows<P: rusqlite::Params>(
     stmt: &mut rusqlite::Statement<'_>,
     params: P,
     admission: &mut SqliteAdmission,
@@ -944,7 +1016,7 @@ fn part_occurrence_time(value: &Value) -> Option<String> {
         .or_else(|| source_time_field(value.get("time_created"), "created"))
 }
 
-fn source_time_field(value: Option<&Value>, object_key: &str) -> Option<String> {
+pub(super) fn source_time_field(value: Option<&Value>, object_key: &str) -> Option<String> {
     let value = value?;
     match value {
         Value::String(value) => Some(value.clone()),
@@ -1186,6 +1258,7 @@ mod admission_tests {
             part_min_time_updated: Some(10),
             part_limit: 3,
             resume_high_water: None,
+            ..Default::default()
         };
         let mut exact = budget(usize::MAX, 3);
         let acquired =
@@ -1308,6 +1381,7 @@ mod admission_tests {
                     part_min_time_updated: Some(10),
                     part_limit: 2,
                     resume_high_water: None,
+                    ..Default::default()
                 },
                 &mut SqliteAdmission {
                     cell_limit: 19,

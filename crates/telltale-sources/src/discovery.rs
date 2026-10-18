@@ -591,6 +591,12 @@ pub fn is_fixture_root(root: &Path) -> bool {
 }
 
 fn source_search_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> {
+    if source_def.id == "claude.projects" && root == Path::new(".") && !is_fixture_root(root) {
+        return claude_projects_search_roots(
+            source_search_root(root, source_def),
+            env::var_os("CLAUDE_CONFIG_DIR"),
+        );
+    }
     if is_fixture_root(root) || source_def.id != "opencode.sqlite" {
         return vec![source_search_root(root, source_def)];
     }
@@ -612,6 +618,33 @@ fn source_search_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf>
     }
     roots.sort_unstable();
     roots.dedup();
+    roots
+}
+
+/// Claude Code keeps `projects/` under `CLAUDE_CONFIG_DIR` when that is set.
+/// The default `~/.claude/projects` stays a root as well: a scanner service
+/// may not share the user's environment, and sessions written before the
+/// relocation remain there. Only environment-resolved discovery reads the
+/// variable; an explicit root is a home directory with the default layout.
+/// A relocation that names the default directory yields one root.
+fn claude_projects_search_roots(
+    default: PathBuf,
+    config_dir: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let mut roots = vec![default];
+    if let Some(config_dir) = config_dir.filter(|value| !value.is_empty()) {
+        let relocated = PathBuf::from(config_dir).join("projects");
+        let same = |left: &Path, right: &Path| {
+            left == right
+                || matches!(
+                    (fs::canonicalize(left), fs::canonicalize(right)),
+                    (Ok(left), Ok(right)) if left == right
+                )
+        };
+        if !same(&roots[0], &relocated) {
+            roots.push(relocated);
+        }
+    }
     roots
 }
 
@@ -1583,6 +1616,45 @@ mod tests {
         assert_eq!(
             source_search_root_from_context(&context, lookup("opencode.sqlite")),
             PathBuf::from("/Users/tester/Library/Application Support/opencode/opencode.db")
+        );
+    }
+
+    #[test]
+    fn claude_config_dir_adds_a_relocated_projects_root() {
+        use super::claude_projects_search_roots;
+        let temp = tempdir().unwrap();
+        let default = temp.path().join("home/.claude/projects");
+        let relocated = temp.path().join("relocated");
+
+        assert_eq!(
+            claude_projects_search_roots(default.clone(), None),
+            vec![default.clone()]
+        );
+        assert_eq!(
+            claude_projects_search_roots(default.clone(), Some("".into())),
+            vec![default.clone()]
+        );
+        assert_eq!(
+            claude_projects_search_roots(default.clone(), Some(relocated.clone().into())),
+            vec![default.clone(), relocated.join("projects")]
+        );
+        // A relocation naming the default directory, spelled differently, is one root.
+        fs::create_dir_all(&default).unwrap();
+        let alias = temp.path().join("home/.claude/../.claude");
+        assert_eq!(
+            claude_projects_search_roots(default.clone(), Some(alias.into())),
+            vec![default]
+        );
+    }
+
+    #[test]
+    fn explicit_root_ignores_claude_config_dir() {
+        let (_, def) = lookup_source("claude.projects");
+        let temp = tempdir().unwrap();
+        // Environment-independent: an explicit root never consults the variable.
+        assert_eq!(
+            super::source_search_roots(temp.path(), def),
+            vec![temp.path().join(".claude/projects")]
         );
     }
 }

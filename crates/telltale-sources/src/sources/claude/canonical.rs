@@ -8,7 +8,12 @@ use telltale_schema::observation::{
     SourceTimestamp, ToolObservation,
 };
 
-use super::native::{ClaudeContentBlock, ClaudeNativeRecord, is_known_claude_discriminator};
+use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory};
+
+use super::native::{
+    ClaudeContentBlock, ClaudeNativeRecord, is_claude_metadata_discriminator,
+    is_known_claude_discriminator,
+};
 
 #[derive(Clone)]
 pub(crate) struct ClaudeCanonicalOptions {
@@ -77,15 +82,70 @@ impl From<ObservationError> for ClaudeCanonicalError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct ClaudeProjection {
+    pub(crate) observations: Vec<CanonicalObservationV2>,
+    /// Records left out by themselves; every other record was still mapped.
+    pub(crate) quarantined: Vec<ClaudeQuarantinedRecord>,
+}
+
+/// Coordinates of a record excluded from projection, never its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaudeQuarantinedRecord {
+    pub(crate) source_sequence: u64,
+    pub(crate) code: &'static str,
+    pub(crate) bound: Option<CanonicalBoundContext>,
+}
+
+/// Map each record on its own. A record whose type or content block this
+/// adapter does not know, or whose own values exceed a canonical bound, is
+/// quarantined so one record cannot blind the whole session. Integrity
+/// failures and the source-wide retained budget still fail the source.
 pub(crate) fn project_claude_native_records(
     records: &[ClaudeNativeRecord],
     options: &ClaudeCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, ClaudeCanonicalError> {
+) -> Result<ClaudeProjection, ClaudeCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::default();
+    let mut quarantined = Vec::new();
     for record in records {
-        project_record(record, options, &mut observations)?;
+        let mut unit = crate::acquisition::CanonicalCollector::default();
+        match project_record(record, options, &mut unit) {
+            Ok(()) => {
+                for observation in unit.finish() {
+                    observations.push(observation)?;
+                }
+            }
+            Err(error) => match quarantine_code(&error) {
+                Some(code) => quarantined.push(ClaudeQuarantinedRecord {
+                    source_sequence: record.source_sequence,
+                    code,
+                    bound: match &error {
+                        ClaudeCanonicalError::Observation(error) => error.bound_context(),
+                        ClaudeCanonicalError::Mapping { .. } => None,
+                    },
+                }),
+                None => return Err(error),
+            },
+        }
     }
-    Ok(observations.finish())
+    Ok(ClaudeProjection {
+        observations: observations.finish(),
+        quarantined,
+    })
+}
+
+fn quarantine_code(error: &ClaudeCanonicalError) -> Option<&'static str> {
+    match error {
+        ClaudeCanonicalError::Mapping { code, .. }
+            if matches!(*code, "unknown_discriminator" | "unknown_content_block") =>
+        {
+            Some(code)
+        }
+        ClaudeCanonicalError::Observation(error) if error.code() == "unbounded_value" => {
+            Some("unbounded_value")
+        }
+        _ => None,
+    }
 }
 
 fn project_record(
@@ -93,15 +153,16 @@ fn project_record(
     options: &ClaudeCanonicalOptions,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
-    if record
-        .discriminator
-        .as_deref()
-        .is_some_and(|kind| !is_known_claude_discriminator(kind))
-    {
-        return Err(mapping(
-            "unknown_discriminator",
-            "explicit Claude record discriminator is not supported",
-        ));
+    if let Some(kind) = record.discriminator.as_deref() {
+        if is_claude_metadata_discriminator(kind) {
+            return Ok(());
+        }
+        if !is_known_claude_discriminator(kind) {
+            return Err(mapping(
+                "unknown_discriminator",
+                "explicit Claude record discriminator is not supported",
+            ));
+        }
     }
 
     let role = canonical_role(record)?;
@@ -133,6 +194,16 @@ fn project_record(
             "Claude content block type is not supported",
         ));
     }
+    let kept = blocks
+        .iter()
+        .filter(|block| !matches!(block, ClaudeContentBlock::Ignored))
+        .cloned()
+        .collect::<Vec<_>>();
+    if kept.is_empty() && !blocks.is_empty() {
+        // A turn of reasoning or media only has no text or tool facts.
+        return Ok(());
+    }
+    let blocks = &kept[..];
 
     let has_tool_result = blocks
         .iter()
@@ -177,7 +248,7 @@ fn project_record(
                         emit_tool(record, options, block, &mut child_ordinal, observations)?;
                     }
                 }
-                ClaudeContentBlock::Unknown => unreachable!(),
+                ClaudeContentBlock::Ignored | ClaudeContentBlock::Unknown => unreachable!(),
             }
         }
         if message_required
@@ -244,25 +315,20 @@ fn content_part(block: &ClaudeContentBlock) -> Result<ContentPart, ClaudeCanonic
                 JsonValue::try_from_source_message_text(text)?,
             ))
         }
-        ClaudeContentBlock::ToolUse {
-            id,
-            name,
-            input,
-            input_present,
-        } => {
+        // Tool parts reference their lifecycle by call id. Arguments and
+        // results live once, on the linked tool observation, so a message
+        // never repeats them under the tighter nested-value bounds.
+        ClaudeContentBlock::ToolUse { id, name, .. } => {
             let id = id.as_deref().ok_or_else(|| {
                 mapping("missing_tool_id", "tool_use block has no source call id")
             })?;
             let name = name
                 .as_deref()
                 .ok_or_else(|| mapping("missing_tool_name", "tool_use block has no tool name"))?;
-            let mut fields = vec![
+            let fields = vec![
                 ("id".to_owned(), JsonValue::string(id)),
                 ("name".to_owned(), JsonValue::string(name)),
             ];
-            if *input_present && let Some(input) = input {
-                fields.push(("input".to_owned(), value_to_json(input)?));
-            }
             Ok(ContentPart::new(
                 ContentPartKind::ToolUse,
                 JsonValue::object(fields)?,
@@ -270,9 +336,9 @@ fn content_part(block: &ClaudeContentBlock) -> Result<ContentPart, ClaudeCanonic
         }
         ClaudeContentBlock::ToolResult {
             tool_use_id,
-            content,
             is_error,
             is_error_present,
+            ..
         } => {
             let tool_use_id = tool_use_id.as_deref().ok_or_else(|| {
                 mapping("missing_tool_id", "tool_result block has no source call id")
@@ -284,9 +350,6 @@ fn content_part(block: &ClaudeContentBlock) -> Result<ContentPart, ClaudeCanonic
                 ));
             }
             let mut fields = vec![("tool_use_id".to_owned(), JsonValue::string(tool_use_id))];
-            if let Some(content) = content {
-                fields.push(("content".to_owned(), value_to_json(content)?));
-            }
             if let Some(is_error) = is_error {
                 fields.push(("is_error".to_owned(), JsonValue::Bool(*is_error)));
             }
@@ -295,7 +358,7 @@ fn content_part(block: &ClaudeContentBlock) -> Result<ContentPart, ClaudeCanonic
                 JsonValue::object(fields)?,
             ))
         }
-        ClaudeContentBlock::Unknown => Err(mapping(
+        ClaudeContentBlock::Ignored | ClaudeContentBlock::Unknown => Err(mapping(
             "unknown_content_block",
             "Claude content block type is not supported",
         )),
@@ -400,12 +463,7 @@ fn tool_body(
     block: &ClaudeContentBlock,
 ) -> Result<(ToolObservation, Vec<&'static str>, Option<String>), ClaudeCanonicalError> {
     match block {
-        ClaudeContentBlock::ToolUse {
-            id: _,
-            name,
-            input,
-            input_present: _,
-        } => {
+        ClaudeContentBlock::ToolUse { id: _, name, input } => {
             let name = name
                 .as_deref()
                 .ok_or_else(|| mapping("missing_tool_name", "tool_use block has no tool name"))?;
@@ -413,7 +471,9 @@ fn tool_body(
             let mut paths = vec!["tool.name"];
             let mut facet = None;
             if let Some(input) = input {
-                let input = value_to_json(input)?;
+                let input = JsonValue::try_from_source_tool_arguments(Some(name), input).map_err(
+                    |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
+                )?;
                 facet = resource_path(&input).map(ToOwned::to_owned);
                 body = body.with_arguments(input);
                 paths.push("tool.arguments");
@@ -435,7 +495,13 @@ fn tool_body(
             let mut body = ToolObservation::new();
             let mut paths = Vec::new();
             if let Some(content) = content {
-                body = body.with_result(value_to_json(content)?);
+                let joined = joined_text_result(content);
+                body = body.with_result(
+                    JsonValue::try_from_source_tool_result(joined.as_ref().unwrap_or(content))
+                        .map_err(|error| {
+                            error.with_bound_category(CanonicalFieldCategory::ToolResult)
+                        })?,
+                );
                 paths.push("tool.result");
             }
             if let Some(is_error) = is_error {
@@ -551,8 +617,21 @@ fn resource_path(value: &JsonValue) -> Option<&str> {
     }
 }
 
-fn value_to_json(value: &serde_json::Value) -> Result<JsonValue, ClaudeCanonicalError> {
-    Ok(JsonValue::try_from_source_value(value)?)
+/// Claude Code stores most tool output as `[{"type":"text","text":...}]`.
+/// Join an all-text result into one direct string so it gets the tool-result
+/// text budget; any other shape keeps ordinary structured conversion.
+fn joined_text_result(content: &serde_json::Value) -> Option<serde_json::Value> {
+    let items = content.as_array()?;
+    let texts = items
+        .iter()
+        .map(
+            |item| match item.get("type").and_then(serde_json::Value::as_str) {
+                Some("text") => item.get("text").and_then(serde_json::Value::as_str),
+                _ => None,
+            },
+        )
+        .collect::<Option<Vec<_>>>()?;
+    (!texts.is_empty()).then(|| serde_json::Value::String(texts.join("\n")))
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> ClaudeCanonicalError {
@@ -591,6 +670,7 @@ mod tests {
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("canonical observations")
+        .observations
     }
 
     #[test]
@@ -754,12 +834,14 @@ mod tests {
             &super::super::native::extract_claude_native_records(&source(first_path)).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         let moved = project_claude_native_records(
             &super::super::native::extract_claude_native_records(&source(second_path)).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         assert_eq!(first[0].observation_id(), moved[0].observation_id());
         assert_eq!(first[0].session_id().unwrap().value(), "synthetic-session");
 
@@ -774,7 +856,8 @@ mod tests {
             &super::super::native::extract_claude_native_records(&source(changed_path)).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         assert_eq!(first[0].observation_id(), changed[0].observation_id());
         assert_eq!(
             first[0]
@@ -810,12 +893,14 @@ mod tests {
             &super::super::native::extract_claude_native_records(&source(first_path)).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         let second = project_claude_native_records(
             &super::super::native::extract_claude_native_records(&source(second_path)).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         assert_ne!(first[0].observation_id(), second[0].observation_id());
     }
 
@@ -863,7 +948,8 @@ mod tests {
                 &super::super::native::extract_claude_native_records(&source).unwrap(),
                 &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
             )
-            .unwrap();
+            .unwrap()
+            .observations;
             let request = observations
                 .iter()
                 .find(|o| o.stage() == ObservationStage::ToolRequested)
@@ -964,7 +1050,8 @@ mod tests {
             &super::super::native::extract_claude_native_records(&source).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect("assistant tool result should project");
+        .expect("assistant tool result should project")
+        .observations;
 
         assert_eq!(
             observations
@@ -1021,20 +1108,19 @@ mod tests {
     }
 
     #[test]
-    fn canonical_failures_are_bounded() {
+    fn unknown_discriminators_are_quarantined_without_content() {
         let source = fixture_source("parser_maturity/non_discovered/unknown-variant.jsonl");
-        let error = project_claude_native_records(
+        let projection = project_claude_native_records(
             &super::super::native::extract_claude_native_records(&source).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect_err("unknown discriminator must fail canonical mapping");
-        assert_eq!(error.code(), "unknown_discriminator");
+        .unwrap();
+        assert!(projection.observations.is_empty());
+        assert_eq!(projection.quarantined.len(), 1);
+        assert_eq!(projection.quarantined[0].code, "unknown_discriminator");
         assert!(
-            !error
-                .to_string()
-                .contains("Synthetic unknown record variant")
+            !format!("{:?}", projection.quarantined).contains("Synthetic unknown record variant")
         );
-        assert!(!format!("{error:?}").contains("Synthetic unknown record variant"));
     }
 
     #[test]
@@ -1074,12 +1160,16 @@ mod tests {
     }
 
     #[test]
-    fn unknown_content_blocks_fail_closed() {
+    fn unknown_content_blocks_quarantine_only_their_record() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("unknown-block.jsonl");
         fs::write(
             &path,
-            br#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"future_block","value":"synthetic payload"}]}}"#,
+            concat!(
+                r#"{"type":"assistant","sessionId":"s","message":{"role":"assistant","content":[{"type":"future_block","value":"synthetic payload"}]}}"#,
+                "\n",
+                r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic next turn."}}"#,
+            ),
         )
         .unwrap();
         let source = Source {
@@ -1088,12 +1178,180 @@ mod tests {
             source_id: "claude.projects".to_owned(),
             path,
         };
-        let error = project_claude_native_records(
+        let projection = project_claude_native_records(
             &super::super::native::extract_claude_native_records(&source).unwrap(),
             &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect_err("unknown content block must fail");
-        assert_eq!(error.code(), "unknown_content_block");
-        assert!(!error.to_string().contains("synthetic payload"));
+        .unwrap();
+        assert_eq!(projection.observations.len(), 1);
+        assert_eq!(
+            projection.observations[0].source().source_sequence(),
+            Some(1)
+        );
+        assert_eq!(projection.quarantined.len(), 1);
+        assert_eq!(projection.quarantined[0].source_sequence, 0);
+        assert_eq!(projection.quarantined[0].code, "unknown_content_block");
+        assert!(!format!("{:?}", projection.quarantined).contains("synthetic payload"));
+    }
+
+    fn project_lines(lines: &[&str]) -> super::ClaudeProjection {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("session.jsonl");
+        fs::write(&path, lines.join("\n")).unwrap();
+        let source = Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".to_owned(),
+            path,
+        };
+        project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn claude_code_metadata_records_are_skipped() {
+        let mut lines = [
+            "attachment",
+            "queue-operation",
+            "last-prompt",
+            "custom-title",
+            "ai-title",
+            "agent-name",
+            "atis-latch",
+            "file-history-snapshot",
+            "file-history-delta",
+            "summary",
+            "system",
+            "progress",
+        ]
+        .map(|kind| format!(r#"{{"type":"{kind}","sessionId":"s","content":"synthetic"}}"#))
+        .to_vec();
+        lines.push(
+            r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic turn."}}"#
+                .to_owned(),
+        );
+        let projection = project_lines(&lines.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(projection.quarantined.is_empty());
+        assert_eq!(projection.observations.len(), 1);
+        assert_eq!(
+            projection.observations[0].source().source_sequence(),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn reasoning_and_media_blocks_are_dropped_from_messages() {
+        let projection = project_lines(&[
+            r#"{"type":"assistant","sessionId":"s","message":{"role":"assistant","content":[{"type":"thinking","thinking":"synthetic reasoning","signature":"x"}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"role":"assistant","content":[{"type":"redacted_thinking","data":"x"},{"type":"text","text":"Synthetic answer."}]}}"#,
+            r#"{"type":"user","sessionId":"s","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"Synthetic caption."}]}}"#,
+        ]);
+        assert!(projection.quarantined.is_empty());
+        assert_eq!(projection.observations.len(), 2);
+        for observation in &projection.observations {
+            let ObservationBody::Message(message) = observation.body() else {
+                panic!("expected message")
+            };
+            assert_eq!(message.content_parts().len(), 1);
+            assert_eq!(message.content_parts()[0].kind(), ContentPartKind::Text);
+        }
+    }
+
+    #[test]
+    fn nested_and_authored_tool_arguments_project_on_the_tool_observation() {
+        let long = "x".repeat(20_000);
+        let write = format!(
+            r#"{{"type":"assistant","sessionId":"s","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_write","name":"Write","input":{{"file_path":"C:\\repo\\big.txt","content":"{long}"}}}}]}}}}"#
+        );
+        let projection = project_lines(&[
+            r#"{"type":"assistant","sessionId":"s","message":{"role":"assistant","content":[{"type":"text","text":"Planning."},{"type":"tool_use","id":"toolu_todo","name":"TodoWrite","input":{"todos":[{"content":"Synthetic step","status":"pending","activeForm":"Doing it"}]}}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_multi","name":"MultiEdit","input":{"file_path":"C:\\repo\\a.rs","edits":[{"old_string":"a","new_string":"b"}]}}]}}"#,
+            &write,
+            r#"{"type":"assistant","sessionId":"s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ps","name":"PowerShell","input":{"command":"Get-ChildItem $env:USERPROFILE\\.ssh"}}]}}"#,
+        ]);
+        assert!(
+            projection.quarantined.is_empty(),
+            "{:?}",
+            projection.quarantined
+        );
+        let tools = projection
+            .observations
+            .iter()
+            .filter_map(|observation| match observation.body() {
+                ObservationBody::Tool(tool) => Some((observation, tool)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tools
+                .iter()
+                .map(|(_, tool)| tool.name())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("TodoWrite"),
+                Some("MultiEdit"),
+                Some("Write"),
+                Some("PowerShell")
+            ]
+        );
+        assert!(tools.iter().all(|(_, tool)| tool.arguments().is_some()));
+        let (write, _) = tools[2];
+        assert_eq!(
+            write.facets().get("resource.path").unwrap().value(),
+            &JsonValue::string("C:\\repo\\big.txt")
+        );
+        let (shell, _) = tools[3];
+        assert!(shell.facets().get("command.text").is_some());
+        // The message part references the call without repeating its input.
+        let ObservationBody::Message(message) = projection.observations[0].body() else {
+            panic!("expected message")
+        };
+        assert_eq!(
+            message.content_parts()[1].value(),
+            &JsonValue::object([
+                ("id".to_owned(), JsonValue::string("toolu_todo")),
+                ("name".to_owned(), JsonValue::string("TodoWrite")),
+            ])
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn text_array_tool_results_join_into_direct_text() {
+        let long = "y".repeat(10_000);
+        let line = format!(
+            r#"{{"type":"user","sessionId":"s","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_a","content":[{{"type":"text","text":"first"}},{{"type":"text","text":"{long}"}}]}}]}}}}"#
+        );
+        let projection = project_lines(&[&line]);
+        assert!(projection.quarantined.is_empty());
+        let ObservationBody::Tool(tool) = projection.observations[0].body() else {
+            panic!("expected tool result")
+        };
+        assert_eq!(
+            tool.result(),
+            Some(&JsonValue::string(format!("first\n{long}")))
+        );
+    }
+
+    #[test]
+    fn oversized_tool_arguments_quarantine_only_their_record() {
+        let long = "z".repeat(5_000);
+        let line = format!(
+            r#"{{"type":"assistant","sessionId":"s","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_x","name":"Grep","input":{{"pattern":"{long}"}}}}]}}}}"#
+        );
+        let projection = project_lines(&[
+            &line,
+            r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic turn."}}"#,
+        ]);
+        assert_eq!(projection.observations.len(), 1);
+        assert_eq!(projection.quarantined.len(), 1);
+        assert_eq!(projection.quarantined[0].code, "unbounded_value");
+        assert_eq!(
+            projection.quarantined[0].bound.map(|bound| bound.category),
+            Some(telltale_schema::observation::CanonicalFieldCategory::ToolArguments)
+        );
     }
 }
