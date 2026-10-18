@@ -187,14 +187,86 @@ silently drop an in-scope record.
 - **THEN** canonical mapping returns a bounded error code and non-sensitive
   detail
 
+### Requirement: Claude unit quarantine is explicit and partial
+
+This Claude-only amendment reconciles acquisition with merged
+[#103](https://github.com/Dark-Roast-Cyber/telltale/pull/103), merge
+`bf181d41e7cf377d8303f2376adb689abc6bc6bc`: the author explicitly scoped
+per-record exclusion while retaining whole-source integrity and retention
+failure. It does not amend any other adapter's representation or failure policy.
+
+For a well-formed unknown explicit record discriminator or content-block type,
+a record's own canonical-bound rejection, or invalid per-record native
+contribution, acquisition MUST quarantine the entire affected Claude record.
+It MUST retain its native-unit and record-kind counts and validate ownership
+and attestation across all records, including excluded records. It MUST NOT
+retain that record's observations or activity contributions. Quarantine MUST
+report only coordinates, closed code and optional bound context, never content.
+Successful acquisition with any quarantine MUST return `PartialSource` and
+`AcquisitionProgress::None`; the runtime MUST use `NoReplacement`, not additive
+or whole-source baseline storage.
+
+This exception MUST NOT weaken physical/source admission, native read/decoding,
+session ownership or attestation, shared session/contribution cardinality,
+checked accounting overflow, or source-wide canonical-retention failure.
+Non-quarantinable mapping/validation failures MUST still return only a bounded
+error, without a successful batch or progress.
+
+For mapped records, selected content-block arrays MUST contain only objects
+with a string `type`. A non-object block or missing/non-string type MUST fail
+native extraction atomically with a bounded source-read error, not quarantine
+as an unknown type. This enforces the retained malformed-input failure contract;
+it does not expand the merged #103 quarantine exception. The check MUST NOT
+descend into tool arguments/results, non-array direct message values, or opaque
+payloads of ignored reasoning/media blocks, bookkeeping or unknown records.
+
+#### Scenario: A quarantined unit does not hide valid activity
+
+- **WHEN** a valid prefix is followed by one of the eligible Claude units above
+- **THEN** the valid prefix remains evaluable, native counts include both units,
+  and quarantine is explicit with partial accounting and no baseline replacement
+
+#### Scenario: Integrity failure on an otherwise quarantinable unit
+
+- **WHEN** a future-type Claude record has invalid attestation or conflicting
+  recognized session ownership
+- **THEN** the whole acquisition fails, rather than preserving a partial prefix
+
+#### Scenario: Malformed content-block envelopes reject the source
+
+- **WHEN** a valid prefix is followed by a mapped record whose selected content
+  array has a non-object block or a missing/null/non-string type
+- **THEN** native extraction fails without a successful prefix, accounting or
+  progress, while a genuine unknown string type still quarantines its record
+
+#### Scenario: Data is not reinterpreted as an envelope
+
+- **WHEN** direct non-array message content, tool arguments/results or an ignored
+  payload contains objects without string type fields or nested content arrays
+- **THEN** its existing retention/omission and bounds apply without recursive
+  block-envelope validation
+
 ### Requirement: Metadata and privacy boundaries hold
 
 Every populated body field and facet MUST have exactly one `FactMetadata` entry.
-Structural fields, content, arguments, results, and the parsed path MUST use
-`Reported` or `Parsed` provenance as appropriate and `Normal` sensitivity
+Structural fields, content, arguments, direct result strings and untouched
+structured results, and the parsed path MUST use `Reported` or `Parsed`
+provenance as appropriate. The existing nonempty all-text result-array
+transformation MUST mark `tool.result` as `Derived`, including one-part arrays
+and empty text entries; its newline-joined representation is unchanged.
+This corrects the older Reported/Parsed-only restriction to match the generic
+deterministic-transformation provenance contract, not a new result policy for
+other adapters. Every such fact MUST retain `Normal` sensitivity
 without export-safe or Event4 claims. Adapter errors MUST NOT include raw
 prompt, tool, result, path, or arbitrary source payloads in Display or Debug,
 and observations MUST NOT be logged.
+
+#### Scenario: Result provenance distinguishes a transformation from retention
+
+- **WHEN** acquisition receives a direct string, a nonempty all-text result
+  array, or an untouched empty/mixed/structured result
+- **THEN** the direct and untouched values remain Reported, the all-text array's
+  exact ordered newline-joined value is Derived, and all have Normal sensitivity
 
 #### Scenario: Mapping errors do not leak payloads
 

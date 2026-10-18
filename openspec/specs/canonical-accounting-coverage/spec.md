@@ -69,18 +69,24 @@ Default accounting MUST be partial, never an implicit empty complete snapshot.
 Successful exhaustive acquisitions of `claude.projects`, `codex.sessions`,
 `codex.archived_sessions`, `codex.headless_sessions`, `openclaw.agents`,
 `qwen.projects`, and `copilot.process_log` MUST return CompleteSource.
+For `claude.projects` this requires no quarantined units: the narrow
+[merged #103 Claude exception](../claude-canonical-observation-v2-adapter/spec.md#requirement-claude-unit-quarantine-is-explicit-and-partial)
+MUST instead return PartialSource and preserve NoReplacement when any eligible
+record is excluded. Exhaustive native counts do not imply complete contribution
+coverage. No other adapter's failure policy changes under this amendment.
 
 #### Scenario: Exhaustive file succeeds
 
-- **WHEN** a supported file is fully read and all extraction, accounting, mapping,
-  and validation stages succeed
+- **WHEN** a supported file is fully read, no units are quarantined, and all
+  extraction, accounting, mapping, and validation stages succeed
 - **THEN** its returned accounting is complete for that acquired source read
 - **AND** repeated acquisition under the same contract yields the same coverage
 
 #### Scenario: File fails after valid units
 
-- **WHEN** an admission-limit overflow, malformed tail, read failure, invalid attestation, capacity overflow,
-  mapping failure, or validation failure occurs
+- **WHEN** an admission-limit overflow, malformed tail, read failure, invalid
+  ownership/attestation, shared capacity/overflow or source-retention failure,
+  or non-quarantinable mapping/validation failure occurs
 - **THEN** no successful accounting or partial successful batch is returned
 
 #### Scenario: Observation-free native units
@@ -96,7 +102,10 @@ units.
 JSONL blank lines and Copilot ordinary log lines/completion controls are
 not countable native units; Copilot workspace initialization and every accumulated
 output item are.
-Canonical observation suppression MUST NOT remove accounting.
+Canonical observation suppression MUST NOT remove native-unit or record-kind
+counts. Under the linked Claude quarantine exception, these counts and valid
+attestation MUST still include excluded records, while their activity
+contributions MUST be omitted and coverage MUST remain partial.
 
 #### Scenario: Exhaustive file accounting includes suppressed native units
 

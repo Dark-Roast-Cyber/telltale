@@ -172,10 +172,10 @@ second detector or an Event 3 conversion loop.
   `completion`, `coverage()`, and `semantic_provenance`. There is no partial
   success. Match on `failure()`, not on `event_type` strings.
 - `coverage()` is `WholeSource` or `Partial` for a successful source. `Partial`
-  (OpenCode's bounded window) means unselected history was not evaluated: no
-  findings is not a clean bill of health for it, and a later scan may not select
-  an earlier action. Coverage is acquisition scope, separate from rule
-  visibility.
+  means a bounded selection or quarantined native units left some source evidence
+  unevaluated. No findings is not a clean bill of health for excluded evidence;
+  a later bounded scan may not select an earlier action. Coverage is acquisition
+  scope, separate from rule visibility and failed-source atomicity.
 - `completion` is the closed `EvaluationCompletion` enum: `Complete` or
   `VisibilityLimited`; match variants, not Debug text. `visibility_limits()`
   names the reasons as non-exhaustive `VisibilityLimit` values with stable
@@ -191,11 +191,13 @@ second detector or an Event 3 conversion loop.
 - `quarantined()` lists native units a successful scan excluded, as
   `QuarantinedUnit` coordinates (session, native ID, source sequence, code and,
   when the bound reports one, bound context) without content. A unit is
-  excluded for an oversized or invalid value of its own, or as
+  excluded for an unsupported shape or an oversized or invalid value of its own.
+  Claude Code and OpenCode v2 support native-unit quarantine; see the source-specific notes in
+  [session sources](session-sources.md). OpenCode v2 also reports
   `evaluation_capacity_exceeded` when even the smallest window of rows exceeds
-  evaluation work or projection capacity. Progress covers these units; the
-  other units in the window were evaluated. OpenCode v2 is currently the only
-  source that quarantines.
+  evaluation work or projection capacity. Only OpenCode returns progress covering
+  quarantined units; other units in its selected window were evaluated. Claude
+  quarantine does not add a progress or resume mechanism.
 
 ### Rule v1 URL target
 

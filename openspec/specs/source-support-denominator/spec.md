@@ -54,8 +54,17 @@ source I/O.
 
 #### Scenario: Acquisition failure cannot advance progress
 
-- **WHEN** extraction, canonical mapping, or validation fails
+- **WHEN** extraction or a non-quarantinable canonical mapping/validation fails
 - **THEN** the API returns only a bounded error, without observations or progress
+
+The only Claude unit-level exception is owned by the
+[merged #103 quarantine contract](../claude-canonical-observation-v2-adapter/spec.md#requirement-claude-unit-quarantine-is-explicit-and-partial).
+Its reported exclusions are successful partial acquisition, not successful
+progress from a source failure. Admission, ownership/attestation, shared
+cardinality/overflow and source-wide retention MUST remain atomic; no other
+adapter's failure or representation contract is amended here. Malformed mapped
+Claude content-block envelopes remain source-read failures, not an additional
+quarantine exception.
 
 #### Scenario: OpenCode controls cannot affect other acquisition families
 

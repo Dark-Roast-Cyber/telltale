@@ -410,9 +410,9 @@ pub enum SourceCoverage {
     /// Every countable native unit of the acquired read was evaluated. File
     /// reads cover the acquired byte stream, not an atomic filesystem revision.
     WholeSource,
-    /// Only a selected part was evaluated (OpenCode's bounded recent window).
-    /// No finding is not evidence about unselected history, and a later scan
-    /// may no longer select an earlier action.
+    /// A bounded selection or quarantined native units left evidence unevaluated.
+    /// No finding is not evidence about excluded units or unselected history;
+    /// a later bounded scan may no longer select an earlier action.
     Partial,
 }
 

@@ -50,6 +50,28 @@ source-native extraction, calls the source-owned crate-private canonical mapper,
 and returns an acquisition batch. All eight use explicit caller-owned
 `observed_at`.
 
+For `claude.projects`, merged [#103](https://github.com/Dark-Roast-Cyber/telltale/pull/103)
+adds explicit native-unit quarantine: unknown record/block types, a record's own
+canonical-bound failure, or invalid native contribution can exclude that record
+while the rest of the acquired transcript is evaluated. Excluded units retain
+native counts and content-free quarantine coordinates, but no observations or
+activity contributions. The successful batch has `PartialSource` accounting and
+no progress, even after an exhaustive file read; it cannot replace a baseline.
+Admission/read errors, ownership/attestation integrity, shared accounting
+capacity/overflow and source-wide canonical retention still fail atomically.
+See [Claude source notes](session-sources.md) for current representation and
+[the Claude quarantine contract](../openspec/specs/claude-canonical-observation-v2-adapter/spec.md#requirement-claude-unit-quarantine-is-explicit-and-partial)
+for the bounded exception. Malformed selected content-block envelopes are native
+source-read failures, not unknown-type quarantine; opaque tool values and
+non-array direct message values are not block envelopes.
+These Claude rules do not change other adapters' failure contracts.
+
+Claude's existing nonempty all-text tool-result arrays become one newline-joined
+direct string, with `Derived` fact provenance even for one part or empty text
+entries. Direct strings and untouched empty/mixed/structured values stay
+`Reported`. This corrects the transformation's provenance, not its representation
+or bounds; it does not establish a representation policy for other sources.
+
 The OpenCode-specific `acquire_opencode_sqlite` entry point accepts part and
 `session_message` minimum-update coordinates and limits, and returns separate
 progress as the selected legacy part-row or OpenCode v2 message-row
@@ -125,7 +147,8 @@ Canonical acquisition and evaluation permit up to
 65,536 raw UTF-8 bytes only for direct string `message.content` and a direct
 string value of a `ContentPartKind::Text` part. The representation remains
 `JsonValue`, `MessageObservation`, and ordered `ContentPart` values. Arrays,
-objects, nested strings even inside Text parts, tool values/names, inference
+objects, nested strings even inside Text parts, tool values/names outside their
+existing source-specific policies, inference
 metadata, facets, identifiers, and local originals receive no wider allowance.
 Ordinary JSON bounds remain 4,096 string bytes, 16,384 encoded bytes per value,
 depth 6, 64 array items, 32 object members, and 64 key bytes. Part values are
@@ -153,15 +176,19 @@ Semantic comparison and protected assignment commitments retain the full text,
 including suffixes beyond the old limit.
 
 The six native source adapters use narrow message-content and direct Text-string
-conversion. Like ordinary source conversion, they check original string bytes before
+conversion. Both message and ordinary structured conversion check original string bytes before
 NFC; builders check their existing canonicalized NFC values. Equivalent bounded
 normalized inputs therefore agree, but an oversized decomposed source string
 can reject even when a directly assembled normalized value fits. Conversion
-checks value bounds, not the later observation-wide aggregate.
+checks value bounds, not the later observation-wide aggregate. A Claude record's
+own canonical-bound rejection is quarantined as described above, not a successful
+truncation and not necessarily a failure of the source acquisition. Other source
+failure policies are unchanged.
 
 One shared collector checks an 8 MiB canonical semantic/local retention budget
 before each next observation is retained, across all records and sessions in a
-source projection. Evaluation ingress applies the same budget using a cached,
+source projection. Exceeding this source-wide budget remains atomic failure,
+including for Claude; it is outside per-record quarantine. Evaluation ingress applies the same budget using a cached,
 nonallocating size. Whole-file native reader intermediate memory is not capped
 by this canonical-retention policy. Inference acquisition keeps its own limits.
 
@@ -386,7 +413,14 @@ facts during the same extraction, without another source read, reconstructed
 records, or a new raw-input sidecar.
 Internal SQL transport aliases are not source JSON ownership evidence, and ignored
 Copilot items cannot attest metadata. Counts use checked `u64` arithmetic. Invalid/oversized metadata
-or contribution input, capacity exhaustion, and overflow fail with code-only errors. Missing and
+input, shared capacity exhaustion, and overflow fail with code-only errors.
+Claude checks each record's contribution before merging it: invalid contribution
+input quarantines that record without its activity contribution. It does not
+turn session cardinality, shared contribution-key capacity or checked overflow
+into successful partial accounting. Native counts and valid attestation still
+include quarantined units; see the
+[accounting coverage contract](../openspec/specs/canonical-accounting-coverage/spec.md#requirement-all-eight-identities-have-explicit-acquisition-coverage).
+Other adapters retain their source-atomic contribution failures. Missing and
 ambiguous metadata remain successful acquisition. Debug rendering hides labels
 and session IDs. The composition borrows only known fields for exact
 evaluated session keys into Event3 projection and retains the single accounting
@@ -418,8 +452,10 @@ partially overlapping batches.
 
 B3A.1, committed at
 `2c7bc2878ff28224b154d0151260a8430814c1f0`, adds explicit source-instance
-coverage. Exhaustive file reads are `CompleteSource`; current bounded OpenCode
-reads are `PartialSource`. This resolves the prerequisite for file support, but
+coverage. Exhaustive file reads without quarantined units are `CompleteSource`;
+a Claude file containing quarantined units and current bounded OpenCode reads
+are `PartialSource`. Exhaustive reading alone is therefore insufficient for
+replacement. This resolves the prerequisite for complete file support, but
 does not make an OpenCode partial batch a replacement or an additive population.
 The prior overlap analysis remains authoritative: a previous A+B read followed
 by a B+C read would either lose A under replacement or train B twice under
@@ -429,8 +465,13 @@ operation.
 
 The unchanged frozen Event3 constructor permits truthful batch session activity for
 `PartialSource`: Known metadata is retained and Missing or Ambiguous fields are
-omitted. A successful partial operation can progress, but it produces no baseline
+omitted. A successful partial operation may return source-specific progress
+(OpenCode only; Claude still returns none), but it produces no baseline
 storage or deviation and returns `NoReplacement`.
+A true source failure instead returns a typed `SourceFailure`, with no successful
+accounting, replacement candidate or progress. A quarantine diagnostic from an
+otherwise successful scan must not be mistaken for that failure outcome; match
+the typed result as described in [embedding](embedding.md#source-outcome).
 
 `CompleteSource` returns an explicit `BaselineReplacement::Replace(Vec<BaselineSummary>)`,
 including `Replace(empty)` to clear stale sessions excluded by the current

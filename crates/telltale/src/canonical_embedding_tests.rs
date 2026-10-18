@@ -551,6 +551,121 @@ fn canonical_embedding_bound_context_survives_without_event3_changes() {
 }
 
 #[test]
+fn canonical_embedding_claude_quarantine_is_no_replacement_not_source_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        source_id: "claude.projects".into(),
+        kind: SourceKind::Jsonl,
+        path: dir.path().join("synthetic-quarantine.jsonl"),
+    };
+    let prefix = serde_json::json!({"type":"user","sessionId":"synthetic","content":"needle"});
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    std::fs::write(&source.path, format!("{prefix}\n")).unwrap();
+    let complete = pipeline
+        .scan_canonical_sources(std::slice::from_ref(&source), clock())
+        .unwrap();
+    let complete = complete[0].1.as_ref().unwrap();
+    assert_eq!(
+        complete.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
+    assert!(
+        matches!(&complete.baseline_replacement, BaselineReplacement::Replace(values) if !values.is_empty())
+    );
+
+    for (excluded, code) in [
+        (
+            serde_json::json!({"type":"future_record","sessionId":"synthetic","content":"SYNTHETIC-EXCLUDED"}),
+            "unknown_discriminator",
+        ),
+        (
+            serde_json::json!({"type":"assistant","sessionId":"synthetic","content":[{"type":"future_block"}]}),
+            "unknown_content_block",
+        ),
+        (
+            serde_json::json!({"type":"user","sessionId":"synthetic","content":"x".repeat(65_537)}),
+            "unbounded_value",
+        ),
+        (
+            serde_json::json!({"type":"assistant","sessionId":"synthetic","content":[{"type":"tool_use","id":"synthetic-call","name":"Grep\u{7}","input":{"pattern":"synthetic"}}]}),
+            "invalid_native_contribution",
+        ),
+    ] {
+        std::fs::write(&source.path, format!("{prefix}\n{excluded}\n")).unwrap();
+        let before = tree_snapshot(dir.path());
+        let result = pipeline
+            .scan_canonical_sources(std::slice::from_ref(&source), clock())
+            .unwrap();
+        let result = result[0]
+            .1
+            .as_ref()
+            .expect("quarantine is successful partial acquisition");
+        assert_eq!(
+            result.accounting.coverage,
+            AccountingCoverage::PartialSource
+        );
+        assert_eq!(
+            result.baseline_replacement,
+            BaselineReplacement::NoReplacement
+        );
+        assert_eq!(result.progress, AcquisitionProgress::None);
+        assert_eq!(result.accounting.sessions[0].counts.native_units, 2);
+        assert_eq!(result.quarantined.len(), 1);
+        assert_eq!(result.quarantined[0].code, code);
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| event.event_type == "activity")
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| event.rule_ids.iter().any(|rule| rule == "synthetic.target"))
+        );
+        assert!(
+            !serde_json::to_string(&result.events)
+                .unwrap()
+                .contains("SYNTHETIC-EXCLUDED")
+        );
+        assert_eq!(tree_snapshot(dir.path()), before);
+    }
+
+    use telltale_sources::acquisition::AcquisitionError;
+    for (invalid, expected) in [
+        (
+            serde_json::json!({"type":"future_record","sessionId":"synthetic","model":123}),
+            AcquisitionError::InvalidAttestation,
+        ),
+        (
+            serde_json::json!({"type":"future_record","sessionId":"synthetic","message":{"sessionId":"different"}}),
+            AcquisitionError::ConflictingSessionOwnership,
+        ),
+        (
+            serde_json::json!({"type":"user","sessionId":"synthetic","message":{"role":"user","content":[null]}}),
+            AcquisitionError::SourceRead,
+        ),
+    ] {
+        std::fs::write(&source.path, format!("{prefix}\n{invalid}\n")).unwrap();
+        let failed = pipeline
+            .scan_canonical_sources(std::slice::from_ref(&source), clock())
+            .unwrap();
+        let failed = failed[0].1.as_ref().err().expect(
+            "malformed envelopes and integrity failures are atomic, not NoReplacement success",
+        );
+        assert_eq!(failed.stage, canonical_runtime::FailureStage::Acquisition);
+        assert_eq!(failed.acquisition, Some(expected));
+        assert_eq!(failed.progress, AcquisitionProgress::None);
+    }
+}
+
+#[test]
 fn canonical_embedding_rejects_retired_identity_without_successful_output() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("synthetic.jsonl");

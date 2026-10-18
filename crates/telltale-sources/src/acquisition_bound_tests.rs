@@ -8,6 +8,250 @@ fn options() -> AcquisitionOptions {
     AcquisitionOptions::new(ObservedAt::new("2026-09-18T12:00:00Z").unwrap())
 }
 
+#[test]
+fn claude_tool_result_value_and_provenance_follow_native_representation() {
+    use telltale_schema::observation::{FactProvenance, Sensitivity};
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        source_id: "claude.projects".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic-results.jsonl"),
+    };
+    let text_part = JsonValue::object([
+        ("type".to_owned(), JsonValue::string("text")),
+        ("text".to_owned(), JsonValue::string("first")),
+    ])
+    .unwrap();
+    for (case, content, expected, provenance) in [
+        (
+            "direct",
+            json!("first\nsecond"),
+            JsonValue::string("first\nsecond"),
+            FactProvenance::Reported,
+        ),
+        (
+            "direct-empty",
+            json!(""),
+            JsonValue::string(""),
+            FactProvenance::Reported,
+        ),
+        (
+            "one-part",
+            json!([{"type":"text","text":"first"}]),
+            JsonValue::string("first"),
+            FactProvenance::Derived,
+        ),
+        (
+            "multipart",
+            json!([{"type":"text","text":"first"},{"type":"text","text":"second"}]),
+            JsonValue::string("first\nsecond"),
+            FactProvenance::Derived,
+        ),
+        (
+            "one-empty-part",
+            json!([{"type":"text","text":""}]),
+            JsonValue::string(""),
+            FactProvenance::Derived,
+        ),
+        (
+            "empty-entries",
+            json!([{"type":"text","text":""},{"type":"text","text":"middle"},{"type":"text","text":""}]),
+            JsonValue::string("\nmiddle\n"),
+            FactProvenance::Derived,
+        ),
+        (
+            "all-empty-entries",
+            json!([{"type":"text","text":""},{"type":"text","text":""}]),
+            JsonValue::string("\n"),
+            FactProvenance::Derived,
+        ),
+        (
+            "empty-array",
+            json!([]),
+            JsonValue::array(vec![]),
+            FactProvenance::Reported,
+        ),
+        (
+            "mixed-array",
+            json!([{"type":"text","text":"first"},null]),
+            JsonValue::array(vec![text_part, JsonValue::Null]),
+            FactProvenance::Reported,
+        ),
+        (
+            "nontext-value",
+            json!([{"type":"text","text":null}]),
+            JsonValue::array(vec![
+                JsonValue::object([
+                    ("type".to_owned(), JsonValue::string("text")),
+                    ("text".to_owned(), JsonValue::Null),
+                ])
+                .unwrap(),
+            ]),
+            FactProvenance::Reported,
+        ),
+        (
+            "object",
+            json!({"text":"structured"}),
+            JsonValue::object([("text".to_owned(), JsonValue::string("structured"))]).unwrap(),
+            FactProvenance::Reported,
+        ),
+        (
+            "empty-object",
+            json!({}),
+            JsonValue::object([]).unwrap(),
+            FactProvenance::Reported,
+        ),
+    ] {
+        let record = json!({"type":"user","sessionId":"synthetic","message":{"role":"user","content":[{
+            "type":"tool_result","tool_use_id":"synthetic-call","content":content,"is_error":false
+        }]}});
+        std::fs::write(&source.path, format!("{record}\n")).unwrap();
+        let batch = acquire_source(&source, options()).unwrap();
+        assert!(
+            batch.quarantined.is_empty(),
+            "{case}: unexpected quarantine"
+        );
+        assert_eq!(
+            batch.accounting.coverage,
+            AccountingCoverage::CompleteSource
+        );
+        assert_eq!(batch.progress, AcquisitionProgress::None);
+        assert_eq!(batch.observations.len(), 1);
+        let observation = &batch.observations[0];
+        let ObservationBody::Tool(tool) = observation.body() else {
+            panic!("{case}: expected tool result")
+        };
+        assert!(
+            tool.result() == Some(&expected),
+            "{case}: representation changed"
+        );
+        assert_eq!(
+            observation.fact_metadata()["tool.result"].provenance(),
+            provenance,
+            "{case}"
+        );
+        assert_eq!(
+            observation.fact_metadata()["tool.result"].sensitivity(),
+            Sensitivity::Normal
+        );
+        assert_eq!(tool.is_error(), Some(false));
+        assert_eq!(
+            observation.fact_metadata()["tool.is_error"].provenance(),
+            FactProvenance::Reported
+        );
+        assert_eq!(observation.fact_metadata().len(), 2);
+    }
+}
+
+#[test]
+fn claude_tool_result_bounds_preserve_quarantine_and_valid_prefix() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        source_id: "claude.projects".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic-result-bounds.jsonl"),
+    };
+    let prefix = json!({"type":"user","sessionId":"synthetic","message":{"role":"user","content":"valid prefix"}});
+    for (case, content, expected, failure) in [
+        (
+            "direct-inclusive",
+            json!("x".repeat(65_534)),
+            Some(JsonValue::string("x".repeat(65_534))),
+            None,
+        ),
+        (
+            "joined-inclusive",
+            json!([{"type":"text","text":"x".repeat(65_534)}]),
+            Some(JsonValue::string("x".repeat(65_534))),
+            None,
+        ),
+        (
+            "joined-aggregate-overflow",
+            json!([{"type":"text","text":"x".repeat(65_535)}]),
+            None,
+            Some(BoundDimension::EncodedBytes),
+        ),
+        (
+            "direct-string-overflow",
+            json!("x".repeat(65_537)),
+            None,
+            Some(BoundDimension::StringBytes),
+        ),
+        (
+            "joined-string-overflow",
+            json!([{"type":"text","text":"x".repeat(65_537)}]),
+            None,
+            Some(BoundDimension::StringBytes),
+        ),
+        (
+            "structured-inclusive",
+            json!({"text":"x".repeat(4_096)}),
+            Some(
+                JsonValue::object([("text".to_owned(), JsonValue::string("x".repeat(4_096)))])
+                    .unwrap(),
+            ),
+            None,
+        ),
+        (
+            "structured-string-overflow",
+            json!({"text":"x".repeat(4_097)}),
+            None,
+            Some(BoundDimension::StringBytes),
+        ),
+        (
+            "mixed-keeps-structured-bound",
+            json!([{"type":"text","text":"x".repeat(4_097)},null]),
+            None,
+            Some(BoundDimension::StringBytes),
+        ),
+    ] {
+        let record = json!({"type":"user","sessionId":"synthetic","message":{"role":"user","content":[{
+            "type":"tool_result","tool_use_id":"synthetic-call","content":content
+        }]}});
+        std::fs::write(&source.path, format!("{prefix}\n{record}\n")).unwrap();
+        let batch = acquire_source(&source, options()).unwrap();
+        assert_eq!(batch.progress, AcquisitionProgress::None);
+        assert_eq!(batch.accounting.sessions[0].counts.native_units, 2);
+        if let Some(dimension) = failure {
+            assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+            assert_eq!(
+                batch.observations.len(),
+                1,
+                "{case}: valid prefix must survive"
+            );
+            assert!(matches!(
+                batch.observations[0].body(),
+                ObservationBody::Message(_)
+            ));
+            assert_eq!(batch.quarantined.len(), 1);
+            let excluded = &batch.quarantined[0];
+            assert_eq!(excluded.source_sequence, 1);
+            assert_eq!(excluded.code, "unbounded_value");
+            assert_eq!(
+                excluded.bound.unwrap().category,
+                CanonicalFieldCategory::ToolResult
+            );
+            assert_eq!(excluded.bound.unwrap().dimension, dimension);
+        } else {
+            assert_eq!(
+                batch.accounting.coverage,
+                AccountingCoverage::CompleteSource
+            );
+            assert!(batch.quarantined.is_empty());
+            assert_eq!(batch.observations.len(), 2);
+            let ObservationBody::Tool(tool) = batch.observations[1].body() else {
+                panic!("{case}: expected result")
+            };
+            assert!(
+                tool.result() == expected.as_ref(),
+                "{case}: bounded result changed"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "opencode-sqlite")]
 #[test]
 fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
@@ -211,17 +455,22 @@ fn long_message_source_batch_retention_failure_is_atomic() {
     let record =
         json!({"type":"user", "session_id":"synthetic", "content":"x".repeat(65_528)}).to_string();
     std::fs::write(&path, format!("{}\n", vec![record; 129].join("\n"))).unwrap();
-    let source = Source {
-        client: ClientId::Codex,
-        source_id: "codex.sessions".into(),
-        kind: SourceKind::Jsonl,
-        path,
-    };
-    let error = acquire_source(&source, options())
-        .err()
-        .expect("no batch/accounting/progress may escape");
-    assert_eq!(error.code(), "unbounded_value");
-    assert!(!format!("{error:?} {error}").contains("synthetic"));
+    for (client, source_id) in [
+        (ClientId::Codex, "codex.sessions"),
+        (ClientId::Claude, "claude.projects"),
+    ] {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind: SourceKind::Jsonl,
+            path: path.clone(),
+        };
+        let error = acquire_source(&source, options())
+            .err()
+            .expect("no batch/accounting/progress may escape, including Claude's source-wide retention failure");
+        assert_eq!(error.code(), "unbounded_value");
+        assert!(!format!("{error:?} {error}").contains("synthetic"));
+    }
 }
 
 #[test]

@@ -417,7 +417,11 @@ fn emit_tool(
     child_ordinal: &mut usize,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
-    let (body, paths, facet) = tool_body(block)?;
+    let ToolBody {
+        body,
+        facts,
+        resource_path,
+    } = tool_body(block)?;
     let mut builder = common_builder(
         record,
         options,
@@ -430,8 +434,8 @@ fn emit_tool(
         tool_call_id(block)?,
         *child_ordinal,
     )?;
-    for path in paths {
-        builder = builder.fact_metadata(path, normal_reported()?);
+    for (path, provenance) in facts {
+        builder = builder.fact_metadata(path, normal(provenance)?);
     }
     if let ClaudeContentBlock::ToolUse {
         input: Some(serde_json::Value::Object(input)),
@@ -449,7 +453,7 @@ fn emit_tool(
             )?
             .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
     }
-    if let Some(path) = facet {
+    if let Some(path) = resource_path {
         builder = builder
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
             .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
@@ -459,16 +463,20 @@ fn emit_tool(
     Ok(())
 }
 
-fn tool_body(
-    block: &ClaudeContentBlock,
-) -> Result<(ToolObservation, Vec<&'static str>, Option<String>), ClaudeCanonicalError> {
+struct ToolBody {
+    body: ToolObservation,
+    facts: Vec<(&'static str, FactProvenance)>,
+    resource_path: Option<String>,
+}
+
+fn tool_body(block: &ClaudeContentBlock) -> Result<ToolBody, ClaudeCanonicalError> {
     match block {
         ClaudeContentBlock::ToolUse { id: _, name, input } => {
             let name = name
                 .as_deref()
                 .ok_or_else(|| mapping("missing_tool_name", "tool_use block has no tool name"))?;
             let mut body = ToolObservation::new().with_name(name)?;
-            let mut paths = vec!["tool.name"];
+            let mut paths = vec![("tool.name", FactProvenance::Reported)];
             let mut facet = None;
             if let Some(input) = input {
                 let input = JsonValue::try_from_source_tool_arguments(Some(name), input).map_err(
@@ -476,9 +484,13 @@ fn tool_body(
                 )?;
                 facet = resource_path(&input).map(ToOwned::to_owned);
                 body = body.with_arguments(input);
-                paths.push("tool.arguments");
+                paths.push(("tool.arguments", FactProvenance::Reported));
             }
-            Ok((body, paths, facet))
+            Ok(ToolBody {
+                body,
+                facts: paths,
+                resource_path: facet,
+            })
         }
         ClaudeContentBlock::ToolResult {
             tool_use_id: _,
@@ -502,11 +514,18 @@ fn tool_body(
                             error.with_bound_category(CanonicalFieldCategory::ToolResult)
                         })?,
                 );
-                paths.push("tool.result");
+                paths.push((
+                    "tool.result",
+                    if joined.is_some() {
+                        FactProvenance::Derived
+                    } else {
+                        FactProvenance::Reported
+                    },
+                ));
             }
             if let Some(is_error) = is_error {
                 body = body.with_is_error(*is_error);
-                paths.push("tool.is_error");
+                paths.push(("tool.is_error", FactProvenance::Reported));
             }
             if paths.is_empty() {
                 return Err(mapping(
@@ -514,7 +533,11 @@ fn tool_body(
                     "tool_result block has no result or error state",
                 ));
             }
-            Ok((body, paths, None))
+            Ok(ToolBody {
+                body,
+                facts: paths,
+                resource_path: None,
+            })
         }
         _ => Err(mapping(
             "unsupported_tool_block",

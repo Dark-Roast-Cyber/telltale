@@ -79,8 +79,26 @@ pub(crate) fn extract_claude_native_records_with_limits(
                     .filter_map(move |key| envelope.get(key))
             }));
         let session_id = ownership.as_ref().ok().cloned().flatten();
-        let blocks = content_blocks(&value)
-            .map(|blocks| blocks.iter().map(claude_content_block).collect::<Vec<_>>());
+        let discriminator = claude_discriminator(&value);
+        let source_blocks = content_blocks(&value);
+        // Only mapped records interpret these arrays as content-block envelopes.
+        // Skipped bookkeeping and unknown record payloads remain opaque.
+        if !discriminator.is_some_and(is_claude_metadata_discriminator)
+            && discriminator.is_none_or(is_known_claude_discriminator)
+            && source_blocks.is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|block| block.get("type").and_then(Value::as_str).is_none())
+            })
+        {
+            return Err(SourceReadError::SchemaDrift {
+                client: source.client,
+                source_id: source.source_id.clone(),
+                detail: "Claude content block must be an object with a string type",
+            });
+        }
+        let blocks =
+            source_blocks.map(|blocks| blocks.iter().map(claude_content_block).collect::<Vec<_>>());
         let is_tool_call = blocks.as_ref().is_some_and(|blocks| {
             blocks
                 .iter()
@@ -95,7 +113,7 @@ pub(crate) fn extract_claude_native_records_with_limits(
                 .map(ToOwned::to_owned),
             session_id,
             timestamp: nested_string_field(&value, "timestamp"),
-            discriminator: claude_discriminator(&value).map(ToOwned::to_owned),
+            discriminator: discriminator.map(ToOwned::to_owned),
             role: nested_string_field(&value, "role"),
             message_content: claude_message_content(&value),
             contribution_strings: if is_tool_call {
