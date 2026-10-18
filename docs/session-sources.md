@@ -47,7 +47,7 @@ than by exact private path or transcript content.
 
 | Client | Source Kind | Linux candidate | macOS candidate | Windows candidate | Confidence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows unvalidated | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
+| Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows bounded live validation (2026-10-14) | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
 | Codex | `codex.archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `%CODEX_HOME%\archived_sessions` or `%USERPROFILE%\.codex\archived_sessions` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. When `CLAUDE_CONFIG_DIR` is set in the scanner's environment, `$CLAUDE_CONFIG_DIR/projects` is searched as well; `~/.claude/projects` stays a root because a scanner service may not share the user's environment. An explicit `--root` ignores the variable. |
@@ -118,6 +118,29 @@ Codex adapter notes:
 - JSONL entries include `session_meta`, `turn_context`, and event payloads.
 - `session_meta.payload.source == "exec"` marks headless sessions.
 - `session_meta.payload.model_provider` and `agent_nickname` can identify provider and agent.
+- A forked thread's rollout starts with `history_base` (`thread_id`,
+  `end_ordinal_exclusive`, `end_byte_offset`) and its ordinals continue from
+  `end_ordinal_exclusive`. The parent history stays in the parent's rollout
+  and is not read again. `subagent_history_start_ordinal` is still rejected.
+- Bookkeeping records are skipped: `token_usage_record`, `compacted`,
+  `turn_context`, `world_state`, lifecycle and reasoning `event_msg` payloads
+  (including `thread_settings_applied` and `turn_aborted`), and completed
+  `Reasoning`, `ContextCompaction`, `EnteredReviewMode` and
+  `ExitedReviewMode` items.
+- Code-mode `exec` and freeform `apply_patch` string inputs get the
+  authored-text budget. An all-text `custom_tool_call_output` array is joined
+  into one direct result, and a completed command's `aggregated_output` is the
+  direct result with `exit_code` as `tool.exit_code`.
+- Completed `McpToolCall`, `FileChange` and `Extension` items are not mapped
+  yet and are quarantined by themselves (`unsupported_completed_item`). A
+  parent rollout repeats its subagents' completed items under the subagent's
+  `thread_id`; those copies are quarantined (`foreign_thread_item`), and the
+  subagent's own rollout is the one evaluated.
+- An unknown record type, completed item or content part, or a record whose
+  own values exceed a canonical bound, is quarantined by itself and reported
+  by session, item or call id, sequence and bound, never content; the rest of
+  the rollout is still evaluated and coverage is reported as partial.
+  Coordinate, ownership and wrapper errors still fail the whole source.
 
 OpenCode adapter notes:
 

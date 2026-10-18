@@ -204,8 +204,10 @@ fn completed_actual_cli_embedding_privacy_timeline_and_late_atomic_failure() {
     }
     let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
     let offset = persisted.len();
+    // A late item with conflicting turn coordinates still fails the whole
+    // source. (A late unknown item type is quarantined by itself instead.)
     for source in &sources {
-        fs::write(&source.path,format!("{}{{\"type\":\"event_msg\",\"ordinal\":9,\"payload\":{{\"type\":\"item_completed\",\"thread_id\":\"child\",\"turn_id\":\"turn-a\",\"item\":{{\"type\":\"Future\",\"id\":\"unknown\"}}}}}}\n",input())).unwrap();
+        fs::write(&source.path,format!("{}{{\"type\":\"event_msg\",\"ordinal\":9,\"turn_id\":\"turn-b\",\"payload\":{{\"type\":\"item_completed\",\"thread_id\":\"child\",\"turn_id\":\"turn-a\",\"item\":{{\"type\":\"Future\",\"id\":\"unknown\"}}}}}}\n",input())).unwrap();
     }
     let failed = pipeline.scan_root_with_occurrences(&root).unwrap();
     for scan in failed {

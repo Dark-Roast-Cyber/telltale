@@ -50,6 +50,7 @@ pub(crate) struct CodexToolFields {
     pub(crate) command: Option<String>,
     pub(crate) cwd: Option<String>,
     pub(crate) completed_command: bool,
+    pub(crate) exit_code: Option<i64>,
     pub(crate) output_fidelity: Option<&'static str>,
 }
 
@@ -82,6 +83,9 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) response_turn_id: Option<String>,
     pub(crate) paginated: bool,
     pub(crate) mirrored: bool,
+    /// A record this adapter recognizes as a unit but cannot map; projection
+    /// quarantines it by itself with this code.
+    pub(crate) quarantine: Option<&'static str>,
 }
 
 #[cfg(test)]
@@ -162,10 +166,14 @@ pub(crate) fn extract_codex_native_records_with_limits(
             .flatten()
             .filter(|p| p.is_object());
         let public_meta = metadata_payload.filter(|p| p.get("id").is_some());
+        // A forked thread's file starts after its parent's history, which
+        // stays in the parent's own file; only the first record of an ordinal
+        // source may say so, and validate_native_ordinals checked it.
         if metadata_payload.is_some_and(|p| {
-            ["history_base", "subagent_history_start_ordinal"]
-                .iter()
-                .any(|key| p.get(key).is_some_and(|v| !v.is_null()))
+            p.get("subagent_history_start_ordinal")
+                .is_some_and(|v| !v.is_null())
+                || (p.get("history_base").is_some_and(|v| !v.is_null())
+                    && !(ordinal_mode && position == 0))
         }) {
             return Err(drift("Codex inherited history coordinates are unsupported"));
         }
@@ -292,6 +300,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
             response_turn_id,
             paginated,
             mirrored: false,
+            quarantine: None,
         };
 
         if session_metadata
@@ -348,24 +357,48 @@ fn validate_native_ordinals(values: &[Value]) -> Result<bool, &'static str> {
         return Err("Codex native ordinal mode requires exact paginated session metadata first");
     }
     required_string(metadata, "id")?;
-    if ["history_base", "subagent_history_start_ordinal"]
-        .iter()
-        .any(|key| metadata.get(key).is_some_and(|v| !v.is_null()))
+    if metadata
+        .get("subagent_history_start_ordinal")
+        .is_some_and(|v| !v.is_null())
     {
         return Err("Codex referenced or inherited ordinal history is unsupported");
     }
-    let mut expected = Some(0_u64);
+    let mut expected = Some(history_base_end(metadata)?);
     for value in values {
         let ordinal = value
             .get("ordinal")
             .and_then(Value::as_u64)
             .ok_or("Codex native ordinal mode requires a u64 ordinal on every record")?;
         if expected != Some(ordinal) {
-            return Err("Codex native ordinals must start at zero and remain consecutive");
+            return Err(
+                "Codex native ordinals must start at the history base and remain consecutive",
+            );
         }
         expected = ordinal.checked_add(1);
     }
     Ok(true)
+}
+
+/// Where a forked thread's own ordinals start. Its `history_base` names the
+/// parent thread and the end of the parent history it continues from; that
+/// history is the parent's file, not this one. Absent, ordinals start at zero.
+fn history_base_end(metadata: &Value) -> Result<u64, &'static str> {
+    let base = match metadata.get("history_base") {
+        None | Some(Value::Null) => return Ok(0),
+        Some(base) => base,
+    };
+    let invalid = "Codex referenced or inherited ordinal history is unsupported";
+    let members = base.as_object().ok_or(invalid)?;
+    if members.len() != 3 {
+        return Err(invalid);
+    }
+    required_string(base, "thread_id").map_err(|_| invalid)?;
+    base.get("end_byte_offset")
+        .and_then(Value::as_u64)
+        .ok_or(invalid)?;
+    base.get("end_ordinal_exclusive")
+        .and_then(Value::as_u64)
+        .ok_or(invalid)
 }
 
 fn raw_message_turn_id(value: &Value, payload: &Value) -> Result<Option<String>, &'static str> {
@@ -430,11 +463,40 @@ fn completed_record(
             return Err("Codex completed item has conflicting turn coordinates");
         }
     }
-    if inherited_owner.is_some_and(|id| id != owner) {
-        return Err("Codex completed item disagrees with session metadata owner");
+    if let Some(file_owner) = inherited_owner.filter(|id| *id != owner) {
+        // A parent thread's rollout repeats its subagents' completed items.
+        // The item is not this thread's: it is quarantined by itself under
+        // the file's owner, never attributed or projected here.
+        return Ok(CodexNativeRecord {
+            attestation: Ok(SessionMetadata::default()),
+            source_sequence: sequence,
+            adapter_id: source.source_id.clone(),
+            effective_session_id: Some(file_owner.to_owned()),
+            timestamp: None,
+            discriminator: Some("item_completed".to_owned()),
+            session_metadata: false,
+            auxiliary: false,
+            external_import: false,
+            role: None,
+            message_content: None,
+            blocks: None,
+            tool: CodexToolFields {
+                call_id: Some(item_id),
+                ..CodexToolFields::default()
+            },
+            contribution_strings: Vec::new(),
+            completed: None,
+            root_session_id,
+            response_id: None,
+            response_turn_id: None,
+            paginated,
+            mirrored: false,
+            quarantine: Some("foreign_thread_item"),
+        });
     }
     let mut tool = CodexToolFields::default();
     let mut blocks = None;
+    let mut quarantine = None;
     let (discriminator, role, auxiliary) = match item.get("type").and_then(Value::as_str) {
         Some(kind @ ("AgentMessage" | "UserMessage")) => {
             let content = item
@@ -449,7 +511,10 @@ fn completed_record(
             let mut text = Vec::with_capacity(content.len());
             for part in content {
                 if part.get("type").and_then(Value::as_str) != Some(tag) {
-                    return Err("Codex completed message content variant is unsupported");
+                    // An image or other part this adapter cannot map leaves
+                    // the message out by itself, not the whole source.
+                    quarantine = Some("unknown_content_block");
+                    break;
                 }
                 text.push(CodexContentBlock::Text {
                     text: Some(
@@ -460,7 +525,7 @@ fn completed_record(
                     ),
                 });
             }
-            blocks = Some(text);
+            blocks = quarantine.is_none().then_some(text);
             if kind == "AgentMessage" {
                 ("assistant_message", Some("assistant"), false)
             } else {
@@ -468,6 +533,16 @@ fn completed_record(
             }
         }
         Some("Reasoning") => ("reasoning", None, true),
+        // Lifecycle markers: a compaction point and review-mode boundaries.
+        Some("ContextCompaction" | "EnteredReviewMode" | "ExitedReviewMode") => {
+            ("lifecycle", None, true)
+        }
+        // Known activity this adapter does not map yet. Each is quarantined
+        // by itself and reported, never silently dropped.
+        Some("McpToolCall" | "FileChange" | "Extension") => {
+            quarantine = Some("unsupported_completed_item");
+            ("item_completed", None, false)
+        }
         Some("CommandExecution") => {
             let argv = item
                 .get("command")
@@ -479,26 +554,23 @@ fn completed_record(
                 .and_then(Value::as_str)
                 .filter(|s| matches!(*s, "completed" | "failed" | "declined"))
                 .ok_or("Codex completed command status is unsupported or nonterminal")?;
-            let mut result = serde_json::Map::new();
-            for key in ["exit_code", "aggregated_output"] {
-                if let Some(v) = item.get(key) {
-                    if !v.is_null()
-                        && !(if key == "exit_code" {
-                            v.as_i64().is_some()
-                        } else {
-                            v.is_string()
-                        })
-                    {
-                        return Err("Codex completed command result field has invalid type");
-                    }
-                    result.insert(key.to_owned(), v.clone());
-                }
-            }
+            // The output is the direct tool result, so it gets the tool-result
+            // text budget; the exit code is its own reported fact.
+            let invalid = "Codex completed command result field has invalid type";
+            let output = match item.get("aggregated_output") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(output)) => Some(Value::String(output.clone())),
+                Some(_) => return Err(invalid),
+            };
+            tool.exit_code = match item.get("exit_code") {
+                None | Some(Value::Null) => None,
+                Some(code) => Some(code.as_i64().ok_or(invalid)?),
+            };
             tool.arguments = Some(Value::Array(argv.clone()));
             tool.call_id = Some(item_id.clone());
             tool.status = Some(status.to_owned());
-            tool.result_present = !result.is_empty();
-            tool.result = (!result.is_empty()).then_some(Value::Object(result));
+            tool.result_present = output.is_some();
+            tool.result = output;
             tool.completed_command = true;
             tool.output_fidelity = Some(
                 match item.get("aggregated_output").and_then(Value::as_str) {
@@ -519,7 +591,10 @@ fn completed_record(
             };
             ("tool_result", None, false)
         }
-        _ => return Err("Codex completed item variant is unsupported"),
+        _ => {
+            quarantine = Some("unknown_discriminator");
+            ("item_completed", None, false)
+        }
     };
     let attestation = session_identity([&Value::String(owner.to_owned())]).and_then(|_| {
         let mut metadata = SessionMetadata::default();
@@ -557,6 +632,7 @@ fn completed_record(
         response_turn_id: None,
         paginated,
         mirrored: false,
+        quarantine,
     })
 }
 
@@ -565,7 +641,12 @@ fn resolve_mirrors(records: &mut [CodexNativeRecord]) -> Result<(), &'static str
     let mut assistant = BTreeMap::new();
     let mut user_turns = BTreeSet::new();
     for (index, record) in records.iter().enumerate() {
-        let (Some(coords), Some(owner)) = (&record.completed, &record.effective_session_id) else {
+        // A quarantined completed message cannot stand in for its raw mirror.
+        let (Some(coords), Some(owner), None) = (
+            &record.completed,
+            &record.effective_session_id,
+            record.quarantine,
+        ) else {
             continue;
         };
         if record.role.as_deref() == Some("assistant") {
@@ -691,6 +772,17 @@ impl CodexNativeRecord {
 
     pub(crate) fn contribution_strings(&self) -> &[String] {
         &self.contribution_strings
+    }
+
+    /// A content-free native coordinate for a quarantined record: the
+    /// completed item, response or tool call id, when the record has one.
+    pub(crate) fn quarantine_native_id(&self) -> String {
+        self.completed
+            .as_ref()
+            .map(|coords| coords.item_id.clone())
+            .or_else(|| self.response_id.clone())
+            .or_else(|| self.tool.call_id.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -850,12 +942,24 @@ fn is_codex_auxiliary(value: &Value) -> Result<bool, &'static str> {
             }
             true
         }
+        // Per-response token counters, and a compaction checkpoint whose
+        // replacement history restates turns already in this file.
+        Some("token_usage_record" | "compacted") => {
+            if payload.get("type").is_some() || payload.get("payload").is_some() {
+                return Err(
+                    "Codex bookkeeping payload must not contain discriminator or wrapper keys",
+                );
+            }
+            true
+        }
         Some("response_item") => payload.get("type").and_then(Value::as_str) == Some("reasoning"),
         Some("event_msg") => matches!(
             payload.get("type").and_then(Value::as_str),
             Some(
                 "task_started"
                     | "task_complete"
+                    | "turn_aborted"
+                    | "thread_settings_applied"
                     | "token_count"
                     | "agent_reasoning"
                     | "agent_reasoning_raw_content"

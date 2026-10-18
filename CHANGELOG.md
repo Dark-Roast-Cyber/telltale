@@ -13,6 +13,15 @@
   body, edit and prompt fields. Previously each of these failed the whole
   transcript. An unknown record or block, or an oversized record, is now
   quarantined by itself and reported without content, like OpenCode v2 rows.
+- Fix Codex ingestion for current rollouts. Previously every Codex source on a
+  Windows 11 host failed as a whole. Forked threads whose ordinals continue
+  from a parent `history_base` are now read. Bookkeeping records
+  (`token_usage_record`, `compacted`, `thread_settings_applied`,
+  `turn_aborted`, compaction and review-mode items) are skipped. Code-mode
+  `exec` scripts, text-array tool output and completed-command output get the
+  direct-text budget, and a command's exit code is its own fact. An unknown or
+  unmapped record or item, a parent's copy of a subagent item, or an oversized
+  record is now quarantined by itself and reported without content.
 - Claude install inventory recognizes the Claude desktop app's bundled Claude
   Code (`%APPDATA%\Claude\claude-code\<version>\<hash>\claude.exe` and its MSIX
   mirror) as metadata-only `executable` evidence. On Windows these signals
