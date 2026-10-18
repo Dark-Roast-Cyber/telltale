@@ -4,7 +4,7 @@
 Telltale finds the correct transcript, including the Claude desktop app's Code
 tab session that this audit ran in. It then rejects the **entire file** while
 parsing, so it emits no activity, detection, or session-risk events for it. The
-only output is a low-severity `scanner_error` with `check_name=source_parse`.
+only output is an `informational` `scanner_error` with `check_name=source_parse`.
 
 ## Environment
 
@@ -23,7 +23,7 @@ only output is a low-severity `scanner_error` with `check_name=source_parse`.
 | `%USERPROFILE%\.claude\projects\<cwd-slug>\<session>.jsonl` | Full transcripts for the CLI and the desktop Code tab | **Yes**: the only Claude source (`claude.projects`) |
 | `%APPDATA%\Claude\claude-code-sessions\<org>\<acct>\local_<id>.json` | Desktop session metadata (`cliSessionId`, `cwd`, model, permission mode, title) | No |
 | `%APPDATA%\Claude\local-agent-mode-sessions\…` | Cowork / local agent mode working files and skills (no JSONL transcripts on this host) | No |
-| `%APPDATA%\Claude\claude-code\<ver>\<hash>\claude.exe` | Desktop-bundled Claude Code binary | No (install inventory checks PATH only) |
+| `%APPDATA%\Claude\claude-code\<ver>\<hash>\claude.exe` | Desktop-bundled Claude Code binary | Install inventory only, metadata (`claude-desktop`; resolved below) |
 | `%LOCALAPPDATA%\Claude\logs\*.log` | App logs (`main.log`, `mcp.log`, `ssh.log`, `remote-control.log`, `cowork_vm_node.log`) | No |
 | `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude` | MSIX-virtualized mirror of `%APPDATA%\Claude` | No |
 
@@ -136,8 +136,8 @@ records for detection, and they are exactly the ones Telltale discards.
 
 ## Resolution (branch `fix/windows-claude-code-parsing`)
 
-Implemented recommendations 1–3. Recommendations 4 and 5 (desktop install
-inventory, `CLAUDE_CONFIG_DIR`, scanner_error severity) remain open.
+Implemented recommendations 1–3. Recommendations 4 and 5 are resolved on
+branch `fix/windows-claude-code-secondary-gaps` (see below).
 
 - Bookkeeping record types are skipped, including `file-history-delta`, which
   the first live re-scan surfaced through quarantine. `thinking`,
@@ -161,3 +161,50 @@ on the real `~/.claude/projects` gave `parse_success_source_count=1`,
 quarantined units. For the desktop session it emitted `activity`, 3
 `process_chain`, 1 `detection`, and `session_risk_summary` events, and no
 `scanner_error`.
+
+## Resolution of recommendations 4 and 5 (branch `fix/windows-claude-code-secondary-gaps`)
+
+All three secondary gaps above (install inventory, `CLAUDE_CONFIG_DIR`, quiet
+failure) are resolved. The stale validation claim is not part of this change.
+
+- **Install inventory (resolved).** On Windows the `claude` agent also probes
+  `~/AppData/Roaming/Claude/claude-code/<version>/<hash>/claude.exe`
+  (`claude-desktop`) and the MSIX mirror under
+  `~/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code`
+  (`claude-desktop-packaged`). Both exist on this host. The probe is
+  metadata only: it lists directories and checks for a regular file, so it
+  never opens or runs the binary. A present bundle is `executable` evidence,
+  so a desktop-only host is `confirmed`. The `AgentInstallDef` snapshot in
+  `registry.rs` is unchanged. On Windows the two new signals change the
+  inventory hash once. Inventory emission is interval-gated, not
+  hash-triggered, so the new hash appears in the next scheduled
+  `install_inventory` event after upgrade. Other platforms are unchanged. macOS and Linux bundle locations were not
+  confirmed on a real install, so they are not probed.
+- **`CLAUDE_CONFIG_DIR` (resolved).** When the variable is set in the
+  scanner's environment, `claude.projects` discovery, bounded discovery and
+  watch roots search `$CLAUDE_CONFIG_DIR/projects` in addition to
+  `~/.claude/projects`. The default stays a root because a scanner running as
+  a service or scheduled task may not share the user's environment. Operators
+  who relocate the directory must set the variable for the scanner too. An
+  explicit `--root` ignores the variable.
+- **Quiet failure (resolved without changing `scanner_error`).** Event 3.0
+  fixes `scanner_error` at `informational`. Both the producer validator and the
+  consumer reject anything else, and Event 3.0 is frozen, so raising it would
+  break every downstream consumer. A full scan in which every selected source
+  of a client fails processing now also emits one `warning` `operational_alert`
+  for that client, with `alert_type=source_parse_outage`, the generic
+  `check_name=operational_alert`, and content-free evidence
+  (`client=claude; selected_sources=N; processed_sources=0`). That family and
+  check name already exist in the contract. The existing
+  `scanner_error_threshold_exceeded` alert only fires above three errors, so
+  it missed a single-transcript outage. State records the outage, so an
+  unchanged outage alerts once; a full scan in which one of its sources processes
+  successfully clears it, so a recurrence after recovery alerts again. `--backfill`
+  re-emits everything, so it repeats the alert on each full scan. Targeted watch
+  scans do not raise it, because they see only the changed sources.
+- **Tests.** `install_inventory::tests::windows_claude_desktop_bundle_is_confirmed_without_path_or_node`,
+  `discovery::tests::claude_config_dir_adds_a_relocated_projects_root`,
+  `discovery::tests::explicit_root_ignores_claude_config_dir`,
+  `cli::scan::tests::source_parse_outage_alerts_only_when_every_source_of_a_client_fails`,
+  and the CLI test
+  `claude_code_current_format::claude_config_dir_relocated_transcripts_are_discovered`.
