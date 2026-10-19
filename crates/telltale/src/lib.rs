@@ -195,9 +195,11 @@ pub struct SourceScan {
 const RESUME_TOKEN_PREFIX: &str = "resume:v1:opencode.sqlite:";
 /// Marks an OpenCode v2 `session_message` position inside the v1 token family.
 const SESSION_MESSAGE_COORDINATE: &str = "session_message:";
-/// Marks a cut OpenCode v2 window: continue strictly after the position,
-/// without the overlap, until a window completes.
+/// Older cut tokens lack the raw cut; replay their overlap on upgrade.
 const SESSION_MESSAGE_DRAIN_COORDINATE: &str = "session_message_drain:";
+/// Cut tokens carry both the monotone checkpoint and the raw continuation.
+/// Older readers reject this coordinate rather than skip unfinished overlap.
+const SESSION_MESSAGE_WINDOW_COORDINATE: &str = "session_message_window:";
 
 /// The progress coordinate a token resumes. A legacy `part` position never
 /// resumes an OpenCode v2 `session_message` store, or the reverse.
@@ -206,6 +208,7 @@ enum ResumeCoordinate {
     Part,
     SessionMessage,
     SessionMessageDrain,
+    SessionMessageWindow(i64),
 }
 
 impl ResumeCoordinate {
@@ -215,15 +218,20 @@ impl ResumeCoordinate {
             (self, other),
             (Self::Part, Self::Part)
                 | (
-                    Self::SessionMessage | Self::SessionMessageDrain,
-                    Self::SessionMessage | Self::SessionMessageDrain
+                    Self::SessionMessage
+                        | Self::SessionMessageDrain
+                        | Self::SessionMessageWindow(_),
+                    Self::SessionMessage
+                        | Self::SessionMessageDrain
+                        | Self::SessionMessageWindow(_)
                 )
         )
     }
 }
 
 /// Opaque, versioned position after a successful scan of a resumable source
-/// (`opencode.sqlite` today). It is bound to one source, monotone, and carries
+/// (`opencode.sqlite` today). It is bound to one source, carries a monotone
+/// checkpoint and (for unfinished v2 windows) a separate raw cut, and contains
 /// no path or content. Persist [`ResumeToken::as_str`] only after durably
 /// accepting that scan's findings, and pass the parsed token to
 /// [`Pipeline::scan_source_detailed_resuming`].
@@ -237,13 +245,18 @@ pub struct ResumeToken {
 
 impl ResumeToken {
     fn new(binding: String, coordinate: ResumeCoordinate, high_water: i64) -> Self {
-        let coordinate_text = match coordinate {
-            ResumeCoordinate::Part => "",
-            ResumeCoordinate::SessionMessage => SESSION_MESSAGE_COORDINATE,
-            ResumeCoordinate::SessionMessageDrain => SESSION_MESSAGE_DRAIN_COORDINATE,
+        let position = match coordinate {
+            ResumeCoordinate::Part => high_water.to_string(),
+            ResumeCoordinate::SessionMessage => format!("{SESSION_MESSAGE_COORDINATE}{high_water}"),
+            ResumeCoordinate::SessionMessageDrain => {
+                format!("{SESSION_MESSAGE_DRAIN_COORDINATE}{high_water}")
+            }
+            ResumeCoordinate::SessionMessageWindow(cut) => {
+                format!("{SESSION_MESSAGE_WINDOW_COORDINATE}{high_water}:{cut}")
+            }
         };
         Self {
-            text: format!("{RESUME_TOKEN_PREFIX}{coordinate_text}{high_water}:{binding}"),
+            text: format!("{RESUME_TOKEN_PREFIX}{position}:{binding}"),
             binding,
             coordinate,
             high_water,
@@ -260,19 +273,35 @@ impl ResumeToken {
         let rest = text
             .strip_prefix(RESUME_TOKEN_PREFIX)
             .ok_or(ResumeTokenError)?;
-        let (coordinate, rest) = if let Some(rest) = rest.strip_prefix(SESSION_MESSAGE_COORDINATE) {
-            (ResumeCoordinate::SessionMessage, rest)
-        } else if let Some(rest) = rest.strip_prefix(SESSION_MESSAGE_DRAIN_COORDINATE) {
-            (ResumeCoordinate::SessionMessageDrain, rest)
-        } else {
-            (ResumeCoordinate::Part, rest)
-        };
+        let window = rest.starts_with(SESSION_MESSAGE_WINDOW_COORDINATE);
+        let (mut coordinate, rest) =
+            if let Some(rest) = rest.strip_prefix(SESSION_MESSAGE_WINDOW_COORDINATE) {
+                (ResumeCoordinate::SessionMessageWindow(0), rest)
+            } else if let Some(rest) = rest.strip_prefix(SESSION_MESSAGE_COORDINATE) {
+                (ResumeCoordinate::SessionMessage, rest)
+            } else if let Some(rest) = rest.strip_prefix(SESSION_MESSAGE_DRAIN_COORDINATE) {
+                (ResumeCoordinate::SessionMessageDrain, rest)
+            } else {
+                (ResumeCoordinate::Part, rest)
+            };
         let (high_water, binding) = rest.split_once(':').ok_or(ResumeTokenError)?;
         let high_water = high_water
             .parse::<i64>()
             .ok()
             .filter(|value| *value >= 0 && high_water == value.to_string())
             .ok_or(ResumeTokenError)?;
+        let binding = if window {
+            let (cut_text, binding) = binding.split_once(':').ok_or(ResumeTokenError)?;
+            let cut = cut_text
+                .parse::<i64>()
+                .ok()
+                .filter(|cut| *cut <= high_water && cut_text == cut.to_string())
+                .ok_or(ResumeTokenError)?;
+            coordinate = ResumeCoordinate::SessionMessageWindow(cut);
+            binding
+        } else {
+            binding
+        };
         if binding.len() != 64
             || !binding
                 .bytes()
@@ -326,14 +355,14 @@ fn resume_token(
             if window_complete {
                 ResumeCoordinate::SessionMessage
             } else {
-                ResumeCoordinate::SessionMessageDrain
+                ResumeCoordinate::SessionMessageWindow(message_max_time_updated?)
             },
             message_max_time_updated,
         ),
         AcquisitionProgress::None => return None,
     };
-    // Keep the same-schema checkpoint monotone, including cut windows. This
-    // does not guarantee re-reading unfinished overlap below the checkpoint.
+    // Only the checkpoint is clamped. A cut's raw continuation remains in its
+    // coordinate, including when it falls inside unfinished overlap below it.
     let prior = resumed_from
         .filter(|(resumed, _)| resumed.same_schema(coordinate))
         .map(|(_, high_water)| high_water);
@@ -730,6 +759,9 @@ impl Pipeline {
     /// the bounded bootstrap read of [`Self::scan_sources_detailed`]. A resumed
     /// read re-reads a fixed overlap before the token's high-water, so expect
     /// repeated actions (dedup with replay identity or coordinates). A resumed
+    /// unfinished v2 window instead continues after its raw cut, even below the
+    /// checkpoint; older cut tokens without that coordinate replay the overlap.
+    /// Regression detection always uses the checkpoint. A resumed
     /// read that exceeds its part limit fails with
     /// `AcquisitionError::BoundedSourceRead(LimitExceeded)`: drop the token and
     /// scan again from bootstrap, treating the gap as unevaluated history.
@@ -766,10 +798,15 @@ impl Pipeline {
                 // bounded bootstrap selection instead of inheriting this position.
                 match coordinate {
                     ResumeCoordinate::Part => OpenCodeSqliteReadOptions::resume_after(high_water),
-                    ResumeCoordinate::SessionMessage => OpenCodeSqliteReadOptions::default()
-                        .resume_session_messages_after(high_water),
-                    ResumeCoordinate::SessionMessageDrain => OpenCodeSqliteReadOptions::default()
-                        .continue_session_messages_after(high_water),
+                    ResumeCoordinate::SessionMessage | ResumeCoordinate::SessionMessageDrain => {
+                        OpenCodeSqliteReadOptions::default()
+                            .resume_session_messages_after(high_water)
+                    }
+                    ResumeCoordinate::SessionMessageWindow(cut) => {
+                        OpenCodeSqliteReadOptions::default()
+                            .resume_session_messages_after(high_water)
+                            .continue_session_messages_after(cut)
+                    }
                 }
             }),
             rules,

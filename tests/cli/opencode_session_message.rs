@@ -73,6 +73,10 @@ impl Harness {
     }
 
     fn scan(&self) -> std::process::Output {
+        self.scan_with(&[])
+    }
+
+    fn scan_with(&self, extra: &[&str]) -> std::process::Output {
         Command::new(env!("CARGO_BIN_EXE_telltale"))
             .env_clear()
             .current_dir(self.temp.path())
@@ -94,6 +98,7 @@ impl Harness {
             .arg(&self.log)
             .arg("--state-path")
             .arg(&self.state)
+            .args(extra)
             .output()
             .unwrap()
     }
@@ -201,6 +206,253 @@ fn update(writer: &Connection, id: &str, updated: i64, data: Value) {
             rusqlite::params![id, updated, data.to_string()],
         )
         .unwrap();
+}
+
+#[test]
+fn opencode_v2_unfinished_overlap_restarts_after_a_later_window_failure() {
+    let h = Harness::new();
+    let mut writer = Connection::open(&h.database).unwrap();
+    writer.execute_batch(SESSION_SCHEMA).unwrap();
+    session(&writer, "ses");
+    message(
+        &writer,
+        "prior",
+        "ses",
+        0,
+        T0 + 1_000_000,
+        serde_json::json!({"type":"system"}),
+    );
+    h.successful();
+    let tx = writer.transaction().unwrap();
+    for seq in 1..=25_000 {
+        message(
+            &tx,
+            &seq.to_string(),
+            "ses",
+            seq,
+            T0 + 500_000 + seq,
+            serde_json::json!({"type":"system"}),
+        );
+    }
+    message(
+        &tx,
+        "broken",
+        "ses",
+        25_001,
+        T0 + 600_000,
+        serde_json::json!({"type":"system"}),
+    );
+    tx.execute(
+        "UPDATE session_message SET data = 'not-json' WHERE id = 'broken'",
+        [],
+    )
+    .unwrap();
+    message(
+        &tx,
+        "unseen",
+        "ses",
+        25_002,
+        T0 + 700_000,
+        assistant(bash(
+            "late-call",
+            "echo synthetic-v2-command-marker",
+            serde_json::json!({"status":"running", "metadata":{}}),
+        )),
+    );
+    tx.commit().unwrap();
+    let output_blocked = || {
+        let before = fs::read(&h.state).unwrap();
+        let before_log = fs::read(&h.log).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(h.log.with_file_name("events.jsonl.lock"))
+            .unwrap();
+        fs4::FileExt::lock(&lock).unwrap();
+        let output = h.scan();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("resource busy; retry later"));
+        assert_eq!(
+            fs::read(&h.state).unwrap(),
+            before,
+            "required output must gate both coordinates"
+        );
+        assert_eq!(fs::read(&h.log).unwrap(), before_log);
+        fs4::FileExt::unlock(&lock).unwrap();
+    };
+    output_blocked();
+    let failed = h.successful();
+    assert_eq!(
+        failed["source_processing"]["evaluated_window_count"], 1,
+        "{failed}"
+    );
+    assert_eq!(
+        failed["source_processing"]["incomplete_window_source_count"], 1,
+        "{failed}"
+    );
+    assert_eq!(
+        failed["source_processing"]["failures"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(h.cursors()["session_message"], T0 + 1_000_000);
+    let saved = fs::read(&h.state).unwrap();
+    let mut saved_value: Value = serde_json::from_slice(&saved).unwrap();
+    let cursor = saved_value["sqlite_ingestion_cursors"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    assert_eq!(cursor["continue_after_time_updated"], T0 + 525_000);
+    assert_eq!(cursor["draining"], true);
+    // Upgrade an older drain without a raw cut by re-reading its overlap.
+    cursor
+        .as_object_mut()
+        .unwrap()
+        .remove("continue_after_time_updated");
+    fs::write(&h.state, serde_json::to_vec(&saved_value).unwrap()).unwrap();
+    let upgraded = h.successful();
+    assert_eq!(
+        upgraded["source_processing"]["parsed_record_count"], 25_000,
+        "{upgraded}"
+    );
+    let saved = fs::read(&h.state).unwrap();
+    for flags in [&["--dry-run"][..], &["--backfill"][..]] {
+        let output = h.scan_with(flags);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let after = fs::read(&h.state).unwrap();
+        if flags == ["--dry-run"] {
+            assert_eq!(after, saved);
+        } else {
+            // Backfill may update source/outage inventory, never ingestion or baselines.
+            let before: Value = serde_json::from_slice(&saved).unwrap();
+            let after: Value = serde_json::from_slice(&after).unwrap();
+            for family in [
+                "sqlite_ingestion_cursors",
+                "baseline_snapshots",
+                "baseline_source_contributions",
+            ] {
+                assert_eq!(after[family], before[family], "{family}");
+            }
+        }
+    }
+    let saved = fs::read(&h.state).unwrap();
+    let history = h.history(&h.temp.path().join("history.jsonl"));
+    assert!(
+        history.status.success(),
+        "{}",
+        String::from_utf8_lossy(&history.stderr)
+    );
+    assert_eq!(fs::read(&h.state).unwrap(), saved);
+    writer
+        .execute("DELETE FROM session_message WHERE id = 'prior'", [])
+        .unwrap();
+    let regressed = h.scan();
+    assert!(regressed.status.success());
+    let summary: Value = serde_json::from_slice(&regressed.stdout).unwrap();
+    assert_eq!(
+        summary["source_processing"]["failures"][0]["acquisition_code"],
+        "resume_regressed"
+    );
+    assert_eq!(h.cursors()["session_message"], T0 + 1_000_000);
+    message(
+        &writer,
+        "prior",
+        "ses",
+        0,
+        T0 + 1_000_000,
+        serde_json::json!({"type":"system"}),
+    );
+    update(
+        &writer,
+        "broken",
+        T0 + 600_000,
+        serde_json::json!({"type":"system"}),
+    );
+    output_blocked();
+    let restarted = h.successful();
+    assert_eq!(
+        restarted["source_processing"]["parsed_record_count"], 4,
+        "{restarted}"
+    );
+    assert!(
+        h.events()
+            .iter()
+            .any(|event| event["rule_ids"] == serde_json::json!(["synthetic.v2.command"]))
+    );
+    assert_eq!(h.cursors()["session_message"], T0 + 1_000_000);
+    let complete: Value = serde_json::from_slice(&fs::read(&h.state).unwrap()).unwrap();
+    let cursor = complete["sqlite_ingestion_cursors"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert!(cursor.get("draining").is_none());
+    assert!(cursor.get("continue_after_time_updated").is_none());
+}
+
+#[test]
+fn opencode_v2_empty_completed_drain_restores_overlap() {
+    let h = Harness::new();
+    let writer = Connection::open(&h.database).unwrap();
+    writer.execute_batch(SESSION_SCHEMA).unwrap();
+    session(&writer, "ses");
+    message(
+        &writer,
+        "prior",
+        "ses",
+        0,
+        T0 + 1_000_000,
+        serde_json::json!({"type":"system"}),
+    );
+    h.successful();
+    // A valid saved cut whose remaining rows were deleted before restart.
+    let mut saved: Value = serde_json::from_slice(&fs::read(&h.state).unwrap()).unwrap();
+    let cursor = saved["sqlite_ingestion_cursors"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    cursor["draining"] = true.into();
+    cursor["continue_after_time_updated"] = (T0 + 1_000_000).into();
+    fs::write(&h.state, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let empty = h.successful();
+    assert_eq!(empty["source_processing"]["parsed_record_count"], 0);
+    let complete: Value = serde_json::from_slice(&fs::read(&h.state).unwrap()).unwrap();
+    let cursor = complete["sqlite_ingestion_cursors"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert!(
+        cursor.get("continue_after_time_updated").is_none(),
+        "{cursor}"
+    );
+    assert!(cursor.get("draining").is_none());
+    assert_eq!(cursor["last_time_updated"], T0 + 1_000_000);
+    // The restored overlap must acquire a newly inserted backdated row.
+    message(
+        &writer,
+        "late",
+        "ses",
+        1,
+        T0 + 900_000,
+        serde_json::json!({"type":"system"}),
+    );
+    assert_eq!(
+        h.successful()["source_processing"]["parsed_record_count"],
+        2
+    );
 }
 
 fn assistant(tool: Value) -> Value {

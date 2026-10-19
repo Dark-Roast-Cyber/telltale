@@ -58,11 +58,14 @@ pub struct SqliteIngestionCursor {
     pub table: String,
     pub last_time_updated: i64,
     pub observed_at_unix_ms: u64,
-    /// The last read ended a cut OpenCode v2 window at `last_time_updated`:
-    /// continue strictly after it, without the overlap, until a window
-    /// completes. Absent in state written before rolling windows.
+    /// An unfinished OpenCode v2 window. Older writers stored only the
+    /// monotone checkpoint, so an absent raw cut requires overlap replay.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub draining: bool,
+    /// Raw cut, independent of the monotone `last_time_updated` checkpoint.
+    /// Older readers reject this unknown field rather than skip unfinished rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continue_after_time_updated: Option<i64>,
 }
 
 pub use telltale_schema::source::SourceInventoryChangeSummary;
@@ -376,10 +379,10 @@ impl ScanState {
             .map(|cursor| cursor.last_time_updated)
     }
 
-    pub fn sqlite_ingestion_cursor_draining(&self, source: &Source, table: &str) -> bool {
+    pub fn sqlite_ingestion_continue_after(&self, source: &Source, table: &str) -> Option<i64> {
         self.sqlite_ingestion_cursors
             .get(&sqlite_ingestion_cursor_key(source, table))
-            .is_some_and(|cursor| cursor.draining)
+            .and_then(|cursor| cursor.continue_after_time_updated)
     }
 
     pub fn observe_sqlite_ingestion_cursor(
@@ -401,14 +404,11 @@ impl ScanState {
             table,
             last_time_updated,
             observed_at_unix_ms,
-            false,
+            None,
         );
     }
 
-    /// Record the end of a cut window; the next read continues strictly after
-    /// it, without the overlap. The stored position remains monotone even when
-    /// a cut ends below the prior high-water; it is not a raw continuation
-    /// coordinate for unfinished overlap below that watermark.
+    /// Record both the raw cut for strict continuation and a monotone checkpoint.
     pub fn observe_sqlite_ingestion_drain(
         &mut self,
         source: &Source,
@@ -416,6 +416,7 @@ impl ScanState {
         last_time_updated: i64,
         observed_at_unix_ms: u64,
     ) {
+        let cut = last_time_updated;
         let last_time_updated = self
             .sqlite_ingestion_cursors
             .get(&sqlite_ingestion_cursor_key(source, table))
@@ -427,7 +428,7 @@ impl ScanState {
             table,
             last_time_updated,
             observed_at_unix_ms,
-            true,
+            Some(cut),
         );
     }
 
@@ -437,7 +438,7 @@ impl ScanState {
         table: &str,
         last_time_updated: i64,
         observed_at_unix_ms: u64,
-        draining: bool,
+        continue_after_time_updated: Option<i64>,
     ) {
         self.sqlite_ingestion_cursors.insert(
             sqlite_ingestion_cursor_key(source, table),
@@ -448,7 +449,8 @@ impl ScanState {
                 table: table.to_string(),
                 last_time_updated,
                 observed_at_unix_ms,
-                draining,
+                draining: continue_after_time_updated.is_some(),
+                continue_after_time_updated,
             },
         );
     }
@@ -693,8 +695,23 @@ fn validate_state_families(
                     "last_time_updated",
                     "observed_at_unix_ms",
                     "draining",
+                    "continue_after_time_updated",
                 ],
             )?;
+            if let Some(cut) = value.get("continue_after_time_updated") {
+                let valid = cut
+                    .as_i64()
+                    .zip(value["last_time_updated"].as_i64())
+                    .is_some_and(|(cut, checkpoint)| cut <= checkpoint);
+                if !valid
+                    || value["draining"] != true
+                    || value["client"] != "opencode"
+                    || value["source_id"] != "opencode.sqlite"
+                    || value["table"] != "session_message"
+                {
+                    return Err(MIGRATION_GUIDANCE.into());
+                }
+            }
             if native {
                 require_fields(
                     value,
@@ -1547,6 +1564,81 @@ mod tests {
         assert_eq!(
             state.sqlite_ingestion_cursor_time_updated(&source, "part"),
             Some(1_000)
+        );
+    }
+
+    #[test]
+    fn sqlite_unfinished_overlap_state_is_validated_and_migrates_without_losing_the_cut() {
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".into(),
+            path: Path::new("/synthetic/overlap.db").to_path_buf(),
+        };
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, "session_message", 1_000_000, 1);
+        state.observe_sqlite_ingestion_drain(&source, "session_message", 600_000, 2);
+        let bytes = state.canonical_bytes().unwrap();
+        let migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
+        assert_eq!(migrated.canonical_bytes().unwrap(), bytes);
+        assert_eq!(
+            migrated.sqlite_ingestion_continue_after(&source, "session_message"),
+            Some(600_000)
+        );
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        let key = value["sqlite_ingestion_cursors"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        for cut in [i64::MIN, -1, 0] {
+            let mut signed = value.clone();
+            signed["sqlite_ingestion_cursors"][&key]["last_time_updated"] = 0.into();
+            signed["sqlite_ingestion_cursors"][&key]["continue_after_time_updated"] = cut.into();
+            let bytes = serde_json::to_vec(&signed).unwrap();
+            let loaded = ScanState::validate_native_bytes(&bytes).unwrap();
+            assert_eq!(
+                loaded.sqlite_ingestion_continue_after(&source, "session_message"),
+                Some(cut)
+            );
+            let migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
+            assert_eq!(
+                migrated.canonical_bytes().unwrap(),
+                loaded.canonical_bytes().unwrap()
+            );
+        }
+        for (field, invalid) in [
+            ("continue_after_time_updated", serde_json::json!(1_000_001)),
+            ("continue_after_time_updated", Value::Null),
+            ("continue_after_time_updated", serde_json::json!("600000")),
+            ("draining", serde_json::json!(false)),
+            ("table", serde_json::json!("part")),
+            ("client", serde_json::json!("codex")),
+            ("source_id", serde_json::json!("opencode.sqlite.lookalike")),
+        ] {
+            let mut bad = value.clone();
+            bad["sqlite_ingestion_cursors"][&key][field] = invalid;
+            assert!(
+                ScanState::validate_native_bytes(&serde_json::to_vec(&bad).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        // Old drain state remains readable, but has no trustworthy strict cut.
+        let mut old = value;
+        old["sqlite_ingestion_cursors"][&key]
+            .as_object_mut()
+            .unwrap()
+            .remove("continue_after_time_updated");
+        let old = ScanState::validate_native_bytes(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(
+            old.sqlite_ingestion_continue_after(&source, "session_message"),
+            None
+        );
+        assert_eq!(
+            old.sqlite_ingestion_cursor_time_updated(&source, "session_message"),
+            Some(1_000_000)
         );
     }
 

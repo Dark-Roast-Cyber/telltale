@@ -2169,9 +2169,9 @@ fn oversized_selections_roll_through_windows_until_drained() {
             window_complete: false,
         }
     );
-    let rest = packed
-        .acquire(OpenCodeSqliteReadOptions::default().continue_session_messages_after(T0 + 2))
-        .unwrap();
+    let continuation = resume.continue_session_messages_after(T0 + 2);
+    assert_eq!(continuation.message_resume_high_water, Some(T0 + 3));
+    let rest = packed.acquire(continuation).unwrap();
     assert_eq!(
         shape(&rest)
             .into_iter()
@@ -2185,6 +2185,17 @@ fn oversized_selections_roll_through_windows_until_drained() {
             message_max_time_updated: Some(T0 + 3),
             window_complete: true,
         }
+    );
+
+    // The raw continuation is not the regression floor: rows can still exist
+    // after the cut while the previously evaluated checkpoint has disappeared.
+    packed
+        .connection
+        .execute("DELETE FROM session_message WHERE id = 'msg_3'", [])
+        .unwrap();
+    assert_eq!(
+        packed.acquire(continuation).err(),
+        Some(AcquisitionError::ResumeRegressed)
     );
 
     // A cut never splits rows sharing one `time_updated`: it backs off to the
