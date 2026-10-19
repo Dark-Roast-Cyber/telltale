@@ -18,6 +18,15 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
+## Start here
+
+- **Use it:** [Install](docs/install.md), then the fixture-safe checks in [Quick start](#quick-start).
+- **Understand coverage:** [Source validation matrix](docs/source-validation-matrix.md).
+- **Use the telemetry:** [Telemetry output](docs/telemetry-output.md).
+- **Embed it:** [Embedding contract](docs/embedding.md).
+- **Find the right document:** [Documentation map](docs/README.md).
+- **Learn the practice:** [Agent Archaeology](https://agentarchaeology.ai/).
+
 > **Runtime contract:** `telltale` (`telltale.exe`) is the headless scanner binary and
 > CLI identity. Runtime configuration uses `TELLTALE_*` names only; unknown
 > inherited non-canonical variables are ignored. Native paths are
