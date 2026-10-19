@@ -22,6 +22,9 @@ build, test, configure, and operate it:
   allowlist examples, and selected configuration examples under `config/`
   that ship in the open-source core. The release bundle is narrower and ships
   only the reviewed deployment examples listed below.
+- The rule-package format and loader, and the embedded Apache-2.0 community
+  rule package (`crates/telltale-rules/data/community.package.yaml`) vendored
+  from a published community detections release.
 - Synthetic tests, fixtures, and benchmarks under `tests/` and `benches/`.
 - Public technical documentation under `docs/`, plus reviewed examples and
   assets that ship in the open-source core.
@@ -37,7 +40,10 @@ Apache-2.0 public tree unless they carry their own explicit license file and
 clear packaging boundary. Candidate separate-license areas include:
 
 - AI-assisted rule and policy authoring.
-- Managed or signed detection feeds.
+- Managed or signed detection feeds: hosted delivery, automatic updates, or
+  separately licensed packages. Packages carry their own `license` field, so such
+  content can load through the open rule-package format without changing the
+  Apache-2.0 core or the community package.
 - Continuous policy monitoring services.
 - Local AI review or endpoint elevation features beyond the deterministic core.
 - EDR, SOAR, case-management, or containment integrations.

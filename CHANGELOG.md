@@ -6,6 +6,21 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Add rule packages and enable community rules by default. Telltale now embeds
+  the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
+  community detections repository: Git hook path changes, MCP server
+  registration commands, and Windows persistence commands. `--no-community-rules`
+  or `TELLTALE_COMMUNITY_RULES=0` keeps only the core rules; `--no-default-rules`
+  now omits both core rules and the embedded community snapshot. Operators can
+  install versioned, namespaced `telltale-rule-package/v1` files in
+  `rule-packages.d` to run a newer community release or their own packages.
+  Packages only add definitions and cannot reuse a core namespace. `rules
+  validate`, `config validate`, and scan effective configuration report each
+  active package's ID, version, content SHA-256, and origin. The embedding
+  facade adds `PipelineBuilder::rule_package`, `without_community_rules`, and
+  `Pipeline::rule_packages`; the bundled rule catalog includes community entries
+  with a `package_id`.
+
 - Fix Claude Code ingestion for current 2.1.x transcripts, including the Claude
   desktop app's Code tab on Windows. Bookkeeping records are skipped, and
   `thinking`/media blocks are dropped. Tool arguments and results live once on

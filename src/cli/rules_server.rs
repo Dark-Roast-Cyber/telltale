@@ -373,6 +373,7 @@ fn validate_rules_request(body: &[u8]) -> Result<ApiResponse, Box<dyn std::error
             &crate::rules::RuleResolutionDiagnostics {
                 sources: Vec::new(),
                 provenance: Vec::new(),
+                packages: Vec::new(),
             },
         ))),
         Err(error) => Ok(ApiResponse::bad_request(error.to_string())),
@@ -909,6 +910,7 @@ modifiers: []
                     winner: format!("/private/{marker}/winner.yaml"),
                     replaced_sources: vec![format!("/private/{marker}/replaced.yaml")],
                 }],
+                packages: Vec::new(),
             },
         );
 

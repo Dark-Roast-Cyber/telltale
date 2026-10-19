@@ -163,13 +163,22 @@ limits. Those limits do not bound OS/backend buffers or total process memory.
 
 ### Local rule configuration
 
+Telltale ships bundled core rules and an embedded community rule package
+(`telltale.community`, rule IDs `tdx.*`) from the
+[community detections repository](https://github.com/Dark-Roast-Cyber/telltale-detections);
+both are on by default. Use `--no-community-rules` (or
+`TELLTALE_COMMUNITY_RULES=0`) to run only the core rules.
+
 Telltale discovers local YAML config files under `/etc/telltale` and
 `$XDG_CONFIG_HOME/telltale` (or `$HOME/.config/telltale`) without requiring
 every path on the command line. Managed rule packs resolve in fixed tier order
-(bundled defaults → `organization-rules.d` → `rules.d` → `ui-rules.d`); a
-higher tier fully replaces a same-ID definition in place, while unique IDs are
-additive. `overrides.d` tunes rules without editing source YAML, and
-`policies.d`/`allowlists.d` provide policy and suppression config.
+(bundled core → rule packages → `organization-rules.d` → `rules.d` →
+`ui-rules.d`); a higher tier fully replaces a same-ID definition in place, while
+unique IDs are additive. Rule packages in `rule-packages.d` are versioned,
+namespaced, additive files: install a newer community release or your own
+custom package there without a Telltale release. `overrides.d` tunes rules
+without editing source YAML, and `policies.d`/`allowlists.d` provide policy and
+suppression config.
 
 Use `--config-dir <path>` for explicit config roots, or `--no-local-config` to
 disable discovery. Run `telltale config validate` as the local config preflight

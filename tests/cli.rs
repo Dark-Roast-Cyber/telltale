@@ -28,6 +28,25 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
 use tempfile::tempdir;
 
+/// Rules the CLI loads without local config: bundled core rules plus the
+/// embedded community package. Computed through the embedding facade so a
+/// community refresh does not rewrite every count, and so CLI and facade agree.
+fn default_rule_count() -> usize {
+    telltale_core::Pipeline::builder()
+        .build()
+        .expect("default rules")
+        .rule_count()
+}
+
+/// Rule documents the CLI loads without local config: core plus each
+/// embedded community document.
+fn default_rule_source_count() -> usize {
+    1 + telltale_rules::package::bundled_community_package()
+        .expect("embedded community package")
+        .documents()
+        .len()
+}
+
 fn event_schema_validator() -> &'static jsonschema::Validator {
     static VALIDATOR: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
     VALIDATOR.get_or_init(|| {

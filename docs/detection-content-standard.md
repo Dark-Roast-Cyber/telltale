@@ -1,6 +1,6 @@
 # Detection Content Standard
 
-This document defines the quality bar for Telltale detection rules, fixtures, and related documentation. Every bundled rule must meet this standard before it ships. Custom rules loaded via `--rules` are encouraged but not required to follow it.
+This document defines the quality bar for Telltale detection rules, fixtures, and related documentation. Every bundled core rule must meet this standard before it ships. Embedded community rules follow the community gate in [Community Rules](#community-rules). Custom rules and packages are encouraged but not required to follow it.
 
 ## Required Rule Metadata
 
@@ -94,6 +94,32 @@ Every rule should have a documented rationale for its severity level. This ratio
 - How common is this behavior in legitimate developer workflows?
 - What is the blast radius if this behavior is malicious?
 - Does this rule fire alone or primarily as part of a chain?
+
+## Community Rules
+
+Community rules are developed in the
+[community detections repository](https://github.com/Dark-Roast-Cyber/telltale-detections)
+and ship as the `telltale.community` rule package (namespace `tdx`). Telltale
+embeds a pinned release and enables it by default; see
+[Install](install.md#community-rules-and-rule-packages) for the opt-out and for
+installing a newer release.
+
+- **Maturity.** Each community rule sets Rule v1 `status` to `experimental`,
+  `test`, or `stable`. Only `test` and `stable` rules ship in a community release.
+- **Evidence.** A community rule carries an adversarial scenario it must match, a
+  benign look-alike it must not match, and an analyst note. Its scenario labels
+  are written independently of detector output and assessed against a pinned
+  Telltale revision in that repository. Telltale's local fixture requirement
+  applies to core rules; `rules coverage --no-community-rules` reports it.
+- **Refreshing the embedded snapshot.** Run
+  `scripts/dev/vendor-community-rules.py` on a published release package with its
+  `SHA256SUMS`, after `gh attestation verify`. Review the package diff as
+  detection content, then run `cargo test --locked -p telltale-rules package`,
+  the CLI rules tests, and `make evaluation-check`.
+- **Promotion to core.** A `stable` community rule may become a core rule with a
+  new non-`tdx` ID once it meets this standard: fixtures, a detection test, use-case
+  notes, and a changelog entry. The community repository then retires the `tdx`
+  ID under [Deprecation Rules](#deprecation-rules).
 
 ## Process-Chain Rules
 

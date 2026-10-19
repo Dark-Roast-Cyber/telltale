@@ -1534,7 +1534,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        crate::default_rule_source_count()
     );
     assert_source_processing_accounting(summary);
     assert_detection_flow_accounting(summary, 30, 0);
@@ -1790,7 +1790,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["status"], "ok");
     assert_eq!(event["telltale_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
-    assert_eq!(event["rule_count"], 18);
+    assert_eq!(event["rule_count"], crate::default_rule_count());
     assert_eq!(event["emitted_count"], 31);
     assert_eq!(event["suppressed_count"], 0);
     assert_eq!(event["scanner_error_count"], 0);

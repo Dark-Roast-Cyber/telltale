@@ -34,6 +34,7 @@ pub struct RuleCatalogEntry {
     enabled: bool,
     when_all_categories: Vec<String>,
     when_all_rule_ids: Vec<String>,
+    package_id: Option<String>,
 }
 impl RuleCatalogEntry {
     pub fn id(&self) -> &str {
@@ -90,10 +91,16 @@ impl RuleCatalogEntry {
     pub fn when_all_rule_ids(&self) -> &[String] {
         &self.when_all_rule_ids
     }
+    /// The rule package that ships this definition; `None` for core rules.
+    pub fn package_id(&self) -> Option<&str> {
+        self.package_id.as_deref()
+    }
 }
 
-/// Bundled UI metadata, deterministically ID-ordered and bounded. It does not
-/// describe custom documents or policy overrides in a caller's Pipeline.
+/// Bundled UI metadata for core rules and the embedded community package,
+/// deterministically ID-ordered and bounded. `enabled` describes the default
+/// pipeline; this does not describe supplied packages, custom documents, or
+/// policy overrides in a caller's Pipeline.
 /// Parses through the RuleSet owner; action semantics come from Detection v2.
 /// No source, environment, or filesystem access is performed.
 pub fn bundled_rule_catalog(
@@ -107,8 +114,24 @@ pub fn bundled_rule_catalog(
             "bundled_catalog_exceeds_bounds",
         ))));
     }
-    let set = telltale_rules::bundled_default_rule_set().map_err(PipelineError::Compilation)?;
-    if set.rules.len() + set.modifiers.len() > 4096 {
+    let community =
+        telltale_rules::package::bundled_community_package().map_err(PipelineError::Compilation)?;
+    let community_id = community.id().to_owned();
+    let mut sources = vec![(
+        None,
+        telltale_rules::bundled_default_rule_set().map_err(PipelineError::Compilation)?,
+    )];
+    sources.extend(
+        community
+            .into_documents()
+            .into_iter()
+            .map(|document| (Some(community_id.clone()), document)),
+    );
+    let definitions = sources
+        .iter()
+        .map(|(_, set)| set.rules.len() + set.modifiers.len())
+        .sum::<usize>();
+    if definitions > 4096 {
         return Err(PipelineError::Compilation(Box::new(std::io::Error::other(
             "bundled_catalog_exceeds_bounds",
         ))));
@@ -119,59 +142,63 @@ pub fn bundled_rule_catalog(
     let (plan, _) = pipeline.compile_semantics(Some(options))?;
     let export = pipeline.rule_set.compatibility_export();
     let mut entries = Vec::new();
-    for rule in set.rules {
-        let enabled = export
-            .rules()
-            .iter()
-            .any(|effective| effective.id == rule.id);
-        entries.push(RuleCatalogEntry {
-            id: rule.id,
-            kind: RuleCatalogKind::Rule,
-            title: rule.title,
-            explanation: rule.explanation,
-            falsepositives: rule.falsepositives,
-            category: Some(rule.category),
-            severity: Some(rule.severity),
-            session_score: rule.score,
-            action_score: enabled.then_some(rule.score),
-            action_ordered: false,
-            action_within_seconds: None,
-            action_link: None,
-            atlas_tags: rule.atlas_tags,
-            signal_type: rule.signal_type,
-            tags: rule.tags,
-            enabled,
-            when_all_categories: Vec::new(),
-            when_all_rule_ids: Vec::new(),
-        });
-    }
-    for modifier in set.modifiers {
-        let action = plan.action_modifier_semantics(&modifier.id, options);
-        entries.push(RuleCatalogEntry {
-            id: modifier.id,
-            kind: RuleCatalogKind::Modifier,
-            title: None,
-            explanation: modifier.explanation,
-            falsepositives: modifier.falsepositives,
-            category: None,
-            severity: None,
-            session_score: modifier.score,
-            action_score: action.as_ref().map(|semantics| semantics.score),
-            action_ordered: action.as_ref().is_some_and(|semantics| semantics.ordered),
-            action_within_seconds: action
-                .as_ref()
-                .and_then(|semantics| semantics.within_seconds),
-            action_link: action
-                .as_ref()
-                .and_then(|semantics| semantics.link)
-                .map(str::to_owned),
-            atlas_tags: modifier.atlas_tags,
-            signal_type: modifier.signal_type,
-            tags: Vec::new(),
-            enabled: action.is_some(),
-            when_all_categories: modifier.when_all_categories,
-            when_all_rule_ids: modifier.when_all_rule_ids,
-        });
+    for (package_id, set) in sources {
+        for rule in set.rules {
+            let enabled = export
+                .rules()
+                .iter()
+                .any(|effective| effective.id == rule.id);
+            entries.push(RuleCatalogEntry {
+                id: rule.id,
+                kind: RuleCatalogKind::Rule,
+                title: rule.title,
+                explanation: rule.explanation,
+                falsepositives: rule.falsepositives,
+                category: Some(rule.category),
+                severity: Some(rule.severity),
+                session_score: rule.score,
+                action_score: enabled.then_some(rule.score),
+                action_ordered: false,
+                action_within_seconds: None,
+                action_link: None,
+                atlas_tags: rule.atlas_tags,
+                signal_type: rule.signal_type,
+                tags: rule.tags,
+                enabled,
+                when_all_categories: Vec::new(),
+                when_all_rule_ids: Vec::new(),
+                package_id: package_id.clone(),
+            });
+        }
+        for modifier in set.modifiers {
+            let action = plan.action_modifier_semantics(&modifier.id, options);
+            entries.push(RuleCatalogEntry {
+                id: modifier.id,
+                kind: RuleCatalogKind::Modifier,
+                title: None,
+                explanation: modifier.explanation,
+                falsepositives: modifier.falsepositives,
+                category: None,
+                severity: None,
+                session_score: modifier.score,
+                action_score: action.as_ref().map(|semantics| semantics.score),
+                action_ordered: action.as_ref().is_some_and(|semantics| semantics.ordered),
+                action_within_seconds: action
+                    .as_ref()
+                    .and_then(|semantics| semantics.within_seconds),
+                action_link: action
+                    .as_ref()
+                    .and_then(|semantics| semantics.link)
+                    .map(str::to_owned),
+                atlas_tags: modifier.atlas_tags,
+                signal_type: modifier.signal_type,
+                tags: Vec::new(),
+                enabled: action.is_some(),
+                when_all_categories: modifier.when_all_categories,
+                when_all_rule_ids: modifier.when_all_rule_ids,
+                package_id: package_id.clone(),
+            });
+        }
     }
     entries.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(entries)
@@ -240,7 +267,23 @@ mod tests {
     fn catalog_preserves_display_metadata_without_executable_content() {
         let catalog = bundled_rule_catalog(&DetailedEvaluationOptions::default()).unwrap();
         let raw = telltale_rules::bundled_default_rule_set().unwrap();
-        assert_eq!(catalog.len(), raw.rules.len() + raw.modifiers.len());
+        let community = telltale_rules::package::bundled_community_package().unwrap();
+        let community_definitions = community
+            .documents()
+            .iter()
+            .map(|document| document.rules.len() + document.modifiers.len())
+            .sum::<usize>();
+        assert_eq!(
+            catalog.len(),
+            raw.rules.len() + raw.modifiers.len() + community_definitions
+        );
+        assert_eq!(
+            catalog
+                .iter()
+                .filter(|entry| entry.package_id().is_none())
+                .count(),
+            raw.rules.len() + raw.modifiers.len()
+        );
         assert!(catalog.windows(2).all(|pair| pair[0].id() < pair[1].id()));
         for rule in raw.rules {
             let entry = catalog.iter().find(|entry| entry.id() == rule.id).unwrap();

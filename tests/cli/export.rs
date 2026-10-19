@@ -249,7 +249,7 @@ fn status_reports_latest_health_event() {
     assert_eq!(summary["health_check_name"], "source_discovery");
     assert_eq!(summary["health_check_status"], "ok");
     assert_eq!(summary["active_policy_name"], Value::Null);
-    assert_eq!(summary["rule_count"], 18);
+    assert_eq!(summary["rule_count"], crate::default_rule_count());
     assert!(
         summary["detection_count"]
             .as_u64()

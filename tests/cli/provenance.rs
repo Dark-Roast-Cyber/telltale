@@ -17,7 +17,10 @@ fn config_provenance_is_deterministic_and_validates_as_public_manifest() {
     let manifest =
         telltale_schema::provenance::ProducerProvenanceManifestV1::from_json_bytes(&first.stdout)
             .expect("public manifest");
-    assert_eq!(manifest.rules.rule_count, 18);
+    assert_eq!(
+        manifest.rules.rule_count as usize,
+        crate::default_rule_count()
+    );
     assert_eq!(
         manifest.rules.canonicalization,
         "rule-v1-compiled-compatibility-v2"

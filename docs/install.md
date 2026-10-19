@@ -400,8 +400,9 @@ default. Unknown inherited variables are ignored.
 
 ## Local Rule, Policy, And Allowlist Config
 
-Telltale loads bundled detection rules by default. Operators can add local YAML
-without repeating every path by creating a local config root. Existing default
+Telltale loads its bundled core rules and the embedded community rule package by
+default. Operators can add local YAML and rule packages without repeating every
+path by creating a local config root. Existing default
 roots are checked in deterministic order:
 
 - `/etc/telltale`
@@ -412,6 +413,7 @@ Supported directories for this phase are:
 
 ```text
 /etc/telltale/
+  rule-packages.d/*.yaml|*.yml
   organization-rules.d/*.yaml|*.yml
   rules.d/*.yaml|*.yml
   ui-rules.d/*.yaml|*.yml
@@ -420,7 +422,8 @@ Supported directories for this phase are:
   allowlists.d/*.yaml|*.yml
 ```
 
-Rule packs resolve in fixed tier order: bundled defaults, `organization-rules.d`,
+Rule packs resolve in fixed tier order: bundled core rules, rule packages (the
+embedded community package and `rule-packages.d`), `organization-rules.d`,
 `rules.d` deployment files, and `ui-rules.d` local/UI files. Files are sorted
 within each root and roots are processed in configured root order. A higher tier
 fully replaces a same-ID definition in place; unique IDs are additive. Equal-tier
@@ -437,7 +440,79 @@ not provided.
 trusted operator configuration. Protect them from untrusted or unsigned writes:
 higher tiers can fully replace bundled rules, including disabling or changing
 detections. Rule-pack integrity or signing is not provided by this configuration
-mechanism.
+mechanism. `rule-packages.d` files cannot replace or disable core rules, but they
+add detections, scores, and analyst-facing text, so install only packages whose
+release checksum or attestation you have verified.
+
+### Community rules and rule packages
+
+Detection content comes from three sources that share one rule engine, similar to
+running a bundled ruleset beside community and custom rule feeds:
+
+| Source | Delivered as | Default |
+| --- | --- | --- |
+| Core rules | Compiled into the binary (`telltale rules export-default`) | On; `--no-default-rules` removes them |
+| Community rules | Package `telltale.community`, namespace `tdx`, embedded in the binary | On; opt out below |
+| Custom packages | Operator-installed `rule-packages.d/*.yaml` files | Off until installed |
+
+Community rules come from the
+[community detections repository](https://github.com/Dark-Roast-Cyber/telltale-detections),
+which reviews each rule against independently labeled synthetic scenarios before
+it reaches a release. Use only the core rules with `--no-community-rules` on
+`scan`, `watch`, `rules`, and `config` commands, or set
+`TELLTALE_COMMUNITY_RULES=0` in a service environment whose arguments are fixed.
+`--no-default-rules` omits both the core rules and the embedded community
+snapshot, while installed packages still load like other managed content.
+
+A rule package is one YAML file:
+
+```yaml
+format: telltale-rule-package/v1
+id: acme.agent-rules        # unique package identity
+version: "1.4.0"
+publisher: Acme security engineering
+license: Apache-2.0
+rule_namespace: acme        # every rule and modifier ID starts with "acme."
+source: https://example.com/acme/agent-rules   # optional, informational
+revision: 0123456789abcdef0123456789abcdef01234567  # optional, informational
+documents:
+  - version: 1
+    description: Acme agent rules.
+    defaults: {case_insensitive: true, enabled: true}
+    rules:
+      - id: acme.persistence.example
+        # ... ordinary Rule v1 fields ...
+    modifiers: []
+```
+
+Packages only add definitions. A package cannot reuse a core rule namespace,
+replace a core rule, or replace another package's rule; conflicting package IDs,
+namespaces, or rule IDs fail validation with both sources. Operators may still
+tune a package rule through `overrides.d` or replace it from
+`organization-rules.d`, `rules.d`, or `ui-rules.d`. Telltale never downloads
+packages and rejects packages that contain control or invisible formatting
+characters.
+
+To run a newer community release without waiting for a Telltale release, verify
+and install its package. An installed package with ID `telltale.community`
+replaces the embedded snapshot as a whole:
+
+```sh
+gh release download v0.2.0 --repo Dark-Roast-Cyber/telltale-detections \
+  --pattern '*.package.yaml' --pattern SHA256SUMS
+sha256sum --check SHA256SUMS
+gh attestation verify telltale.community-0.2.0.package.yaml \
+  --repo Dark-Roast-Cyber/telltale-detections
+sudo install -D -m 0644 telltale.community-0.2.0.package.yaml \
+  /etc/telltale/rule-packages.d/telltale.community.yaml
+telltale config validate
+```
+
+Install a custom package the same way under its own file name. `telltale rules
+validate` and `telltale config validate` list each effective package with its ID,
+version, content SHA-256, origin (`embedded` or `installed`), and any replaced
+embedded version; scans record the same list under
+`effective_configuration.rules.packages`.
 
 Use overrides for local rule disablement or score tuning without editing bundled
 or custom rule files:

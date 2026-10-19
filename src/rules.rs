@@ -7,13 +7,20 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+pub(crate) use telltale_rules::package::{
+    CommunityRules, PackageOrigin, RulePackage, RulePackageSummary, resolve_rule_packages,
+};
 pub(crate) use telltale_rules::*;
 
+/// Managed rule content: tiered Rule v1 packs, installed rule packages, and
+/// whether community content participates.
 #[derive(Debug, Clone, Default)]
 pub struct RulePackPaths {
     pub organization: Vec<PathBuf>,
     pub deployment: Vec<PathBuf>,
     pub local: Vec<PathBuf>,
+    pub packages: Vec<PathBuf>,
+    pub community: CommunityRules,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,6 +35,7 @@ pub struct RuleProvenance {
 pub struct RuleResolutionDiagnostics {
     pub sources: Vec<String>,
     pub provenance: Vec<RuleProvenance>,
+    pub packages: Vec<RulePackageSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +79,8 @@ pub(crate) fn resolve_rule_set_from_pack_paths_with_mode_override_paths_and_repl
         .iter()
         .map(|(path, raw)| (canonical_or_original(path), *raw))
         .collect::<BTreeMap<_, _>>();
-    let documents = load_rule_documents(pack_paths, explicit_rule_paths, mode, &replacements)?;
+    let (documents, packages) =
+        load_rule_documents(pack_paths, explicit_rule_paths, mode, &replacements)?;
     if documents.is_empty() {
         return Err(
             "no rule documents loaded; remove --no-default-rules or pass at least one --rules file"
@@ -87,7 +96,8 @@ pub(crate) fn resolve_rule_set_from_pack_paths_with_mode_override_paths_and_repl
         None => None,
     };
 
-    let (mut rule_set, diagnostics) = merge_rule_documents(documents)?;
+    let (mut rule_set, mut diagnostics) = merge_rule_documents(documents)?;
+    diagnostics.packages = packages;
     apply_rule_overrides_from_paths(&mut rule_set, override_paths)?;
     let merged_rule_set = rule_set.clone();
     Ok(RuleResolution {
@@ -100,6 +110,7 @@ pub(crate) fn resolve_rule_set_from_pack_paths_with_mode_override_paths_and_repl
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum RuleTier {
     Builtin,
+    Package,
     Organization,
     Deployment,
     Local,
@@ -110,11 +121,18 @@ impl RuleTier {
     fn name(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
+            Self::Package => "package",
             Self::Organization => "organization",
             Self::Deployment => "deployment",
             Self::Local => "local-ui",
             Self::Explicit => "explicit",
         }
+    }
+
+    /// Packages and explicit `--rules` files add definitions; they never
+    /// replace a definition from any tier.
+    fn is_additive_only(self) -> bool {
+        matches!(self, Self::Package | Self::Explicit)
     }
 }
 
@@ -129,7 +147,7 @@ fn load_rule_documents(
     explicit_rule_paths: &[PathBuf],
     mode: RuleLoadMode,
     replacements: &BTreeMap<PathBuf, &str>,
-) -> Result<Vec<RuleDocument>, Box<dyn std::error::Error>> {
+) -> Result<(Vec<RuleDocument>, Vec<RulePackageSummary>), Box<dyn std::error::Error>> {
     let mut documents = Vec::new();
     let mut managed_paths = BTreeSet::new();
     if matches!(mode, RuleLoadMode::IncludeDefault) {
@@ -139,6 +157,7 @@ fn load_rule_documents(
             rule_set: bundled_default_rule_set()?,
         });
     }
+    let packages = load_package_documents(pack_paths, mode, &mut documents)?;
 
     for (tier, paths) in [
         (RuleTier::Organization, &pack_paths.organization),
@@ -161,7 +180,54 @@ fn load_rule_documents(
         }
         documents.push(load_rule_document(RuleTier::Explicit, path, replacements)?);
     }
-    Ok(documents)
+    Ok((documents, packages))
+}
+
+/// Add the effective packages' documents at the package tier. Without bundled
+/// defaults, the embedded community snapshot is omitted but an installed
+/// community package still loads, like any other managed content.
+fn load_package_documents(
+    pack_paths: &RulePackPaths,
+    mode: RuleLoadMode,
+    documents: &mut Vec<RuleDocument>,
+) -> Result<Vec<RulePackageSummary>, Box<dyn std::error::Error>> {
+    let community = match (mode, pack_paths.community) {
+        (RuleLoadMode::CustomOnly, CommunityRules::Embedded) => CommunityRules::SuppliedOnly,
+        (_, community) => community,
+    };
+    let installed = pack_paths
+        .packages
+        .iter()
+        .map(|path| {
+            RulePackage::parse(&fs::read_to_string(path)?).map_err(|error| {
+                format!(
+                    "invalid rule package '{}': {error}",
+                    canonical_or_original(path).display()
+                )
+                .into()
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let mut summaries = Vec::new();
+    for resolved in resolve_rule_packages(community, installed)? {
+        summaries.push(resolved.summary());
+        let location = match resolved.origin {
+            PackageOrigin::Embedded => "embedded".to_string(),
+            PackageOrigin::Supplied(index) => canonical_or_original(&pack_paths.packages[index])
+                .display()
+                .to_string(),
+        };
+        let package = resolved.package;
+        let identity = format!("{}@{}", package.id(), package.version());
+        for (index, rule_set) in package.into_documents().into_iter().enumerate() {
+            documents.push(RuleDocument {
+                tier: RuleTier::Package,
+                source: format!("package:{identity}:{location}#document:{index}"),
+                rule_set,
+            });
+        }
+    }
+    Ok(summaries)
 }
 
 fn load_rule_document(
@@ -224,6 +290,7 @@ fn merge_rule_documents(
 
     for tier in [
         RuleTier::Builtin,
+        RuleTier::Package,
         RuleTier::Organization,
         RuleTier::Deployment,
         RuleTier::Local,
@@ -310,6 +377,7 @@ fn merge_rule_documents(
         RuleResolutionDiagnostics {
             sources,
             provenance,
+            packages: Vec::new(),
         },
     ))
 }
@@ -418,7 +486,7 @@ fn upsert_definition_location(
             source,
         ));
     }
-    if tier == RuleTier::Explicit || existing.tier >= tier {
+    if tier.is_additive_only() || existing.tier >= tier {
         return Err(duplicate_definition_error(
             id.to_string(),
             existing.kind,
@@ -467,7 +535,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        RuleLoadMode, RulePackPaths, canonical_or_original,
+        CommunityRules, RuleLoadMode, RulePackPaths, canonical_or_original,
         resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
     };
 
@@ -511,6 +579,7 @@ modifiers: []
             organization: discovered.organization_rule_paths,
             deployment: discovered.deployment_rule_paths,
             local: discovered.local_rule_paths,
+            ..RulePackPaths::default()
         }
     }
 
@@ -874,6 +943,7 @@ modifiers:
                     organization: vec![temp.path().join("organization-rules.d/organization.yaml")],
                     deployment: vec![deployment_first, deployment_second],
                     local: vec![local],
+                    ..RulePackPaths::default()
                 },
                 &[],
                 None,
@@ -1235,5 +1305,122 @@ overrides:
                 .score,
             12
         );
+    }
+
+    fn package_yaml(id: &str, namespace: &str, document: &str) -> String {
+        let mut lines = document.lines();
+        let mut yaml = format!(
+            "format: telltale-rule-package/v1\nid: {id}\nversion: \"1.0.0\"\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: {namespace}\ndocuments:\n  - {}\n",
+            lines.next().expect("document line")
+        );
+        for line in lines {
+            yaml.push_str(&format!("    {line}\n"));
+        }
+        yaml
+    }
+
+    #[test]
+    fn package_rules_are_additive_and_operator_tiers_can_replace_them() {
+        let temp = tempdir().expect("tempdir");
+        let package = temp.path().join("rule-packages.d/acme.yaml");
+        fs::create_dir_all(package.parent().unwrap()).expect("package dir");
+        fs::write(
+            &package,
+            package_yaml(
+                "acme.rules",
+                "acme",
+                &rule_yaml("acme.marker", "packaged", 5),
+            ),
+        )
+        .expect("package");
+        let organization = temp.path().join("organization-rules.d/tuned.yaml");
+        write_rule(&organization, "acme.marker", "tuned", 9);
+        let pack_paths = |organization: Vec<PathBuf>| RulePackPaths {
+            organization,
+            packages: vec![package.clone()],
+            ..RulePackPaths::default()
+        };
+
+        let packaged = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+            &pack_paths(Vec::new()),
+            &[],
+            None,
+            RuleLoadMode::CustomOnly,
+            &[],
+            &[],
+        )
+        .expect("package resolves");
+        assert_eq!(packaged.merged_rule_set.rules[0].score, 5);
+        assert_eq!(packaged.diagnostics.packages.len(), 1);
+        assert_eq!(packaged.diagnostics.packages[0].id, "acme.rules");
+        assert!(!packaged.diagnostics.packages[0].embedded);
+
+        let tuned = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+            &pack_paths(vec![organization]),
+            &[],
+            None,
+            RuleLoadMode::CustomOnly,
+            &[],
+            &[],
+        )
+        .expect("organization tier replaces package rule");
+        assert_eq!(tuned.merged_rule_set.rules[0].score, 9);
+        let provenance = &tuned.diagnostics.provenance[0];
+        assert!(provenance.winner.starts_with("organization:"));
+        assert!(provenance.replaced_sources[0].starts_with("package:acme.rules@1.0.0:"));
+
+        let explicit = temp.path().join("explicit.yaml");
+        write_rule(&explicit, "acme.marker", "explicit", 3);
+        let error = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+            &pack_paths(Vec::new()),
+            std::slice::from_ref(&explicit),
+            None,
+            RuleLoadMode::CustomOnly,
+            &[],
+            &[],
+        )
+        .expect_err("explicit rules cannot replace package rules");
+        assert!(
+            error.to_string().contains("duplicate rule id: acme.marker"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn embedded_community_package_loads_only_with_bundled_defaults() {
+        let resolve = |mode, community| {
+            resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                &RulePackPaths {
+                    community,
+                    ..RulePackPaths::default()
+                },
+                &[],
+                None,
+                mode,
+                &[],
+                &[],
+            )
+        };
+        let default =
+            resolve(RuleLoadMode::IncludeDefault, CommunityRules::Embedded).expect("default rules");
+        assert_eq!(default.diagnostics.packages.len(), 1);
+        assert!(default.diagnostics.packages[0].embedded);
+        assert!(
+            default
+                .diagnostics
+                .sources
+                .iter()
+                .any(|source| source.starts_with("package:telltale.community@"))
+        );
+        let core =
+            resolve(RuleLoadMode::IncludeDefault, CommunityRules::Disabled).expect("core rules");
+        assert!(core.diagnostics.packages.is_empty());
+        assert_eq!(
+            core.rule_set.rule_count(),
+            telltale_rules::load_default_rule_set()
+                .unwrap()
+                .rule_count()
+        );
+        assert!(resolve(RuleLoadMode::CustomOnly, CommunityRules::Embedded).is_err());
     }
 }

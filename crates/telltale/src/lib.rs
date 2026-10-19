@@ -26,6 +26,10 @@
 //! ```
 
 use telltale_rules::CompiledRuleSet;
+pub use telltale_rules::package::{COMMUNITY_PACKAGE_ID, RulePackageSummary};
+use telltale_rules::package::{
+    CommunityRules, ResolvedRulePackage, RulePackage, resolve_rule_packages,
+};
 
 #[cfg(feature = "protected-assignment")]
 pub mod assignment;
@@ -614,16 +618,21 @@ pub struct Pipeline {
     canonical: telltale_detect::v2::RuleV1CompatibilityPlan,
     /// The bundled process pack, loaded on first opt-in use and then reused.
     process_rules: std::sync::OnceLock<telltale_rules::process_chain::CompiledProcessChainRules>,
+    /// Identity of every rule package in `rule_set`, in load order.
+    rule_packages: Vec<RulePackageSummary>,
 }
 
-/// Builder for [`Pipeline`]. This in-memory convenience includes bundled default
-/// rules and makes extra rule documents additive; it is not the CLI's path and
-/// managed-tier configuration resolver.
+/// Builder for [`Pipeline`]. This in-memory convenience includes bundled core
+/// rules and the embedded community package, and makes supplied packages and
+/// rule documents additive; it is not the CLI's path and managed-tier
+/// configuration resolver.
 #[derive(Default)]
 pub struct PipelineBuilder {
     extra_rule_documents: Vec<String>,
+    rule_packages: Vec<String>,
     policy_document: Option<String>,
     custom_only: bool,
+    without_community: bool,
 }
 
 impl Pipeline {
@@ -634,6 +643,12 @@ impl Pipeline {
     /// Number of enabled, compiled rules in this pipeline.
     pub fn rule_count(&self) -> usize {
         self.rule_set.rule_count()
+    }
+
+    /// Identity of each rule package compiled into this pipeline, embedded
+    /// community content first, for provenance and inventory reporting.
+    pub fn rule_packages(&self) -> &[RulePackageSummary] {
+        &self.rule_packages
     }
 
     /// Resolve the exact detailed-scan semantic identity before acquisition.
@@ -941,34 +956,76 @@ impl PipelineBuilder {
         self
     }
 
-    /// Drop the bundled default rules and use only the supplied documents
-    /// (mirrors `--no-default-rules`).
+    /// Add a rule package document (`telltale-rule-package/v1`). Package
+    /// definitions are additive; a package with the community ID replaces the
+    /// embedded community snapshot (mirrors an installed `rule-packages.d` file).
+    pub fn rule_package(mut self, yaml: impl Into<String>) -> Self {
+        self.rule_packages.push(yaml.into());
+        self
+    }
+
+    /// Drop the bundled core rules and the embedded community package; use
+    /// only supplied packages and documents (mirrors `--no-default-rules`).
     pub fn without_bundled_defaults(mut self) -> Self {
         self.custom_only = true;
         self
     }
 
-    /// Compile bundled and supplied Rule v1 documents with the optional policy.
-    /// Missing documents or rejected rules/policy return [`PipelineError`].
+    /// Omit community rules from every origin, embedded or supplied
+    /// (mirrors `--no-community-rules`).
+    pub fn without_community_rules(mut self) -> Self {
+        self.without_community = true;
+        self
+    }
+
+    /// Compile bundled core rules, rule packages, and supplied Rule v1
+    /// documents with the optional policy.
+    /// Missing documents or rejected rules/packages/policy return [`PipelineError`].
     /// Canonical semantics are compiled once here and reused by every scan.
     /// Content that Rule v1 loading accepts but canonical compilation rejects
     /// returns [`PipelineError::Compilation`] here, not later from a scan.
     /// Content and policy that leave no effective rule return
     /// [`PipelineError::EmptyRuleSet`].
     pub fn build(self) -> Result<Pipeline, PipelineError> {
-        let mut documents: Vec<&str> = Vec::new();
+        let community = if self.without_community {
+            CommunityRules::Disabled
+        } else if self.custom_only {
+            CommunityRules::SuppliedOnly
+        } else {
+            CommunityRules::Embedded
+        };
+        let supplied = self
+            .rule_packages
+            .iter()
+            .map(|raw| RulePackage::parse(raw))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(PipelineError::Compilation)?;
+        let packages =
+            resolve_rule_packages(community, supplied).map_err(PipelineError::Compilation)?;
+        let rule_packages = packages
+            .iter()
+            .map(ResolvedRulePackage::summary)
+            .collect::<Vec<_>>();
+        let mut rule_sets = Vec::new();
         if !self.custom_only {
-            documents.push(telltale_rules::bundled_default_rule_yaml());
+            rule_sets.push(
+                telltale_rules::bundled_default_rule_set().map_err(PipelineError::Compilation)?,
+            );
         }
-        documents.extend(self.extra_rule_documents.iter().map(String::as_str));
-        if documents.is_empty() {
+        for resolved in packages {
+            rule_sets.extend(resolved.package.into_documents());
+        }
+        for raw in &self.extra_rule_documents {
+            rule_sets.push(
+                telltale_rules::parse_rule_document(raw).map_err(PipelineError::Compilation)?,
+            );
+        }
+        if rule_sets.is_empty() {
             return Err(PipelineError::InvalidConfiguration);
         }
-        let rule_set = telltale_rules::load_rule_set_from_documents(
-            &documents,
-            self.policy_document.as_deref(),
-        )
-        .map_err(PipelineError::Compilation)?;
+        let rule_set =
+            telltale_rules::compile_rule_sets(rule_sets, self.policy_document.as_deref())
+                .map_err(PipelineError::Compilation)?;
         // Modifiers only combine rule matches, so no effective rule leaves no
         // Rule v1 detection. Fail closed instead of building an empty pipeline,
         // even though opt-in process-chain detection does not use this rule set:
@@ -982,6 +1039,7 @@ impl PipelineBuilder {
             rule_set,
             canonical,
             process_rules: std::sync::OnceLock::new(),
+            rule_packages,
         })
     }
 }
@@ -1086,6 +1144,108 @@ modifiers: []
                 .without_bundled_defaults()
                 .build()
                 .is_err()
+        );
+    }
+
+    fn community_package(version: &str, rule_id: &str) -> String {
+        format!(
+            "format: telltale-rule-package/v1\nid: telltale.community\nversion: \"{version}\"\n\
+             publisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: tdx\ndocuments:\n  \
+             - version: 1\n    description: Synthetic.\n    defaults: {{case_insensitive: true, \
+             enabled: true}}\n    rules:\n      - id: {rule_id}\n        category: persistence\n        \
+             severity: low\n        score: 20\n        targets: [command]\n        regex: marker\n        \
+             tags: [synthetic]\n        explanation: Synthetic.\n    modifiers: []\n"
+        )
+    }
+
+    #[test]
+    fn community_rules_are_default_and_opt_out_leaves_core_rules() {
+        let embedded = telltale_rules::package::bundled_community_package().unwrap();
+        let community_rules = embedded
+            .documents()
+            .iter()
+            .map(|document| document.rules.len())
+            .sum::<usize>();
+        let default = Pipeline::builder().build().unwrap();
+        let core = Pipeline::builder()
+            .without_community_rules()
+            .build()
+            .unwrap();
+        assert_eq!(default.rule_count(), core.rule_count() + community_rules);
+        assert_eq!(
+            default.rule_packages(),
+            [RulePackageSummary {
+                id: COMMUNITY_PACKAGE_ID.to_string(),
+                version: embedded.version().to_string(),
+                content_sha256: embedded.content_sha256().to_string(),
+                embedded: true,
+                replaced_embedded_version: None,
+            }]
+        );
+        assert!(core.rule_packages().is_empty());
+        assert_eq!(
+            core.rule_count(),
+            telltale_rules::load_default_rule_set()
+                .unwrap()
+                .rule_count()
+        );
+    }
+
+    #[test]
+    fn supplied_community_package_replaces_embedded_and_stays_opt_out() {
+        let supplied = community_package("99.0.0", "tdx.synthetic.newer");
+        let replaced = Pipeline::builder().rule_package(&supplied).build().unwrap();
+        let summary = &replaced.rule_packages()[0];
+        assert_eq!(
+            (summary.version.as_str(), summary.embedded),
+            ("99.0.0", false)
+        );
+        assert!(summary.replaced_embedded_version.is_some());
+        let core = Pipeline::builder()
+            .without_community_rules()
+            .build()
+            .unwrap();
+        assert_eq!(replaced.rule_count(), core.rule_count() + 1);
+
+        let package_only = Pipeline::builder()
+            .without_bundled_defaults()
+            .rule_package(&supplied)
+            .build()
+            .unwrap();
+        assert_eq!(package_only.rule_count(), 1);
+        assert!(matches!(
+            Pipeline::builder()
+                .without_bundled_defaults()
+                .without_community_rules()
+                .rule_package(&supplied)
+                .build(),
+            Err(PipelineError::InvalidConfiguration)
+        ));
+        assert!(matches!(
+            Pipeline::builder()
+                .rule_package("format: unknown\n")
+                .build(),
+            Err(PipelineError::Compilation(_))
+        ));
+    }
+
+    #[test]
+    fn rule_catalog_attributes_community_entries_to_their_package() {
+        let catalog = bundled_rule_catalog(&DetailedEvaluationOptions::default()).unwrap();
+        let community = catalog
+            .iter()
+            .filter(|entry| entry.package_id() == Some(COMMUNITY_PACKAGE_ID))
+            .collect::<Vec<_>>();
+        assert!(!community.is_empty());
+        assert!(
+            community
+                .iter()
+                .all(|entry| entry.id().starts_with("tdx.") && entry.enabled())
+        );
+        assert!(
+            catalog
+                .iter()
+                .any(|entry| entry.id() == "secret.env.read" && entry.package_id().is_none())
         );
     }
 
