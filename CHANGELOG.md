@@ -21,6 +21,27 @@
   `Pipeline::rule_packages`; the bundled rule catalog includes community entries
   with a `package_id`.
 
+- Add `scripts/build-windows-development.ps1`, a development-only Windows build
+  helper for PowerShell 5.1 and 7. It builds `telltale` with `--locked`, adds
+  the static-CRT flag to the rustflags source Cargo reads for the default MSVC
+  target, rejects a conflicting CRT flag, never falls back to another target,
+  and reports the path, version,
+  source revision and SHA-256. It does not install anything.
+- Build provenance watches the real Git metadata paths (`HEAD`, the active loose
+  ref and `packed-refs`), so linked worktrees and new commits on the same branch
+  refresh the reported revision, and a changed `PATH` reruns the build script.
+  `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` cannot select another
+  repository, and path lookup works with Git 2.5 and later. Failures keep
+  `unknown` with bounded warning categories only.
+- Add `scripts/verify-live-host.ps1`, a read-only verifier that runs one dry-run
+  scan per selected client with temporary log and state paths. It classifies each
+  client as `passed`, `passed_with_limits`, `failed` or `not_available` from the
+  scanner output, failing a scan that exceeds `-TimeoutSeconds` (default 600) or
+  whose record-kind counts do not add up. Its report omits session IDs, source
+  paths and transcript content. It does not install, schedule or change source stores.
+- Keep process findings for executable names containing spaces by encoding
+  generated standalone deduplication keys within existing identifier bounds.
+  Existing valid keys and authored chain-key validation are unchanged.
 - Fix Claude Code ingestion for current 2.1.x transcripts, including the Claude
   desktop app's Code tab on Windows. Bookkeeping records are skipped, and
   `thinking`/media blocks are dropped. Tool arguments and results live once on
