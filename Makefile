@@ -41,7 +41,7 @@ help:
 	@echo "Telltale - Agent Detection and Response"
 	@echo ""
 	@echo "Targets:"
-	@grep -h '^## ' $(MAKEFILE_LIST) | sed 's/^## //' | sort
+	@awk '/^## /{desc=substr($$0, 4); next} /^[A-Za-z0-9_.-]+:/ && desc != "" {split($$0, t, ":"); printf "  %-34s %s\n", t[1], desc} {desc=""}' $(MAKEFILE_LIST) | sort
 
 ## Verify workspace versions, immutable release floor, and version gate regressions
 version-consistency-check:
