@@ -33,8 +33,13 @@ fn checkout_root(manifest_dir: &Path) -> Option<PathBuf> {
 }
 
 // Never expose Git stderr, environments or private paths in warnings.
+// Repository-selection overrides are removed so the checkout root alone decides
+// which metadata is reported and watched.
 fn git_output(root: &Path, args: &[&str]) -> Result<String, &'static str> {
     let output = Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -65,12 +70,10 @@ fn verify_checkout(root: &Path) -> Result<(), &'static str> {
 
 pub(crate) fn git_metadata_paths(root: &Path) -> Result<Vec<PathBuf>, &'static str> {
     verify_checkout(root)?;
+    // `--git-path` (Git 2.5+) prints a path relative to `root` unless it is
+    // already absolute, as in linked worktrees; `--path-format` needs 2.31.
     let git_path = |name: &str| -> Result<PathBuf, &'static str> {
-        git_output(
-            root,
-            &["rev-parse", "--path-format=absolute", "--git-path", name],
-        )
-        .map(PathBuf::from)
+        git_output(root, &["rev-parse", "--git-path", name]).map(|path| root.join(path))
     };
     let head = git_path("HEAD")?;
     let mut paths = vec![head.clone()];

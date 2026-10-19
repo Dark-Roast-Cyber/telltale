@@ -6,6 +6,32 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Cargo reads exactly one rustflags source, in this order, so the static-CRT
+# flag is added to the first one that is set rather than to one Cargo ignores.
+function Get-TTStaticCrtFlags([hashtable]$Saved) {
+    foreach ($name in @('CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS', 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS')) {
+        if ($Saved[$name] -match '(?:target-feature(?:=|\s+)[^\s\x1f]*-crt-static)') {
+            throw "Conflicting CRT flags in $name; remove the conflict before building."
+        }
+    }
+    if ($null -ne $Saved['CARGO_ENCODED_RUSTFLAGS']) {
+        $prefix = $Saved['CARGO_ENCODED_RUSTFLAGS']
+        if ($prefix.Length -gt 0) { $prefix += [char]31 }
+        return @{ Name = 'CARGO_ENCODED_RUSTFLAGS'; Value = $prefix + '-C' + [char]31 + 'target-feature=+crt-static' }
+    }
+    if ($null -ne $Saved['RUSTFLAGS']) {
+        return @{ Name = 'RUSTFLAGS'; Value = ($Saved['RUSTFLAGS'] + ' -C target-feature=+crt-static').Trim() }
+    }
+    return @{
+        Name = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS'
+        Value = ($Saved['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS'] + ' -C target-feature=+crt-static').Trim()
+    }
+}
+
+# Dot-sourcing loads the functions for tests without building.
+if ($MyInvocation.InvocationName -eq '.') { return }
+
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $cargo = (Get-Command cargo.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
@@ -22,20 +48,8 @@ try {
     }
     $expected = $revision[0].Substring(0, 12)
     if ($Target -eq 'x86_64-pc-windows-msvc') {
-        foreach ($name in $variables[1..3]) {
-            if ($saved[$name] -match '(?:target-feature(?:=|\s+)[^\s\x1f]*-crt-static)') {
-                throw "Conflicting CRT flags in $name; remove the conflict before building."
-            }
-        }
-        if ($null -ne $saved['CARGO_ENCODED_RUSTFLAGS']) {
-            $prefix = $saved['CARGO_ENCODED_RUSTFLAGS']
-            if ($prefix.Length -gt 0) { $prefix += [char]31 }
-            $env:CARGO_ENCODED_RUSTFLAGS = $prefix + '-C' + [char]31 + 'target-feature=+crt-static'
-        } elseif (-not [string]::IsNullOrEmpty($saved['RUSTFLAGS'])) {
-            $env:RUSTFLAGS = $saved['RUSTFLAGS'] + ' -C target-feature=+crt-static'
-        } else {
-            $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = ($saved['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS'] + ' -C target-feature=+crt-static').Trim()
-        }
+        $flags = Get-TTStaticCrtFlags $saved
+        [Environment]::SetEnvironmentVariable($flags.Name, $flags.Value, 'Process')
     }
     & $cargo build --locked --release --bin telltale --target $Target
     if ($LASTEXITCODE -ne 0) { throw "Development build failed for $Target; no fallback target was attempted." }

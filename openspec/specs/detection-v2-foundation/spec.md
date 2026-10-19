@@ -43,7 +43,10 @@ browser.surface, browser.origin_class, browser.navigation_id
 
 Generated standalone process matcher keys that contain text outside the bounded
 opaque identifier grammar SHALL use a deterministic, domain-separated SHA-256
-identity. Existing valid keys SHALL remain unchanged; distinct full matcher
+identity: the SHA-256 digest of the ASCII bytes `telltale:process-atomic-dedupe:v1`,
+one NUL byte, and the full matcher key's UTF-8 bytes, published as
+`process:sha256:` followed by the 64-character lowercase hexadecimal digest.
+Existing valid keys SHALL remain unchanged; distinct full matcher
 keys SHALL remain distinct, and authored chain-key validation SHALL remain
 strict. A valid executable basename containing spaces MUST NOT cause an
 otherwise supported source's process findings to fail evaluation.

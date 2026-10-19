@@ -5,6 +5,7 @@ param(
     [ValidateSet('codex', 'claude', 'opencode', 'copilot', 'openclaw', 'qwen')]
     [string[]]$Client = @('codex', 'claude', 'opencode', 'copilot'),
     [ValidateRange(1, 25)][int]$MaxSources = 5,
+    [ValidateRange(1, 3600)][int]$TimeoutSeconds = 600,
     [ValidateSet('codex', 'claude', 'opencode', 'copilot', 'openclaw', 'qwen')]
     [string[]]$RequiredClient = @(),
     [string]$ReportPath
@@ -30,12 +31,13 @@ function Get-TTHostCount($Object, [string]$Name) {
     return [decimal]$value
 }
 
-function Get-TTHostClassification($Summary, [int]$ExitCode, [bool]$Required, [bool]$RuntimeOutputs) {
+function Get-TTHostClassification($Summary, [int]$ExitCode, [bool]$Required, [bool]$RuntimeOutputs, [bool]$TimedOut = $false) {
     $codes = New-Object 'System.Collections.Generic.List[string]'
     $counts = [ordered]@{}
     $quarantineReasons = [ordered]@{}
     $coverage = $null
     try {
+        if ($TimedOut) { $codes.Add('scanner_timeout') }
         if ($ExitCode -ne 0) { $codes.Add('scanner_exit') }
         if ($RuntimeOutputs) { $codes.Add('dry_run_wrote_outputs') }
         $discovery = Get-TTHostProperty $Summary 'source_discovery'
@@ -59,11 +61,15 @@ function Get-TTHostClassification($Summary, [int]$ExitCode, [bool]$Required, [bo
         }
         $kinds = Get-TTHostProperty $processing 'record_kind_counts'
         $semanticCount = [decimal]0
-        foreach ($name in @('user_message', 'assistant_message', 'tool_call', 'tool_result')) {
+        $kindTotal = [decimal]0
+        foreach ($name in @('user_message', 'assistant_message', 'tool_call', 'tool_result', 'session_meta', 'other')) {
             $count = Get-TTHostCount $kinds $name
             $counts[$name + '_count'] = $count
-            $semanticCount += $count
+            $kindTotal += $count
+            if ($name -notin @('session_meta', 'other')) { $semanticCount += $count }
         }
+        # The scanner counts every parsed record under exactly one kind.
+        if ($kindTotal -ne $counts.parsed_record_count) { throw 'invalid_summary' }
         $flow = Get-TTHostProperty $Summary 'detection_flow'
         $counts['emitted_detection_count'] = Get-TTHostCount $flow 'emitted_detection_count'
         # Only aggregate closed scanner codes. Never retain native/session IDs,
@@ -108,7 +114,7 @@ function ConvertTo-TTHostArgument([string]$Value) {
     return '"' + $escaped + '"'
 }
 
-function Invoke-TTHostProcess([string]$File, [string[]]$Arguments) {
+function Invoke-TTHostProcess([string]$File, [string[]]$Arguments, [int]$TimeoutSeconds = 0) {
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = $File
     $start.Arguments = (@($Arguments | ForEach-Object { ConvertTo-TTHostArgument $_ }) -join ' ')
@@ -122,8 +128,15 @@ function Invoke-TTHostProcess([string]$File, [string[]]$Arguments) {
         if (-not $process.Start()) { throw 'scanner_start_failed' }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
+        $timedOut = $false
+        if ($TimeoutSeconds -gt 0 -and -not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            # A blocked scan must not hang the verifier; stop it and report.
+            $timedOut = $true
+            try { $process.Kill() } catch { }
+        }
+        # The parameterless wait also drains the redirected output streams.
         $process.WaitForExit()
-        return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout.Result; Stderr = $stderr.Result }
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout.Result; Stderr = $stderr.Result; TimedOut = $timedOut }
     } finally { $process.Dispose() }
 }
 
@@ -133,9 +146,9 @@ function Invoke-TTHostVerification {
     $scanRoot = (Get-Item -LiteralPath $Root -ErrorAction Stop).FullName
     if (-not (Test-Path -LiteralPath $scanRoot -PathType Container)) { throw 'Root must be a directory.' }
     $clients = @($Client + $RequiredClient | Select-Object -Unique)
-    $versionResult = Invoke-TTHostProcess $binary @('--version')
+    $versionResult = Invoke-TTHostProcess $binary @('--version') $TimeoutSeconds
     $version = $versionResult.Stdout.Trim()
-    if ($versionResult.ExitCode -ne 0 -or $version -cnotmatch '^telltale [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)? \((?:[0-9a-f]{12}|unknown)\)$') {
+    if ($versionResult.TimedOut -or $versionResult.ExitCode -ne 0 -or $version -cnotmatch '^telltale [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)? \((?:[0-9a-f]{12}|unknown)\)$') {
         throw 'invalid_binary_version'
     }
     $started = [DateTime]::UtcNow.ToString('o')
@@ -148,11 +161,13 @@ function Invoke-TTHostVerification {
             $arguments = @('scan', '--once', '--dry-run', '--no-local-config', '--emit-activity',
                 '--root', $scanRoot, '--client', $selectedClient, '--max-sources', [string]$MaxSources,
                 '--log-path', (Join-Path $temp 'events.jsonl'), '--state-path', (Join-Path $temp 'state.json'))
-            $scan = Invoke-TTHostProcess $binary $arguments
+            $scan = Invoke-TTHostProcess $binary $arguments $TimeoutSeconds
             $summary = $null
-            try { $summary = $scan.Stdout | ConvertFrom-Json -ErrorAction Stop } catch { }
+            if (-not $scan.TimedOut) {
+                try { $summary = $scan.Stdout | ConvertFrom-Json -ErrorAction Stop } catch { }
+            }
             $outputs = @(Get-ChildItem -LiteralPath $temp -Force).Count -gt 0
-            $check = Get-TTHostClassification $summary $scan.ExitCode ($selectedClient -in $RequiredClient) $outputs
+            $check = Get-TTHostClassification $summary $scan.ExitCode ($selectedClient -in $RequiredClient) $outputs $scan.TimedOut
             $checks += [pscustomobject][ordered]@{
                 client = $selectedClient
                 classification = $check.classification
@@ -180,6 +195,7 @@ function Invoke-TTHostVerification {
         binary_version = $version
         binary_sha256 = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
         max_sources_per_client = $MaxSources
+        timeout_seconds = $TimeoutSeconds
         checks = $checks
     }
     $json = $report | ConvertTo-Json -Depth 8

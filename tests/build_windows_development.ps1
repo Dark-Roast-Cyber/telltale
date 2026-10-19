@@ -26,4 +26,27 @@ try {
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $original[$name], 'Process') }
 }
+
+# Each supported form must carry +crt-static in the source Cargo actually reads.
+. $helper
+$static = '-C target-feature=+crt-static'
+$unit = [string][char]31
+$cases = @(
+    @{ Saved = @{}; Name = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS'; Value = $static },
+    @{ Saved = @{ CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C opt-level=2' }
+        Name = 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS'; Value = "-C opt-level=2 $static" },
+    @{ Saved = @{ RUSTFLAGS = '-C opt-level=2'; CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C debuginfo=0' }
+        Name = 'RUSTFLAGS'; Value = "-C opt-level=2 $static" },
+    @{ Saved = @{ RUSTFLAGS = '' }; Name = 'RUSTFLAGS'; Value = $static },
+    @{ Saved = @{ CARGO_ENCODED_RUSTFLAGS = '-C' + $unit + 'opt-level=2'; RUSTFLAGS = '-C debuginfo=0' }
+        Name = 'CARGO_ENCODED_RUSTFLAGS'; Value = '-C' + $unit + 'opt-level=2' + $unit + '-C' + $unit + 'target-feature=+crt-static' },
+    @{ Saved = @{ CARGO_ENCODED_RUSTFLAGS = '' }
+        Name = 'CARGO_ENCODED_RUSTFLAGS'; Value = '-C' + $unit + 'target-feature=+crt-static' }
+)
+foreach ($case in $cases) {
+    $flags = Get-TTStaticCrtFlags $case.Saved
+    if ($flags.Name -cne $case.Name -or $flags.Value -cne $case.Value) {
+        throw "Static CRT flag was not added to $($case.Name)."
+    }
+}
 Write-Output 'Windows development build flag/environment tests passed.'

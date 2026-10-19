@@ -15,7 +15,7 @@ function New-TTSummary {
             selected_source_count = 1; parse_success_source_count = 1; parse_error_source_count = 0
             accounting_complete_source_count = 1; accounting_partial_source_count = 0
             quarantined_unit_count = 0; parsed_record_count = 2; selected_source_coverage = 'complete'
-            record_kind_counts = [pscustomobject]@{ user_message = 1; assistant_message = 0; tool_call = 0; tool_result = 0 }
+            record_kind_counts = [pscustomobject]@{ user_message = 1; assistant_message = 0; tool_call = 0; tool_result = 0; session_meta = 1; other = 0 }
             quarantined_units = @()
         }
         detection_flow = [pscustomobject]@{ emitted_detection_count = 0 }
@@ -36,6 +36,7 @@ $summary.source_processing.selected_source_coverage = 'partial'
 Assert-TTHost ((Get-TTHostClassification $summary 0 $false $false).classification -eq 'passed_with_limits') 'Suffix/OpenCode partial coverage must keep its limit.'
 $summary = New-TTSummary
 $summary.source_processing.record_kind_counts.user_message = 0
+$summary.source_processing.record_kind_counts.session_meta = 2
 Assert-TTHost ((Get-TTHostClassification $summary 0 $false $false).classification -eq 'passed_with_limits') 'Metadata-only accounting does not prove semantic activity.'
 $summary = New-TTSummary
 $summary.source_processing.quarantined_unit_count = 1
@@ -52,6 +53,20 @@ Assert-TTHost ((Get-TTHostClassification $summary 0 $false $false).classificatio
 Assert-TTHost ((Get-TTHostClassification (New-TTSummary) 1 $false $false).classification -eq 'failed') 'Nonzero scanner exit must fail.'
 Assert-TTHost ((Get-TTHostClassification (New-TTSummary) 0 $false $true).classification -eq 'failed') 'Unexpected dry-run output must fail.'
 Assert-TTHost ((Get-TTHostClassification $null 0 $false $false).classification -eq 'failed') 'Invalid JSON must fail.'
+$summary = New-TTSummary
+$summary.source_processing.record_kind_counts.other = 1
+Assert-TTHost ((Get-TTHostClassification $summary 0 $false $false).classification -eq 'failed') 'Record kinds that disagree with parsed_record_count must fail.'
+$summary = New-TTSummary
+$summary.source_processing.record_kind_counts.session_meta = 0
+Assert-TTHost ((Get-TTHostClassification $summary 0 $false $false).classification -eq 'failed') 'Uncounted parsed records must fail.'
+$check = Get-TTHostClassification (New-TTSummary) 0 $false $false $true
+Assert-TTHost ($check.classification -eq 'failed' -and $check.error_codes -contains 'scanner_timeout') 'A timed-out scan must fail.'
+$shell = (Get-Process -Id $PID).Path
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$blocked = Invoke-TTHostProcess $shell @('-NoProfile', '-Command', 'Start-Sleep -Seconds 60') 1
+Assert-TTHost ($blocked.TimedOut -and $clock.Elapsed.TotalSeconds -lt 30) 'A blocked process must be stopped at the deadline.'
+$finished = Invoke-TTHostProcess $shell @('-NoProfile', '-Command', 'exit 3') 60
+Assert-TTHost (-not $finished.TimedOut -and $finished.ExitCode -eq 3) 'A process that exits in time keeps its exit code.'
 $summary = New-TTSummary
 $summary.source_processing.selected_source_count = 0
 $summary.source_processing.parse_success_source_count = 0

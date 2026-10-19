@@ -179,6 +179,10 @@ fn standalone_build_scripts_categorize_missing_git_and_emit_matching_real_revisi
     let temp = tempfile::tempdir().unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let revision = git(root, &["rev-parse", "HEAD"]);
+    let decoy = temp.path().join("decoy");
+    std::fs::create_dir_all(&decoy).unwrap();
+    git(&decoy, &["init"]);
+    let decoy_revision = commit(&decoy);
     for (index, (source, manifest)) in [
         ("build.rs", root.to_path_buf()),
         (
@@ -225,5 +229,20 @@ fn standalone_build_scripts_categorize_missing_git_and_emit_matching_real_revisi
             assert!(output.contains("cargo:rerun-if-env-changed=PATHEXT"));
         }
         assert!(!output.contains("cargo:warning="));
+        // Repository-selection overrides cannot substitute another revision.
+        let overridden = std::process::Command::new(&binary)
+            .current_dir(temp.path())
+            .env("CARGO_MANIFEST_DIR", &manifest)
+            .env("GIT_DIR", decoy.join(".git"))
+            .env("GIT_WORK_TREE", root)
+            .env("GIT_COMMON_DIR", decoy.join(".git"))
+            .output()
+            .unwrap();
+        let overridden = String::from_utf8(overridden.stdout).unwrap();
+        assert!(overridden.contains(&format!(
+            "cargo:rustc-env=TELLTALE_GIT_HASH={}",
+            &revision[..12]
+        )));
+        assert!(!overridden.contains(&decoy_revision[..12]));
     }
 }
