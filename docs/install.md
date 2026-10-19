@@ -272,6 +272,19 @@ cargo build --locked --release --target x86_64-pc-windows-msvc
 bundled rules. Its receipt says `development-local`; it is never reported as
 a verified published artifact. It cannot be combined with `-ReleaseTag`.
 
+For a development build without the manual steps above, run
+`.\scripts\build-windows-development.ps1` (add `-Target x86_64-pc-windows-gnu`
+only for development-only verification). It builds `telltale` with `--locked`,
+checks that `--version` reports the checked-out revision, and prints the binary
+path and SHA-256. It never falls back to another target.
+
+To check a live host read-only, run
+`.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Root <source root> -Client codex,claude`.
+It performs one dry-run scan per client with temporary log and state paths and
+reports `passed`, `passed_with_limits`, `failed`, or `not_available`. It does not
+install, schedule, or change any source store. See
+[Windows host tooling](windows-host-compatibility-spec.md).
+
 ### Windows Scheduled Task example
 
 `-WithScheduledTask` derives `TelltaleScan` from
