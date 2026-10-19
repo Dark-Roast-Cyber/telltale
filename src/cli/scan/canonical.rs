@@ -60,10 +60,12 @@ impl CanonicalProcessingResult {
     /// The cursor table this result's progress belongs to, and its high-water.
     /// Eligible for staging only; this operation never mutates ScanState. Legacy
     /// `part` and OpenCode v2 `session_message` progress stage separate cursors.
+    /// An empty completed drain retains its checkpoint but clears continuation.
     pub(super) fn sqlite_progress_cursor(
         &self,
         dry_run: bool,
         backfill: bool,
+        prior_message_checkpoint: Option<i64>,
     ) -> Option<(&'static str, i64, bool)> {
         if !should_stage_sqlite_ingestion_cursors(dry_run, backfill) {
             return None;
@@ -78,7 +80,7 @@ impl CanonicalProcessingResult {
                 window_complete,
             } => (
                 OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
-                message_max_time_updated,
+                message_max_time_updated.or(prior_message_checkpoint.filter(|_| window_complete)),
                 !window_complete,
             ),
         };
@@ -88,7 +90,7 @@ impl CanonicalProcessingResult {
 
     #[cfg(test)]
     pub(super) fn sqlite_progress_candidate(&self, dry_run: bool, backfill: bool) -> Option<i64> {
-        self.sqlite_progress_cursor(dry_run, backfill)
+        self.sqlite_progress_cursor(dry_run, backfill, None)
             .map(|(_, high_water, _)| high_water)
     }
 }

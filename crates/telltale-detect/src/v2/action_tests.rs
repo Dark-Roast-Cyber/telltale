@@ -995,6 +995,274 @@ fn results_prose_and_authored_content_are_not_commands() {
 }
 
 #[test]
+fn credential_native_profile_characterizes_token_families_and_rule_v1_differences() {
+    let export = telltale_rules::load_default_rule_set()
+        .unwrap()
+        .compatibility_export();
+    let plan = compile_rule_v1(&export).unwrap();
+    let matcher = export
+        .rules()
+        .iter()
+        .find(|rule| rule.id == "credential.api_key.pattern")
+        .unwrap()
+        .compile_content_matcher()
+        .unwrap();
+    // Characterization, not credential validity or independent efficacy labels:
+    // Rule v1 hunts broad token shapes; the native action profile also applies
+    // case-sensitive family syntax, ASCII left boundaries and example heuristics.
+    for token in [
+        "sk-Zq3Wt9LmP2kR7vX4nB8c",
+        "ghp_Zq3Wt9LmP2kR7vX4nB8c",
+        "xoxb-Zq3Wt9LmP2kR7vX4nB8c",
+        "AKIA2E0A8F3B244C9986",
+        "eyJZq3Wt9LmP2.kR7vX4nB8c.Y1dF6hJ0sA",
+        "Bearer Zq3Wt9LmP2kR7vX4nB8c",
+    ] {
+        for (prefix, native) in [
+            ("", true),
+            (" ", true),
+            ("=", true),
+            ("_", false),
+            ("a", false),
+        ] {
+            let text = format!("{prefix}{token}");
+            assert!(
+                !matcher
+                    .matching_fields(&[("tool_result", &text)])
+                    .is_empty()
+            );
+            assert_credential_projections(&plan, credential_result(&text), true, native, &text);
+        }
+    }
+    for (text, rule_v1, native) in [
+        ("ordinary output", false, false),
+        ("sk-too-short", false, false),
+        ("SK-Zq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("GHP_Zq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("XOxb-Zq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("akia2e0a8f3b244c9986", true, false),
+        ("eyjZq3Wt9LmP2.kR7vX4nB8c.Y1dF6hJ0sA", true, false),
+        ("bearer Zq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("AKIAIOSFODNN7EXAMPLE", true, false),
+        ("sk-1234567890abcdef", true, false),
+        ("ghp_your_Zq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("ghp_placeholderZq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("ghp_REDACTEDZq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("ghp_fabricatedexampleZq3Wt9LmP2kR7vX4nB8c", true, false),
+        ("AKIAIOSFODNN7EXAMPLE and AKIA2E0A8F3B244C9986", true, true),
+        ("AKIA2E0A8F3B244C9986 and AKIAIOSFODNN7EXAMPLE", true, true),
+    ] {
+        assert_eq!(
+            !matcher.matching_fields(&[("tool_result", text)]).is_empty(),
+            rule_v1,
+            "{text}"
+        );
+        assert_credential_projections(&plan, credential_result(text), rule_v1, native, text);
+    }
+}
+
+fn credential_result(text: &str) -> CanonicalObservationV2 {
+    body(
+        "credential-result",
+        ObservationBody::Tool(ToolObservation::new().with_result(JsonValue::string(text))),
+        ObservationStage::ToolResultReturned,
+    )
+}
+
+fn assert_credential_projections(
+    plan: &RuleV1CompatibilityPlan,
+    observation: CanonicalObservationV2,
+    session_match: bool,
+    action_match: bool,
+    case: &str,
+) {
+    let id = "credential.api_key.pattern";
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let output = evaluate_source_with_options(
+        CanonicalSourceInput {
+            client: ClientId::Claude,
+            source_id: "claude.projects",
+            source_instance: Some(&instance),
+            observations: std::slice::from_ref(&observation),
+        },
+        plan,
+        None,
+        &DetailedEvaluationOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(output.client, ClientId::Claude);
+    assert_eq!(output.source_id(), "claude.projects");
+    assert_eq!(output.sessions().len(), 1);
+    let session = &output.sessions()[0];
+    assert_eq!(session.session_id(), observation.session_id());
+    assert_eq!(
+        session.rule_ids().iter().any(|rule| rule == id),
+        session_match,
+        "session: {case}"
+    );
+    assert_eq!(
+        session.rule_score(),
+        if session_match { 30 } else { 0 },
+        "session: {case}"
+    );
+    assert_eq!(
+        session.risk_contributions().len(),
+        usize::from(session_match)
+    );
+    let findings = session.action_findings();
+    assert_eq!(findings.len(), usize::from(action_match), "action: {case}");
+    if let Some(finding) = findings.first() {
+        assert_eq!(finding.rule_ids(), [id]);
+        assert_eq!(finding.observation_id(), observation.observation_id());
+        assert_eq!(finding.promotion_score(), 30);
+        assert_eq!(finding.contributions().len(), 1);
+        assert_eq!(finding.contributions()[0].id(), id);
+        assert_eq!(finding.contributions()[0].points(), 30);
+        assert_eq!(finding.canonical_findings()[0].risk_points(), Some(30));
+    }
+}
+
+#[test]
+fn credential_boundaries_and_example_exemptions_apply_to_the_same_candidate() {
+    let export = telltale_rules::load_default_rule_set()
+        .unwrap()
+        .compatibility_export();
+    let plan = compile_rule_v1(&export).unwrap();
+    for text in [
+        "_ghp_Zq3Wt9LmP2kR7vX4nB8c",
+        "AKIAIOSFODNN7EXAMPLE",
+        "_ghp_Zq3Wt9LmP2kR7vX4nB8c and AKIAIOSFODNN7EXAMPLE",
+        "AKIAIOSFODNN7EXAMPLE and _ghp_Zq3Wt9LmP2kR7vX4nB8c",
+    ] {
+        assert_credential_projections(&plan, credential_result(text), true, false, text);
+    }
+}
+
+#[test]
+fn credential_action_surfaces_remain_distinct_from_session_selectors() {
+    let export = telltale_rules::load_default_rule_set()
+        .unwrap()
+        .compatibility_export();
+    let plan = compile_rule_v1(&export).unwrap();
+    let token = "ghp_Zq3Wt9LmP2kR7vX4nB8c";
+    for (case, observation, session_match) in [
+        ("result", credential_result(token), true),
+        (
+            "argument-text",
+            body(
+                "credential-command",
+                ObservationBody::Tool(
+                    ToolObservation::new()
+                        .with_name("Bash")
+                        .unwrap()
+                        .with_arguments(JsonValue::string(token)),
+                ),
+                ObservationStage::ToolRequested,
+            ),
+            true,
+        ),
+        // Object arguments without a governed command facet are not serialized
+        // into Rule v1 text. The action view interprets their command key.
+        (
+            "structured-command-without-facet",
+            body(
+                "credential-command-object",
+                ObservationBody::Tool(
+                    ToolObservation::new()
+                        .with_name("Bash")
+                        .unwrap()
+                        .with_arguments(
+                            JsonValue::try_from_source_value(
+                                &serde_json::json!({"command": token}),
+                            )
+                            .unwrap(),
+                        ),
+                ),
+                ObservationStage::ToolRequested,
+            ),
+            false,
+        ),
+        (
+            "assistant",
+            body(
+                "credential-assistant",
+                ObservationBody::Message(
+                    MessageObservation::new(MessageRole::Assistant)
+                        .with_content(JsonValue::string(token)),
+                ),
+                ObservationStage::MessageObserved,
+            ),
+            true,
+        ),
+        (
+            "user",
+            body(
+                "credential-user",
+                ObservationBody::Message(
+                    MessageObservation::new(MessageRole::User)
+                        .with_content(JsonValue::string(token)),
+                ),
+                ObservationStage::MessageObserved,
+            ),
+            false,
+        ),
+        (
+            "authored-content",
+            body(
+                "credential-write",
+                ObservationBody::Tool(
+                    ToolObservation::new()
+                        .with_name("Write")
+                        .unwrap()
+                        .with_arguments(
+                            JsonValue::try_from_source_value(&serde_json::json!({
+                                "file_path": "notes.txt", "content": token
+                            }))
+                            .unwrap(),
+                        ),
+                ),
+                ObservationStage::ToolRequested,
+            ),
+            false,
+        ),
+    ] {
+        assert_credential_projections(&plan, observation, session_match, true, case);
+    }
+}
+
+#[test]
+fn credential_same_id_custom_predicate_does_not_inherit_native_refinements() {
+    let document = r"
+version: 1
+description: synthetic
+defaults: { enabled: true, case_insensitive: false }
+rules:
+  - id: credential.api_key.pattern
+    category: credential_pattern
+    severity: medium
+    score: 30
+    targets: [tool_result]
+    regex: 'needle|AKIAIOSFODNN7EXAMPLE|_ghp_[A-Za-z0-9]{20,}'
+    tags: []
+    explanation: synthetic
+modifiers: []
+";
+    let export = telltale_rules::load_rule_set_from_documents(&[document], None)
+        .unwrap()
+        .compatibility_export();
+    let plan = compile_rule_v1(&export).unwrap();
+    for (text, matched) in [
+        ("needle", true),
+        ("AKIAIOSFODNN7EXAMPLE", true),
+        ("_ghp_Zq3Wt9LmP2kR7vX4nB8c", true),
+        ("ghp_Zq3Wt9LmP2kR7vX4nB8c", false),
+        ("NEEDLE", false),
+    ] {
+        assert_credential_projections(&plan, credential_result(text), matched, matched, text);
+    }
+}
+
+#[test]
 fn link_needs_source_time_order_artifact_and_window() {
     for (index, (download, execute, time)) in [
         (

@@ -1,6 +1,6 @@
 # Policy Modes
 
-Telltale operates in named policy modes that control what the scanner does with detections. Modes are explicit, documented, and map to the log-review phase that Telltale occupies today.
+Telltale uses policy YAML to select Rule v1 detections. The names below describe configuration outcomes and proposed future behavior, not selectable scanner modes.
 
 ## Current Phase: Log-Review
 
@@ -19,23 +19,31 @@ policy YAML selects active rule categories and rule IDs, and the emitted
 deterministic response metadata is the review artifact downstream consumers
 use.
 
-Three policy modes are available in the current phase:
+There is no policy-mode flag and no `policy_mode` event field. `observe` and `alert` below describe configuration outcomes, not a mode enum. `simulate-block` is not implemented.
 
 ### `observe`
 
-Emit activity and health telemetry only. No detections or detection review metadata.
+Suppress policy-controlled Rule v1 detections while retaining conditional health
+events and activity with `--emit-activity`. Health events are emitted for dry-run
+or backfill, inventory changes, scanner errors, outages, or operational alerts;
+an unchanged routine scan need not emit one. Process-chain detections are independently
+enabled by default; set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` as well for a
+detection-free baseline scan.
 
 | Behavior | Setting |
 | --- | --- |
-| Activity events | emitted |
-| Health events | emitted |
-| Detection events | suppressed |
-| Review metadata | not applicable |
+| Activity events | emitted only with `--emit-activity` |
+| Health events | conditional on the changes, errors, execution settings, or alerts described above |
+| Detection events | Rule v1 candidates disabled by policy; process-chain events require the separate setting above |
+| Review metadata | absent only when neither detection path emits |
 | Operational alerts | emitted |
 
-Use `observe` when onboarding a new host or agent source and you want to confirm discovery, parsing, and schema compliance without generating security noise.
+Use this configuration when onboarding a host or source to confirm discovery,
+parsing, and schema compliance without detection noise.
 
-In practice, `observe` is the behavior when no detection rules match or when a policy disables all rule categories:
+For the bundled Rule v1 pack, disable all of its categories as follows. Custom
+packs need their own categories or rule IDs disabled too; the policy name alone
+does not select any behavior.
 
 ```yaml
 # observe-policy.yaml
@@ -51,16 +59,24 @@ disabled_categories:
   - approval_bypass
   - tool_injection
   - mcp_prompt_injection
+  - credential_harvesting
+  - supply_chain
+  - mcp_enumeration
+```
+
+```sh
+TELLTALE_PROCESS_CHAIN_DETECTIONS=0 telltale scan --once --emit-activity --policy observe-policy.yaml --root "$HOME"
 ```
 
 ### `alert`
 
-Emit detections with deterministic response metadata for analyst review. This is the default and recommended mode for production log-review deployments.
+Emit detections with deterministic response metadata for analyst review. This is
+the default scan behavior, not a named mode or flag.
 
 | Behavior | Setting |
 | --- | --- |
 | Activity events | emitted (with `--emit-activity`) |
-| Health events | emitted |
+| Health events | conditional, as described under `observe` |
 | Detection events | emitted |
 | Review metadata | Native Event 3.0 uses deterministic response metadata and optional `timeline_anchors`; no embedded triage verdict |
 | Operational alerts | emitted |
@@ -77,19 +93,23 @@ than a fixed severity table):
 | 70–89 | high | deterministic response metadata | detection event with deterministic response metadata |
 | 90+ | critical | deterministic response metadata | detection event with deterministic response metadata |
 
-This is the mode Telltale uses when `--policy` is omitted or when the loaded policy does not suppress all detection categories.
+Without an effective policy, policy filtering is not applied; rule packs and
+overrides still determine the active definitions. An explicit `--policy` selects
+the policy file; omitting it can still load an auto-discovered `policies.d` file.
+`--no-local-config` disables that discovery, not an explicit policy. An effective
+policy filters Rule v1 rules; process-chain enablement is independent.
 
 ### `simulate-block`
 
-Mark detections that *would* have been blocked without actually blocking anything. This mode produces the same telemetry as `alert` but adds a policy simulation tag so analysts can evaluate containment rules before enabling active enforcement.
+Not implemented. There is no `--mode` flag, and events are not stamped with `policy_mode`. The table below is not current behavior.
 
 | Behavior | Setting |
 | --- | --- |
-| Activity events | emitted |
-| Health events | emitted |
-| Detection events | emitted with `policy_mode: simulate-block` |
-| Review metadata | deterministic Event 3.0 response metadata |
-| Operational alerts | emitted |
+| Activity events | not implemented |
+| Health events | not implemented as a distinct mode |
+| Detection events | not implemented; no `policy_mode` field is emitted |
+| Review metadata | not implemented as a distinct mode |
+| Operational alerts | not implemented as a distinct mode |
 | Session termination | never |
 
 `simulate-block` is not yet implemented as a distinct CLI mode. Today, the same effect can be approximated by using a strict policy with `alert` behavior and reviewing the `response.recommended_action` field on detection events. A dedicated `--mode simulate-block` flag that stamps events with the policy mode is a future enhancement.
@@ -136,7 +156,7 @@ Automatically deny or terminate sessions for high-confidence detections that mat
 
 ## Policy YAML
 
-Telltale uses policy YAML to select active rule categories and rule IDs. This is separate from the policy mode concept:
+Telltale uses policy YAML to select active Rule v1 categories and rule IDs:
 
 ```yaml
 # config/policy.yaml
@@ -153,32 +173,30 @@ disabled_rules:
 Load a policy at scan time:
 
 ```sh
-telltale scan --once --policy config/policy.yaml --root ~/.codex/sessions
+telltale scan --once --policy config/policy.yaml --root "$HOME"
 ```
 
-The policy YAML controls *which rules fire*. The policy mode controls *what
-happens when they fire*. In the current log-review phase, the mode is implicitly
-`alert` for all detections that pass the policy filter. Under the adopted
-principles, this policy-file vocabulary is legacy/current-implementation
-terminology; future policy semantics (decisions, capabilities, enforcement
-degradation) belong to the separately accepted policy layer.
+Policy YAML controls which Rule v1 rules remain active, not an enforcement
+response or scanner mode. Matching active rules emit the current deterministic
+review metadata. Future decisions, capabilities, and enforcement degradation
+belong to the separately accepted policy layer.
 
 ## Relationship to Other Features
 
-| Feature | Policy Mode Interaction |
+| Feature | Configuration interaction |
 | --- | --- |
-| Allowlists | Suppressed detections are logged at `informational` with `suppressed` tag regardless of mode. |
+| Allowlists | Suppressed detections are logged at `informational` with the `suppressed` tag. |
 | Analyst review | Above-threshold events carry deterministic response metadata and optional anchors; suppressed detections remain informational. |
-| Response contract | `recommended_action` and `response_playbook` are emitted in all modes. `simulate-block` may add a `would_block` flag in the future. |
-| Operational alerts | Emitted in all modes. Not affected by detection policy mode. |
-| Correlation | Cross-session correlation operates on emitted detection events, so it works in `alert` and `simulate-block`. |
+| Response contract | Non-suppressed emitted detections carry response metadata. Allowlist suppression clears `response`. `simulate-block` is not implemented. |
+| Operational alerts | Independent of Rule v1 category/rule selection. |
+| Correlation | Cross-session correlation operates on emitted detection events; there is no distinct `simulate-block` path. |
 
-## Mode Selection Guidance
+## Configuration Guidance
 
-| Scenario | Recommended Mode |
+| Scenario | Current configuration |
 | --- | --- |
-| First deployment on a new host | `observe` (disable all categories) |
-| Tuning rules on a developer workstation | `alert` with a permissive policy |
-| Production SIEM ingestion | `alert` with a strict policy |
-| Evaluating containment rules | `simulate-block` (when implemented) |
-| High-confidence automated response | `block` (future, after false-positive review) |
+| First deployment on a new host | Disable all active Rule v1 categories/rules and set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0`; add `--emit-activity` for activity telemetry |
+| Tuning rules on a developer workstation | Keep relevant detections active and use `--policy` to select them |
+| Production SIEM ingestion | Normal scan with reviewed policy and sink configuration |
+| Evaluating containment rules | Review response recommendations; no simulation mode is implemented |
+| Automated response | No active blocking or termination is implemented |

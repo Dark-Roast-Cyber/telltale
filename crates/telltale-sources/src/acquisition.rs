@@ -141,8 +141,8 @@ pub enum AcquisitionProgress {
     },
     /// OpenCode v2 `session_v2`/`session_message` store: the `time_updated`
     /// high-water of the evaluated window. `window_complete` is false when the
-    /// row limit or retained budget cut the selection; resuming from the
-    /// high-water (minus the overlap) continues the backlog.
+    /// row limit or retained budget cut the selection. Continue strictly after
+    /// this raw cut while keeping a higher evaluated checkpoint separate.
     OpenCodeSessionMessages {
         message_max_time_updated: Option<i64>,
         window_complete: bool,
@@ -195,19 +195,19 @@ impl OpenCodeSqliteReadOptions {
         }
     }
 
-    /// Also resume an OpenCode v2 store after a recorded `session_message`
-    /// `time_updated` high-water, with the same overlap, incremental row limit
-    /// and regression check as the legacy part cursor. Legacy controls are
-    /// unchanged, so one options value can carry both cursors.
-    /// Continue a cut OpenCode v2 window strictly after its high-water,
+    /// Continue a cut OpenCode v2 window strictly after its raw cut,
     /// without the overlap, so a backlog drains even when one window cannot
-    /// hold the overlap. Resume with [`Self::resume_session_messages_after`]
-    /// once a window reports itself complete.
-    pub fn continue_session_messages_after(self, high_water: i64) -> Self {
+    /// hold the overlap. Retain any higher `message_resume_high_water` as the
+    /// regression floor; the cut may be below that checkpoint. Resume with
+    /// [`Self::resume_session_messages_after`] once a window reports itself complete.
+    pub fn continue_session_messages_after(self, cut: i64) -> Self {
         Self {
-            message_min_time_updated: Some(high_water.saturating_add(1)),
+            message_min_time_updated: Some(cut.saturating_add(1)),
             message_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
-            message_resume_high_water: Some(high_water),
+            message_resume_high_water: Some(
+                self.message_resume_high_water
+                    .map_or(cut, |floor| floor.max(cut)),
+            ),
             ..self
         }
     }
@@ -224,6 +224,8 @@ impl OpenCodeSqliteReadOptions {
         }
     }
 
+    /// Resume an OpenCode v2 checkpoint with the shared ten-minute overlap,
+    /// incremental row limit and regression check. Legacy controls are unchanged.
     pub fn resume_session_messages_after(self, high_water: i64) -> Self {
         Self {
             message_min_time_updated: Some(
@@ -991,61 +993,55 @@ fn account_unit(
     Ok(())
 }
 
+fn map_observation_error(
+    error: telltale_schema::observation::ObservationError,
+) -> AcquisitionError {
+    match error.bound_context() {
+        Some(context) => AcquisitionError::CanonicalBoundValidation { context },
+        None => AcquisitionError::CanonicalValidation { code: error.code() },
+    }
+}
+
 #[cfg(feature = "opencode-sqlite")]
 fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
     match error {
         OpenCodeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        OpenCodeCanonicalError::Observation(error) => match error.bound_context() {
-            Some(context) => AcquisitionError::CanonicalBoundValidation { context },
-            None => AcquisitionError::CanonicalValidation { code: error.code() },
-        },
+        OpenCodeCanonicalError::Observation(error) => map_observation_error(error),
     }
 }
 
 fn map_claude_error(error: ClaudeCanonicalError) -> AcquisitionError {
     match error {
         ClaudeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        ClaudeCanonicalError::Observation(error) => match error.bound_context() {
-            Some(context) => AcquisitionError::CanonicalBoundValidation { context },
-            None => AcquisitionError::CanonicalValidation { code: error.code() },
-        },
+        ClaudeCanonicalError::Observation(error) => map_observation_error(error),
     }
 }
 
 fn map_codex_error(error: CodexCanonicalError) -> AcquisitionError {
     match error {
         CodexCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        CodexCanonicalError::Observation(error) => match error.bound_context() {
-            Some(context) => AcquisitionError::CanonicalBoundValidation { context },
-            None => AcquisitionError::CanonicalValidation { code: error.code() },
-        },
+        CodexCanonicalError::Observation(error) => map_observation_error(error),
     }
 }
 
 fn map_openclaw_error(error: OpenClawCanonicalError) -> AcquisitionError {
     match error {
         OpenClawCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        OpenClawCanonicalError::Observation(error) => {
-            AcquisitionError::CanonicalValidation { code: error.code() }
-        }
+        OpenClawCanonicalError::Observation(error) => map_observation_error(error),
     }
 }
 
 fn map_qwen_error(error: QwenCanonicalError) -> AcquisitionError {
     match error {
         QwenCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        QwenCanonicalError::Observation(error) => {
-            AcquisitionError::CanonicalValidation { code: error.code() }
-        }
+        QwenCanonicalError::Observation(error) => map_observation_error(error),
     }
 }
 
 fn map_copilot_error(error: CopilotCanonicalError) -> AcquisitionError {
     match error {
         CopilotCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        CopilotCanonicalError::Observation(error) => {
-            AcquisitionError::CanonicalValidation { code: error.code() }
-        }
+        CopilotCanonicalError::Observation(error) => map_observation_error(error),
     }
 }
 
@@ -1228,11 +1224,13 @@ mod tests {
     fn dispatcher_rejects_identity_and_kind_before_io() {
         let directory = tempdir().unwrap();
         let missing = directory.path().join("private-missing-source");
-        for &(client, source_id, kind) in JSONL_IDENTITIES.iter().chain(&[(
-            ClientId::Copilot,
-            "copilot.process_log",
-            SourceKind::CopilotProcessLog,
-        )]) {
+        let clients = crate::clients::supported_clients();
+        for (client, definition) in clients
+            .iter()
+            .flat_map(|client| client.sources.iter().map(move |source| (client.id, source)))
+        {
+            let source_id = definition.id;
+            let kind = definition.kind;
             let mut source = Source {
                 client,
                 source_id: source_id.to_owned(),
@@ -1240,10 +1238,12 @@ mod tests {
                 path: missing.clone(),
             };
             for wrong_kind in [
+                SourceKind::Json,
                 SourceKind::Jsonl,
                 SourceKind::ArchivedJsonl,
                 SourceKind::HeadlessJsonl,
                 SourceKind::Sqlite,
+                SourceKind::CopilotProcessLog,
             ] {
                 if wrong_kind == kind {
                     continue;
@@ -1255,24 +1255,26 @@ mod tests {
                 );
             }
             source.kind = kind;
-            assert_eq!(
-                acquisition_error(acquire_opencode_sqlite(
-                    &source,
-                    options(),
-                    OpenCodeSqliteReadOptions {
-                        part_min_time_updated: Some(99),
-                        part_limit: 1,
-                        resume_high_water: None,
-                        ..Default::default()
-                    }
-                )),
-                AcquisitionError::UnsupportedSourceIdentity
-            );
-            source.client = ClientId::OpenCode;
-            assert_eq!(
-                acquisition_error(super::acquire_source(&source, options())),
-                AcquisitionError::UnsupportedSourceIdentity
-            );
+            if client != ClientId::OpenCode {
+                assert_eq!(
+                    acquisition_error(acquire_opencode_sqlite(
+                        &source,
+                        options(),
+                        OpenCodeSqliteReadOptions::default()
+                    )),
+                    AcquisitionError::UnsupportedSourceIdentity
+                );
+            }
+            for wrong_client in clients.iter().map(|client| client.id) {
+                if wrong_client == client {
+                    continue;
+                }
+                source.client = wrong_client;
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&source, options())),
+                    AcquisitionError::UnsupportedSourceIdentity
+                );
+            }
         }
         for (client, source_id) in [
             (ClientId::OpenCode, "opencode.legacy_json"),
@@ -1299,6 +1301,41 @@ mod tests {
                 acquisition_error(super::acquire_source(&source, options())),
                 AcquisitionError::UnsupportedSourceIdentity
             );
+        }
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn bounded_acquisition_keeps_its_jsonl_only_subset() {
+        let directory = tempdir().unwrap();
+        let missing = directory.path().join("missing-source");
+        for client in crate::clients::supported_clients() {
+            for definition in client.sources {
+                let source = Source {
+                    client: client.id,
+                    source_id: definition.id.to_owned(),
+                    kind: definition.kind,
+                    path: missing.clone(),
+                };
+                let expected = if matches!(
+                    definition.kind,
+                    SourceKind::Jsonl | SourceKind::ArchivedJsonl | SourceKind::HeadlessJsonl
+                ) {
+                    AcquisitionError::BoundedSourceRead(BoundedReadError::Missing)
+                } else {
+                    AcquisitionError::UnsupportedSourceIdentity
+                };
+                assert_eq!(
+                    acquisition_error(super::acquire_source_bounded(
+                        &source,
+                        options(),
+                        super::DirectReadLimits::default()
+                    )),
+                    expected,
+                    "{}",
+                    definition.id
+                );
+            }
         }
         assert!(!missing.exists());
     }

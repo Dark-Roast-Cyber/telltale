@@ -1,11 +1,11 @@
 use std::fmt;
 
 use telltale_schema::observation::{
-    CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
-    ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
-    IngestionMode, JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
-    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
-    SourceTimestamp, ToolObservation,
+    CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
+    CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds, FactMetadata,
+    FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
+    ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
+    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
 use super::native::{
@@ -277,7 +277,9 @@ fn build_message_body(
     let mut body = MessageObservation::new(role);
     if blocks.is_empty() {
         if let Some(content) = &record.message_content {
-            body = body.with_content(JsonValue::try_from_source_message_content(content)?);
+            body = body.with_content(JsonValue::try_from_source_message_content(content).map_err(
+                |error| error.with_bound_category(CanonicalFieldCategory::MessageContent),
+            )?);
         }
     } else {
         for block in blocks {
@@ -341,7 +343,9 @@ fn content_part(block: &QwenContentBlock) -> Result<ContentPart, QwenCanonicalEr
             })?;
             Ok(ContentPart::new(
                 ContentPartKind::Text,
-                JsonValue::try_from_source_message_text(text)?,
+                JsonValue::try_from_source_message_text(text).map_err(|error| {
+                    error.with_bound_category(CanonicalFieldCategory::MessageContentParts)
+                })?,
             ))
         }
         QwenContentBlock::ToolUse {
@@ -358,7 +362,10 @@ fn content_part(block: &QwenContentBlock) -> Result<ContentPart, QwenCanonicalEr
                 fields.push(("name".to_owned(), JsonValue::string(name)));
             }
             if *input_present && let Some(input) = input {
-                fields.push(("input".to_owned(), value_to_json(input)?));
+                fields.push((
+                    "input".to_owned(),
+                    value_to_json(input, CanonicalFieldCategory::MessageContentParts)?,
+                ));
             }
             Ok(ContentPart::new(
                 ContentPartKind::ToolUse,
@@ -383,7 +390,10 @@ fn content_part(block: &QwenContentBlock) -> Result<ContentPart, QwenCanonicalEr
                 fields.push(("tool_call_id".to_owned(), JsonValue::string(tool_call_id)));
             }
             if *result_present && let Some(result) = result {
-                fields.push(("content".to_owned(), value_to_json(result)?));
+                fields.push((
+                    "content".to_owned(),
+                    value_to_json(result, CanonicalFieldCategory::MessageContentParts)?,
+                ));
             }
             if let Some(is_error) = is_error {
                 fields.push(("is_error".to_owned(), JsonValue::Bool(*is_error)));
@@ -513,11 +523,14 @@ fn emit_tool(
         metadata.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(arguments) = &fields.arguments {
-        body = body.with_arguments(value_to_json(arguments)?);
+        body = body.with_arguments(value_to_json(
+            arguments,
+            CanonicalFieldCategory::ToolArguments,
+        )?);
         metadata.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = result {
-        body = body.with_result(value_to_json(result)?);
+        body = body.with_result(value_to_json(result, CanonicalFieldCategory::ToolResult)?);
         metadata.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = fields.is_error {
@@ -657,8 +670,12 @@ fn argument_string(
         .map(ToOwned::to_owned)
 }
 
-fn value_to_json(value: &serde_json::Value) -> Result<JsonValue, QwenCanonicalError> {
-    Ok(JsonValue::try_from_source_value(value)?)
+fn value_to_json(
+    value: &serde_json::Value,
+    category: CanonicalFieldCategory,
+) -> Result<JsonValue, QwenCanonicalError> {
+    Ok(JsonValue::try_from_source_value(value)
+        .map_err(|error| error.with_bound_category(category))?)
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> QwenCanonicalError {

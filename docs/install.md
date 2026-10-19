@@ -335,8 +335,8 @@ Recognized tiers are `organization-rules.d`, `rules.d`, `ui-rules.d`, `overrides
 `policies.d`, `allowlists.d`, and `outputs.d`. Explicit/project configuration roots
 remain outside cleanup. Unsafe or relative environment-selected roots fail closed.
 All underlying Claude Code, Codex, OpenCode, Gemini and other coding-agent session
-stores remain untouched. Emusary's embedded libraries, installation and data are
-outside this standalone lifecycle.
+stores remain untouched. Downstream embedding consumers' libraries, installation,
+and data are outside this standalone lifecycle.
 
 The old `%LOCALAPPDATA%\Telltale\telltale.exe` layout is detected and retained.
 Manual executables and tasks have no installer ownership proof. Legacy cleanup
@@ -509,8 +509,9 @@ Pass the config to scans or watch mode:
 cargo run --bin telltale -- scan --once --root "$HOME" --project-config projects.yaml
 ```
 
-You can also set the colon-separated `TELLTALE_PROJECT_CONFIG` environment variable
-instead of repeating the flag. When neither is provided, Telltale uses the
+You can also set `TELLTALE_PROJECT_CONFIG` to a platform-native path list
+instead of repeating the flag. On Windows that is not a colon-separated string.
+When neither is provided, Telltale uses the
 default paths (`~/github` and `~/projects`).
 
 ## Optional Watch Mode

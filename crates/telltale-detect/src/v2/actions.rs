@@ -19,7 +19,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 2;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 2;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 3;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1247,11 +1247,6 @@ fn native_fields<'a>(
                     })
                 }
             }
-            "credential.api_key.pattern" => regex(
-                r"(^|[^A-Za-z0-9_])(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,})",
-                text,
-                budget,
-            )?,
             "mcp.server_enumeration" => {
                 field == "command"
                     && regex(r"(?i)\bmcp(?:-scan)?\b", text, budget)?
@@ -1956,8 +1951,9 @@ pub(crate) fn process_findings(
 
 fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
     budget.charge(text.len())?;
-    // Exclusions apply to each candidate, not an entire field containing a real
-    // token next to a documentation example.
+    // The compiled Rule v1 matcher already filters candidate fields. Native
+    // case, boundary and example refinements must all apply to the same token,
+    // not let an excluded example admit a different embedded token.
     static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}").unwrap()
     });
@@ -1978,7 +1974,10 @@ fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, Pr
                 break;
             }
         }
-        if !excluded && (m.start() == 0 || !text.as_bytes()[m.start() - 1].is_ascii_alphanumeric())
+        if !excluded
+            && (m.start() == 0
+                || !(text.as_bytes()[m.start() - 1].is_ascii_alphanumeric()
+                    || text.as_bytes()[m.start() - 1] == b'_'))
         {
             return Ok(true);
         }

@@ -952,11 +952,12 @@ fn build_event_backed_timeline_summary(
             .map(terminal_export_severity)
         {
             let rank = severity_rank(&severity);
+            let timeline_rank = (rank, severity == "warning");
             if timeline_max_severity
                 .as_ref()
-                .is_none_or(|(current_rank, _)| rank >= *current_rank)
+                .is_none_or(|(current_rank, _)| timeline_rank >= *current_rank)
             {
-                timeline_max_severity = Some((rank, severity.clone()));
+                timeline_max_severity = Some((timeline_rank, severity.clone()));
             }
             if rank > severity_rank(&risk_max_severity) {
                 risk_max_severity = severity;
@@ -1059,6 +1060,7 @@ fn triage_ran_from_event(event: &serde_json::Value) -> bool {
 }
 
 fn severity_rank(severity: &str) -> u8 {
+    // Operational warnings remain visible in timelines but are not risk bands.
     match severity {
         "critical" => 4,
         "high" => 3,

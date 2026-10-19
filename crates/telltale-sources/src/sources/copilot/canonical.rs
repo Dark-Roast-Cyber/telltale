@@ -2,11 +2,11 @@ use std::fmt;
 
 use serde_json::Value;
 use telltale_schema::observation::{
-    CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
-    ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
-    IngestionMode, JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
-    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
-    SourceTimestamp, ToolObservation,
+    CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
+    CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds, FactMetadata,
+    FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
+    ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
+    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
 use super::native::{CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem};
@@ -186,7 +186,10 @@ fn project_function_call(
     if has_arguments {
         let arguments = item.arguments.as_deref().expect("checked");
         if let Ok(value) = serde_json::from_str::<Value>(arguments) {
-            body = body.with_arguments(value_to_json(&value)?);
+            body = body.with_arguments(value_to_json(
+                &value,
+                CanonicalFieldCategory::ToolArguments,
+            )?);
             metadata.push(("tool.arguments", FactProvenance::Parsed));
         } else {
             body = body.with_arguments(JsonValue::string(arguments));
@@ -277,7 +280,9 @@ fn project_message(
         })?;
         body = body.with_content_part(ContentPart::new(
             ContentPartKind::Text,
-            JsonValue::try_from_source_message_text(text)?,
+            JsonValue::try_from_source_message_text(text).map_err(|error| {
+                error.with_bound_category(CanonicalFieldCategory::MessageContentParts)
+            })?,
         ));
     }
     let mut builder = common_builder(
@@ -392,8 +397,12 @@ fn normal(provenance: FactProvenance) -> Result<FactMetadata, CopilotCanonicalEr
     })
 }
 
-fn value_to_json(value: &Value) -> Result<JsonValue, CopilotCanonicalError> {
-    Ok(JsonValue::try_from_source_value(value)?)
+fn value_to_json(
+    value: &Value,
+    category: CanonicalFieldCategory,
+) -> Result<JsonValue, CopilotCanonicalError> {
+    Ok(JsonValue::try_from_source_value(value)
+        .map_err(|error| error.with_bound_category(category))?)
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> CopilotCanonicalError {

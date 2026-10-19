@@ -4,7 +4,7 @@ This document defines the quality bar for Telltale detection rules, fixtures, an
 
 ## Required Rule Metadata
 
-Every rule in `config/rules/tool-call-regex.yaml` must include:
+Every rule in `config/rules/tool-call-regex.yaml` must include the fields below. `detection_class`, `signal_type`, and `analytic_intent` may be omitted; the defaults in this table apply, and most bundled rules omit them.
 
 | Field | Purpose | Example |
 | --- | --- | --- |
@@ -199,7 +199,7 @@ Follow this checklist:
 1. Read [threat-taxonomy.md](threat-taxonomy.md) and assign exactly one ADR category.
 2. Choose a stable `id` following the naming convention.
 3. Set `severity`, `score`, `targets`, and `regex` (or `detection` block).
-4. Set `detection_class`, `signal_type`, and `analytic_intent`.
+4. Set `detection_class`, `signal_type`, and `analytic_intent` when overriding their documented defaults; otherwise they may be omitted.
 5. Add `atlas_tags` only when the mapping is specific and update `MITRE_ATLAS_COVERAGE.md`.
 6. Write a clear `explanation` answering: what happened, why it matters, what evidence is safe.
 7. Add one or more `tags` for filtering and documentation.

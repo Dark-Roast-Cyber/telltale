@@ -15,7 +15,10 @@ use std::path::Path;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use telltale_schema::event::{Evidence, evidence_hash, redact_sensitive_text};
+use telltale_schema::event::{
+    Evidence, VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SIGNAL_TYPES, evidence_hash,
+    redact_sensitive_text,
+};
 use telltale_schema::scoring::{
     RiskAccountingError, RiskContribution, RiskContributionType, canonicalize_contributions,
     is_canonical_contribution_id,
@@ -414,7 +417,10 @@ pub fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::
     })
 }
 
-fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
+/// Materialize document defaults before combining rule definitions. Compile the
+/// combined set with neutral defaults (`case_insensitive: false, enabled: true`)
+/// so defaults are not applied again. This does not resolve duplicate IDs.
+pub fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
     if !defaults.enabled {
         rule.enabled = false;
     }
@@ -433,7 +439,9 @@ fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
     }
 }
 
-fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &RuleDefaults) {
+/// Materialize document enablement before combining modifier definitions.
+/// Case-insensitivity does not affect modifiers. This does not resolve IDs.
+pub fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &RuleDefaults) {
     if !defaults.enabled {
         modifier.enabled = false;
     }
@@ -936,26 +944,14 @@ fn validate_rule_metadata(
         rule_id,
         "detection_class",
         detection_class,
-        &[
-            "security_detection",
-            "policy_violation",
-            "threat_hunting",
-            "compliance_observation",
-            "operational_health",
-            "baseline_deviation",
-        ],
+        VALID_DETECTION_CLASSES,
     )?;
-    validate_metadata_value(
-        rule_id,
-        "signal_type",
-        signal_type,
-        &["atomic", "chain", "correlation", "baseline_deviation"],
-    )?;
+    validate_metadata_value(rule_id, "signal_type", signal_type, VALID_SIGNAL_TYPES)?;
     validate_metadata_value(
         rule_id,
         "analytic_intent",
         analytic_intent,
-        &["alert", "hunt", "enrich", "baseline", "audit"],
+        VALID_ANALYTIC_INTENTS,
     )?;
     for tag in atlas_tags {
         if !tag.starts_with("atlas:") {
@@ -1814,6 +1810,48 @@ modifiers: []
         assert_eq!(result.signal_types, vec!["atomic"]);
         assert_eq!(result.analytic_intents, vec!["audit"]);
         assert_eq!(result.atlas_tags, vec!["atlas:AML.T0051"]);
+    }
+
+    #[test]
+    fn rule_purpose_metadata_agrees_with_frozen_event3_taxonomy() {
+        let schema: serde_json::Value =
+            serde_json::from_str(telltale_schema::event::EVENT3_SCHEMA).expect("frozen schema");
+        let properties = &schema["$defs"]["detection"]["allOf"][1]["properties"];
+        for class in properties["detection_classes"]["items"]["enum"]
+            .as_array()
+            .expect("classes")
+        {
+            for signal in properties["signal_types"]["items"]["enum"]
+                .as_array()
+                .expect("signals")
+            {
+                for intent in properties["analytic_intents"]["items"]["enum"]
+                    .as_array()
+                    .expect("intents")
+                {
+                    super::validate_rule_metadata(
+                        "rule.taxonomy",
+                        class.as_str().unwrap(),
+                        signal.as_str().unwrap(),
+                        intent.as_str().unwrap(),
+                        &[],
+                    )
+                    .expect("wire taxonomy accepted by rules");
+                }
+            }
+        }
+        for invalid in ["", "unknown", "ALERT", "atomic ", " alert", "alert\u{a0}"] {
+            for (class, signal, intent, field) in [
+                (invalid, "atomic", "alert", "detection_class"),
+                ("security_detection", invalid, "alert", "signal_type"),
+                ("security_detection", "atomic", invalid, "analytic_intent"),
+            ] {
+                let error =
+                    super::validate_rule_metadata("rule.taxonomy", class, signal, intent, &[])
+                        .expect_err("invalid taxonomy");
+                assert!(error.to_string().contains(field));
+            }
+        }
     }
 
     #[test]

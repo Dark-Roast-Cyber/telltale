@@ -36,10 +36,12 @@ crate a stable embedding API.
 
 ### Qualification status
 
-The published `v0.7.0-rc.2` prerelease implements this contract; it is not a
-stable API freeze or a fully qualified release (clean-host gates are pending). Published RC1 evidence does not cover
-post-RC1 additions, and a passing host test of a Git pin is integration evidence,
-not release qualification. Candidate gates live in
+Published `v0.7.0-rc.2` implements the pre-v2 facade, not this whole contract.
+OpenCode v2 resume, cut-window tokens, and quarantine described here are
+later than RC2. Neither published RC1 nor RC2 qualifies this tree. RC2 is not a
+stable API freeze or a fully qualified release (clean-host gates are pending).
+A passing host test of a Git pin is integration evidence, not release
+qualification. Candidate gates live in
 [release readiness](release-readiness.md#post-rc1-embedding-qualification).
 
 ## Getting the crate
@@ -109,8 +111,11 @@ A compile-tested example lives at `crates/telltale/examples/embed_scan.rs`
 (`cargo run -p telltale-core --example embed_scan -- <session-root>`; use a
 synthetic fixture root).
 
-The builder mirrors the CLI's rule semantics. Rule documents are strings, not
-paths, so the rule engine works without filesystem access:
+The builder shares the CLI's rule content, defaults, policy, and evaluation
+semantics. It accepts document strings, not filesystem paths, and rejects
+duplicate IDs across documents, including bundled defaults. It does not implement
+the CLI's filesystem-managed tiers, same-ID replacement, or override files
+([tier resolution](install.md#local-rule-policy-and-allowlist-config)):
 
 ```rust
 let pipeline = Pipeline::builder()
@@ -281,12 +286,15 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (2),
+  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (3),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
   revision separately. `ProducerProvenanceManifestV1` has a different scope; see
   [producer provenance](telemetry-output.md#producer--detector-provenance-manifest).
+  Native profile 3 applies credential boundaries and example exclusions to the
+  same token; semantic identities change from profile 2, while replay identities
+  and Event 3 session semantics remain unchanged.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not
   permission to invent a substitute. Golden values are pinned by tests and change
@@ -440,8 +448,9 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
 scan of one source. A successful `opencode.sqlite` scan returns
 `resume_token()`: an opaque, versioned `ResumeToken` bound to that source (by
 client, source identity, and a hash of the exact platform-native path; no path or
-content). It is monotone: a resumed scan with no newer parts returns the token it
-resumed from. Sources without part history to resume from, and every JSONL
+content). Its evaluated checkpoint is monotone. An idle complete-window resume
+keeps its token; unfinished overlap can advance its separate continuation without
+moving that checkpoint. Sources without history to resume from, and every JSONL
 source, return `None`.
 
 - Persist `ResumeToken::as_str()` only after durably accepting that scan's
@@ -450,35 +459,66 @@ source, return `None`.
 - A token names its coordinate: legacy part tokens keep their form, and OpenCode
   v2 stores issue `resume:v1:opencode.sqlite:session_message:` tokens. After a
   window that was cut (`resume_token()` from a scan whose v2 window did not
-  hold the whole selection), they issue `session_message_drain:` tokens. Those
-  continue strictly after the position without the overlap, so persisting each
-  token and scanning again drains a backlog. A token
+  hold the whole selection), they issue
+  `resume:v1:opencode.sqlite:session_message_window:<checkpoint>:<cut>:<binding>`.
+  Those continue strictly after the raw cut without the overlap, even when the
+  cut is below the prior monotone checkpoint. Regression checks still use the
+  checkpoint, not the cut. Persisting each token and scanning again drains a
+  backlog; complete windows return to the overlapping form. Older
+  `session_message_drain:` tokens still parse, but replay the checkpoint's
+  overlap because they do not retain a trustworthy raw cut. Older readers
+  reject the new coordinate. A token
   for the other schema is not applied; the scan reads that store's bootstrap
   selection and returns a token for the schema it read. A store with an
   incomplete v2 schema fails as `UnsupportedSourceSchema`
   (`unsupported_source_schema`) without a token; keep the prior token and scan
   again once the store's schema is complete.
-- A resumed scan reads parts updated since the token's high-water minus a fixed
-  ten-minute overlap, the same policy as the CLI cursor. Expect actions from the
-  overlap again and deduplicate with replay identity or source-bound coordinates.
-  Chains whose earlier steps fall before the window are not reconstructed.
-- A resumed scan selects every part updated at or after that lower bound, not
-  only parts inside the overlap.
-- Two resumed failures need a tokenless rescan. Both fail atomically with
-  `coverage() == None` and no token:
+- Token checkpoints remain nonnegative. A v2 raw cut instead preserves the
+  native signed 64-bit integer `time_updated`, including negative values, and
+  must not exceed its checkpoint. For example, checkpoint `0` can have an
+  unfinished overlap ending at `-2`; continuing after that cut still acquires a
+  row at `-1`, while a cut at `-1` continues from `0`. This is progress, not
+  authorization: supplied cuts never remove row/byte admission caps, whole
+  timestamp-group boundaries or checkpoint regression checks.
+- Legacy part tokens, complete v2 tokens and older drain-token replays read from
+  the checkpoint minus a fixed ten-minute overlap, the same policy as the CLI
+  cursor. New v2 cut tokens instead use strict raw-cut continuation as described
+  above. Expect actions from overlapping reads again and deduplicate with replay
+  identity or source-bound coordinates. Chains whose earlier steps fall before
+  the window are not reconstructed.
+- Legacy resumed reads select every part at or after that lower bound, not only
+  parts inside the overlap. V2 reads evaluate bounded windows and issue cut
+  tokens until the selection completes.
+- These resumed acquisition failures are atomic, with `coverage() == None` and
+  no new token. A tokenless bootstrap is a bounded rebaseline with possible
+  history gaps, not an overlap-safe rollback:
 
   | `failure().acquisition_error()` | Cause | Host action |
   | --- | --- | --- |
-  | `BoundedSourceRead(LimitExceeded)` | More than 25,000 parts selected | Drop the token and scan without one; history between the two reads stays unevaluated. |
-  | `ResumeRegressed` (`resume_regressed`) | No part with an integer `time_updated` at or after the token's high-water remains: a restored or replaced database, or its newest parts deleted (ordinary session deletion or undo can do this) | Drop the token and scan without one; deduplicate repeats with replay identity or coordinates. |
+  | `BoundedSourceRead(LimitExceeded)` | Legacy: more than 25,000 selected parts. V2: one whole `time_updated` group cannot fit a bounded window; ordinary larger selections return cut windows instead. | Do not advance the token. A tokenless bootstrap may abandon unevaluated history; it does not guarantee that an oversized v2 group becomes readable. |
+  | `ResumeRegressed` (`resume_regressed`) | No row in the selected schema with an integer `time_updated` at or after the token's checkpoint remains: a restored or replaced database, or newest rows deleted (ordinary session deletion or undo can do this) | Recover the source snapshot, or explicitly accept bounded tokenless rebaselining and its history gap; deduplicate repeats with replay identity or coordinates. |
 
-  Not detected: a replaced store whose newest part is at or after the token,
-  and a clock rollback while parts at or after the high-water remain. Parts
+  Not detected: a replaced store whose newest row is at or after the checkpoint,
+  and a clock rollback while rows at or after that checkpoint remain. Rows
   written below the overlap window in those cases are not read.
-- `InvalidResumeToken` means the token does not bind to this source, including
-  tokens from an older binding. Drop it and scan without one.
+- Malformed or unsupported token text fails parsing as `ResumeTokenError`;
+  `PipelineError::InvalidResumeToken` rejects a parsed token that does not bind
+  to this source, including an older binding. For normal recovery, restore the
+  correct source/token pair or explicitly accept bounded tokenless rebaselining
+  and its history gap. Rejection by an older reader during downgrade is not
+  permission to discard or rewrite an unfinished token; use the rollback rules
+  below.
 - A token for another source or a non-resumable source returns
   `PipelineError::InvalidResumeToken` before any source I/O.
+
+**Downgrade:** do not strip `continue_after_time_updated` while leaving
+`draining: true`, or rewrite a `session_message_window:` token into an older
+`session_message_drain:` token containing only the checkpoint. Older readers
+then continue strictly after that checkpoint and can skip unfinished overlap.
+Finish the drain with the new reader before downgrading, or restore a coordinated
+earlier source/state/token snapshot (and matching accepted output). Dropping the
+token and bootstrapping is not an overlap-safe rollback. See the
+[migration guide](migrations/0.7.0.md#opencode-v2-changes-after-rc2).
 
 ## Canonical bound diagnostics
 
@@ -524,7 +564,7 @@ emitted by scans or CLI watch.
   is a bounded single-line subset (quoted sections, environment keys, arrays);
   unsupported MCP syntax yields an explicit unsupported outcome, and only
   unrelated multiline strings are skipped.
-- `InstallPlatform::Windows` matches `.exe`, `.cmd`, `.bat`, and `.ps1`.
+- `InstallPlatform::Windows` matches `.exe`, `.com`, `.cmd`, `.bat`, and `.ps1`.
   `collect_install_inventory_with_sources` marks agents present from exact
   supported sources as `InstallConfidence::Partial`, without reading contents.
 

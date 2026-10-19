@@ -21,7 +21,7 @@ Sources: `codex.sessions`, `codex.archived_sessions`,
 | Model, provider, agent | Full | Inherited from session metadata when needed. |
 | Workspace | Partial | Present in some session metadata. |
 | Timestamp and session ID | Full | Source-reported values only. A missing session id fails closed. |
-| Process ID and exit code | Absent | Not reported by this store. |
+| Process ID and exit code | Partial | Process ID is absent. A completed command preserves `exit_code` as `tool.exit_code`. |
 | Call ID, error state, content parts | Partial | Preserved when the source reports them. Missing IDs are not fabricated. |
 
 The Canonical Observation v2 adapter covers all three

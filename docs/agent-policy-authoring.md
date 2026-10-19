@@ -62,7 +62,7 @@ Detection bundles remain Telltale rule YAML. Bundles can be organized by purpose
 
 - `config/rules/tool-call-regex.yaml` for bundled security and threat-hunting detections.
 - `config/rules/ad-hoc/*.yaml` for temporary or bleeding-edge rules that should be validated before promotion.
-- `config/rules/policy-violations/*.yaml` for detections whose primary purpose is policy enforcement or audit.
+- `config/rules/policy-violations/*.yaml` for policy-violation detection or audit. These are ordinary detection YAML, not an enforcement action.
 - Deployment-specific custom bundles passed with repeated `--rules` flags. These
   bundles are additive-only after managed packs and cannot replace their IDs.
 - Small deployments can place organization, deployment, and local/UI bundles

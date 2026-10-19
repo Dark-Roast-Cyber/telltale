@@ -10,7 +10,7 @@ The first implementation is static and local-only. It reads known MCP configurat
 - tags including `mcp`, `mcp_inventory`, and either `mcp_inventory_supported` or `mcp_inventory_unsupported`
 - evidence field `mcp_server_inventory` with server name, transport, redacted command/package details, URL host, argument count, environment variable names, declared tool names when present, and support status
 
-Telltale does not connect to MCP servers during scan. That keeps the batch scanner side-effect free and avoids executing arbitrary configured commands. Actual tool names are only emitted when a local config or exported inventory payload explicitly declares a `tools` array. Otherwise Telltale reports the configured MCP server as installed tooling and leaves runtime tool enumeration to later active-inspection work.
+Telltale does not connect to MCP servers during scan. That keeps the batch scanner side-effect free and avoids executing arbitrary configured commands. Actual tool names are only emitted when a local config or exported inventory payload explicitly declares a `tools` array. Otherwise Telltale reports the configured MCP server as configured tooling and leaves runtime tool enumeration to later active-inspection work.
 
 ## Supported Static Config Sources
 

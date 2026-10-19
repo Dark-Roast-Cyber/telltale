@@ -1152,7 +1152,10 @@ fn all_eight_identities_acquire_evaluate_project_without_legacy_records() {
     for source in &sources {
         let batch = acquire_source(source, AcquisitionOptions::new(clock())).unwrap();
         assert!(!batch.observations.is_empty(), "{}", source.source_id);
-        assert!(batch.observations.iter().all(|o| o.source().adapter_id() == source.source_id && o.observed_at() == &clock()));
+        assert!(batch
+            .observations
+            .iter()
+            .all(|o| o.source().adapter_id() == source.source_id && o.observed_at() == &clock()));
         let result = process_canonical_source(
             source,
             &state,

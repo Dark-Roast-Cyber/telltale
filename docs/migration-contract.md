@@ -103,6 +103,19 @@ Migration of schema 3 state preserves its baseline populations. Normal loading
 rejects schema 1 or 2 with migration guidance; it never silently resets them.
 Network-host identity normalization remains the other supported normalization.
 
+OpenCode v2 unfinished windows optionally carry `draining: true` plus
+`continue_after_time_updated`, the raw cut independent of the monotone
+`last_time_updated` checkpoint. Native loading and explicit migration preserve
+both coordinates; a cut must be an integer no greater than the checkpoint and
+is valid only on an exact `opencode` / `opencode.sqlite` / `session_message`
+draining cursor. Unknown-field validation makes older readers fail closed on
+this shape. An older draining cursor with no raw cut remains readable and
+replays the checkpoint's ten-minute overlap, rather than assuming a strict cut.
+The raw cut is removed when the drain completes. No top-level version change or
+automatic migration write is needed; normal output-gated state installation
+writes the new coordinate after successful evaluation. This does not recover
+historically skipped rows outside the retained overlap.
+
 The documented legacy compatibility window permits omitted
 `source_instance_id` fields in source observations, SQLite cursors, and source
 contributions, plus omitted optional inventory `path_hash` and baseline key

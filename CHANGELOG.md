@@ -67,7 +67,9 @@
   uninstall retains data; confirmed purge removes owned generated data, with
   configuration requiring separate explicit selection. Legacy installs are retained.
 - Synthetic Windows lifecycle regressions and disposable-runner scheduling
-  validation. ZIP inventory, embedding APIs and Event 3.0 are unchanged.
+  validation. ZIP inventory and Event 3.0 are unchanged. OpenCode persisted
+  cursor/token compatibility is covered by the current
+  [migration guide](docs/migrations/0.7.0.md#opencode-v2-changes-after-rc2).
   RC3 tagging/publication and qualification remain separate gates.
 - Bound untrusted rule-server requests, source admission, MCP inventory,
   historical export and durable sink delivery. Failed MCP reads restore their

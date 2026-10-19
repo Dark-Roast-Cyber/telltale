@@ -72,12 +72,32 @@ so a large backlog is read a window at a time. A v2 selection is evaluated in
   `evaluation_capacity_exceeded`, so one dense row cannot stop a drain;
 - `source_processing.evaluated_window_count` counts the windows. A source
   still cut after 64 windows is counted in `incomplete_window_source_count`;
-  its cursor carries a `draining` flag and the next scan continues strictly
-  after it. Embedding scans evaluate one window per call, with
-  `session_message_drain:` tokens. The ten-minute overlap returns once a
+   its cursor carries a `draining` flag and a raw `continue_after_time_updated`
+   cut, and the next scan continues strictly after that cut. Embedding scans
+   evaluate one window per call, with `session_message_window:` tokens carrying
+   both checkpoint and cut. The ten-minute overlap returns once a
   window completes;
 - only one timestamp holding more rows than a whole window fails, as
   `LimitExceeded`.
+
+Drain checkpoints remain monotone, independently of the raw continuation. If a
+cut falls below the prior checkpoint, the next read starts after the raw cut,
+so unseen late or backdated rows in the unfinished overlap are not skipped.
+Regression detection still requires a row at or after the higher checkpoint,
+including during a drain. Required outputs gate installation of both values.
+A successful empty final window also clears the drain, without lowering the
+checkpoint, so later backdated rows are read by the normal overlap.
+An older `draining` cursor or `session_message_drain:` token lacks the raw cut;
+the new reader conservatively replays the checkpoint's ten-minute overlap before
+issuing a new continuation. Already-skipped rows outside that overlap cannot be
+recovered by this upgrade; use a separately selected history scan for those.
+Older readers reject the new field/token coordinate rather than misread it.
+Do not strip the raw-cut field while leaving `draining: true`, or rewrite a new
+window token into an old drain token carrying only the checkpoint: older readers
+can then skip unfinished overlap. Finish the drain with the new reader, or
+restore a coordinated earlier source/state/token snapshot with matching accepted
+output. Tokenless bootstrap is not an overlap-safe rollback; see the
+[migration guide](migrations/0.7.0.md#opencode-v2-changes-after-rc2).
 
 Rows that cannot be mapped within a size bound are quarantined by coordinates,
 never by content, while the rest is evaluated: a row over the 64 KB text
@@ -211,13 +231,17 @@ Extraction opens SQLite read-only, with a five-second busy timeout and one
 transaction snapshot across messages and part pages, including committed WAL
 contents. Scanning does not repair, checkpoint or rewrite the session database.
 Malformed state, unsupported variants, bound failures and evaluation/projection
-failure reject the entire source without partial successful output. OpenCode
+failure reject the failed window atomically. A later-window failure retains
+earlier successful windows and their raw continuation, with the failure reported.
+OpenCode
 bound diagnostics expose only closed field/dimension enums, never payloads,
 dynamic keys, source IDs, paths or measured sizes.
 
 Progress is staged only after successful processing. Required canonical JSONL
 persistence, or durable outbox retention, precedes scanner state installation.
-Rejected acquisition or required persistence failure leaves the prior cursor.
+Rejected acquisition contributes no new progress; earlier successful windows
+remain eligible. Required persistence failure leaves the prior stored cursor,
+including its raw continuation.
 After input becomes supported or the sink is repaired, restart with the same
 state/output configuration: the inclusive overlap retries pending data. Deleting
 state or bypassing rejection is not required. Remote-only best-effort delivery
@@ -273,10 +297,12 @@ redesign is promised by this candidate.
 
 The public embedding facade persists nothing. Without a resume token it reads the
 bounded bootstrap selection; with a host-persisted `ResumeToken` it applies the
-same incremental read policy as the CLI cursor (high-water minus the overlap,
-25,000-part limit, overflow fails as
-`AcquisitionError::BoundedSourceRead(LimitExceeded)`, and a store older than the
-token fails as `AcquisitionError::ResumeRegressed`). It has no persisted
+same schema-specific incremental read policy as the CLI cursor. Legacy parts
+use the overlap and 25,000-part limit; v2 uses overlapping complete tokens and
+strict raw-cut continuation tokens, with a whole-timestamp-group limit rather
+than ordinary selection overflow. Both schemas detect checkpoint regression as
+`AcquisitionError::ResumeRegressed`; see
+[embedding recovery](embedding.md#resuming-opencode-scans). It has no persisted
 suppression. Repeated scans of unchanged selected input have stable action
 semantics and Event 3 semantic projections, apart from fresh event IDs and
 materialization clocks.
