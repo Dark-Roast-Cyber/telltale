@@ -820,8 +820,11 @@ records a drain with `draining: true` and `continue_after_time_updated`; its
 `last_time_updated` checkpoint MUST remain monotone independently of that cut.
 Embedding cut tokens MUST use
 `resume:v1:opencode.sqlite:session_message_window:<checkpoint>:<cut>:<binding>`;
-an embedding scan evaluates one window. The cut MUST be an integer no greater
-than the checkpoint. Both coordinates MUST retain exact source/schema binding
+an embedding scan evaluates one window. The cut MUST preserve the native signed
+64-bit integer `time_updated`, including negative values, and MUST be no greater
+than the checkpoint; embedding token checkpoints remain nonnegative. A negative
+cut MUST NOT bypass admission caps, whole timestamp-group boundaries or the
+checkpoint regression check. Both coordinates MUST retain exact source/schema binding
 and required-output installation gating. Regression checks during a drain MUST
 use the monotone checkpoint, not a lower raw cut; the read-option continuation
 helper MUST preserve a higher regression floor already supplied by its caller.

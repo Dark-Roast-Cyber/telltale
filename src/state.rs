@@ -1593,6 +1593,22 @@ mod tests {
             .next()
             .unwrap()
             .clone();
+        for cut in [i64::MIN, -1, 0] {
+            let mut signed = value.clone();
+            signed["sqlite_ingestion_cursors"][&key]["last_time_updated"] = 0.into();
+            signed["sqlite_ingestion_cursors"][&key]["continue_after_time_updated"] = cut.into();
+            let bytes = serde_json::to_vec(&signed).unwrap();
+            let loaded = ScanState::validate_native_bytes(&bytes).unwrap();
+            assert_eq!(
+                loaded.sqlite_ingestion_continue_after(&source, "session_message"),
+                Some(cut)
+            );
+            let migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
+            assert_eq!(
+                migrated.canonical_bytes().unwrap(),
+                loaded.canonical_bytes().unwrap()
+            );
+        }
         for (field, invalid) in [
             ("continue_after_time_updated", serde_json::json!(1_000_001)),
             ("continue_after_time_updated", Value::Null),

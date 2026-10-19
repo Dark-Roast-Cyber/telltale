@@ -473,6 +473,13 @@ source, return `None`.
   incomplete v2 schema fails as `UnsupportedSourceSchema`
   (`unsupported_source_schema`) without a token; keep the prior token and scan
   again once the store's schema is complete.
+- Token checkpoints remain nonnegative. A v2 raw cut instead preserves the
+  native signed 64-bit integer `time_updated`, including negative values, and
+  must not exceed its checkpoint. For example, checkpoint `0` can have an
+  unfinished overlap ending at `-2`; continuing after that cut still acquires a
+  row at `-1`, while a cut at `-1` continues from `0`. This is progress, not
+  authorization: supplied cuts never remove row/byte admission caps, whole
+  timestamp-group boundaries or checkpoint regression checks.
 - Legacy part tokens, complete v2 tokens and older drain-token replays read from
   the checkpoint minus a fixed ten-minute overlap, the same policy as the CLI
   cursor. New v2 cut tokens instead use strict raw-cut continuation as described
