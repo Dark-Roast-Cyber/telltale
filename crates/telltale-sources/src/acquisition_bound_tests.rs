@@ -103,21 +103,161 @@ fn qwen_and_copilot_acquisition_preserve_assembled_message_bound_context() {
                 .expect("bound failure must not return a partial batch");
             assert_eq!(error.code(), "unbounded_value");
             assert_eq!(error.to_string(), "unbounded_value");
-            // Conversion attribution is separate; missing context is not a guarantee.
-            if bytes == 65_536 {
-                assert_eq!(
-                    error.bound_context(),
-                    Some(CanonicalBoundContext {
-                        category,
-                        dimension: BoundDimension::EncodedBytes,
-                    }),
-                    "{client:?}, {bytes} bytes"
-                );
-            }
+            // 65_536 passes direct-text conversion and fails assembled encoded size.
+            // 65_537 fails at pre-assembly conversion; category must not change dimension.
+            let dimension = match bytes {
+                65_536 => BoundDimension::EncodedBytes,
+                65_537 => BoundDimension::StringBytes,
+                _ => unreachable!("only the two boundary sizes are exercised"),
+            };
+            assert_eq!(
+                error.bound_context(),
+                Some(CanonicalBoundContext {
+                    category,
+                    dimension,
+                }),
+                "{client:?}, {bytes} bytes"
+            );
             let diagnostic = format!("{error:?} {error}");
             for forbidden in ["private-suffix", "synthetic", "output_text"] {
                 assert!(!diagnostic.contains(forbidden));
             }
+        }
+    }
+}
+
+#[test]
+fn qwen_and_copilot_conversion_sites_report_field_category_and_dimension() {
+    let directory = tempfile::tempdir().unwrap();
+    // Direct message text uses the 65_536 budget. Nested conversion uses the
+    // ordinary 4_096 string bound and must keep that dimension.
+    let over_text = format!("{}private-suffix", "x".repeat(65_537 - 14));
+    let over_structured = format!("{}private-suffix", "x".repeat(4_097 - 14));
+    let object_members = Value::Object(
+        (0..33)
+            .map(|index| (format!("k{index}"), Value::Null))
+            .collect(),
+    );
+    let qwen = |record: Value| format!("{record}\n");
+    let copilot = |items: Value| {
+        format!(
+            "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {items}\n"
+        )
+    };
+    let cases = [
+        (
+            "qwen-content-part-text",
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen(
+                json!({"type":"assistant","sessionId":"synthetic","content":[{"type":"text","text":over_text}]}),
+            ),
+            CanonicalFieldCategory::MessageContentParts,
+            BoundDimension::StringBytes,
+        ),
+        (
+            "qwen-content-part-tool-input",
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen(
+                json!({"type":"assistant","sessionId":"synthetic","content":[{"type":"tool_use","name":"exec","input":over_structured.clone()}]}),
+            ),
+            CanonicalFieldCategory::MessageContentParts,
+            BoundDimension::StringBytes,
+        ),
+        (
+            "qwen-content-part-tool-result",
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen(
+                json!({"type":"assistant","sessionId":"synthetic","content":[{"type":"text","text":"ok"},{"type":"tool_result","content":over_structured.clone()}]}),
+            ),
+            CanonicalFieldCategory::MessageContentParts,
+            BoundDimension::StringBytes,
+        ),
+        (
+            "qwen-tool-arguments",
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen(
+                json!({"type":"tool_call","sessionId":"synthetic","tool_name":"exec","arguments":over_structured.clone()}),
+            ),
+            CanonicalFieldCategory::ToolArguments,
+            BoundDimension::StringBytes,
+        ),
+        (
+            "qwen-tool-result",
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen(
+                json!({"type":"tool_result","sessionId":"synthetic","content":over_structured.clone()}),
+            ),
+            CanonicalFieldCategory::ToolResult,
+            BoundDimension::StringBytes,
+        ),
+        (
+            "qwen-tool-arguments-object-members",
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen(
+                json!({"type":"tool_call","sessionId":"synthetic","tool_name":"exec","arguments":object_members}),
+            ),
+            CanonicalFieldCategory::ToolArguments,
+            BoundDimension::ObjectMembers,
+        ),
+        (
+            "copilot-tool-arguments",
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+            copilot(
+                json!([{"type":"function_call","name":"exec","arguments":format!("{{\"note\":\"{}\"}}", over_structured)}]),
+            ),
+            CanonicalFieldCategory::ToolArguments,
+            BoundDimension::StringBytes,
+        ),
+    ];
+    for (label, client, source_id, kind, input, category, dimension) in cases {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind,
+            path: directory.path().join("synthetic-conversion.log"),
+        };
+        std::fs::write(&source.path, &input).unwrap();
+        let error = acquire_source(&source, options())
+            .err()
+            .expect("bound failure must not return a partial batch");
+        assert_eq!(error.code(), "unbounded_value", "{label}");
+        assert_eq!(error.to_string(), "unbounded_value", "{label}");
+        assert_eq!(
+            error.bound_context(),
+            Some(CanonicalBoundContext {
+                category,
+                dimension,
+            }),
+            "{label}"
+        );
+        let diagnostic = format!("{error:?} {error}");
+        for forbidden in [
+            "private-suffix",
+            "synthetic",
+            "output_text",
+            "tool_use",
+            "tool_result",
+            "function_call",
+            "exec",
+        ] {
+            assert!(
+                !diagnostic.contains(forbidden),
+                "{label} leaked {forbidden}"
+            );
         }
     }
 }
