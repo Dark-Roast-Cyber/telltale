@@ -22,7 +22,7 @@ CARGO_DENY_VERSION ?= 0.20.2
 RUST_TOOLCHAIN_VERSION ?= 1.95.0
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check upstream-formats-check catalog-update harness-drift-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check upstream-formats-check catalog-update harness-drift-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight release-preflight-ci package-manifest package-verify status logs scan-dry scan help
 
 .PHONY: telltale-console-check
 .PHONY: version-consistency-check
@@ -339,6 +339,9 @@ release-canonical-identity-check:
 
 ## Public release preflight
 release-preflight: release-context-check release-tag-review release-crate-manifest release-canonical-identity-check event3-contract-check producer-provenance-check local-event-feed-check package-verify release-public-docs-check release-artifact-manifest check release-fixture-smoke
+
+## Release-only preflight gates for pull requests; CI's fmt, clippy, test and package jobs cover the rest
+release-preflight-ci: release-context-check release-tag-review release-crate-manifest release-canonical-identity-check release-public-docs-check release-artifact-manifest release-fixture-smoke
 
 ## Show timer status
 status:

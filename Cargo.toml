@@ -121,3 +121,9 @@ harness = false
 [[bin]]
 name = "telltale"
 path = "src/main.rs"
+
+# Dev and test builds optimize third-party dependencies (bundled SQLite, regex,
+# serde) so integration tests do not spend their time in unoptimized library
+# code. Workspace crates keep unoptimized, incremental debug builds.
+[profile.dev.package."*"]
+opt-level = 2
