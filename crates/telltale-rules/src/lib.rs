@@ -26,7 +26,9 @@ use telltale_schema::scoring::{
 
 const DEFAULT_RULE_YAML: &str = include_str!("../data/tool-call-regex.yaml");
 
-const SUPPORTED_RULE_TARGETS: &[&str] = &[
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "arguments",
     "assistant_context",
     "command",

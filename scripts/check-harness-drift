@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Verify upstream harness pins and report newer upstream release tags.
+
+Reads tests/upstream_formats/harnesses.json, checks that each pinned tag still
+resolves to the pinned commit, and lists the newest tag matching each
+harness's tag pattern. Uses the GitHub REST API; set GH_TOKEN or GITHUB_TOKEN
+to avoid anonymous rate limits. A newer tag means the cited upstream code
+should be re-read, not that Telltale is broken.
+
+Exit status: 1 if a pin no longer resolves to its commit, or with --strict
+when any harness is behind; 0 otherwise.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+API = "https://api.github.com"
+MANIFEST = Path(__file__).resolve().parent.parent / "tests" / "upstream_formats" / "harnesses.json"
+
+
+def get(path: str) -> object:
+    request = urllib.request.Request(API + path, headers={"Accept": "application/vnd.github+json"})
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        request.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def tag_commit(repository: str, tag: str) -> str:
+    ref = get(f"/repos/{repository}/git/ref/tags/{tag}")["object"]
+    # Annotated tags point at a tag object; peel it to the commit.
+    while ref["type"] == "tag":
+        ref = get(f"/repos/{repository}/git/tags/{ref['sha']}")["object"]
+    return ref["sha"]
+
+
+def version_key(tag: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"[0-9]+", tag))
+
+
+def newest_tag(repository: str, pattern: re.Pattern[str]) -> str | None:
+    tags = [entry["name"] for entry in get(f"/repos/{repository}/tags?per_page=100")]
+    matching = [tag for tag in tags if pattern.fullmatch(tag)]
+    return max(matching, key=version_key) if matching else None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--strict", action="store_true", help="also fail when a harness is behind upstream")
+    args = parser.parse_args()
+
+    harnesses = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    rows: list[tuple[str, str, str, str, str]] = []
+    broken = behind = 0
+    for key, harness in sorted(harnesses.items()):
+        repository, tag, commit = harness["repository"], harness["tag"], harness["commit"]
+        try:
+            resolved = tag_commit(repository, tag)
+            pin = "ok" if resolved == commit else f"MISMATCH ({resolved[:12]})"
+            latest = newest_tag(repository, re.compile(harness["tag_pattern"])) or "none matched"
+        except (urllib.error.URLError, KeyError, ValueError) as error:
+            pin, latest = f"ERROR ({error})", "unknown"
+        if pin != "ok":
+            broken += 1
+        is_behind = latest not in (tag, "unknown", "none matched") and version_key(latest) > version_key(tag)
+        if is_behind:
+            behind += 1
+        rows.append((key, f"{repository}@{tag}", pin, latest, "behind" if is_behind else "current"))
+
+    lines = [
+        "| Harness | Pinned | Pin check | Newest matching tag | State |",
+        "| --- | --- | --- | --- | --- |",
+        *(f"| {' | '.join(row)} |" for row in rows),
+    ]
+    print("\n".join(lines))
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write("## Upstream harness drift\n\n" + "\n".join(lines) + "\n")
+
+    if broken:
+        print(f"{broken} harness pin(s) did not resolve to the pinned commit.", file=sys.stderr)
+        return 1
+    if behind:
+        print(f"{behind} harness(es) have newer upstream tags; re-read the cited code and update cases.", file=sys.stderr)
+        return 1 if args.strict else 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -22,7 +22,7 @@ CARGO_DENY_VERSION ?= 0.20.2
 RUST_TOOLCHAIN_VERSION ?= 1.95.0
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check upstream-formats-check catalog-update harness-drift-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 .PHONY: telltale-console-check
 .PHONY: version-consistency-check
@@ -181,6 +181,18 @@ security-check: security-audit security-deny security-sbom-test workflow-pins-ch
 ## Generate and repeat-verify the deterministic release SBOM
 release-sbom:
 	@python3 scripts/generate-sbom.py --output target/release/telltale-sbom.cdx.json
+
+## Check upstream harness format cases and the generated source and rule catalog
+upstream-formats-check:
+	cargo test $(CARGO_LOCKED) --quiet --test upstream_formats --test catalog
+
+## Regenerate docs/catalog from the source registry and the Rule v1 validator
+catalog-update:
+	TELLTALE_UPDATE_CATALOG=1 cargo test $(CARGO_LOCKED) --quiet --test catalog
+
+## Verify upstream harness pins and list newer upstream releases (uses the GitHub API)
+harness-drift-check:
+	@python3 scripts/check-harness-drift
 
 ## Validate and compare the synthetic evaluation baseline
 evaluation-check:

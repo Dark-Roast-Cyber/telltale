@@ -1,0 +1,81 @@
+{
+  "analytic_intents": [
+    "alert",
+    "hunt",
+    "enrich",
+    "baseline",
+    "audit"
+  ],
+  "atlas_tag_prefix": "atlas:",
+  "detection_classes": [
+    "security_detection",
+    "policy_violation",
+    "threat_hunting",
+    "compliance_observation",
+    "operational_health",
+    "baseline_deviation"
+  ],
+  "detection_conditions": [
+    "selection"
+  ],
+  "detection_fields": [
+    "selection",
+    "exclude",
+    "condition"
+  ],
+  "generated_by": "tests/catalog.rs",
+  "rule_fields": [
+    "id",
+    "title",
+    "description",
+    "status",
+    "author",
+    "references",
+    "falsepositives",
+    "level",
+    "category",
+    "detection_class",
+    "signal_type",
+    "analytic_intent",
+    "atlas_tags",
+    "severity",
+    "score",
+    "targets",
+    "regex",
+    "detection",
+    "tags",
+    "explanation",
+    "enabled"
+  ],
+  "severities": {
+    "checked_by": "event construction; telltale rules validate does not check severity yet",
+    "values": [
+      "informational",
+      "low",
+      "medium",
+      "high",
+      "critical",
+      "warning"
+    ]
+  },
+  "signal_types": [
+    "atomic",
+    "chain",
+    "correlation",
+    "baseline_deviation"
+  ],
+  "source_of_truth": [
+    "crates/telltale-rules/src/lib.rs",
+    "crates/telltale-schema/src/event/mod.rs"
+  ],
+  "targets": [
+    "arguments",
+    "assistant_context",
+    "command",
+    "file_path",
+    "tool_name",
+    "tool_result",
+    "url",
+    "user_context"
+  ]
+}

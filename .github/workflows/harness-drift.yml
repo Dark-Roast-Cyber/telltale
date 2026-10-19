@@ -1,0 +1,26 @@
+name: Upstream harness drift
+
+# Weekly report of newer upstream harness releases than the pins in
+# tests/upstream_formats/harnesses.json. It fails only when a pinned tag no
+# longer resolves to its pinned commit; a newer release is reported in the job
+# summary as a prompt to re-read the cited upstream code.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Harness pins and newer releases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check harness pins and newest upstream tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-harness-drift

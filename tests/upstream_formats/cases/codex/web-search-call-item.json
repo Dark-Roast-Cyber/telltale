@@ -1,0 +1,72 @@
+{
+  "description": "A hosted web search persists a response_item web_search_call.",
+  "harness": "codex",
+  "upstream": [
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/policy.rs#L80-L101"
+  ],
+  "status": "supported",
+  "acquire": {
+    "source_id": "codex.sessions",
+    "jsonl": [
+      {
+        "timestamp": "2026-10-13T00:00:00.000Z",
+        "type": "session_meta",
+        "payload": {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "timestamp": "2026-10-13T00:00:00.000Z",
+          "cwd": "/synthetic/work",
+          "originator": "codex_cli_rs",
+          "cli_version": "0.162.1",
+          "source": "cli",
+          "model_provider": "synthetic-provider"
+        }
+      },
+      {
+        "timestamp": "2026-10-13T00:00:01.000Z",
+        "type": "response_item",
+        "payload": {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Summarize the synthetic workspace."
+            }
+          ]
+        }
+      },
+      {
+        "timestamp": "2026-10-13T00:00:02.000Z",
+        "type": "response_item",
+        "payload": {
+          "type": "web_search_call",
+          "status": "completed",
+          "action": {
+            "type": "search",
+            "query": "synthetic.invalid"
+          }
+        }
+      },
+      {
+        "timestamp": "2026-10-13T00:00:03.000Z",
+        "type": "response_item",
+        "payload": {
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Done."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expect": {
+    "min_observations": 2,
+    "min_families": {
+      "message": 2
+    }
+  }
+}

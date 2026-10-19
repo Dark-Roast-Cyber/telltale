@@ -1,0 +1,62 @@
+{
+  "description": "type system records (for example subtype ui_telemetry) interleave with the conversation.",
+  "harness": "qwen-code",
+  "upstream": [
+    "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/services/chatRecordingService.ts#L355-L413"
+  ],
+  "status": "known_gap",
+  "note": "type system is not a known discriminator, so one system record rejects the whole file.",
+  "acquire": {
+    "source_id": "qwen.projects",
+    "jsonl": [
+      {
+        "uuid": "u1",
+        "parentUuid": null,
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:01.000Z",
+        "type": "user",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "user",
+          "parts": [
+            {
+              "text": "List the synthetic workspace."
+            }
+          ]
+        }
+      },
+      {
+        "uuid": "s2",
+        "parentUuid": "u1",
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:02.000Z",
+        "type": "system",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "subtype": "ui_telemetry"
+      },
+      {
+        "uuid": "a4",
+        "parentUuid": "u1",
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:04.000Z",
+        "type": "assistant",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The workspace has a README."
+            }
+          ]
+        },
+        "model": "synthetic-model"
+      }
+    ]
+  },
+  "expect": {
+    "error": "unknown_discriminator"
+  }
+}

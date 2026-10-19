@@ -1,0 +1,54 @@
+{
+  "description": "A text-only turn: ChatRecord lines whose message is a Gemini Content object with role and parts.",
+  "harness": "qwen-code",
+  "upstream": [
+    "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/services/chatRecordingService.ts#L355-L470"
+  ],
+  "status": "supported",
+  "acquire": {
+    "source_id": "qwen.projects",
+    "jsonl": [
+      {
+        "uuid": "u1",
+        "parentUuid": null,
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:01.000Z",
+        "type": "user",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "user",
+          "parts": [
+            {
+              "text": "List the synthetic workspace."
+            }
+          ]
+        }
+      },
+      {
+        "uuid": "a4",
+        "parentUuid": "u1",
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:04.000Z",
+        "type": "assistant",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The workspace has a README."
+            }
+          ]
+        },
+        "model": "synthetic-model"
+      }
+    ]
+  },
+  "expect": {
+    "min_observations": 2,
+    "min_families": {
+      "message": 2
+    }
+  }
+}

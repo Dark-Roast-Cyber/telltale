@@ -1,0 +1,56 @@
+{
+  "claude-code": {
+    "client": "claude",
+    "repository": "anthropics/claude-code",
+    "tag": "v2.1.296",
+    "commit": "2301018b1f61073c501a8e7a4813ef48c239163b",
+    "checked": "2026-10-13",
+    "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "note": "The transcript format is internal and unpublished; shapes come from the pinned changelog and documented session paths."
+  },
+  "codex": {
+    "client": "codex",
+    "repository": "openai/codex",
+    "tag": "rust-v0.162.1",
+    "commit": "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d",
+    "checked": "2026-10-13",
+    "tag_pattern": "^rust-v[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "note": "Re-read rollout/src/policy.rs, history/src/rollout_payload.rs, protocol/src/items.rs and core/src/tools/handlers/shell_spec.rs at a new tag."
+  },
+  "copilot-cli": {
+    "client": "copilot",
+    "repository": "github/copilot-cli",
+    "tag": "v1.0.96",
+    "commit": "dcdc0273c0250d8b32677ca99bc0e1f5006daa89",
+    "checked": "2026-10-13",
+    "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "note": "No published schema for process logs or session-state events.jsonl; storage comes from the changelog and config-dir reference."
+  },
+  "openclaw": {
+    "client": "openclaw",
+    "repository": "openclaw/openclaw",
+    "tag": "v2026.10.2",
+    "commit": "b8952d477f0c932d8ddc6da5c89cab5a169b6ff1",
+    "checked": "2026-10-13",
+    "tag_pattern": "^v[0-9]{4}\\.[0-9]+\\.[0-9]+$",
+    "note": "SQLite agent store is the default from v2026.8.1; JSONL is the legacy migration source."
+  },
+  "opencode": {
+    "client": "opencode",
+    "repository": "anomalyco/opencode",
+    "tag": "v2.0.27",
+    "commit": "1f4d07a4a519185955ae8ab2ea3607805509e386",
+    "checked": "2026-10-13",
+    "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "note": "v2 databases bootstrap session_v2 and session_message; v1 message/part stores are legacy."
+  },
+  "qwen-code": {
+    "client": "qwen",
+    "repository": "QwenLM/qwen-code",
+    "tag": "v0.25.1",
+    "commit": "c1a8218f38203e272e6e965778ed6a2795cfeed7",
+    "checked": "2026-10-13",
+    "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "note": "ChatRecord lines carry Gemini Content messages (role + parts)."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "description": "From v2026.8.1 runtime sessions and transcripts live in agents/<agentId>/agent/openclaw-agent.sqlite; JSONL is only the legacy migration source.",
+  "harness": "openclaw",
+  "upstream": [
+    "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/docs/concepts/session.md#L232-L261",
+    "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/docs/reference/database-schemas/agent-schema-history.md#L11-L20",
+    "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/state/openclaw-agent-schema.sql"
+  ],
+  "status": "known_gap",
+  "note": "Discovery reads only *.jsonl* files under ~/.openclaw/agents. The file is a placeholder; build it from the pinned schema before promoting this case.",
+  "discover": {
+    "client": "openclaw",
+    "files": {
+      ".openclaw/agents/main/agent/openclaw-agent.sqlite": {
+        "text": "placeholder: not a SQLite database\n"
+      }
+    }
+  },
+  "expect": {
+    "selected_sources": 0
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "description": "Session reset and delete archives are written to the sessions directory as *.jsonl.deleted.<timestamp>.zst.",
+  "harness": "openclaw",
+  "upstream": [
+    "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/docs/reference/session-management-compaction/maintenance.md#L20-L40"
+  ],
+  "status": "known_gap",
+  "note": "The .jsonl substring pattern discovers the archive and acquisition fails on the compressed bytes. The file holds only a zstd frame magic.",
+  "discover": {
+    "client": "openclaw",
+    "files": {
+      ".openclaw/agents/main/sessions/session-a.jsonl.deleted.2026-10-13T00-00-00.000Z.zst": {
+        "hex": "28b52ffd0000"
+      }
+    }
+  },
+  "expect": {
+    "selected_sources": 1,
+    "failure_codes": [
+      "source_read"
+    ]
+  }
+}

@@ -1489,7 +1489,9 @@ const INVALID_CONTROLLED_EVENT_ERROR: &str = "event contains invalid controlled 
 
 const VALID_TIME_SOURCES: &[&str] = &["observed", "source", "override"];
 const VALID_TIME_CONFIDENCES: &[&str] = &["low", "medium", "high"];
-const VALID_SEVERITIES: &[&str] = &[
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const VALID_SEVERITIES: &[&str] = &[
     "informational",
     "low",
     "medium",
