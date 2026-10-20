@@ -18,6 +18,12 @@ A rule package SHALL be one `telltale-rule-package/v1` YAML document with `forma
 - **WHEN** a package line contains a bidirectional override such as U+202E
 - **THEN** loading fails and reports the line and code point without echoing the content
 
+#### Scenario: YAML-escaped hidden character
+
+- **WHEN** a YAML escape in a package string decodes to a forbidden control or formatting character
+- **THEN** loading fails and reports the code point without echoing the decoded content
+- **AND** ordinary multiline rule text and literal regex escape sequences remain valid
+
 ### Requirement: Packages only add definitions
 
 Package definitions SHALL load at a package tier after bundled core rules and before `organization-rules.d`, `rules.d`, and `ui-rules.d`. A package definition SHALL NOT replace a bundled core definition or another package's definition; a repeated ID fails with both sources. Higher operator tiers MAY replace a package definition by ID, and explicit `--rules` files remain additive-only. Two effective packages SHALL NOT share an ID or a namespace.
