@@ -1081,15 +1081,15 @@ defaults:
 rules:
   - id: synthetic.invalid
     category: synthetic
-    severity: unknown
-    score: 1
+    severity: low
+    score: 101
     targets: [command]
     regex: needle
     tags: []
     explanation: synthetic
 modifiers: []
 "#;
-        // Rule v1 loading accepts the severity; canonical compilation rejects
+        // Rule v1 loading accepts the score; canonical compilation rejects
         // it at build time, so no pipeline exists that can only fail scans.
         let error = Pipeline::builder()
             .without_bundled_defaults()
@@ -1102,7 +1102,7 @@ modifiers: []
             error
                 .source()
                 .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-            Some(RuleV1CompileError::InvalidSeverity)
+            Some(RuleV1CompileError::ScoreOutOfRange)
         ));
         let valid = Pipeline::builder().build().unwrap();
         let sources = [synthetic_source()];
