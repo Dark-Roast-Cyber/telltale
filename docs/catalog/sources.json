@@ -1,5 +1,6 @@
 {
   "generated_by": "tests/catalog.rs",
+  "hand_maintained": "path_roots and source_specific_discovery are written by hand from crates/telltale-sources/src/discovery.rs, not generated; tests/upstream_formats discover cases check the behavior where a case exists.",
   "path_roots": {
     "codex_home": "Explicit --root joined with .codex, else $CODEX_HOME, else <home>/.codex.",
     "data_home": "Explicit --root joined with the platform data path; else Linux $XDG_DATA_HOME or <home>/.local/share, macOS <home>/Library/Application Support, Windows %LOCALAPPDATA% then %APPDATA% then <home>/AppData/Local.",

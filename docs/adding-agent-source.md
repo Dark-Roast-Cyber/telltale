@@ -146,7 +146,9 @@ applies when adding an entirely new coding agent or harness.
   for the executable gate; an empty input is not evidence. Never use real
   transcripts, credentials, auth files, private paths, or customer data.
 - Take record shapes, paths, and environment overrides from the harness's own
-  code at a pinned release, not from another tool or memory. Add the harness to
+  code at a pinned release, not from another tool or memory. When the harness
+  does not publish that code, use its pinned release notes or official
+  documentation and say so in the case note. Add the harness to
   `tests/upstream_formats/harnesses.json` and add upstream format cases, including
   `known_gap` cases for shapes the harness writes that the adapter does not read
   yet. See [`tests/upstream_formats/README.md`](../tests/upstream_formats/README.md).

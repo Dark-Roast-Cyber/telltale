@@ -2,68 +2,26 @@
   "description": "A legacy-history rollout mirrors each assistant message as event_msg agent_message, which Codex persists only in legacy history mode (older rollouts and clients that do not request pagination).",
   "harness": "codex",
   "upstream": [
-    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/policy.rs#L141-L158",
-    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L791-L798"
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/policy.rs#L141-L155",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L2548-L2560",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L790-L797",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L3211-L3212"
   ],
-  "status": "supported",
+  "status": "known_gap",
   "acquire": {
     "source_id": "codex.sessions",
     "jsonl": [
-      {
-        "timestamp": "2026-10-13T00:00:00.000Z",
-        "type": "session_meta",
-        "payload": {
-          "id": "00000000-0000-4000-8000-000000000002",
-          "timestamp": "2026-10-13T00:00:00.000Z",
-          "cwd": "/synthetic/work",
-          "originator": "codex_cli_rs",
-          "cli_version": "0.162.1",
-          "source": "cli",
-          "model_provider": "synthetic-provider"
-        }
-      },
-      {
-        "timestamp": "2026-10-13T00:00:01.000Z",
-        "type": "response_item",
-        "payload": {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "Summarize the synthetic workspace."
-            }
-          ]
-        }
-      },
-      {
-        "timestamp": "2026-10-13T00:00:02.000Z",
-        "type": "event_msg",
-        "payload": {
-          "type": "agent_message",
-          "message": "Done."
-        }
-      },
-      {
-        "timestamp": "2026-10-13T00:00:03.000Z",
-        "type": "response_item",
-        "payload": {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "Done."
-            }
-          ]
-        }
-      }
+      {"timestamp": "2026-10-13T00:00:00.000Z", "type": "session_meta", "payload": {"id": "00000000-0000-4000-8000-000000000002", "timestamp": "2026-10-13T00:00:00.000Z", "cwd": "/synthetic/work", "originator": "codex_cli_rs", "cli_version": "0.162.1", "source": "cli", "model_provider": "synthetic-provider", "history_mode": "legacy"}},
+      {"timestamp": "2026-10-13T00:00:01.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Summarize the synthetic workspace."}]}},
+      {"timestamp": "2026-10-13T00:00:02.000Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "Done.", "phase": null, "memory_citation": null}},
+      {"timestamp": "2026-10-13T00:00:03.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]}}
     ]
   },
   "expect": {
-    "min_observations": 2,
-    "min_families": {
-      "message": 2
-    }
-  }
+    "observations": 2,
+    "quarantine_codes": [
+      "unknown_discriminator"
+    ]
+  },
+  "note": "The agent_message mirror is quarantined as unknown_discriminator, so a current legacy-mode rollout is reported as partial. The assistant text is still read from the response_item message."
 }

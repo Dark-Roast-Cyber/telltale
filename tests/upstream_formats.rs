@@ -15,7 +15,7 @@ use std::process::Command;
 use rusqlite::{Connection, types::Value as SqlValue};
 use serde::Deserialize;
 use serde_json::Value;
-use telltale_schema::observation::ObservedAt;
+use telltale_schema::observation::{ObservationBody, ObservedAt};
 use telltale_schema::source::Source;
 use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 use telltale_sources::clients::{ClientDef, ClientSourceDef, supported_clients};
@@ -104,6 +104,12 @@ struct Expect {
     min_observations: Option<usize>,
     #[serde(default)]
     min_families: BTreeMap<String, usize>,
+    /// Exact sorted unique quarantine codes; none when omitted.
+    #[serde(default)]
+    quarantine_codes: Option<Vec<String>>,
+    /// Exact number of message observations with no content; zero when omitted.
+    #[serde(default)]
+    empty_messages: Option<usize>,
     #[serde(default)]
     selected_sources: Option<u64>,
     #[serde(default)]
@@ -188,10 +194,15 @@ fn source_def(source_id: &str) -> (&'static ClientDef, ClientSourceDef) {
         .unwrap_or_else(|| panic!("{source_id} is not a registered source identity"))
 }
 
-fn is_pinned_upstream(url: &str) -> bool {
-    url.split('/')
-        .any(|segment| segment.len() == 40 && segment.bytes().all(|byte| byte.is_ascii_hexdigit()))
+/// Whether `url` points into the harness repository at its pinned commit.
+fn cites_pinned_harness(url: &str, harness: &Harness) -> bool {
+    url.starts_with(&format!(
+        "https://github.com/{}/blob/{}/",
+        harness.repository, harness.commit
+    ))
 }
+
+const PLATFORMS: &[&str] = &["linux", "macos", "windows"];
 
 /// Writes one case input to `path`.
 fn write_input(name: &str, input: &Input, path: &Path) {
@@ -275,6 +286,8 @@ struct Outcome {
     error: Option<String>,
     observations: usize,
     families: BTreeMap<String, usize>,
+    quarantine_codes: Vec<String>,
+    empty_messages: usize,
     selected_sources: u64,
     records: u64,
     failure_codes: Vec<String>,
@@ -301,15 +314,30 @@ fn run_acquire(name: &str, acquire: &Acquire, dir: &Path) -> Outcome {
     ) {
         Ok(batch) => {
             let mut families = BTreeMap::new();
+            let mut empty_messages = 0;
             for observation in &batch.observations {
                 let family = serde_json::to_value(observation.kind()).expect("family");
                 *families
                     .entry(family.as_str().expect("family name").to_owned())
                     .or_insert(0) += 1;
+                if let ObservationBody::Message(message) = observation.body()
+                    && message.content().is_none()
+                    && message.content_parts().is_empty()
+                {
+                    empty_messages += 1;
+                }
             }
             Outcome {
                 observations: batch.observations.len(),
                 families,
+                empty_messages,
+                quarantine_codes: batch
+                    .quarantined
+                    .iter()
+                    .map(|unit| unit.code.to_owned())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
                 ..Outcome::default()
             }
         }
@@ -419,6 +447,20 @@ fn compare(case: &Case, outcome: &Outcome) -> Vec<String> {
                 ));
             }
         }
+        let codes = expect.quarantine_codes.clone().unwrap_or_default();
+        if codes != outcome.quarantine_codes {
+            problems.push(format!(
+                "quarantine codes: expected {codes:?}, got {:?}",
+                outcome.quarantine_codes
+            ));
+        }
+        let empty = expect.empty_messages.unwrap_or(0);
+        if empty != outcome.empty_messages {
+            problems.push(format!(
+                "messages without content: expected {empty}, got {}",
+                outcome.empty_messages
+            ));
+        }
     } else {
         if let Some(exact) = expect.selected_sources
             && exact != outcome.selected_sources
@@ -455,13 +497,26 @@ fn validate_case(name: &str, case: &Case, harnesses: &BTreeMap<String, Harness>)
         .get(&case.harness)
         .unwrap_or_else(|| panic!("{name}: harness {} is not in {HARNESSES}", case.harness));
     assert!(
-        case.upstream.iter().any(|url| is_pinned_upstream(url)),
-        "{name}: cite at least one upstream URL pinned to a full commit SHA"
+        case.upstream
+            .iter()
+            .any(|url| cites_pinned_harness(url, harness)),
+        "{name}: cite at least one https://github.com/{}/blob/{}/ URL",
+        harness.repository,
+        harness.commit
     );
     assert!(
         case.status == Status::Supported || case.note.is_some(),
         "{name}: explain a known_gap or out_of_scope case in note"
     );
+    if let Some(platforms) = &case.platforms {
+        assert!(
+            !platforms.is_empty()
+                && platforms
+                    .iter()
+                    .all(|platform| PLATFORMS.contains(&platform.as_str())),
+            "{name}: platforms must name one or more of {PLATFORMS:?}"
+        );
+    }
     let expect = &case.expect;
     match (&case.acquire, &case.discover) {
         (Some(acquire), None) => {
@@ -481,6 +536,11 @@ fn validate_case(name: &str, case: &Case, harnesses: &BTreeMap<String, Harness>)
                 assert!(
                     expect.error.is_none() && expect.min_observations.unwrap_or(0) > 0,
                     "{name}: a supported acquire case needs no error and min_observations > 0"
+                );
+                assert!(
+                    expect.quarantine_codes.as_ref().is_none_or(Vec::is_empty)
+                        && expect.empty_messages.unwrap_or(0) == 0,
+                    "{name}: a supported case quarantines nothing and keeps message content"
                 );
             } else {
                 assert!(
@@ -502,9 +562,17 @@ fn validate_case(name: &str, case: &Case, harnesses: &BTreeMap<String, Harness>)
                 expect.error.is_none()
                     && expect.observations.is_none()
                     && expect.min_observations.is_none()
-                    && expect.min_families.is_empty(),
+                    && expect.min_families.is_empty()
+                    && expect.quarantine_codes.is_none()
+                    && expect.empty_messages.is_none(),
                 "{name}: discover cases use selected_sources/min_records/failure_codes"
             );
+            if case.status == Status::Supported {
+                assert!(
+                    expect.selected_sources.unwrap_or(0) > 0 && expect.min_records.unwrap_or(0) > 0,
+                    "{name}: a supported discover case selects a source and reads records"
+                );
+            }
         }
         _ => panic!("{name}: give exactly one of acquire or discover"),
     }

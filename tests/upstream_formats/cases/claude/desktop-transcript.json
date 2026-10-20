@@ -7,7 +7,7 @@
     "https://code.claude.com/docs/en/sessions"
   ],
   "status": "supported",
-  "note": "Upstream calls the entry format internal. Record shapes follow Telltale's bounded live validation of 2.1.x transcripts.",
+  "note": "Claude Code's transcript serializer is not public, so no source line defines these records. The pinned release notes confirm saved sessions keep thinking, tool call and tool result blocks and attachment entries; record shapes follow Telltale's bounded live validation of 2.1.x transcripts.",
   "acquire": {
     "source_id": "claude.projects",
     "jsonl": [
@@ -21,6 +21,9 @@
   },
   "expect": {
     "min_observations": 3,
-    "min_families": {"tool": 1, "message": 2}
+    "min_families": {
+      "tool": 1,
+      "message": 2
+    }
   }
 }

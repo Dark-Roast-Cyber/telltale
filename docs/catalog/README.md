@@ -15,6 +15,10 @@ source tables in [session sources](../session-sources.md) or the
 of identities than the registry. Regenerate with `make catalog-update` in the
 same change as the code.
 
-The path-root descriptions in `sources.json` summarize resolution code in
-`crates/telltale-sources/src/discovery.rs`; behavior per harness release is
-exercised by the [upstream format cases](../../tests/upstream_formats/README.md).
+Two parts of `sources.json` are written by hand rather than generated: the
+`path_roots` and `source_specific_discovery` descriptions. They summarize
+resolution code in `crates/telltale-sources/src/discovery.rs`, and the staleness
+check only confirms the committed text matches the test. Their behavior per
+harness release is exercised by the
+[upstream format cases](../../tests/upstream_formats/README.md) where a case
+exists.

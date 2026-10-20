@@ -40,6 +40,10 @@ pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "user_context",
 ];
 
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleSet {
     pub version: u32,
@@ -872,7 +876,7 @@ fn default_enabled() -> bool {
 }
 
 fn default_condition() -> String {
-    "selection".to_string()
+    SUPPORTED_DETECTION_CONDITIONS[0].to_string()
 }
 
 fn default_detection_class() -> String {
@@ -917,7 +921,7 @@ fn compile_matchers(
         }
     }
     if let Some(detection) = &definition.detection {
-        if detection.condition != "selection" {
+        if !SUPPORTED_DETECTION_CONDITIONS.contains(&detection.condition.as_str()) {
             return Err(format!(
                 "rule {} uses unsupported condition {}; only 'selection' is supported",
                 definition.id, detection.condition

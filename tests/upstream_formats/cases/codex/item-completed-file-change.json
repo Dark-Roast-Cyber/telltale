@@ -6,79 +6,26 @@
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/items.rs#L42-L78",
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/items.rs#L411-L426",
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L4225-L4239",
-    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L1964-L1976"
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L1964-L1976",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L3211-L3212",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/history/src/lib.rs#L362-L368",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/ordinal.rs#L20-L52"
   ],
   "status": "known_gap",
-  "note": "The rollout is acquired, but the FileChange item maps to no canonical observation, so patch paths and contents are invisible to detection. Expect a file observation when this is mapped.",
+  "note": "The FileChange item is quarantined as unsupported_completed_item, so patch paths and contents are invisible to detection and the source is reported as partial. Expect a file observation when this is mapped.",
   "acquire": {
     "source_id": "codex.sessions",
     "jsonl": [
-      {
-        "timestamp": "2026-10-13T00:00:00.000Z",
-        "type": "session_meta",
-        "payload": {
-          "id": "00000000-0000-4000-8000-000000000002",
-          "timestamp": "2026-10-13T00:00:00.000Z",
-          "cwd": "/synthetic/work",
-          "originator": "codex_cli_rs",
-          "cli_version": "0.162.1",
-          "source": "cli",
-          "model_provider": "synthetic-provider"
-        }
-      },
-      {
-        "timestamp": "2026-10-13T00:00:01.000Z",
-        "type": "response_item",
-        "payload": {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "Summarize the synthetic workspace."
-            }
-          ]
-        }
-      },
-      {
-        "timestamp": "2026-10-13T00:00:02.000Z",
-        "type": "event_msg",
-        "payload": {
-          "type": "item_completed",
-          "thread_id": "00000000-0000-4000-8000-000000000002",
-          "turn_id": "turn-1",
-          "item": {
-            "type": "FileChange",
-            "id": "patch-1",
-            "status": "completed",
-            "changes": {
-              "/synthetic/work/notes.txt": {
-                "type": "add",
-                "content": "synthetic note\n"
-              }
-            }
-          },
-          "started_at_ms": 1791849601000,
-          "completed_at_ms": 1791849602000
-        }
-      },
-      {
-        "timestamp": "2026-10-13T00:00:03.000Z",
-        "type": "response_item",
-        "payload": {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "Done."
-            }
-          ]
-        }
-      }
+      {"timestamp": "2026-10-13T00:00:00.000Z", "ordinal": 0, "type": "session_meta", "payload": {"id": "00000000-0000-4000-8000-000000000002", "timestamp": "2026-10-13T00:00:00.000Z", "cwd": "/synthetic/work", "originator": "codex_cli_rs", "cli_version": "0.162.1", "source": "cli", "model_provider": "synthetic-provider", "history_mode": "paginated"}},
+      {"timestamp": "2026-10-13T00:00:01.000Z", "ordinal": 1, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Summarize the synthetic workspace."}]}},
+      {"timestamp": "2026-10-13T00:00:02.000Z", "ordinal": 2, "type": "event_msg", "payload": {"type": "item_completed", "thread_id": "00000000-0000-4000-8000-000000000002", "turn_id": "turn-1", "item": {"type": "FileChange", "id": "patch-1", "status": "completed", "changes": {"/synthetic/work/notes.txt": {"type": "add", "content": "synthetic note\n"}}}, "started_at_ms": 1791849601000, "completed_at_ms": 1791849602000}},
+      {"timestamp": "2026-10-13T00:00:03.000Z", "ordinal": 3, "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]}}
     ]
   },
   "expect": {
-    "observations": 2
+    "observations": 2,
+    "quarantine_codes": [
+      "unsupported_completed_item"
+    ]
   }
 }

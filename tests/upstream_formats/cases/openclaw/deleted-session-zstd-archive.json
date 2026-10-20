@@ -5,12 +5,12 @@
     "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/docs/reference/session-management-compaction/maintenance.md#L20-L40"
   ],
   "status": "known_gap",
-  "note": "The .jsonl substring pattern discovers the archive and acquisition fails on the compressed bytes. The file holds only a zstd frame magic.",
+  "note": "The .jsonl substring pattern discovers the archive and acquisition fails on the compressed bytes. The file is a valid zstd frame of two synthetic legacy JSONL records.",
   "discover": {
     "client": "openclaw",
     "files": {
       ".openclaw/agents/main/sessions/session-a.jsonl.deleted.2026-10-13T00-00-00.000Z.zst": {
-        "hex": "28b52ffd0000"
+        "hex": "28b52ffd20ed150500228a201f60b5ce01806d6d626d39744e6364c741107703d685c50acfe381a20a568a15c59c8879641b8b6c18dbb4d1ec08d70ed83ee8fb6d3fd8ae2e97a1ebd781f2932ac7819e9e19f45bc9e2d595dd0463dea79837acb5105dab10508ea51c82652dd7c78735efe3faea0012464973bd4d3f8993a85d9d1d8cbbfa838e79f9fa8d527f0a0b0010c4ca94ab22282c90a75086a3ca05b2cd509cba2b35ed2edb6402"
       }
     }
   },

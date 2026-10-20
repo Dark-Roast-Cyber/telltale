@@ -1,5 +1,5 @@
 {
-  "description": "OPENCODE_DB replaces the database filename; a relative value resolves against the data directory and an absolute value is used as is.",
+  "description": "An absolute OPENCODE_DB value is used as the database path as is. Relative values resolve against the data directory and are not covered by this case.",
   "harness": "opencode",
   "upstream": [
     "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13",

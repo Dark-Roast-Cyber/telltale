@@ -11,7 +11,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use telltale_rules::{DetectionDefinition, RuleDefinition, SUPPORTED_RULE_TARGETS};
+use telltale_rules::{
+    DetectionDefinition, RuleDefinition, SUPPORTED_DETECTION_CONDITIONS, SUPPORTED_RULE_TARGETS,
+};
 use telltale_schema::event::{
     VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SEVERITIES, VALID_SIGNAL_TYPES,
 };
@@ -83,6 +85,7 @@ fn sources_catalog() -> Value {
     json!({
         "generated_by": "tests/catalog.rs",
         "source_of_truth": "crates/telltale-sources/src/sources/registry.rs",
+        "hand_maintained": "path_roots and source_specific_discovery are written by hand from crates/telltale-sources/src/discovery.rs, not generated; tests/upstream_formats discover cases check the behavior where a case exists.",
         "path_roots": {
             "home": "Explicit --root, else $HOME, else %USERPROFILE%.",
             "codex_home": "Explicit --root joined with .codex, else $CODEX_HOME, else <home>/.codex.",
@@ -127,7 +130,7 @@ fn rule_vocabulary_catalog() -> Value {
         ],
         "rule_fields": accepted_fields::<RuleDefinition>(),
         "detection_fields": accepted_fields::<DetectionDefinition>(),
-        "detection_conditions": ["selection"],
+        "detection_conditions": SUPPORTED_DETECTION_CONDITIONS,
         "targets": SUPPORTED_RULE_TARGETS,
         "detection_classes": VALID_DETECTION_CLASSES,
         "signal_types": VALID_SIGNAL_TYPES,
@@ -153,25 +156,43 @@ fn rule_vocabulary_catalog_matches_validator() {
     );
 }
 
-/// Source identities named in the second column of a doc's Markdown tables.
+/// Second-column headers that mark a table of source identities.
+const SOURCE_ID_HEADERS: &[&str] = &["Source Identity", "Source Kind"];
+
+/// Every second-column cell of a doc's source-identity tables, so a misspelled
+/// or unknown identity is compared rather than skipped.
 fn documented_source_ids(relative: &str) -> BTreeSet<String> {
     let text = fs::read_to_string(repo_path(relative)).expect("source doc");
-    let registered = registry_source_ids();
-    let clients = supported_clients()
-        .iter()
-        .map(|client| client.id.as_str())
-        .collect::<BTreeSet<_>>();
-    text.lines()
-        .filter_map(|line| line.trim().strip_prefix('|'))
-        .filter_map(|row| row.split('|').nth(1))
-        .map(|cell| cell.trim().trim_matches('`').to_owned())
-        .filter(|cell| {
-            registered.contains(cell)
-                || cell
-                    .split_once('.')
-                    .is_some_and(|(client, _)| clients.contains(client))
-        })
-        .collect()
+    let second_cell = |line: &str| {
+        line.trim()
+            .strip_prefix('|')
+            .and_then(|row| row.split('|').nth(1))
+            .map(|cell| cell.trim().trim_matches('`').to_owned())
+    };
+    let mut ids = BTreeSet::new();
+    let mut in_table = false;
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some(cell) = second_cell(line) else {
+            in_table = false;
+            continue;
+        };
+        let separator = lines
+            .peek()
+            .and_then(|next| second_cell(next))
+            .is_some_and(|next| next.starts_with("---"));
+        if separator {
+            in_table = SOURCE_ID_HEADERS.contains(&cell.as_str());
+            lines.next();
+        } else if in_table {
+            ids.insert(cell);
+        }
+    }
+    assert!(
+        !ids.is_empty(),
+        "{relative}: no source identity table found"
+    );
+    ids
 }
 
 fn registry_source_ids() -> BTreeSet<String> {
