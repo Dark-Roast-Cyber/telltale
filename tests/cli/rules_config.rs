@@ -671,6 +671,131 @@ fn rules_validate_reports_unsupported_targets() {
 }
 
 #[test]
+fn rules_validate_and_test_accept_every_detection_severity() {
+    let temp = tempdir().expect("tempdir");
+    let rules = temp.path().join("severity.yaml");
+    for severity in telltale_schema::event::VALID_DETECTION_SEVERITIES {
+        fs::write(
+            &rules,
+            custom_rule_yaml("synthetic.severity", "exfiltrate project secrets")
+                .replace("severity: low", &format!("severity: {severity}"))
+                .replace("targets: [command]", "targets: [assistant_context]"),
+        )
+        .expect("synthetic rule");
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["rules", "validate", "--no-local-config", "--rules"])
+            .arg(&rules)
+            .env_remove("TELLTALE_COMMUNITY_RULES")
+            .output()
+            .expect("validate severity");
+        assert!(
+            output.status.success(),
+            "{severity}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: Value = serde_json::from_slice(&output.stdout).expect("summary");
+        assert_eq!(summary["status"], "ok");
+        assert_eq!(summary["rule_count"], default_rule_count() + 1);
+
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "rules",
+                "test",
+                "tests/fixtures/custom_rules/custom-agent-behavior.jsonl",
+                "--no-local-config",
+                "--no-default-rules",
+                "--rules",
+            ])
+            .arg(&rules)
+            .output()
+            .expect("compile and test detection severity");
+        assert!(
+            output.status.success(),
+            "{severity}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: Value = serde_json::from_slice(&output.stdout).expect("test summary");
+        assert_eq!(summary["match_count"], 1);
+        assert_eq!(summary["matches"][0]["rule_ids"][0], "synthetic.severity");
+    }
+}
+
+#[test]
+fn unsupported_rule_severity_fails_before_activation() {
+    let temp = tempdir().expect("tempdir");
+    let rules = temp.path().join("severity.yaml");
+    let root = temp.path().join("session_stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).expect("synthetic sessions directory");
+    let fixture = sessions.join("severity.jsonl");
+    fs::write(
+        &fixture,
+        "{\"type\":\"event_msg\",\"session_id\":\"synthetic-severity\",\"timestamp\":\"2026-05-08T10:00:01Z\",\"payload\":{\"type\":\"tool_call\",\"tool_name\":\"shell\",\"command\":\"echo synthetic-probe\"}}\n",
+    )
+    .expect("synthetic Codex session");
+    let activation = temp.path().join("must-not-be-created");
+    for severity in ["warning", "catastrophic"] {
+        fs::write(
+            &rules,
+            custom_rule_yaml("synthetic.severity", "synthetic-probe")
+                .replace("severity: low", &format!("severity: {severity}"))
+                .replace(
+                    "category: custom_agent_behavior",
+                    "status: not_a_status\n    category: not_a_category",
+                ),
+        )
+        .expect("synthetic invalid severity rule");
+        for args in [
+            vec!["rules", "validate"],
+            vec!["config", "validate"],
+            vec!["rules", "test"],
+            vec!["scan", "--once"],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+            command
+                .args(&args)
+                .args(["--no-local-config", "--no-default-rules", "--rules"])
+                .arg(&rules);
+            if args == ["rules", "test"] {
+                command.arg(&fixture);
+            } else if args[0] == "scan" {
+                command
+                    .args(["--allow-fixtures", "--install-inventory-disabled", "--root"])
+                    .arg(&root)
+                    .arg("--log-path")
+                    .arg(activation.join("events.jsonl"))
+                    .arg("--state-path")
+                    .arg(activation.join("state.json"));
+            }
+            let output = command.output().expect("run invalid severity command");
+            assert!(
+                !output.status.success(),
+                "{args:?} accepted invalid severity"
+            );
+            assert!(output.stdout.is_empty(), "{args:?} emitted output");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!(
+                    "rule synthetic.severity uses unsupported severity '{severity}'"
+                )),
+                "{args:?}: {stderr}"
+            );
+            assert!(
+                stderr.contains(&format!(
+                    "supported values: {}",
+                    telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
+                )),
+                "{args:?}: {stderr}"
+            );
+        }
+    }
+    assert!(
+        !activation.exists(),
+        "output/state activated before rejection"
+    );
+}
+
+#[test]
 fn rules_test_supports_sigma_inspired_custom_yaml() {
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([

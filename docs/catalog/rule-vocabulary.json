@@ -48,14 +48,21 @@
     "enabled"
   ],
   "severities": {
-    "checked_by": "event construction; telltale rules validate does not check severity yet",
-    "values": [
+    "checked_by": "Rule v1 compilation (including telltale rules validate)",
+    "event3_global_values": [
       "informational",
       "low",
       "medium",
       "high",
       "critical",
       "warning"
+    ],
+    "values": [
+      "informational",
+      "low",
+      "medium",
+      "high",
+      "critical"
     ]
   },
   "signal_types": [
