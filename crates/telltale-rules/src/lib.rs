@@ -17,8 +17,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use telltale_schema::event::{
-    Evidence, VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SIGNAL_TYPES, evidence_hash,
-    redact_sensitive_text,
+    Evidence, VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_DETECTION_SEVERITIES,
+    VALID_SIGNAL_TYPES, evidence_hash, redact_sensitive_text,
 };
 use telltale_schema::scoring::{
     RiskAccountingError, RiskContribution, RiskContributionType, canonicalize_contributions,
@@ -899,6 +899,12 @@ fn compile_matchers(
     definition: &RuleDefinition,
     case_insensitive: bool,
 ) -> Result<Vec<CompiledMatcher>, Box<dyn std::error::Error>> {
+    validate_metadata_value(
+        &definition.id,
+        "severity",
+        &definition.severity,
+        &VALID_DETECTION_SEVERITIES,
+    )?;
     validate_rule_metadata(
         &definition.id,
         &definition.detection_class,
@@ -1876,6 +1882,116 @@ modifiers: []
                 assert!(error.to_string().contains(field));
             }
         }
+    }
+
+    #[test]
+    fn rule_severity_validation_uses_detection_vocabulary() {
+        let schema: serde_json::Value =
+            serde_json::from_str(telltale_schema::event::EVENT3_SCHEMA).expect("frozen schema");
+        assert_eq!(
+            schema["$defs"]["detection"]["allOf"][1]["properties"]["severity"]["enum"],
+            serde_json::json!(telltale_schema::event::VALID_DETECTION_SEVERITIES)
+        );
+        let rule_set = |severity: &str| {
+            let mut definition = rule("synthetic.severity", "custom");
+            definition.severity = severity.to_string();
+            RuleSet {
+                version: 1,
+                description: "synthetic severity validation".to_string(),
+                defaults: RuleDefaults {
+                    case_insensitive: false,
+                    enabled: true,
+                },
+                rules: vec![definition],
+                modifiers: Vec::new(),
+            }
+        };
+        for severity in &telltale_schema::event::VALID_DETECTION_SEVERITIES {
+            let compiled = rule_set(severity).compile(None).expect("accepted severity");
+            assert_eq!(compiled.summaries()[0].severity, *severity);
+            assert_eq!(
+                compiled.compatibility_export().rules()[0].severity,
+                *severity
+            );
+        }
+        for invalid in [
+            "warning",
+            "catastrophic",
+            "",
+            "unknown",
+            "HIGH",
+            "high ",
+            " high",
+            "high\u{a0}",
+        ] {
+            let error = rule_set(invalid)
+                .compile(None)
+                .expect_err("invalid severity must fail shared compilation");
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "rule synthetic.severity uses unsupported severity '{invalid}'; supported values: {}",
+                    telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
+                )
+            );
+            let mut disabled = rule_set(invalid);
+            disabled.rules[0].enabled = false;
+            assert_eq!(
+                disabled.compile(None).expect("disabled rule").rule_count(),
+                0
+            );
+            let mut disabled_defaults = rule_set(invalid);
+            disabled_defaults.defaults.enabled = false;
+            assert_eq!(
+                disabled_defaults
+                    .compile(None)
+                    .expect("disabled document")
+                    .rule_count(),
+                0
+            );
+            let policy = super::RulePolicy {
+                disabled_rules: vec!["synthetic.severity".to_string()],
+                ..Default::default()
+            };
+            assert_eq!(
+                rule_set(invalid)
+                    .compile(Some(&policy))
+                    .expect("policy-filtered rule")
+                    .rule_count(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn rule_status_remains_informational_metadata() {
+        for status in ["not_a_status", "disabled", "deprecated"] {
+            let mut definition = rule("synthetic.status", "custom");
+            definition.status = Some(status.to_string());
+            let compiled = single_rule_set(definition);
+            assert_eq!(compiled.rule_count(), 1);
+            assert!(
+                compiled
+                    .evaluate(&[("assistant_context", "hidden instruction")])
+                    .expect("evaluate")
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn rule_category_remains_open_behavior_metadata() {
+        let compiled = single_rule_set(rule("synthetic.category", "not_a_category"));
+        assert_eq!(compiled.summaries()[0].category, "not_a_category");
+        assert_eq!(
+            compiled.compatibility_export().rules()[0].category,
+            "not_a_category"
+        );
+        let result = compiled
+            .evaluate(&[("assistant_context", "hidden instruction")])
+            .expect("evaluate")
+            .expect("match");
+        assert_eq!(result.categories, ["not_a_category"]);
     }
 
     #[test]

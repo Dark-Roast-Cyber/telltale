@@ -21,6 +21,61 @@ rules:
 modifiers: []
 "#;
 
+fn synthetic_package(document: &str) -> String {
+    format!(
+        "format: telltale-rule-package/v1\nid: custom.synthetic\nversion: 1.0.0\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: custom\ndocuments:\n  - {}\n",
+        document.trim().replace('\n', "\n    ")
+    )
+}
+
+#[test]
+fn accepted_detection_severities_have_shared_canonical_and_embedding_parity() {
+    for severity in telltale_schema::event::VALID_DETECTION_SEVERITIES {
+        let document = RULE.replace("severity: low", &format!("severity: {severity}"));
+        let compiled = telltale_rules::load_rule_set_from_documents(&[&document], None)
+            .expect("supported detection severity");
+        let plan = telltale_detect::v2::compile_rule_v1(&compiled.compatibility_export())
+            .expect("canonical severity parity");
+        assert_eq!(plan.detectors().len(), 1);
+        for builder in [
+            Pipeline::builder()
+                .without_bundled_defaults()
+                .rules_document(&document),
+            Pipeline::builder()
+                .without_bundled_defaults()
+                .rule_package(synthetic_package(&document)),
+        ] {
+            let pipeline = builder.build().expect("embedding severity parity");
+            assert_eq!(pipeline.rule_count(), 1);
+        }
+    }
+}
+
+#[test]
+fn unsupported_detection_severities_fail_shared_compilation_for_documents_and_packages() {
+    for severity in ["warning", "catastrophic"] {
+        let document = RULE.replace("severity: low", &format!("severity: {severity}"));
+        for builder in [
+            Pipeline::builder()
+                .without_bundled_defaults()
+                .rules_document(&document),
+            Pipeline::builder()
+                .without_bundled_defaults()
+                .rule_package(synthetic_package(&document)),
+        ] {
+            let error = builder.build().err().expect("unsupported severity");
+            assert!(matches!(error, PipelineError::Compilation(_)));
+            assert_eq!(
+                error.source().unwrap().to_string(),
+                format!(
+                    "rule custom.error_contract uses unsupported severity '{severity}'; supported values: {}",
+                    telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
+                )
+            );
+        }
+    }
+}
+
 #[test]
 fn pipeline_error_characterization_builder_diagnostics() {
     let error = Pipeline::builder()
@@ -44,6 +99,10 @@ fn pipeline_error_characterization_builder_diagnostics() {
         (
             RULE.replace("regex: needle", "regex: '['"),
             "invalid regex for rule custom.error_contract:",
+        ),
+        (
+            RULE.replace("severity: low", "severity: catastrophic"),
+            "rule custom.error_contract uses unsupported severity 'catastrophic'; supported values:",
         ),
     ] {
         let error = Pipeline::builder()
@@ -88,27 +147,14 @@ fn pipeline_error_characterization_builder_diagnostics() {
 
 #[test]
 fn pipeline_error_characterization_canonical_rejection_fails_build() {
-    for (document, expected) in [
-        (
-            RULE.replace("severity: low", "severity: unknown"),
-            "invalid_severity",
-        ),
-        (
-            RULE.replace("score: 10", "score: 101"),
-            "score_out_of_range",
-        ),
-    ] {
-        // Rule v1 loading accepts these; canonical compilation rejects them at
-        // build time, before any scan or source processing can be attempted.
-        let error = Pipeline::builder()
-            .without_bundled_defaults()
-            .rules_document(document)
-            .build()
-            .err()
-            .expect("canonical rejection at build");
-        assert_eq!(error.to_string(), "pipeline_compilation_failed");
-        assert_eq!(error.source().unwrap().to_string(), expected);
-    }
+    let error = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE.replace("score: 10", "score: 101"))
+        .build()
+        .err()
+        .expect("canonical score rejection at build");
+    assert_eq!(error.to_string(), "pipeline_compilation_failed");
+    assert_eq!(error.source().unwrap().to_string(), "score_out_of_range");
 }
 
 #[test]
@@ -168,7 +214,7 @@ fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
     }
     let error = Pipeline::builder()
         .without_bundled_defaults()
-        .rules_document(RULE.replace("severity: low", "severity: unknown"))
+        .rules_document(RULE.replace("score: 10", "score: 101"))
         .build()
         .err()
         .unwrap();
@@ -177,7 +223,7 @@ fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
         error
             .source()
             .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-        Some(RuleV1CompileError::InvalidSeverity)
+        Some(RuleV1CompileError::ScoreOutOfRange)
     ));
     assert!(pipeline.scan_sources(&[])?.is_empty());
     assert!(pipeline.scan_sources_with_occurrences(&[])?.is_empty());

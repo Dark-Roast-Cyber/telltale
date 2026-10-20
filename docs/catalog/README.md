@@ -7,7 +7,7 @@ another project, or memory.
 | File | Generated from |
 | --- | --- |
 | [`sources.json`](sources.json) | The built-in source registry: every source identity with its client, kind, path root, relative path, file pattern, recursion, and fixture path, plus how each path root resolves. |
-| [`rule-vocabulary.json`](rule-vocabulary.json) | The Rule v1 validator: accepted rule and detection fields, match targets, detection classes, signal types, analytic intents, and severities. |
+| [`rule-vocabulary.json`](rule-vocabulary.json) | The Rule v1 validator: accepted rule and detection fields, match targets, detection classes, signal types, analytic intents, and detection severities. `severities.event3_global_values` separately records the broader Event3 vocabulary, including operational `warning`, which is not a Rule v1 detection severity. |
 
 `cargo test --locked --test catalog` fails when a file is stale, and when the
 source tables in [session sources](../session-sources.md) or the
