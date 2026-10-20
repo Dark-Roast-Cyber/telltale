@@ -6,6 +6,17 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Add generated contributor catalogs: `docs/catalog/sources.json` lists every
+  registered source's exact client, source ID, root, relative path, pattern and
+  discovery special cases, and `docs/catalog/rule-vocabulary.json` lists the
+  Rule v1 fields, targets and accepted values the validator takes. A test fails
+  when either file is stale or when the source tables in the docs name an
+  identity the registry does not have; `make catalog-update` regenerates them.
+  `tests/upstream_formats` checks synthetic cases shaped from pinned harness
+  releases, asserting a floor for supported shapes and the exact current outcome
+  for known gaps. `make harness-drift-check` and a weekly workflow verify the
+  pins and list newer harness releases. No runtime behavior changes.
+
 - Reject YAML-escaped control and hidden formatting characters in rule packages,
   including nested rule text, without rejecting ordinary multiline content or
   literal regex escapes.

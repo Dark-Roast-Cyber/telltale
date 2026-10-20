@@ -1,0 +1,23 @@
+{
+  "description": "OPENCLAW_STATE_DIR replaces the ~/.openclaw state root.",
+  "harness": "openclaw",
+  "upstream": [
+    "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/docs/cli/transcripts.md#L20-L34"
+  ],
+  "status": "known_gap",
+  "note": "Telltale does not read OPENCLAW_STATE_DIR. The file reuses a Telltale fixture so only the root differs.",
+  "discover": {
+    "client": "openclaw",
+    "env": {
+      "OPENCLAW_STATE_DIR": "{home}/relocated-openclaw"
+    },
+    "files": {
+      "relocated-openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl": {
+        "fixture": "tests/fixtures/session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl"
+      }
+    }
+  },
+  "expect": {
+    "selected_sources": 0
+  }
+}

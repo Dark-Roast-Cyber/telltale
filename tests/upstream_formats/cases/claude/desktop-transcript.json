@@ -1,0 +1,29 @@
+{
+  "description": "A Claude Code 2.1 transcript with bookkeeping records between turns, a thinking block, a tool_use and its tool_result.",
+  "harness": "claude-code",
+  "upstream": [
+    "https://github.com/anthropics/claude-code/blob/2301018b1f61073c501a8e7a4813ef48c239163b/CHANGELOG.md#L145",
+    "https://github.com/anthropics/claude-code/blob/2301018b1f61073c501a8e7a4813ef48c239163b/CHANGELOG.md#L2588",
+    "https://code.claude.com/docs/en/sessions"
+  ],
+  "status": "supported",
+  "note": "Claude Code's transcript serializer is not public, so no source line defines these records. The pinned release notes confirm saved sessions keep thinking, tool call and tool result blocks and attachment entries; record shapes follow Telltale's bounded live validation of 2.1.x transcripts.",
+  "acquire": {
+    "source_id": "claude.projects",
+    "jsonl": [
+      {"type": "queue-operation", "uuid": "q1", "sessionId": "11111111-2222-4333-8444-555555555551", "timestamp": "2026-10-13T00:00:00.000Z", "operation": "enqueue"},
+      {"type": "user", "uuid": "u1", "sessionId": "11111111-2222-4333-8444-555555555551", "timestamp": "2026-10-13T00:00:01.000Z", "cwd": "/synthetic/work", "version": "2.1.296", "userType": "external", "message": {"role": "user", "content": "List the synthetic workspace."}},
+      {"type": "attachment", "uuid": "a1", "parentUuid": "u1", "sessionId": "11111111-2222-4333-8444-555555555551", "timestamp": "2026-10-13T00:00:01.000Z", "attachment": {"type": "hook_additional_context", "content": ["synthetic"]}},
+      {"type": "assistant", "uuid": "m1", "parentUuid": "u1", "sessionId": "11111111-2222-4333-8444-555555555551", "timestamp": "2026-10-13T00:00:02.000Z", "cwd": "/synthetic/work", "version": "2.1.296", "message": {"role": "assistant", "model": "claude-synthetic", "content": [{"type": "thinking", "thinking": "Synthetic reasoning.", "signature": "sig"}, {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls /synthetic/work", "description": "List files"}}]}},
+      {"type": "user", "uuid": "u2", "parentUuid": "m1", "sessionId": "11111111-2222-4333-8444-555555555551", "timestamp": "2026-10-13T00:00:03.000Z", "cwd": "/synthetic/work", "version": "2.1.296", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "README.md"}]}},
+      {"type": "assistant", "uuid": "m2", "parentUuid": "u2", "sessionId": "11111111-2222-4333-8444-555555555551", "timestamp": "2026-10-13T00:00:04.000Z", "cwd": "/synthetic/work", "version": "2.1.296", "message": {"role": "assistant", "model": "claude-synthetic", "content": [{"type": "text", "text": "The workspace has a README."}]}}
+    ]
+  },
+  "expect": {
+    "min_observations": 3,
+    "min_families": {
+      "tool": 1,
+      "message": 2
+    }
+  }
+}

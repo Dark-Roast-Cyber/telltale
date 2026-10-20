@@ -1,0 +1,82 @@
+{
+  "description": "Tool use: an assistant record whose model parts hold functionCall, answered by a tool_result record whose parts hold functionResponse.",
+  "harness": "qwen-code",
+  "upstream": [
+    "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/services/chatRecordingService.ts#L2774-L2800",
+    "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/services/chatRecordingService.ts#L2940-L2975"
+  ],
+  "status": "known_gap",
+  "note": "The adapter reads content[] and tool_calls, not Gemini parts, so the functionResponse record fails and the whole file is rejected.",
+  "acquire": {
+    "source_id": "qwen.projects",
+    "jsonl": [
+      {
+        "uuid": "u1",
+        "parentUuid": null,
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:01.000Z",
+        "type": "user",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "user",
+          "parts": [
+            {
+              "text": "List the synthetic workspace."
+            }
+          ]
+        }
+      },
+      {
+        "uuid": "a2",
+        "parentUuid": "u1",
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:02.000Z",
+        "type": "assistant",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "id": "call-1",
+                "name": "run_shell_command",
+                "args": {
+                  "command": "ls /synthetic/work"
+                }
+              }
+            }
+          ]
+        },
+        "model": "synthetic-model"
+      },
+      {
+        "uuid": "t3",
+        "parentUuid": "a2",
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "timestamp": "2026-10-13T00:00:03.000Z",
+        "type": "tool_result",
+        "cwd": "/synthetic/work",
+        "version": "0.25.1",
+        "message": {
+          "role": "user",
+          "parts": [
+            {
+              "functionResponse": {
+                "id": "call-1",
+                "name": "run_shell_command",
+                "response": {
+                  "output": "README.md"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "expect": {
+    "error": "invalid_tool_result"
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "description": "Release channels other than latest, dev, beta, next and prod write opencode-<channel>.db in the data directory, for example opencode-stable.db.",
+  "harness": "opencode",
+  "upstream": [
+    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13",
+    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/core/src/session/sql.ts#L22-L94"
+  ],
+  "status": "known_gap",
+  "note": "Discovery matches only the exact file opencode.db. Tables are reduced to the columns session history needs.",
+  "platforms": [
+    "linux"
+  ],
+  "discover": {
+    "client": "opencode",
+    "files": {
+      ".local/share/opencode/opencode-stable.db": {
+        "sqlite": {
+          "schema": [
+            "CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL, vcs text, name text, time_created integer NOT NULL, time_updated integer NOT NULL)",
+            "CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, workspace_id text, parent_id text, slug text NOT NULL, directory text NOT NULL, path text, title text, version text NOT NULL, agent text, model text, time_created integer NOT NULL, time_updated integer NOT NULL)",
+            "CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL REFERENCES session_v2(id) ON DELETE CASCADE, type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)",
+            "CREATE UNIQUE INDEX session_message_session_seq_idx ON session_message (session_id, seq)"
+          ],
+          "rows": {
+            "project": [
+              {
+                "id": "prj_synthetic",
+                "worktree": "/synthetic/work",
+                "vcs": "git",
+                "name": null,
+                "time_created": 1791849600000,
+                "time_updated": 1791849604000
+              }
+            ],
+            "session_v2": [
+              {
+                "id": "ses_synthetic",
+                "project_id": "prj_synthetic",
+                "slug": "synthetic",
+                "directory": "/synthetic/work",
+                "title": "Synthetic session",
+                "version": "2.0.27",
+                "agent": "build",
+                "model": {
+                  "id": "synthetic-model",
+                  "providerID": "synthetic"
+                },
+                "time_created": 1791849600000,
+                "time_updated": 1791849604000
+              }
+            ],
+            "session_message": [
+              {
+                "id": "msg_0001",
+                "session_id": "ses_synthetic",
+                "type": "user",
+                "seq": 1,
+                "time_created": 1791849601000,
+                "time_updated": 1791849601000,
+                "data": {
+                  "time": {
+                    "created": 1791849601000
+                  },
+                  "text": "List the synthetic workspace.",
+                  "files": [],
+                  "agents": [],
+                  "skills": []
+                }
+              },
+              {
+                "id": "msg_0002",
+                "session_id": "ses_synthetic",
+                "type": "assistant",
+                "seq": 2,
+                "time_created": 1791849602000,
+                "time_updated": 1791849604000,
+                "data": {
+                  "time": {
+                    "created": 1791849602000,
+                    "completed": 1791849604000
+                  },
+                  "agent": "build",
+                  "model": {
+                    "id": "synthetic-model",
+                    "providerID": "synthetic"
+                  },
+                  "content": [
+                    {
+                      "type": "tool",
+                      "id": "call_0001",
+                      "name": "bash",
+                      "executed": true,
+                      "state": {
+                        "status": "completed",
+                        "input": {
+                          "command": "ls /synthetic/work",
+                          "description": "Run shell command"
+                        },
+                        "metadata": {
+                          "exit": 0
+                        },
+                        "content": [
+                          {
+                            "type": "text",
+                            "text": "README.md"
+                          }
+                        ]
+                      },
+                      "time": {
+                        "created": 1791849602000,
+                        "ran": 1791849602000,
+                        "completed": 1791849603000
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "text": "The workspace has a README."
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "expect": {
+    "selected_sources": 0
+  }
+}

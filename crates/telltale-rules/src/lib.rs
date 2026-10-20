@@ -27,7 +27,9 @@ use telltale_schema::scoring::{
 
 const DEFAULT_RULE_YAML: &str = include_str!("../data/tool-call-regex.yaml");
 
-const SUPPORTED_RULE_TARGETS: &[&str] = &[
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "arguments",
     "assistant_context",
     "command",
@@ -37,6 +39,10 @@ const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "url",
     "user_context",
 ];
+
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleSet {
@@ -870,7 +876,7 @@ fn default_enabled() -> bool {
 }
 
 fn default_condition() -> String {
-    "selection".to_string()
+    SUPPORTED_DETECTION_CONDITIONS[0].to_string()
 }
 
 fn default_detection_class() -> String {
@@ -915,7 +921,7 @@ fn compile_matchers(
         }
     }
     if let Some(detection) = &definition.detection {
-        if detection.condition != "selection" {
+        if !SUPPORTED_DETECTION_CONDITIONS.contains(&detection.condition.as_str()) {
             return Err(format!(
                 "rule {} uses unsupported condition {}; only 'selection' is supported",
                 definition.id, detection.condition

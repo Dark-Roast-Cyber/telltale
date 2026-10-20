@@ -1,0 +1,37 @@
+{
+  "description": "A paginated rollout as non-ephemeral codex exec starts it: session and turn context, turn events, the exec_command shell tool with a JSON-string cmd, a header-prefixed text output, and a token_usage_record after each model response. Every record carries a consecutive ordinal.",
+  "harness": "codex",
+  "upstream": [
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/history/src/rollout_payload.rs#L31-L72",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/core/src/tools/handlers/shell_spec.rs#L24-L116",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/core/src/tools/context.rs#L524-L546",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/core/src/session/mod.rs#L4736-L4751",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/exec/src/lib.rs#L1461",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L3211-L3212",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/history/src/lib.rs#L362-L368",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/ordinal.rs#L20-L52"
+  ],
+  "status": "supported",
+  "acquire": {
+    "source_id": "codex.sessions",
+    "jsonl": [
+      {"timestamp": "2026-10-13T00:00:00.000Z", "ordinal": 0, "type": "session_meta", "payload": {"id": "00000000-0000-4000-8000-000000000001", "timestamp": "2026-10-13T00:00:00.000Z", "cwd": "/synthetic/work", "originator": "codex_exec", "cli_version": "0.162.1", "source": "exec", "model_provider": "synthetic-provider", "history_mode": "paginated"}},
+      {"timestamp": "2026-10-13T00:00:00.000Z", "ordinal": 1, "type": "turn_context", "payload": {"cwd": "/synthetic/work", "approval_policy": "on-request", "sandbox_policy": {"mode": "workspace-write"}, "model": "synthetic-model", "summary": "auto"}},
+      {"timestamp": "2026-10-13T00:00:01.000Z", "ordinal": 2, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}},
+      {"timestamp": "2026-10-13T00:00:01.000Z", "ordinal": 3, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "List the synthetic workspace."}]}},
+      {"timestamp": "2026-10-13T00:00:02.000Z", "ordinal": 4, "type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\":\"ls /synthetic/work\",\"workdir\":\"/synthetic/work\"}", "call_id": "call-1"}},
+      {"timestamp": "2026-10-13T00:00:02.000Z", "ordinal": 5, "type": "token_usage_record", "payload": {"thread_id": "00000000-0000-4000-8000-000000000001", "turn_id": "turn-1", "session_id": "00000000-0000-4000-8000-000000000001", "root_turn_id": "turn-1", "response_id": "resp-1", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 0, "total_tokens": 2}, "turn_token_usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 0, "total_tokens": 2}, "thread_token_usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 0, "total_tokens": 2}}},
+      {"timestamp": "2026-10-13T00:00:03.000Z", "ordinal": 6, "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call-1", "output": "Wall time: 0.1000 seconds\nProcess exited with code 0\nOutput:\nREADME.md\n"}},
+      {"timestamp": "2026-10-13T00:00:04.000Z", "ordinal": 7, "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "The workspace has a README."}]}},
+      {"timestamp": "2026-10-13T00:00:04.000Z", "ordinal": 8, "type": "token_usage_record", "payload": {"thread_id": "00000000-0000-4000-8000-000000000001", "turn_id": "turn-1", "session_id": "00000000-0000-4000-8000-000000000001", "root_turn_id": "turn-1", "response_id": "resp-2", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 0, "total_tokens": 2}, "turn_token_usage": {"input_tokens": 2, "cached_input_tokens": 0, "output_tokens": 2, "reasoning_output_tokens": 0, "total_tokens": 4}, "thread_token_usage": {"input_tokens": 2, "cached_input_tokens": 0, "output_tokens": 2, "reasoning_output_tokens": 0, "total_tokens": 4}}},
+      {"timestamp": "2026-10-13T00:00:04.000Z", "ordinal": 9, "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "last_agent_message": "The workspace has a README."}}
+    ]
+  },
+  "expect": {
+    "min_observations": 4,
+    "min_families": {
+      "tool": 2,
+      "message": 2
+    }
+  }
+}

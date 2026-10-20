@@ -1,0 +1,129 @@
+{
+  "generated_by": "tests/catalog.rs",
+  "hand_maintained": "path_roots and source_specific_discovery are written by hand from crates/telltale-sources/src/discovery.rs, not generated; tests/upstream_formats discover cases check the behavior where a case exists.",
+  "path_roots": {
+    "codex_home": "Explicit --root joined with .codex, else $CODEX_HOME, else <home>/.codex.",
+    "data_home": "Explicit --root joined with the platform data path; else Linux $XDG_DATA_HOME or <home>/.local/share, macOS <home>/Library/Application Support, Windows %LOCALAPPDATA% then %APPDATA% then <home>/AppData/Local.",
+    "home": "Explicit --root, else $HOME, else %USERPROFILE%.",
+    "project_local": "Configured project roots, else <home>/github and <home>/projects when present; project_relative_path is searched below each project."
+  },
+  "source_of_truth": "crates/telltale-sources/src/sources/registry.rs",
+  "source_specific_discovery": {
+    "claude.projects": "Environment-resolved discovery (--root .) also searches $CLAUDE_CONFIG_DIR/projects; an explicit --root ignores it.",
+    "opencode.sqlite": "On Windows, also searches $XDG_DATA_HOME and <home>/.local/share; an explicit --root also accepts <root>/opencode/opencode.db."
+  },
+  "sources": [
+    {
+      "client": "codex",
+      "client_display_name": "Codex",
+      "fixture_relative_path": "codex/sessions",
+      "kind": "jsonl",
+      "pattern": {
+        "extension": "jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": "sessions",
+      "root": "codex_home",
+      "source_id": "codex.sessions"
+    },
+    {
+      "client": "codex",
+      "client_display_name": "Codex",
+      "fixture_relative_path": "codex/archived_sessions",
+      "kind": "archived_jsonl",
+      "pattern": {
+        "extension": "jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": "archived_sessions",
+      "root": "codex_home",
+      "source_id": "codex.archived_sessions"
+    },
+    {
+      "client": "codex",
+      "client_display_name": "Codex",
+      "fixture_relative_path": "codex/headless",
+      "kind": "headless_jsonl",
+      "pattern": {
+        "extension": "jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": "headless",
+      "root": "codex_home",
+      "source_id": "codex.headless_sessions"
+    },
+    {
+      "client": "claude",
+      "client_display_name": "Claude Code",
+      "fixture_relative_path": "claude/projects",
+      "kind": "jsonl",
+      "pattern": {
+        "extension": "jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": ".claude/projects",
+      "root": "home",
+      "source_id": "claude.projects"
+    },
+    {
+      "client": "openclaw",
+      "client_display_name": "OpenClaw",
+      "fixture_relative_path": "openclaw/agents",
+      "kind": "jsonl",
+      "pattern": {
+        "file_name_contains": ".jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": ".openclaw/agents",
+      "root": "home",
+      "source_id": "openclaw.agents"
+    },
+    {
+      "client": "qwen",
+      "client_display_name": "Qwen CLI",
+      "fixture_relative_path": "qwen/projects",
+      "kind": "jsonl",
+      "pattern": {
+        "extension": "jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": ".qwen/projects",
+      "root": "home",
+      "source_id": "qwen.projects"
+    },
+    {
+      "client": "opencode",
+      "client_display_name": "OpenCode",
+      "fixture_relative_path": "opencode/opencode.db",
+      "kind": "sqlite",
+      "pattern": {
+        "exact_file": "opencode.db"
+      },
+      "project_relative_path": null,
+      "recursive": false,
+      "relative_path": "opencode/opencode.db",
+      "root": "data_home",
+      "source_id": "opencode.sqlite"
+    },
+    {
+      "client": "copilot",
+      "client_display_name": "GitHub Copilot",
+      "fixture_relative_path": "copilot",
+      "kind": "copilot_process_log",
+      "pattern": {
+        "extension": "log"
+      },
+      "project_relative_path": "logs/copilot",
+      "recursive": false,
+      "relative_path": "logs/copilot",
+      "root": "project_local",
+      "source_id": "copilot.process_log"
+    }
+  ]
+}

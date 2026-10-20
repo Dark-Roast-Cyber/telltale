@@ -1,0 +1,20 @@
+{
+  "description": "Legacy OpenClaw JSONL (v2026.7.1 and files left after import) starts with a type session header; this case covers only that header and a text message.",
+  "harness": "openclaw",
+  "upstream": [
+    "https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/docs/reference/session-management-compaction.md#L132-L145",
+    "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/config/sessions/transcript-payload.test.ts#L404-L429"
+  ],
+  "status": "out_of_scope",
+  "note": "Older OpenClaw JSONL formats are legacy and not under development; the SQLite store is the current format. Telltale rejects the session header with unknown_discriminator before reading any message.",
+  "acquire": {
+    "source_id": "openclaw.agents",
+    "jsonl": [
+      {"type": "session", "id": "session-legacy", "cwd": "/synthetic/work", "timestamp": "2026-07-01T00:00:00.000Z"},
+      {"type": "message", "id": "e1", "parentId": null, "message": {"role": "user", "content": [{"type": "text", "text": "List the synthetic workspace."}]}}
+    ]
+  },
+  "expect": {
+    "error": "unknown_discriminator"
+  }
+}

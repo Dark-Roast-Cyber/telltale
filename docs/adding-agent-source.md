@@ -145,6 +145,13 @@ applies when adding an entirely new coding agent or harness.
   asserted indeterminate reasons. See the [Source Validation Matrix](source-validation-matrix.md)
   for the executable gate; an empty input is not evidence. Never use real
   transcripts, credentials, auth files, private paths, or customer data.
+- Take record shapes, paths, and environment overrides from the harness's own
+  code at a pinned release, not from another tool or memory. When the harness
+  does not publish that code, use its pinned release notes or official
+  documentation and say so in the case note. Add the harness to
+  `tests/upstream_formats/harnesses.json` and add upstream format cases, including
+  `known_gap` cases for shapes the harness writes that the adapter does not read
+  yet. See [`tests/upstream_formats/README.md`](../tests/upstream_formats/README.md).
 
 ### 8. Add focused tests
 
@@ -166,7 +173,9 @@ Avoid exact separators and Unix-only assumptions.
 
 ### 9. Update support documentation
 
-- Update `docs/session-sources.md` and `docs/source-validation-matrix.md`.
+- Update `docs/session-sources.md` and `docs/source-validation-matrix.md`;
+  their source tables must name exactly the registered identities.
+- Regenerate the machine-readable catalog with `make catalog-update`.
 - Update `docs/agent-capability-profiles.md` for user-visible source
   visibility.
 - Update telemetry or schema documentation only if a separately justified

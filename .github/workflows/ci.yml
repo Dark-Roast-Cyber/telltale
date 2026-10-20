@@ -36,8 +36,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       - name: Display-free native console checks
         shell: bash
         run: sh scripts/telltale-console-check
@@ -68,8 +68,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       - run: make --silent CARGO_LOCKED=--locked clippy
 
   test:
@@ -88,8 +88,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       # CI bootstrap exception: hosted runners need not have uv installed.
       - name: Install Event 3.0 validator dependency
         shell: bash
@@ -137,8 +137,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       - name: Run the production package verifier through /bin/sh
         shell: sh
         run: ./scripts/package-verify
@@ -162,8 +162,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       - name: Install Event 3.0 validator dependency
         shell: bash
         run: |
@@ -225,8 +225,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       - name: Install Event 3.0 validator dependency
         shell: bash
         run: |
@@ -314,9 +314,19 @@ jobs:
           "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
           "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
           printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
+      # Pull requests run only the release-specific gates; the fmt, clippy,
+      # test and package-verify jobs already cover the rest. Pushes to main
+      # keep the complete preflight on the exact source SHA.
       - name: Run prospective source release preflight
         if: steps.identity.outputs.prospective == 'true'
-        run: make --silent CARGO_LOCKED=--locked PUBLIC_RELEASE_REMOTE=https://github.com/Dark-Roast-Cyber/telltale release-preflight
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          preflight=release-preflight
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            preflight=release-preflight-ci
+          fi
+          make --silent CARGO_LOCKED=--locked PUBLIC_RELEASE_REMOTE=https://github.com/Dark-Roast-Cyber/telltale "$preflight"
       - name: Check independently locked embedding contracts
         if: steps.identity.outputs.prospective == 'true'
         run: make --silent embedding-contract-check

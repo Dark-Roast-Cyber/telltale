@@ -36,12 +36,15 @@ avoid another status file, duplicate plan, or decision catalog.
 | Upgrade or roll back? | [Controlled deployment](controlled-deployment.md), [installer matrix](installer-migration-matrix.md), [migration contract](migration-contract.md), [0.7 migration](migrations/0.7.0.md) |
 | Source identities and validation depth? | [Source validation matrix](source-validation-matrix.md) |
 | Discovery paths and per-source visibility? | [Session sources](session-sources.md), [agent capability profiles](agent-capability-profiles.md) |
+| Exact source identities, roots, paths, and patterns as data? | [Source catalog](catalog/sources.json), generated from the registry; see the [catalog notes](catalog/README.md) |
+| What current harness releases write, and what Telltale reads of it? | [Upstream format cases](../tests/upstream_formats/README.md) and their pinned [harness manifest](../tests/upstream_formats/harnesses.json) |
 | Acquisition scope, accounting coverage, or source failures? | [Canonical acquisition](canonical-observation-v2.md#acquisition-convergence-status), [source denominator](../openspec/specs/source-support-denominator/spec.md), [accounting coverage](../openspec/specs/canonical-accounting-coverage/spec.md) |
 | OpenCode admission, cursor behavior, or recovery limits? | [OpenCode live ingestion](opencode-live-ingestion.md) |
 | Pipeline, dependency boundaries, and code ownership? | [Architecture](architecture.md), [development principles](development-principles.md) |
 | Source-evidence model and semantic flow? | [Canonical Observation v2](canonical-observation-v2.md), [semantic foundation](semantic-foundation.md) |
 | Runtime evaluator, scoring, and process chains? | [Detection v2](detection-v2.md), [detection model](detection-model.md), [process-chain detections](process-chain-detections.md) |
 | Rule quality, categories, and examples? | [Detection content standard](detection-content-standard.md), [threat taxonomy](threat-taxonomy.md), [ATLAS coverage](../MITRE_ATLAS_COVERAGE.md), [use cases](use-cases.md) |
+| Rule v1 field names, targets, and accepted values as data? | [Rule vocabulary](catalog/rule-vocabulary.json), generated from the validator |
 | Community rules, rule packages, or opting out? | [Install: community rules and rule packages](install.md#community-rules-and-rule-packages), [rule-packages spec](../openspec/specs/rule-packages/spec.md) |
 | Policy configuration versus enforcement? | [Policy modes](policy-modes.md), [policy authoring](agent-policy-authoring.md) |
 | Event 3.0 schema, local output, and sinks? | [Telemetry output](telemetry-output.md) |

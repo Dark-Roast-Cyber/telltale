@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Verify upstream harness pins and report newer upstream release tags.
+
+Reads tests/upstream_formats/harnesses.json, checks that each pinned tag still
+resolves to the pinned commit, and lists the newest tag matching each
+harness's tag pattern. Uses the GitHub REST API; set GH_TOKEN or GITHUB_TOKEN
+to avoid anonymous rate limits. A newer tag means the cited upstream code
+should be re-read, not that Telltale is broken.
+
+Exit status: 1 if a pin no longer resolves to its commit, if a harness's
+release tags cannot be listed or none match its tag pattern, or with --strict
+when any harness is behind; 0 otherwise.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+API = "https://api.github.com"
+MANIFEST = Path(__file__).resolve().parent.parent / "tests" / "upstream_formats" / "harnesses.json"
+PER_PAGE = 100
+MAX_TAG_PAGES = 50
+ERRORS = (urllib.error.URLError, KeyError, TypeError, ValueError)
+
+
+def get(path: str) -> object:
+    request = urllib.request.Request(API + path, headers={"Accept": "application/vnd.github+json"})
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        request.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def tag_commit(repository: str, tag: str) -> str:
+    ref = get(f"/repos/{repository}/git/ref/tags/{tag}")["object"]
+    # Annotated tags point at a tag object; peel it to the commit.
+    while ref["type"] == "tag":
+        ref = get(f"/repos/{repository}/git/tags/{ref['sha']}")["object"]
+    return ref["sha"]
+
+
+def version_key(tag: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"[0-9]+", tag))
+
+
+def newest_tag(repository: str, pattern: re.Pattern[str]) -> str | None:
+    # The tags endpoint is not ordered by version, so read every page.
+    tags: list[str] = []
+    for page in range(1, MAX_TAG_PAGES + 1):
+        entries = get(f"/repos/{repository}/tags?per_page={PER_PAGE}&page={page}")
+        tags.extend(entry["name"] for entry in entries)
+        if len(entries) < PER_PAGE:
+            break
+    else:
+        raise ValueError(f"more than {MAX_TAG_PAGES * PER_PAGE} tags")
+    matching = [tag for tag in tags if pattern.fullmatch(tag)]
+    return max(matching, key=version_key) if matching else None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--strict", action="store_true", help="also fail when a harness is behind upstream")
+    args = parser.parse_args()
+
+    harnesses = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    rows: list[tuple[str, str, str, str, str]] = []
+    broken = unknown = behind = 0
+    for key, harness in sorted(harnesses.items()):
+        repository, tag, commit = harness["repository"], harness["tag"], harness["commit"]
+        try:
+            resolved = tag_commit(repository, tag)
+            pin = "ok" if resolved == commit else f"MISMATCH ({resolved[:12]})"
+        except ERRORS as error:
+            pin = f"ERROR ({error})"
+        if pin != "ok":
+            broken += 1
+
+        # Release discovery fails separately, so it never reads as a broken pin.
+        latest = None
+        pattern = re.compile(harness["tag_pattern"])
+        if not pattern.fullmatch(tag):
+            release = "pinned tag does not match tag_pattern"
+        else:
+            try:
+                latest = newest_tag(repository, pattern)
+                release = latest or "no tag matched tag_pattern"
+            except ERRORS as error:
+                release = f"ERROR ({error})"
+        if latest is None:
+            unknown += 1
+            state = "unknown"
+        elif version_key(latest) > version_key(tag):
+            behind += 1
+            state = "behind"
+        else:
+            state = "current"
+        rows.append((key, f"{repository}@{tag}", pin, release, state))
+
+    lines = [
+        "| Harness | Pinned | Pin check | Newest matching tag | State |",
+        "| --- | --- | --- | --- | --- |",
+        *(f"| {' | '.join(row)} |" for row in rows),
+    ]
+    print("\n".join(lines))
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write("## Upstream harness drift\n\n" + "\n".join(lines) + "\n")
+
+    if broken:
+        print(f"{broken} harness pin(s) did not resolve to the pinned commit.", file=sys.stderr)
+    if unknown:
+        print(f"{unknown} harness(es) have no newest release: tags could not be listed or none match tag_pattern.", file=sys.stderr)
+    if broken or unknown:
+        return 1
+    if behind:
+        print(f"{behind} harness(es) have newer upstream tags; re-read the cited code and update cases.", file=sys.stderr)
+        return 1 if args.strict else 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
