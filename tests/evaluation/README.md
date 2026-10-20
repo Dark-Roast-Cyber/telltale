@@ -29,6 +29,8 @@ high     = 70
 critical = 90
 ```
 
+Rule severity and session score answer different questions. A rule's `severity` describes that one signal in isolation; `exfil.outbound_upload` is `high`. Security review is a session decision that requires a corroborated score of 70 or more. No bundled atomic rule scores above 60, so review needs at least two corroborating signals or a chain modifier. A single high-severity match can therefore leave a malicious session below the boundary. That outcome is a scoring decision, not a missed match.
+
 Each scored efficacy case has `expected_security_review` of `required` or `not_required` plus a `label_rationale` that describes the intended analyst outcome without referring to observed scores, matched rules, or the golden report.
 
 `not_scored` cases remain visible for characterization and source conformance. They do not enter TP/FP/TN/FN.
@@ -63,6 +65,23 @@ If an intentional product change causes an efficacy mismatch, one of the followi
 3. the case becomes `not_scored` with justification.
 
 Golden characterization output and efficacy expectations are reviewable independently.
+
+## Known misses
+
+Every remaining false negative is listed here with the layer that owns it. The
+same cases are false negatives under both rule profiles.
+
+| Cases | Score | Layer | Decision | Why it is not tuned away |
+| --- | --- | --- | --- | --- |
+| CE-COMMAND-FAILURE, CE-COMMAND-DECLINED | 60 (`exfil.outbound_upload`) | Scoring. Visibility was closed by the derived Codex argv command view, and the upload signature matches. | By policy, an outbound upload alone and a secret-named file alone are each not a review signal. No rule treats `synthetic-secrets.txt` as secret access, so nothing corroborates the upload. | Raising `exfil.outbound_upload` to 70 would escalate every benign upload. A filename rule keyed to this fixture would overfit the corpus. Both labels stay `required`, and the cases stay false negatives until corroborating evidence or an accepted policy change raises the session. |
+
+Unreadable targets evaluate as no match. A Rule v1 detector whose targets resolve
+to nothing readable, such as `compat.v1.arguments` over a structured array or
+object, reports `evaluated_no_match`, not `not_evaluated`. Before the derived
+argv view, the two command cases scored 0 this way: the report could not tell
+"looked and found nothing" from "could not look". Separating those outcomes is
+deferred to a future OpenSpec proposal; this corpus does not change
+`not_evaluated` semantics.
 
 ## Other families
 
@@ -149,9 +168,11 @@ override is a separate zero-point assistant-context signal,
 (45), so an override quote alone stays at 0. The chain is session-scoped: an
 override in one message and an unexcluded approval-bypass phrase anywhere else in
 the session also combine to 75. Completed
-commands preserve argv as `tool.arguments` arrays and structured result objects,
-with no searchable arguments/result. Rule-v1 compatibility text selectors do not
-serialize or join arrays, so the Codex adapter adds a Derived `command.text`
+commands preserve argv as `tool.arguments` arrays. Their output, when present,
+is a string `tool.result` that `compat.v1.tool_result` reads like any other
+result. The FAILURE diagnostic is read; its invented `api_key=` value is not a
+recognized token shape, so nothing matches it. Rule-v1 compatibility text
+selectors do not serialize or join arrays, so the Codex adapter adds a Derived `command.text`
 facet: a POSIX shell-quoted rendering of argv that a shell parses back into
 exactly argv, and that `compat.v1.command` reads. The upload attempts therefore
 match the bundled outbound-upload signature (60). No secret-file signature
