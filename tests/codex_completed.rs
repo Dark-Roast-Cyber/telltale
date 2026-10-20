@@ -38,6 +38,278 @@ rules:
 modifiers: []
 "#;
 
+const FILE_CHANGE_RULES: &str = r#"version: 1
+description: Synthetic reported patch visibility, not proof of filesystem effects.
+defaults: {enabled: true, case_insensitive: false}
+rules:
+  - id: synthetic.patch
+    category: synthetic
+    severity: low
+    score: 3
+    targets: [tool_result]
+    regex: patch-visibility-needle
+    tags: [synthetic]
+    explanation: Synthetic reported patch.
+modifiers: []
+"#;
+
+#[test]
+fn completed_file_change_pinned_case_selectors_and_production_privacy() {
+    use telltale_detect::v2::{SelectorId, SelectorRegistry};
+    use telltale_schema::observation::{JsonValue, ObservationBody, ObservationStage, ObservedAt};
+    let case: Value = serde_json::from_str(include_str!(
+        "upstream_formats/cases/codex/item-completed-file-change.json"
+    ))
+    .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let rules = temp.path().join("rules.yaml");
+    fs::write(&rules, FILE_CHANGE_RULES).unwrap();
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(FILE_CHANGE_RULES)
+        .build()
+        .unwrap();
+    let mut sources = Vec::new();
+    for (directory, source_id, kind) in [
+        ("sessions", "codex.sessions", SourceKind::Jsonl),
+        (
+            "archived_sessions",
+            "codex.archived_sessions",
+            SourceKind::ArchivedJsonl,
+        ),
+        (
+            "headless",
+            "codex.headless_sessions",
+            SourceKind::HeadlessJsonl,
+        ),
+    ] {
+        let directory = root.join("codex").join(directory);
+        fs::create_dir_all(&directory).unwrap();
+        let source = Source {
+            client: ClientId::Codex,
+            source_id: source_id.into(),
+            kind,
+            path: directory.join("synthetic.jsonl"),
+        };
+        let write = |values: &[Value]| {
+            fs::write(
+                &source.path,
+                values
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap()
+        };
+        let mut values = case["acquire"]["jsonl"].as_array().unwrap().clone();
+        write(&values);
+        let batch = acquire_source(
+            &source,
+            AcquisitionOptions::new(ObservedAt::new("2026-10-13T00:00:00Z").unwrap()),
+        )
+        .unwrap();
+        assert!(batch.quarantined.is_empty());
+        let result = batch
+            .observations
+            .iter()
+            .find(|o| o.stage() == ObservationStage::ToolResultReturned)
+            .expect("pinned gap is supported as a reported result");
+        let ObservationBody::Tool(tool) = result.body() else {
+            panic!("reported result")
+        };
+        assert_eq!(
+            tool.result(),
+            Some(
+                &JsonValue::try_from_source_value(
+                    &json!({"changes":values[2]["payload"]["item"]["changes"],"status":"completed"})
+                )
+                .unwrap()
+            )
+        );
+        for selector in [
+            "tool.searchable_result",
+            "tool.result.text",
+            "compat.v1.tool_result",
+        ] {
+            let selected = SelectorRegistry::new()
+                .resolve(SelectorId::parse(selector).unwrap(), result)
+                .unwrap();
+            let Some(JsonValue::String(text)) = selected.value() else {
+                panic!("searchable native patch")
+            };
+            assert!(text.contains("/synthetic/work/notes.txt"));
+            assert!(text.contains("add.content synthetic note "));
+        }
+        for (selector, value) in [
+            ("tool.result", tool.result().unwrap().clone()),
+            ("tool.reported_status", JsonValue::string("succeeded")),
+            ("tool.stage", JsonValue::string("result_returned")),
+        ] {
+            let selected = SelectorRegistry::new()
+                .resolve(SelectorId::parse(selector).unwrap(), result)
+                .unwrap();
+            assert_eq!(selected.value(), Some(&value));
+            assert!(selected.is_present());
+        }
+        // The test-local rule must see each source-supported textual change field,
+        // including removed text as reported patch evidence, not newly written data.
+        for (path, change) in [
+            (
+                "/synthetic/patch-visibility-needle",
+                json!({"type":"add","content":"ordinary note"}),
+            ),
+            (
+                "/synthetic/notes.txt",
+                json!({"type":"add","content":"patch-visibility-needle api_key=SYNTHETIC-FILECHANGE-PRIVATE"}),
+            ),
+            (
+                "/synthetic/notes.txt",
+                json!({"type":"delete","content":"patch-visibility-needle api_key=SYNTHETIC-FILECHANGE-PRIVATE"}),
+            ),
+            (
+                "/synthetic/notes.txt",
+                json!({"type":"update","unified_diff":"@@\n-old\n+patch-visibility-needle api_key=SYNTHETIC-FILECHANGE-PRIVATE\n","move_path":"/synthetic/moved.txt"}),
+            ),
+            (
+                "/synthetic/notes.txt",
+                json!({"type":"update","unified_diff":"@@\n-old\n+new\n","move_path":"/synthetic/patch-visibility-needle"}),
+            ),
+        ] {
+            values[2]["payload"]["item"]["changes"] = json!({path:change});
+            values[2]["payload"]["item"]["status"] = json!("failed");
+            write(&values);
+            let scan = pipeline
+                .scan_sources_with_occurrences(std::slice::from_ref(&source))
+                .unwrap()
+                .remove(0);
+            assert_eq!(scan.occurrences.len(), 1);
+            assert_eq!(
+                scan.events
+                    .iter()
+                    .find(|e| e.event_type == "detection")
+                    .unwrap()
+                    .rule_ids,
+                ["synthetic.patch"]
+            );
+            assert!(
+                !serde_json::to_string(&scan.events)
+                    .unwrap()
+                    .contains("SYNTHETIC-FILECHANGE-PRIVATE")
+            );
+        }
+        values[2]["payload"]["item"]["changes"] =
+            json!({"/synthetic/notes.txt":{"type":"add","content":"ordinary note"}});
+        write(&values);
+        assert!(
+            pipeline
+                .scan_sources_with_occurrences(std::slice::from_ref(&source))
+                .unwrap()
+                .remove(0)
+                .occurrences
+                .is_empty(),
+            "benign counterpart"
+        );
+        values[2]["payload"]["item"]["changes"] = json!({"/synthetic/notes.txt":{"type":"add","content":"patch-visibility-needle api_key=SYNTHETIC-FILECHANGE-PRIVATE"}});
+        write(&values);
+        sources.push(source);
+    }
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("config"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--no-default-rules",
+            "--install-inventory-disabled",
+            "--emit-activity",
+            "--client",
+            "codex",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--rules")
+        .arg(&rules)
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["detection_count"], 3);
+    assert_eq!(
+        summary["source_processing"]["evaluation_complete_source_count"],
+        3
+    );
+    assert_eq!(
+        summary["source_processing"]["selected_source_coverage"],
+        "complete"
+    );
+    assert_eq!(
+        summary["source_processing"]["accounting_complete_source_count"],
+        3
+    );
+    assert_eq!(
+        summary["source_processing"]["accounting_partial_source_count"],
+        0
+    );
+    let persisted = fs::read_to_string(&log).unwrap();
+    let validator = jsonschema::validator_for(
+        &serde_json::from_str::<Value>(include_str!("../schemas/event.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let mut detections = 0;
+    for line in persisted.lines() {
+        let event: Value = serde_json::from_str(line).unwrap();
+        assert!(validator.is_valid(&event));
+        if event["event_type"] == "detection" {
+            detections += 1;
+            assert_eq!(event["rule_ids"], json!(["synthetic.patch"]));
+            assert_eq!(event["risk_score"], 3);
+        }
+    }
+    assert_eq!(detections, 3);
+    for bytes in [
+        output.stdout,
+        output.stderr,
+        persisted.into_bytes(),
+        fs::read(&state).unwrap(),
+    ] {
+        assert!(!String::from_utf8_lossy(&bytes).contains("SYNTHETIC-FILECHANGE-PRIVATE"));
+    }
+    for source in sources {
+        let batch = acquire_source(
+            &source,
+            AcquisitionOptions::new(ObservedAt::new("2026-10-13T00:00:00Z").unwrap()),
+        )
+        .unwrap();
+        assert_eq!(batch.accounting.sessions[0].counts.native_units, 4);
+        assert_eq!(
+            batch.accounting.sessions[0]
+                .counts
+                .record_counts
+                .tool_result,
+            1
+        );
+        assert_eq!(
+            batch.accounting.sessions[0].counts.record_counts.tool_call,
+            0
+        );
+        assert_eq!(
+            batch.accounting.sessions[0].counts.contributions,
+            Default::default()
+        );
+    }
+}
+
 fn input() -> String {
     let text = format!(
         "api_key=SYNTHETIC-COMPLETED-SECRET {}needle",

@@ -219,7 +219,7 @@ items, 4,096-byte retained strings and 4 MiB are unchanged.
 
 All three Codex identities accept exact `event_msg.payload.type: item_completed`
 with an object `item` tagged exactly `AgentMessage`, `UserMessage`, `Reasoning`,
-or `CommandExecution`. Agent content accepts ordered exact `Text` strings; user
+`CommandExecution`, or `FileChange`. Agent content accepts ordered exact `Text` strings; user
 content accepts only exact lowercase `text` UserInput strings. Unknown/nontext
 content, wrong/nested wrappers, unknown items and nonterminal command status
 reject the whole source, without successful observations, accounting or progress.
@@ -289,6 +289,41 @@ output, and otherwise `capture_completeness_unknown`. Absence is not success.
 are manufactured, and ToolExecution remains Unsupported. Structured argv,
 results and facets retain ordinary 4,096-string/16,384-encoded-byte bounds;
 oversize rejects rather than truncates. Message text uses the existing #79 bounds.
+
+Completed `FileChange` is one `ToolResultReturned`, not a `FileObserved` or
+an execution claim. Its structured `tool.result` preserves the reported `changes`
+map: `add`/`delete` content, `update.unified_diff` and optional `move_path`.
+Only those supported change fields and optional `status`, `auto_approved`,
+`stdout` and `stderr` are retained; arbitrary item/change JSON is excluded.
+Source completed/failed/declined status maps to reported Succeeded/Failed/Denied
+and exact `tool.source_status`. Missing/null status creates neither
+`tool.reported_status` nor `tool.source_status`; the structured result preserves
+the distinction between an omitted status and explicit `tool.result.status: null`.
+No tool name,
+argv, request or call relationship is fabricated. Existing typed response
+correlation and owner/turn/item replay identity apply, with one native ToolResult
+and zero invocation contributions for the physical item, irrespective of path count.
+
+A parsed, field-labeled `tool.searchable_result` exposes supported paths, change
+kinds, content/diffs, move destinations and stdout/stderr to the existing
+`tool.searchable_result`, `tool.result.text` and Rule v1 tool-result selectors.
+Canonical path order is deterministic. Search text folds CR/LF to spaces to meet
+the existing single-line Tool constructor contract; structured patch text retains
+the original evidence under normal NFC conversion. Deletion content and removed
+diff lines are reported patch evidence, **not newly written content**. An empty
+changes map remains an explicit result. No path is read from disk.
+
+FileChange retains ordinary structured limits (including 64-byte path keys,
+32 changes-map members, 4,096-byte nested strings and 16,384 encoded bytes), the
+assembled search field's 4,096-byte string bound and existing semantic/source
+budgets. An over-budget physical item is quarantined whole as `unbounded_value`,
+not silently clipped; an unknown change variant remains
+`unsupported_completed_item`. Malformed supported fields fail source integrity
+atomically. This bounded synthetic support uses public Codex
+[`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`](https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/items.rs#L411-L426)
+and its `protocol/src/protocol.rs:4225-4239,3764-3770` definitions, not a live-host
+or unrestricted patch-losslessness claim. ToolExecution remains Unsupported;
+request/result/mirror distinctions and unrelated quarantine remain unchanged.
 
 No public source API enum or Event 3.0 schema changes are introduced.
 

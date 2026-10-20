@@ -23,6 +23,7 @@ Sources: `codex.sessions`, `codex.archived_sessions`,
 | Timestamp and session ID | Full | Source-reported values only. A missing session id fails closed. |
 | Process ID and exit code | Partial | Process ID is absent. A completed command preserves `exit_code` as `tool.exit_code`. |
 | Call ID, error state, content parts | Partial | Preserved when the source reports them. Missing IDs are not fabricated. |
+| Completed file changes | Partial | Exact `item_completed` / `FileChange` maps to one reported Tool result: structured add/delete content, update diff/move path, optional terminal status and diagnostic fields. Field-labeled result text is searchable; no filesystem execution or file state is inferred. Existing structured and search bounds apply. |
 
 The Canonical Observation v2 adapter covers all three
 registered Codex identities. It does not use filename/path fallback for v2
