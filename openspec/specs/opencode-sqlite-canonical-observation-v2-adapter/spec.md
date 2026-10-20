@@ -482,6 +482,65 @@ persistence MUST still gate scanner-state installation.
 - **WHEN** an incremental scanner poll finds no part with an integer `time_updated` at or after the stored high-water (restored or replaced older store, newest parts deleted, or part table removed)
 - **THEN** the source fails with acquisition code `resume_regressed` and a privacy-safe scanner error, the stored cursor is neither advanced nor reset, backfill still reads without staging, and polling resumes once a part at or after the cursor exists
 
+### Requirement: Operator cursor reset is exact, explicit and state-only
+
+`telltale cursor list --state-path <existing-native-state>` MUST inspect stored
+OpenCode SQLite cursors without discovering/reading source stores, preparing scan
+configuration or activating sinks. Results MUST expose only the fixed adapter,
+opaque source instance, supported schema table, checkpoint/observation time,
+drain/raw cut and inspection digest, never paths or content. Native validation
+and exact agreement between map key and stored client/adapter/instance/table
+binding MUST precede output or mutation. No profile/environment state default
+is permitted.
+
+`cursor reset` MUST require explicit state path, exact stored source instance,
+explicit `part` or `session_message` table, matching inspection digest and
+`--accept-history-gap`. Missing or changed selection MUST fail without writing.
+The digest MUST bind the complete selected cursor including checkpoint,
+observation time, drain and optional raw cut. It MUST remove the whole selected
+record, never just the raw cut or checkpoint, and preserve every other schema
+and source cursor, baseline contribution/snapshot, fingerprint, observation and
+inventory value. An unfinished drain, including an older drain without a raw cut,
+MUST fail unless `--abandon-incomplete-drain` is also present. This is an
+intentionally lossy maintenance exception, not overlap-safe rollback or token
+conversion; surviving continuations retain their existing downgrade semantics.
+
+Maintenance MUST use existing state locking, strict validation and atomic
+replacement. Pre-installation failures MUST preserve persisted state. Installation
+errors MUST conservatively report potentially committed outcome; acknowledgement
+failure after replacement MUST report committed-but-unacknowledged. Operators
+MUST pause scanning throughout inspection/reset/retry and inspect after uncertain
+outcomes; absent state selection proves no previous outcome. A changed digest
+MUST NOT be refreshed automatically to retry destructive maintenance.
+
+Maintenance MUST NOT evaluate source data, install scan progress, modify source
+history/log/outbox, emit Event 3 or replace a whole-source baseline. A subsequent
+scan selecting the reset schema attempts the unchanged bounded bootstrap and
+normal overlap, with unchanged output-before-progress installation. No recovered
+history, full evaluation, exactly-once replay or successful ingestion is implied.
+Retained fingerprints can suppress identical projections while changed selected
+window aggregates can repeat.
+
+#### Scenario: Reset isolates the selected source and schema
+
+- **WHEN** a validated native state contains several clients, source instances and both OpenCode schema cursors, and the operator confirms one current selection
+- **THEN** only its complete cursor record is removed, baseline/deduplication and every other state value are retained, and source/output bytes are untouched
+
+#### Scenario: Unfinished continuation is never silently discarded
+
+- **WHEN** reset selects an interrupted v2 drain with or without a raw cut
+- **THEN** it fails unchanged without separate abandonment acknowledgement; with both acknowledgements it removes the whole selected record and reports abandonment without claiming historical coverage or safe downgrade
+
+#### Scenario: Reset is not successful ingestion or history recovery
+
+- **WHEN** reset is followed by a scan of a restored older store, empty/missing table or more than 5,000 retained rows
+- **THEN** only the normal selected-schema bootstrap is attempted, omitted/lost history remains a gap, unsupported schemas still fail, and required output failure installs no new progress
+
+#### Scenario: Stale retry cannot silently discard changed progress
+
+- **WHEN** state is locked/invalid, source binding disagrees, acknowledgement is missing or the inspected cursor digest changed
+- **THEN** maintenance returns a closed privacy-safe error without changing persisted state; after possible commit or failed acknowledgement the operator must inspect rather than blindly retry
+
 ### Requirement: Embedded OpenCode scans report partial coverage and missing capability
 
 The embedding facade MUST report a successful OpenCode source scan as

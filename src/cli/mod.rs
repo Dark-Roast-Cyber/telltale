@@ -21,6 +21,7 @@ use telltale_schema::source::Source;
 use telltale_sources::clients::supported_clients;
 
 mod coverage;
+mod cursor;
 mod export;
 pub mod historical;
 mod migrate;
@@ -62,6 +63,12 @@ enum Command {
     Migrate {
         #[command(subcommand)]
         command: MigrateCommand,
+    },
+
+    /// Inspect or explicitly discard one stored OpenCode ingestion cursor.
+    Cursor {
+        #[command(subcommand)]
+        command: cursor::CursorCommand,
     },
 
     /// Manage durable delivery state.
@@ -1519,6 +1526,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
+        Command::Cursor { command } => cursor::run(command)?,
         Command::Migrate { command } => match command {
             MigrateCommand::State { from, to } => migrate::run_state_migration(&from, &to)?,
             MigrateCommand::Events { pairs } => {
