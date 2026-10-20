@@ -131,8 +131,11 @@ Codex adapter notes:
   authored-text budget. An all-text `custom_tool_call_output` array is joined
   into one direct result, and a completed command's `aggregated_output` is the
   direct result with `exit_code` as `tool.exit_code`.
-- Completed `McpToolCall`, `FileChange` and `Extension` items are not mapped
-  yet and are quarantined by themselves (`unsupported_completed_item`). A
+- Completed `FileChange` maps to one reported Tool result with bounded structured
+  patch evidence and a parsed, field-labeled searchable result, not a file-state
+  or execution claim. See the [canonical mapping and bounds](canonical-observation-v2.md).
+- Completed `McpToolCall` and `Extension` items are not mapped yet and are
+  quarantined by themselves (`unsupported_completed_item`). A
   parent rollout repeats its subagents' completed items under the subagent's
   `thread_id`; those copies are quarantined (`foreign_thread_item`), and the
   subagent's own rollout is the one evaluated.

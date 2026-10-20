@@ -712,7 +712,9 @@ Only source `changes`, `status`, `auto_approved`, `stdout` and `stderr` SHALL
 enter the structured result. Optional fields SHALL preserve missing, null and
 returned values. Present non-null status SHALL accept only completed, failed or
 declined, mapping to reported Succeeded, Failed or Denied and exact reported
-`tool.source_status`. Missing/null status SHALL remain absent. These statuses
+`tool.source_status`. Missing/null status SHALL create neither `tool.reported_status`
+nor `tool.source_status`; the structured result SHALL distinguish an omitted
+status from explicit `tool.result.status: null`. These statuses
 SHALL NOT assert OS effects, guaranteed file state, approval or absence of effects.
 
 #### Scenario: Missing status is not completed success

@@ -296,7 +296,10 @@ map: `add`/`delete` content, `update.unified_diff` and optional `move_path`.
 Only those supported change fields and optional `status`, `auto_approved`,
 `stdout` and `stderr` are retained; arbitrary item/change JSON is excluded.
 Source completed/failed/declined status maps to reported Succeeded/Failed/Denied
-and exact `tool.source_status`; missing/null status stays absent. No tool name,
+and exact `tool.source_status`. Missing/null status creates neither
+`tool.reported_status` nor `tool.source_status`; the structured result preserves
+the distinction between an omitted status and explicit `tool.result.status: null`.
+No tool name,
 argv, request or call relationship is fabricated. Existing typed response
 correlation and owner/turn/item replay identity apply, with one native ToolResult
 and zero invocation contributions for the physical item, irrespective of path count.
