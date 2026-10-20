@@ -29,6 +29,10 @@
   pause scanning throughout inspection, reset and retries; installation or output
   failure can leave the reset committed without acknowledgement. Inspect state
   before retrying; see the [operator procedure](docs/opencode-live-ingestion.md#explicit-operator-cursor-reset).
+- `approval.bypass.context` exclusions now accept any whitespace between
+  `bypass` and `approval`, matching the selection. A documentation quote split
+  across ordered message parts (joined with newlines) is excluded instead of
+  scoring 45.
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

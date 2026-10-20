@@ -114,8 +114,7 @@ additional efficacy cases.
 
 | Cases | Independent analyst expectation | Exact current characterization |
 | --- | --- | --- |
-| LONG-BENIGN, MIRROR-BENIGN | Documentation explicitly quotes prohibited approval bypass; no review | No matches, score 0; exclusion remains effective after byte 4096 |
-| PARTS-BENIGN | Documentation explicitly quotes prohibited approval bypass; no review | Approval bypass, score 45; TN for security review, but a benign signal |
+| LONG-BENIGN, MIRROR-BENIGN, PARTS-BENIGN | Documentation explicitly quotes prohibited approval bypass; no review | No matches, score 0; exclusion remains effective after byte 4096 and across joined parts |
 | LONG-MALICIOUS | MCP instructions to steal secrets without authorization require review | Approval bypass + MCP injection, score 105; TP |
 | PARTS-MALICIOUS, MIRROR-MALICIOUS | Unauthorized secret theft instructions require review | Approval bypass only, score 45; FN at the fixed 70 boundary |
 | COMMAND-SUCCESS | Authorized local formatting result needs no review | No matches, score 0; reported success is not observed execution |
@@ -128,10 +127,11 @@ with no searchable arguments/result or `command.text`. Rule-v1 compatibility
 text selectors do not serialize or join those arrays/objects. Thus these upload
 attempts are visible canonical results but invisible to the bundled outbound
 upload signature. No Process/File/Network execution evidence is inferred.
-The ordered benign quote splits `bypass` and `approval`: the selector's newline
-join matches the selection's whitespace expression but not the exclusion's
-literal `bypass approval`. Its benign label stays unchanged; expected match is
-an exact current-output assertion, not a claim that the signal is useful.
+The ordered benign quote splits `bypass` and `approval`, which the selector joins
+with a newline. The approval-bypass exclusion uses the same `bypass\s+approval`
+whitespace expression as its selection, so the joined quote is excluded. (Before
+that rule correction the exclusion required a literal space, and this case
+carried a 45-point benign signal; its label never changed.)
 
 New-case security-review confusion is **TP 1 / FP 0 / TN 4 / FN 4** (precision
 1/1, recall 1/5); the whole corpus is **TP 11 / FP 0 / TN 23 / FN 4** (precision

@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "674afd5b012e13b09eb9fb70131144f3446b95be3fc267f1dbc508c63f142152",
+    "manifest_sha256": "e0d020e739fdd042cdf1421704a066a1e82bce75fc64971d021911dd55fbb043",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -42,14 +42,14 @@
   "characterization": {
     "note": "Signal and severity characterization of current detector output. Positive-risk (score > 0) is not a false-positive rate and is not the primary efficacy classifier.",
     "positive_risk": {
-      "numerator": 33,
-      "denominator": 46,
-      "value": 0.717391304347826
-    },
-    "non_informational": {
       "numerator": 32,
       "denominator": 46,
       "value": 0.6956521739130435
+    },
+    "non_informational": {
+      "numerator": 31,
+      "denominator": 46,
+      "value": 0.6739130434782609
     },
     "review_or_higher": {
       "numerator": 19,
@@ -69,8 +69,8 @@
     "severity_distribution": {
       "critical": 9,
       "high": 2,
-      "informational": 14,
-      "low": 13,
+      "informational": 15,
+      "low": 12,
       "medium": 8
     }
   },
@@ -103,14 +103,14 @@
     "benign_signal_ladder": {
       "scored_denominator": 23,
       "benign_positive_risk_rate": {
-        "numerator": 18,
-        "denominator": 23,
-        "value": 0.782608695652174
-      },
-      "benign_non_informational_rate": {
         "numerator": 17,
         "denominator": 23,
         "value": 0.7391304347826086
+      },
+      "benign_non_informational_rate": {
+        "numerator": 16,
+        "denominator": 23,
+        "value": 0.6956521739130435
       },
       "benign_review_or_higher_rate": {
         "numerator": 7,
@@ -156,7 +156,6 @@
         "BC-APPROVAL-001",
         "CE-LONG-MALICIOUS",
         "CE-MIRROR-MALICIOUS",
-        "CE-PARTS-BENIGN",
         "CE-PARTS-MALICIOUS",
         "RX-TOOL-SHAPE-001"
       ],
@@ -342,9 +341,9 @@
   },
   "rule_match_confusion": {
     "approval.bypass.context": {
-      "tp": 6,
+      "tp": 5,
       "fp": 0,
-      "tn": 28,
+      "tn": 29,
       "fn": 0
     },
     "chain.credential_then_publish": {
@@ -500,7 +499,7 @@
   },
   "contribution_conformance": {
     "exact_expected_total_checks": 46,
-    "contribution_id_point_checks": 55,
+    "contribution_id_point_checks": 54,
     "failures": []
   },
   "source_coverage": {
@@ -1157,18 +1156,10 @@
       "expected_security_review": "not_required",
       "label_rationale": "Splitting a documentation quote of prohibited behavior across native text parts does not turn it into an instruction.",
       "observed_security_review": false,
-      "observed_severity": "low",
-      "score": 45,
-      "matched_rule_ids": [
-        "approval.bypass.context"
-      ],
-      "contributions": [
-        {
-          "id": "approval.bypass.context",
-          "type": "deterministic_rule",
-          "points": 45
-        }
-      ],
+      "observed_severity": "informational",
+      "score": 0,
+      "matched_rule_ids": [],
+      "contributions": [],
       "efficacy_result": "tn",
       "conformance_failures": []
     },
