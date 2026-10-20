@@ -6,6 +6,17 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Add generated contributor catalogs: `docs/catalog/sources.json` lists every
+  registered source's exact client, source ID, root, relative path, pattern and
+  discovery special cases, and `docs/catalog/rule-vocabulary.json` lists the
+  Rule v1 fields, targets and accepted values the validator takes. A test fails
+  when either file is stale or when the source tables in the docs name an
+  identity the registry does not have; `make catalog-update` regenerates them.
+  `tests/upstream_formats` checks synthetic cases shaped from pinned harness
+  releases, asserting a floor for supported shapes and the exact current outcome
+  for known gaps. `make harness-drift-check` and a weekly workflow verify the
+  pins and list newer harness releases. No runtime behavior changes.
+
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server
