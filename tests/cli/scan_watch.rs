@@ -431,104 +431,117 @@ fn canonical_efficacy_fixtures_cli_characterization_and_event_privacy() {
     let validator = validator_for(&schema).unwrap();
     let manifest: Value =
         serde_yaml::from_str(include_str!("../evaluation/manifest.yaml")).unwrap();
-    for case in manifest["cases"].as_array().unwrap().iter().filter(|case| {
-        case["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "canonical_efficacy")
-    }) {
-        let temp = tempdir().unwrap();
-        let root = temp.path().join("stores");
-        let directory = root.join("codex/sessions");
-        fs::create_dir_all(&directory).unwrap();
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join(case["input"]["fixture"].as_str().unwrap());
-        let input = fs::read_to_string(fixture).unwrap();
-        let source = directory.join("synthetic.jsonl");
-        fs::write(&source, &input).unwrap();
-        let log = temp.path().join("events.jsonl");
-        let state = temp.path().join("state.json");
-        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-            .args([
-                "scan",
-                "--once",
-                "--allow-fixtures",
-                "--no-local-config",
-                "--emit-activity",
-                "--client",
-                "codex",
-                "--root",
-            ])
-            .arg(&root)
-            .arg("--log-path")
-            .arg(&log)
-            .arg("--state-path")
-            .arg(&state)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}: {}",
-            case["id"],
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let expected = case["expected_detection"]["expected_score"]
-            .as_u64()
-            .unwrap();
-        let rules = case["expected_detection"]["rule_expectations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|rule| rule["expectation"] == "expected_match")
-            .map(|rule| rule["rule_id"].clone())
-            .collect::<Vec<_>>();
-        // A session detection is emitted for any matched rule, including a
-        // zero-point signal; its risk score is asserted separately.
-        let detected = !rules.is_empty();
-        assert_eq!(
-            summary["detection_count"],
-            u64::from(detected),
-            "{}",
-            case["id"]
-        );
-        let persisted = fs::read_to_string(&log).unwrap();
-        let events = persisted
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect::<Vec<_>>();
-        assert!(!events.is_empty());
-        for event in &events {
-            assert!(validator.is_valid(event), "{}: {event}", case["id"]);
-        }
-        let detections = events
-            .iter()
-            .filter(|event| event["event_type"] == "detection")
-            .collect::<Vec<_>>();
-        assert_eq!(detections.len(), usize::from(detected));
-        if let Some(detection) = detections.first() {
-            assert_eq!(detection["risk_score"], expected);
-            assert_eq!(detection["rule_ids"], serde_json::json!(rules));
-            assert_eq!(
-                detection["timeline_anchors"].as_array().unwrap().len(),
-                1,
-                "mirrors must not double analytic evidence"
-            );
-        }
-        for bytes in [
-            output.stdout,
-            output.stderr,
-            persisted.into_bytes(),
-            fs::read(&state).unwrap(),
-        ] {
+    // The manifest characterizes the core-only profile. The evaluation corpus
+    // lists default-profile differences; no canonical efficacy case has one,
+    // so both pinned profiles must reproduce the same characterization.
+    for (community, reported) in [(false, "disabled"), (true, "enabled")] {
+        for case in manifest["cases"].as_array().unwrap().iter().filter(|case| {
+            case["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tag| tag == "canonical_efficacy")
+        }) {
+            let id = format!("{} ({reported} community rules)", case["id"]);
+            let temp = tempdir().unwrap();
+            let root = temp.path().join("stores");
+            let directory = root.join("codex/sessions");
+            fs::create_dir_all(&directory).unwrap();
+            let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(case["input"]["fixture"].as_str().unwrap());
+            let input = fs::read_to_string(fixture).unwrap();
+            let source = directory.join("synthetic.jsonl");
+            fs::write(&source, &input).unwrap();
+            let log = temp.path().join("events.jsonl");
+            let state = temp.path().join("state.json");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+            command
+                .env_clear()
+                .env("HOME", temp.path())
+                .env(
+                    "TELLTALE_COMMUNITY_RULES",
+                    if community { "1" } else { "0" },
+                )
+                .args([
+                    "scan",
+                    "--once",
+                    "--allow-fixtures",
+                    "--no-local-config",
+                    "--emit-activity",
+                    "--install-inventory-disabled",
+                    "--client",
+                    "codex",
+                    "--root",
+                ])
+                .arg(&root)
+                .arg("--log-path")
+                .arg(&log)
+                .arg("--state-path")
+                .arg(&state);
+            if !community {
+                command.arg("--no-community-rules");
+            }
+            let output = command.output().unwrap();
             assert!(
-                !String::from_utf8_lossy(&bytes).contains("SYNTHETIC-EFFICACY-PRIVATE"),
-                "{}",
-                case["id"]
+                output.status.success(),
+                "{id}: {}",
+                String::from_utf8_lossy(&output.stderr)
             );
+            let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                summary["effective_configuration"]["rules"]["community"], reported,
+                "{id}"
+            );
+            let expected = case["expected_detection"]["expected_score"]
+                .as_u64()
+                .unwrap();
+            let rules = case["expected_detection"]["rule_expectations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|rule| rule["expectation"] == "expected_match")
+                .map(|rule| rule["rule_id"].clone())
+                .collect::<Vec<_>>();
+            // A session detection is emitted for any matched rule, including a
+            // zero-point signal; its risk score is asserted separately.
+            let detected = !rules.is_empty();
+            assert_eq!(summary["detection_count"], u64::from(detected), "{id}");
+            let persisted = fs::read_to_string(&log).unwrap();
+            let events = persisted
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            assert!(!events.is_empty());
+            for event in &events {
+                assert!(validator.is_valid(event), "{id}: {event}");
+            }
+            let detections = events
+                .iter()
+                .filter(|event| event["event_type"] == "detection")
+                .collect::<Vec<_>>();
+            assert_eq!(detections.len(), usize::from(detected), "{id}");
+            if let Some(detection) = detections.first() {
+                assert_eq!(detection["risk_score"], expected, "{id}");
+                assert_eq!(detection["rule_ids"], serde_json::json!(rules), "{id}");
+                assert_eq!(
+                    detection["timeline_anchors"].as_array().unwrap().len(),
+                    1,
+                    "{id}: mirrors must not double analytic evidence"
+                );
+            }
+            for bytes in [
+                output.stdout,
+                output.stderr,
+                persisted.into_bytes(),
+                fs::read(&state).unwrap(),
+            ] {
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains("SYNTHETIC-EFFICACY-PRIVATE"),
+                    "{id}"
+                );
+            }
+            assert_eq!(fs::read_to_string(source).unwrap(), input, "{id}");
         }
-        assert_eq!(fs::read_to_string(source).unwrap(), input);
     }
 }
 

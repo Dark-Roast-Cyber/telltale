@@ -7,12 +7,18 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use evaluate::evaluate_manifest;
+use evaluate::{RuleProfile, evaluate_manifest};
 use manifest::{load_manifest, validate_manifest_bytes};
 use report::render_report;
 
 const MANIFEST_PATH: &str = "tests/evaluation/manifest.yaml";
 const GOLDEN_PATH: &str = "tests/evaluation/baseline-report.v1.json";
+const DEFAULT_PROFILE_REPORT: &str = "default-profile-report.v1.json";
+
+/// Cases whose default-profile result may differ from core-only: the rule IDs
+/// the embedded community package adds and the resulting session score. Any
+/// other difference, and any listed difference that does not occur, fails.
+const DEFAULT_PROFILE_EXPECTED_DIFFERENCES: &[(&str, &[&str], u64)] = &[];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -21,7 +27,7 @@ fn repo_root() -> PathBuf {
 fn current_report() -> Result<Vec<u8>, String> {
     let root = repo_root();
     let manifest = load_manifest(&root.join(MANIFEST_PATH), &root)?;
-    let evaluation = evaluate_manifest(&manifest, &root)?;
+    let evaluation = evaluate_manifest(&manifest, &root, RuleProfile::CoreOnly)?;
     render_report(&manifest, &evaluation, &root)
 }
 
@@ -157,6 +163,66 @@ fn evaluation_corpus_matches_golden_baseline() {
     if actual != expected {
         write_actual_report(&actual).expect("write actual report");
         panic!("{}", structured_diff(&expected, &actual));
+    }
+}
+
+#[test]
+fn default_profile_differs_from_core_only_only_where_listed() {
+    let root = repo_root();
+    let manifest = load_manifest(&root.join(MANIFEST_PATH), &root).expect("load manifest");
+    let core = evaluate_manifest(&manifest, &root, RuleProfile::CoreOnly).expect("core-only");
+    let default = evaluate_manifest(&manifest, &root, RuleProfile::Default).expect("default");
+    let report = render_report(&manifest, &default, &root).expect("render default report");
+    let directory = root.join("target/evaluation");
+    fs::create_dir_all(&directory).expect("create evaluation directory");
+    fs::write(directory.join(DEFAULT_PROFILE_REPORT), report).expect("write default report");
+
+    // A default pass that loads no community rule would compare core with core.
+    assert!(
+        default.rule_coverage.enabled.len() > core.rule_coverage.enabled.len()
+            && default
+                .rule_coverage
+                .enabled
+                .is_superset(&core.rule_coverage.enabled),
+        "default profile must add community rules to the core set"
+    );
+    for (id, _, _) in DEFAULT_PROFILE_EXPECTED_DIFFERENCES {
+        assert!(
+            manifest.cases.iter().any(|case| case.id == *id),
+            "{id}: listed default-profile difference names no case"
+        );
+    }
+    assert_eq!(core.cases.len(), default.cases.len());
+    for (core_case, default_case) in core.cases.iter().zip(&default.cases) {
+        assert_eq!(core_case.id, default_case.id);
+        let id = core_case.id.as_str();
+        let same = core_case.score == default_case.score
+            && core_case.matched_rules == default_case.matched_rules
+            && core_case.contributions == default_case.contributions;
+        let Some((_, added, score)) = DEFAULT_PROFILE_EXPECTED_DIFFERENCES
+            .iter()
+            .find(|(listed, _, _)| *listed == id)
+        else {
+            assert!(
+                same,
+                "{id}: unlisted default-profile difference: core score {} rules {:?}, default score {} rules {:?}",
+                core_case.score,
+                core_case.matched_rules,
+                default_case.score,
+                default_case.matched_rules
+            );
+            continue;
+        };
+        let mut expected_rules = core_case.matched_rules.clone();
+        expected_rules.extend(added.iter().map(|rule| (*rule).to_string()));
+        expected_rules.sort();
+        expected_rules.dedup();
+        assert!(
+            !same,
+            "{id}: listed default-profile difference did not occur"
+        );
+        assert_eq!(default_case.matched_rules, expected_rules, "{id}");
+        assert_eq!(default_case.score, *score, "{id}");
     }
 }
 
@@ -413,7 +479,8 @@ fn evaluation_report_path_rejects_absolute_path() {
 fn evaluation_coverage_gate_is_complete() {
     let root = repo_root();
     let manifest = load_manifest(&root.join(MANIFEST_PATH), &root).expect("load manifest");
-    let evaluation = evaluate_manifest(&manifest, &root).expect("evaluate corpus");
+    let evaluation =
+        evaluate_manifest(&manifest, &root, RuleProfile::CoreOnly).expect("evaluate corpus");
     assert!(
         evaluation.rule_coverage.uncovered.is_empty(),
         "uncovered regex rules: {:?}",

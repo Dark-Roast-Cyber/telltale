@@ -40,6 +40,12 @@
   override quote alone emits a zero-risk detection; beside approval bypass the
   session scores 75 and requires security review. The chain is session-scoped.
   Matching sessions that already scored now include both IDs and gain 30 points.
+- The evaluation corpus now also runs the default rule profile (core plus the
+  embedded community package) and writes it to
+  `target/evaluation/default-profile-report.v1.json`. A test fails on any
+  per-case difference from the core-only golden that is not listed. Counts stay
+  separate per profile. The CLI canonical-efficacy test pins both profiles with
+  a cleared environment. No runtime behavior changes.
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

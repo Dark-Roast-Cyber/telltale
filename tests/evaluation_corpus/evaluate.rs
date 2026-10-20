@@ -2,10 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use telltale_detect::v2::{
-    compile_rule_v1,
+    RuleV1CompatibilityPlan, compile_rule_v1,
     session::{CanonicalSourceInput, evaluate_source},
 };
-use telltale_rules::bundled_default_rule_set;
+use telltale_rules::package::{CommunityRules, resolve_rule_packages};
+use telltale_rules::{RuleSet, bundled_default_rule_set, compile_rule_sets};
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, MessageRole, ObservationBody, ObservationStage,
     ObservedAt,
@@ -83,6 +84,7 @@ pub struct VisibilityCounts {
 
 #[derive(Debug, Clone)]
 pub struct Evaluation {
+    pub profile: RuleProfile,
     pub cases: Vec<CaseEvaluation>,
     pub rule_coverage: RuleCoverage,
     pub modifier_coverage: RuleCoverage,
@@ -90,25 +92,88 @@ pub struct Evaluation {
     pub process_chain_coverage: ProcessChainCoverage,
 }
 
-pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evaluation, String> {
-    let rule_set = bundled_default_rule_set().map_err(|error| error.to_string())?;
-    let canonical_rules = compile_rule_v1(
-        &telltale_rules::load_default_rule_set()
+/// Effective rule content an evaluation pass loads. Each profile is reported
+/// separately; their counts are never combined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleProfile {
+    /// Bundled core rules only. The golden baseline uses this profile.
+    CoreOnly,
+    /// Core plus the embedded community package, as the CLI and embedding
+    /// defaults load them.
+    Default,
+}
+
+impl RuleProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CoreOnly => "core_only",
+            Self::Default => "default_core_plus_embedded_community",
+        }
+    }
+}
+
+struct ProfileRules {
+    canonical: RuleV1CompatibilityPlan,
+    enabled_rules: BTreeSet<String>,
+    enabled_modifiers: BTreeSet<String>,
+}
+
+fn profile_rules(profile: RuleProfile) -> Result<ProfileRules, String> {
+    let mut documents = vec![bundled_default_rule_set().map_err(|error| error.to_string())?];
+    if profile == RuleProfile::Default {
+        for resolved in resolve_rule_packages(CommunityRules::Embedded, Vec::new())
             .map_err(|error| error.to_string())?
-            .compatibility_export(),
-    )
-    .map_err(|error| error.to_string())?;
-    let enabled_regex = rule_set
-        .rules
+        {
+            documents.extend(resolved.package.into_documents());
+        }
+    }
+    let enabled_rules = enabled_ids(&documents, |rule_set| {
+        rule_set
+            .rules
+            .iter()
+            .filter(|rule| rule.enabled)
+            .map(|rule| rule.id.clone())
+            .collect()
+    });
+    let enabled_modifiers = enabled_ids(&documents, |rule_set| {
+        rule_set
+            .modifiers
+            .iter()
+            .filter(|modifier| modifier.enabled)
+            .map(|modifier| modifier.id.clone())
+            .collect()
+    });
+    let compiled = compile_rule_sets(documents, None).map_err(|error| error.to_string())?;
+    let canonical =
+        compile_rule_v1(&compiled.compatibility_export()).map_err(|error| error.to_string())?;
+    Ok(ProfileRules {
+        canonical,
+        enabled_rules,
+        enabled_modifiers,
+    })
+}
+
+fn enabled_ids(documents: &[RuleSet], ids: impl Fn(&RuleSet) -> Vec<String>) -> BTreeSet<String> {
+    documents
         .iter()
-        .filter(|rule| rule.enabled && rule_set.defaults.enabled)
-        .map(|rule| rule.id.clone())
-        .collect::<BTreeSet<_>>();
-    let enabled_modifiers = rule_set
-        .modifiers
-        .iter()
-        .filter(|modifier| modifier.enabled && rule_set.defaults.enabled)
-        .map(|modifier| modifier.id.clone())
+        .filter(|rule_set| rule_set.defaults.enabled)
+        .flat_map(ids)
+        .collect()
+}
+
+pub fn evaluate_manifest(
+    manifest: &Manifest,
+    repo_root: &Path,
+    profile: RuleProfile,
+) -> Result<Evaluation, String> {
+    let ProfileRules {
+        canonical: canonical_rules,
+        enabled_rules: enabled_regex,
+        enabled_modifiers,
+    } = profile_rules(profile)?;
+    let enabled = enabled_regex
+        .union(&enabled_modifiers)
+        .cloned()
         .collect::<BTreeSet<_>>();
     let mut cases = manifest.cases.iter().collect::<Vec<_>>();
     cases.sort_by(|left, right| left.id.cmp(&right.id));
@@ -121,13 +186,20 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
         visibility_field_coverage: BTreeMap::new(),
     };
     for case in cases {
-        let result = evaluate_case(case, &canonical_rules, repo_root, &mut source_coverage)?;
+        let result = evaluate_case(
+            case,
+            &canonical_rules,
+            &enabled,
+            repo_root,
+            &mut source_coverage,
+        )?;
         results.push(result);
     }
     let rule_coverage = coverage_for(&manifest.cases, &enabled_regex);
     let modifier_coverage = coverage_for(&manifest.cases, &enabled_modifiers);
     let process_chain_coverage = evaluate_process_chain_coverage()?;
     Ok(Evaluation {
+        profile,
         cases: results,
         rule_coverage,
         modifier_coverage,
@@ -138,7 +210,8 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
 
 fn evaluate_case(
     case: &Case,
-    canonical_rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
+    canonical_rules: &RuleV1CompatibilityPlan,
+    enabled: &BTreeSet<String>,
     repo_root: &Path,
     source_coverage: &mut SourceCoverage,
 ) -> Result<CaseEvaluation, String> {
@@ -177,7 +250,6 @@ fn evaluate_case(
         .iter()
         .map(|expectation| (expectation.rule_id.as_str(), expectation.expectation))
         .collect::<BTreeMap<_, _>>();
-    let enabled = enabled_rule_ids();
     for rule_id in enabled {
         let expectation = expected_rules.get(rule_id.as_str()).copied().unwrap_or({
             if case.expected_detection.exact_rule_set {
@@ -187,10 +259,10 @@ fn evaluate_case(
             }
         });
         match expectation {
-            RuleExpectationKind::ExpectedMatch if !actual_rules.contains(&rule_id) => {
+            RuleExpectationKind::ExpectedMatch if !actual_rules.contains(rule_id) => {
                 failures.push(format!("required rule missing: {rule_id}"));
             }
-            RuleExpectationKind::ExpectedAbsent if actual_rules.contains(&rule_id) => {
+            RuleExpectationKind::ExpectedAbsent if actual_rules.contains(rule_id) => {
                 failures.push(format!("forbidden rule matched: {rule_id}"));
             }
             RuleExpectationKind::ExpectedMatch
@@ -233,7 +305,7 @@ fn evaluate_case(
 
 fn evaluate_source_fixture(
     case: &Case,
-    rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
+    rules: &RuleV1CompatibilityPlan,
     source: &Source,
 ) -> Result<FixtureDetection, String> {
     let observed_at = ObservedAt::new("2026-09-18T12:00:00Z").expect("fixed observed time");
@@ -373,23 +445,6 @@ fn checked_risk_sum_from(contributions: &[Contribution]) -> Result<u64, String> 
             .checked_add(contribution.points)
             .ok_or_else(|| "contribution total overflow".to_string())
     })
-}
-
-fn enabled_rule_ids() -> BTreeSet<String> {
-    let rule_set = bundled_default_rule_set().expect("bundled rule set");
-    rule_set
-        .rules
-        .iter()
-        .filter(|rule| rule.enabled && rule_set.defaults.enabled)
-        .map(|rule| rule.id.clone())
-        .chain(
-            rule_set
-                .modifiers
-                .iter()
-                .filter(|modifier| modifier.enabled && rule_set.defaults.enabled)
-                .map(|modifier| modifier.id.clone()),
-        )
-        .collect()
 }
 
 fn coverage_for(cases: &[Case], enabled: &BTreeSet<String>) -> RuleCoverage {

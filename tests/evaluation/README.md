@@ -33,6 +33,25 @@ Each scored efficacy case has `expected_security_review` of `required` or `not_r
 
 `not_scored` cases remain visible for characterization and source conformance. They do not enter TP/FP/TN/FN.
 
+## Rule profiles
+
+Every expectation, count and the golden report characterize the **core-only**
+profile: the bundled rules and modifiers, without rule packages. The CLI and
+embedding defaults also load the embedded community package, so
+`default_profile_differs_from_core_only_only_where_listed` evaluates the same
+manifest under the **default** profile (core plus embedded community). It writes
+`target/evaluation/default-profile-report.v1.json`, labeled with
+`metadata.rule_profile`, and fails on any per-case difference in score, matched
+rules or contributions that `DEFAULT_PROFILE_EXPECTED_DIFFERENCES` does not list,
+or on a listed difference that does not occur. The list is currently empty.
+
+The two profiles' counts are reported separately and never combined. Each
+currently reports session security-review confusion of **TP 13 / FP 0 / TN 25 /
+FN 2**. The default report's rule coverage lists the community rules as uncovered
+because no manifest case exercises them; the coverage gate applies to core-only.
+The CLI canonical-efficacy test runs each fixture under both profiles with a
+cleared environment and an explicit community setting.
+
 ## Label governance
 
 A contributor MUST NOT change an efficacy expected label solely to make a failing detector result pass.
@@ -154,7 +173,7 @@ checks unproven mirrors, malformed late command results and status/exit-code
 disagreement or absence. These are coverage/rejection contracts, not extra TP/TN
 samples. Existing Codex terminal tests cover capability, fidelity and provenance.
 
-The CLI test scans all eleven fixtures with bundled rules, compares the same exact
+The CLI test scans all eleven fixtures under both rule profiles, compares the same exact
 scores/rules, validates emitted Event3 against its schema, and checks stdout,
 stderr, durable JSONL and state for absence of `SYNTHETIC-EFFICACY-PRIVATE` markers.
 Markers appear only as invented `api_key=` values in messages/results (LONG,

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::evaluate::{
     CANONICAL_EVALUATION_THRESHOLDS, CaseEvaluation, Contribution, Evaluation, RuleCoverage,
-    SourceCoverage, VisibilityCounts,
+    RuleProfile, SourceCoverage, VisibilityCounts,
 };
 use crate::manifest::{
     Disposition, ExpectedSecurityReview, Manifest, RuleExpectationKind, manifest_sha256,
@@ -31,6 +31,9 @@ struct Report {
 struct Metadata {
     schema: String,
     version: u32,
+    /// Absent for the core-only golden profile; present on every other profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rule_profile: Option<&'static str>,
     manifest_version: u32,
     manifest_sha256: String,
     synthetic: bool,
@@ -213,6 +216,8 @@ pub fn render_report(
         metadata: Metadata {
             schema: "telltale.evaluation.baseline".to_string(),
             version: 1,
+            rule_profile: (evaluation.profile != RuleProfile::CoreOnly)
+                .then(|| evaluation.profile.as_str()),
             manifest_version: manifest.version,
             manifest_sha256: manifest_sha256(&repo_root.join("tests/evaluation/manifest.yaml"))?,
             synthetic: true,
