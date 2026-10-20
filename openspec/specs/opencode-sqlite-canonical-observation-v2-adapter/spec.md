@@ -510,13 +510,15 @@ replacement. Pre-installation failures MUST preserve persisted state. Installati
 errors MUST conservatively report potentially committed outcome; acknowledgement
 failure after replacement MUST report committed-but-unacknowledged. Operators
 MUST pause scanning throughout inspection/reset/retry and inspect after uncertain
-outcomes; absent state selection proves no previous outcome. A changed digest
+outcomes. An absent selection MUST NOT be treated as proof that a previous reset
+did or did not commit; `cursor_not_found` on retry requires inspection. A changed digest
 MUST NOT be refreshed automatically to retry destructive maintenance.
 
 Maintenance MUST NOT evaluate source data, install scan progress, modify source
 history/log/outbox, emit Event 3 or replace a whole-source baseline. A subsequent
 scan selecting the reset schema attempts the unchanged bounded bootstrap and
-normal overlap, with unchanged output-before-progress installation. No recovered
+later incremental scans resume normal overlap (or an unfinished v2 raw cut),
+with unchanged output-before-progress installation. No recovered
 history, full evaluation, exactly-once replay or successful ingestion is implied.
 Retained fingerprints can suppress identical projections while changed selected
 window aggregates can repeat.

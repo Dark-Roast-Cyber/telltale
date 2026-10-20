@@ -312,7 +312,8 @@ Other unfinished cursors retain their downgrade rejection. To avoid abandonment,
 finish with the current reader or restore coordinated source/state/output.
 
 A subsequent normal scan **if it selects that schema** attempts the existing
-newest-5,000 bootstrap under all normal bounds, then resumes the normal overlap.
+uncursored newest-5,000 bootstrap under all normal bounds. Normal overlap resumes
+on later incremental scans; unfinished v2 windows retain raw-cut continuation.
 Resetting a dormant `part` cursor does not reset active v2 progress, or vice
 versa. Empty/missing/unsupported stores do not acquire invented progress or
 become successfully recovered through reset. Required canonical output/durable
