@@ -557,7 +557,14 @@ fn emit_tool(
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
-        body = body.with_result(tool_result_json(result)?);
+        let result = tool_result_json(result)?;
+        if fields.completed_file_change
+            && let Some(text) = file_change_searchable_result(&result)
+        {
+            body = body.with_searchable_result(text)?;
+            paths.push(("tool.searchable_result", FactProvenance::Parsed));
+        }
+        body = body.with_result(result);
         paths.push(("tool.result", FactProvenance::Reported));
     } else if let Some(error) = &fields.error {
         body = body.with_result(value_to_json(error, CanonicalFieldCategory::ToolResult)?);
@@ -571,7 +578,7 @@ fn emit_tool(
         body = body.with_exit_code(exit_code);
         paths.push(("tool.exit_code", FactProvenance::Reported));
     }
-    if fields.completed_command {
+    if fields.completed_command || fields.completed_file_change && fields.status.is_some() {
         body = body.with_reported_status(match fields.status.as_deref() {
             Some("completed") => ToolStatus::Succeeded,
             Some("failed") => ToolStatus::Failed,
@@ -579,7 +586,7 @@ fn emit_tool(
             _ => {
                 return Err(mapping(
                     "invalid_command_status",
-                    "completed command requires terminal status",
+                    "completed tool requires terminal status",
                 ));
             }
         });
@@ -637,6 +644,17 @@ fn emit_tool(
         }
     }
 
+    if fields.completed_file_change
+        && let Some(status) = &fields.status
+    {
+        builder = builder
+            .facet(
+                "tool.source_status",
+                SemanticFacet::new(JsonValue::string(status)),
+            )?
+            .fact_metadata("tool.source_status", normal_reported()?);
+    }
+
     let argument_view = fields.arguments.as_ref().and_then(parsed_argument_view);
     let command = fields
         .command
@@ -662,6 +680,50 @@ fn emit_tool(
     observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
+}
+
+/// Only the closed native patch fields become text. Deletion content and both
+/// sides of a diff remain reported patch evidence, never newly written content.
+fn file_change_searchable_result(result: &JsonValue) -> Option<String> {
+    let JsonValue::Object(result) = result else {
+        unreachable!("validated file change")
+    };
+    let JsonValue::Object(changes) = &result["changes"] else {
+        unreachable!("validated changes")
+    };
+    let mut text = String::new();
+    for (path, change) in changes {
+        let JsonValue::Object(change) = change else {
+            unreachable!("validated change")
+        };
+        let JsonValue::String(kind) = &change["type"] else {
+            unreachable!("validated kind")
+        };
+        text.push_str("path\n");
+        text.push_str(path);
+        text.push('\n');
+        for key in ["content", "unified_diff", "move_path"] {
+            if let Some(JsonValue::String(value)) = change.get(key) {
+                text.push_str(kind);
+                text.push('.');
+                text.push_str(key);
+                text.push('\n');
+                text.push_str(value);
+                text.push('\n');
+            }
+        }
+    }
+    for key in ["stdout", "stderr"] {
+        if let Some(JsonValue::String(value)) = result.get(key) {
+            text.push_str(key);
+            text.push('\n');
+            text.push_str(value);
+            text.push('\n');
+        }
+    }
+    // Searchable Tool fields are single-line by contract. The structured result
+    // above retains exact patch text; only this parsed search view folds CR/LF.
+    (!text.is_empty()).then(|| text.replace(['\r', '\n'], " "))
 }
 
 fn tool_correlation(call_id: Option<&str>) -> Result<Option<CorrelationIds>, CodexCanonicalError> {

@@ -51,7 +51,14 @@ fn transcript(suffix: bool) -> Vec<Value> {
     ];
     if suffix {
         for kind in ["FileChange", "McpToolCall", "Extension"] {
-            values.push(json!({"type":"event_msg","payload":{"type":"item_completed","thread_id":"child-a","turn_id":"turn-a","item":{"type":kind,"id":kind,"private":PRIVATE}}}));
+            let mut value = json!({"type":"event_msg","payload":{"type":"item_completed","thread_id":"child-a","turn_id":"turn-a","item":{"type":kind,"id":kind,"private":PRIVATE}}});
+            if kind == "FileChange" {
+                // Known FileChange fields are supported; an unknown change kind
+                // must still quarantine this unit without hiding its neighbors.
+                value["payload"]["item"]["changes"] =
+                    json!({"/synthetic/future":{"type":"future","content":PRIVATE}});
+            }
+            values.push(value);
         }
         values.push(command("oversize", "x".repeat(65_537)));
         values.push(json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"supported neighbor survives"}]}}));

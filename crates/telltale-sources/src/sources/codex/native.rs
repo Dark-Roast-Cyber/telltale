@@ -50,6 +50,7 @@ pub(crate) struct CodexToolFields {
     pub(crate) command: Option<String>,
     pub(crate) cwd: Option<String>,
     pub(crate) completed_command: bool,
+    pub(crate) completed_file_change: bool,
     pub(crate) exit_code: Option<i64>,
     pub(crate) output_fidelity: Option<&'static str>,
 }
@@ -539,9 +540,27 @@ fn completed_record(
         }
         // Known activity this adapter does not map yet. Each is quarantined
         // by itself and reported, never silently dropped.
-        Some("McpToolCall" | "FileChange" | "Extension") => {
+        Some("McpToolCall" | "Extension") => {
             quarantine = Some("unsupported_completed_item");
             ("item_completed", None, false)
+        }
+        Some("FileChange") => {
+            tool.status = match item.get("status") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(status))
+                    if matches!(status.as_str(), "completed" | "failed" | "declined") =>
+                {
+                    Some(status.clone())
+                }
+                _ => return Err("Codex completed file change status is invalid"),
+            };
+            tool.result = completed_file_change_result(item)?;
+            if tool.result.is_none() {
+                quarantine = Some("unsupported_completed_item");
+            }
+            tool.result_present = tool.result.is_some();
+            tool.completed_file_change = true;
+            ("tool_result", None, false)
         }
         Some("CommandExecution") => {
             let argv = item
@@ -634,6 +653,60 @@ fn completed_record(
         mirrored: false,
         quarantine,
     })
+}
+
+fn completed_file_change_result(item: &Value) -> Result<Option<Value>, &'static str> {
+    let invalid = "Codex completed file change field has invalid type";
+    let changes = item
+        .get("changes")
+        .and_then(Value::as_object)
+        .ok_or(invalid)?;
+    let mut admitted = serde_json::Map::new();
+    let mut unsupported = false;
+    for (path, change) in changes {
+        let kind = change.get("type").and_then(Value::as_str).ok_or(invalid)?;
+        let text_key = match kind {
+            "add" | "delete" => "content",
+            "update" => "unified_diff",
+            _ => {
+                unsupported = true;
+                continue;
+            }
+        };
+        let text = change
+            .get(text_key)
+            .filter(|v| v.is_string())
+            .ok_or(invalid)?;
+        let mut fields = serde_json::Map::from_iter([
+            ("type".to_owned(), Value::String(kind.to_owned())),
+            (text_key.to_owned(), text.clone()),
+        ]);
+        if kind == "update"
+            && let Some(path) = change.get("move_path")
+        {
+            if !path.is_null() && !path.is_string() {
+                return Err(invalid);
+            }
+            fields.insert("move_path".to_owned(), path.clone());
+        }
+        admitted.insert(path.clone(), Value::Object(fields));
+    }
+    let mut result = serde_json::Map::from_iter([("changes".to_owned(), Value::Object(admitted))]);
+    for key in ["status", "auto_approved", "stdout", "stderr"] {
+        if let Some(value) = item.get(key) {
+            if !value.is_null()
+                && if key == "auto_approved" {
+                    !value.is_boolean()
+                } else {
+                    !value.is_string()
+                }
+            {
+                return Err(invalid);
+            }
+            result.insert(key.to_owned(), value.clone());
+        }
+    }
+    Ok((!unsupported).then_some(Value::Object(result)))
 }
 
 fn resolve_mirrors(records: &mut [CodexNativeRecord]) -> Result<(), &'static str> {

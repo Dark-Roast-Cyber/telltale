@@ -11,8 +11,8 @@
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/history/src/lib.rs#L362-L368",
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/ordinal.rs#L20-L52"
   ],
-  "status": "known_gap",
-  "note": "The FileChange item is quarantined as unsupported_completed_item, so patch paths and contents are invisible to detection and the source is reported as partial. Expect a file observation when this is mapped.",
+  "status": "supported",
+  "note": "FileChange is a conservative ToolResultReturned with structured patch evidence and a field-labeled searchable result, not an OS-observed File observation. Field and selector assertions are in tests/codex_completed.rs.",
   "acquire": {
     "source_id": "codex.sessions",
     "jsonl": [
@@ -23,9 +23,7 @@
     ]
   },
   "expect": {
-    "observations": 2,
-    "quarantine_codes": [
-      "unsupported_completed_item"
-    ]
+    "min_observations": 3,
+    "min_families": {"message": 2, "tool": 1}
   }
 }
