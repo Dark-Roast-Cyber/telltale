@@ -3268,3 +3268,68 @@ fn installed_packages_add_rules_but_never_replace_core_rules() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("reserved for core rules"), "{stderr}");
 }
+
+#[test]
+fn installed_package_yaml_escapes_fail_before_scan_outputs_activate() {
+    let temp = tempdir().expect("tempdir");
+    let config = temp.path().join("config");
+    let packages = config.join("rule-packages.d");
+    fs::create_dir_all(&packages).expect("package dir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir(&root).expect("empty source root");
+    let state = temp.path().join("state.json");
+    let log = temp.path().join("events.jsonl");
+    let marker = "PACKAGE_HIDDEN_SENTINEL";
+
+    for (field, original, replacement, code_point) in [
+        (
+            "publisher",
+            "publisher: Synthetic community",
+            r#"publisher: "PACKAGE_HIDDEN_SENTINEL\u202E""#,
+            "U+202E",
+        ),
+        (
+            "explanation",
+            "explanation: Synthetic community rule.",
+            r#"explanation: "PACKAGE_HIDDEN_SENTINEL\x1b[31m""#,
+            "U+001B",
+        ),
+    ] {
+        let raw =
+            community_package_yaml("1.0.0", "tdx.synthetic.marker").replace(original, replacement);
+        fs::write(packages.join("community.yaml"), raw).expect("package");
+
+        for args in [
+            vec!["rules", "validate"],
+            vec!["config", "validate"],
+            vec!["scan", "--once"],
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+            command.args(&args).arg("--config-dir").arg(&config);
+            command.env_remove("TELLTALE_COMMUNITY_RULES");
+            if args[0] == "scan" {
+                command.arg("--install-inventory-disabled");
+                command.arg("--root").arg(&root);
+                command.arg("--state-path").arg(&state);
+                command.arg("--log-path").arg(&log);
+            }
+            let output = command.output().expect("run telltale");
+            assert!(
+                !output.status.success(),
+                "{field}: {args:?} accepted package"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!("forbidden character {code_point}")),
+                "{field}: {args:?} missing forbidden-character diagnostic"
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                !stdout.contains(marker) && !stderr.contains(marker),
+                "{field}: {args:?} leaked package content"
+            );
+            assert!(!state.exists(), "{field}: {args:?} created scan state");
+            assert!(!log.exists(), "{field}: {args:?} created event output");
+        }
+    }
+}

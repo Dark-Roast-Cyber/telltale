@@ -17,6 +17,9 @@
   for known gaps. `make harness-drift-check` and a weekly workflow verify the
   pins and list newer harness releases. No runtime behavior changes.
 
+- Reject YAML-escaped control and hidden formatting characters in rule packages,
+  including nested rule text, without rejecting ordinary multiline content or
+  literal regex escapes.
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

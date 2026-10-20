@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 use serde::{Deserialize, Serialize};
+use serde_yaml::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{RuleSet, bundled_default_rule_set, validate_canonical_rule_id};
@@ -69,7 +70,8 @@ impl RulePackage {
     /// Parse and validate one package document.
     ///
     /// Rejects unknown formats or header fields, malformed identities, hidden
-    /// control or bidirectional-formatting characters anywhere in the text,
+    /// control or bidirectional-formatting characters in source text or decoded
+    /// YAML strings,
     /// reserved or malformed namespaces, definition IDs outside the namespace,
     /// duplicate IDs, and packages without definitions. Rule content is
     /// compiled later, together with the rest of the effective rule set.
@@ -78,6 +80,8 @@ impl RulePackage {
             return Err(format!("rule package exceeds {MAX_RULE_PACKAGE_BYTES} bytes").into());
         }
         reject_hidden_characters(raw)?;
+        reject_decoded_hidden_characters(raw)?;
+        // Keep typed parsing on the source for YAML string coercion and error locations.
         let package = serde_yaml::from_str::<RawRulePackage>(raw)
             .map_err(|error| format!("invalid rule package: {error}"))?;
         if package.format != RULE_PACKAGE_FORMAT {
@@ -304,10 +308,41 @@ fn reject_hidden_characters(raw: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn reject_decoded_hidden_characters(raw: &str) -> Result<(), Box<dyn Error>> {
+    let value = serde_yaml::from_str::<Value>(raw)
+        .map_err(|error| format!("invalid rule package: {error}"))?;
+    let mut pending = vec![&value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::String(text) => {
+                if let Some(character) = text
+                    .chars()
+                    .find(|character| is_hidden_character(*character))
+                {
+                    return Err(format!(
+                        "rule package decoded string: forbidden character U+{:04X}",
+                        character as u32
+                    )
+                    .into());
+                }
+            }
+            Value::Sequence(values) => pending.extend(values),
+            Value::Mapping(values) => {
+                for (key, value) in values {
+                    pending.extend([key, value]);
+                }
+            }
+            Value::Tagged(value) => pending.push(&value.value),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Controls and invisible formatting characters can make reviewed text differ
 /// from what a matcher, terminal, or analyst tool interprets.
 fn is_hidden_character(character: char) -> bool {
-    (character.is_control() && !matches!(character, '\t' | '\r'))
+    (character.is_control() && !matches!(character, '\t' | '\r' | '\n'))
         || matches!(
             character,
             '\u{061C}'
@@ -503,6 +538,128 @@ documents:
         let message = error(&raw);
         assert!(message.contains("forbidden character U+202E"), "{message}");
         assert!(message.contains("line 19"), "{message}");
+    }
+
+    #[test]
+    fn yaml_escaped_hidden_characters_are_rejected_in_decoded_strings() {
+        let base = package("acme.rules", "acme", "acme.synthetic.marker");
+        let fields = [
+            (
+                "publisher",
+                "publisher: Synthetic publisher",
+                "publisher: \"VALUE\"",
+            ),
+            ("license", "license: Apache-2.0", "license: \"VALUE\""),
+            ("source", "documents:", "source: \"VALUE\"\ndocuments:"),
+            ("revision", "documents:", "revision: \"VALUE\"\ndocuments:"),
+            (
+                "document description",
+                "description: Synthetic package rules.",
+                "description: \"VALUE\"",
+            ),
+            (
+                "rule explanation",
+                "explanation: Synthetic package rule.",
+                "explanation: \"VALUE\"",
+            ),
+            (
+                "regex",
+                "regex: 'synthetic-package-marker'",
+                "regex: \"VALUE\"",
+            ),
+            ("tags", "tags: [synthetic]", "tags: [\"VALUE\"]"),
+            (
+                "selection value",
+                "regex: 'synthetic-package-marker'",
+                "detection:\n          selection: {command: \"VALUE\"}",
+            ),
+            (
+                "selection key",
+                "regex: 'synthetic-package-marker'",
+                "detection:\n          selection: {\"VALUE\": marker}",
+            ),
+            (
+                "modifier explanation",
+                "modifiers: []",
+                "modifiers:\n      - id: acme.synthetic.chain\n        score: 5\n        explanation: \"VALUE\"",
+            ),
+            (
+                "ignored document field",
+                "description: Synthetic package rules.",
+                "description: Synthetic package rules.\n    ignored: \"VALUE\"",
+            ),
+            (
+                "tagged value",
+                "description: Synthetic package rules.",
+                "description: Synthetic package rules.\n    ignored: !synthetic \"VALUE\"",
+            ),
+            (
+                "aliased value",
+                "description: Synthetic package rules.",
+                "description: &text \"VALUE\"\n    ignored: *text",
+            ),
+        ];
+        for (escape, code_point) in [
+            (r"\u202E", "U+202E"),
+            (r"\U00002066", "U+2066"),
+            (r"\u200B", "U+200B"),
+            (r"\uFEFF", "U+FEFF"),
+            (r"\x1b", "U+001B"),
+            (r"\e", "U+001B"),
+            (r"\0", "U+0000"),
+            (r"\b", "U+0008"),
+            (r"\u0085", "U+0085"),
+        ] {
+            for (field, original, replacement) in fields {
+                let marker = "PACKAGE_HIDDEN_SENTINEL";
+                let raw = base.replace(
+                    original,
+                    &replacement.replace("VALUE", &format!("{marker}{escape}")),
+                );
+                let message = RulePackage::parse(&raw)
+                    .err()
+                    .unwrap_or_else(|| panic!("{field}: accepted forbidden {code_point}"))
+                    .to_string();
+                assert!(
+                    message.contains(&format!("forbidden character {code_point}")),
+                    "{field}: missing forbidden-character diagnostic for {code_point}"
+                );
+                assert!(
+                    !message.contains(marker),
+                    "{field}: diagnostic leaked content"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoded_multiline_content_and_literal_regex_escapes_remain_valid() {
+        let raw = package("acme.rules", "acme", "acme.synthetic.marker")
+            .replace(
+                "publisher: Synthetic publisher",
+                r#"publisher: "Caf\u00E9""#,
+            )
+            .replace(
+                "rule_namespace: acme",
+                "rule_namespace: acme\nrevision: 12345",
+            )
+            .replace(
+                "description: Synthetic package rules.",
+                "description: |\n      First line.\n      Second line.",
+            )
+            .replace(
+                "explanation: Synthetic package rule.",
+                r#"explanation: "First line.\nSecond\tline.""#,
+            )
+            .replace("regex: 'synthetic-package-marker'", r"regex: '\u202E|\x1b'");
+        let parsed = RulePackage::parse(&raw).expect("visible escapes and multiline rule content");
+        assert_eq!(parsed.publisher(), "Café");
+        assert_eq!(parsed.revision(), Some("12345"));
+        let document = &parsed.documents()[0];
+        assert_eq!(document.description, "First line.\nSecond line.\n");
+        assert_eq!(document.rules[0].explanation, "First line.\nSecond\tline.");
+        assert_eq!(document.rules[0].regex.as_deref(), Some(r"\u202E|\x1b"));
+        crate::compile_rule_sets(parsed.into_documents(), None).expect("regex escapes compile");
     }
 
     #[test]
