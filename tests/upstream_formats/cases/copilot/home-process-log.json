@@ -7,7 +7,7 @@
     "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
   ],
   "status": "known_gap",
-  "note": "Telltale registers only project-local logs/copilot. The file reuses a Telltale fixture; whether 1.0.96 still writes these lines at the default level is unconfirmed.",
+  "note": "Telltale registers only project-local logs/copilot. Copilot CLI does not publish its log writer, so the path comes from the pinned changelog and the official config-dir reference; the log contents reuse a Telltale fixture, and whether 1.0.96 still writes these lines at the default level is unconfirmed.",
   "discover": {
     "client": "copilot",
     "files": {
