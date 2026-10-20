@@ -30,6 +30,19 @@ Optional fields:
 | `enabled` | Defaults to `true`. Set `false` to disable without removing. |
 | `detection.exclude` | At most one exclusion regex per selected target. The key must also exist in `detection.selection`; exclusions are not valid with `targets` + `regex`. |
 
+Shared Rule v1 compilation, including `rules validate`, rejects effective rules
+whose `severity` is outside the five detection severities in the table above
+before activation. The [generated vocabulary](catalog/rule-vocabulary.json)
+distinguishes these supported rule values from the broader Event 3.0 vocabulary:
+`warning` remains valid for operational events, but is not a rule severity or an
+alias for a detection severity. Shared validation and canonical detection
+compilation accept the same detection severity values.
+
+`status` is optional descriptive metadata, not an enablement control or a closed
+vocabulary. `enabled` and policy control enablement. `category` remains an open
+behavior label for custom rules and packages; the bundled core category convention
+above is a content standard, not a validator restriction.
+
 ### Rule Purpose Metadata
 
 All rule purposes use the same rule YAML and engine. Do not create a separate syntax for ad-hoc alerts, hunting detections, production alerts, or policy violations.

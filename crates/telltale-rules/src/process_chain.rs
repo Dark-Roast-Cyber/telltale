@@ -27,7 +27,7 @@ use serde::Deserialize;
 const DEFAULT_PROCESS_CHAIN_YAML: &str = include_str!("../data/process-chain.yaml");
 
 /// Severity bands, ordered weakest to strongest.
-pub const SEVERITIES: [&str; 5] = ["informational", "low", "medium", "high", "critical"];
+pub const SEVERITIES: [&str; 5] = telltale_schema::event::VALID_DETECTION_SEVERITIES;
 
 /// Confidence bands, ordered weakest to strongest.
 pub const CONFIDENCES: [&str; 3] = ["low", "medium", "high"];

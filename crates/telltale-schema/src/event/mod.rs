@@ -1516,8 +1516,11 @@ pub const VALID_SIGNAL_TYPES: &[&str] = &["atomic", "chain", "correlation", "bas
 pub const VALID_ANALYTIC_INTENTS: &[&str] = &["alert", "hunt", "enrich", "baseline", "audit"];
 const VALID_CONFIDENCES: &[&str] = &["low", "medium", "high"];
 const VALID_RISK_ENTITY_TYPES: &[&str] = &["host", "user", "session"];
-const VALID_PROCESS_RULE_SEVERITIES: &[&str] =
-    &["informational", "low", "medium", "high", "critical"];
+// Shared by detection/process-rule validation and the vocabulary catalog.
+// Operational Event3 families additionally support `warning` via VALID_SEVERITIES.
+#[doc(hidden)]
+pub const VALID_DETECTION_SEVERITIES: [&str; 5] =
+    ["informational", "low", "medium", "high", "critical"];
 const VALID_RESPONSE_ACTIONS: &[&str] = &[
     "monitor",
     "review",
@@ -1589,7 +1592,7 @@ fn terminal_controlled_fields_are_valid(event: &Event, historical_version: bool)
                 || !is_allowed_controlled_value(&response.escalation, VALID_RESPONSE_ESCALATIONS)
         })
         || event.process.as_ref().is_some_and(|process| {
-            !is_allowed_controlled_value(&process.rule_severity, VALID_PROCESS_RULE_SEVERITIES)
+            !is_allowed_controlled_value(&process.rule_severity, &VALID_DETECTION_SEVERITIES)
         })
     {
         return false;
@@ -5304,6 +5307,35 @@ mod tests {
                 .redacted_value
                 .contains("TT_PRIVACY_SCANNER_25")
         );
+    }
+
+    #[test]
+    fn detection_severities_exclude_warning_without_changing_operational_events() {
+        let schema: serde_json::Value =
+            serde_json::from_str(super::EVENT3_SCHEMA).expect("frozen schema");
+        assert_eq!(
+            schema["$defs"]["detection"]["allOf"][1]["properties"]["severity"]["enum"],
+            serde_json::json!(super::VALID_DETECTION_SEVERITIES)
+        );
+        assert_eq!(
+            schema["$defs"]["eventCore"]["properties"]["severity"]["enum"],
+            serde_json::json!(super::VALID_SEVERITIES)
+        );
+        assert!(!super::VALID_DETECTION_SEVERITIES.contains(&"warning"));
+        let event = operational_alert_event(OperationalAlertInput {
+            alert_type: "scanner_error_threshold_exceeded".to_string(),
+            threshold: "max_scanner_errors=3".to_string(),
+            actual_value: "scanner_error_count=5".to_string(),
+            scan_duration_ms: None,
+            scanner_error_count: Some(5),
+        });
+        let wire =
+            serde_json::to_value(&event).expect("operational warning terminal serialization");
+        assert_eq!(wire["severity"], "warning");
+        jsonschema::validator_for(&schema)
+            .expect("event schema validator")
+            .validate(&wire)
+            .expect("operational warning remains schema-valid");
     }
 
     #[test]
