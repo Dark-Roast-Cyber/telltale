@@ -1283,6 +1283,7 @@ fn real_detectors_match_command_text_across_paths_not_returned_execution() {
                         | "mcp.server_enumeration"
                         | "mcp.tool_metadata.prompt_injection"
                         | "network.controlled_test_domain.darkroast"
+                        | "prompt_injection.instruction_override"
                         | "secret.env.read"
                         | "tool.injection.shape"
                 )

@@ -477,9 +477,19 @@ fn canonical_efficacy_fixtures_cli_characterization_and_event_privacy() {
         let expected = case["expected_detection"]["expected_score"]
             .as_u64()
             .unwrap();
+        let rules = case["expected_detection"]["rule_expectations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|rule| rule["expectation"] == "expected_match")
+            .map(|rule| rule["rule_id"].clone())
+            .collect::<Vec<_>>();
+        // A session detection is emitted for any matched rule, including a
+        // zero-point signal; its risk score is asserted separately.
+        let detected = !rules.is_empty();
         assert_eq!(
             summary["detection_count"],
-            u64::from(expected > 0),
+            u64::from(detected),
             "{}",
             case["id"]
         );
@@ -496,16 +506,9 @@ fn canonical_efficacy_fixtures_cli_characterization_and_event_privacy() {
             .iter()
             .filter(|event| event["event_type"] == "detection")
             .collect::<Vec<_>>();
-        assert_eq!(detections.len(), usize::from(expected > 0));
+        assert_eq!(detections.len(), usize::from(detected));
         if let Some(detection) = detections.first() {
             assert_eq!(detection["risk_score"], expected);
-            let rules = case["expected_detection"]["rule_expectations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|rule| rule["expectation"] == "expected_match")
-                .map(|rule| rule["rule_id"].clone())
-                .collect::<Vec<_>>();
             assert_eq!(detection["rule_ids"], serde_json::json!(rules));
             assert_eq!(
                 detection["timeline_anchors"].as_array().unwrap().len(),
@@ -1605,7 +1608,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 89);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 109);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -3109,7 +3112,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 30);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        89
+        109
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -5495,6 +5498,13 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn telltale watch");
+    // Drain while waiting: the one-line summary can exceed a reduced pipe
+    // buffer, and a blocked write would keep the watcher from exiting.
+    let mut stdout = child.stdout.take().expect("watch stdout");
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
 
     wait_for_watch_ready(
         &mut child,
@@ -5545,7 +5555,11 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = stdout_reader
+        .join()
+        .expect("join watch stdout reader")
+        .expect("read watch stdout");
+    let stdout = String::from_utf8_lossy(&stdout);
     let summary_line = stdout
         .lines()
         .find(|line| line.starts_with('{'))

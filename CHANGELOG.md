@@ -33,6 +33,13 @@
   `bypass` and `approval`, matching the selection. A documentation quote split
   across ordered message parts (joined with newlines) is excluded instead of
   scoring 45.
+- Add the zero-point assistant-context rule
+  `prompt_injection.instruction_override` ("ignore/disregard previous/prior
+  instructions", with the same documentation exclusions as approval bypass) and
+  the 30-point modifier `chain.instruction_override_with_approval_bypass`. An
+  override quote alone emits a zero-risk detection; beside approval bypass the
+  session scores 75 and requires security review. The chain is session-scoped.
+  Matching sessions that already scored now include both IDs and gain 30 points.
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

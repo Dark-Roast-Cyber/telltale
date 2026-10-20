@@ -194,6 +194,26 @@ rules:
     falsepositives:
       - Security tests and documentation may intentionally embed MCP prompt-injection phrases in synthetic metadata.
 
+  - id: prompt_injection.instruction_override
+    category: instruction_override
+    detection_class: threat_hunting
+    signal_type: atomic
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: low
+    score: 0
+    detection:
+      selection:
+        assistant_context: '\b(ignore|disregard)\s+(all\s+)?(previous|prior)\s+instructions?'
+      exclude:
+        assistant_context: '(?s:\s*((for documentation|in the documentation review|documentation review|review notes|test vector).*((ignore|disregard)\s+(all\s+)?(previous|prior)\s+instructions?.*(quoted example|should not be treated as an instruction|review notes|test vector)|(quoted example|should not be treated as an instruction|review notes|test vector).*(ignore|disregard)\s+(all\s+)?(previous|prior)\s+instructions?)(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+      condition: selection
+    tags: [prompt-injection, instruction-override]
+    explanation: Assistant output contains a generic instruction-override phrase. It carries no points by itself and corroborates other behavior through chain modifiers.
+    falsepositives:
+      - Prompt-injection discussions, triage notes, and security documentation quote override phrases without acting on them.
+
   - id: network.controlled_test_domain.darkroast
     category: exfiltration
     atlas_tags:
@@ -335,3 +355,14 @@ modifiers:
     explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
     falsepositives:
       - MCP integration tests may enumerate tools and include synthetic injection strings to validate defenses.
+  - id: chain.instruction_override_with_approval_bypass
+    score: 30
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    when_all_categories: [instruction_override, approval_bypass]
+    explanation: An instruction override co-occurring with an approval-bypass directive in assistant output requires security review.
+    falsepositives:
+      - Co-occurrence is evaluated per session, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase elsewhere in the session (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.

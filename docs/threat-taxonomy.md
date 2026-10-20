@@ -68,6 +68,7 @@ When authoring or reviewing detection content:
 | `exfiltration` | The agent sent, staged, or encoded data for outbound transfer. | HTTP POST/upload, object-store copy, encoded HTTP hostnames or base64 bodies, DNS encoding, controlled tester domains. | `exfil.outbound_upload`, `network.controlled_test_domain.darkroast`, `exfil.dns_encoding`, `exfil.encoded_http` |
 | `persistence` | The agent touched startup, profile, scheduled task, or service persistence surfaces. | `.bashrc`, `.zshrc`, `crontab`, `systemctl enable`, `launchctl load`. | `persistence.shell_profile` |
 | `approval_bypass` | Context asks the agent to avoid user approval, hide behavior, or run silently. | "without asking", "do not tell", "bypass approval", "no confirm". | `approval.bypass.context` |
+| `instruction_override` | Assistant output repeats a generic instruction to ignore or disregard prior instructions. It is a zero-point corroborating signal. | "ignore previous instructions", "disregard all prior instructions". | `prompt_injection.instruction_override` |
 | `tool_injection` | Tool-call-shaped content appears where it may spoof or steer tool use. | `<tool_call>`, `tool_calls`, `function_call`, `recipient_name`, `arguments`. | `tool.injection.shape` |
 | `mcp_prompt_injection` | MCP metadata, server instructions, tool descriptions, parameters, or tool results try to steer the agent. | `tools/list`, tool description, parameter description, server instructions, tool result plus hidden instructions. | `mcp.tool_metadata.prompt_injection` |
 | `credential_harvesting` | The agent targeted local, cloud, container, or orchestration credential stores. | `.aws/credentials`, `.kube/config`, Docker config, service-account files. | `credential.cloud_harvest` |
@@ -95,6 +96,7 @@ Chain modifiers add score and derived rule IDs when multiple categories or rules
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting appeared near package publishing. |
 | `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting appeared near data theft behavior. |
 | `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing appeared near prompt-injection behavior. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override appeared in the same session as an approval-bypass directive. |
 
 Process-chain correlations are separate from these modifiers: they require an
 ordered sequence within a time window and entity boundary rather than
