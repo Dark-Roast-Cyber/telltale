@@ -94,6 +94,7 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 | `approval.bypass.context` | `approval_bypass` | `policy_violation` | `atomic` | `alert` | `atlas:AML.T0051` | Suspicious approval-bypass language. Current tag is strongest only when the instruction originated from an untrusted prompt or tool context. |
 | `tool.injection.shape` | `tool_injection` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0051` | Tool-call-shaped content may spoof or steer tool use; shape alone does not prove prompt injection. |
 | `mcp.tool_metadata.prompt_injection` | `mcp_prompt_injection` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0051` | Strong prompt-injection mapping. ATLAS 2026.09 also provides `AML.T0110.000` for poisoned tool definitions and `AML.T0110.002` for poisoned runtime responses. |
+| `prompt_injection.instruction_override` | `instruction_override` | `threat_hunting` | `atomic` | `hunt` | `atlas:AML.T0051` | Generic instruction-override phrase in assistant output. Zero points alone; it corroborates `approval.bypass.context` through `chain.instruction_override_with_approval_bypass`. |
 | `network.controlled_test_domain.darkroast` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Controlled-domain string match. Current tag is only semantically complete when the observation establishes actual egress. |
 | `exfil.dns_encoding` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Base64-encoded DNS exfiltration. |
 | `exfil.encoded_http` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded hostname or base64 request material sent through an HTTP client. |
@@ -113,6 +114,7 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | `security_detection` | `chain` | `alert` | none | Credential harvesting near package publishing. |
 | `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0055`, `atlas:AML.T0025` | Credential access followed by cyber exfiltration. |
 | `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | `security_detection` | `chain` | `alert` | `atlas:AML.T0084`, `atlas:AML.T0051` | Current emitted tags. `AML.T0133` is more precise for the runtime enumeration half of the chain. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051` | Instruction override corroborated by an approval-bypass directive in the same session. |
 
 ### Example Rules
 
@@ -125,8 +127,8 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 
 Current shipped/example rule metadata remains:
 
-- Bundled rules: 18 (13 with ATLAS tags, 5 intentionally untagged)
-- Bundled chain modifiers: 8 (3 with ATLAS tags, 5 intentionally untagged)
+- Bundled rules: 19 (14 with ATLAS tags, 5 intentionally untagged)
+- Bundled chain modifiers: 9 (4 with ATLAS tags, 5 intentionally untagged)
 - Example rules: 2 (2 with ATLAS tags)
 - Distinct ATLAS technique IDs currently emitted: 8 (`AML.T0050`, `AML.T0051`, `AML.T0025`, `AML.T0055`, `AML.T0057`, `AML.T0081`, `AML.T0084`, `AML.T0086`)
 - Distinct ATLAS tactics represented by those technique relationships: 5 (`AML.TA0005`, `AML.TA0006`, `AML.TA0008`, `AML.TA0010`, `AML.TA0013`). `AML.TA0007` is not represented by the emitted technique IDs; Defense Evasion mappings for guardrail modification and obfuscation remain future work. The example policy rule already emits `AML.T0081` for agent guardrail/configuration modification.

@@ -29,6 +29,31 @@
   pause scanning throughout inspection, reset and retries; installation or output
   failure can leave the reset committed without acknowledgement. Inspect state
   before retrying; see the [operator procedure](docs/opencode-live-ingestion.md#explicit-operator-cursor-reset).
+- `approval.bypass.context` exclusions now accept any whitespace between
+  `bypass` and `approval`, matching the selection. A documentation quote split
+  across ordered message parts (joined with newlines) is excluded instead of
+  scoring 45.
+- Add the zero-point assistant-context rule
+  `prompt_injection.instruction_override` ("ignore/disregard previous/prior
+  instructions", with the same documentation exclusions as approval bypass) and
+  the 30-point modifier `chain.instruction_override_with_approval_bypass`. An
+  override quote alone emits a zero-risk detection; beside approval bypass the
+  session scores 75 and requires security review. The chain is session-scoped.
+  Matching sessions that already scored now include both IDs and gain 30 points.
+- The evaluation corpus now also runs the default rule profile (core plus the
+  embedded community package) and writes it to
+  `target/evaluation/default-profile-report.v1.json`. A test fails on any
+  per-case difference from the core-only golden that is not listed. Counts stay
+  separate per profile. The CLI canonical-efficacy test pins both profiles with
+  a cleared environment. No runtime behavior changes.
+- Codex completed `CommandExecution` results now carry a Derived `command.text`
+  facet: a POSIX shell-quoted rendering of argv that a shell parses back into
+  exactly argv. Argv stays structured in `tool.arguments`, and no execution,
+  Process, File, or Network fact is added. Command and argument rules in every
+  rule profile now see completed commands. A request and its completed result
+  still count each rule once per session, though both can appear as evidence
+  anchors. A rendering that does not fit the canonical bounds is omitted rather
+  than rejecting the result.
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

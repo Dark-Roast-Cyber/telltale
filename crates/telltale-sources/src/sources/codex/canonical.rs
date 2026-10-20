@@ -660,6 +660,7 @@ fn emit_tool(
         .command
         .clone()
         .or_else(|| argument_command(fields.arguments.as_ref(), argument_view.as_ref()));
+    let has_command = command.is_some();
     if let Some(command) = command {
         builder = builder
             .facet(
@@ -677,9 +678,61 @@ fn emit_tool(
             .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
     }
 
-    observations.push(builder.build()?)?;
+    // Completed commands report argv only. A shell-quoted rendering gives
+    // command selectors a view of it; argv stays structured, and a rendering
+    // that does not fit the bounds is omitted rather than rejecting the result.
+    let derived = if fields.completed_command && !has_command {
+        fields
+            .arguments
+            .as_ref()
+            .and_then(shell_quoted_argv)
+            .and_then(|text| {
+                builder
+                    .clone()
+                    .facet("command.text", SemanticFacet::new(JsonValue::string(text)))
+                    .ok()
+            })
+    } else {
+        None
+    };
+    let observation = match derived {
+        Some(with_command) => match with_command
+            .fact_metadata("command.text", normal(FactProvenance::Derived)?)
+            .build()
+        {
+            Ok(observation) => observation,
+            Err(error) if error.bound_dimension().is_some() => builder.build()?,
+            Err(error) => return Err(error.into()),
+        },
+        None => builder.build()?,
+    };
+    observations.push(observation)?;
     *child_ordinal += 1;
     Ok(())
+}
+
+/// POSIX shell quoting: safe words unchanged, the empty word as `''`, and any
+/// other word single-quoted with each embedded quote written as `'\''`.
+fn shell_quoted_argv(arguments: &Value) -> Option<String> {
+    let words = arguments
+        .as_array()?
+        .iter()
+        .map(|word| word.as_str().map(shell_quote))
+        .collect::<Option<Vec<_>>>()?;
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+fn shell_quote(word: &str) -> String {
+    if word.is_empty() {
+        "''".to_owned()
+    } else if word
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&byte))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
 }
 
 /// Only the closed native patch fields become text. Deletion content and both
