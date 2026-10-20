@@ -116,6 +116,17 @@ automatic migration write is needed; normal output-gated state installation
 writes the new coordinate after successful evaluation. This does not recover
 historically skipped rows outside the retained overlap.
 
+Explicit `cursor reset` is a separate, intentionally lossy maintenance operation,
+not migration or baseline replacement. With exact instance/table selection,
+matching inspection digest and explicit history-gap acceptance, it removes the
+whole selected OpenCode cursor record. An unfinished drain requires the separate
+abandonment acknowledgement, including an older drain without a raw cut. Every
+other cursor, baseline and fingerprint remains unchanged; surviving raw cuts are
+never stripped for downgrade. It evaluates nothing and installs no scan progress.
+Preparation failures preserve state; replacement or acknowledgement failure may
+be committed and requires inspection with scanners paused. See the
+[operator procedure](opencode-live-ingestion.md#explicit-operator-cursor-reset).
+
 The documented legacy compatibility window permits omitted
 `source_instance_id` fields in source observations, SQLite cursors, and source
 contributions, plus omitted optional inventory `path_hash` and baseline key

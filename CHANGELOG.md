@@ -20,6 +20,15 @@
 - Reject YAML-escaped control and hidden formatting characters in rule packages,
   including nested rule text, without rejecting ordinary multiline content or
   literal regex escapes.
+
+- Add state-only `cursor list` / `cursor reset` for one exact stored OpenCode
+  source/schema cursor, with a matching inspection digest, explicit history-gap
+  acceptance and separate unfinished-drain abandonment acknowledgement. Baselines,
+  deduplication and other cursors remain unchanged. Subsequent bootstrap is bounded,
+  not history recovery, whole-store evaluation or safe downgrade. Operators must
+  pause scanning throughout inspection, reset and retries; installation or output
+  failure can leave the reset committed without acknowledgement. Inspect state
+  before retrying; see the [operator procedure](docs/opencode-live-ingestion.md#explicit-operator-cursor-reset).
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

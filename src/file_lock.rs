@@ -605,8 +605,7 @@ pub(crate) fn manifest_path(destination: &Path) -> PathBuf {
 }
 
 pub(crate) fn sync_parent(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    sync_directory(parent)
+    sync_directory(path_parent_or_current(path))
 }
 
 pub(crate) struct TempFile {
