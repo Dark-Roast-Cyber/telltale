@@ -1,0 +1,27 @@
+{
+  "description": "A paginated rollout with an interrupted turn's event_msg turn_aborted; paginated history keeps turn lifecycle events and drops the legacy event mirrors.",
+  "harness": "codex",
+  "upstream": [
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/policy.rs#L127-L140",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L4250-L4262",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L3211-L3212",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/history/src/lib.rs#L362-L368",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/ordinal.rs#L20-L52"
+  ],
+  "status": "supported",
+  "acquire": {
+    "source_id": "codex.sessions",
+    "jsonl": [
+      {"timestamp": "2026-10-13T00:00:00.000Z", "ordinal": 0, "type": "session_meta", "payload": {"id": "00000000-0000-4000-8000-000000000002", "timestamp": "2026-10-13T00:00:00.000Z", "cwd": "/synthetic/work", "originator": "codex_cli_rs", "cli_version": "0.162.1", "source": "cli", "model_provider": "synthetic-provider", "history_mode": "paginated"}},
+      {"timestamp": "2026-10-13T00:00:01.000Z", "ordinal": 1, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Summarize the synthetic workspace."}]}},
+      {"timestamp": "2026-10-13T00:00:02.000Z", "ordinal": 2, "type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "turn-1", "reason": "interrupted"}},
+      {"timestamp": "2026-10-13T00:00:03.000Z", "ordinal": 3, "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]}}
+    ]
+  },
+  "expect": {
+    "min_observations": 2,
+    "min_families": {
+      "message": 2
+    }
+  }
+}

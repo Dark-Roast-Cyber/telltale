@@ -1,5 +1,5 @@
 {
-  "description": "Copilot CLI writes one process log per session to ~/.copilot/logs/process-<timestamp>-<pid>.log under the default home. COPILOT_HOME relocation is not covered by this case.",
+  "description": "Copilot CLI writes one process log per session to ~/.copilot/logs/process-<timestamp>-<pid>.log under the default home. copilot-home-relocation covers COPILOT_HOME.",
   "harness": "copilot-cli",
   "upstream": [
     "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484",

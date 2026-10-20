@@ -1,0 +1,25 @@
+{
+  "description": "COPILOT_HOME replaces ~/.copilot, so process logs are written to $COPILOT_HOME/logs/process-<timestamp>-<pid>.log.",
+  "harness": "copilot-cli",
+  "upstream": [
+    "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484",
+    "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1694",
+    "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
+  ],
+  "status": "known_gap",
+  "note": "Telltale registers only project-local logs/copilot and does not read COPILOT_HOME. The file reuses a Telltale fixture; whether 1.0.96 still writes these lines at the default level is unconfirmed.",
+  "discover": {
+    "client": "copilot",
+    "files": {
+      "custom-copilot/logs/process-2026-10-13T00-00-00-1234.log": {
+        "fixture": "tests/fixtures/session_stores/copilot/process-fixture.log"
+      }
+    },
+    "env": {
+      "COPILOT_HOME": "{home}/custom-copilot"
+    }
+  },
+  "expect": {
+    "selected_sources": 0
+  }
+}
