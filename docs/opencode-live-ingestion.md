@@ -255,11 +255,89 @@ with an integer `time_updated` at or after the cursor. It emits a privacy-safe
 `source_processing.failures`. The cursor is not advanced, reset or replaced.
 Scans resume on their own once OpenCode writes a part at or after the cursor.
 Changes the store lost before that point stay unevaluated. `--backfill` reads the
-newest bootstrap window without the cursor and stages nothing. No command resets
-or rebaselines the OpenCode cursor (`--rebuild-baselines` rebuilds baseline
-snapshots only), and deleting the state file discards every other source's state
-as well. The check does not detect a replaced store whose newest part is at
+newest bootstrap window without the cursor and stages no cursor or baseline.
+`--rebuild-baselines` rebuilds baseline snapshots only. For an explicitly accepted
+history gap, use the targeted cursor reset below, not deletion of the state file:
+deleting the file discards every other source's state as well.
+The check does not detect a replaced store whose newest part is at
 or after the cursor, or a clock rollback while such parts remain.
+
+### Explicit operator cursor reset
+
+This is **cursor reset, not rebaseline or history recovery**. It is a separate
+state-only maintenance action. Pause every scan/watch process or schedule using
+the state file, and keep them paused through inspection, reset and any retry.
+Retain a coordinated source/state/output snapshot if restoration may be needed.
+Prefer repairing/restoring the source or completing its drain without reset.
+
+Inspect the **explicit existing native state file** (there is no environment or
+profile default):
+
+```sh
+telltale cursor list --state-path /path/to/telltale-state.json
+```
+
+The JSON result lists only OpenCode SQLite cursors, with opaque
+`source_instance_id`, `table`, checkpoint, observation time, drain/cut and
+`cursor_digest`. It does not discover or open source stores, load rules/config,
+activate sinks, or print paths/content. The source instance is the existing
+SHA-256 of the scanner's exact stored path spelling, **not** a new canonicalized
+path or database identity. It matches the scanner's `source_path_hash` for that
+same path spelling. Match the intended stored source; do not guess from another
+path spelling. Map keys and stored source/schema ownership must agree.
+
+Select exactly one listed instance and table (`part` or `session_message`),
+and copy its fresh digest:
+
+```sh
+telltale cursor reset --state-path /path/to/telltale-state.json \
+  --source-instance-id <64-lowercase-hex> --table session_message \
+  --expect-cursor <cursor_digest> --accept-history-gap
+```
+
+The reset atomically removes **that entire cursor record**: checkpoint,
+`draining` and raw continuation together. It preserves every other source and
+schema cursor, baseline contributions/snapshots, observations, inventory and
+source/detection fingerprints. It never changes source history, canonical JSONL
+or the outbox and emits no Event 3 record. Its JSON acknowledgement is a
+maintenance result, not evidence that any source was evaluated.
+
+An unfinished drain is refused unless the operator additionally passes
+`--abandon-incomplete-drain`. This also applies to older `draining: true`
+records without a raw cut. The separate acknowledgement accepts loss of the
+unfinished continuation: pending rows outside the subsequent bootstrap window
+may remain unevaluated. No raw cut is stripped from a surviving record, no
+embedding token is rewritten, and this is **not an overlap-safe downgrade**.
+Other unfinished cursors retain their downgrade rejection. To avoid abandonment,
+finish with the current reader or restore coordinated source/state/output.
+
+A subsequent normal scan **if it selects that schema** attempts the existing
+uncursored newest-5,000 bootstrap under all normal bounds. Normal overlap resumes
+on later incremental scans; unfinished v2 windows retain raw-cut continuation.
+Resetting a dormant `part` cursor does not reset active v2 progress, or vice
+versa. Empty/missing/unsupported stores do not acquire invented progress or
+become successfully recovered through reset. Required canonical output/durable
+outbox persistence still precedes installation of any newly evaluated progress.
+Maintenance itself evaluates nothing and installs no scan progress, so it does
+not require a scan-output transaction.
+
+Retained deduplication can suppress identical earlier projections; changed
+selected-window aggregates can emit again. Reset does not promise exactly-once
+replay, whole-store evaluation, a whole-source baseline or recovery of lost or
+omitted history. For v2, a separately selected `--history all` scan can inspect
+history the store still retains; it neither restores deleted history nor repairs
+the routine cursor.
+
+Validation, selection, required-acceptance, lock and preparation failures leave the
+state file unchanged. Missing selections fail without writing; absence is not
+proof that an earlier reset succeeded. A changed digest rejects stale selection,
+including changed observation time or continuation. Do not automatically refresh
+the digest and retry: review the fresh selection with scanners still paused.
+`cursor_reset_outcome_unknown` means installation may have occurred (for example,
+rename succeeded but parent-directory sync failed); `cursor_reset_committed_ack_failed`
+means replacement completed but stdout acknowledgement failed. Inspect state
+before retrying either case; never roll back newly installed state or discard a
+recreated cursor blindly. No state migration or compatibility conversion occurs.
 
 Bootstrap and backfill still select the **newest 5,000 eligible tool/text parts**,
 plus message-table records. Incremental reads use the prior part update high-water

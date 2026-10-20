@@ -1071,12 +1071,23 @@ fn source_observation_key(source: &Source) -> String {
 }
 
 fn sqlite_ingestion_cursor_key(source: &Source, table: &str) -> String {
+    sqlite_ingestion_cursor_key_for_instance(
+        source.client.as_str(),
+        &source.source_id,
+        &source_instance_id(source),
+        table,
+    )
+}
+
+pub(crate) fn sqlite_ingestion_cursor_key_for_instance(
+    client: &str,
+    source_id: &str,
+    source_instance_id: &str,
+    table: &str,
+) -> String {
     format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        source.client.as_str(),
-        source.source_id,
-        source_instance_id(source),
-        table
+        client, source_id, source_instance_id, table
     )
 }
 
