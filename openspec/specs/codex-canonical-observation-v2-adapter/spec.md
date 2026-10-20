@@ -197,7 +197,7 @@ to a conservative request; completed/error or explicit output/error MUST map to
 `ToolResultReturned`.
 The adapter MUST NOT emit ToolProposed,
 ToolExecutionStarted, ToolExecutionCompleted, inferred success, or a
-source-success status except the bounded completed-command observation below.
+source-success status except the bounded completed-command and FileChange results below.
 A state-only generic record MAY use parsed canonical
 `Unknown` status solely to satisfy the Tool body's minimum without claiming
 execution or success.
@@ -418,7 +418,7 @@ generic metadata ignore mechanism SHALL be added.
 
 All three Codex identities SHALL accept only exact outer `event_msg`, direct
 object payload `type: item_completed`, and object `item` tagged exactly
-`AgentMessage`, `UserMessage`, `Reasoning`, or `CommandExecution`.
+`AgentMessage`, `UserMessage`, `Reasoning`, `CommandExecution`, or `FileChange`.
 
 #### Scenario: Typed coordinates preserve replay without retaining reasoning
 
@@ -711,6 +711,73 @@ when unambiguous.
 
 - **WHEN** a completed command enters analytics or timeline
 - **THEN** no OS facts are invented, oversize rejects and timeline labels it a result
+
+### Requirement: Completed FileChange preserves reported patch evidence
+
+At public Codex commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`,
+`protocol/src/items.rs:411-426` defines FileChangeItem, and
+`protocol/src/protocol.rs:4225-4239,3764-3770` defines its changes and status.
+The adapter SHALL map one owned FileChange item to one ToolResultReturned and
+one native ToolResult, with zero invocation contributions. It SHALL NOT invent
+a tool name, arguments, request, call linkage, execution stage or File observation.
+Existing typed owner/turn/item identity, response correlation, source ordinals,
+root correlation, provenance, fidelity and Unsupported ToolExecution SHALL apply.
+
+#### Scenario: Multi-path patch remains one reported result
+
+- **WHEN** any exact Codex identity acquires an owned FileChange with add, delete and update entries
+- **THEN** one structured `tool.result` retains the entire changes map, each exact change type, add/delete `content`, update `unified_diff`, and absent/null/string `move_path`
+- **AND** native accounting counts the physical item once, and raw requests/results remain distinct
+
+### Requirement: FileChange optional fields do not invent success
+
+Only source `changes`, `status`, `auto_approved`, `stdout` and `stderr` SHALL
+enter the structured result. Optional fields SHALL preserve missing, null and
+returned values. Present non-null status SHALL accept only completed, failed or
+declined, mapping to reported Succeeded, Failed or Denied and exact reported
+`tool.source_status`. Missing/null status SHALL create neither `tool.reported_status`
+nor `tool.source_status`; the structured result SHALL distinguish an omitted
+status from explicit `tool.result.status: null`. These statuses
+SHALL NOT assert OS effects, guaranteed file state, approval or absence of effects.
+
+#### Scenario: Missing status is not completed success
+
+- **WHEN** an item_completed FileChange omits status or reports null
+- **THEN** the patch result remains visible without reported status or a source-status facet
+- **AND** invalid status or malformed supported fields reject atomically with content-free errors
+
+### Requirement: FileChange selectors read only supported patch fields
+
+The adapter SHALL populate parsed `tool.searchable_result` from only changed path
+keys, change-kind-labeled content/diff/move fields and optional stdout/stderr,
+in canonical sorted path order. This single-line search view SHALL fold CR/LF to
+spaces; the structured result SHALL retain the native text under existing NFC
+behavior. Deletion content and both sides of a diff SHALL remain reported patch
+evidence, never an assertion of newly written content. Arbitrary item/change
+fields SHALL NOT be serialized into search text or retained in the result.
+An empty changes map SHALL remain an explicit structured result.
+
+#### Scenario: Canonical production selectors can match a patch and exclude a benign counterpart
+
+- **WHEN** a synthetic patch contains a test-local signature in a supported path, content, diff or move field
+- **THEN** existing tool result selectors and production embedding/CLI evaluation can match it, while an ordinary patch does not match
+- **AND** Event 3.0 serialization and persisted state do not disclose controlled secret markers
+
+### Requirement: FileChange retains bounded failures and unrelated quarantine
+
+Existing structured result, searchable-field, semantic and source bounds SHALL
+remain unchanged, including 64-byte path keys, 32 changes-map members, 4,096-byte
+strings and 16,384 encoded structured-value bytes. The assembled search view
+SHALL also satisfy its existing string bound. Oversize SHALL quarantine the
+entire physical item as `unbounded_value` with safe bound context, without a
+truncated success or partial patch. Unknown change kinds SHALL quarantine as
+`unsupported_completed_item`. Foreign-thread and conflicting-owner behavior,
+unrelated completed-item quarantine, auxiliaries and reasoning SHALL be unchanged.
+
+#### Scenario: Over-budget or unsupported patch does not hide supported neighbors
+
+- **WHEN** a source contains a supported neighbor followed by an oversized patch or unknown change variant
+- **THEN** only that physical item is quarantined, accounting and completion coverage remain partial, and diagnostics expose no patch values or paths
 
 ### Requirement: Unknown input fails closed without leakage
 

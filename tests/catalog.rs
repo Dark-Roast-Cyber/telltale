@@ -15,7 +15,8 @@ use telltale_rules::{
     DetectionDefinition, RuleDefinition, SUPPORTED_DETECTION_CONDITIONS, SUPPORTED_RULE_TARGETS,
 };
 use telltale_schema::event::{
-    VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SEVERITIES, VALID_SIGNAL_TYPES,
+    VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_DETECTION_SEVERITIES, VALID_SEVERITIES,
+    VALID_SIGNAL_TYPES,
 };
 use telltale_sources::clients::{PathRoot, SourcePattern, supported_clients};
 
@@ -136,8 +137,9 @@ fn rule_vocabulary_catalog() -> Value {
         "signal_types": VALID_SIGNAL_TYPES,
         "analytic_intents": VALID_ANALYTIC_INTENTS,
         "severities": {
-            "values": VALID_SEVERITIES,
-            "checked_by": "event construction; telltale rules validate does not check severity yet",
+            "values": VALID_DETECTION_SEVERITIES,
+            "checked_by": "Rule v1 compilation (including telltale rules validate)",
+            "event3_global_values": VALID_SEVERITIES,
         },
         "atlas_tag_prefix": "atlas:",
     })

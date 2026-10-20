@@ -340,6 +340,39 @@ identity, matcher, and scoring behavior.
 - **WHEN** a supported version-1 pack is resolved
 - **THEN** tier, override, provenance, identity, matcher and score behavior remain intact
 
+### Requirement: Shared Rule v1 compilation validates severity before activation
+
+Shared Rule v1 compilation SHALL reject an effective rule whose `severity` is
+outside the supported detection vocabulary: `informational`, `low`, `medium`,
+`high`, and `critical`. The error SHALL name the rule and list those supported
+values. CLI validation, scan activation, and embedding construction SHALL use
+this check rather than defer invalid severity to canonical detection compilation
+or event emission. Shared validation and canonical detection compilation SHALL
+agree on accepted severity values. The global Event 3.0 operational value
+`warning` SHALL remain supported for operational events, not as a rule severity
+or detection-severity alias.
+
+`status` SHALL remain optional descriptive metadata, not a closed vocabulary or
+an enablement control. `category` SHALL remain an open behavior label rather than
+a new closed vocabulary. Existing enabled and policy filtering SHALL be preserved.
+
+#### Scenario: Invalid severity fails before output or state activation
+
+- **WHEN** an effective Rule v1 rule declares `severity: warning` or `severity: catastrophic`
+- **THEN** shared compilation and `rules validate` fail with the supported values
+- **AND** a scan using that rule fails before output or state activation
+
+#### Scenario: Every accepted detection severity compiles on all rule input paths
+
+- **WHEN** an ordinary rule document or package uses any supported detection severity
+- **THEN** shared validation, canonical detection compilation, and embedding construction succeed
+
+#### Scenario: Custom status and category do not invalidate an otherwise valid rule
+
+- **WHEN** a rule declares a supported detection severity, `status: not_a_status`,
+  and `category: not_a_category`
+- **THEN** it compiles with that category and existing enablement behavior
+
 ### Requirement: Rule v1 exposes one effective read-only compatibility view
 
 `telltale-rules` MUST expose only an effective read-only Rule v1 compatibility
@@ -1115,7 +1148,8 @@ fails to load.
 #### Scenario: Pipeline construction rejects content that cannot scan
 
 - **WHEN** a rule document has an unknown severity or an out-of-range score
-- **THEN** `build()` fails with `Compilation` carrying the canonical cause, and no pipeline exists whose scans all fail
+- **THEN** `build()` fails with `Compilation` carrying the shared Rule v1 severity
+  validation cause or canonical score cause, and no pipeline exists whose scans all fail
 
 ### Requirement: Action identities are pinned to algorithm versions
 
