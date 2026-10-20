@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "e926c634095b5c6d97c35e621cb1a8deb7bdd3e5171a92124297316c51b48d48",
+    "manifest_sha256": "9ddf0a7abd79f7b273e577f0c1dd44095cf29bfd4fecb5fd90b27329ed20b6bd",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -42,19 +42,19 @@
   "characterization": {
     "note": "Signal and severity characterization of current detector output. Positive-risk (score > 0) is not a false-positive rate and is not the primary efficacy classifier.",
     "positive_risk": {
-      "numerator": 32,
+      "numerator": 34,
       "denominator": 48,
-      "value": 0.6666666666666666
+      "value": 0.7083333333333334
     },
     "non_informational": {
-      "numerator": 31,
+      "numerator": 33,
       "denominator": 48,
-      "value": 0.6458333333333334
+      "value": 0.6875
     },
     "review_or_higher": {
-      "numerator": 21,
+      "numerator": 23,
       "denominator": 48,
-      "value": 0.4375
+      "value": 0.4791666666666667
     },
     "security_review_required": {
       "numerator": 13,
@@ -69,9 +69,9 @@
     "severity_distribution": {
       "critical": 9,
       "high": 4,
-      "informational": 17,
+      "informational": 15,
       "low": 10,
-      "medium": 8
+      "medium": 10
     }
   },
   "efficacy": {
@@ -186,6 +186,8 @@
       "exfil.outbound_upload": [
         "BC-ENCODED-HTTP-001",
         "BC-UPLOAD-001",
+        "CE-COMMAND-DECLINED",
+        "CE-COMMAND-FAILURE",
         "RX-HARVEST-EXFIL-001",
         "RX-OUTBOUND-001"
       ],
@@ -457,9 +459,9 @@
       "fn": 0
     },
     "exfil.outbound_upload": {
-      "tp": 4,
+      "tp": 6,
       "fp": 0,
-      "tn": 33,
+      "tn": 31,
       "fn": 0
     },
     "install.package_manager": {
@@ -531,7 +533,7 @@
   },
   "contribution_conformance": {
     "exact_expected_total_checks": 48,
-    "contribution_id_point_checks": 58,
+    "contribution_id_point_checks": 60,
     "failures": []
   },
   "source_coverage": {
@@ -1068,10 +1070,18 @@
       "expected_security_review": "required",
       "label_rationale": "A proposed unauthorized transfer of project secrets merits review despite a reported declined outcome, which proves neither user refusal nor zero effects.",
       "observed_security_review": false,
-      "observed_severity": "informational",
-      "score": 0,
-      "matched_rule_ids": [],
-      "contributions": [],
+      "observed_severity": "medium",
+      "score": 60,
+      "matched_rule_ids": [
+        "exfil.outbound_upload"
+      ],
+      "contributions": [
+        {
+          "id": "exfil.outbound_upload",
+          "type": "deterministic_rule",
+          "points": 60
+        }
+      ],
       "efficacy_result": "fn",
       "conformance_failures": []
     },
@@ -1082,10 +1092,18 @@
       "expected_security_review": "required",
       "label_rationale": "An unauthorized attempt to transfer project secrets warrants review even if the producer reports failure; no successful transfer is asserted.",
       "observed_security_review": false,
-      "observed_severity": "informational",
-      "score": 0,
-      "matched_rule_ids": [],
-      "contributions": [],
+      "observed_severity": "medium",
+      "score": 60,
+      "matched_rule_ids": [
+        "exfil.outbound_upload"
+      ],
+      "contributions": [
+        {
+          "id": "exfil.outbound_upload",
+          "type": "deterministic_rule",
+          "points": 60
+        }
+      ],
       "efficacy_result": "fn",
       "conformance_failures": []
     },

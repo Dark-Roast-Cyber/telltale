@@ -238,7 +238,8 @@ absence and MUST NOT be hashed, fabricated, or treated as a mapping error.
 Every populated canonical body field and facet MUST have exactly one matching
 `FactMetadata` entry. The adapter MAY add only clear `command.text` and
 `resource.path` Tool facets, with parsed provenance, except the closed completed-item
-facets and reported cwd specified below, and MUST never emit File,
+facets, the derived completed-command `command.text` facet, and reported cwd
+specified below, and MUST never emit File,
 Process, Network, Session, or Inference observations from those facets or from
 Codex metadata. `payload.source` is metadata only and MUST NOT imply execution.
 
@@ -641,13 +642,35 @@ atomically.
 It SHALL map to ToolResultReturned with native ToolResult accounting,
 not ToolCall, execution stages or invocation contributions. item.id SHALL supply
 call_id independently of raw response.id. argv SHALL remain structured
-tool.arguments, never space-joined, with no invented tool name or command-text
-facet.
+tool.arguments, never space-joined, with no invented tool name.
+
+The observation SHALL carry a `command.text` facet with Derived provenance whose
+value is the POSIX shell-quoted rendering of argv: an element that is non-empty
+and consists only of ASCII letters, digits and `_@%+=:,./-` is emitted unchanged;
+an empty element is `''`; any other element is enclosed in single quotes with each
+embedded single quote written as `'\''`; elements are separated by one space. A
+POSIX shell parsing the facet SHALL yield exactly argv. The facet SHALL NOT imply
+execution and SHALL NOT produce Process, File, or Network facts. When the
+rendering does not fit the canonical facet or aggregate bounds, the facet SHALL be
+omitted and the ToolResult SHALL otherwise be unchanged; it SHALL NOT be rejected
+or truncated for that reason.
 
 #### Scenario: Codex completed command identity and arguments remain native
 
 - **WHEN** a terminal CommandExecution is projected
 - **THEN** it is a ToolResult with native call ID and structured argv, not a ToolCall
+
+#### Scenario: Completed argv has a derived shell-quoted command view
+
+- **WHEN** a terminal CommandExecution has argv `["/bin/sh","-c","printf 'a b'",""]`
+- **THEN** `tool.arguments` is that structured array
+- **AND** `command.text` is `/bin/sh -c 'printf '\''a b'\''' ''` with Derived provenance
+- **AND** no Process, File, or Network observation is emitted
+
+#### Scenario: Oversize rendering is omitted, not rejected
+
+- **WHEN** the shell-quoted rendering of valid argv exceeds a canonical bound
+- **THEN** the ToolResult is emitted without `command.text` and is otherwise identical
 
 ### Requirement: Codex completed command output preserves absence and values
 

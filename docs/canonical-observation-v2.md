@@ -276,8 +276,16 @@ mirrors; it is not a deduplicated canonical count.
 
 Terminal commands map to `ToolResultReturned` and native `ToolResult`, never
 invocation contributions or execution stages. `item.id` supplies `call_id`,
-not the distinct raw response ID. Structured argv remains `tool.arguments`;
-no argv joining, tool-name invention or command-text facet is performed.
+not the distinct raw response ID. Structured argv remains `tool.arguments`
+and no tool name is invented. A `command.text` facet with Derived provenance
+gives command selectors a POSIX shell-quoted rendering of argv: safe elements
+(ASCII letters, digits and `_@%+=:,./-`) unchanged, an empty element as `''`, any
+other element single-quoted with embedded quotes written as `'\''`, separated by
+single spaces, so a POSIX shell parses it back into exactly argv. It is not
+execution evidence. A rendering that does not fit the facet or aggregate bounds
+is omitted rather than rejecting or truncating the result. Space or newline
+joining and a selector-level array join were rejected: the first two lose element
+boundaries, and the last would flatten arbitrary arrays for every source.
 Optional exit/output fields retain presence, null, empty and returned values
 in `tool.result`. The source status remains `tool.source_status`, with
 completed/failed/declined mapped to reported Succeeded/Failed/Denied. These are

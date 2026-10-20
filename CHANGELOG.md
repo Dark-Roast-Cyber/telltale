@@ -46,6 +46,14 @@
   per-case difference from the core-only golden that is not listed. Counts stay
   separate per profile. The CLI canonical-efficacy test pins both profiles with
   a cleared environment. No runtime behavior changes.
+- Codex completed `CommandExecution` results now carry a Derived `command.text`
+  facet: a POSIX shell-quoted rendering of argv that a shell parses back into
+  exactly argv. Argv stays structured in `tool.arguments`, and no execution,
+  Process, File, or Network fact is added. Command and argument rules in every
+  rule profile now see completed commands. A request and its completed result
+  still count each rule once per session, though both can appear as evidence
+  anchors. A rendering that does not fit the canonical bounds is omitted rather
+  than rejecting the result.
 - Add rule packages and enable community rules by default. Telltale now embeds
   the `telltale.community` package (rule IDs `tdx.*`, Apache-2.0) from the
   community detections repository: Git hook path changes, MCP server

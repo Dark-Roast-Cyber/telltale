@@ -97,7 +97,7 @@ cases:
     expected_security_review: required
     label_rationale: An unauthorized attempt to transfer project secrets warrants review even if the producer reports failure; no successful transfer is asserted.
     expected_visibility: {required_record_kinds: [tool_result], optional_fields: [arguments, content], unavailable_fields: [pid, parent_pid, tool_name, timestamp]}
-    expected_detection: {rule_expectations: [{rule_id: exfil.outbound_upload, expectation: expected_absent}], exact_rule_set: true, expected_score: 0, expected_contributions: []}
+    expected_detection: {rule_expectations: [{rule_id: exfil.outbound_upload, expectation: expected_match}], exact_rule_set: true, expected_score: 60, expected_contributions: [{id: exfil.outbound_upload, type: deterministic_rule, points: 60}]}
     tags: [synthetic, canonical_efficacy, command_outcome, source_conformance, efficacy, characterization]
 
   - id: CE-COMMAND-DECLINED
@@ -108,7 +108,7 @@ cases:
     expected_security_review: required
     label_rationale: A proposed unauthorized transfer of project secrets merits review despite a reported declined outcome, which proves neither user refusal nor zero effects.
     expected_visibility: {required_record_kinds: [tool_result], optional_fields: [arguments, content], unavailable_fields: [pid, parent_pid, tool_name, timestamp]}
-    expected_detection: {rule_expectations: [{rule_id: exfil.outbound_upload, expectation: expected_absent}], exact_rule_set: true, expected_score: 0, expected_contributions: []}
+    expected_detection: {rule_expectations: [{rule_id: exfil.outbound_upload, expectation: expected_match}], exact_rule_set: true, expected_score: 60, expected_contributions: [{id: exfil.outbound_upload, type: deterministic_rule, points: 60}]}
     tags: [synthetic, canonical_efficacy, command_outcome, source_conformance, efficacy, characterization]
 
   - id: CE-OVERRIDE-DOC-BENIGN
