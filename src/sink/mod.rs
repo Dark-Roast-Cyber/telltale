@@ -763,9 +763,12 @@ impl SinkSet {
             // Every sink receives its own share, even after a slow predecessor.
             // The time budget stops new attempts; an in-flight attempt retains
             // its configured transport deadline. Unselected rows remain pending.
-            let started = std::time::Instant::now();
+            let started = clock.monotonic_now();
             for row in 0..16 {
-                if row > 0 && started.elapsed() >= std::time::Duration::from_millis(100) {
+                if row > 0
+                    && clock.monotonic_now().duration_since(started)
+                        >= std::time::Duration::from_millis(100)
+                {
                     break;
                 }
                 let Some(ready) = outbox.next_ready_delivery(sink_id, now)? else {
@@ -1269,12 +1272,23 @@ mod tests {
 
     struct FakeClock {
         now: AtomicI64,
+        monotonic: Mutex<std::time::Instant>,
+        dispatch_step: std::time::Duration,
     }
 
     impl FakeClock {
         fn new(now: i64) -> Self {
             Self {
                 now: AtomicI64::new(now),
+                monotonic: Mutex::new(std::time::Instant::now()),
+                dispatch_step: std::time::Duration::ZERO,
+            }
+        }
+
+        fn with_dispatch_step(now: i64, step_millis: u64) -> Self {
+            Self {
+                dispatch_step: std::time::Duration::from_millis(step_millis),
+                ..Self::new(now)
             }
         }
 
@@ -1286,6 +1300,13 @@ mod tests {
     impl DeliveryClock for FakeClock {
         fn now_millis(&self) -> i64 {
             self.now.load(Ordering::SeqCst)
+        }
+
+        fn monotonic_now(&self) -> std::time::Instant {
+            let mut now = self.monotonic.lock().expect("monotonic clock lock");
+            let instant = *now;
+            *now += self.dispatch_step;
+            instant
         }
     }
 
@@ -2210,9 +2231,10 @@ mod tests {
         );
         let events = (0..40).map(|_| make_health_event()).collect::<Vec<_>>();
         sinks.persist_for_durable_replay(&events).unwrap();
-        sinks.deliver_durable().unwrap();
+        let clock = FakeClock::new(1_000);
+        sinks.deliver_durable_with_clock(&clock).unwrap();
         for calls in [&first_calls, &second_calls] {
-            assert!((1..=16).contains(&calls.lock().unwrap().len()));
+            assert_eq!(calls.lock().unwrap().len(), 16);
         }
         let outbox = Outbox::open(&outbox_path).unwrap();
         assert!(events.iter().any(|event| {
@@ -2224,8 +2246,8 @@ mod tests {
                 == DeliveryState::Pending
         }));
         drop(outbox);
-        for _ in 0..40 {
-            sinks.deliver_durable().unwrap();
+        for _ in 0..2 {
+            sinks.deliver_durable_with_clock(&clock).unwrap();
         }
         assert_eq!(first_calls.lock().unwrap().len(), 40);
         assert_eq!(second_calls.lock().unwrap().len(), 40);
@@ -3362,12 +3384,23 @@ mod tests {
 
     #[test]
     fn poison_delivery_is_dead_but_does_not_wedge_a_later_valid_event() {
+        assert_poison_delivery_progress(0, false);
+    }
+
+    #[test]
+    fn poison_delivery_preserves_valid_work_at_the_dispatch_time_boundary() {
+        for (step_millis, deferred) in [(99, false), (100, true), (101, true)] {
+            assert_poison_delivery_progress(step_millis, deferred);
+        }
+    }
+
+    fn assert_poison_delivery_progress(dispatch_step_millis: u64, deferred: bool) {
         let directory = tempdir().expect("temporary directory");
         let outbox_path = directory.path().join("private-outbox/outbox.sqlite");
         let poison = make_health_event();
         let valid = make_health_event();
         seed_pending(&outbox_path, &[&poison, &valid], &["remote"]).expect("seed pending events");
-        {
+        let valid_before = {
             let mut outbox = Outbox::open(&outbox_path).expect("open seeded outbox");
             outbox
                 .record_delivery_at(
@@ -3395,7 +3428,11 @@ mod tests {
                     },
                 )
                 .expect("order valid second");
-        }
+            outbox
+                .get_delivery(&valid.event_id, "remote")
+                .expect("original valid delivery")
+                .expect("original valid row")
+        };
 
         let (sink, calls) = ScriptedDurableSink::new(
             "remote",
@@ -3405,10 +3442,16 @@ mod tests {
             ],
         );
         let sinks = durable_sink_set(&outbox_path, sink, retry_config(3, 10));
-        let clock = FakeClock::new(5_000);
-        sinks
+        let clock = FakeClock::with_dispatch_step(5_000, dispatch_step_millis);
+        let failures = sinks
             .dispatch_durable_with_clock(&clock)
-            .expect("quarantine poison and deliver valid event");
+            .expect("quarantine poison within the dispatch budget");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(
+            failures[0].class,
+            DeliveryErrorClass::SinkApplicationRejected
+        );
+        assert_eq!(failures[0].attempts, 1);
 
         let outbox = Outbox::open(&outbox_path).expect("reopen poison outbox");
         let poison_row = outbox
@@ -3416,9 +3459,59 @@ mod tests {
             .expect("poison delivery")
             .expect("poison row");
         assert_eq!(poison_row.state, DeliveryState::Dead);
+        assert_eq!(poison_row.attempts, 1);
+        assert_eq!(poison_row.next_attempt_at, None);
         assert_eq!(
             poison_row.last_error_class,
             Some(DeliveryErrorClass::SinkApplicationRejected)
+        );
+        if deferred {
+            assert_eq!(calls.lock().expect("calls lock").len(), 1);
+            assert_eq!(
+                outbox
+                    .get_delivery(&valid.event_id, "remote")
+                    .expect("unselected valid delivery")
+                    .expect("unselected valid row"),
+                valid_before
+            );
+            assert_eq!(
+                outbox
+                    .next_ready_delivery("remote", clock.now_millis())
+                    .expect("valid delivery remains eligible")
+                    .expect("ready valid delivery")
+                    .row,
+                valid_before
+            );
+        }
+        let health = outbox.health(&["remote"], 5).expect("poison queue health");
+        assert_eq!(health.sinks[0].dead_count, 1);
+        assert_eq!(health.sinks[0].pending_depth, u64::from(deferred));
+        drop(outbox);
+        drop(sinks);
+
+        let mut sent = calls.lock().expect("calls lock").clone();
+        if deferred {
+            // Budget exhaustion defers selection, not delivery eligibility. A
+            // fresh invocation must recover the untouched row without a delay.
+            let (sink, resumed_calls) =
+                ScriptedDurableSink::new("remote", [ScriptedOutcome::Success]);
+            let restarted = durable_sink_set(&outbox_path, sink, retry_config(3, 10));
+            assert!(
+                restarted
+                    .dispatch_durable_with_clock(&clock)
+                    .expect("deliver valid event after restart")
+                    .is_empty()
+            );
+            sent.extend(resumed_calls.lock().expect("resumed calls lock").clone());
+        }
+
+        let outbox = Outbox::open(&outbox_path).expect("reopen completed poison outbox");
+        assert_eq!(
+            outbox
+                .get_delivery(&poison.event_id, "remote")
+                .expect("persisted poison delivery")
+                .expect("persisted poison row"),
+            poison_row
         );
         assert_eq!(
             outbox
@@ -3428,7 +3521,22 @@ mod tests {
                 .state,
             DeliveryState::Acked
         );
-        assert_eq!(calls.lock().expect("calls lock").len(), 2);
+        for (payload, event) in sent.iter().zip([&poison, &valid]) {
+            assert_eq!(
+                payload,
+                &outbox
+                    .get_event(&event.event_id)
+                    .expect("persisted canonical event")
+                    .expect("canonical event row")
+                    .payload
+            );
+        }
+        assert_eq!(sent.len(), 2);
+        let health = outbox
+            .health(&["remote"], 5)
+            .expect("completed queue health");
+        assert_eq!(health.sinks[0].dead_count, 1);
+        assert_eq!(health.sinks[0].pending_depth, 0);
     }
 
     #[test]
