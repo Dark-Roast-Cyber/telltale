@@ -13,6 +13,26 @@ assert!(rules.rule_count() > 0);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+`package` validates `telltale-rule-package/v1` documents: identified, versioned,
+namespaced Rule v1 content that only adds definitions. The community package
+(`telltale.community`, namespace `tdx`) is embedded from a published release of
+the community detections repository; `scripts/dev/vendor-community-rules.py`
+refreshes it. `resolve_rule_packages` selects the effective packages, letting a
+supplied community package replace the embedded snapshot:
+
+```rust
+use telltale_rules::package::{CommunityRules, RulePackage, resolve_rule_packages};
+
+let supplied: Vec<RulePackage> = Vec::new(); // RulePackage::parse(&text)? per package
+let mut rule_sets = vec![telltale_rules::bundled_default_rule_set()?];
+for resolved in resolve_rule_packages(CommunityRules::Embedded, supplied)? {
+    rule_sets.extend(resolved.package.into_documents());
+}
+let rules = telltale_rules::compile_rule_sets(rule_sets, None)?;
+assert!(rules.rule_count() > 0);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 `CompiledRuleSet::compatibility_export()` exposes the effective compiled Rule v1
 semantics used by the public provenance manifest. The export's
 `evaluate_matched()` supplies the same session-level Rule v1 content decisions

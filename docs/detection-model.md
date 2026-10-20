@@ -75,16 +75,18 @@ the pack for a scan.
 
 ## Configurable Rules And Policies
 
-Telltale loads bundled default rules from the binary by default. Repeated `--rules`
-flags add custom YAML files on top of those defaults:
+Telltale loads its bundled core rules and the embedded community rule package
+(`telltale.community`, `tdx.*` IDs) from the binary by default; `--no-community-rules`
+keeps only the core rules. Repeated `--rules` flags add custom YAML files on top
+of those defaults:
 
 ```sh
 telltale scan --once --no-local-config --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
 ```
 
-Use `--no-default-rules` to omit only the embedded bundled pack. Managed
-directories still load; combine it with `--no-local-config` for an explicit
-custom-only rule set:
+Use `--no-default-rules` to omit the embedded core and community content. Managed
+directories and installed rule packages still load; combine it with
+`--no-local-config` for an explicit custom-only rule set:
 
 ```sh
 telltale scan --once --no-local-config --no-default-rules --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
@@ -94,9 +96,10 @@ Custom rule files can also live under local config roots. Telltale checks
 existing `/etc/telltale` and per-user config roots by default; pass
 `--config-dir <path>` to use an explicit root for a command, or
 `--no-local-config` to disable discovery. Rule packs resolve in fixed tier
-order (bundled defaults → `organization-rules.d` → `rules.d` → `ui-rules.d`);
-a higher tier fully replaces a same-ID definition in place, while unique IDs are
-additive. Replacements and winners are available in the provenance columns of
+order (bundled core → rule packages → `organization-rules.d` → `rules.d` →
+`ui-rules.d`); a higher tier fully replaces a same-ID definition in place, while
+unique IDs are additive. Rule packages are namespaced, additive-only files in
+`rule-packages.d`; see [Install](install.md#community-rules-and-rule-packages). Replacements and winners are available in the provenance columns of
 `telltale rules list --verbose` and in `telltale rules validate`. Repeated
 explicit `--rules` files remain an additive-only stage after managed packs, so
 they cannot replace managed definitions.

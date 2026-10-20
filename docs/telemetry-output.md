@@ -269,7 +269,9 @@ otherwise ambiguous zero-detection result without exposing session content:
 - `effective_configuration` reports hashed path provenance for local config,
   log/state resolution, rules and overrides, policy/allowlist selection,
   project config, and startup output selection. Rule sources and replacement
-  winners are identity-hashed. Output projections expose only sink name/type,
+  winners are identity-hashed. `rules.community` is `enabled`, `installed_only`,
+  or `disabled`, and `rules.packages` lists each active rule package's ID,
+  version, content SHA-256, origin, and any replaced embedded version. Output projections expose only sink name/type,
   selection/origin, JSONL destination hashes, secret/TLS posture, and delivery
   posture; endpoints, credentials, credential references, hosts, indices,
   sourcetypes, and CA paths are excluded.

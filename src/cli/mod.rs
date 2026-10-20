@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::paths::{self, PathProfile};
 use crate::rules::{
-    RuleLoadMode, RulePackPaths, RuleResolutionDiagnostics,
+    CommunityRules, RuleLoadMode, RulePackPaths, RuleResolutionDiagnostics,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::sink::config as sink_config;
@@ -257,9 +257,15 @@ struct ScanExecutionArgs {
     #[command(flatten)]
     local_config: LocalConfigCliArgs,
 
-    /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+    /// Do not load bundled defaults (core rules and the embedded community package).
+    /// Managed packs and installed packages remain active; --rules files stay additive.
     #[arg(long)]
     no_default_rules: bool,
+
+    /// Do not load community rules, embedded or installed, and use bundled core rules.
+    /// TELLTALE_COMMUNITY_RULES=0 has the same effect.
+    #[arg(long)]
+    no_community_rules: bool,
 
     /// YAML policy file that selects active rule categories and rule ids.
     #[arg(long)]
@@ -417,9 +423,15 @@ struct ConfigRuleCliArgs {
     #[command(flatten)]
     local_config: LocalConfigCliArgs,
 
-    /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+    /// Do not load bundled defaults (core rules and the embedded community package).
+    /// Managed packs and installed packages remain active; --rules files stay additive.
     #[arg(long)]
     no_default_rules: bool,
+
+    /// Do not load community rules, embedded or installed, and use bundled core rules.
+    /// TELLTALE_COMMUNITY_RULES=0 has the same effect.
+    #[arg(long)]
+    no_community_rules: bool,
 
     /// YAML policy file that selects active rule categories and rule ids.
     #[arg(long)]
@@ -508,9 +520,15 @@ struct RuleConfigCliArgs {
     #[command(flatten)]
     local_config: LocalConfigCliArgs,
 
-    /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+    /// Do not load bundled defaults (core rules and the embedded community package).
+    /// Managed packs and installed packages remain active; --rules files stay additive.
     #[arg(long)]
     no_default_rules: bool,
+
+    /// Do not load community rules, embedded or installed, and use bundled core rules.
+    /// TELLTALE_COMMUNITY_RULES=0 has the same effect.
+    #[arg(long)]
+    no_community_rules: bool,
 
     /// YAML policy file that selects active rule categories and rule ids.
     #[arg(long)]
@@ -524,7 +542,7 @@ struct LocalConfigCliArgs {
     config_dirs: Vec<PathBuf>,
 
     /// Disable local config discovery from organization-rules.d, rules.d, ui-rules.d,
-    /// overrides.d, policies.d, allowlists.d, and outputs.d.
+    /// rule-packages.d, overrides.d, policies.d, allowlists.d, and outputs.d.
     #[arg(long)]
     no_local_config: bool,
 }
@@ -602,6 +620,7 @@ impl ScanExecutionArgs {
             &self.rule_paths,
             self.policy.as_deref(),
             self.allowlist.as_deref(),
+            community_rules(self.no_community_rules),
         )?;
         let loaded_outputs = sink_config::load_outputs_config_with_delivery(
             &resolved_config.discovered.output_paths,
@@ -845,7 +864,37 @@ fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json
                     .collect::<Vec<_>>(),
             }))
             .collect::<Vec<_>>(),
+        "packages": diagnostics
+            .packages
+            .iter()
+            .map(|package| serde_json::json!({
+                "id": terminal_identifier("package", &package.id),
+                "version": terminal_identifier("package-version", &package.version),
+                "content_sha256": package.content_sha256,
+                "origin": if package.embedded { "embedded" } else { "installed" },
+                "replaced_embedded_version": package
+                    .replaced_embedded_version
+                    .as_deref()
+                    .map(|version| terminal_identifier("package-version", version)),
+            }))
+            .collect::<Vec<_>>(),
     })
+}
+
+fn community_rules(no_community_rules: bool) -> CommunityRules {
+    if no_community_rules || !crate::config::community_rules_enabled() {
+        CommunityRules::Disabled
+    } else {
+        CommunityRules::Embedded
+    }
+}
+
+fn community_rules_name(community: CommunityRules, no_default_rules: bool) -> &'static str {
+    match community {
+        CommunityRules::Disabled => "disabled",
+        CommunityRules::Embedded if !no_default_rules => "enabled",
+        CommunityRules::Embedded | CommunityRules::SuppliedOnly => "installed_only",
+    }
 }
 
 fn output_snapshot_value(
@@ -961,9 +1010,12 @@ fn effective_configuration_base(
         },
         "rules": {
             "default_enabled": !no_default_rules,
+            "community": community_rules_name(resolved_config.rule_pack_paths.community, no_default_rules),
             "path_hashes": path_hashes(&resolved_config.rule_paths),
+            "package_path_hashes": path_hashes(&resolved_config.rule_pack_paths.packages),
             "sources": Vec::<String>::new(),
             "provenance": Vec::<serde_json::Value>::new(),
+            "packages": Vec::<serde_json::Value>::new(),
         },
         "overrides": {
             "path_hashes": path_hashes(&resolved_config.override_paths),
@@ -1017,6 +1069,8 @@ impl RuleConfigCliArgs {
             organization: discovered.organization_rule_paths.clone(),
             deployment: discovered.deployment_rule_paths.clone(),
             local: discovered.local_rule_paths.clone(),
+            packages: discovered.rule_package_paths.clone(),
+            community: community_rules(self.no_community_rules),
         };
         Ok(ResolvedRuleConfig {
             explicit_rule_paths: self.rule_paths.clone(),
@@ -1053,6 +1107,7 @@ fn resolve_scan_config(
     rule_paths: &[PathBuf],
     policy: Option<&Path>,
     allowlist: Option<&Path>,
+    community: CommunityRules,
 ) -> Result<ResolvedScanConfig, Box<dyn std::error::Error>> {
     let discovered = crate::config::discover_local_config_files(
         &local_config.config_dirs,
@@ -1065,6 +1120,8 @@ fn resolve_scan_config(
         organization: discovered.organization_rule_paths.clone(),
         deployment: discovered.deployment_rule_paths.clone(),
         local: discovered.local_rule_paths.clone(),
+        packages: discovered.rule_package_paths.clone(),
+        community,
     };
     let policy_path = crate::config::resolve_policy_path(policy, &discovered.policy_paths)?;
     let allowlist_path =
@@ -1115,6 +1172,7 @@ impl ConfigRuleCliArgs {
             &self.rule_paths,
             self.policy.as_deref(),
             self.allowlist.as_deref(),
+            community_rules(self.no_community_rules),
         )?;
         let resolution =
             resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
@@ -1266,6 +1324,9 @@ fn run_config_validate(config: &ConfigRuleCliArgs) -> Result<(), Box<dyn std::er
                 "paths": display_paths(&resolved_config.rule_paths),
                 "explicit_count": config.rule_paths.len(),
                 "discovered_count": resolved_config.discovered.rule_paths.len(),
+                "community": community_rules_name(resolved_config.rule_pack_paths.community, config.no_default_rules),
+                "package_paths": display_paths(&resolved_config.rule_pack_paths.packages),
+                "packages": rule_diagnostics["packages"],
                 "provenance": rule_diagnostics["provenance"],
                 "sources": rule_diagnostics["sources"],
             },
@@ -1539,6 +1600,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "policy": resolution.rule_set.policy_name().map(|name| opaque_identifier("policy", name)),
                         "sources": diagnostics["sources"],
                         "provenance": diagnostics["provenance"],
+                        "packages": diagnostics["packages"],
                     }))?
                 );
             }

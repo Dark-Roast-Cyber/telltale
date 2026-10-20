@@ -45,6 +45,7 @@ avoid another status file, duplicate plan, or decision catalog.
 | Runtime evaluator, scoring, and process chains? | [Detection v2](detection-v2.md), [detection model](detection-model.md), [process-chain detections](process-chain-detections.md) |
 | Rule quality, categories, and examples? | [Detection content standard](detection-content-standard.md), [threat taxonomy](threat-taxonomy.md), [ATLAS coverage](../MITRE_ATLAS_COVERAGE.md), [use cases](use-cases.md) |
 | Rule v1 field names, targets, and accepted values as data? | [Rule vocabulary](catalog/rule-vocabulary.json), generated from the validator |
+| Community rules, rule packages, or opting out? | [Install: community rules and rule packages](install.md#community-rules-and-rule-packages), [rule-packages spec](../openspec/specs/rule-packages/spec.md) |
 | Policy configuration versus enforcement? | [Policy modes](policy-modes.md), [policy authoring](agent-policy-authoring.md) |
 | Event 3.0 schema, local output, and sinks? | [Telemetry output](telemetry-output.md) |
 | Rust embedding, action findings, and investigation? | [Embedding](embedding.md), [core package](../crates/telltale/README.md) |

@@ -262,6 +262,7 @@ fn run_scan_for_platform(
         let mut rules = effective_configuration["rules"].clone();
         rules["sources"] = diagnostics["sources"].clone();
         rules["provenance"] = diagnostics["provenance"].clone();
+        rules["packages"] = diagnostics["packages"].clone();
         rules
     };
     let rule_count = rule_set.rule_count();

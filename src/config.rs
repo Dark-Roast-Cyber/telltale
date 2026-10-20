@@ -10,6 +10,7 @@ pub struct LocalConfigFiles {
     pub deployment_rule_paths: Vec<PathBuf>,
     pub local_rule_paths: Vec<PathBuf>,
     pub rule_paths: Vec<PathBuf>,
+    pub rule_package_paths: Vec<PathBuf>,
     pub override_paths: Vec<PathBuf>,
     pub policy_paths: Vec<PathBuf>,
     pub allowlist_paths: Vec<PathBuf>,
@@ -24,6 +25,14 @@ pub enum LocalConfigDiscoveryKind {
 
 pub(crate) fn process_chain_detections_enabled() -> bool {
     std::env::var("TELLTALE_PROCESS_CHAIN_DETECTIONS")
+        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true)
+}
+
+/// `TELLTALE_COMMUNITY_RULES=0` opts a process out of community rules, like
+/// `--no-community-rules`, for services whose arguments are fixed.
+pub(crate) fn community_rules_enabled() -> bool {
+    std::env::var("TELLTALE_COMMUNITY_RULES")
         .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
         .unwrap_or(true)
 }
@@ -60,6 +69,7 @@ pub fn discover_local_config_files(
         deployment_rule_paths,
         local_rule_paths,
         rule_paths,
+        rule_package_paths: discover_yaml_files(&roots, "rule-packages.d")?,
         override_paths: discover_yaml_files(&roots, "overrides.d")?,
         policy_paths: discover_yaml_files(&roots, "policies.d")?,
         allowlist_paths,

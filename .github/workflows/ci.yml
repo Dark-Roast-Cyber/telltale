@@ -189,6 +189,15 @@ jobs:
       - name: Verify Windows release runtime imports
         shell: pwsh
         run: .\scripts\verify-windows-runtime.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe
+      - name: Test read-only host verification in both PowerShell versions
+        shell: pwsh
+        run: |
+          .\tests\build_windows_development.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\build_windows_development.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell build helper regressions failed' }
+          .\tests\windows_host_verification.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\windows_host_verification.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell host verifier regressions failed' }
       - name: Smoke-test Windows release binary
         shell: pwsh
         run: |

@@ -185,7 +185,7 @@ fn rules_list_and_validate_default_rules() {
     );
     let summary: Value = serde_json::from_slice(&validate.stdout).expect("summary json");
     assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["rule_count"], 18);
+    assert_eq!(summary["rule_count"], crate::default_rule_count());
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn rules_serve_exposes_read_only_rule_summary_endpoint() {
         .expect("response body");
     let summary: Value = serde_json::from_str(body).expect("rules json");
     assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["rule_count"], 18);
+    assert_eq!(summary["rule_count"], crate::default_rule_count());
     assert!(
         summary["rules"]
             .as_array()
@@ -2872,8 +2872,15 @@ suppressions:
 
 #[test]
 fn rules_coverage_reports_fixture_and_client_coverage() {
+    // Core rules need local fixtures; community rules carry their scenario
+    // evidence in the community repository instead.
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["rules", "coverage", "--no-local-config"])
+        .args([
+            "rules",
+            "coverage",
+            "--no-local-config",
+            "--no-community-rules",
+        ])
         .output()
         .expect("run telltale rules coverage");
     assert!(
@@ -3063,4 +3070,201 @@ fn rules_coverage_sanitizes_the_root_path_in_operator_output() {
         "rules coverage retained a controlled root marker"
     );
     assert!(text.contains("[sensitive-path]"));
+}
+
+fn community_rule_ids() -> Vec<String> {
+    let community =
+        telltale_rules::package::bundled_community_package().expect("community package");
+    let ids = community
+        .documents()
+        .iter()
+        .flat_map(|document| document.rules.iter().map(|rule| rule.id.clone()))
+        .collect::<Vec<_>>();
+    assert!(!ids.is_empty(), "embedded community package has rules");
+    ids
+}
+
+fn listed_rule_ids(args: &[&str], community_env: Option<&str>) -> Vec<String> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command.args(["rules", "list"]).args(args);
+    command.env_remove("TELLTALE_COMMUNITY_RULES");
+    if let Some(value) = community_env {
+        command.env("TELLTALE_COMMUNITY_RULES", value);
+    }
+    let output = command.output().expect("run telltale rules list");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split('\t').next())
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn community_package_yaml(version: &str, rule_id: &str) -> String {
+    format!(
+        r#"format: telltale-rule-package/v1
+id: telltale.community
+version: "{version}"
+publisher: Synthetic community
+license: Apache-2.0
+rule_namespace: tdx
+documents:
+  - version: 1
+    description: Synthetic community release.
+    defaults:
+      case_insensitive: true
+      enabled: true
+    rules:
+      - id: {rule_id}
+        category: persistence
+        severity: low
+        score: 20
+        targets: [command]
+        regex: 'synthetic-community-marker'
+        tags: [synthetic]
+        explanation: Synthetic community rule.
+    modifiers: []
+"#
+    )
+}
+
+#[test]
+fn community_rules_load_by_default_and_every_opt_out_removes_them() {
+    let community = community_rule_ids();
+    let default = listed_rule_ids(&["--no-local-config"], None);
+    assert_eq!(default.len(), crate::default_rule_count());
+    for id in &community {
+        assert!(default.contains(id), "default rules omit {id}");
+    }
+    assert!(default.iter().any(|id| id == "secret.env.read"));
+
+    let temp = tempdir().expect("tempdir");
+    let custom = temp.path().join("custom.yaml");
+    fs::write(
+        &custom,
+        r#"version: 1
+description: Synthetic custom rules.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: custom.synthetic.marker
+    category: persistence
+    severity: low
+    score: 20
+    targets: [command]
+    regex: 'synthetic-custom-marker'
+    tags: [synthetic]
+    explanation: Synthetic custom rule.
+modifiers: []
+"#,
+    )
+    .expect("custom rules");
+    let custom = custom.to_string_lossy().into_owned();
+    for (args, env) in [
+        (vec!["--no-local-config", "--no-community-rules"], None),
+        (vec!["--no-local-config"], Some("0")),
+        (
+            vec![
+                "--no-local-config",
+                "--no-default-rules",
+                "--rules",
+                custom.as_str(),
+            ],
+            None,
+        ),
+    ] {
+        let listed = listed_rule_ids(&args, env);
+        for id in &community {
+            assert!(!listed.contains(id), "{args:?} {env:?} still loads {id}");
+        }
+    }
+}
+
+#[test]
+fn installed_community_package_replaces_the_embedded_snapshot() {
+    let temp = tempdir().expect("tempdir");
+    let packages = temp.path().join("rule-packages.d");
+    fs::create_dir_all(&packages).expect("package dir");
+    fs::write(
+        packages.join("community.yaml"),
+        community_package_yaml("99.0.0", "tdx.synthetic.newer_release"),
+    )
+    .expect("package");
+    let config_dir = temp.path().to_string_lossy().into_owned();
+
+    let listed = listed_rule_ids(&["--config-dir", &config_dir], None);
+    assert!(listed.contains(&"tdx.synthetic.newer_release".to_string()));
+    for id in community_rule_ids() {
+        assert!(!listed.contains(&id), "embedded {id} was not replaced");
+    }
+    // Without bundled defaults the installed community package is managed
+    // content and still loads; the community opt-out removes it everywhere.
+    let custom_only = listed_rule_ids(&["--config-dir", &config_dir, "--no-default-rules"], None);
+    assert_eq!(custom_only, ["tdx.synthetic.newer_release"]);
+    let opted_out = listed_rule_ids(&["--config-dir", &config_dir, "--no-community-rules"], None);
+    assert!(!opted_out.iter().any(|id| id.starts_with("tdx.")));
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "validate", "--config-dir", &config_dir])
+        .env_remove("TELLTALE_COMMUNITY_RULES")
+        .output()
+        .expect("run telltale rules validate");
+    assert!(
+        validate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&validate.stdout).expect("summary json");
+    let embedded = telltale_rules::package::bundled_community_package().expect("community package");
+    assert_eq!(
+        summary["packages"],
+        serde_json::json!([{
+            "id": "telltale.community",
+            "version": "99.0.0",
+            "content_sha256": telltale_rules::package::RulePackage::parse(
+                &community_package_yaml("99.0.0", "tdx.synthetic.newer_release")
+            )
+            .expect("package")
+            .content_sha256(),
+            "origin": "installed",
+            "replaced_embedded_version": embedded.version(),
+        }])
+    );
+}
+
+#[test]
+fn installed_packages_add_rules_but_never_replace_core_rules() {
+    let temp = tempdir().expect("tempdir");
+    let packages = temp.path().join("rule-packages.d");
+    fs::create_dir_all(&packages).expect("package dir");
+    let custom = community_package_yaml("1.0.0", "acme.synthetic.marker")
+        .replace("id: telltale.community", "id: acme.rules")
+        .replace("rule_namespace: tdx", "rule_namespace: acme");
+    fs::write(packages.join("acme.yaml"), &custom).expect("package");
+    let config_dir = temp.path().to_string_lossy().into_owned();
+    let listed = listed_rule_ids(&["--config-dir", &config_dir], None);
+    assert!(listed.contains(&"acme.synthetic.marker".to_string()));
+    assert!(listed.contains(&"secret.env.read".to_string()));
+
+    // A package cannot claim a core namespace, so it cannot shadow core IDs.
+    fs::write(
+        packages.join("acme.yaml"),
+        custom
+            .replace("rule_namespace: acme", "rule_namespace: secret")
+            .replace("acme.synthetic.marker", "secret.env.read"),
+    )
+    .expect("package");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "validate", "--config-dir", &config_dir])
+        .output()
+        .expect("run telltale rules validate");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("reserved for core rules"), "{stderr}");
 }

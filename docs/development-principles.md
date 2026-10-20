@@ -203,15 +203,19 @@ prefer explicit replacement or override semantics where superseding content is
 intended. Which source wins, which was overridden, and why should be knowable
 from provenance rather than discovered from behavior.
 
-A future package manifest may carry identity, version, and origin metadata
-needed for this. Do not build a package manager or expand the current
-tiered-resolution behavior to get there; the tier order documented in
-`docs/install.md` remains the current implementation.
+Rule packages (`telltale-rule-package/v1`) are the accepted small manifest:
+one file carries package ID, version, publisher, license, a rule namespace,
+optional source revision, and Rule v1 documents, and Telltale reports each
+active package's content hash. Packages load at one additive-only tier after the
+core rules: they cannot replace core or other package definitions, and their IDs
+must use the package namespace. The embedded community package is replaced only
+as a whole, by a package with the same ID. The [rule-packages
+specification](../openspec/specs/rule-packages/spec.md) and `docs/install.md`
+own the current behavior.
 
-A future small manifest should identify package ID/version, rule-schema
-compatibility, publisher, license, contents, and integrity information.
-
-Do not build a complex package manager prematurely.
+Do not grow this into a package manager: no network fetch, dependency
+resolution, or version solving. Acquisition and signature verification stay with
+release tooling, operators, or an embedding host.
 
 Telltale should know what rule content it loaded, where it came from, which version is active, and whether activation succeeded.
 

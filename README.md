@@ -18,40 +18,29 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> **Runtime contract:** `telltale` (`telltale.exe`) is the headless scanner binary and
-> CLI identity. Runtime configuration uses `TELLTALE_*` names only; unknown
-> inherited non-canonical variables are ignored. Native paths are
-> `telltale-events.jsonl` and
-> `telltale-state.json`, with profile-specific directories documented in the
-> install and telemetry guides.
->
-> The active installer, service, archive, and release-workflow surfaces use the
-> canonical Telltale identity. Event 3.0/SIEM identities remain `telltale_version`,
-> `telltale-<UUIDv4>`, Splunk `index=telltale`, `sourcetype=telltale:json`, and
-> `source=telltale`; historical schemas and records remain immutable. Keep
-> uppercase ADR category terminology and unrelated architecture decision
-> records and fixtures unchanged.
+## Start here
+
+- **Try it:** [Quick start](#quick-start) or [install a release](docs/install.md).
+- **Explore the code:** [CLI](src/cli/), [reusable crates](crates/), and [tests](tests/).
+- **Browse detections:** [Bundled rules](config/rules/) and [synthetic samples](tests/fixtures/rule_samples/).
+- **Embed it:** [Rust API](crates/telltale/src/lib.rs) and [embedding contract](docs/embedding.md).
+- **Check compatibility:** [Source validation matrix](docs/source-validation-matrix.md) and [event schema](schemas/event.schema.json).
+- **Find other guidance:** [Documentation map](docs/README.md).
+- **Learn the practice:** [Agent Archaeology](https://agentarchaeology.ai/).
+
+The command is `telltale` (`telltale.exe` on Windows). See [Install](docs/install.md)
+for `TELLTALE_*` configuration and storage paths, and
+[Telemetry output](docs/telemetry-output.md) for the Event 3.0 contract.
 
 ## Why Telltale exists
 
-Agentic coding is not just “the user typed a prompt and the model answered.” By the time an agent decides to run a command, its input tokens may include:
+Coding agents act on prompts, repository files, web pages, tool results, and
+harness configuration. When an action crosses a trust boundary or drifts from
+user intent, the evidence is scattered across source-specific session stores.
 
-- user prompts and chat history;
-- system, developer, and assistant instructions;
-- tool schemas, MCP descriptions, and tool results;
-- skills, subagents, plugins, and IDE extension context;
-- RAG snippets, documentation, search results, and web pages;
-- repository files, diagnostics, terminal output, and build logs;
-- router or aggregator metadata from services such as model gateways and coding assistants;
-- prior session state, retries, summaries, and the assorted incantations and ceremonies required to keep a long-running agent workflow on the rails.
-
-Some of that is intentional. Some of it is scaffolding. Some of it is simply the reality of how modern agentic systems are built.
-
-That creates a real visibility problem for defenders. SOCs and security teams often do not have a good handle on what agentic coders actually did. A compromised router, poisoned skill, prompt-injected web page, malicious tool response, risky extension, or unexpected model behavior can turn into file reads, shell commands, network calls, credential access, or entire sessions that drift away from user intent. When that happens, the evidence is often scattered across local transcripts, tool logs, and application-specific session stores.
-
-Organizations may define policies for what agents should never do, but those policies are not easy to monitor consistently across many platforms, session formats, and tool surfaces. It is difficult to write detections that scale cleanly from obvious policy violations to broader risky behavior and undesired sessions. Telltale takes a risk-analysis approach: scan local session stores, normalize messages and tool activity, apply detections, score behavior across a session, redact sensitive evidence, and emit structured JSONL telemetry that a SOC can inspect, search, forward, and alert on.
-
-Set it up around your agent session stores and point the output at your alerting pipeline. Telltale is detection-first today: it gives builders and SOCs concrete, redacted telemetry to inspect during or after long-running agent tasks, and it exports that telemetry for downstream response workflows.
+Telltale normalizes those stores, applies deterministic detections, and emits
+redacted JSONL for investigation and alerting. It is detection-first, not an
+active blocking system.
 
 ## What it does
 
@@ -104,9 +93,9 @@ synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
 real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
-For the published 0.7.0 prereleases (current: `v0.7.0-rc.2`), see the
-[0.7.0 migration guide](docs/migrations/0.7.0.md). Stable 0.7.0 is not
-published.
+See [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) for
+published builds and the [0.7.0 migration guide](docs/migrations/0.7.0.md) for that
+upgrade line. A source checkout is not evidence of release qualification.
 
 ## Development verification
 
@@ -129,32 +118,22 @@ release.
 
 ## Cargo packages
 
-The experimental, non-production `telltale-inference`
-crate implements synthetic-tested OpenAI Chat, Anthropic Messages, OpenAI Responses
-HTTP and Ollama native chat normalization subsets. Its crate README defines the
-supported subsets. It is not a gateway, live-provider interoperability claim or
-additional production source.
+The [workspace manifest](Cargo.toml) lists the packages. The official packages are:
 
-The repository remains a Cargo workspace with six official packages. The 0.6.x
-architecture-convergence sequence is complete. The latest published prerelease is
-`v0.7.0-rc.2`; five-platform native verification of that artifact passed in run
-`38098389234` and does not qualify current source. Workspace `0.7.0-rc.3` is
-unpublished preparation. Historical RC1 native qualification passed in run
-`36305581215` using verifier tooling
-`c5c955f57a83cbfc7bd9827932a5e7d54a2fd077` against the immutable published
-artifacts, not the current source. Clean-host qualification and stable promotion
-remain separate.
-Crates.io publication remains intentionally deferred until that public Rust
-surface is stable enough for deliberate external consumers.
+- [`telltale-schema`](crates/telltale-schema/) — shared types and privacy
+- [`telltale-rules`](crates/telltale-rules/) — rule loading and validation
+- [`telltale-sources`](crates/telltale-sources/) — source acquisition
+- [`telltale-detect`](crates/telltale-detect/) — detection and scoring
+- [`telltale-core`](crates/telltale/) — the supported embedding surface (`telltale_core` in Rust)
+- [`telltale-cli`](crates/telltale-cli/) — command-line package
 
-The six official packages are:
+The separate [inference crate](crates/telltale-inference/README.md) is an
+experimental normalizer, not a gateway or additional production source. Its
+README defines the supported subsets.
 
-- `telltale-schema`
-- `telltale-rules`
-- `telltale-sources`
-- `telltale-detect`
-- `telltale-core` — the supported embedding surface (`telltale_core` in Rust)
-- `telltale-cli`
+Exact-artifact qualification evidence lives in [Release readiness](docs/release-readiness.md),
+not in this overview. Qualification of a published artifact does not qualify
+later source changes.
 
 See [Versioning and releases](docs/versioning.md) for the package and `0.x`
 compatibility policy. Until crates.io publication begins, install or build from
@@ -178,23 +157,28 @@ watched session-store directories (including project roots). `watch` rejects
 runtime storage inside those directories before activation, so its own sidecars,
 rotation, and delivery writes cannot trigger source scans. Other directories
 under the broader `--root` remain valid output locations.
-Notification admission is nonblocking and capped at 256 relevant queued events,
-64 relevant paths per event, and 4096 distinct coalesced paths. Ignored access and
-SQLite reader-sidecar notifications do not count toward these caps. Exceeding a
-cap retains an independent full-reconciliation signal, so source changes during
-scanning or delivery are rediscovered on a subsequent scan; watcher errors still
-stop the run. These are application queue limits, not bounds on OS/backend buffers
-or total process memory.
+Watch mode bounds its notification queues and reconciles overflow; watcher errors
+stop the run. See the [watch implementation](src/cli/scan/watch.rs) for current
+limits. Those limits do not bound OS/backend buffers or total process memory.
 
 ### Local rule configuration
+
+Telltale ships bundled core rules and an embedded community rule package
+(`telltale.community`, rule IDs `tdx.*`) from the
+[community detections repository](https://github.com/Dark-Roast-Cyber/telltale-detections);
+both are on by default. Use `--no-community-rules` (or
+`TELLTALE_COMMUNITY_RULES=0`) to run only the core rules.
 
 Telltale discovers local YAML config files under `/etc/telltale` and
 `$XDG_CONFIG_HOME/telltale` (or `$HOME/.config/telltale`) without requiring
 every path on the command line. Managed rule packs resolve in fixed tier order
-(bundled defaults → `organization-rules.d` → `rules.d` → `ui-rules.d`); a
-higher tier fully replaces a same-ID definition in place, while unique IDs are
-additive. `overrides.d` tunes rules without editing source YAML, and
-`policies.d`/`allowlists.d` provide policy and suppression config.
+(bundled core → rule packages → `organization-rules.d` → `rules.d` →
+`ui-rules.d`); a higher tier fully replaces a same-ID definition in place, while
+unique IDs are additive. Rule packages in `rule-packages.d` are versioned,
+namespaced, additive files: install a newer community release or your own
+custom package there without a Telltale release. `overrides.d` tunes rules
+without editing source YAML, and `policies.d`/`allowlists.d` provide policy and
+suppression config.
 
 Use `--config-dir <path>` for explicit config roots, or `--no-local-config` to
 disable discovery. Run `telltale config validate` as the local config preflight
@@ -273,36 +257,23 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 ## Project layout
 
-- `src/` — CLI, scan/watch orchestration, state, and telemetry delivery
-- `crates/` — reusable schema, rules, source acquisition, detection/scoring, and embedding packages; experimental inference normalization and equivalence tests
-- `apps/telltale-console/` — optional read-only local Event3 viewer
-- `tests/` — CLI coverage plus synthetic fixtures
-- `schemas/` — JSON schema for emitted events
-- `config/rules/tool-call-regex.yaml` — bundled detection rules
-- `config/allowlists.yaml` — suppression examples
-- `docs/` — public technical documentation; start at `docs/README.md`
-- `openspec/specs/` — durable public behavioral requirements
+- [`src/`](src/) — CLI, scan/watch orchestration, state, and telemetry delivery
+- [`crates/`](crates/) — reusable packages and experimental inference normalization
+- [`apps/telltale-console/`](apps/telltale-console/) — optional read-only local Event3 viewer
+- [`tests/`](tests/) — CLI coverage plus synthetic fixtures
+- [`schemas/`](schemas/) — JSON schema for emitted events
+- [`config/rules/`](config/rules/) — bundled detection rules
+- [`config/allowlists.yaml`](config/allowlists.yaml) — suppression examples
+- [`docs/`](docs/) — public technical documentation
+- [`openspec/specs/`](openspec/specs/) — durable public behavioral requirements
 
 For project direction and planning ownership, see [ROADMAP.md](ROADMAP.md). Detailed active implementation planning and scratch context are intentionally kept out of the public release boundary.
 
-## Related resources
+## Further guidance
 
-For approachable guides on agentic forensics, Telltale, and the broader Agent Archaeology practice, see [AgentArchaeology.ai](https://agentarchaeology.ai/).
-
-The [documentation map](docs/README.md) is the routing index for this
-repository. Use it to choose the current contract, and do not treat an accepted
-future page as shipped behavior. Start with:
-
-- [Install](docs/install.md) — build, verify, and deploy
-- [Source validation matrix](docs/source-validation-matrix.md) — which source claims are supported
-- [Embedding](docs/embedding.md) — supported Rust host surface
-- [Telemetry output](docs/telemetry-output.md) — current Event 3.0 JSONL and forwarding
-- [0.7.0 migration](docs/migrations/0.7.0.md) — current upgrade line
-
-Formal behavioral requirements live in `openspec/specs/`. Milestone direction
-is [ROADMAP.md](ROADMAP.md). Use the [release readiness checklist](docs/release-readiness.md) before tagging
-or publishing release artifacts; it includes the public repository boundary
-review for staged or tagged content.
+Use the [documentation map](docs/README.md) for contracts and operational guides;
+proposed behavior is labeled separately from shipped behavior. Before tagging or
+publishing release artifacts, follow [Release readiness](docs/release-readiness.md).
 
 ## License
 

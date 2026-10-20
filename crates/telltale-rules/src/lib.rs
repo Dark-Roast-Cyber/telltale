@@ -6,6 +6,7 @@
 //! normalized fields as in-memory values, which keeps the engine reusable for
 //! batch session scanning and future inline inference-proxy evaluation alike.
 
+pub mod package;
 pub mod process_chain;
 pub mod provenance;
 
@@ -368,14 +369,28 @@ pub fn load_rule_set_from_documents(
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
     let loaded = rule_documents
         .iter()
-        .map(|raw| serde_yaml::from_str::<RuleSet>(raw))
+        .map(|raw| parse_rule_document(raw))
         .collect::<Result<Vec<_>, _>>()?;
+    compile_rule_sets(loaded, policy_document)
+}
+
+/// Parse one Rule v1 document without compiling it.
+pub fn parse_rule_document(raw: &str) -> Result<RuleSet, Box<dyn std::error::Error>> {
+    Ok(serde_yaml::from_str::<RuleSet>(raw)?)
+}
+
+/// Merge parsed rule documents, such as bundled core rules, package documents,
+/// and caller documents, then compile them with an optional policy document.
+/// Definitions are additive: a repeated rule or modifier ID fails.
+pub fn compile_rule_sets(
+    rule_sets: Vec<RuleSet>,
+    policy_document: Option<&str>,
+) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
     let policy = match policy_document {
         Some(raw) => Some(serde_yaml::from_str::<RulePolicy>(raw)?),
         None => None,
     };
-
-    merge_rule_sets(loaded)?.compile(policy.as_ref())
+    merge_rule_sets(rule_sets)?.compile(policy.as_ref())
 }
 
 pub fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::error::Error>> {
@@ -599,7 +614,10 @@ fn validate_rule_ids(rule_set: &RuleSet) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn validate_canonical_rule_id(id: &str, kind: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn validate_canonical_rule_id(
+    id: &str,
+    kind: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !is_canonical_contribution_id(id) {
         return Err(format!("{kind} id '{id}' is not canonical").into());
     }

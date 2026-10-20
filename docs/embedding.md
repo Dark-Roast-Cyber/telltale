@@ -112,21 +112,35 @@ A compile-tested example lives at `crates/telltale/examples/embed_scan.rs`
 synthetic fixture root).
 
 The builder shares the CLI's rule content, defaults, policy, and evaluation
-semantics. It accepts document strings, not filesystem paths, and rejects
-duplicate IDs across documents, including bundled defaults. It does not implement
-the CLI's filesystem-managed tiers, same-ID replacement, or override files
+semantics: bundled core rules plus the embedded community package
+(`telltale.community`) by default. It accepts document and package strings, not
+filesystem paths, and rejects duplicate IDs across documents, including bundled
+defaults. It does not implement the CLI's filesystem-managed tiers, same-ID
+replacement, or override files
 ([tier resolution](install.md#local-rule-policy-and-allowlist-config)):
 
 ```rust
 let pipeline = Pipeline::builder()
+    .rule_package(package_yaml)       // additive, like rule-packages.d
     .rules_document(custom_yaml)      // additive, like --rules
     .policy_document(policy_yaml)     // enable/disable, like --policy
     .build()?;
-// .without_bundled_defaults() mirrors --no-default-rules; with no documents
-// left, build() fails with PipelineError::InvalidConfiguration. Content and
-// policy that leave no effective rule fail with PipelineError::EmptyRuleSet,
+// .without_community_rules() mirrors --no-community-rules.
+// .without_bundled_defaults() mirrors --no-default-rules: it drops core rules
+// and the embedded community snapshot; supplied packages still load. With no
+// content left, build() fails with PipelineError::InvalidConfiguration. Content
+// and policy that leave no effective rule fail with PipelineError::EmptyRuleSet,
 // even if scans enable process_chain (build() cannot know that).
 ```
+
+A supplied package with ID `telltale.community` replaces the embedded snapshot
+as a whole, so a host that distributes rule content can deliver a newer verified
+community release, or its own namespaced packages, without a Telltale upgrade.
+`Pipeline::rule_packages()` returns each compiled package's ID, version, content
+SHA-256, and whether it is the embedded snapshot, for inventory and provenance
+reporting. Package validation lives in `telltale_rules::package`
+(`RulePackage::parse`, `resolve_rule_packages`); see the
+[rule-packages specification](../openspec/specs/rule-packages/spec.md).
 
 What an embedder inherits:
 
@@ -337,7 +351,9 @@ never reopens a source.
 `bundled_rule_catalog(&options)` returns immutable presentation metadata
 (`RuleCatalogEntry`: `id`, `kind`, `title`, `explanation`, `falsepositives`,
 `category`, `severity`, `session_score`, `action_score`, `action_ordered`,
-`action_within_seconds`, `action_link`). Session scores are frozen compatibility
+`action_within_seconds`, `action_link`, `package_id`) for core rules and the
+embedded community package; `package_id` is `None` for core rules and `enabled`
+describes the default pipeline. Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
 promotion totals. It exposes no detector internals, custom documents, policy
 overrides, or executable process AST. Like `ActionFinding`, catalog entries do
