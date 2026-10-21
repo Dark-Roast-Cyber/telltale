@@ -19,7 +19,8 @@
 
 - Reject YAML-escaped control and hidden formatting characters in rule packages,
   including nested rule text, without rejecting ordinary multiline content or
-  literal regex escapes.
+  literal regex escapes. U+2028 and U+2029 are rejected too: YAML breaks lines
+  at them, so they could add package keys that a reviewer's viewer never shows.
 
 - Add state-only `cursor list` / `cursor reset` for one exact stored OpenCode
   source/schema cursor, with a matching inspection digest, explicit history-gap

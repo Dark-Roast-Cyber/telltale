@@ -6,7 +6,7 @@ Defines identified, versioned, namespaced Rule v1 content that Telltale adds to 
 ## Requirements
 ### Requirement: A package is one validated, namespaced document
 
-A rule package SHALL be one `telltale-rule-package/v1` YAML document with `format`, `id`, `version`, `publisher`, `license`, `rule_namespace`, optional informational `source` and `revision`, and one or more Rule v1 `documents`. Telltale SHALL reject unknown header fields, malformed identities, packages larger than 4 MiB, control or invisible formatting characters anywhere in the text, definitions outside `<rule_namespace>.`, duplicate definition IDs, and packages without definitions. A namespace SHALL NOT reuse the first ID segment of a bundled core rule or modifier, `procchain`, or `telltale`.
+A rule package SHALL be one `telltale-rule-package/v1` YAML document with `format`, `id`, `version`, `publisher`, `license`, `rule_namespace`, optional informational `source` and `revision`, and one or more Rule v1 `documents`. Telltale SHALL reject unknown header fields, malformed identities, packages larger than 4 MiB, control or invisible formatting characters (including the U+2028 and U+2029 separators, which YAML treats as line breaks) anywhere in the text, definitions outside `<rule_namespace>.`, duplicate definition IDs, and packages without definitions. A namespace SHALL NOT reuse the first ID segment of a bundled core rule or modifier, `procchain`, or `telltale`.
 
 #### Scenario: Definition outside the namespace
 
