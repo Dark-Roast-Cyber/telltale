@@ -190,10 +190,15 @@ pub(crate) struct ReadyDelivery {
     pub(crate) payload: Vec<u8>,
 }
 
-/// Clock used by the durable scheduler. Values are Unix milliseconds so a
+/// Clock used by the durable scheduler. Retry times use Unix milliseconds so a
 /// configured sub-second backoff cannot collapse into an immediate retry.
+/// Dispatch work budgets use monotonic time, independently of retry eligibility.
 pub(crate) trait DeliveryClock {
     fn now_millis(&self) -> i64;
+
+    fn monotonic_now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
 }
 
 pub(crate) struct SystemDeliveryClock;
