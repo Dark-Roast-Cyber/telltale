@@ -42,10 +42,43 @@ const WATCH_NOTIFICATION_CAPACITY: usize = 256;
 const WATCH_EVENT_PATH_CAPACITY: usize = 64;
 const WATCH_PENDING_PATH_CAPACITY: usize = 4096;
 
+#[derive(Clone, Default)]
+struct WatchPathFilter {
+    sqlite_override: Option<PathBuf>,
+    exclusive_parent: Option<PathBuf>,
+}
+
+impl WatchPathFilter {
+    fn ignores(&self, path: &Path) -> bool {
+        let database = self.sqlite_override.as_deref();
+        if database.is_some_and(|database| watch_paths_equal(path, database)) {
+            return false;
+        }
+        if configured_reader_sidecar(path, database) {
+            return true;
+        }
+        self.exclusive_parent.as_deref().is_some_and(|parent| {
+            path.parent()
+                .is_some_and(|actual| watch_paths_equal(actual, parent))
+                && database.is_none_or(|database| {
+                    !watch_paths_equal(path, &sqlite_sidecar_path(database, "-wal"))
+                })
+        })
+    }
+
+    fn normalize(&self, path: &Path) -> Option<PathBuf> {
+        if self.ignores(path) {
+            return None;
+        }
+        normalize_watch_event_path_with_override(path, self.sqlite_override.as_deref())
+    }
+}
+
 struct WatchInbox {
     rx: Receiver<NotifyEvent>,
     errors: Receiver<notify::Error>,
     overflow: Arc<AtomicBool>,
+    filter: WatchPathFilter,
 }
 
 impl WatchInbox {
@@ -69,11 +102,42 @@ impl WatchInbox {
     }
 }
 
+#[cfg(test)]
 fn admit_watch_event(
     tx: &SyncSender<NotifyEvent>,
     errors: &SyncSender<notify::Error>,
     overflow: &AtomicBool,
     result: notify::Result<NotifyEvent>,
+) {
+    admit_watch_event_with_override(tx, errors, overflow, result, None);
+}
+
+#[cfg(test)]
+fn admit_watch_event_with_override(
+    tx: &SyncSender<NotifyEvent>,
+    errors: &SyncSender<notify::Error>,
+    overflow: &AtomicBool,
+    result: notify::Result<NotifyEvent>,
+    sqlite_override: Option<&Path>,
+) {
+    admit_filtered_watch_event(
+        tx,
+        errors,
+        overflow,
+        result,
+        &WatchPathFilter {
+            sqlite_override: sqlite_override.map(Path::to_path_buf),
+            exclusive_parent: None,
+        },
+    );
+}
+
+fn admit_filtered_watch_event(
+    tx: &SyncSender<NotifyEvent>,
+    errors: &SyncSender<notify::Error>,
+    overflow: &AtomicBool,
+    result: notify::Result<NotifyEvent>,
+    filter: &WatchPathFilter,
 ) {
     let mut event = match result {
         Ok(event) => event,
@@ -83,12 +147,10 @@ fn admit_watch_event(
             return;
         }
     };
-    if !watch_event_is_relevant(&event) {
+    if !watch_event_is_relevant(&event, filter) {
         return;
     }
-    event
-        .paths
-        .retain(|path| watch_event_path_is_relevant(path));
+    event.paths.retain(|path| filter.normalize(path).is_some());
     if event.paths.len() > WATCH_EVENT_PATH_CAPACITY
         || matches!(tx.try_send(event), Err(TrySendError::Full(_)))
     {
@@ -100,6 +162,8 @@ pub(crate) struct WatchRoots {
     roots: Vec<PathBuf>,
     projects: Vec<crate::projects::ProjectDef>,
     accounting: ProjectConfigurationAccounting,
+    non_recursive: BTreeSet<PathBuf>,
+    filter: WatchPathFilter,
 }
 
 pub(crate) fn validate_watch_roots(
@@ -112,10 +176,67 @@ pub(crate) fn validate_watch_roots(
     if watch_roots.is_empty() {
         return Err("no existing Telltale session-store roots found".into());
     }
-    let roots = watch_roots
+    let include_opencode = execution.clients.is_empty()
+        || execution
+            .clients
+            .contains(&telltale_schema::clients::ClientId::OpenCode);
+    let sqlite_override = if include_opencode {
+        telltale_sources::discovery::opencode_database_override(execution.root)
+            .map_err(|_| "invalid OpenCode database override")?
+            .map(|path| normalized_path(&path))
+            .transpose()?
+    } else {
+        None
+    };
+    let other_clients = telltale_sources::clients::supported_clients()
+        .iter()
+        .filter(|client| {
+            client.id != telltale_schema::clients::ClientId::OpenCode
+                && (execution.clients.is_empty() || execution.clients.contains(&client.id))
+        })
+        .map(|client| client.id)
+        .collect::<Vec<_>>();
+    let recursive_roots = if other_clients.is_empty() {
+        Vec::new()
+    } else {
+        discover_watch_roots_with_projects(execution.root, &other_clients, &project_configs)
+            .iter()
+            .map(|path| normalized_path(path))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    // SQLite candidates are direct children. In particular, an arbitrary override
+    // authorizes its file and sidecars, not recursively watching its parent's tree.
+    let mut roots = watch_roots
         .iter()
         .map(|path| normalized_path(path))
         .collect::<Result<Vec<_>, _>>()?;
+    roots.sort_unstable();
+    roots.dedup();
+    let non_recursive = roots
+        .iter()
+        .filter(|path| !recursive_roots.contains(path))
+        .cloned()
+        .collect();
+    let data_directories = if sqlite_override.is_some() {
+        telltale_sources::discovery::opencode_data_directories(execution.root)
+            .iter()
+            .map(|path| normalized_path(path))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let exclusive_parent = sqlite_override
+        .as_ref()
+        .and_then(|path| path.parent())
+        .filter(|parent| {
+            !data_directories.iter().any(|data| data == parent)
+                && !recursive_roots.iter().any(|root| parent.starts_with(root))
+        })
+        .map(Path::to_path_buf);
+    let filter = WatchPathFilter {
+        sqlite_override,
+        exclusive_parent,
+    };
     let mut storage = execution.sinks.local_persistence_paths();
     storage.push(execution.state_path.to_path_buf());
     if let Some(outbox) = execution.sinks.durable_outbox_path() {
@@ -130,9 +251,11 @@ pub(crate) fn validate_watch_roots(
         }
     }
     Ok(WatchRoots {
-        roots: watch_roots,
+        roots,
         projects: project_configs,
         accounting: project_configuration,
+        non_recursive,
+        filter,
     })
 }
 
@@ -145,6 +268,8 @@ pub(crate) fn run_watch(
         roots: watch_roots,
         projects: project_configs,
         accounting: project_configuration,
+        non_recursive,
+        filter,
     } = watch_roots;
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -158,15 +283,23 @@ pub(crate) fn run_watch(
         rx,
         errors,
         overflow: Arc::clone(&overflow),
+        filter: filter.clone(),
     };
     let mut watcher = RecommendedWatcher::new(
         move |result| {
-            admit_watch_event(&tx, &error_tx, &overflow, result);
+            admit_filtered_watch_event(&tx, &error_tx, &overflow, result, &filter);
         },
         NotifyConfig::default(),
     )?;
     for root in &watch_roots {
-        watcher.watch(root, RecursiveMode::Recursive)?;
+        watcher.watch(
+            root,
+            if non_recursive.contains(root) {
+                RecursiveMode::NonRecursive
+            } else {
+                RecursiveMode::Recursive
+            },
+        )?;
     }
 
     let (sources, discovery) = discover_operational_sources(
@@ -214,7 +347,7 @@ pub(crate) fn run_watch(
                 continue;
             }
             match inbox.rx.recv_timeout(WATCH_SHUTDOWN_POLL) {
-                Ok(event) => pending.absorb(&event),
+                Ok(event) => pending.absorb_with_filter(&event, &inbox.filter),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     inbox.take_signals(&mut pending)?;
@@ -252,6 +385,10 @@ pub(crate) fn run_watch(
             },
             WatchScanAction::Full => ScanTargets::Full,
         };
+        if inbox.filter.sqlite_override.is_some() {
+            telltale_sources::discovery::opencode_database_override(config.execution.root)
+                .map_err(|_| "invalid OpenCode database override")?;
+        }
         let result = run_scan(scan_config, targets, StateSavePolicy::OnChange)?;
         inbox.check_error()?;
         last_delivery_completed = Instant::now();
@@ -297,7 +434,7 @@ fn collect_watch_events_for(
         }
         let timeout = (deadline - now).min(WATCH_SHUTDOWN_POLL);
         match inbox.rx.recv_timeout(timeout) {
-            Ok(event) => pending.absorb(&event),
+            Ok(event) => pending.absorb_with_filter(&event, &inbox.filter),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
                 inbox.take_signals(pending)?;
@@ -329,8 +466,24 @@ impl PendingWatchChanges {
         self.paths.clear();
     }
 
+    #[cfg(test)]
     fn absorb(&mut self, event: &NotifyEvent) {
-        if !watch_event_is_relevant(event) {
+        self.absorb_with_override(event, None);
+    }
+
+    #[cfg(test)]
+    fn absorb_with_override(&mut self, event: &NotifyEvent, sqlite_override: Option<&Path>) {
+        self.absorb_with_filter(
+            event,
+            &WatchPathFilter {
+                sqlite_override: sqlite_override.map(Path::to_path_buf),
+                exclusive_parent: None,
+            },
+        );
+    }
+
+    fn absorb_with_filter(&mut self, event: &NotifyEvent, filter: &WatchPathFilter) {
+        if !watch_event_is_relevant(event, filter) {
             return;
         }
         if event.need_rescan() {
@@ -343,7 +496,7 @@ impl PendingWatchChanges {
             self.saw_remove = true;
         }
         for path in &event.paths {
-            if let Some(path) = normalize_watch_event_path(path) {
+            if let Some(path) = filter.normalize(path) {
                 if self.paths.len() == WATCH_PENDING_PATH_CAPACITY && !self.paths.contains(&path) {
                     self.require_full_scan();
                     return;
@@ -380,14 +533,60 @@ impl PendingWatchChanges {
     }
 }
 
-fn watch_event_is_relevant(event: &NotifyEvent) -> bool {
+fn watch_event_is_relevant(event: &NotifyEvent, filter: &WatchPathFilter) -> bool {
     event.need_rescan()
-        || matches!(event.kind, EventKind::Remove(_))
+        || (matches!(event.kind, EventKind::Remove(_))
+            && (event.paths.is_empty() || event.paths.iter().any(|path| !filter.ignores(path))))
         || (matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
             && event
                 .paths
                 .iter()
-                .any(|path| watch_event_path_is_relevant(path)))
+                .any(|path| filter.normalize(path).is_some()))
+}
+
+fn sqlite_sidecar_path(database: &Path, suffix: &str) -> PathBuf {
+    let mut path = database.as_os_str().to_os_string();
+    path.push(suffix);
+    path.into()
+}
+
+fn watch_paths_equal(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let left = left.as_os_str().encode_wide().collect::<Vec<_>>();
+        let right = right.as_os_str().encode_wide().collect::<Vec<_>>();
+        let (Ok(left_len), Ok(right_len)) = (i32::try_from(left.len()), i32::try_from(right.len()))
+        else {
+            return false;
+        };
+        // SAFETY: both buffers remain live for the supplied UTF-16 unit lengths;
+        // ordinal comparison reads only those buffers and performs no path I/O.
+        let result = unsafe {
+            windows_sys::Win32::Globalization::CompareStringOrdinal(
+                left.as_ptr(),
+                left_len,
+                right.as_ptr(),
+                right_len,
+                1,
+            )
+        };
+        result == 2
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn configured_reader_sidecar(path: &Path, database: Option<&Path>) -> bool {
+    database.is_some_and(|database| {
+        !watch_paths_equal(path, database)
+            && ["-shm", "-journal"]
+                .iter()
+                .any(|suffix| watch_paths_equal(path, &sqlite_sidecar_path(database, suffix)))
+    })
 }
 
 fn watch_event_path_is_relevant(path: &Path) -> bool {
@@ -403,7 +602,26 @@ fn watch_event_path_is_relevant(path: &Path) -> bool {
 /// Map SQLite WAL sidecar events onto the main database file and drop `-shm` /
 /// `-journal` sidecar events, which fire on reader activity without new
 /// persisted data.
+#[cfg(test)]
 fn normalize_watch_event_path(path: &Path) -> Option<PathBuf> {
+    normalize_watch_event_path_with_override(path, None)
+}
+
+fn normalize_watch_event_path_with_override(
+    path: &Path,
+    sqlite_override: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(database) = sqlite_override {
+        // An explicitly configured main file can itself have a sidecar-looking name.
+        if watch_paths_equal(path, database)
+            || watch_paths_equal(path, &sqlite_sidecar_path(database, "-wal"))
+        {
+            return Some(database.to_path_buf());
+        }
+        if configured_reader_sidecar(path, Some(database)) {
+            return None;
+        }
+    }
     if !watch_event_path_is_relevant(path) {
         return None;
     }
@@ -465,6 +683,7 @@ mod tests {
             rx,
             errors,
             overflow,
+            filter: WatchPathFilter::default(),
         };
         let mut pending = PendingWatchChanges::default();
         inbox.take_signals(&mut pending).unwrap();
@@ -520,6 +739,7 @@ mod tests {
             rx,
             errors,
             overflow,
+            filter: WatchPathFilter::default(),
         };
         let mut pending = PendingWatchChanges::default();
         inbox.take_signals(&mut pending).unwrap();
@@ -603,6 +823,7 @@ mod tests {
             rx,
             errors,
             overflow,
+            filter: WatchPathFilter::default(),
         };
         assert!(
             inbox
@@ -644,6 +865,7 @@ mod tests {
             rx,
             errors,
             overflow: Arc::new(AtomicBool::new(true)),
+            filter: WatchPathFilter::default(),
         };
         drop(tx);
         let mut pending = PendingWatchChanges::default();
@@ -690,6 +912,7 @@ mod tests {
             rx,
             errors,
             overflow,
+            filter: WatchPathFilter::default(),
         };
         assert!(
             collect_watch_events_for(
@@ -757,6 +980,140 @@ mod tests {
             WatchScanAction::Targeted(targets) => assert_eq!(targets, vec![db_source]),
             _ => panic!("expected targeted scan"),
         }
+    }
+
+    #[test]
+    fn pending_changes_target_arbitrarily_named_sqlite_wal() {
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".into(),
+            path: "/watch-test/custom-store.sqlite".into(),
+        };
+        let index = BTreeMap::from([(source.path.clone(), source.clone())]);
+        let mut pending = PendingWatchChanges::default();
+        pending.absorb_with_override(
+            &change("/watch-test/custom-store.sqlite-wal".into()),
+            Some(&source.path),
+        );
+        match pending.scan_action(&index) {
+            WatchScanAction::Targeted(sources) => assert_eq!(sources, [source]),
+            _ => panic!("configured SQLite WAL must target its exact main file"),
+        }
+    }
+
+    #[test]
+    fn configured_sqlite_names_take_precedence_over_sidecar_suffixes() {
+        for name in [
+            "custom.sqlite",
+            "actual.db-wal",
+            "actual.db-shm",
+            "actual.db-journal",
+        ] {
+            let database = Path::new("/watch-test").join(name);
+            assert_eq!(
+                normalize_watch_event_path_with_override(&database, Some(&database)),
+                Some(database.clone())
+            );
+            assert_eq!(
+                normalize_watch_event_path_with_override(
+                    &PathBuf::from(format!("{}-wal", database.display())),
+                    Some(&database)
+                ),
+                Some(database.clone())
+            );
+            for suffix in ["-shm", "-journal"] {
+                assert_eq!(
+                    normalize_watch_event_path_with_override(
+                        &PathBuf::from(format!("{}{suffix}", database.display())),
+                        Some(&database)
+                    ),
+                    None
+                );
+            }
+            let (tx, rx) = mpsc::sync_channel(1);
+            let (errors, _receive_errors) = mpsc::sync_channel(1);
+            let overflow = AtomicBool::new(false);
+            for _ in 0..WATCH_NOTIFICATION_CAPACITY * 2 {
+                admit_watch_event_with_override(
+                    &tx,
+                    &errors,
+                    &overflow,
+                    Ok(change(format!("{}-shm", database.display()).into())),
+                    Some(&database),
+                );
+            }
+            assert!(rx.try_recv().is_err());
+            assert!(!overflow.load(Ordering::SeqCst));
+        }
+        let unrelated = Path::new("/watch-test/unrelated-wal");
+        assert_eq!(
+            normalize_watch_event_path_with_override(
+                unrelated,
+                Some(Path::new("/watch-test/custom.sqlite"))
+            ),
+            Some(unrelated.to_path_buf())
+        );
+    }
+
+    #[test]
+    fn configured_reader_sidecar_removals_do_not_reconcile() {
+        for suffix in ["-shm", "-journal"] {
+            let database = Path::new("/watch-test/custom.sqlite");
+            let event = NotifyEvent::new(EventKind::Remove(notify::event::RemoveKind::Any))
+                .add_path(format!("{}{suffix}", database.display()).into());
+            let mut pending = PendingWatchChanges::default();
+            pending.absorb_with_override(&event, Some(database));
+            assert!(matches!(
+                pending.scan_action(&BTreeMap::new()),
+                WatchScanAction::Skip
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_windows_notifications_preserve_native_case_aliases() {
+        let database = Path::new(r"C:\synthetic\Store-Σ.sqlite");
+        assert_eq!(
+            normalize_watch_event_path_with_override(
+                Path::new(r"C:\synthetic\store-σ.sqlite-wal"),
+                Some(database)
+            ),
+            Some(database.to_path_buf())
+        );
+        assert_eq!(
+            normalize_watch_event_path_with_override(
+                Path::new(r"C:\synthetic\STORE-Σ.SQLITE-shm"),
+                Some(database)
+            ),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_non_utf8_and_symlink_sidecars_use_their_names_not_targets() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let database = PathBuf::from(OsString::from_vec(
+            b"/watch-test/custom\xff.sqlite".to_vec(),
+        ));
+        let mut sidecar = database.as_os_str().to_os_string();
+        sidecar.push("-shm");
+        assert_eq!(
+            normalize_watch_event_path_with_override(Path::new(&sidecar), Some(&database)),
+            None
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("custom.sqlite");
+        std::fs::write(&database, b"synthetic metadata only").unwrap();
+        let sidecar = temp.path().join("custom.sqlite-shm");
+        std::os::unix::fs::symlink(&database, &sidecar).unwrap();
+        assert_eq!(
+            normalize_watch_event_path_with_override(&sidecar, Some(&database)),
+            None
+        );
     }
 
     #[test]
@@ -875,6 +1232,7 @@ mod tests {
             rx,
             errors,
             overflow: Arc::new(AtomicBool::new(false)),
+            filter: WatchPathFilter::default(),
         };
         let mut pending = PendingWatchChanges::default();
         let shutdown = AtomicBool::new(false);

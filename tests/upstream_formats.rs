@@ -353,6 +353,8 @@ fn run_discover(name: &str, discover: &Discover, dir: &Path) -> Outcome {
     let home = dir.join("home");
     let work = dir.join("work");
     fs::create_dir_all(&home).expect("home");
+    // Do not make a synthetic override traverse the OS temporary-directory alias.
+    let home = home.canonicalize().expect("canonical synthetic home");
     fs::create_dir_all(&work).expect("work");
     for (relative, input) in &discover.files {
         write_input(name, input, &home.join(relative));
