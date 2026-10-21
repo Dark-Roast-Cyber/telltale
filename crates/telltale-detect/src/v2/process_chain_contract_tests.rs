@@ -216,6 +216,42 @@ fn duplicate_interpretations_collapse_to_one_event_with_the_strongest_score() {
 }
 
 #[test]
+fn schtasks_query_is_not_scored_as_task_creation() {
+    let scored = |command| {
+        let events = events_for(&[(command, "2026-05-10T10:00:00Z")]);
+        ["cmd", "powershell"].into_iter().find(|parent| {
+            event_with_rule(&events, &format!("procchain.persistence.{parent}_schtasks")).is_some()
+        })
+    };
+    assert_eq!(
+        scored("schtasks.exe /Query /TN SyntheticUpdater /FO LIST"),
+        None
+    );
+    assert_eq!(scored(r"C:\Windows\System32\schtasks.exe -query"), None);
+    assert_eq!(
+        scored(r#"powershell -c "schtasks /query /tn SyntheticUpdater""#),
+        None
+    );
+    assert_eq!(
+        scored("schtasks.exe /Create /TN SyntheticUpdater /TR synthetic-updater.exe /SC DAILY"),
+        Some("cmd")
+    );
+    assert_eq!(
+        scored(
+            r#"powershell -c "schtasks /create /tn SyntheticUpdater /tr synthetic-updater.exe""#
+        ),
+        Some("powershell")
+    );
+    // A query inside the created task's action does not excuse the creation.
+    assert_eq!(
+        scored(
+            r#"schtasks.exe /Create /TN SyntheticUpdater /TR "cmd /c schtasks /query & synthetic-updater.exe" /SC DAILY"#
+        ),
+        Some("cmd")
+    );
+}
+
+#[test]
 fn matching_is_case_insensitive_and_paths_are_normalized() {
     let events = events_for(&[(
         r#""C:\Windows\System32\CMD.EXE" /C "C:\Windows\System32\WHOAMI.EXE" /all"#,
