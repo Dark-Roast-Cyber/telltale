@@ -22,6 +22,15 @@
   literal regex escapes. U+2028 and U+2029 are rejected too: YAML breaks lines
   at them, so they could add package keys that a reviewer's viewer never shows.
 
+- Fix three detection gaps that synthetic lab scenarios found. `approval.bypass.context`
+  no longer fires on a documentation review that quotes any of its phrases as
+  disallowed, including inside Codex exec output with its exit metadata; only
+  "bypass approval" in plain text was excused before. Review framing placed after
+  an instruction still does not excuse it. `persistence.shell_profile` now matches
+  options before the verb, such as `systemctl --user enable`. The cmd and PowerShell
+  `schtasks` process-chain rules no longer score a read-only `schtasks /Query` as
+  task creation, while a `/Create` whose action merely contains a query still scores.
+
 - Add state-only `cursor list` / `cursor reset` for one exact stored OpenCode
   source/schema cursor, with a matching inspection digest, explicit history-gap
   acceptance and separate unfinished-drain abandonment acknowledgement. Baselines,

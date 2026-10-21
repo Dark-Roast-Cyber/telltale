@@ -3843,6 +3843,8 @@ rules:
     mitre: [T1053.005]
     reason: "cmd -> schtasks - scheduled task creation"
     source_severity: 1
+    child_command_line_none:
+      - "^\\s*\\S*schtasks(?:\\.exe)?\"?\\s+[/-]query\\b"
   - id: procchain.persistence.cmd_xcopy
     title: "cmd spawned xcopy"
     category: persistence
@@ -3944,6 +3946,8 @@ rules:
     mitre: [T1053.005]
     reason: "PowerShell -> schtasks - scheduled task creation"
     source_severity: 1
+    child_command_line_none:
+      - "^\\s*\\S*schtasks(?:\\.exe)?\"?\\s+[/-]query\\b"
   - id: procchain.persistence.reg_run_key
     title: "cmd wrote an autorun registry key"
     category: persistence
