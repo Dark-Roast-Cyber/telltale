@@ -2,6 +2,61 @@ use super::*;
 
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn scan_once_reports_copilot_cli_install_without_claiming_session_coverage() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let bin = temp.path().join("PRIVATE_INSTALL_PATH/bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let launcher = if cfg!(windows) {
+        "copilot.exe"
+    } else {
+        "copilot"
+    };
+    fs::write(bin.join(launcher), b"not executable: PRIVATE_CONTENT").unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .env_clear()
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("PATH", &bin)
+        .args(["scan", "--once", "--no-local-config", "--root"])
+        .arg(&home)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .arg("--log-path")
+        .arg(temp.path().join("events.jsonl"));
+    for key in ["SystemRoot", "windir"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let summary: Value = serde_json::from_str(&stdout).unwrap();
+    let log = fs::read_to_string(temp.path().join("events.jsonl")).unwrap();
+    let events = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    let inventory = events
+        .iter()
+        .find(|event| event["check_name"] == "install_inventory")
+        .expect("install inventory event");
+    assert!(event_schema_validator().is_valid(inventory));
+    assert!(inventory["evidence"].as_array().unwrap().iter().any(|item| {
+        item["redacted_value"].as_str().is_some_and(|value| value == "agent=copilot; installed=true; confidence=Confirmed; present_signals=executable:copilot")
+    }));
+    assert_eq!(summary["source_processing"]["selected_source_count"], 0);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 0);
+    for text in [&stdout, &log] {
+        assert!(!text.contains("PRIVATE_INSTALL_PATH"));
+        assert!(!text.contains("PRIVATE_CONTENT"));
+    }
+}
+
 // Opt-in measurements stay at the process boundary, not in the scanner.
 #[cfg(target_os = "linux")]
 mod workload {

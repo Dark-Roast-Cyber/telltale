@@ -104,6 +104,12 @@ runtime. Caller-supplied record evaluation was removed; use the
 
 Source: `copilot.process_log`.
 
+The capabilities below describe the existing accumulated-output process-log
+adapter, not every current Copilot CLI log. v1.0.96's default-level record format
+is unqualified, so home and `COPILOT_HOME` discovery remain disabled and their
+upstream cases remain known gaps. `events.jsonl` and `session-store.db` are not
+acquired. See [qualification evidence](session-sources.md#copilot-cli-qualification-gap).
+
 | Capability | Status | Notes |
 | --- | --- | --- |
 | User and assistant messages | Lossy | Process logs do not contain full conversation context. |

@@ -40,7 +40,7 @@ ToolExecution **Unknown**.
 | OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
 | OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (legacy schema); bounded v2.0.28 shell-stage acquisition live-validated; v2 routine drain and full `--history all` pass live-validated after the request-side contribution fix, with oversized rows quarantined | Workspace conditional; process ID absent; exit code only for v2 shell commands and settled v2 `shell` tool calls; v2 tool-entry ToolExecution stays Unknown even when `executed: true` or a settled `shell` tool call emits an execution stage; v2 user shell commands report Supported; call ID/error state/parts conditional |
-| Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | — | ✅ Fixture-backed + bounded live validation | UC-001 capability-indeterminate: UserContext unsupported; content parts absent; tool results conditional; ToolExecution unknown |
+| Copilot | `copilot.process_log` | ✅ project-local; ⚠️ CLI home | ✅ existing format | ✅ | ✅ | ⚠️ | ✅ | — | ✅ Existing-format fixtures + historical bounded project-local live validation; v1.0.96 default logs unqualified | Home/COPILOT_HOME discovery blocked on current default-level format evidence; events.jsonl and session-store.db not acquired; UC-001 capability-indeterminate: UserContext unsupported; content parts absent; tool results conditional; ToolExecution unknown |
 
 ## Coverage Gates
 
@@ -126,7 +126,11 @@ Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
   (4,306 records; 440 units quarantined by themselves). The one remaining
   source is acquired but exceeds the per-source evaluation work budget.
 - **OpenCode**: Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` (complete)
-- **Copilot**: `logs/copilot/process-*.log` (complete)
+- **Copilot**: historical bounded validation of project-local
+  `logs/copilot/process-*.log`, not qualification of current Copilot CLI defaults.
+  v1.0.96 home logs and `COPILOT_HOME` remain known gaps: public upstream evidence
+  establishes the paths but not the adapter-required records at default logging.
+  See the [qualification evidence and unblock criteria](session-sources.md#copilot-cli-qualification-gap).
 - **Claude Code**: `~/.claude/projects/` (complete) — bounded `--client claude --max-sources 5 --dry-run` parsed 5 sources with 5 activities and 1 benign detection, zero scanner errors; repeated at cap 10 with consistent results.
   On 2026-10-14 a Windows 11 audit found that Claude Code 2.1.x transcripts
   (CLI and desktop Code tab) no longer parsed: bookkeeping records, `thinking`
