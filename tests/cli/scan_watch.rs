@@ -5202,9 +5202,9 @@ fn watch_command_is_available_for_realtime_scans() {
     assert!(stdout.contains("--client"));
 }
 
-fn seed_relocated_opencode(path: &Path) -> Connection {
+fn seed_relocated_opencode(path: &Path) -> rusqlite::Connection {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let connection = Connection::open(path).unwrap();
+    let connection = rusqlite::Connection::open(path).unwrap();
     connection
         .execute_batch(
             "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, agent TEXT, model TEXT);
@@ -5217,7 +5217,7 @@ fn seed_relocated_opencode(path: &Path) -> Connection {
     connection
 }
 
-fn append_relocated_opencode(connection: &Connection, sequence: i64) {
+fn append_relocated_opencode(connection: &rusqlite::Connection, sequence: i64) {
     connection
         .execute(
             "INSERT INTO session_message VALUES (?1, 'synthetic-relocation', 'user', ?2, ?3, ?4)",
@@ -5413,9 +5413,11 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
                 first["source_discovery"]["basis"],
                 "watch_source_index_snapshot"
             );
-            let read_only =
-                Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .unwrap();
+            let read_only = rusqlite::Connection::open_with_flags(
+                &database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
             assert_eq!(
                 read_only
                     .query_row("SELECT COUNT(*) FROM session_message", [], |row| row
