@@ -103,7 +103,7 @@ fn completed_rejects_late_wrong_shapes_and_ownership_atomically() {
         // Well-owned items this adapter cannot map are quarantined by
         // themselves; coordinates and wrappers stay whole-source integrity.
         let mut quarantined = Vec::new();
-        for kind in ["agent_message", "Plan", "Future"] {
+        for kind in ["agent_message", "Future"] {
             quarantined.push((completed(kind, "bad"), "unknown_discriminator"));
         }
         for kind in ["McpToolCall", "Extension"] {

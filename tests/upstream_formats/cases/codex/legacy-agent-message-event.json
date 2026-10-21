@@ -5,9 +5,10 @@
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/policy.rs#L141-L155",
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L2548-L2560",
     "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L790-L797",
-    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L3211-L3212"
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/protocol.rs#L3211-L3212",
+    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/protocol/src/legacy_events.rs#L124-L139"
   ],
-  "status": "known_gap",
+  "status": "supported",
   "acquire": {
     "source_id": "codex.sessions",
     "jsonl": [
@@ -18,10 +19,8 @@
     ]
   },
   "expect": {
-    "observations": 2,
-    "quarantine_codes": [
-      "unknown_discriminator"
-    ]
+    "min_observations": 2,
+    "min_families": {"message": 2}
   },
-  "note": "The agent_message mirror is quarantined as unknown_discriminator, so a current legacy-mode rollout is reported as partial. The assistant text is still read from the response_item message."
+  "note": "The adjacent equivalent event/raw pair contributes assistant text once to analytics; both physical units still count. Unmatched event text remains visible. Synthetic acquisition/conformance coverage only."
 }
