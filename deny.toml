@@ -34,12 +34,12 @@ confidence-threshold = 0.8
 # These exceptions are intentionally package-specific. They are the only
 # unusual license identifiers reported by the current graph:
 # - ryu@1.0.23: Apache-2.0 OR BSL-1.0; transitive serializer dependency.
-# - webpki-roots@1.0.8: CDLA-Permissive-2.0; root certificates for rustls.
+# - webpki-roots@1.0.10: CDLA-Permissive-2.0; root certificates for rustls.
 # - r-efi@5.3.0 and r-efi@6.0.0: target-specific firmware support and the
 #   live MIT/Apache-2.0/LGPL-2.1-or-later expression.
 exceptions = [
     { crate = "ryu@1.0.23", allow = ["Apache-2.0", "BSL-1.0"] },
-    { crate = "webpki-roots@1.0.8", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "webpki-roots@1.0.10", allow = ["CDLA-Permissive-2.0"] },
     { crate = "r-efi@5.3.0", allow = ["MIT", "Apache-2.0", "LGPL-2.1-or-later"] },
     { crate = "r-efi@6.0.0", allow = ["MIT", "Apache-2.0", "LGPL-2.1-or-later"] },
 ]
