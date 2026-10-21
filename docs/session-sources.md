@@ -142,6 +142,11 @@ escaping rules.
   For a parent used solely by an arbitrary override, unrelated sibling events
   are ignored as well. Other selected source roots keep their own coverage.
   Notification filtering compares native path names without filesystem lookups.
+  macOS's native notification backend can miss writes to an already-open SQLite
+  WAL ([upstream limitation](https://github.com/notify-rs/notify/issues/613)); a
+  native relocation test has timed out on a second WAL update. Timely macOS WAL
+  acquisition is therefore not established by filename mapping or passing scan
+  conformance cases. No polling fallback is implemented.
 - A non-`.` explicit `--root` ignores `OPENCODE_DB` and retains exact
   `opencode.db` matching and its existing home/data-home candidates. Fixture
   layout is unchanged. Relocation is additive: the scanner may not share the
