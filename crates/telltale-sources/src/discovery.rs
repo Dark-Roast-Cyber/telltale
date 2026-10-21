@@ -388,13 +388,22 @@ fn source_watch_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> 
         .collect();
     }
 
-    let mut searches = source_search_roots(root, source_def);
-    if environment_opencode(root, source_def)
-        && let Ok(Some(path)) = opencode_database_override(root)
-    {
-        searches.push(path);
+    if environment_opencode(root, source_def) {
+        let mut directories = opencode_data_directories_for_source(root, source_def);
+        if let Ok(Some(path)) = opencode_database_override(root)
+            && let Some(parent) = path.parent()
+        {
+            directories.push(parent.to_path_buf());
+        }
+        return directories
+            .into_iter()
+            .filter(|directory| {
+                let mut remaining = usize::MAX;
+                inspect_opencode_path(directory, &mut remaining, true) == Ok(true)
+            })
+            .collect();
     }
-    searches
+    source_search_roots(root, source_def)
         .into_iter()
         .filter_map(|search_root| {
             if search_root.is_dir() {
@@ -423,21 +432,21 @@ fn discover_source(
     if environment_opencode(root, source_def) {
         let mut sources = Vec::new();
         for directory in opencode_data_directories_for_source(root, source_def) {
-            // Keep exact default-file behavior, including its checked traversal failures.
+            let mut remaining = usize::MAX;
+            match inspect_opencode_path(&directory, &mut remaining, true) {
+                Ok(true) => {}
+                Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+                _ => continue,
+            }
+            // Preserve the default's source coordinate without following a linked target.
             let default = directory.join("opencode.db");
-            match fs::metadata(&default) {
+            match fs::symlink_metadata(&default) {
                 Ok(metadata) if metadata.is_file() => {
                     sources.push(new_source(client, source_def, default))
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 _ if mode.is_checked() => return Err(context.traversal_error()),
                 _ => {}
-            }
-            let mut remaining = usize::MAX;
-            match inspect_opencode_path(&directory, &mut remaining, true) {
-                Ok(true) => {}
-                Err(_) if mode.is_checked() => return Err(context.traversal_error()),
-                _ => continue,
             }
             sources.extend(
                 walk_files(&directory, false, context, mode)?
@@ -2095,5 +2104,126 @@ mod tests {
             std::os::unix::fs::symlink(&outside, root.join("directory-link")).unwrap();
             run("symlink", &root.join("directory-link/custom.sqlite"));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_explicit_root_retains_legacy_default_link_coordinates() {
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = home.join("opencode");
+        fs::create_dir_all(&data).unwrap();
+        let target = temp.path().join("synthetic.sqlite");
+        fs::write(&target, b"synthetic metadata only").unwrap();
+        let path = data.join("opencode.db");
+        std::os::unix::fs::symlink(target, &path).unwrap();
+        let sources = discover_sources(&home).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, path);
+        assert_eq!(discover_sources_best_effort(&home), sources);
+        assert_eq!(
+            discover_watch_roots_for_clients(&home, &[ClientId::OpenCode]),
+            vec![data]
+        );
+        assert_eq!(
+            super::discover_sources_bounded(&home, ClientId::OpenCode, 16384),
+            Err(super::BoundedDiscoveryError::SymlinkRoot)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_environment_default_links_preserve_discovery_boundaries() {
+        const CHILD: &str = "TELLTALE_OPENCODE_DEFAULT_LINK_CHILD";
+        if let Some(mode) = std::env::var_os(CHILD) {
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+            let root = home.parent().unwrap();
+            let data = home.join("data/opencode");
+            let bounded =
+                super::discover_sources_bounded(Path::new("."), ClientId::OpenCode, 16384);
+            let checked = discover_sources(Path::new("."));
+            assert_eq!(bounded, Err(super::BoundedDiscoveryError::SymlinkRoot));
+            assert!(
+                matches!(&checked, Err(DiscoveryError::Traversal { source_id, .. }) if source_id == "opencode.sqlite"),
+                "bounded={bounded:?}; checked={checked:?}"
+            );
+            let mut expected = vec![root.join("allowed.sqlite")];
+            let mut expected_roots = vec![root.to_path_buf()];
+            if mode != "directory" && mode != "ancestor" {
+                expected.push(data.join("opencode-preview.db"));
+                expected_roots.push(data);
+            }
+            expected.sort();
+            expected_roots.sort();
+            let sources = discover_sources_best_effort(Path::new("."));
+            let mut actual = sources
+                .iter()
+                .map(|source| source.path.clone())
+                .collect::<Vec<_>>();
+            actual.sort();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                discover_watch_roots_for_clients(Path::new("."), &[ClientId::OpenCode]),
+                expected_roots
+            );
+            return;
+        }
+        let mut failures = Vec::new();
+        for mode in [
+            "file",
+            "dangling",
+            "leaf-directory",
+            "directory",
+            "ancestor",
+        ] {
+            let temp = tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let home = root.join("home");
+            let work = root.join("work");
+            let outside = root.join("PRIVATE-DEFAULT/opencode");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&work).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(root.join("allowed.sqlite"), b"synthetic metadata only").unwrap();
+            fs::write(outside.join("opencode.db"), b"synthetic metadata only").unwrap();
+            let data = home.join("data/opencode");
+            match mode {
+                "ancestor" => {
+                    std::os::unix::fs::symlink(outside.parent().unwrap(), home.join("data"))
+                        .unwrap()
+                }
+                "directory" => {
+                    fs::create_dir_all(home.join("data")).unwrap();
+                    std::os::unix::fs::symlink(&outside, &data).unwrap();
+                }
+                _ => {
+                    fs::create_dir_all(&data).unwrap();
+                    fs::write(data.join("opencode-preview.db"), b"synthetic metadata only")
+                        .unwrap();
+                    let target = match mode {
+                        "dangling" => outside.join("missing.sqlite"),
+                        "leaf-directory" => outside.clone(),
+                        _ => outside.join("opencode.db"),
+                    };
+                    std::os::unix::fs::symlink(target, data.join("opencode.db")).unwrap();
+                }
+            }
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.env_clear().current_dir(&work)
+                .env("HOME", &home).env("USERPROFILE", &home)
+                .env("XDG_DATA_HOME", home.join("data"))
+                .env("OPENCODE_DB", root.join("allowed.sqlite")).env(CHILD, mode)
+                .args(["--exact", "discovery::tests::opencode_environment_default_links_preserve_discovery_boundaries", "--nocapture"]);
+            for key in ["PATH", "SystemRoot", "windir"] {
+                if let Some(value) = std::env::var_os(key) {
+                    command.env(key, value);
+                }
+            }
+            let output = command.output().unwrap();
+            if !output.status.success() {
+                failures.push(format!("{mode}: {output:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

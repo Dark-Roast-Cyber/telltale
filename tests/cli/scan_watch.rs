@@ -5480,6 +5480,76 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn opencode_relocation_watch_skips_linked_default_database() {
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let data = home.join("data/opencode");
+    fs::create_dir_all(&work).unwrap();
+    drop(seed_relocated_opencode(&data.join("opencode-preview.db")));
+    let outside = root.join("PRIVATE-DEFAULT/foreign.sqlite");
+    drop(seed_relocated_opencode(&outside));
+    std::os::unix::fs::symlink(&outside, data.join("opencode.db")).unwrap();
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .env("XDG_DATA_HOME", home.join("data"))
+        .args([
+            "--iterations",
+            "1",
+            "--emit-activity",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = WatchChildGuard::new(command.spawn().unwrap());
+    let mut stdout = child.child_mut().stdout.take().unwrap();
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    wait_for_watch_ready(child.child_mut(), &data);
+    fs::write(
+        data.join("rediscovery-trigger.txt"),
+        b"synthetic watch trigger",
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.child_mut().try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            fail_watch(child.child_mut(), "linked-default watcher did not exit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.disarm().wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let bytes = reader.join().unwrap().unwrap();
+    let summary: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        summary["source_processing"]["selected_source_count"], 1,
+        "{summary}"
+    );
+    assert_eq!(
+        summary["source_processing"]["parsed_record_count"], 1,
+        "{summary}"
+    );
+    assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+    assert_eq!(
+        summary["source_discovery"]["best_effort_fallback_used"],
+        true
+    );
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+    assert!(!log.is_empty());
+    assert!(!log.contains("PRIVATE-DEFAULT"));
+}
+
 #[cfg(unix)]
 #[test]
 fn opencode_relocation_channel_roots_do_not_follow_symlink_components() {

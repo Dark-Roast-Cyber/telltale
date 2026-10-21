@@ -109,8 +109,11 @@ escaping rules.
   `opencode-<channel>.db` files are candidates. A channel is nonempty and contains
   only ASCII letters, digits, `.`, `_`, or `-`; the basename predicate is
   case-sensitive. Sidecars, extra extensions and nested files are not candidates.
-  New channel enumeration rejects symlink components in its directory root;
-  the pre-existing default-file lookup remains separate.
+  Environment-resolved discovery validates directory components before selecting
+  defaults or channels and rejects symlinked `opencode.db` files, including
+  dangling links. Best-effort skips rejected targets while retaining healthy
+  candidates; watch registers only validated directories, never a linked default
+  directory target. Non-`.` explicit-root behavior remains unchanged.
   Native filesystem aliases can still be case-insensitive. The pinned
   [filename resolver](https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13)
   sanitizes the baked build channel; setting runtime `OPENCODE_CHANNEL` does not
