@@ -341,13 +341,16 @@ fn reject_decoded_hidden_characters(raw: &str) -> Result<(), Box<dyn Error>> {
 
 /// Controls and invisible formatting characters can make reviewed text differ
 /// from what a matcher, terminal, or analyst tool interprets.
+/// Controls and invisible formatting. The range starting at U+2028 includes the
+/// line and paragraph separators: YAML breaks lines there, but many viewers do
+/// not, so they could add keys a reviewer never sees.
 fn is_hidden_character(character: char) -> bool {
     (character.is_control() && !matches!(character, '\t' | '\r' | '\n'))
         || matches!(
             character,
             '\u{061C}'
                 | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
+                | '\u{2028}'..='\u{202E}'
                 | '\u{2060}'..='\u{2069}'
                 | '\u{FEFF}'
         )
@@ -538,6 +541,19 @@ documents:
         let message = error(&raw);
         assert!(message.contains("forbidden character U+202E"), "{message}");
         assert!(message.contains("line 19"), "{message}");
+    }
+
+    #[test]
+    fn unicode_line_separators_are_rejected_before_yaml_splits_on_them() {
+        for separator in ['\u{2028}', '\u{2029}'] {
+            let raw = package("acme.rules", "acme", "acme.synthetic.marker").replace(
+                "explanation: Synthetic package rule.",
+                &format!("explanation: Synthetic package rule.{separator}        enabled: false"),
+            );
+            let message = error(&raw);
+            let expected = format!("forbidden character U+{:04X}", separator as u32);
+            assert!(message.contains(&expected), "{message}");
+        }
     }
 
     #[test]
