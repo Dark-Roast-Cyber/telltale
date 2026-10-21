@@ -61,7 +61,8 @@ function Get-TestSharingError([object[]]$Records) {
     for ($index = 0; $index -lt [Math]::Min(32, $Records.Count); $index++) {
         $record = $Records[$index]
         if ($record -isnot [System.Management.Automation.ErrorRecord]) { continue }
-        if (-not [string]::Equals($record.InvocationInfo.ScriptName, $helper, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not [string]::Equals($record.InvocationInfo.ScriptName, $helper, [StringComparison]::OrdinalIgnoreCase) -and
+            -not [string]::Equals($record.InvocationInfo.ScriptName, $installer, [StringComparison]::OrdinalIgnoreCase)) { continue }
         if (@(Get-TestExceptionChain $record.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -gt 0) { return $record }
     }
     return $null
@@ -70,7 +71,7 @@ function Get-TestSharingError([object[]]$Records) {
 function Get-TestErrorSummary($Failure) {
     if ($null -eq $Failure) { return @{ status = 'unknown'; reason = 'original command error unavailable within 32 records' } }
     $scriptName = [IO.Path]::GetFileName($Failure.InvocationInfo.ScriptName)
-    if ($scriptName -cnotin @('windows-lifecycle.ps1', 'uninstall-telltale.ps1')) { return @{ status = 'unknown'; reason = 'unexpected error origin' } }
+    if ($scriptName -cnotin @('windows-lifecycle.ps1', 'uninstall-telltale.ps1', 'install-telltale.ps1')) { return @{ status = 'unknown'; reason = 'unexpected error origin' } }
     return @{
         status = 'captured'; script = $scriptName; line = $Failure.InvocationInfo.ScriptLineNumber
         stack = ([string]$Failure.ScriptStackTrace).Substring(0, [Math]::Min(4096, ([string]$Failure.ScriptStackTrace).Length))
@@ -78,7 +79,7 @@ function Get-TestErrorSummary($Failure) {
     }
 }
 
-function Assert-TestDiagnosticTarget([string]$Path) {
+function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]$AllowMissing) {
     # Lexical scope checks precede ALL filesystem/native probes. A similar
     # prefix, another test root, canonical installation or normalized escape fails.
     $parent = [IO.Path]::Combine($script:TTLocal, 'TelltaleLifecycleTests')
@@ -90,16 +91,30 @@ function Assert-TestDiagnosticTarget([string]$Path) {
     if (-not [string]::Equals($full, $Path, [StringComparison]::OrdinalIgnoreCase) -or
         -not $full.StartsWith($temp + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is outside the exact synthetic root or is not normalized.' }
     $relative = $full.Substring($temp.Length + 1)
-    if ($relative -cnotmatch '^[A-Za-z0-9-]{1,64}\\Application With Spaces\\telltale\.exe$' -or
-        -not [string]::Equals($full, [IO.Path]::Combine($script:testLayout.InstallDirectory, 'telltale.exe'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is not the selected synthetic installed executable.' }
+    $leaf = [IO.Path]::GetFileName($full)
+    $allowed = if ($FixedLeaf) { @('telltale.exe', 'staged.exe', 'previous.exe', 'install-receipt.json', 'transaction.json') } else { @('telltale.exe', 'staged.exe') }
+    if ($relative -cnotmatch '^[A-Za-z0-9-]{1,64}\\Application With Spaces\\[^\\]+$' -or $leaf -cnotin $allowed -or
+        -not [string]::Equals($full, [IO.Path]::Combine($script:testLayout.InstallDirectory, $leaf), [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is not an exact selected synthetic leaf.' }
     Get-TTPath $full | Out-Null
+    foreach ($directory in @($testParent, $temp, $script:testLayout.InstallDirectory)) {
+        if (Test-Path -LiteralPath $directory) {
+            if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw 'Diagnostic ancestor is not a directory.' }
+            Assert-TTOwner $directory
+        }
+    }
+    if ($AllowMissing -and -not (Test-Path -LiteralPath $full)) { return $full }
     Assert-TTFile $full -Owned
     return $full
 }
 
-function Get-TestLockUsers([string]$Path) {
+function Get-TestLockUsers([string]$Path, $Refusal = $null) {
+    $leaf = [IO.Path]::GetFileName($Path)
+    if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock') -or
+        $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
+        throw 'Staged attribution requires a selected scenario and an observed sharing refusal.'
+    }
     $checked = Assert-TestDiagnosticTarget $Path
-    $report = @{ status = 'unknown'; scope = 'exact synthetic installed executable'; processes = @(); limitation = 'post-failure resource users are not proof of lock ownership; kernel users may be absent' }
+    $report = @{ status = 'unknown'; scope = "exact synthetic $leaf"; processes = @(); limitation = 'post-failure resource users are not proof of lock ownership; kernel users may be absent' }
     if ($env:GITHUB_ACTIONS -cne 'true') { $report.reason = 'native attribution restricted to disposable CI'; return $report }
     try {
         $result = [TelltaleLifecycleTests.LockUsers]::Query($checked)
@@ -111,6 +126,49 @@ function Get-TestLockUsers([string]$Path) {
         foreach ($user in $result.Processes) { $report.processes += @{ pid = $user.Pid; start_filetime = $user.StartFileTime } }
     } catch { $report.reason = 'native attribution unavailable'; $report.exceptions = @(Get-TestExceptionChain $_.Exception) }
     return $report
+}
+
+function Get-TestFileDiagnostic([string]$Name) {
+    $entry = [ordered]@{ name = $Name; state = 'unknown' }
+    try {
+        $path = Assert-TestDiagnosticTarget ([IO.Path]::Combine($script:testLayout.InstallDirectory, $Name)) -FixedLeaf -AllowMissing
+        if (Test-Path -LiteralPath $path) {
+            $entry.state = 'present'
+            try { $entry.sha256 = Get-TTHash $path }
+            catch { $entry.read_error = @(Get-TestExceptionChain $_.Exception) }
+            try { Assert-TTUnlocked $path; $entry.exclusive_probe = 'available' }
+            catch {
+                $probeFailure = $_
+                $entry.exclusive_probe = 'refused'; $entry.probe_error = @(Get-TestExceptionChain $probeFailure.Exception)
+                if ($Name -ceq 'staged.exe' -and $script:testScenario -cin @('fresh', 'partial-rollback', 'controlled-stage-lock')) {
+                    try { $entry.lock_users = Get-TestLockUsers $path $probeFailure }
+                    catch { $entry.lock_users = @{ status = 'unknown'; reason = 'synthetic stage validation or attribution failed'; processes = @(); exceptions = @(Get-TestExceptionChain $_.Exception) } }
+                }
+            }
+            if ($Name -cin @('install-receipt.json', 'transaction.json')) {
+                try {
+                    $metadata = Read-TTJson $path
+                    $entry.metadata = 'readable'
+                    foreach ($flag in @('uninstalling', 'committed')) {
+                        if ($metadata.PSObject.Properties[$flag] -and $metadata.$flag -is [bool]) { $entry[$flag] = $metadata.$flag }
+                    }
+                } catch { $entry.metadata = 'unknown'; $entry.metadata_error = @(Get-TestExceptionChain $_.Exception) }
+            }
+        } else { $entry.state = 'missing' }
+    } catch { $entry.error = @(Get-TestExceptionChain $_.Exception) }
+    return $entry
+}
+
+function Invoke-TestDiagnosticInstall([hashtable]$Layout, [string]$DevelopmentBinary) {
+    if ($script:testScenario -cnotin @('fresh', 'partial-rollback') -or $Layout.Count -ne 2 -or
+        $Layout.InstallDirectory -cne $script:testLayout.InstallDirectory -or $Layout.DataDirectory -cne $script:testLayout.DataDirectory) { throw 'Installer diagnostics require the exact selected scenario.' }
+    $installErrors = @()
+    try { & $installer @Layout -DevelopmentBinary $DevelopmentBinary -ErrorVariable installErrors }
+    catch {
+        $failure = $_
+        Write-TestFailure $failure (Get-TestSharingError $installErrors)
+        throw
+    }
 }
 
 function Write-TestFailure($Failure, $OriginalError = $null) {
@@ -146,28 +204,7 @@ function Write-TestFailure($Failure, $OriginalError = $null) {
         if ($null -ne $script:testLayout) {
             # Fixed synthetic leaves only: never enumerate directories or dump metadata contents.
             foreach ($name in @('telltale.exe', 'staged.exe', 'previous.exe', 'install-receipt.json', 'transaction.json')) {
-                $entry = [ordered]@{ name = $name; state = 'unknown' }
-                try {
-                    $path = Get-TTPath (Join-Path $script:testLayout.InstallDirectory $name)
-                    if (-not $path.StartsWith($testParent + '\telltale-lifecycle-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Not a synthetic target.' }
-                    if (Test-Path -LiteralPath $path) {
-                        $entry.state = 'present'
-                        try { $entry.sha256 = Get-TTHash $path }
-                        catch { $entry.read_error = @(Get-TestExceptionChain $_.Exception) }
-                        try { Assert-TTUnlocked $path; $entry.exclusive_probe = 'available' }
-                        catch { $entry.exclusive_probe = 'refused'; $entry.probe_error = @(Get-TestExceptionChain $_.Exception) }
-                        if ($name -in @('install-receipt.json', 'transaction.json')) {
-                            try {
-                                $metadata = Read-TTJson $path
-                                $entry.metadata = 'readable'
-                                foreach ($flag in @('uninstalling', 'committed')) {
-                                    if ($metadata.PSObject.Properties[$flag] -and $metadata.$flag -is [bool]) { $entry[$flag] = $metadata.$flag }
-                                }
-                            } catch { $entry.metadata = 'unknown'; $entry.metadata_error = @(Get-TestExceptionChain $_.Exception) }
-                        }
-                    } else { $entry.state = 'missing' }
-                } catch { $entry.error = @(Get-TestExceptionChain $_.Exception) }
-                $report.files += $entry
+                $report.files += Get-TestFileDiagnostic $name
             }
         }
         if ($script:testScheduler -ne 'not inspected') {
@@ -303,12 +340,12 @@ try {
     $before = Get-TreeDigest $temp
     & $installer @layout -DevelopmentBinary $binary -WhatIf
     Assert-True ((Get-TreeDigest $temp) -ceq $before) 'install WhatIf makes no filesystem changes'
-    & $installer @layout -DevelopmentBinary $BinaryPath
+    Invoke-TestDiagnosticInstall $layout $BinaryPath
     Assert-True (Test-Path -LiteralPath (Join-Path $layout.InstallDirectory 'telltale.exe')) 'fresh development installation'
     Assert-True ($null -eq (Get-TTTask)) 'task absent by default'
     $receipt = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
     Assert-True ($receipt.source.kind -ceq 'development-local') 'development provenance stays distinct'
-    & $installer @layout -DevelopmentBinary $binary
+    Invoke-TestDiagnosticInstall $layout $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).id -ceq $receipt.id) 'same-version repeat preserves installation identity'
     $variant = Join-Path $temp 'development-variant.exe'
     Copy-Item -LiteralPath $binary -Destination $variant
@@ -317,7 +354,7 @@ try {
     # pretending this fixture is a separately compiled or published version.
     $stream = [IO.File]::Open($variant, 'Append', 'Write', 'None')
     try { $stream.WriteByte(42) } finally { $stream.Dispose() }
-    & $installer @layout -DevelopmentBinary $variant
+    Invoke-TestDiagnosticInstall $layout $variant
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq (Get-TTHash $variant)) 'replacement with a different development digest'
     $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
     Assert-True ((Invoke-TTNative $installed @('--version')) -ceq $receipt.version) 'installed binary version'
@@ -586,8 +623,56 @@ try {
         $script:lockWorker = $null
     }
 
-    $layout = New-TestLayout 'partial-rollback'
+    $layout = New-TestLayout 'controlled-stage-lock'
     & $installer @layout -DevelopmentBinary $binary
+    $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $next = ($previous | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+    $next.binary_sha256 = Get-TTHash $variant
+    $journalPath = Join-Path $layout.InstallDirectory 'transaction.json'
+    Write-TTJson $journalPath @{ previous = $previous; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+    $stage = Join-Path $layout.InstallDirectory 'staged.exe'
+    Copy-Item -LiteralPath $variant -Destination $stage
+    Set-TTCreatedOwner $stage
+    $stageAlias = Join-Path $temp 'stage-hardlink.exe'
+    New-Item -ItemType HardLink -Path $stageAlias -Target $stage | Out-Null
+    try { Assert-Fails { Assert-TestDiagnosticTarget $stage } 'stage diagnostics reject a hard-linked exact target' }
+    finally { Remove-Item -LiteralPath $stageAlias }
+    foreach ($invalidTarget in @((Join-Path $temp 'staged.exe'), (Join-Path $layout.DataDirectory 'staged.exe'), (Join-Path $layout.InstallDirectory 'previous.exe'), (Join-Path $layout.InstallDirectory '..\Application With Spaces\staged.exe'))) {
+        Assert-Fails { Assert-TestDiagnosticTarget $invalidTarget } 'stage diagnostics reject nonselected filename layout or normalized escape'
+    }
+    $beforeStageDiagnostic = Get-TreeDigest $layout.InstallDirectory
+    $stageStream = [IO.File]::Open($stage, 'Open', 'Read', 'Read')
+    try {
+        Assert-TTUnlocked $installed
+        $installErrors = @()
+        $installFailure = $null
+        try { & $installer @layout -DevelopmentBinary $binary -ErrorVariable installErrors | Out-Null }
+        catch { $installFailure = $_ }
+        Assert-True ($null -ne $installFailure) 'controlled stage lock blocks installer recovery'
+        $originalSummary = Get-TestErrorSummary (Get-TestSharingError $installErrors)
+        Assert-True ($originalSummary.status -ceq 'captured' -and $originalSummary.script -ceq 'windows-lifecycle.ps1') 'installer command retains original recovery sharing error'
+        Assert-True (@($originalSummary.exceptions | Where-Object { $_.hresult -eq -2147024864 }).Count -gt 0) 'controlled stage recovery retains native sharing HRESULT'
+        Assert-Fails { Get-TestLockUsers $stage } 'staged-file query requires an observed sharing refusal'
+        $stageDiagnostic = Get-TestFileDiagnostic 'staged.exe'
+        Assert-True ($stageDiagnostic.exclusive_probe -ceq 'refused' -and $stageDiagnostic.lock_users.status -cin @('reported', 'unknown')) 'refused exact stage has bounded attribution or explicit unknown'
+        Assert-True (@($stageDiagnostic.lock_users.processes).Count -le 8) 'staged-file attribution is bounded'
+        foreach ($user in @($stageDiagnostic.lock_users.processes)) {
+            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime') }).Count -eq 0) 'stage attribution exposes only PID and start identity'
+        }
+        Assert-True ($stageStream.CanRead -and (Get-TreeDigest $layout.InstallDirectory) -ceq $beforeStageDiagnostic) 'stage diagnostics preserve open lock and all protected bytes'
+        Assert-Fails { Assert-TTUnlocked $stage } 'stage diagnostics do not release or remediate the lock'
+        Assert-Fails { & $uninstaller @layout -Confirm:$false } 'locked staged transaction still blocks cleanup'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeStageDiagnostic) 'stage diagnostics and refused cleanup preserve transaction evidence'
+        Write-Host ('Windows lifecycle controlled stage diagnostic: ' + (@{ original_error = $originalSummary; file = $stageDiagnostic; lock_owner = 'known test stream; resource users are not ownership proof'; bytes_preserved = $true } | ConvertTo-Json -Depth 12 -Compress))
+    } finally { $stageStream.Dispose() }
+    Assert-TTUnlocked $stage
+    & $installer @layout -DevelopmentBinary $binary
+    Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq $previous.binary_sha256 -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'controlled stage recovers only after explicit test release'
+    & $uninstaller @layout -Confirm:$false
+
+    $layout = New-TestLayout 'partial-rollback'
+    Invoke-TestDiagnosticInstall $layout $binary
     $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
     $beforeHash = Get-TTHash $installed
     $metadata = Join-Path $layout.InstallDirectory 'install-receipt.json'
@@ -597,7 +682,7 @@ try {
         Assert-Fails { & $uninstaller @layout -Confirm:$false } 'pending recovery blocks cleanup'
     } finally { $stream.Dispose() }
     Assert-True ((Get-TTHash $installed) -ceq $beforeHash) 'previous binary restored despite blocked metadata rollback'
-    & $installer @layout -DevelopmentBinary $binary
+    Invoke-TestDiagnosticInstall $layout $binary
     $stream = [IO.File]::Open($metadata, 'Open', 'Read', 'Read')
     try { Assert-Fails { & $uninstaller @layout -Confirm:$false } 'cleanup metadata failure does not report success' }
     finally { $stream.Dispose() }

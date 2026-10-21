@@ -2183,6 +2183,55 @@ fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
     assert!(lexical_scope < file_probe);
     assert!(target_guard.contains("[IO.Path]::GetFileName($temp) -cnotmatch"));
     assert!(target_guard.contains("Assert-TTFile $full -Owned"));
+    assert!(
+        script.contains("function Invoke-TestDiagnosticInstall"),
+        "selected installer operations must retain command-scoped original errors"
+    );
+    assert!(script.contains("$record.InvocationInfo.ScriptName, $installer,"));
+    assert!(script.contains("'uninstall-telltale.ps1', 'install-telltale.ps1'"));
+    assert!(script.contains("function Get-TestFileDiagnostic"));
+    assert!(script.contains("Get-TestLockUsers $path $probeFailure"));
+    assert!(script.contains("staged-file query requires an observed sharing refusal"));
+    assert!(script.contains("stage diagnostics preserve open lock and all protected bytes"));
+    assert!(script.contains("stage diagnostics do not release or remediate the lock"));
+    assert_eq!(
+        script
+            .matches("Invoke-TestDiagnosticInstall $layout")
+            .count(),
+        5
+    );
+    let file_diagnostic = script
+        .split("function Get-TestFileDiagnostic")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-TestDiagnosticInstall")
+        .next()
+        .unwrap();
+    assert!(
+        file_diagnostic
+            .find("$entry.exclusive_probe = 'refused'")
+            .unwrap()
+            < file_diagnostic
+                .find("Get-TestLockUsers $path $probeFailure")
+                .unwrap()
+    );
+    assert!(target_guard.contains("$leaf -cnotin $allowed"));
+    assert!(target_guard.contains("Assert-TTOwner $directory"));
+    let attribution = script
+        .split("function Get-TestLockUsers")
+        .nth(1)
+        .unwrap()
+        .split("function Get-TestFileDiagnostic")
+        .next()
+        .unwrap();
+    assert!(attribution.contains("$null -eq $Refusal"));
+    assert!(attribution.contains("$_.hresult -eq -2147024864"));
+    assert!(
+        attribution
+            .find("$checked = Assert-TestDiagnosticTarget $Path")
+            .unwrap()
+            < attribution.find("::Query($checked)").unwrap()
+    );
     for forbidden in [
         "Get-Process",
         "Get-CimInstance",
