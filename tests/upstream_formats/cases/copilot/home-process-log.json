@@ -2,12 +2,12 @@
   "description": "Copilot CLI writes one process log per session to ~/.copilot/logs/process-<timestamp>-<pid>.log under the default home. copilot-home-relocation covers COPILOT_HOME.",
   "harness": "copilot-cli",
   "upstream": [
-    "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484",
-    "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1694",
+    "https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/changelog.md#L1585",
+    "https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/changelog.md#L1795",
     "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
   ],
   "status": "known_gap",
-  "note": "Telltale registers only project-local logs/copilot. Copilot CLI does not publish its log writer, so the path comes from the pinned changelog and the official config-dir reference; the log contents reuse a Telltale fixture, and whether 1.0.96 still writes these lines at the default level is unconfirmed.",
+  "note": "Telltale registers only project-local logs/copilot. Copilot CLI does not publish its log writer, so the path comes from the pinned changelog and the official config-dir reference; the log contents reuse a Telltale fixture, and whether 1.0.101 writes these lines at the default level is unconfirmed.",
   "discover": {
     "client": "copilot",
     "files": {

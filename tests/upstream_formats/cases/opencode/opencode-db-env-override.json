@@ -2,8 +2,8 @@
   "description": "An absolute OPENCODE_DB value is used as the database path as is. Relative values resolve against the data directory and are not covered by this case.",
   "harness": "opencode",
   "upstream": [
-    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13",
-    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/core/src/session/sql.ts#L22-L94"
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/cli/src/database-path.ts#L4-L13",
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/session/sql.ts#L22-L94"
   ],
   "status": "known_gap",
   "note": "Telltale does not read OPENCODE_DB. Tables are reduced to the columns session history needs.",
@@ -39,7 +39,7 @@
                 "slug": "synthetic",
                 "directory": "/synthetic/work",
                 "title": "Synthetic session",
-                "version": "2.0.27",
+                "version": "2.1.2",
                 "agent": "build",
                 "model": {
                   "id": "synthetic-model",

@@ -2,27 +2,27 @@
   "claude-code": {
     "client": "claude",
     "repository": "anthropics/claude-code",
-    "tag": "v2.1.296",
-    "commit": "2301018b1f61073c501a8e7a4813ef48c239163b",
-    "checked": "2026-10-13",
+    "tag": "v2.1.306",
+    "commit": "d014fc0fa64280540728772fc84063918ed185cc",
+    "checked": "2026-10-21",
     "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
-    "note": "The transcript format is internal and unpublished; shapes come from the pinned changelog and documented session paths."
+    "note": "The transcript format is internal and unpublished. v2.1.300 added API-request details, but their record schema is not published; the existing bounded transcript case does not establish coverage of those additions."
   },
   "codex": {
     "client": "codex",
     "repository": "openai/codex",
-    "tag": "rust-v0.162.1",
-    "commit": "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d",
-    "checked": "2026-10-13",
+    "tag": "rust-v0.163.0",
+    "commit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "checked": "2026-10-21",
     "tag_pattern": "^rust-v[0-9]+\\.[0-9]+\\.[0-9]+$",
-    "note": "Re-read rollout/src/policy.rs, history/src/rollout_payload.rs, protocol/src/items.rs and core/src/tools/handlers/shell_spec.rs at a new tag."
+    "note": "Re-read rollout/src/policy.rs, history/src/rollout_payload.rs, protocol/src/items.rs, protocol/src/models.rs and core/src/tools/handlers/shell_spec.rs at a new tag."
   },
   "copilot-cli": {
     "client": "copilot",
     "repository": "github/copilot-cli",
-    "tag": "v1.0.96",
-    "commit": "dcdc0273c0250d8b32677ca99bc0e1f5006daa89",
-    "checked": "2026-10-13",
+    "tag": "v1.0.101",
+    "commit": "84a2bd392a397e3dafaa9a1212b2964c3bd694bc",
+    "checked": "2026-10-21",
     "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
     "note": "No published schema for process logs or session-state events.jsonl; storage comes from the changelog and config-dir reference."
   },
@@ -38,11 +38,11 @@
   "opencode": {
     "client": "opencode",
     "repository": "anomalyco/opencode",
-    "tag": "v2.0.27",
-    "commit": "1f4d07a4a519185955ae8ab2ea3607805509e386",
-    "checked": "2026-10-13",
+    "tag": "v2.1.2",
+    "commit": "a517687fde98a7329ada3ae644a01a9fc6c4e99e",
+    "checked": "2026-10-21",
     "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
-    "note": "v2 databases bootstrap session_v2 and session_message; v1 message/part stores are legacy."
+    "note": "v2.1.2 is a source tag without a GitHub Release record. Database paths and tables are unchanged from v2.0.27, but packages/schema/src/session-message.ts replaces provider replay metadata with native and changes compaction fields; v1 message/part stores are legacy."
   },
   "qwen-code": {
     "client": "qwen",

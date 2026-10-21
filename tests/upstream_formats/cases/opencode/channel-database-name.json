@@ -2,8 +2,8 @@
   "description": "Release channels other than latest, dev, beta, next and prod write opencode-<channel>.db in the data directory, for example opencode-stable.db.",
   "harness": "opencode",
   "upstream": [
-    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13",
-    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/core/src/session/sql.ts#L22-L94"
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/cli/src/database-path.ts#L4-L13",
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/session/sql.ts#L22-L94"
   ],
   "status": "known_gap",
   "note": "Discovery matches only the exact file opencode.db. Tables are reduced to the columns session history needs.",
@@ -39,7 +39,7 @@
                 "slug": "synthetic",
                 "directory": "/synthetic/work",
                 "title": "Synthetic session",
-                "version": "2.0.27",
+                "version": "2.1.2",
                 "agent": "build",
                 "model": {
                   "id": "synthetic-model",

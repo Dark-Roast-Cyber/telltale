@@ -2,7 +2,7 @@
   "description": "CLAUDE_CONFIG_DIR moves everything Claude Code writes, including projects/<project>/<session>.jsonl transcripts.",
   "harness": "claude-code",
   "upstream": [
-    "https://github.com/anthropics/claude-code/blob/2301018b1f61073c501a8e7a4813ef48c239163b/CHANGELOG.md#L2184",
+    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L2717",
     "https://code.claude.com/docs/en/env-vars",
     "https://code.claude.com/docs/en/sessions"
   ],
