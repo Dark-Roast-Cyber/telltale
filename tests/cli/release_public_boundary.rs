@@ -2155,6 +2155,57 @@ fn assert_ci_validator_bootstrap(workflow: &serde_yaml::Value) {
 }
 
 #[test]
+fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
+    let script = fs::read_to_string("tests/windows_lifecycle.ps1").unwrap();
+    assert!(
+        script.contains("function Get-TestSharingError"),
+        "the controlled-lock characterization needs command-scoped original error capture"
+    );
+    assert!(script.contains("-ErrorVariable uninstallErrors"));
+    assert!(script.contains("command-scoped errors retain original sharing violation"));
+    assert!(script.contains("function Assert-TestDiagnosticTarget"));
+    assert!(script.contains("function Get-TestLockUsers"));
+    assert!(script.contains("RmRegisterResources(session, 1, new[] { path }, 0, null, 0, null)"));
+    assert!(script.contains("ProcessInfo[16]"));
+    assert!(script.contains("count > 8"));
+    assert!(script.contains("[Math]::Min(32, $Records.Count)"));
+    assert!(script.contains("[Math]::Min(4096,"));
+    assert!(script.contains("RmEndSession(session)"));
+    let target_guard = script
+        .split("function Assert-TestDiagnosticTarget")
+        .nth(1)
+        .unwrap()
+        .split("function Get-TestLockUsers")
+        .next()
+        .unwrap();
+    let lexical_scope = target_guard.find("$full.StartsWith($temp +").unwrap();
+    let file_probe = target_guard.find("Get-TTPath $full").unwrap();
+    assert!(lexical_scope < file_probe);
+    assert!(target_guard.contains("[IO.Path]::GetFileName($temp) -cnotmatch"));
+    assert!(target_guard.contains("Assert-TTFile $full -Owned"));
+    for forbidden in [
+        "Get-Process",
+        "Get-CimInstance",
+        "Get-WmiObject",
+        "Process.GetProcesses",
+        "RmShutdown",
+        "RmRestart(",
+        "$global:Error",
+        ".Exception.Message",
+        ".InvocationInfo.Line",
+        ".PositionMessage",
+        ".TargetObject",
+        ".AppName",
+        ".ServiceName",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "broad or mutating probe: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn ci_validator_bootstrap_precedes_consumers_and_rejects_bypasses() {
     let workflow: serde_yaml::Value =
         serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
