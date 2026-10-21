@@ -19,6 +19,11 @@ New-TTDirectory $testParent
 $temp = Get-TTPath (Join-Path $testParent ("telltale-lifecycle-tests-{0}" -f [guid]::NewGuid()))
 New-TTDirectory $temp
 $script:assertions = 0
+$script:firstFailureReported = $false
+$script:testScenario = 'setup'
+$script:testLayout = $null
+$script:lockWorker = $null
+$script:testScheduler = 'substituted'
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "Assertion failed: $Message" }
     $script:assertions++
@@ -30,12 +35,89 @@ function Assert-Fails([scriptblock]$Operation, [string]$Message) {
 }
 function New-TestLayout([string]$Name) {
     $directory = Join-Path $temp $Name
-    return @{ InstallDirectory = (Join-Path $directory 'Application With Spaces'); DataDirectory = (Join-Path $directory 'Runtime Data') }
+    $script:testScenario = $Name
+    $script:testLayout = @{ InstallDirectory = (Join-Path $directory 'Application With Spaces'); DataDirectory = (Join-Path $directory 'Runtime Data') }
+    return $script:testLayout
 }
 function Get-TreeDigest([string]$Directory) {
     return (@(Get-ChildItem -LiteralPath $Directory -Recurse -Force | Sort-Object FullName | ForEach-Object {
         if ($_.PSIsContainer) { $_.FullName } else { "$($_.FullName):$((Get-FileHash -LiteralPath $_.FullName).Hash)" }
     }) -join "`n")
+}
+
+function Get-TestExceptionChain($Exception) {
+    $chain = @()
+    for ($depth = 0; $null -ne $Exception -and $depth -lt 8; $depth++) {
+        $chain += @{ type = $Exception.GetType().FullName; hresult = $Exception.HResult }
+        $Exception = $Exception.InnerException
+    }
+    return $chain
+}
+
+function Write-TestFailure($Failure) {
+    if ($script:firstFailureReported) { return }
+    $script:firstFailureReported = $true
+    try {
+        $self = [Diagnostics.Process]::GetCurrentProcess()
+        try { $identity = @{ pid = $self.Id; start_utc = $self.StartTime.ToUniversalTime().ToString('o') } }
+        finally { $self.Dispose() }
+        # String throws can use the entire message as their error ID; do not
+        # serialize arbitrary messages or source lines in addition to the rethrow.
+        $errorId = [string]$Failure.FullyQualifiedErrorId
+        if ($errorId -cnotmatch '^[A-Za-z0-9_.:,-]{1,256}$') { $errorId = 'omitted-non-identifier' }
+        $report = [ordered]@{
+            scenario = $script:testScenario; observed_utc = [DateTime]::UtcNow.ToString('o'); assertions = $script:assertions; process = $identity
+            error_id = $errorId
+            category = [string]$Failure.CategoryInfo.Category
+            script = [IO.Path]::GetFileName($Failure.InvocationInfo.ScriptName)
+            line = $Failure.InvocationInfo.ScriptLineNumber
+            stack = ([string]$Failure.ScriptStackTrace).Substring(0, [Math]::Min(4096, ([string]$Failure.ScriptStackTrace).Length))
+            exceptions = @(Get-TestExceptionChain $Failure.Exception)
+            exception_limit = 'Installer string rethrows may have discarded the original inner stack and HResult.'
+            lock_owner = 'unknown: no native handle-owner probe; file probes below are post-failure observations'
+            known_lock_worker = $script:lockWorker; files = @(); task = 'not inspected'; scheduler = $script:testScheduler
+            target = if ($null -ne $script:testLayout) { $script:testLayout.InstallDirectory } else { 'not selected' }
+        }
+        if ($null -ne $script:testLayout) {
+            # Fixed synthetic leaves only: never enumerate directories or dump metadata contents.
+            foreach ($name in @('telltale.exe', 'staged.exe', 'previous.exe', 'install-receipt.json', 'transaction.json')) {
+                $entry = [ordered]@{ name = $name; state = 'unknown' }
+                try {
+                    $path = Get-TTPath (Join-Path $script:testLayout.InstallDirectory $name)
+                    if (-not $path.StartsWith($testParent + '\telltale-lifecycle-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Not a synthetic target.' }
+                    if (Test-Path -LiteralPath $path) {
+                        $entry.state = 'present'
+                        try { $entry.sha256 = Get-TTHash $path }
+                        catch { $entry.read_error = @(Get-TestExceptionChain $_.Exception) }
+                        try { Assert-TTUnlocked $path; $entry.exclusive_probe = 'available' }
+                        catch { $entry.exclusive_probe = 'refused'; $entry.probe_error = @(Get-TestExceptionChain $_.Exception) }
+                        if ($name -in @('install-receipt.json', 'transaction.json')) {
+                            try {
+                                $metadata = Read-TTJson $path
+                                $entry.metadata = 'readable'
+                                foreach ($flag in @('uninstalling', 'committed')) {
+                                    if ($metadata.PSObject.Properties[$flag] -and $metadata.$flag -is [bool]) { $entry[$flag] = $metadata.$flag }
+                                }
+                            } catch { $entry.metadata = 'unknown'; $entry.metadata_error = @(Get-TestExceptionChain $_.Exception) }
+                        }
+                    } else { $entry.state = 'missing' }
+                } catch { $entry.error = @(Get-TestExceptionChain $_.Exception) }
+                $report.files += $entry
+            }
+        }
+        if ($script:testScheduler -ne 'not inspected') {
+            try {
+                $task = Get-TTTask
+                $report.task = if ($null -eq $task) { @{ present = $false } }
+                    else { @{ present = $true; state = $task.State; enabled = $task.Enabled; xml_sha256 = Get-TTTextHash $task.Xml } }
+            } catch { $report.task = @{ state = 'unknown'; exceptions = @(Get-TestExceptionChain $_.Exception) } }
+        }
+        Write-Host ('Windows lifecycle first failure: ' + ($report | ConvertTo-Json -Depth 12 -Compress))
+    } catch {
+        # Even a failed diagnostic output channel must not replace the test error.
+        try { Write-Host ('Windows lifecycle diagnostics: unknown; capture failed: ' + ($_.Exception.GetType().FullName)) }
+        catch { }
+    }
 }
 
 # The regression matrix exercises real scripts, files and binaries. Only Task
@@ -117,6 +199,8 @@ try {
     finally { Pop-Location }
     Assert-True (Test-Path -LiteralPath (Join-Path $relativeLayout.InstallDirectory 'telltale.exe')) 'development source follows PowerShell location'
     & $uninstaller @relativeLayout -Confirm:$false
+    $script:testScenario = 'fresh-synthetic-scan'
+    $script:testLayout = $layout
     Invoke-TTNative $installed @('rules', 'validate', '--no-local-config') | Out-Null
 
     $fixtureRoot = Join-Path $temp 'synthetic-session-store'
@@ -252,6 +336,102 @@ try {
     Assert-True ((Get-TTHash $installed) -ceq $originalHash) 'restored only the synthetic test binary'
     & $uninstaller @layout -Confirm:$false
 
+    $layout = New-TestLayout 'distinct-process-locked-recovery'
+    & $installer @layout -DevelopmentBinary $binary
+    $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $before = Get-TreeDigest $layout.InstallDirectory
+    $lockWorkerScript = Join-Path $temp 'read-lock-worker.ps1'
+    [IO.File]::WriteAllText($lockWorkerScript, @'
+param($Target, $ReadyEvent, $ReleaseEvent)
+$ErrorActionPreference = 'Stop'
+$ready = [Threading.EventWaitHandle]::OpenExisting($ReadyEvent)
+$release = [Threading.EventWaitHandle]::OpenExisting($ReleaseEvent)
+$stream = $null
+try {
+    $stream = [IO.File]::Open($Target, 'Open', 'Read', 'Read')
+    $ready.Set() | Out-Null
+    if (-not $release.WaitOne(120000)) { throw 'Synthetic read-lock release timed out.' }
+} finally {
+    if ($null -ne $stream) { $stream.Dispose() }
+    $ready.Dispose()
+    $release.Dispose()
+}
+'@)
+    $eventPrefix = 'Local\TelltaleLifecycleTests-' + [guid]::NewGuid().ToString()
+    $lockReady = [Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset, ($eventPrefix + '-ready'))
+    $lockRelease = [Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset, ($eventPrefix + '-release'))
+    $lockProcess = $null
+    $workerId = $null
+    $workerStart = $null
+    try {
+        $workerArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Target "{1}" -ReadyEvent "{2}" -ReleaseEvent "{3}"' -f $lockWorkerScript, $installed, ($eventPrefix + '-ready'), ($eventPrefix + '-release')
+        $lockProcess = Start-Process -FilePath $engine -ArgumentList $workerArguments -WindowStyle Hidden -PassThru
+        $workerId = $lockProcess.Id
+        $workerStart = $lockProcess.StartTime.ToUniversalTime()
+        $script:lockWorker = @{ pid = $workerId; start_utc = $workerStart.ToString('o'); target = $installed; ready = $false; release_requested = $false; exit_observed = $false }
+        $script:lockWorker.ready = $lockReady.WaitOne(15000)
+        Assert-True $script:lockWorker.ready 'distinct worker signaled after opening exact installed binary'
+        Assert-True (-not $lockProcess.HasExited -and $lockProcess.Id -eq $workerId -and $lockProcess.StartTime.ToUniversalTime() -eq $workerStart) 'ready worker PID and start time match owned process'
+        $probeFailure = $null
+        try { Assert-TTUnlocked $installed } catch { $probeFailure = $_ }
+        Assert-True ($null -ne $probeFailure) 'known child read lock rejects exclusive binary access'
+        $script:lockWorker.exclusive_probe_exceptions = @(Get-TestExceptionChain $probeFailure.Exception)
+        Assert-True (@($script:lockWorker.exclusive_probe_exceptions | Where-Object { $_.hresult -eq -2147024864 }).Count -gt 0) 'known child lock produces native ERROR_SHARING_VIOLATION'
+        Write-Host ('Windows lifecycle synthetic read lock: ' + ($script:lockWorker | ConvertTo-Json -Depth 6 -Compress))
+        Assert-Fails { & $installer @layout -DevelopmentBinary $variant } 'distinct-process lock blocks replacement'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $before) 'blocked replacement preserves binary, receipt and absent journal'
+        Assert-Fails { & $uninstaller @layout -Confirm:$false } 'distinct-process lock blocks uninstall'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $before) 'blocked uninstall preserves binary, receipt and absent journal'
+
+        # A separate interrupted transaction must remain byte-for-byte recoverable
+        # while the same known worker still holds the installed executable.
+        $next = ($previous | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+        $next.binary_sha256 = Get-TTHash $variant
+        $journalPath = Join-Path $layout.InstallDirectory 'transaction.json'
+        Write-TTJson $journalPath @{ previous = $previous; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+        $stage = Join-Path $layout.InstallDirectory 'staged.exe'
+        Copy-Item -LiteralPath $variant -Destination $stage
+        Set-TTCreatedOwner $stage
+        $beforeRecovery = Get-TreeDigest $layout.InstallDirectory
+        Assert-Fails { & $installer @layout -DevelopmentBinary $binary } 'known child lock blocks pending transaction recovery'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeRecovery) 'blocked recovery preserves binary, receipt, journal and stage bytes'
+        Assert-Fails { & $uninstaller @layout -Confirm:$false } 'pending locked transaction blocks cleanup'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeRecovery) 'blocked pending cleanup preserves transaction evidence'
+        Assert-True (-not $lockProcess.HasExited -and $lockProcess.Id -eq $workerId -and $lockProcess.StartTime.ToUniversalTime() -eq $workerStart) 'same owned worker remains until explicit release'
+        $lockRelease.Set() | Out-Null
+        $script:lockWorker.release_requested = $true
+        $script:lockWorker.exit_observed = $lockProcess.WaitForExit(15000)
+        Assert-True $script:lockWorker.exit_observed 'released worker exited within bound'
+        Assert-True ($lockProcess.ExitCode -eq 0) 'released worker closed lock successfully'
+        Write-Host ('Windows lifecycle synthetic read lock: ' + ($script:lockWorker | ConvertTo-Json -Depth 6 -Compress))
+        Assert-TTUnlocked $installed
+        & $installer @layout -DevelopmentBinary $binary
+        $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+        Assert-True ($recovered.id -ceq $previous.id -and $recovered.binary_sha256 -ceq $previous.binary_sha256 -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'explicit post-release recovery preserves identity and clears transaction'
+        & $uninstaller @layout -Confirm:$false
+        Assert-True (-not (Test-Path -LiteralPath $installed)) 'post-release cleanup removes owned executable'
+    } catch {
+        Write-TestFailure $_
+        throw
+    } finally {
+        try {
+            $lockRelease.Set() | Out-Null
+            if ($null -ne $lockProcess) {
+                if (-not $lockProcess.WaitForExit(15000)) {
+                    if ($null -eq $workerStart -or $lockProcess.Id -ne $workerId -or $lockProcess.StartTime.ToUniversalTime() -ne $workerStart) { throw 'Owned worker identity unknown or changed; no process terminated.' }
+                    $lockProcess.Kill()
+                    if (-not $lockProcess.WaitForExit(15000)) { throw 'Owned read-lock worker did not exit after termination.' }
+                }
+                $lockProcess.Dispose()
+            }
+        } catch {
+            if (-not $script:firstFailureReported) { Write-TestFailure $_; throw }
+            try { Write-Host 'Windows lifecycle read-lock worker cleanup: unknown; original failure retained.' } catch { }
+        } finally { $lockReady.Dispose(); $lockRelease.Dispose() }
+        $script:lockWorker = $null
+    }
+
     $layout = New-TestLayout 'partial-rollback'
     & $installer @layout -DevelopmentBinary $binary
     $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
@@ -333,6 +513,8 @@ try {
     Assert-Fails { Get-TTPathWithoutEntry "$temp;$temp" $temp } 'duplicated PATH ownership rejected'
 
     # Runtime configuration resolver, isolated from real user configuration.
+    $script:testScenario = 'synthetic-configuration-roots'
+    $script:testLayout = $null
     $oldXdg = $env:XDG_CONFIG_HOME
     $oldHome = $env:HOME
     try {
@@ -430,17 +612,27 @@ try {
     Assert-True ((Get-TTTask).Enabled) 'original transition proof survives interrupted rollback registration'
     & $uninstaller @layout -Confirm:$false
     Write-Output "Windows lifecycle regression matrix passed: $script:assertions assertions. Synthetic root: $temp"
+} catch {
+    Write-TestFailure $_
+    throw
 } finally {
     [TelltaleLifecycleTests.Folder]::Current = $null
     [TelltaleLifecycleTests.Folder]::FailRegistrationOnce = $false
     Remove-Item Function:New-Object
+    $script:testScheduler = 'not inspected'
     # A fresh GUID root, checked again after junction tests; never delete canonical directories.
-    $checkedTemp = Get-TTPath $temp
-    if (-not $checkedTemp.StartsWith($testParent + '\telltale-lifecycle-tests-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected test cleanup root.' }
-    Remove-Item -LiteralPath $checkedTemp -Recurse -Force
+    try {
+        $checkedTemp = Get-TTPath $temp
+        if (-not $checkedTemp.StartsWith($testParent + '\telltale-lifecycle-tests-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected test cleanup root.' }
+        Remove-Item -LiteralPath $checkedTemp -Recurse -Force
+    } catch {
+        if (-not $script:firstFailureReported) { Write-TestFailure $_; throw }
+        try { Write-Host 'Windows lifecycle synthetic-root cleanup: unknown; original failure retained.' } catch { }
+    }
 }
 if ($TestScheduledTask) {
     if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Live Task Scheduler testing is restricted to the disposable CI runner.' }
+    $script:testScheduler = 'native-disposable-runner'
     function Set-SyntheticRuntimeOwner($Layout) {
         # Only fresh outputs of this runner's synthetic scan may be normalized.
         # First prove that group ownership still blocks purge without mutation.
@@ -475,6 +667,8 @@ if ($TestScheduledTask) {
     if ($null -ne (Get-TTTask)) { throw 'CI task collision; refusing to change an existing task.' }
     $liveTemp = Get-TTPath (Join-Path $testParent ("telltale-lifecycle-live-{0}" -f [guid]::NewGuid()))
     $layout = @{ InstallDirectory = (Join-Path $liveTemp 'Application With Spaces'); DataDirectory = (Join-Path $liveTemp 'Runtime Data') }
+    $script:testScenario = 'live-scheduler-and-path'
+    $script:testLayout = $layout
     $savedXml = $null
     $savedXdg = $env:XDG_CONFIG_HOME
     $env:XDG_CONFIG_HOME = Join-Path $liveTemp 'synthetic-xdg'
@@ -522,6 +716,8 @@ if ($TestScheduledTask) {
         Assert-True ($null -eq (Get-TTTask) -and -not @((Get-TTUserPath) -split ';' | Where-Object { $_ -ceq $layout.InstallDirectory }).Count) 'live task and owned PATH removed'
         $canonical = @{ InstallDirectory = (Join-Path $script:TTLocal 'Programs\Telltale'); DataDirectory = (Join-Path $script:TTLocal 'Telltale') }
         if ((Test-Path -LiteralPath $canonical.InstallDirectory) -or (Test-Path -LiteralPath $canonical.DataDirectory)) { throw 'Canonical CI installation collision; no existing installation will be touched.' }
+        $script:testScenario = 'canonical-disposable-runner-lifecycle'
+        $script:testLayout = $null # Failure probes are confined to GUID synthetic roots, never canonical paths.
         try {
             & $installer -DevelopmentBinary $binary
             Assert-True ($null -eq (Get-TTTask)) 'canonical default install leaves real task absent'
@@ -536,19 +732,50 @@ if ($TestScheduledTask) {
             Assert-True ((Test-Path -LiteralPath $canonicalLog) -and (Test-Path -LiteralPath $canonicalState)) 'canonical default uninstall retains data'
             & $uninstaller -PurgeData -Confirm:$false
             Assert-True (-not (Test-Path -LiteralPath $canonical.InstallDirectory) -and -not (Test-Path -LiteralPath $canonical.DataDirectory)) 'canonical owned installation fully purged'
+        } catch {
+            Write-TestFailure $_
+            throw
         } finally {
-            if (Test-Path -LiteralPath (Join-Path $canonical.InstallDirectory 'install-receipt.json')) { & $uninstaller -Confirm:$false }
+            try {
+                if (Test-Path -LiteralPath (Join-Path $canonical.InstallDirectory 'install-receipt.json')) { & $uninstaller -Confirm:$false }
+            } catch {
+                if (-not $script:firstFailureReported) { Write-TestFailure $_; throw }
+                try { Write-Host 'Windows lifecycle canonical cleanup: unknown; original failure retained.' } catch { }
+            }
         }
         Write-Output 'Disposable-runner live Scheduled Task and PATH lifecycle passed.'
+    } catch {
+        Write-TestFailure $_
+        throw
     } finally {
         $env:XDG_CONFIG_HOME = $savedXdg
-        if ($savedXml -and $null -ne (Get-TTTask)) {
-            # Only this test owns the exact saved receipt and its synthetic variant.
-            Set-TTTask $savedXml | Out-Null
-            & $uninstaller @layout -Confirm:$false
+        $script:testScenario = 'live-cleanup'
+        $script:testLayout = $layout
+        $cleanupFailure = $null
+        $liveTaskCleanupFailed = $false
+        try {
+            if ($savedXml -and $null -ne (Get-TTTask)) {
+                # Only this test owns the exact saved receipt and its synthetic variant.
+                Set-TTTask $savedXml | Out-Null
+                & $uninstaller @layout -Confirm:$false
+            }
+        } catch {
+            $liveTaskCleanupFailed = $true
+            if (-not $script:firstFailureReported) { $cleanupFailure = $_; Write-TestFailure $_ }
+            else { try { Write-Host 'Windows lifecycle live task cleanup: unknown; original failure retained.' } catch { } }
         }
-        $checkedLive = Get-TTPath $liveTemp
-        if (-not $checkedLive.StartsWith($testParent + '\telltale-lifecycle-live-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected live test cleanup root.' }
-        if (Test-Path -LiteralPath $checkedLive) { Remove-Item -LiteralPath $checkedLive -Recurse -Force }
+        try {
+            if ($liveTaskCleanupFailed) {
+                try { Write-Host 'Windows lifecycle live synthetic root retained: task cleanup failed; recovery evidence preserved.' } catch { }
+            } else {
+                $checkedLive = Get-TTPath $liveTemp
+                if (-not $checkedLive.StartsWith($testParent + '\telltale-lifecycle-live-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected live test cleanup root.' }
+                if (Test-Path -LiteralPath $checkedLive) { Remove-Item -LiteralPath $checkedLive -Recurse -Force }
+            }
+        } catch {
+            if (-not $script:firstFailureReported) { $cleanupFailure = $_; Write-TestFailure $_ }
+            else { try { Write-Host 'Windows lifecycle live synthetic-root cleanup: unknown; original failure retained.' } catch { } }
+        }
+        if ($null -ne $cleanupFailure) { throw $cleanupFailure }
     }
 }
