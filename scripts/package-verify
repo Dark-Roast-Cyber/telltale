@@ -94,6 +94,12 @@ test -f "$(package_path telltale-schema)/data/event-4.0.schema.json" || {
     echo "packaged telltale-schema is missing its Event 4.0 schema asset" >&2
     exit 1
 }
+for asset in action-record-v1 rule-catalog-v1; do
+    test -f "$(package_path telltale-schema)/data/$asset.schema.json" || {
+        echo "packaged telltale-schema is missing its $asset schema asset" >&2
+        exit 1
+    }
+done
 for schema_path in \
     schemas/event.schema.json \
     schemas/historical/README.md \
