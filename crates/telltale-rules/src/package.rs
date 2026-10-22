@@ -164,6 +164,17 @@ impl RulePackage {
     pub fn into_documents(self) -> Vec<RuleSet> {
         self.documents
     }
+
+    /// Diagnostics never show package paths, so a version and content hash
+    /// prefix tell copies apart. The prefix stays short enough that diagnostic
+    /// sanitization keeps it.
+    fn copy_identity(&self) -> String {
+        format!(
+            "version {} (content SHA-256 {}...)",
+            self.version,
+            &self.content_sha256[..12]
+        )
+    }
 }
 
 /// The community package text embedded in this build.
@@ -240,13 +251,19 @@ pub fn resolve_rule_packages(
     community: CommunityRules,
     supplied: Vec<RulePackage>,
 ) -> Result<Vec<ResolvedRulePackage>, Box<dyn Error>> {
-    let mut supplied_ids = BTreeSet::new();
+    let mut supplied_ids = BTreeMap::new();
     for package in &supplied {
-        if !supplied_ids.insert(package.id.as_str()) {
-            return Err(format!("duplicate rule package id '{}'", package.id).into());
+        if let Some(first) = supplied_ids.insert(package.id.as_str(), package) {
+            return Err(format!(
+                "duplicate rule package id '{}': {} and {}; supply each package once",
+                package.id,
+                first.copy_identity(),
+                package.copy_identity()
+            )
+            .into());
         }
     }
-    let supplies_community = supplied_ids.contains(COMMUNITY_PACKAGE_ID);
+    let supplies_community = supplied_ids.contains_key(COMMUNITY_PACKAGE_ID);
 
     let mut resolved = Vec::new();
     let mut replaced_embedded_version = None;
@@ -292,6 +309,7 @@ pub fn resolve_rule_packages(
 }
 
 fn reject_hidden_characters(raw: &str) -> Result<(), Box<dyn Error>> {
+    // `lines()` drops CRLF endings, so any carriage return left is a lone one.
     for (line, text) in raw.lines().enumerate() {
         if let Some(character) = text
             .chars()
@@ -340,12 +358,12 @@ fn reject_decoded_hidden_characters(raw: &str) -> Result<(), Box<dyn Error>> {
 }
 
 /// Controls and invisible formatting characters can make reviewed text differ
-/// from what a matcher, terminal, or analyst tool interprets.
-/// Controls and invisible formatting. The range starting at U+2028 includes the
-/// line and paragraph separators: YAML breaks lines there, but many viewers do
-/// not, so they could add keys a reviewer never sees.
+/// from what a matcher, terminal, or analyst tool interprets. A lone carriage
+/// return and the line and paragraph separators in the range starting at
+/// U+2028 are line breaks to YAML, but many viewers do not break there, so
+/// they could add keys a reviewer never sees.
 fn is_hidden_character(character: char) -> bool {
-    (character.is_control() && !matches!(character, '\t' | '\r' | '\n'))
+    (character.is_control() && !matches!(character, '\t' | '\n'))
         || matches!(
             character,
             '\u{061C}'
@@ -544,8 +562,8 @@ documents:
     }
 
     #[test]
-    fn unicode_line_separators_are_rejected_before_yaml_splits_on_them() {
-        for separator in ['\u{2028}', '\u{2029}'] {
+    fn hidden_line_breaks_are_rejected_before_yaml_splits_on_them() {
+        for separator in ['\u{2028}', '\u{2029}', '\r'] {
             let raw = package("acme.rules", "acme", "acme.synthetic.marker").replace(
                 "explanation: Synthetic package rule.",
                 &format!("explanation: Synthetic package rule.{separator}        enabled: false"),
@@ -553,7 +571,31 @@ documents:
             let message = error(&raw);
             let expected = format!("forbidden character U+{:04X}", separator as u32);
             assert!(message.contains(&expected), "{message}");
+            assert!(message.contains("line 21"), "{message}");
         }
+        let message = error(&format!(
+            "{}\r",
+            package("acme.rules", "acme", "acme.synthetic.marker")
+        ));
+        assert!(message.contains("forbidden character U+000D"), "{message}");
+    }
+
+    #[test]
+    fn crlf_line_endings_load_like_lf() {
+        let lf = package("acme.rules", "acme", "acme.synthetic.marker").replace(
+            "description: Synthetic package rules.",
+            "description: |\n      First line.\n      Second line.",
+        );
+        let crlf = RulePackage::parse(&lf.replace('\n', "\r\n")).expect("CRLF package");
+        let lf = RulePackage::parse(&lf).unwrap();
+        assert_eq!(
+            format!("{:?}", crlf.documents()),
+            format!("{:?}", lf.documents())
+        );
+        assert_eq!(
+            crlf.documents()[0].description,
+            "First line.\nSecond line.\n"
+        );
     }
 
     #[test]
@@ -624,6 +666,7 @@ documents:
             (r"\e", "U+001B"),
             (r"\0", "U+0000"),
             (r"\b", "U+0008"),
+            (r"\r", "U+000D"),
             (r"\u0085", "U+0085"),
         ] {
             for (field, original, replacement) in fields {
@@ -784,14 +827,26 @@ documents:
     fn conflicting_package_ids_and_namespaces_fail() {
         let first =
             RulePackage::parse(&package("acme.rules", "acme", "acme.synthetic.marker")).unwrap();
+        let older = RulePackage::parse(
+            &package("acme.rules", "acme", "acme.synthetic.marker").replace("1.2.3", "1.0.0"),
+        )
+        .unwrap();
         let message =
-            resolve_rule_packages(CommunityRules::Disabled, vec![first.clone(), first.clone()])
+            resolve_rule_packages(CommunityRules::Disabled, vec![first.clone(), older.clone()])
                 .unwrap_err()
                 .to_string();
         assert!(
             message.contains("duplicate rule package id 'acme.rules'"),
             "{message}"
         );
+        for copy in [&first, &older] {
+            let identity = format!(
+                "version {} (content SHA-256 {}...)",
+                copy.version(),
+                &copy.content_sha256()[..12]
+            );
+            assert!(message.contains(&identity), "{message}");
+        }
 
         let second =
             RulePackage::parse(&package("acme.extra", "acme", "acme.synthetic.other")).unwrap();

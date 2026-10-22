@@ -30,10 +30,16 @@ pub(crate) fn process_chain_detections_enabled() -> bool {
 }
 
 /// `TELLTALE_COMMUNITY_RULES=0` opts a process out of community rules, like
-/// `--no-community-rules`, for services whose arguments are fixed.
+/// `--no-community-rules`, for services whose arguments are fixed. `false`,
+/// `off` and `no` work too, in any case.
 pub(crate) fn community_rules_enabled() -> bool {
     std::env::var("TELLTALE_COMMUNITY_RULES")
-        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
         .unwrap_or(true)
 }
 
