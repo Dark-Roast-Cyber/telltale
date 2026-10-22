@@ -6,3 +6,7 @@ tests/evaluation/*.json text eol=lf
 scripts/release-native-verify-rc*.json text eol=lf
 scripts/release-native-verify*.json text eol=lf
 **/uc001-positive.jsonl text eol=lf
+schemas/action-record-v1.schema.json text eol=lf
+crates/telltale-schema/data/action-record-v1.schema.json text eol=lf
+schemas/rule-catalog-v1.schema.json text eol=lf
+crates/telltale-schema/data/rule-catalog-v1.schema.json text eol=lf

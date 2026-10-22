@@ -306,8 +306,8 @@ impl ActionContextEntry {
 /// Immutable, constructor-sanitized detailed output; never an Event3 body.
 ///
 /// This is a Rust value, not a wire format: it deliberately does not implement
-/// `Serialize`. Hosts project accessors into their own versioned envelope;
-/// Telltale's cross-process formats are explicit versioned schemas.
+/// `Serialize`. Its cross-process form is the versioned action record
+/// (`telltale.action.v1`) that the core facade projects from a scan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActionFinding {

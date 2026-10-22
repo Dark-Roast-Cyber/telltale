@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/rule-catalog-v1.schema.json",
+  "title": "Telltale Rule Catalog v1",
+  "description": "Presentation metadata for bundled core rules and the embedded community package. Every key is always present; absent values are null.",
+  "$defs": {
+    "text": { "type": "string", "maxLength": 4096 },
+    "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "optionalLabel": { "anyOf": [{ "$ref": "#/$defs/label" }, { "type": "null" }] },
+    "labels": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/label" } },
+    "optionalCount": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+    "entry": {
+      "type": "object",
+      "required": [
+        "id", "kind", "title", "explanation", "falsepositives", "category",
+        "severity", "session_score", "action_score", "action_ordered",
+        "action_within_seconds", "action_link", "atlas_tags", "signal_type",
+        "tags", "enabled", "when_all_categories", "when_all_rule_ids", "package_id"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/label" },
+        "kind": { "type": "string", "enum": ["rule", "modifier"] },
+        "title": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+        "explanation": { "$ref": "#/$defs/text" },
+        "falsepositives": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/text" } },
+        "category": { "$ref": "#/$defs/optionalLabel" },
+        "severity": {
+          "anyOf": [
+            { "type": "string", "enum": ["informational", "low", "medium", "high", "critical"] },
+            { "type": "null" }
+          ]
+        },
+        "session_score": { "type": "integer", "minimum": 0 },
+        "action_score": { "$ref": "#/$defs/optionalCount" },
+        "action_ordered": { "type": "boolean" },
+        "action_within_seconds": { "$ref": "#/$defs/optionalCount" },
+        "action_link": { "$ref": "#/$defs/optionalLabel" },
+        "atlas_tags": { "$ref": "#/$defs/labels" },
+        "signal_type": { "$ref": "#/$defs/label" },
+        "tags": { "$ref": "#/$defs/labels" },
+        "enabled": { "type": "boolean" },
+        "when_all_categories": { "$ref": "#/$defs/labels" },
+        "when_all_rule_ids": { "$ref": "#/$defs/labels" },
+        "package_id": { "$ref": "#/$defs/optionalLabel" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schema", "telltale_version", "semantic_identity", "entries"],
+  "properties": {
+    "schema": { "const": "telltale.rule_catalog.v1" },
+    "telltale_version": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "semantic_identity": { "type": "string", "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" },
+    "entries": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/entry" } }
+  },
+  "additionalProperties": false
+}

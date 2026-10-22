@@ -1087,15 +1087,39 @@ their own matcher content.
 ### Requirement: Embedding facade values are not wire formats
 
 `ActionFinding`, its component DTOs, and `RuleCatalogEntry` SHALL NOT implement
-`Serialize`. Telltale cross-process formats SHALL be explicit versioned schemas
-(Event 3 today). Hosts SHALL obtain delivery identity from `coordinate()` and
-`replay_identity()` and project other accessors into their own versioned
-envelope; no derived field name SHALL be an implied contract.
+`Serialize`. Telltale cross-process formats SHALL be explicit versioned schemas:
+Event 3, action record v1 (`telltale.action.v1`), and rule catalog v1
+(`telltale.rule_catalog.v1`). No derived field name of a facade value SHALL be
+an implied contract.
 
 #### Scenario: Embedding facade values are not wire formats
 
 - **WHEN** a host transports or stores an action finding or catalog entry
-- **THEN** it projects accessors into a host-owned schema, and Telltale adding a private field changes no host bytes
+- **THEN** it transports `ActionRecordV1` or `RuleCatalogV1` inside its own envelope, and Telltale adding a private facade field changes no host bytes
+
+### Requirement: Action records are versioned terminal projections
+
+`SourceScan::action_records()` SHALL return one `ActionRecordV1` per action
+finding, in `action_findings` order, and none for a failed source or a
+compatibility scan. Each record SHALL carry only values the facade accessors
+return, plus the scan's client, source ID, source path hash, semantic identity
+and the `event_id` of the session event at `session_event_index()`, or null
+when that index is `None`. Every key SHALL be serialized; absent values are
+null. `ActionRecordV1::from_json` SHALL reject oversized input, another record
+version, unknown fields, values outside the published JSON Schema, a stage
+incompatible with its family, invalid times or tool labels, and a promotion
+score that is not the sum of its contributions, with privacy-safe errors.
+Changing a field SHALL be a new record version.
+
+#### Scenario: Action records round-trip and link their session event
+
+- **WHEN** a detailed scan produces actions
+- **THEN** each record validates, round-trips through the strict consumer, and its session event ID, session ID and source path hash equal the linked serialized Event 3 values
+
+#### Scenario: Action records reject unknown shapes
+
+- **WHEN** a record has another version, an unknown field, or a promotion score that differs from its contributions
+- **THEN** the consumer rejects it with a closed error code that contains no input text
 
 ### Requirement: Action observed facts are typed
 

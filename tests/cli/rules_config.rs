@@ -3294,6 +3294,9 @@ modifiers: []
     for (args, env) in [
         (vec!["--no-local-config", "--no-community-rules"], None),
         (vec!["--no-local-config"], Some("0")),
+        (vec!["--no-local-config"], Some("FALSE")),
+        (vec!["--no-local-config"], Some(" Off ")),
+        (vec!["--no-local-config"], Some("No")),
         (
             vec![
                 "--no-local-config",
@@ -3360,6 +3363,46 @@ fn installed_community_package_replaces_the_embedded_snapshot() {
             "origin": "installed",
             "replaced_embedded_version": embedded.version(),
         }])
+    );
+}
+
+#[test]
+fn duplicate_installed_packages_fail_and_name_each_copy() {
+    // The same file name under two config roots, as after installing a newer
+    // release system-wide while an older per-user copy remains.
+    let temp = tempdir().expect("tempdir");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .args(["rules", "validate"])
+        .env_remove("TELLTALE_COMMUNITY_RULES");
+    let mut identities = Vec::new();
+    for (root, version) in [("system", "99.0.0"), ("user", "98.0.0")] {
+        let root = temp.path().join(root);
+        let packages = root.join("rule-packages.d");
+        fs::create_dir_all(&packages).expect("package dir");
+        let raw = community_package_yaml(version, "tdx.synthetic.newer_release");
+        fs::write(packages.join("telltale.community.yaml"), &raw).expect("package");
+        let package = telltale_rules::package::RulePackage::parse(&raw).expect("package");
+        identities.push(format!(
+            "version {} (content SHA-256 {}...)",
+            package.version(),
+            &package.content_sha256()[..12]
+        ));
+        command.arg("--config-dir").arg(&root);
+    }
+    let output = command.output().expect("run telltale rules validate");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("duplicate rule package id 'telltale.community'"),
+        "{stderr}"
+    );
+    for identity in &identities {
+        assert!(stderr.contains(identity), "{stderr}");
+    }
+    assert!(
+        !stderr.contains(&*temp.path().to_string_lossy()),
+        "{stderr}"
     );
 }
 
@@ -3456,5 +3499,216 @@ fn installed_package_yaml_escapes_fail_before_scan_outputs_activate() {
             assert!(!state.exists(), "{field}: {args:?} created scan state");
             assert!(!log.exists(), "{field}: {args:?} created event output");
         }
+    }
+}
+
+/// Agent commands that embedded community rules must detect, each beside a
+/// benign look-alike that must not match. The community repository owns most
+/// community rule testing; this pins that its embedded content fires through a
+/// real scan. Re-run it when vendoring a community release, and update a row
+/// when that release renames or retires the rule.
+const COMMUNITY_TRIGGERS: &[(&str, &str, &str)] = &[
+    (
+        "tdx.persistence.mcp_server_registration",
+        "claude mcp add synthetic-server -- npx -y synthetic-mcp-server",
+        "claude mcp list",
+    ),
+    (
+        "tdx.persistence.git_hook_change",
+        "git config core.hooksPath .synthetic-hooks",
+        "git config --get core.hooksPath",
+    ),
+    (
+        "tdx.persistence.windows_agent_command",
+        r"schtasks /create /tn SyntheticTask /tr C:\synthetic.exe /sc onlogon",
+        "schtasks /query /tn SyntheticTask",
+    ),
+];
+
+fn claude_bash_session(session: &str, commands: &[&str]) -> String {
+    let record = |kind: &str, uuid: String, message: Value| {
+        serde_json::json!({
+            "type": kind,
+            "uuid": uuid,
+            "sessionId": session,
+            "timestamp": "2026-10-21T10:00:00.000Z",
+            "cwd": "/home/synthetic/repo",
+            "version": "2.1.295",
+            "message": message,
+        })
+        .to_string()
+            + "\n"
+    };
+    let mut text = String::new();
+    for (index, command) in commands.iter().enumerate() {
+        let call = format!("toolu_{index}");
+        text += &record(
+            "assistant",
+            format!("{session}-call-{index}"),
+            serde_json::json!({"role": "assistant", "model": "claude-synthetic", "content": [
+                {"type": "tool_use", "id": call, "name": "Bash", "input": {"command": command}}
+            ]}),
+        );
+        text += &record(
+            "user",
+            format!("{session}-result-{index}"),
+            serde_json::json!({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": call, "content": "ok"}
+            ]}),
+        );
+    }
+    text
+}
+
+#[test]
+fn embedded_community_rules_fire_on_agent_sessions_and_spare_look_alikes() {
+    let community =
+        telltale_rules::package::bundled_community_package().expect("community package");
+    let points = community
+        .documents()
+        .iter()
+        .flat_map(|document| &document.rules)
+        .map(|rule| (rule.id.as_str(), rule.score))
+        .collect::<BTreeMap<_, _>>();
+
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("home");
+    let project = root.join(".claude/projects/-home-synthetic-repo");
+    fs::create_dir_all(&project).expect("claude project");
+    for (session, commands) in [
+        (
+            "community-attack",
+            COMMUNITY_TRIGGERS
+                .iter()
+                .map(|(_, attack, _)| *attack)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "community-look-alike",
+            COMMUNITY_TRIGGERS
+                .iter()
+                .map(|(_, _, look_alike)| *look_alike)
+                .collect(),
+        ),
+    ] {
+        fs::write(
+            project.join(format!("{session}.jsonl")),
+            claude_bash_session(session, &commands),
+        )
+        .expect("claude session");
+    }
+    // Codex completed argv reaches the rules through its derived command view.
+    let codex = root.join(".codex/sessions/2026/10");
+    fs::create_dir_all(&codex).expect("codex sessions");
+    let codex_records = [
+        serde_json::json!({"type": "session_meta", "payload": {"id": "community-codex", "history_mode": "paginated"}}),
+        serde_json::json!({"type": "event_msg", "payload": {"type": "item_completed", "thread_id": "community-codex",
+            "turn_id": "turn-1", "item": {"type": "CommandExecution", "id": "call-1",
+            "command": ["codex", "mcp", "add", "synthetic-server", "--", "npx", "synthetic-mcp-server"],
+            "status": "completed", "aggregated_output": "added", "exit_code": 0}}}),
+    ];
+    fs::write(
+        codex.join("rollout-community-codex.jsonl"),
+        codex_records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )
+    .expect("codex session");
+
+    for community_enabled in [true, false] {
+        let log = temp
+            .path()
+            .join(format!("events-{community_enabled}.jsonl"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", temp.path())
+            .args([
+                "scan",
+                "--once",
+                "--no-local-config",
+                "--install-inventory-disabled",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(temp.path().join(format!("state-{community_enabled}.json")));
+        if !community_enabled {
+            command.arg("--no-community-rules");
+        }
+        let output = command.output().expect("run telltale scan");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+        assert_eq!(
+            summary["source_processing"]["parse_success_source_count"], 3,
+            "{summary}"
+        );
+        let rules = &summary["effective_configuration"]["rules"];
+
+        // Session -> community rule -> points, from detection risk contributions.
+        let mut matched = BTreeMap::<String, BTreeMap<String, u64>>::new();
+        for line in fs::read_to_string(&log).expect("events").lines() {
+            let event: Value = serde_json::from_str(line).expect("event json");
+            if event["event_type"] != "detection" {
+                continue;
+            }
+            let session = event["session_id"]
+                .as_str()
+                .expect("session id")
+                .to_string();
+            for contribution in event["risk_contributions"]
+                .as_array()
+                .expect("contributions")
+            {
+                let id = contribution["id"].as_str().expect("contribution id");
+                if id.starts_with("tdx.") {
+                    matched.entry(session.clone()).or_default().insert(
+                        id.to_string(),
+                        contribution["points"].as_u64().expect("points"),
+                    );
+                }
+            }
+        }
+
+        if !community_enabled {
+            assert_eq!(rules["community"], "disabled");
+            assert_eq!(rules["packages"], serde_json::json!([]));
+            assert!(matched.is_empty(), "{matched:?}");
+            continue;
+        }
+        assert_eq!(rules["community"], "enabled");
+        assert_eq!(
+            rules["packages"],
+            serde_json::json!([{
+                "id": community.id(),
+                "version": community.version(),
+                "content_sha256": community.content_sha256(),
+                "origin": "embedded",
+                "replaced_embedded_version": null,
+            }])
+        );
+        let attack = matched.get("community-attack").expect("attack detected");
+        for (rule, _, _) in COMMUNITY_TRIGGERS {
+            let expected = *points
+                .get(rule)
+                .unwrap_or_else(|| panic!("embedded community package lacks {rule}"));
+            assert_eq!(attack.get(*rule), Some(&expected), "{rule}: {attack:?}");
+        }
+        assert_eq!(
+            matched.get("community-codex"),
+            Some(&BTreeMap::from([(
+                "tdx.persistence.mcp_server_registration".to_string(),
+                points["tdx.persistence.mcp_server_registration"],
+            )])),
+            "{matched:?}"
+        );
+        assert!(!matched.contains_key("community-look-alike"), "{matched:?}");
     }
 }

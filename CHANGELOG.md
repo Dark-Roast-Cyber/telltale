@@ -6,6 +6,18 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Add versioned wire forms for embedding hosts. `SourceScan::action_records()`
+  returns one `ActionRecordV1` (`telltale.action.v1`) per action finding: the
+  accessor values plus client, source ID, source path hash, semantic identity
+  and the `event_id` of the linked session Event 3 object. `rule_catalog_document`
+  returns the bundled catalog as `RuleCatalogV1` (`telltale.rule_catalog.v1`).
+  Both have strict consumers in `telltale-schema` that reject other versions,
+  unknown fields and inconsistent values, and JSON Schemas in `schemas/`.
+  Hosts wrap them in their own delivery envelope instead of designing an
+  action or catalog format. `telltale_core::inventory` re-exports structured MCP
+  server discovery. Event 3.0, CLI output and existing APIs are unchanged; the
+  migration guide adds an embedding-host checklist of changes since RC2.
+
 - Add generated contributor catalogs: `docs/catalog/sources.json` lists every
   registered source's exact client, source ID, root, relative path, pattern and
   discovery special cases, and `docs/catalog/rule-vocabulary.json` lists the
@@ -21,6 +33,15 @@
   including nested rule text, without rejecting ordinary multiline content or
   literal regex escapes. U+2028 and U+2029 are rejected too: YAML breaks lines
   at them, so they could add package keys that a reviewer's viewer never shows.
+
+- Reject a carriage return in a rule package unless it ends a CRLF line. YAML
+  breaks lines there, so a lone one could add a key, such as `enabled: false`,
+  that a terminal draws over; CRLF packages still load. A `"\r"` escape in a
+  quoted string is rejected like other escaped controls. Two installed copies of
+  one package ID now fail with each copy's version and content SHA-256 prefix
+  instead of only the ID, since diagnostics never show their paths.
+  `TELLTALE_COMMUNITY_RULES` accepts `0`, `false`, `off`, and `no` in any case;
+  `FALSE` used to leave community rules on.
 
 - Fix three detection gaps that synthetic lab scenarios found. `approval.bypass.context`
   no longer fires on a documentation review that quotes any of its phrases as
