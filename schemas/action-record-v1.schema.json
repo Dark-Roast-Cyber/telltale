@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/action-record-v1.schema.json",
+  "title": "Telltale Action Record v1",
+  "description": "One terminal action finding from a detailed scan. Every key is always present; absent values are null. Hosts wrap this record in their own delivery envelope.",
+  "$defs": {
+    "observationId": {
+      "type": "string",
+      "pattern": "^obs:v2:sha256:[0-9a-f]{64}$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "optionalLabel": {
+      "anyOf": [{ "$ref": "#/$defs/label" }, { "type": "null" }]
+    },
+    "optionalTimestamp": {
+      "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 64 }, { "type": "null" }]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["informational", "low", "medium", "high", "critical"]
+    },
+    "family": {
+      "type": "string",
+      "enum": [
+        "message", "inference", "tool", "tool_definition", "mcp", "process",
+        "file", "network", "browser", "runtime", "session", "other"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "message_observed", "inference_requested", "inference_started",
+        "inference_completed", "inference_failed", "tool_proposed",
+        "tool_requested", "tool_execution_started", "tool_execution_completed",
+        "tool_result_returned", "definition_changed", "mcp_inventory_changed",
+        "process_observed", "file_observed", "network_observed",
+        "browser_observed", "runtime_observed", "runtime_changed",
+        "session_opened", "session_updated", "session_closed", "other_observed"
+      ]
+    },
+    "contribution": {
+      "type": "object",
+      "required": ["id", "type", "points", "rationale"],
+      "properties": {
+        "id": { "$ref": "#/$defs/label" },
+        "type": {
+          "type": "string",
+          "enum": ["deterministic_rule", "chain_modifier", "baseline_deviation"]
+        },
+        "points": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "rationale": { "type": "string", "maxLength": 256 }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["field", "rule_id", "redacted_value"],
+      "properties": {
+        "field": { "$ref": "#/$defs/label" },
+        "rule_id": { "$ref": "#/$defs/label" },
+        "redacted_value": { "type": "string", "maxLength": 512 }
+      },
+      "additionalProperties": false
+    },
+    "canonicalFinding": {
+      "type": "object",
+      "required": [
+        "finding_id", "signal_ids", "observation_ids", "detector_id", "finding_kind",
+        "category", "severity", "risk_points"
+      ],
+      "properties": {
+        "finding_id": { "type": "string", "pattern": "^fnd:v2:sha256:[0-9a-f]{64}$" },
+        "signal_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "type": "string", "pattern": "^sig:v2:sha256:[0-9a-f]{64}$" }
+        },
+        "observation_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/observationId" }
+        },
+        "detector_id": { "$ref": "#/$defs/label" },
+        "finding_kind": {
+          "type": "string",
+          "enum": [
+            "security_detection", "policy_violation", "behavioral_deviation", "guardrail",
+            "compliance_observation", "threat_hunt", "correlation", "informational"
+          ]
+        },
+        "category": { "$ref": "#/$defs/label" },
+        "severity": { "$ref": "#/$defs/severity" },
+        "risk_points": {
+          "anyOf": [{ "type": "integer", "minimum": 0, "maximum": 100 }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "contextEntry": {
+      "type": "object",
+      "required": ["offset", "kind", "stage", "occurred_at", "tool_name", "redacted_text"],
+      "properties": {
+        "offset": { "type": "integer", "minimum": -32, "maximum": 32, "not": { "const": 0 } },
+        "kind": { "type": "string", "enum": ["user_message", "assistant_message", "tool_call"] },
+        "stage": { "$ref": "#/$defs/stage" },
+        "occurred_at": { "$ref": "#/$defs/optionalTimestamp" },
+        "tool_name": { "$ref": "#/$defs/optionalLabel" },
+        "redacted_text": { "type": "string", "maxLength": 512 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema", "telltale_version", "semantic_identity", "client", "source_id",
+    "source_path_hash", "session_id", "session_event_id", "coordinate",
+    "replay_identity", "detector_kind", "finding_kind", "observation_family",
+    "stage", "tool_name", "occurred_at", "timeline_index", "severity",
+    "promotion_score", "rule_ids", "categories", "contributions", "evidence",
+    "supporting_observation_ids", "canonical_findings", "context"
+  ],
+  "properties": {
+    "schema": { "const": "telltale.action.v1" },
+    "telltale_version": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "semantic_identity": { "type": "string", "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" },
+    "client": { "type": "string", "enum": ["codex", "claude", "openclaw", "qwen", "opencode", "copilot"] },
+    "source_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9_]+(?:\\.[a-z0-9_]+)*$" },
+    "source_path_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "session_id": { "$ref": "#/$defs/optionalLabel" },
+    "session_event_id": {
+      "anyOf": [
+        { "type": "string", "pattern": "^telltale-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+        { "type": "null" }
+      ]
+    },
+    "coordinate": { "$ref": "#/$defs/observationId" },
+    "replay_identity": {
+      "anyOf": [{ "type": "string", "pattern": "^replay:v1:sha256:[0-9a-f]{64}$" }, { "type": "null" }]
+    },
+    "detector_kind": { "type": "string", "enum": ["rule_v1_action", "process_chain"] },
+    "finding_kind": { "type": "string", "enum": ["atomic", "correlation"] },
+    "observation_family": { "$ref": "#/$defs/family" },
+    "stage": { "$ref": "#/$defs/stage" },
+    "tool_name": { "$ref": "#/$defs/optionalLabel" },
+    "occurred_at": { "$ref": "#/$defs/optionalTimestamp" },
+    "timeline_index": { "type": "integer", "minimum": 0 },
+    "severity": { "$ref": "#/$defs/severity" },
+    "promotion_score": { "type": "integer", "minimum": 0 },
+    "rule_ids": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/label" } },
+    "categories": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/label" } },
+    "contributions": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/contribution" } },
+    "evidence": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/evidence" } },
+    "supporting_observation_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/observationId" }
+    },
+    "canonical_findings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/canonicalFinding" }
+    },
+    "context": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/contextEntry" } }
+  },
+  "additionalProperties": false
+}

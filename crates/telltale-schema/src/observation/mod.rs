@@ -157,7 +157,7 @@ impl ObservationStage {
         }
     }
 
-    fn is_compatible(self, family: ObservationFamily) -> bool {
+    pub(crate) fn is_compatible(self, family: ObservationFamily) -> bool {
         matches!(
             (family, self),
             (ObservationFamily::Message, Self::MessageObserved)

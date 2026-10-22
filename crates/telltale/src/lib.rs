@@ -83,8 +83,19 @@ pub use telltale_detect::v2::{
     DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions, EvaluationCompletion,
     ReplayIdentity, SemanticProvenance, Severity, VisibilityLimit,
 };
+mod action_record;
 mod rule_catalog;
-pub use rule_catalog::{RuleCatalogEntry, RuleCatalogKind, bundled_rule_catalog};
+pub use rule_catalog::{
+    RuleCatalogEntry, RuleCatalogKind, bundled_rule_catalog, rule_catalog_document,
+};
+pub use telltale_schema::action_record::{
+    ACTION_RECORD_V1_ID, ACTION_RECORD_V1_SCHEMA, ActionRecordContext, ActionRecordContribution,
+    ActionRecordError, ActionRecordErrorCategory, ActionRecordEvidence, ActionRecordFinding,
+    ActionRecordV1,
+};
+pub use telltale_schema::rule_catalog::{
+    RULE_CATALOG_V1_ID, RULE_CATALOG_V1_SCHEMA, RuleCatalogEntryV1, RuleCatalogError, RuleCatalogV1,
+};
 
 type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
 

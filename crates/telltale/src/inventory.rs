@@ -24,7 +24,7 @@ pub use telltale_sources::install_inventory::{
 
 pub use telltale_detect::mcp::{
     McpConfigInput, McpInventoryInput, McpInventoryObservation, McpInventoryState,
-    collect_mcp_inventory,
+    McpServerInventory, collect_mcp_inventory,
 };
 
 /// Read supported static MCP configurations under `root` and return the existing
@@ -34,6 +34,14 @@ pub use telltale_detect::mcp::{
 /// returned `Event` is the telemetry projection. No raw MCP inventory is exposed.
 pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
     telltale_detect::mcp::discover_mcp_inventory(root)
+}
+
+/// The same bounded static discovery as [`discover_mcp_inventory`], returned as
+/// structured servers for a host that builds its own inventory view. `path` is
+/// the local config path, host data like `Source.path`: hash it before it
+/// leaves the host. No server connection or command execution occurs.
+pub fn discover_mcp_inventory_servers(root: &Path) -> Vec<McpServerInventory> {
+    telltale_detect::mcp::discover_mcp_inventory_servers(root)
 }
 
 #[cfg(test)]

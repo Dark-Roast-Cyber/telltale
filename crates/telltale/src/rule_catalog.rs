@@ -1,5 +1,7 @@
 //! Presentation metadata for bundled compatibility content and native actions.
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
+use telltale_schema::event::TELLTALE_VERSION;
+use telltale_schema::rule_catalog::{RULE_CATALOG_V1_ID, RuleCatalogEntryV1, RuleCatalogV1};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -11,8 +13,7 @@ pub enum RuleCatalogKind {
 /// Immutable display metadata, not executable content or a detection AST.
 /// Session scores describe frozen compatibility contributions; action scores
 /// describe individual native contributions, not host promotion totals.
-/// A Rust value, not a wire format: hosts project accessors into their own
-/// versioned catalog document.
+/// A Rust value; [`rule_catalog_document`] is its versioned wire form.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RuleCatalogEntry {
@@ -204,9 +205,80 @@ pub fn bundled_rule_catalog(
     Ok(entries)
 }
 
+/// [`bundled_rule_catalog`] as a versioned [`RuleCatalogV1`] document for
+/// services that render detections, with the semantic identity of the
+/// default pipeline its `enabled` flags and action scores describe.
+pub fn rule_catalog_document(
+    options: &DetailedEvaluationOptions,
+) -> Result<RuleCatalogV1, PipelineError> {
+    let entries = bundled_rule_catalog(options)?;
+    let semantic_identity = Pipeline::builder()
+        .build()?
+        .semantic_provenance(options)?
+        .identity()
+        .to_owned();
+    Ok(RuleCatalogV1 {
+        schema: RULE_CATALOG_V1_ID.to_owned(),
+        telltale_version: TELLTALE_VERSION.to_owned(),
+        semantic_identity,
+        entries: entries
+            .into_iter()
+            .map(|entry| RuleCatalogEntryV1 {
+                kind: match entry.kind {
+                    RuleCatalogKind::Rule => "rule",
+                    RuleCatalogKind::Modifier => "modifier",
+                }
+                .to_owned(),
+                id: entry.id,
+                title: entry.title,
+                explanation: entry.explanation,
+                falsepositives: entry.falsepositives,
+                category: entry.category,
+                severity: entry.severity,
+                session_score: entry.session_score,
+                action_score: entry.action_score,
+                action_ordered: entry.action_ordered,
+                action_within_seconds: entry.action_within_seconds,
+                action_link: entry.action_link,
+                atlas_tags: entry.atlas_tags,
+                signal_type: entry.signal_type,
+                tags: entry.tags,
+                enabled: entry.enabled,
+                when_all_categories: entry.when_all_categories,
+                when_all_rule_ids: entry.when_all_rule_ids,
+                package_id: entry.package_id,
+            })
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn catalog_document_passes_the_strict_consumer_and_matches_the_catalog() {
+        let options = DetailedEvaluationOptions::default();
+        let document = rule_catalog_document(&options).unwrap();
+        let entries = bundled_rule_catalog(&options).unwrap();
+        assert_eq!(document.entries.len(), entries.len());
+        assert!(
+            document
+                .entries
+                .iter()
+                .any(|entry| entry.package_id.is_some())
+        );
+        assert_eq!(
+            document.semantic_identity,
+            Pipeline::builder()
+                .build()
+                .unwrap()
+                .semantic_provenance(&options)
+                .unwrap()
+                .identity()
+        );
+        let wire = serde_json::to_vec(&document).unwrap();
+        assert_eq!(RuleCatalogV1::from_json(&wire).unwrap(), document);
+    }
     #[test]
     fn startup_provenance_matches_detailed_scans_and_effective_policy() {
         let root = tempfile::tempdir().unwrap();
