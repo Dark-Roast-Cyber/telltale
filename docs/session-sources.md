@@ -154,9 +154,19 @@ escaping rules.
   Notification filtering compares native path names without filesystem lookups.
   macOS's native notification backend can miss writes to an already-open SQLite
   WAL ([upstream limitation](https://github.com/notify-rs/notify/issues/613)); a
-  native relocation test has timed out on a second WAL update. Timely macOS WAL
-  acquisition is therefore not established by filename mapping or passing scan
-  conformance cases. No polling fallback is implemented.
+  native experiment observed no raw event for a second committed insert until
+  writer close. On macOS only, watch therefore samples metadata for already-indexed
+  `opencode.sqlite` main files and their `-wal` files: up to 64 pairs per second,
+  round-robin. Large indexes take proportionally longer for a complete pass.
+  Initial indexing and requested scans capture the relevant baselines before
+  acquisition, never after it, so commits arriving during a scan remain changes.
+  File identity, length and nanosecond modification time are compared; content is
+  never read for sampling. Linked path components and nonregular leaves are rejected.
+  This adds no directory enumeration, new discovery path, SHM/journal sampling or
+  scan on unchanged metadata. Native events still discover new stores, and metadata
+  changes use the same targeted-scan, debounce and minimum-interval rules.
+  Native macOS validation is required; metadata sampling is not a promise to detect
+  writes that deliberately preserve all compared metadata.
 - A non-`.` explicit `--root` ignores `OPENCODE_DB` and retains exact
   `opencode.db` matching and its existing home/data-home candidates. Fixture
   layout is unchanged. Relocation is additive: the scanner may not share the

@@ -2149,7 +2149,7 @@ mod tests {
             );
             let mut expected = vec![root.join("allowed.sqlite")];
             let mut expected_roots = vec![root.to_path_buf()];
-            if mode != "directory" && mode != "ancestor" {
+            if mode != "directory" && mode != "ancestor" && mode != "home" {
                 expected.push(data.join("opencode-preview.db"));
                 expected_roots.push(data);
             }
@@ -2175,13 +2175,20 @@ mod tests {
             "leaf-directory",
             "directory",
             "ancestor",
+            "home",
         ] {
             let temp = tempdir().unwrap();
             let root = temp.path().canonicalize().unwrap();
             let home = root.join("home");
             let work = root.join("work");
             let outside = root.join("PRIVATE-DEFAULT/opencode");
-            fs::create_dir_all(&home).unwrap();
+            if mode == "home" {
+                let real_home = root.join("real-home");
+                fs::create_dir_all(&real_home).unwrap();
+                std::os::unix::fs::symlink(real_home, &home).unwrap();
+            } else {
+                fs::create_dir_all(&home).unwrap();
+            }
             fs::create_dir_all(&work).unwrap();
             fs::create_dir_all(&outside).unwrap();
             fs::write(root.join("allowed.sqlite"), b"synthetic metadata only").unwrap();
