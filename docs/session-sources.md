@@ -63,7 +63,7 @@ than by exact private path or transcript content.
 | Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. When `CLAUDE_CONFIG_DIR` is set in the scanner's environment, `$CLAUDE_CONFIG_DIR/projects` is searched as well; `~/.claude/projects` stays a root because a scanner service may not share the user's environment. An explicit `--root` ignores the variable. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
-| OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | Windows platform data root plus `%XDG_DATA_HOME%\opencode\opencode.db` when set and `~/.local/share/opencode/opencode.db` | Confirmed Linux/macOS; Windows discovery/inventory live-checked | Windows checks the platform data root (`LOCALAPPDATA`, then `APPDATA`, then `~/AppData/Local`) alongside XDG candidates. Desktop v2.0.24 discovery/inventory validation and the live acquisition limit are recorded below. |
+| OpenCode | `opencode.sqlite` | XDG OpenCode data directory; exact `$OPENCODE_DB` when configured | XDG OpenCode data directory plus retained `~/Library/Application Support/opencode/opencode.db`; exact `$OPENCODE_DB` | XDG OpenCode data directory plus retained Windows platform data and `~/.local/share` candidates; exact `%OPENCODE_DB%` | Default paths have prior bounded validation; relocation/channel discovery is synthetic-conformance tested | Environment-resolved mode adds direct-child channel databases and one configured file; see the OpenCode root rules below. Prior Desktop validation does not qualify these new paths or every version. |
 | Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Existing process format only; current CLI home logs unqualified | **Project-local only** — discovered below configured project roots or applicable default project roots. Neither `~/.copilot/logs` nor `COPILOT_HOME/logs` is discovered; see the qualification gap below. |
 
 ## Project Roots
@@ -109,11 +109,79 @@ escaping rules.
 - `Home` sources resolve from `HOME` on Linux/macOS and `HOME` or `USERPROFILE` on Windows.
 - `CodexHome` resolves from `CODEX_HOME` when set, otherwise `~/.codex`.
 - `DataHome` resolves to `XDG_DATA_HOME` or `~/.local/share` on Linux, `~/Library/Application Support` on macOS, and `LOCALAPPDATA`, then `APPDATA`, then `%USERPROFILE%\AppData\Local` on Windows.
-- OpenCode on Windows additionally checks `XDG_DATA_HOME` when set and
-  `~/.local/share`, retaining any distinct databases found in AppData and XDG
-  locations. Scan, watch and bounded discovery use the same candidates. An
-  explicit `--root` is isolated from environment overrides and may name either
-  a home or a data home containing `opencode/opencode.db`.
+- OpenCode environment-resolved host discovery (the default `--root .`) uses
+  nonempty `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`, on
+  every platform. It retains the existing platform `opencode.db` candidates,
+  including macOS Application Support and Windows AppData/`.local/share` paths.
+  This follows the pinned CLI's [XDG roots](https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/util/src/global-roots.ts#L4-L18),
+  without treating Desktop installation metadata as a storage contract.
+- In those OpenCode data directories only, direct-child `opencode.db` and
+  `opencode-<channel>.db` files are candidates. A channel is nonempty and contains
+  only ASCII letters, digits, `.`, `_`, or `-`; the basename predicate is
+  case-sensitive. Sidecars, extra extensions and nested files are not candidates.
+  Environment-resolved discovery validates directory components before selecting
+  defaults or channels and rejects symlinked `opencode.db` files, including
+  dangling links. Best-effort skips rejected targets while retaining healthy
+  candidates; watch registers only validated directories, never a linked default
+  directory target. Non-`.` explicit-root behavior remains unchanged.
+  Native filesystem aliases can still be case-insensitive. The pinned
+  [filename resolver](https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/cli/src/database-path.ts#L4-L13)
+  sanitizes the baked build channel; setting runtime `OPENCODE_CHANNEL` does not
+  change it. Discovery retains every matching store rather than guessing an
+  active channel from the scanner's environment.
+- `OPENCODE_DB` adds **one exact file**, with any basename. Absolute values are
+  used directly; relative values resolve against the upstream XDG OpenCode data
+  directory, not the scanner's working directory or macOS Application Support.
+  `..` is normalized lexically and may select a file outside that directory;
+  `~` is literal, not expanded. The configured file's parent is never enumerated
+  for other databases. Empty values and exact `:memory:` add no persistent file
+  (upstream's empty value names the data directory, not a default database).
+  Existing path components must not be symlinks and the target must be a regular
+  file when present. These are metadata checks, not an atomic filesystem snapshot.
+  Bounded discovery retains explicit symlink/traversal errors and charges visited
+  directory entries and configured-path components against its budget.
+  Rejected roots are checked-discovery errors, not successful empty listings.
+  The CLI reports its first error and uses the existing best-effort fallback,
+  which can retain healthy/default sources; bounded discovery returns no partial
+  listing on failure.
+- Scan, watch and bounded discovery share these candidates. Watch subscribes to
+  OpenCode directories nonrecursively unless another selected source requires
+  recursion there, maps an arbitrary configured filename's WAL to its main file,
+  and ignores its reader-generated SHM/journal changes. State, JSONL and outbox
+  paths must still be outside watched source directories.
+  For a parent used solely by an arbitrary override, unrelated sibling events
+  are ignored as well. Other selected source roots keep their own coverage.
+  Notification filtering compares native path names without filesystem lookups.
+  macOS's native notification backend can miss writes to an already-open SQLite
+  WAL ([upstream limitation](https://github.com/notify-rs/notify/issues/613)); a
+  native experiment observed no raw event for a second committed insert until
+  writer close. On macOS only, watch therefore samples metadata for already-indexed
+  `opencode.sqlite` main files and their `-wal` files: up to 64 pairs per second,
+  round-robin. Large indexes take proportionally longer for a complete pass.
+  Initial indexing and requested scans capture the relevant baselines before
+  acquisition, never after it, so commits arriving during a scan remain changes.
+  File identity, length and nanosecond modification time are compared; content is
+  never read for sampling. Linked path components and nonregular leaves are rejected.
+  This adds no directory enumeration, new discovery path, SHM/journal sampling or
+  scan for unchanged samples of already-indexed stores. Native events still discover new stores, and metadata
+  changes use the same targeted-scan, debounce and minimum-interval rules.
+  A newly indexed store gets one conservative extra scan because a post-scan
+  baseline could hide a concurrent commit; that scan can consume an iteration.
+  Explicit-root aliases with symlinked components remain outside this metadata
+  fallback, even where legacy discovery accepts their coordinates. Use a real,
+  non-symlinked path for open-WAL monitoring; no-follow checks are not relaxed.
+  [Native macOS synthetic validation](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/39770819492)
+  at `cf64c1d` passed open-writer commits, same-size WAL reuse, SHM/sibling exclusion,
+  and the original nonrecursive-watch regression. This is not live-host qualification;
+  metadata sampling is not a promise to detect writes that deliberately preserve
+  all compared metadata.
+- A non-`.` explicit `--root` ignores `OPENCODE_DB` and retains exact
+  `opencode.db` matching and its existing home/data-home candidates. Fixture
+  layout is unchanged. Relocation is additive: the scanner may not share the
+  harness's environment, and older default stores remain useful. The variable
+  must be available to the **scanner process**; the checked-in system service
+  uses a non-`.` root, so merely adding the variable to its environment does not
+  enable relocation. No service configuration or live validation is implied.
 
 ## Linux Operational Notes
 
@@ -125,10 +193,10 @@ be reviewed before publication or reuse in another environment.
 
 ### Copilot CLI qualification gap
 
-Copilot CLI v1.0.96's [pinned changelog](https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484)
+Copilot CLI v1.0.101's [pinned changelog](https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/changelog.md#L1585)
 and [official configuration-directory reference](https://github.com/github/docs/blob/92991ed6d17c5023f52e324ee70d36fe7c36dd7d/content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md#L345-L388)
 confirm `~/.copilot/logs/process-{timestamp}-{pid}.log`, with `COPILOT_HOME`
-replacing `~/.copilot`. The [pinned README](https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/README.md#installation)
+replacing `~/.copilot`. The [pinned README](https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/README.md#installation)
 also establishes the launcher and package names used by install inventory.
 
 The existing adapter requires workspace initialization and accumulated-output
@@ -138,13 +206,15 @@ inspection of the official [v1.0.96 Linux runtime archive](https://github.com/gi
 defines the named `default` log level as `info` in `cli-main.js`'s logging help,
 but does not establish the adapter's `Accumulated output items` format when the
 CLI is invoked without logging flags.
+That assessment is historical v1.0.96 evidence; it does not qualify the current
+v1.0.101 pin's default-level format either.
 The published repository does not contain the log writer. No CLI execution,
 installation, or live capture was used for this assessment.
 
 Home and relocated discovery therefore remain disabled, and both synthetic
 [upstream cases](../tests/upstream_formats/cases/copilot/) remain `known_gap`.
 They copy a Telltale fixture to the documented paths, not an upstream-generated
-v1.0.96 transcript. Promotion requires authoritative format/default-level
+transcript from either version. Promotion requires authoritative format/default-level
 evidence followed by successful discovery **and** acquisition, not merely
 finding that copied fixture. Explicit `--root`, fixture, and project-local
 discovery are unchanged. `session-state/*/events.jsonl` and `session-store.db`

@@ -2,8 +2,8 @@
   "description": "With the opt-in local_thread_store_compression feature, Codex compresses rollouts older than seven days to .jsonl.zst in sessions/ and archived_sessions/.",
   "harness": "codex",
   "upstream": [
-    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/features/src/lib.rs#L1243-L1247",
-    "https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/rollout/src/compression.rs#L333-L370"
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/features/src/lib.rs#L1292-L1296",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rollout/src/compression.rs#L333-L370"
   ],
   "status": "known_gap",
   "note": "The extension(jsonl) pattern does not match .jsonl.zst, so compressed history is silently absent. The feature is off by default. The file holds only a zstd frame magic; build a real frame before promoting this case.",
