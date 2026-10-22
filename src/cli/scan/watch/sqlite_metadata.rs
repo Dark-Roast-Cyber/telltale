@@ -167,8 +167,9 @@ mod tests {
 
     #[test]
     fn observes_open_writer_wal_without_notifications_or_reader_sidecars() {
-        let root = tempfile::tempdir().unwrap();
-        let database = root.path().join("custom.sqlite");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let database = root.join("custom.sqlite");
         let writer = rusqlite::Connection::open(&database).unwrap();
         writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE synthetic (value INTEGER);").unwrap();
         let now = Instant::now();
@@ -185,7 +186,7 @@ mod tests {
             .unwrap()
             .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
             .unwrap();
-        fs::write(root.path().join("unrelated.db"), b"synthetic").unwrap();
+        fs::write(root.join("unrelated.db"), b"synthetic").unwrap();
         assert!(watch.poll(now + INTERVAL * 2).is_empty());
         writer
             .execute_batch("PRAGMA wal_checkpoint(RESTART);")
@@ -212,8 +213,9 @@ mod tests {
 
     #[test]
     fn pre_scan_baseline_keeps_same_length_late_writes_and_replacements_visible() {
-        let root = tempfile::tempdir().unwrap();
-        let database = root.path().join("synthetic.db");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let database = root.join("synthetic.db");
         fs::write(&database, b"first").unwrap();
         let now = Instant::now();
         let mut watch = SqliteMetadataWatch::new(&index(database.clone()), now);
@@ -231,7 +233,7 @@ mod tests {
             .unwrap();
         assert_eq!(watch.poll(now + INTERVAL), std::slice::from_ref(&database));
         assert!(watch.poll(now + INTERVAL * 2).is_empty());
-        let replacement = root.path().join("replacement");
+        let replacement = root.join("replacement");
         fs::write(&replacement, b"later").unwrap();
         fs::OpenOptions::new()
             .write(true)
@@ -247,10 +249,11 @@ mod tests {
 
     #[test]
     fn sampling_is_round_robin_work_bounded_and_exactly_owned() {
-        let root = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
         let mut sources = BTreeMap::new();
         for i in 0..BATCH + 1 {
-            let path = root.path().join(format!("db-{i:03}"));
+            let path = root.join(format!("db-{i:03}"));
             fs::write(&path, b"a").unwrap();
             sources.extend(index(path));
         }
@@ -274,7 +277,7 @@ mod tests {
                 SourceKind::Jsonl,
             ),
         ] {
-            let path = root.path().join(name);
+            let path = root.join(name);
             fs::write(&path, b"a").unwrap();
             sources.insert(
                 path.clone(),
@@ -296,7 +299,7 @@ mod tests {
         assert!(watch.poll(now + INTERVAL).is_empty());
         assert_eq!(watch.poll(now + INTERVAL * 2).len(), 1);
         assert!(watch.poll(now + INTERVAL * 3).is_empty());
-        let new_path = root.path().join("new-db");
+        let new_path = root.join("new-db");
         fs::write(&new_path, b"synthetic").unwrap();
         let new_index = index(new_path.clone());
         watch.reconcile(&new_index);
@@ -307,13 +310,14 @@ mod tests {
 
     #[test]
     fn linked_files_and_ancestors_are_unsafe_not_sampled_through() {
-        let root = tempfile::tempdir().unwrap();
-        let real = root.path().join("real");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let real = root.join("real");
         fs::create_dir(&real).unwrap();
         let file = real.join("source.db");
         fs::write(&file, b"synthetic").unwrap();
-        let linked_file = root.path().join("file-link");
-        let linked_dir = root.path().join("dir-link");
+        let linked_file = root.join("file-link");
+        let linked_dir = root.join("dir-link");
         std::os::unix::fs::symlink(&file, &linked_file).unwrap();
         std::os::unix::fs::symlink(&real, &linked_dir).unwrap();
         assert_eq!(stamp(&linked_file), Stamp::Unsafe);
