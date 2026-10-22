@@ -4,10 +4,12 @@
   "upstream": [
     "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484",
     "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1694",
+    "https://github.com/github/docs/blob/92991ed6d17c5023f52e324ee70d36fe7c36dd7d/content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md#L345-L355",
+    "https://github.com/github/copilot-cli/releases/download/v1.0.96/github-copilot-1.0.96-linux-x64.tgz",
     "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
   ],
   "status": "known_gap",
-  "note": "Telltale registers only project-local logs/copilot. Copilot CLI does not publish its log writer, so the path comes from the pinned changelog and the official config-dir reference; the log contents reuse a Telltale fixture, and whether 1.0.96 still writes these lines at the default level is unconfirmed.",
+  "note": "Path-only characterization: Telltale registers only project-local logs/copilot. The pinned upstream docs confirm the home path, not the fixture's contents. Static inspection of the official v1.0.96 Linux runtime archive (SHA256 e6c9513e7dcff38e424c247a8ae7b5b8a283e93973b77eb31fba9ef769f1c95b) finds logging help defining the named default level as info, but does not establish the adapter-required Accumulated output items format when invoked without logging flags. The log contents below are a Telltale synthetic fixture, not v1.0.96 output. Home discovery and supported promotion remain blocked on authoritative format/default-level evidence and successful discovery plus acquisition; a copied fixture alone cannot qualify upstream support. No live capture was performed.",
   "discover": {
     "client": "copilot",
     "files": {
