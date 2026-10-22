@@ -5551,6 +5551,15 @@ fn opencode_relocation_watch_attributes_open_wal_writer_events_on_macos() {
             "phase={phase} start_ms={}",
             started.elapsed().as_millis()
         ));
+        let mut wal = database.as_os_str().to_os_string();
+        wal.push("-wal");
+        if let Ok(metadata) = fs::symlink_metadata(Path::new(&wal)) {
+            report.push(format!(
+                "phase={phase} wal_bytes={} wal_modified={:?}",
+                metadata.len(),
+                metadata.modified().unwrap()
+            ));
+        }
         let deadline = Instant::now() + PHASE_WINDOW;
         let (mut raw_database, mut scanned) = (false, false);
         while Instant::now() < deadline && !(raw_database && scanned) {

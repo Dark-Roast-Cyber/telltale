@@ -21,6 +21,9 @@ use super::discovery::{
 };
 use super::{ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, run_scan};
 
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod sqlite_metadata;
+
 /// When `watch` decides to run a scan.
 #[derive(Clone, Copy)]
 pub(crate) struct WatchTriggerConfig {
@@ -310,6 +313,9 @@ pub(crate) fn run_watch(
         &project_configuration,
     );
     let (mut source_index, mut watch_discovery) = watch_index_from_sources(sources, discovery);
+    #[cfg(target_os = "macos")]
+    let mut sqlite_metadata =
+        sqlite_metadata::SqliteMetadataWatch::new(&source_index, Instant::now());
     let scan_config = ScanConfig {
         execution: config.execution,
         history: false,
@@ -340,6 +346,13 @@ pub(crate) fn run_watch(
             }
             if !pending.is_empty() {
                 break;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                pending.paths.extend(sqlite_metadata.poll(Instant::now()));
+                if !pending.is_empty() {
+                    break;
+                }
             }
             if idle_delivery && last_delivery_completed.elapsed() >= WATCH_DELIVERY_INTERVAL {
                 report_idle_delivery_failures(config.execution.sinks.deliver_durable()?);
@@ -389,11 +402,17 @@ pub(crate) fn run_watch(
             telltale_sources::discovery::opencode_database_override(config.execution.root)
                 .map_err(|_| "invalid OpenCode database override")?;
         }
+        // Capture before acquisition, never after: a later writer commit must
+        // remain a change even if it arrives while this scan is finishing.
+        #[cfg(target_os = "macos")]
+        sqlite_metadata.before_scan(&targets);
         let result = run_scan(scan_config, targets, StateSavePolicy::OnChange)?;
         inbox.check_error()?;
         last_delivery_completed = Instant::now();
         if let Some((sources, discovery)) = result.full_scan_discovery {
             (source_index, watch_discovery) = watch_index_from_sources(sources, discovery);
+            #[cfg(target_os = "macos")]
+            sqlite_metadata.reconcile(&source_index);
         }
         last_scan_completed = Some(Instant::now());
 

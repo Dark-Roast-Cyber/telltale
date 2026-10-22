@@ -235,8 +235,6 @@ jobs:
           "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
           printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - run: cargo clippy --all-targets -- -D warnings
-      - name: Diagnose open-WAL notifications on macOS
-        run: cargo test --locked --test cli scan_watch::opencode_relocation_watch_attributes_open_wal_writer_events_on_macos -- --exact --ignored --nocapture
       - run: cargo test
       - name: Test protected assignment unsupported-platform boundary
         run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
@@ -249,6 +247,10 @@ jobs:
           ./target/release/telltale scan --once --dry-run \
             --emit-activity --emit-session-risk-summary \
             --root tests/fixtures/session_stores
+
+      - name: Diagnose open-WAL notifications on macOS
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --test cli scan_watch::opencode_relocation_watch_attributes_open_wal_writer_events_on_macos -- --exact --ignored --nocapture
 
   source-preflight:
     name: Prospective source preflight (exact SHA)
