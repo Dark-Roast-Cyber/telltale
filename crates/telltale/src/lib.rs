@@ -83,8 +83,19 @@ pub use telltale_detect::v2::{
     DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions, EvaluationCompletion,
     ReplayIdentity, SemanticProvenance, Severity, VisibilityLimit,
 };
+mod action_record;
 mod rule_catalog;
-pub use rule_catalog::{RuleCatalogEntry, RuleCatalogKind, bundled_rule_catalog};
+pub use rule_catalog::{
+    RuleCatalogEntry, RuleCatalogKind, bundled_rule_catalog, rule_catalog_document,
+};
+pub use telltale_schema::action_record::{
+    ACTION_RECORD_V1_ID, ACTION_RECORD_V1_SCHEMA, ActionRecordContext, ActionRecordContribution,
+    ActionRecordError, ActionRecordErrorCategory, ActionRecordEvidence, ActionRecordFinding,
+    ActionRecordV1,
+};
+pub use telltale_schema::rule_catalog::{
+    RULE_CATALOG_V1_ID, RULE_CATALOG_V1_SCHEMA, RuleCatalogEntryV1, RuleCatalogError, RuleCatalogV1,
+};
 
 type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
 
@@ -1188,6 +1199,40 @@ modifiers: []
             telltale_rules::load_default_rule_set()
                 .unwrap()
                 .rule_count()
+        );
+    }
+
+    #[test]
+    fn default_pipeline_detects_with_embedded_community_rules() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join(".claude/projects/synthetic");
+        std::fs::create_dir_all(&directory).unwrap();
+        let call = serde_json::json!({"type": "assistant", "sessionId": "community-session",
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1",
+            "name": "Bash", "input": {"command": "claude mcp add synthetic-server -- npx synthetic-mcp"}}]}});
+        std::fs::write(directory.join("session.jsonl"), format!("{call}\n")).unwrap();
+        let community_rule_ids = |pipeline: Pipeline| {
+            pipeline
+                .scan_root(root.path())
+                .unwrap()
+                .into_iter()
+                .filter(|(_, event)| event.event_type == "detection")
+                .flat_map(|(_, event)| event.rule_ids)
+                .filter(|id| id.starts_with("tdx."))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            community_rule_ids(Pipeline::builder().build().unwrap()),
+            ["tdx.persistence.mcp_server_registration"]
+        );
+        assert!(
+            community_rule_ids(
+                Pipeline::builder()
+                    .without_community_rules()
+                    .build()
+                    .unwrap()
+            )
+            .is_empty()
         );
     }
 

@@ -13,6 +13,11 @@ a published community release whose checksum file lists the exact package bytes.
         "$TMPDIR/community/telltale.community-0.2.0.package.yaml" \\
         --sha256sums "$TMPDIR/community/SHA256SUMS"
     cargo test --locked -p telltale-rules package
+    cargo test --locked --test cli community
+
+The CLI tests scan synthetic agent sessions and check that embedded community
+rules fire on the commands in `COMMUNITY_TRIGGERS` and spare their look-alikes;
+update a row there when a release renames or retires its rule.
 
 `--unverified-local` skips the checksum requirement for a local development
 build; never vendor such a snapshot into a release.
@@ -70,7 +75,8 @@ def main() -> int:
             raise SystemExit(f"error: sha256 {actual} does not match {args.sha256sums.name}")
     OUT.write_bytes(data)
     print(f"vendored telltale.community {version} -> {OUT.relative_to(REPO)}")
-    print("next: cargo test --locked -p telltale-rules package && make evaluation-check")
+    print("next: cargo test --locked -p telltale-rules package && "
+          "cargo test --locked --test cli community && make evaluation-check")
     return 0
 
 
