@@ -237,7 +237,8 @@ absence and MUST NOT be hashed, fabricated, or treated as a mapping error.
 
 Every populated canonical body field and facet MUST have exactly one matching
 `FactMetadata` entry. The adapter MAY add only clear `command.text` and
-`resource.path` Tool facets, with parsed provenance, except the closed completed-item
+`resource.path` Tool facets, with parsed provenance, except hosted-search reported
+`tool.source_status` and the closed completed-item
 facets, the derived completed-command `command.text` facet, and reported cwd
 specified below, and MUST never emit File,
 Process, Network, Session, or Inference observations from those facets or from
@@ -418,7 +419,7 @@ generic metadata ignore mechanism SHALL be added.
 
 All three Codex identities SHALL accept only exact outer `event_msg`, direct
 object payload `type: item_completed`, and object `item` tagged exactly
-`AgentMessage`, `UserMessage`, `Reasoning`, `CommandExecution`, or `FileChange`.
+`AgentMessage`, `UserMessage`, `Reasoning`, `Plan`, `CommandExecution`, or `FileChange`.
 
 #### Scenario: Typed coordinates preserve replay without retaining reasoning
 
@@ -778,6 +779,75 @@ unrelated completed-item quarantine, auxiliaries and reasoning SHALL be unchange
 
 - **WHEN** a source contains a supported neighbor followed by an oversized patch or unknown change variant
 - **THEN** only that physical item is quarantined, accounting and completion coverage remain partial, and diagnostics expose no patch values or paths
+
+### Requirement: Hosted web search retains conservative tool semantics
+
+All three exact Codex identities SHALL map exact outer `response_item` with
+direct object payload `type: web_search_call` to one `ToolRequested`, one native
+`ToolCall`, and one `web_search` invocation contribution. The parsed name SHALL
+be `web_search`; reported structured arguments SHALL retain only supported
+`action` fields: `search` type/query/queries, `open_page` type/url, and
+`find_in_page` type/url/pattern. Optional absent/null/string values and arrays
+of strings SHALL retain their source representation inside the action.
+Absent/null action SHALL yield no arguments. A parsed `tool.searchable_arguments`
+SHALL expose only supported query/queries/url/pattern text to existing argument
+selectors, folding CR/LF to spaces without replacing the structured native values.
+Its existing assembled string bound SHALL apply; overflow SHALL quarantine the
+unit without truncated or silently omitted search evidence.
+Optional native `id` SHALL supply
+only reported response correlation, never call linkage or content-based identity.
+Optional string status SHALL remain reported `tool.source_status`, without
+reported success, results, Network facts or execution stages. Existing bounds,
+source ordering, identity and Unsupported ToolExecution SHALL remain unchanged.
+Unknown action variants SHALL quarantine as `unknown_discriminator`; malformed
+supported fields and wrong/nested wrappers SHALL reject atomically.
+
+#### Scenario: Search action is visible without claiming network effects
+
+- **WHEN** a pinned synthetic hosted search is acquired and evaluated
+- **THEN** its query is available to deterministic tool-argument selectors,
+  its benign counterpart does not match, and no returned result or execution is inferred
+- **AND** unknown or oversized units remain visible as quarantine without hiding neighbors
+
+### Requirement: Completed Plan is assistant-authored text
+
+An owned exact completed `Plan` SHALL require string `text`, map it as assistant
+message content using existing message bounds and typed owner/turn/item identity,
+and count one native `AssistantMessage` with zero invocation contributions.
+It SHALL NOT be private reasoning, a tool request, or authority for suppressing
+raw `AgentMessage` mirrors. Malformed text SHALL reject atomically; over-budget
+text SHALL quarantine without truncation.
+
+#### Scenario: Plan survives either history mode
+
+- **WHEN** a pinned Plan is acquired from legacy or paginated history
+- **THEN** its full supported text reaches assistant-context analytics and typed replay identity is position-independent
+
+### Requirement: Legacy assistant event pairing is bounded and loss-visible
+
+Exact outer `event_msg` with direct object payload `type: agent_message` SHALL
+require string `message` and map assistant text. Legacy/default history MAY
+suppress one adjacent ordered event fanout in favor of one successfully mapped
+text-only raw assistant response, in either physical order, only when source
+owner, optional string phase and each ordered text part agree exactly.
+No event/response shared identity or turn coordinate SHALL be invented.
+Pairing SHALL NOT cross another native unit, deduplicate repeated raw responses,
+search the whole session for content, apply to paginated history, or replace the
+existing coordinate-proven typed-message mirror rules. Unmatched or ambiguous
+text SHALL remain separate, with possible duplicate analytics rather than loss.
+Raw-response quarantine SHALL NOT suppress usable legacy text. All physical
+native units SHALL count, including suppressed assistant records. Wrong/nested
+wrappers and malformed message fields SHALL reject source integrity atomically.
+Exact outer `response_item` with direct payload `type: agent_message` and no nested
+`payload` is a distinct inter-agent record, not a legacy event: it SHALL quarantine
+by itself as `unknown_discriminator`, retain no content, tool or contribution
+evidence, and count as native Other.
+
+#### Scenario: Mirror does not duplicate analytics or hide unique content
+
+- **WHEN** a raw text-only response and its equivalent adjacent legacy fanout are acquired
+- **THEN** canonical analytics see the raw text once while native accounting counts every unit
+- **AND** unmatched text, nonadjacent repetition, phase/owner differences and raw-message quarantine preserve distinct usable content
 
 ### Requirement: Unknown input fails closed without leakage
 

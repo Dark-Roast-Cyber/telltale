@@ -219,7 +219,7 @@ items, 4,096-byte retained strings and 4 MiB are unchanged.
 
 All three Codex identities accept exact `event_msg.payload.type: item_completed`
 with an object `item` tagged exactly `AgentMessage`, `UserMessage`, `Reasoning`,
-`CommandExecution`, or `FileChange`. Agent content accepts ordered exact `Text` strings; user
+`Plan`, `CommandExecution`, or `FileChange`. Agent content accepts ordered exact `Text` strings; user
 content accepts only exact lowercase `text` UserInput strings. Unknown/nontext
 content, wrong/nested wrappers, unknown items and nonterminal command status
 reject the whole source, without successful observations, accounting or progress.
@@ -334,6 +334,46 @@ or unrestricted patch-losslessness claim. ToolExecution remains Unsupported;
 request/result/mirror distinctions and unrelated quarantine remain unchanged.
 
 No public source API enum or Event 3.0 schema changes are introduced.
+
+#### Hosted search, completed Plans and legacy assistant events
+
+All three Codex identities support the three synthetic cases at public commit
+`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d` in
+[`tests/upstream_formats/cases/codex`](../tests/upstream_formats/cases/codex).
+This is acquisition/deterministic conformance evidence, not new live-host qualification.
+
+- Exact `response_item.payload.type: web_search_call` maps to `ToolRequested`,
+  native `ToolCall` and one `web_search` invocation contribution. The tool name
+  is parsed from the native variant; supported action fields remain reported
+  structured arguments: `search` query/queries, `open_page` URL, or `find_in_page`
+  URL/pattern. Optional fields preserve absence/null inside the action. Absent/null
+  action produces no arguments.
+  A parsed `tool.searchable_arguments` exposes only query/queries/URL/pattern
+  text, with CR/LF folded to spaces, to existing argument selectors. Structured
+  arguments retain the native values. Its existing 4,096-byte assembled search
+  bound applies; over-budget units quarantine rather than losing selector text.
+  Optional response ID is response correlation,
+  never a fabricated call ID. Source status is only reported `tool.source_status`,
+  not success, a returned result, network activity or execution evidence.
+  Unknown action variants quarantine the unit; malformed supported fields fail
+  source integrity, and existing argument/facet bounds remain unchanged.
+- Exact completed `Plan` maps its required string `text` to assistant message
+  content, with existing message bounds and owner/turn/item identity. It counts
+  as native `AssistantMessage`, with no invocation contribution. It is neither
+  private reasoning nor an `AgentMessage` mirror authority.
+- Exact `event_msg.payload.type: agent_message` retains its required string
+  `message` as assistant text. In legacy/default history only, one adjacent
+  text-only raw assistant response and its ordered per-text event fanout may
+  contribute canonical text once, keeping the raw response's identity and position.
+  Both orders are supported. Owner and optional phase must agree, and every text
+  part must match exactly. The raw message must successfully map before events
+  are suppressed; otherwise usable event text survives and quarantine stays visible.
+  Physical native units and assistant record counts are never deduplicated.
+  No session-wide content matching occurs. Unmatched, phase/owner-mismatched,
+  mixed-tool, nonadjacent or paginated representations remain separate, so
+  ambiguous inputs can still produce duplicate analytics. No shared event ID
+  or turn coordinate is invented. Existing coordinate-proven typed-message
+  mirror rules above are unchanged.
 
 At the public pin below, `core/src/context/developer_instructions.rs` constructs
 developer instructions, `core/src/session/mod.rs` persists conversation items
