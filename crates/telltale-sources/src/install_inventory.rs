@@ -254,6 +254,9 @@ fn observe_agent(
 
     let strong_present = signals.iter().any(|signal| {
         signal.present
+            // AWS Copilot uses the same launcher name. Keep that signal visible,
+            // but only GitHub-specific package/extension evidence confirms it.
+            && !(def.agent == "copilot" && signal.kind == "executable")
             && matches!(
                 signal.kind.as_str(),
                 "executable" | "node_package" | "vscode_extension"
