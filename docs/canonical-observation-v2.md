@@ -337,9 +337,10 @@ No public source API enum or Event 3.0 schema changes are introduced.
 
 #### Hosted search, completed Plans and legacy assistant events
 
-All three Codex identities support the three synthetic cases at public commit
-`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d` in
-[`tests/upstream_formats/cases/codex`](../tests/upstream_formats/cases/codex).
+All three Codex identities support the three synthetic cases in
+[`tests/upstream_formats/cases/codex`](../tests/upstream_formats/cases/codex),
+with provenance at the Codex revision pinned in the
+[harness manifest](../tests/upstream_formats/harnesses.json).
 This is acquisition/deterministic conformance evidence, not new live-host qualification.
 
 - Exact `response_item.payload.type: web_search_call` maps to `ToolRequested`,

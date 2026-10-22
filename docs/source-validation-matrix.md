@@ -128,7 +128,8 @@ Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
 - **OpenCode**: Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` (complete)
 - **Copilot**: historical bounded validation of project-local
   `logs/copilot/process-*.log`, not qualification of current Copilot CLI defaults.
-  v1.0.96 home logs and `COPILOT_HOME` remain known gaps: public upstream evidence
+  The current v1.0.101 pin's home logs and `COPILOT_HOME` remain known gaps, as in
+  the historical v1.0.96 assessment: public upstream evidence
   establishes the paths but not the adapter-required records at default logging.
   See the [qualification evidence and unblock criteria](session-sources.md#copilot-cli-qualification-gap).
 - **Claude Code**: `~/.claude/projects/` (complete) — bounded `--client claude --max-sources 5 --dry-run` parsed 5 sources with 5 activities and 1 benign detection, zero scanner errors; repeated at cap 10 with consistent results.

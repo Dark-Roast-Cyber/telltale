@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use telltale_rules::{
     DetectionDefinition, RuleDefinition, SUPPORTED_DETECTION_CONDITIONS, SUPPORTED_RULE_TARGETS,
 };
@@ -18,7 +18,7 @@ use telltale_schema::event::{
     VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_DETECTION_SEVERITIES, VALID_SEVERITIES,
     VALID_SIGNAL_TYPES,
 };
-use telltale_sources::clients::{supported_clients, PathRoot, SourcePattern};
+use telltale_sources::clients::{PathRoot, SourcePattern, supported_clients};
 
 const UPDATE_ENV: &str = "TELLTALE_UPDATE_CATALOG";
 
