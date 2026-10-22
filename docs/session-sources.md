@@ -31,6 +31,11 @@ Copilot inventory checks the `copilot` launcher on `PATH` (including Windows
 launcher suffixes) and the `@github/copilot` package in the existing Node package
 roots, alongside the retained VS Code extension evidence. These metadata-only
 signals do not execute Copilot or establish session acquisition support.
+The launcher name is ambiguous: [AWS Copilot CLI](https://aws.github.io/copilot-cli/docs/getting-started/install/)
+also installs `copilot`. A launcher alone therefore reports `Partial` confidence
+and `installed=false`; `@github/copilot` or GitHub extension evidence confirms the
+inventory entry. Standalone GitHub CLI installs without that evidence also remain
+`Partial`. Other agents' install-confidence rules are unchanged.
 
 ## Host Discovery Candidates
 

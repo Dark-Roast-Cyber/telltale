@@ -3,7 +3,7 @@ use super::*;
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
-fn scan_once_reports_copilot_cli_install_without_claiming_session_coverage() {
+fn scan_once_reports_ambiguous_copilot_launcher_without_claiming_install_or_session_coverage() {
     let temp = tempdir().unwrap();
     let home = temp.path().join("home");
     let bin = temp.path().join("PRIVATE_INSTALL_PATH/bin");
@@ -47,7 +47,7 @@ fn scan_once_reports_copilot_cli_install_without_claiming_session_coverage() {
         .expect("install inventory event");
     assert!(event_schema_validator().is_valid(inventory));
     assert!(inventory["evidence"].as_array().unwrap().iter().any(|item| {
-        item["redacted_value"].as_str().is_some_and(|value| value == "agent=copilot; installed=true; confidence=Confirmed; present_signals=executable:copilot")
+        item["redacted_value"].as_str().is_some_and(|value| value == "agent=copilot; installed=false; confidence=Partial; present_signals=executable:copilot")
     }));
     assert_eq!(summary["source_processing"]["selected_source_count"], 0);
     assert_eq!(summary["source_processing"]["parsed_record_count"], 0);
