@@ -109,7 +109,7 @@ function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]
 
 function Get-TestLockUsers([string]$Path, $Refusal = $null) {
     $leaf = [IO.Path]::GetFileName($Path)
-    if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock') -or
+    if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False') -or
         $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
         throw 'Staged attribution requires a selected scenario and an observed sharing refusal.'
     }
@@ -140,7 +140,7 @@ function Get-TestFileDiagnostic([string]$Name) {
             catch {
                 $probeFailure = $_
                 $entry.exclusive_probe = 'refused'; $entry.probe_error = @(Get-TestExceptionChain $probeFailure.Exception)
-                if ($Name -ceq 'staged.exe' -and $script:testScenario -cin @('fresh', 'partial-rollback', 'controlled-stage-lock')) {
+                if ($Name -ceq 'staged.exe' -and $script:testScenario -cin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False')) {
                     try { $entry.lock_users = Get-TestLockUsers $path $probeFailure }
                     catch { $entry.lock_users = @{ status = 'unknown'; reason = 'synthetic stage validation or attribution failed'; processes = @(); exceptions = @(Get-TestExceptionChain $_.Exception) } }
                 }
@@ -160,7 +160,7 @@ function Get-TestFileDiagnostic([string]$Name) {
 }
 
 function Invoke-TestDiagnosticInstall([hashtable]$Layout, [string]$DevelopmentBinary) {
-    if ($script:testScenario -cnotin @('fresh', 'partial-rollback') -or $Layout.Count -ne 2 -or
+    if ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'recovery-False') -or $Layout.Count -ne 2 -or
         $Layout.InstallDirectory -cne $script:testLayout.InstallDirectory -or $Layout.DataDirectory -cne $script:testLayout.DataDirectory) { throw 'Installer diagnostics require the exact selected scenario.' }
     $installErrors = @()
     try { & $installer @Layout -DevelopmentBinary $DevelopmentBinary -ErrorVariable installErrors }
@@ -813,7 +813,8 @@ try {
         Copy-Item -LiteralPath $variant -Destination $stage
         Set-TTCreatedOwner $stage
         if ($replace) { [IO.File]::Replace($stage, (Join-Path $layout.InstallDirectory 'telltale.exe'), (Join-Path $layout.InstallDirectory 'previous.exe')) }
-        & $installer @layout -DevelopmentBinary $binary
+        if (-not $replace) { Invoke-TestDiagnosticInstall $layout $binary }
+        else { & $installer @layout -DevelopmentBinary $binary }
         Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq $previous.binary_sha256) 'interrupted transaction recovered'
         & $uninstaller @layout -Confirm:$false
     }

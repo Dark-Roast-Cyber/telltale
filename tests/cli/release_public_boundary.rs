@@ -2198,7 +2198,7 @@ fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
         script
             .matches("Invoke-TestDiagnosticInstall $layout")
             .count(),
-        5
+        6
     );
     let file_diagnostic = script
         .split("function Get-TestFileDiagnostic")
@@ -2252,6 +2252,80 @@ fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
             "broad or mutating probe: {forbidden}"
         );
     }
+}
+
+#[test]
+fn windows_lifecycle_recovery_false_diagnostics_remain_narrow() {
+    let script = fs::read_to_string("tests/windows_lifecycle.ps1").unwrap();
+    let install = script
+        .split("function Invoke-TestDiagnosticInstall")
+        .nth(1)
+        .unwrap()
+        .split("function Write-TestFailure")
+        .next()
+        .unwrap();
+    assert!(
+        install.contains(
+            "$script:testScenario -cnotin @('fresh', 'partial-rollback', 'recovery-False')"
+        ),
+        "command-local installer capture must select recovery-False, not every recovery scenario"
+    );
+    assert!(install.contains("$installErrors = @()"));
+    assert!(install.contains("-ErrorVariable installErrors"));
+    assert!(install.contains("Write-TestFailure $failure (Get-TestSharingError $installErrors)"));
+    assert!(install.contains("\n        throw\n"));
+
+    let recovery = script
+        .split("foreach ($replace in @($false, $true))")
+        .nth(1)
+        .unwrap()
+        .split("foreach ($freshActivation")
+        .next()
+        .unwrap();
+    assert!(recovery.contains("New-TestLayout \"recovery-$replace\""));
+    assert!(recovery.contains(
+        "if (-not $replace) { Invoke-TestDiagnosticInstall $layout $binary }\n        else { & $installer @layout -DevelopmentBinary $binary }"
+    ));
+    assert_eq!(recovery.matches("Invoke-TestDiagnosticInstall").count(), 1);
+    assert_eq!(
+        recovery
+            .matches("& $installer @layout -DevelopmentBinary $binary")
+            .count(),
+        2,
+        "initial installs and recovery-True must retain their original invocation"
+    );
+    assert!(
+        recovery.find("Set-TTCreatedOwner $stage").unwrap()
+            < recovery.find("Invoke-TestDiagnosticInstall").unwrap(),
+        "capture must cover the invocation after the interrupted transaction is seeded"
+    );
+
+    let attribution = script
+        .split("function Get-TestLockUsers")
+        .nth(1)
+        .unwrap()
+        .split("function Get-TestFileDiagnostic")
+        .next()
+        .unwrap();
+    assert!(attribution.contains(
+        "$leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False')"
+    ));
+    let file_diagnostic = script
+        .split("function Get-TestFileDiagnostic")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-TestDiagnosticInstall")
+        .next()
+        .unwrap();
+    assert!(file_diagnostic.contains(
+        "$Name -ceq 'staged.exe' -and $script:testScenario -cin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False')"
+    ));
+    assert_eq!(
+        file_diagnostic
+            .matches("Get-TestLockUsers $path $probeFailure")
+            .count(),
+        1
+    );
 }
 
 #[test]
