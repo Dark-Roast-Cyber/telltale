@@ -153,8 +153,13 @@ escaping rules.
   File identity, length and nanosecond modification time are compared; content is
   never read for sampling. Linked path components and nonregular leaves are rejected.
   This adds no directory enumeration, new discovery path, SHM/journal sampling or
-  scan on unchanged metadata. Native events still discover new stores, and metadata
+  scan for unchanged samples of already-indexed stores. Native events still discover new stores, and metadata
   changes use the same targeted-scan, debounce and minimum-interval rules.
+  A newly indexed store gets one conservative extra scan because a post-scan
+  baseline could hide a concurrent commit; that scan can consume an iteration.
+  Explicit-root aliases with symlinked components remain outside this metadata
+  fallback, even where legacy discovery accepts their coordinates. Use a real,
+  non-symlinked path for open-WAL monitoring; no-follow checks are not relaxed.
   Native macOS validation is required; metadata sampling is not a promise to detect
   writes that deliberately preserve all compared metadata.
 - A non-`.` explicit `--root` ignores `OPENCODE_DB` and retains exact
