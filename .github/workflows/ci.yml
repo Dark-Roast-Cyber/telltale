@@ -248,9 +248,6 @@ jobs:
             --emit-activity --emit-session-risk-summary \
             --root tests/fixtures/session_stores
 
-      - name: Diagnose open-WAL notifications on macOS
-        run: cargo test --locked --test cli scan_watch::opencode_relocation_watch_attributes_open_wal_writer_events_on_macos -- --exact --ignored --nocapture
-
   source-preflight:
     name: Prospective source preflight (exact SHA)
     runs-on: ubuntu-latest

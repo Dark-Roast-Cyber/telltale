@@ -170,8 +170,11 @@ escaping rules.
   Explicit-root aliases with symlinked components remain outside this metadata
   fallback, even where legacy discovery accepts their coordinates. Use a real,
   non-symlinked path for open-WAL monitoring; no-follow checks are not relaxed.
-  Native macOS validation is required; metadata sampling is not a promise to detect
-  writes that deliberately preserve all compared metadata.
+  [Native macOS synthetic validation](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/39770819492)
+  at `cf64c1d` passed open-writer commits, same-size WAL reuse, SHM/sibling exclusion,
+  and the original nonrecursive-watch regression. This is not live-host qualification;
+  metadata sampling is not a promise to detect writes that deliberately preserve
+  all compared metadata.
 - A non-`.` explicit `--root` ignores `OPENCODE_DB` and retains exact
   `opencode.db` matching and its existing home/data-home candidates. Fixture
   layout is unchanged. Relocation is additive: the scanner may not share the
