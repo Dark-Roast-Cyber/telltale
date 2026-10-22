@@ -22,6 +22,15 @@
   literal regex escapes. U+2028 and U+2029 are rejected too: YAML breaks lines
   at them, so they could add package keys that a reviewer's viewer never shows.
 
+- Reject a carriage return in a rule package unless it ends a CRLF line. YAML
+  breaks lines there, so a lone one could add a key, such as `enabled: false`,
+  that a terminal draws over; CRLF packages still load. A `"\r"` escape in a
+  quoted string is rejected like other escaped controls. Two installed copies of
+  one package ID now fail with each copy's version and content SHA-256 prefix
+  instead of only the ID, since diagnostics never show their paths.
+  `TELLTALE_COMMUNITY_RULES` accepts `0`, `false`, `off`, and `no` in any case;
+  `FALSE` used to leave community rules on.
+
 - Fix three detection gaps that synthetic lab scenarios found. `approval.bypass.context`
   no longer fires on a documentation review that quotes any of its phrases as
   disallowed, including inside Codex exec output with its exit metadata; only

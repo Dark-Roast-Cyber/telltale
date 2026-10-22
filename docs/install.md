@@ -473,7 +473,8 @@ Community rules come from the
 which reviews each rule against independently labeled synthetic scenarios before
 it reaches a release. Use only the core rules with `--no-community-rules` on
 `scan`, `watch`, `rules`, and `config` commands, or set
-`TELLTALE_COMMUNITY_RULES=0` in a service environment whose arguments are fixed.
+`TELLTALE_COMMUNITY_RULES=0` in a service environment whose arguments are fixed
+(`false`, `off`, and `no` also work, in any case).
 `--no-default-rules` omits both the core rules and the embedded community
 snapshot, while installed packages still load like other managed content.
 
@@ -500,11 +501,14 @@ documents:
 
 Packages only add definitions. A package cannot reuse a core rule namespace,
 replace a core rule, or replace another package's rule; conflicting package IDs,
-namespaces, or rule IDs fail validation with both sources. Operators may still
+namespaces, or rule IDs fail validation with both sources. Diagnostics never
+show paths, so two installed copies of one package are named by version and the
+first 12 hex digits of their content SHA-256; `sha256sum` on the
+`rule-packages.d` files finds them. Operators may still
 tune a package rule through `overrides.d` or replace it from
 `organization-rules.d`, `rules.d`, or `ui-rules.d`. Telltale never downloads
 packages and rejects packages that contain control or invisible formatting
-characters.
+characters, including a carriage return outside a CRLF line ending.
 
 To run a newer community release without waiting for a Telltale release, verify
 and install its package. An installed package with ID `telltale.community`
