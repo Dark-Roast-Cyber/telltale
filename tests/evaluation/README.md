@@ -87,7 +87,17 @@ deferred to a future OpenSpec proposal; this corpus does not change
 
 Rule-match correctness is not security-review correctness. A benign case may correctly match `execution.shell` or `secret.env.read` while correctly remaining `not_required`.
 
-Source fixtures are acquired as Canonical Observation v2 and scored by Detection v2. `execution.shell` matches command and argument text, not a tool name. A fixture whose only shell identity is `tool_name: bash` therefore does not match `execution.shell`, and a chain that requires the execution category does not fire from that name alone. `RX-OUTBOUND-001` is characterization-only for that reason: its previous review requirement depended on the retired projection counting the tool name as command text, and this corpus does not rewrite the command or retune rules to restore it. `RX-HARVEST-EXFIL-001` states the harvest-and-upload command in the Codex `command` field so the scenario remains visible without inventing a shell token.
+Source fixtures are acquired as Canonical Observation v2 and scored by Detection
+v2. `execution.shell` matches exact shell-tool names as well as command and
+argument shell/interpreter text. Its 15 points are counted once per session,
+whether a harness records a wrapper or just the command. Existing execution
+category modifiers can also trigger from this credit; native per-action command
+precision is unchanged. No tool name is copied into command text and no host
+execution is inferred. `RX-OUTBOUND-001` remains characterization-only with its
+original label rationale retained, although its score is now 75 rather than 60.
+Nine cases changed characterization with shell-name coverage; efficacy labels
+and the TP/FP/TN/FN counts are unchanged. `RX-HARVEST-EXFIL-001` still states the
+harvest-and-upload command in the Codex `command` field.
 
 Process-chain coverage retains definition-backed atomic matcher conformance and
 adds fixed canonical Tool contracts through `evaluate_source` and `project_event3`:
