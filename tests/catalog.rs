@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use telltale_rules::{
     DetectionDefinition, RuleDefinition, SUPPORTED_DETECTION_CONDITIONS, SUPPORTED_RULE_TARGETS,
 };
@@ -18,7 +18,7 @@ use telltale_schema::event::{
     VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_DETECTION_SEVERITIES, VALID_SEVERITIES,
     VALID_SIGNAL_TYPES,
 };
-use telltale_sources::clients::{PathRoot, SourcePattern, supported_clients};
+use telltale_sources::clients::{supported_clients, PathRoot, SourcePattern};
 
 const UPDATE_ENV: &str = "TELLTALE_UPDATE_CATALOG";
 
@@ -96,7 +96,7 @@ fn sources_catalog() -> Value {
         "source_specific_discovery": {
             "claude.projects": "Environment-resolved discovery (--root .) also searches $CLAUDE_CONFIG_DIR/projects; an explicit --root ignores it.",
             "copilot.process_log": "Project-local logs/copilot only. Upstream ~/.copilot/logs and $COPILOT_HOME/logs are not discovered: the current default-level process-log format is unqualified; see the Copilot upstream format known-gap cases.",
-            "opencode.sqlite": "On Windows, also searches $XDG_DATA_HOME and <home>/.local/share; an explicit --root also accepts <root>/opencode/opencode.db.",
+            "opencode.sqlite": "Environment-resolved host discovery (--root .) retains default databases and adds $XDG_DATA_HOME/opencode or <home>/.local/share/opencode on every platform. Direct-child opencode-<channel>.db names use a nonempty ASCII alphanumeric/dot/underscore/hyphen channel; environment-resolved default files and directory components reject symlinks. OPENCODE_DB adds one exact file, absolute or relative to that XDG directory, without parent enumeration or symlink components; empty and :memory: add no file. Non-dot roots and fixtures retain exact opencode.db matching; explicit roots also accept <root>/opencode/opencode.db, and Windows retains <home>/.local/share.",
         },
         "sources": sources,
     })

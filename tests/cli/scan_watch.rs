@@ -5257,6 +5257,570 @@ fn watch_command_is_available_for_realtime_scans() {
     assert!(stdout.contains("--client"));
 }
 
+fn seed_relocated_opencode(path: &Path) -> rusqlite::Connection {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, agent TEXT, model TEXT);
+         CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT,
+             seq INTEGER, time_updated INTEGER, data TEXT);
+         INSERT INTO session_v2 VALUES ('synthetic-relocation', 'build', NULL);",
+        )
+        .unwrap();
+    append_relocated_opencode(&connection, 1);
+    connection
+}
+
+fn append_relocated_opencode(connection: &rusqlite::Connection, sequence: i64) {
+    connection
+        .execute(
+            "INSERT INTO session_message VALUES (?1, 'synthetic-relocation', 'user', ?2, ?3, ?4)",
+            rusqlite::params![
+                format!("synthetic-{sequence}"),
+                sequence,
+                1791849600000_i64 + sequence,
+                serde_json::json!({"time":{"created":1791849600000_i64 + sequence},
+                "text":"List the synthetic workspace.","files":[],"agents":[],"skills":[]})
+                .to_string()
+            ],
+        )
+        .unwrap();
+}
+
+fn relocated_opencode_command(home: &Path, work: &Path, subcommand: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .env_clear()
+        .current_dir(work)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .arg(subcommand)
+        .args([
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--client",
+            "opencode",
+        ])
+        .arg("--state-path")
+        .arg(work.join("state.json"))
+        .arg("--log-path")
+        .arg(work.join("events.jsonl"));
+    if subcommand == "scan" {
+        command.arg("--once");
+    }
+    for key in ["PATH", "SystemRoot", "windir"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    command
+}
+
+#[test]
+fn opencode_relocation_discovery_is_exact_additive_and_root_isolated() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    let data = home.join(".local/share/opencode");
+    drop(seed_relocated_opencode(&data.join("opencode.db")));
+    drop(seed_relocated_opencode(&data.join("opencode-stable.db")));
+    drop(seed_relocated_opencode(
+        &data.join("nested/opencode-other.db"),
+    ));
+    let outside = root.join("PRIVATE-RELOCATION/custom-name.sqlite");
+    drop(seed_relocated_opencode(&outside));
+    drop(seed_relocated_opencode(
+        &outside.with_file_name("opencode-neighbor.db"),
+    ));
+    for name in [
+        "opencode-.db",
+        "opencode-stable.db-wal",
+        "opencode-stable.db-shm",
+        "opencode-stable.db.bak",
+        "unrelated.db",
+    ] {
+        fs::write(data.join(name), b"PRIVATE-RELOCATION not SQLite").unwrap();
+    }
+    let scan = |value: Option<&std::ffi::OsStr>, explicit: Option<&Path>, expected: u64| {
+        let mut command = relocated_opencode_command(&home, &work, "scan");
+        if let Some(value) = value {
+            command.env("OPENCODE_DB", value);
+        }
+        if let Some(explicit) = explicit {
+            command.arg("--root").arg(explicit);
+            if explicit.join(".telltale-fixtures").is_file() {
+                command.arg("--allow-fixtures");
+            }
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let summary: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            summary["source_counts"]["opencode.sqlite"], expected,
+            "{summary}"
+        );
+        assert_eq!(
+            summary["source_processing"]["selected_source_count"],
+            expected
+        );
+        assert_eq!(
+            summary["source_processing"]["parsed_record_count"],
+            expected
+        );
+        assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+        let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+        for text in [&stdout, &log] {
+            assert!(!text.contains("PRIVATE-RELOCATION"));
+        }
+    };
+    scan(Some(outside.as_os_str()), None, 3);
+    let relative = Path::new("../../../../PRIVATE-RELOCATION/custom-name.sqlite");
+    scan(Some(relative.as_os_str()), None, 3);
+    scan(None, None, 2);
+    scan(Some(std::ffi::OsStr::new("")), None, 2);
+    scan(Some(std::ffi::OsStr::new(":memory:")), None, 2);
+    // Explicit roots retain their old exact-file contract, regardless of the variable.
+    let explicit = root.join("explicit");
+    drop(seed_relocated_opencode(
+        &explicit.join("opencode/opencode.db"),
+    ));
+    drop(seed_relocated_opencode(
+        &explicit.join("opencode/opencode-stable.db"),
+    ));
+    scan(Some(outside.as_os_str()), Some(&explicit), 1);
+    fs::write(home.join(".telltale-fixtures"), b"").unwrap();
+    drop(seed_relocated_opencode(&home.join("opencode/opencode.db")));
+    drop(seed_relocated_opencode(
+        &home.join("opencode/opencode-preview.db"),
+    ));
+    scan(Some(outside.as_os_str()), Some(&home), 1);
+}
+
+#[test]
+fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_watch() {
+    use std::io::BufRead;
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let store = root.join("PRIVATE-RELOCATION");
+    let nested = store.join("unrelated/nested");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    let database = store.join("custom-store.sqlite");
+    let writer = seed_relocated_opencode(&database);
+    writer
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        .unwrap();
+    drop(seed_relocated_opencode(&store.join("opencode-neighbor.db")));
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .arg("--emit-activity")
+        .args([
+            "--iterations",
+            "2",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+        ])
+        .env("OPENCODE_DB", &database)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let line = line.unwrap();
+            if let Ok(summary) = serde_json::from_str::<Value>(&line) {
+                let _ = send.send(summary);
+            }
+        }
+    });
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            wait_for_watch_ready(&mut child, &store);
+            #[cfg(target_os = "linux")]
+            assert!(
+                !observed_inotify_directories(child.id())
+                    .unwrap()
+                    .contains(&inotify_directory_identity(&nested))
+            );
+            append_relocated_opencode(&writer, 2);
+            let first = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+            assert_eq!(
+                first["source_processing"]["selected_source_count"], 1,
+                "{first}"
+            );
+            assert_eq!(
+                first["source_processing"]["parsed_record_count"], 2,
+                "{first}"
+            );
+            assert_eq!(
+                first["source_discovery"]["basis"],
+                "watch_source_index_snapshot"
+            );
+            let read_only = rusqlite::Connection::open_with_flags(
+                &database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert_eq!(
+                read_only
+                    .query_row("SELECT COUNT(*) FROM session_message", [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                2
+            );
+            drop(read_only);
+            let mut shm = database.as_os_str().to_os_string();
+            shm.push("-shm");
+            fs::OpenOptions::new()
+                .write(true)
+                .open(Path::new(&shm))
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+                .unwrap();
+            fs::write(nested.join("ignored"), b"synthetic nested change").unwrap();
+            fs::write(store.join("unrelated.txt"), b"synthetic sibling change").unwrap();
+            assert!(
+                matches!(
+                    receive.recv_timeout(Duration::from_millis(750)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ),
+                "reader SHM or unrelated siblings/descendants triggered a scan"
+            );
+            assert!(child.try_wait().unwrap().is_none());
+            append_relocated_opencode(&writer, 3);
+            let second = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+            assert_eq!(
+                second["source_processing"]["parsed_record_count"], 3,
+                "{second}"
+            );
+            assert_eq!(second["source_processing"]["parse_error_source_count"], 0);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while child.try_wait().unwrap().is_none() {
+                if Instant::now() >= deadline {
+                    fail_watch(&mut child, "relocated watcher did not exit");
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert!(child.wait().unwrap().success());
+            let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+            assert!(!log.contains("PRIVATE-RELOCATION"));
+            assert!(!log.is_empty());
+            assert!(log.lines().map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .any(|event| event["client"] == "opencode" && event["event_type"] == "activity"));
+            assert!(
+                log.lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .all(|event| event_schema_validator().is_valid(&event))
+            );
+        }));
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    reader.join().unwrap();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// macOS diagnostic for the relocated WAL watch above. One synthetic writer keeps its
+/// WAL open while an unfiltered NonRecursive notify watch and a Telltale watch observe
+/// the same writes. Each bounded phase reports raw backend events beside Telltale scan
+/// summaries, so a missing scan is attributed to the backend (no raw database/WAL
+/// event) or to Telltale (raw event delivered, no scan). Observation only: the report is
+/// always printed, and only a Telltale child that did not start fails the diagnostic.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "targeted raw-notify WAL diagnostic; the non-ignored relocation test owns acceptance"]
+fn opencode_relocation_watch_attributes_open_wal_writer_events_on_macos() {
+    use notify::Watcher;
+    use rusqlite::Connection;
+    const PHASE_WINDOW: Duration = Duration::from_secs(5);
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let store = root.join("wal-probe");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    let database = store.join("custom-store.sqlite");
+    let writer = seed_relocated_opencode(&database);
+    writer
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        .unwrap();
+    let database_names = ["custom-store.sqlite", "custom-store.sqlite-wal"];
+
+    let started = Instant::now();
+    let (raw_send, raw) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+        let _ = raw_send.send((started.elapsed(), result));
+    })
+    .unwrap();
+    watcher
+        .watch(&store, notify::RecursiveMode::NonRecursive)
+        .unwrap();
+
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .arg("--emit-activity")
+        .args(["--debounce-ms", "100", "--min-scan-interval-ms", "0"])
+        .env("OPENCODE_DB", &database)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let (summary_send, summaries) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if let Ok(summary) = serde_json::from_str::<Value>(&line) {
+                let count = summary["source_processing"]["parsed_record_count"].clone();
+                let _ = summary_send.send((started.elapsed(), count));
+            }
+        }
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+
+    // Returns whether a raw database/WAL event and a Telltale scan covering at least
+    // `minimum_records` were observed; later summaries cannot satisfy an earlier phase.
+    let observe = |phase: &str, minimum_records: u64, report: &mut Vec<String>| -> (bool, bool) {
+        report.push(format!(
+            "phase={phase} start_ms={}",
+            started.elapsed().as_millis()
+        ));
+        let deadline = Instant::now() + PHASE_WINDOW;
+        let (mut raw_database, mut scanned) = (false, false);
+        while Instant::now() < deadline && !(raw_database && scanned) {
+            match raw.recv_timeout(Duration::from_millis(50)) {
+                Ok((at, Ok(event))) => {
+                    for path in &event.paths {
+                        let name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        raw_database |= database_names.contains(&name.as_str());
+                        report.push(format!(
+                            "phase={phase} raw t_ms={} kind={:?} name={name}",
+                            at.as_millis(),
+                            event.kind
+                        ));
+                    }
+                }
+                Ok((at, Err(error))) => report.push(format!(
+                    "phase={phase} raw_error t_ms={} {error}",
+                    at.as_millis()
+                )),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            while let Ok((at, count)) = summaries.try_recv() {
+                scanned |= count.as_u64().is_some_and(|count| count >= minimum_records);
+                report.push(format!(
+                    "phase={phase} telltale_scan t_ms={} parsed_record_count={count}",
+                    at.as_millis()
+                ));
+            }
+        }
+        report.push(format!(
+            "phase={phase} raw_database_event={raw_database} telltale_scan={scanned}"
+        ));
+        (raw_database, scanned)
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut report = Vec::new();
+        observe("setup", 0, &mut report);
+        let running_after_setup = child.try_wait().unwrap().is_none();
+        report.push(format!(
+            "telltale_running_after_setup={running_after_setup}"
+        ));
+        append_relocated_opencode(&writer, 2);
+        let first = observe("insert-2", 2, &mut report);
+        // Mirror the regression's reader activity between the two committed inserts.
+        let read_only =
+            Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        let _: u64 = read_only
+            .query_row("SELECT COUNT(*) FROM session_message", [], |row| row.get(0))
+            .unwrap();
+        drop(read_only);
+        let mut shm = database.as_os_str().to_os_string();
+        shm.push("-shm");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(Path::new(&shm))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+            .unwrap();
+        observe("reader", 0, &mut report);
+        append_relocated_opencode(&writer, 3);
+        let second = observe("insert-3", 3, &mut report);
+        drop(writer);
+        observe("writer-close", 0, &mut report);
+        (report, running_after_setup, first, second)
+    }));
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    drop(watcher);
+    reader.join().unwrap();
+    let child_stderr = stderr_reader.join().unwrap();
+    let (report, running_after_setup, first, second) = match result {
+        Ok(observed) => observed,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    let attribution = |phase: &str, (raw_database, scanned): (bool, bool)| match (
+        raw_database,
+        scanned,
+    ) {
+        (_, true) => format!("{phase}: Telltale scanned"),
+        (false, false) => {
+            format!("{phase}: no raw database/WAL event delivered; suggests backend limitation")
+        }
+        (true, false) => format!(
+            "{phase}: raw database/WAL event delivered without a Telltale scan; suggests Telltale defect"
+        ),
+    };
+    let diagnostic = format!(
+        "{}\n{}\n{}\nchild stderr: {child_stderr:?}",
+        attribution("insert-2", first),
+        attribution("insert-3", second),
+        report.join("\n")
+    );
+    eprintln!("{diagnostic}");
+    // Missing raw events or scans are the behavior under investigation, so they are
+    // reported above rather than asserted; the regression owns acceptance.
+    assert!(
+        running_after_setup,
+        "Telltale watch exited during setup\n{diagnostic}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opencode_relocation_watch_skips_linked_default_database() {
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let data = home.join("data/opencode");
+    fs::create_dir_all(&work).unwrap();
+    drop(seed_relocated_opencode(&data.join("opencode-preview.db")));
+    let outside = root.join("PRIVATE-DEFAULT/foreign.sqlite");
+    drop(seed_relocated_opencode(&outside));
+    std::os::unix::fs::symlink(&outside, data.join("opencode.db")).unwrap();
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .env("XDG_DATA_HOME", home.join("data"))
+        .args([
+            "--iterations",
+            "1",
+            "--emit-activity",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = WatchChildGuard::new(command.spawn().unwrap());
+    let mut stdout = child.child_mut().stdout.take().unwrap();
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    wait_for_watch_ready(child.child_mut(), &data);
+    fs::write(
+        data.join("rediscovery-trigger.txt"),
+        b"synthetic watch trigger",
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.child_mut().try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            fail_watch(child.child_mut(), "linked-default watcher did not exit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.disarm().wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let bytes = reader.join().unwrap().unwrap();
+    let summary: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        summary["source_processing"]["selected_source_count"], 1,
+        "{summary}"
+    );
+    assert_eq!(
+        summary["source_processing"]["parsed_record_count"], 1,
+        "{summary}"
+    );
+    assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+    assert_eq!(
+        summary["source_discovery"]["best_effort_fallback_used"],
+        true
+    );
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+    assert!(!log.is_empty());
+    assert!(!log.contains("PRIVATE-DEFAULT"));
+}
+
+#[cfg(unix)]
+#[test]
+fn opencode_relocation_channel_roots_do_not_follow_symlink_components() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let outside = root.join("PRIVATE-CHANNEL/opencode");
+    fs::create_dir_all(home.join("data")).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    drop(seed_relocated_opencode(
+        &outside.join("opencode-foreign.db"),
+    ));
+    std::os::unix::fs::symlink(&outside, home.join("data/opencode")).unwrap();
+    std::os::unix::fs::symlink(outside.parent().unwrap(), root.join("linked-parent")).unwrap();
+    for xdg in [home.join("data"), root.join("linked-parent")] {
+        let mut command = relocated_opencode_command(&home, &work, "scan");
+        let output = command.env("XDG_DATA_HOME", xdg).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            summary["source_processing"]["selected_source_count"], 0,
+            "{summary}"
+        );
+        assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+        assert_eq!(
+            summary["source_discovery"]["best_effort_fallback_used"],
+            true
+        );
+        assert!(
+            !String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("PRIVATE-CHANNEL")
+        );
+    }
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).expect("create copy target dir");
     for entry in fs::read_dir(src).expect("read copy source dir") {

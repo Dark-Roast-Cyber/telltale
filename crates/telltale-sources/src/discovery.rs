@@ -117,6 +117,10 @@ pub fn discover_sources_bounded(
             .iter()
             .filter(|def| def.root != PathRoot::ProjectLocal)
         {
+            if environment_opencode(root, *source_def) {
+                bounded_opencode_paths(root, client, *source_def, &mut remaining, &mut sources)?;
+                continue;
+            }
             for search in source_search_roots(root, *source_def) {
                 match fs::symlink_metadata(&search) {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -132,6 +136,7 @@ pub fn discover_sources_bounded(
                     *source_def,
                     &mut remaining,
                     MAX_DEPTH,
+                    false,
                     &mut sources,
                 )?;
             }
@@ -148,6 +153,7 @@ fn bounded_paths(
     def: ClientSourceDef,
     remaining: &mut usize,
     depth: usize,
+    opencode_channels: bool,
     sources: &mut Vec<Source>,
 ) -> Result<(), BoundedDiscoveryError> {
     if *remaining == 0 {
@@ -156,16 +162,24 @@ fn bounded_paths(
     *remaining -= 1;
     let metadata = fs::symlink_metadata(path).map_err(BoundedDiscoveryError::from_io)?;
     if metadata.file_type().is_symlink() {
+        if opencode_channels && path.file_name().is_some_and(|name| name == "opencode.db") {
+            return Err(BoundedDiscoveryError::SymlinkRoot);
+        }
         return Ok(());
     }
     if metadata.is_file() {
-        let matched = match def.pattern {
-            SourcePattern::Extension(ext) => path.extension().is_some_and(|v| v == ext),
-            SourcePattern::ExactFile(name) => path.file_name().is_some_and(|v| v == name),
-            SourcePattern::FileNameContains(needle) => path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .is_some_and(|v| v.contains(needle)),
+        let matched = if opencode_channels {
+            path.file_name().is_some_and(|name| name != "opencode.db")
+                && opencode_database_name(path)
+        } else {
+            match def.pattern {
+                SourcePattern::Extension(ext) => path.extension().is_some_and(|v| v == ext),
+                SourcePattern::ExactFile(name) => path.file_name().is_some_and(|v| v == name),
+                SourcePattern::FileNameContains(needle) => path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|v| v.contains(needle)),
+            }
         };
         if matched {
             sources.push(new_source(client, def, path.to_path_buf()));
@@ -191,7 +205,15 @@ fn bounded_paths(
                 *remaining -= 1;
                 continue;
             }
-            bounded_paths(&entry.path(), client, def, remaining, depth - 1, sources)?;
+            bounded_paths(
+                &entry.path(),
+                client,
+                def,
+                remaining,
+                depth - 1,
+                opencode_channels,
+                sources,
+            )?;
         }
     }
     Ok(())
@@ -366,6 +388,21 @@ fn source_watch_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> 
         .collect();
     }
 
+    if environment_opencode(root, source_def) {
+        let mut directories = opencode_data_directories_for_source(root, source_def);
+        if let Ok(Some(path)) = opencode_database_override(root)
+            && let Some(parent) = path.parent()
+        {
+            directories.push(parent.to_path_buf());
+        }
+        return directories
+            .into_iter()
+            .filter(|directory| {
+                let mut remaining = usize::MAX;
+                inspect_opencode_path(directory, &mut remaining, true) == Ok(true)
+            })
+            .collect();
+    }
     source_search_roots(root, source_def)
         .into_iter()
         .filter_map(|search_root| {
@@ -392,6 +429,46 @@ fn discover_source(
     context: &DiscoveryContext<'_>,
     mode: DiscoveryMode,
 ) -> Result<Vec<Source>, DiscoveryError> {
+    if environment_opencode(root, source_def) {
+        let mut sources = Vec::new();
+        for directory in opencode_data_directories_for_source(root, source_def) {
+            let mut remaining = usize::MAX;
+            match inspect_opencode_path(&directory, &mut remaining, true) {
+                Ok(true) => {}
+                Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+                _ => continue,
+            }
+            // Preserve the default's source coordinate without following a linked target.
+            let default = directory.join("opencode.db");
+            match fs::symlink_metadata(&default) {
+                Ok(metadata) if metadata.is_file() => {
+                    sources.push(new_source(client, source_def, default))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ if mode.is_checked() => return Err(context.traversal_error()),
+                _ => {}
+            }
+            sources.extend(
+                walk_files(&directory, false, context, mode)?
+                    .into_iter()
+                    .filter(|entry| entry.file_type().is_file())
+                    .map(|entry| entry.into_path())
+                    .filter(|path| {
+                        path.file_name().is_some_and(|name| name != "opencode.db")
+                            && opencode_database_name(path)
+                    })
+                    .map(|path| new_source(client, source_def, path)),
+            );
+        }
+        match opencode_database_override(root) {
+            Ok(Some(path)) if path.is_file() => {
+                add_opencode_override(&mut sources, client, source_def, path)
+            }
+            Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+            _ => {}
+        }
+        return Ok(sources);
+    }
     // For project-local sources, recursively search for the subpath under the project root
     if source_def.root == PathRoot::ProjectLocal && !is_fixture_root(root) {
         let subpath = source_def
@@ -601,17 +678,31 @@ fn source_search_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf>
         return vec![source_search_root(root, source_def)];
     }
     let platform = current_host_platform();
-    let context = if root == Path::new(".") {
+    let mut context = if root == Path::new(".") {
         environment_root_context(platform, root)
     } else {
         rooted_path_context(platform, root)
     };
     let xdg_data_home = if root == Path::new(".") {
-        env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+        env::var_os("XDG_DATA_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
     } else {
         None
     };
+    if root == Path::new(".") && platform == HostPlatform::Linux {
+        context.data_home = Some(
+            xdg_data_home
+                .clone()
+                .unwrap_or_else(|| context.home.join(".local/share")),
+        );
+    }
     let mut roots = opencode_search_roots(&context, platform, source_def, xdg_data_home.as_deref());
+    if root == Path::new(".") {
+        roots.push(
+            opencode_data_directory(&context.home, xdg_data_home.as_deref()).join("opencode.db"),
+        );
+    }
     // Also accept an explicit data-home root without classifying it as fixtures.
     if root != Path::new(".") {
         roots.push(root.join(source_def.relative_path));
@@ -619,6 +710,185 @@ fn source_search_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf>
     roots.sort_unstable();
     roots.dedup();
     roots
+}
+
+fn environment_opencode(root: &Path, source_def: ClientSourceDef) -> bool {
+    root == Path::new(".") && source_def.id == "opencode.sqlite" && !is_fixture_root(root)
+}
+
+fn opencode_data_directory(home: &Path, xdg: Option<&Path>) -> PathBuf {
+    xdg.filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.join(".local/share"))
+        .join("opencode")
+}
+
+fn opencode_data_directories_for_source(root: &Path, def: ClientSourceDef) -> Vec<PathBuf> {
+    let mut directories = source_search_roots(root, def)
+        .into_iter()
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect::<Vec<_>>();
+    directories.sort_unstable();
+    directories.dedup();
+    directories
+}
+
+/// Fixed OpenCode directory candidates, excluding the arbitrary override's parent.
+/// This namespace list does not enumerate directories or read source bytes. It
+/// distinguishes channel directories from an arbitrary configured file's parent.
+pub fn opencode_data_directories(root: &Path) -> Vec<PathBuf> {
+    supported_clients()
+        .iter()
+        .filter(|client| client.id == ClientId::OpenCode)
+        .flat_map(|client| client.sources)
+        .flat_map(|def| opencode_data_directories_for_source(root, *def))
+        .collect()
+}
+
+fn opencode_database_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name == "opencode.db"
+        || name
+            .strip_prefix("opencode-")
+            .and_then(|name| name.strip_suffix(".db"))
+            .is_some_and(|channel| {
+                !channel.is_empty()
+                    && channel
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            })
+}
+
+fn resolved_opencode_override(root: &Path) -> Result<Option<PathBuf>, BoundedDiscoveryError> {
+    if root != Path::new(".") || is_fixture_root(root) {
+        return Ok(None);
+    }
+    let Some(value) =
+        env::var_os("OPENCODE_DB").filter(|value| !value.is_empty() && value != ":memory:")
+    else {
+        return Ok(None);
+    };
+    let context = environment_root_context(current_host_platform(), root);
+    let xdg = env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+    let path = opencode_data_directory(&context.home, xdg.as_deref()).join(value);
+    normalized_opencode_path(&path).map(Some)
+}
+
+fn normalized_opencode_path(path: &Path) -> Result<PathBuf, BoundedDiscoveryError> {
+    let absolute = std::path::absolute(path).map_err(BoundedDiscoveryError::from_io)?;
+    // Node path.resolve normalizes '..' lexically, without following links or expanding '~'.
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            component => resolved.push(component.as_os_str()),
+        }
+    }
+    Ok(resolved)
+}
+
+fn add_opencode_override(
+    sources: &mut Vec<Source>,
+    client: ClientId,
+    def: ClientSourceDef,
+    path: PathBuf,
+) {
+    // Retain the old default/channel coordinate when the override is its lexical alias.
+    if !sources
+        .iter()
+        .any(|source| normalized_opencode_path(&source.path).is_ok_and(|existing| existing == path))
+    {
+        sources.push(new_source(client, def, path));
+    }
+}
+
+fn inspect_opencode_path(
+    path: &Path,
+    remaining: &mut usize,
+    directory: bool,
+) -> Result<bool, BoundedDiscoveryError> {
+    let mut ancestor = PathBuf::new();
+    for component in path.components() {
+        if matches!(component, std::path::Component::Prefix(_)) {
+            ancestor.push(component.as_os_str());
+            continue;
+        }
+        if *remaining == 0 {
+            return Err(BoundedDiscoveryError::LimitExceeded);
+        }
+        *remaining -= 1;
+        ancestor.push(component.as_os_str());
+        match fs::symlink_metadata(&ancestor) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(BoundedDiscoveryError::SymlinkRoot);
+            }
+            Ok(metadata) if ancestor == path => {
+                return if (directory && metadata.is_dir()) || (!directory && metadata.is_file()) {
+                    Ok(true)
+                } else {
+                    Err(BoundedDiscoveryError::Traversal)
+                };
+            }
+            Ok(metadata) if !metadata.is_dir() => return Err(BoundedDiscoveryError::Traversal),
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
+/// The exact environment-configured OpenCode file, including a not-yet-created file.
+/// Explicit/fixture roots ignore it. No directory contents or source bytes are read;
+/// existing components must not be symlinks and the target must not be a directory.
+/// Watch uses this same coordinate to distinguish arbitrary names from their sidecars.
+pub fn opencode_database_override(root: &Path) -> Result<Option<PathBuf>, BoundedDiscoveryError> {
+    let path = resolved_opencode_override(root)?;
+    if let Some(path) = &path {
+        let mut remaining = usize::MAX;
+        inspect_opencode_path(path, &mut remaining, false)?;
+    }
+    Ok(path)
+}
+
+fn bounded_opencode_paths(
+    root: &Path,
+    client: ClientId,
+    def: ClientSourceDef,
+    remaining: &mut usize,
+    sources: &mut Vec<Source>,
+) -> Result<(), BoundedDiscoveryError> {
+    for directory in opencode_data_directories_for_source(root, def) {
+        if !inspect_opencode_path(&directory, remaining, true)? {
+            continue;
+        }
+        // Preserve the default's exact spelling, including native Windows case aliases.
+        let default = directory.join("opencode.db");
+        let default_present = match fs::symlink_metadata(&default) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(BoundedDiscoveryError::SymlinkRoot);
+            }
+            Ok(metadata) if !metadata.is_file() => return Err(BoundedDiscoveryError::Traversal),
+            _ => true,
+        };
+        if default_present {
+            bounded_paths(&default, client, def, remaining, 0, false, sources)?;
+        }
+        bounded_paths(&directory, client, def, remaining, 1, true, sources)?;
+    }
+    if let Some(path) = resolved_opencode_override(root)?
+        && inspect_opencode_path(&path, remaining, false)?
+    {
+        add_opencode_override(sources, client, def, path);
+    }
+    Ok(())
 }
 
 /// Claude Code keeps `projects/` under `CLAUDE_CONFIG_DIR` when that is set.
@@ -1656,5 +1926,304 @@ mod tests {
             super::source_search_roots(temp.path(), def),
             vec![temp.path().join(".claude/projects")]
         );
+    }
+
+    #[test]
+    fn opencode_channel_names_and_xdg_controls_are_exact() {
+        for name in [
+            "opencode.db",
+            "opencode-stable.db",
+            "opencode-Latest.db",
+            "opencode-test_branch.1.db",
+        ] {
+            assert!(super::opencode_database_name(Path::new(name)), "{name}");
+        }
+        for name in [
+            "Opencode.db",
+            "Opencode-stable.db",
+            "opencode-.db",
+            "opencode-a b.db",
+            "opencode-stable.db-wal",
+            "opencode-stable.db-shm",
+            "opencode-stable.db.bak",
+            "unrelated.db",
+        ] {
+            assert!(!super::opencode_database_name(Path::new(name)), "{name}");
+        }
+        let home = Path::new("/synthetic/home");
+        assert_eq!(
+            super::opencode_data_directory(home, None),
+            home.join(".local/share/opencode")
+        );
+        assert_eq!(
+            super::opencode_data_directory(home, Some(Path::new(""))),
+            home.join(".local/share/opencode")
+        );
+        assert_eq!(
+            super::opencode_data_directory(home, Some(Path::new("/synthetic/xdg"))),
+            Path::new("/synthetic/xdg/opencode")
+        );
+    }
+
+    #[test]
+    fn opencode_channel_budget_counts_unmatched_directory_entries() {
+        let temp = tempdir().unwrap();
+        for index in 0..20 {
+            fs::write(
+                temp.path().join(format!("unrelated-{index}")),
+                b"synthetic metadata only",
+            )
+            .unwrap();
+        }
+        let mut remaining = 10;
+        assert_eq!(
+            super::bounded_paths(
+                temp.path(),
+                ClientId::OpenCode,
+                lookup_source("opencode.sqlite").1,
+                &mut remaining,
+                1,
+                true,
+                &mut Vec::new()
+            ),
+            Err(super::BoundedDiscoveryError::LimitExceeded)
+        );
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn opencode_bounded_environment_discovery_preserves_scope_and_failures() {
+        const CHILD: &str = "TELLTALE_RELOCATION_DISCOVERY_CHILD";
+        if let Some(mode) = std::env::var_os(CHILD) {
+            let bounded =
+                super::discover_sources_bounded(Path::new("."), ClientId::OpenCode, 16384);
+            if mode == "symlink" || mode == "directory" {
+                let expected = if mode == "symlink" {
+                    super::BoundedDiscoveryError::SymlinkRoot
+                } else {
+                    super::BoundedDiscoveryError::Traversal
+                };
+                assert_eq!(bounded, Err(expected));
+                assert_eq!(
+                    super::opencode_database_override(Path::new(".")),
+                    Err(expected)
+                );
+                assert!(discover_sources(Path::new(".")).is_err());
+                assert_eq!(discover_sources_best_effort(Path::new(".")).len(), 2);
+            } else {
+                let checked = discover_sources(Path::new(".")).unwrap();
+                assert_eq!(checked.len(), if mode == "duplicate" { 2 } else { 3 });
+                assert_eq!(bounded.unwrap(), checked);
+                assert_eq!(discover_sources_best_effort(Path::new(".")), checked);
+                assert!(
+                    checked
+                        .iter()
+                        .all(|source| source.client == ClientId::OpenCode
+                            && source.source_id == "opencode.sqlite")
+                );
+                assert_eq!(
+                    super::discover_sources_bounded(Path::new("."), ClientId::OpenCode, 1),
+                    Err(super::BoundedDiscoveryError::LimitExceeded)
+                );
+                let override_path = super::opencode_database_override(Path::new("."))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    super::inspect_opencode_path(&override_path, &mut 1, false),
+                    Err(super::BoundedDiscoveryError::LimitExceeded)
+                );
+                assert!(
+                    super::discover_sources_bounded(Path::new("."), ClientId::Qwen, 16384)
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            return;
+        }
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let home = root.join("home");
+        let work = root.join("work");
+        let data = home.join("data/opencode");
+        let outside = root.join("PRIVATE-OVERRIDE");
+        fs::create_dir_all(data.join("nested")).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        for name in [
+            "opencode.db",
+            "opencode-stable.db",
+            "unrelated.db",
+            "opencode-stable.db-wal",
+            "nested/opencode-other.db",
+        ] {
+            fs::write(data.join(name), b"synthetic metadata only").unwrap();
+        }
+        let database = outside.join("custom.sqlite");
+        fs::write(&database, b"synthetic metadata only").unwrap();
+        fs::write(
+            outside.join("opencode-neighbor.db"),
+            b"synthetic metadata only",
+        )
+        .unwrap();
+        let run = |mode: &str, path: &Path| {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.env_clear().current_dir(&work)
+                .env("HOME", &home).env("USERPROFILE", &home).env("XDG_DATA_HOME", home.join("data"))
+                .env("OPENCODE_DB", path).env(CHILD, mode)
+                .args(["--exact", "discovery::tests::opencode_bounded_environment_discovery_preserves_scope_and_failures", "--nocapture"]);
+            if mode == "duplicate" {
+                command.env("XDG_DATA_HOME", home.join("data/../data"));
+            }
+            for key in ["PATH", "SystemRoot", "windir"] {
+                if let Some(value) = std::env::var_os(key) {
+                    command.env(key, value);
+                }
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+        };
+        run("normal", &database);
+        run(
+            "normal",
+            Path::new("../../../PRIVATE-OVERRIDE/custom.sqlite"),
+        );
+        run("duplicate", Path::new("opencode.db"));
+        fs::create_dir_all(data.join("~")).unwrap();
+        fs::write(data.join("~/custom.sqlite"), b"synthetic metadata only").unwrap();
+        run("normal", Path::new("~/custom.sqlite"));
+        #[cfg(windows)]
+        {
+            fs::rename(data.join("opencode.db"), data.join("Opencode.db")).unwrap();
+            run("normal", &database);
+        }
+        run("directory", &outside);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&database, outside.join("leaf-link")).unwrap();
+            run("symlink", &outside.join("leaf-link"));
+            std::os::unix::fs::symlink(&outside, root.join("directory-link")).unwrap();
+            run("symlink", &root.join("directory-link/custom.sqlite"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_explicit_root_retains_legacy_default_link_coordinates() {
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = home.join("opencode");
+        fs::create_dir_all(&data).unwrap();
+        let target = temp.path().join("synthetic.sqlite");
+        fs::write(&target, b"synthetic metadata only").unwrap();
+        let path = data.join("opencode.db");
+        std::os::unix::fs::symlink(target, &path).unwrap();
+        let sources = discover_sources(&home).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, path);
+        assert_eq!(discover_sources_best_effort(&home), sources);
+        assert_eq!(
+            discover_watch_roots_for_clients(&home, &[ClientId::OpenCode]),
+            vec![data]
+        );
+        assert_eq!(
+            super::discover_sources_bounded(&home, ClientId::OpenCode, 16384),
+            Err(super::BoundedDiscoveryError::SymlinkRoot)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_environment_default_links_preserve_discovery_boundaries() {
+        const CHILD: &str = "TELLTALE_OPENCODE_DEFAULT_LINK_CHILD";
+        if let Some(mode) = std::env::var_os(CHILD) {
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+            let root = home.parent().unwrap();
+            let data = home.join("data/opencode");
+            let bounded =
+                super::discover_sources_bounded(Path::new("."), ClientId::OpenCode, 16384);
+            let checked = discover_sources(Path::new("."));
+            assert_eq!(bounded, Err(super::BoundedDiscoveryError::SymlinkRoot));
+            assert!(
+                matches!(&checked, Err(DiscoveryError::Traversal { source_id, .. }) if source_id == "opencode.sqlite"),
+                "bounded={bounded:?}; checked={checked:?}"
+            );
+            let mut expected = vec![root.join("allowed.sqlite")];
+            let mut expected_roots = vec![root.to_path_buf()];
+            if mode != "directory" && mode != "ancestor" {
+                expected.push(data.join("opencode-preview.db"));
+                expected_roots.push(data);
+            }
+            expected.sort();
+            expected_roots.sort();
+            let sources = discover_sources_best_effort(Path::new("."));
+            let mut actual = sources
+                .iter()
+                .map(|source| source.path.clone())
+                .collect::<Vec<_>>();
+            actual.sort();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                discover_watch_roots_for_clients(Path::new("."), &[ClientId::OpenCode]),
+                expected_roots
+            );
+            return;
+        }
+        let mut failures = Vec::new();
+        for mode in [
+            "file",
+            "dangling",
+            "leaf-directory",
+            "directory",
+            "ancestor",
+        ] {
+            let temp = tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let home = root.join("home");
+            let work = root.join("work");
+            let outside = root.join("PRIVATE-DEFAULT/opencode");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&work).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(root.join("allowed.sqlite"), b"synthetic metadata only").unwrap();
+            fs::write(outside.join("opencode.db"), b"synthetic metadata only").unwrap();
+            let data = home.join("data/opencode");
+            match mode {
+                "ancestor" => {
+                    std::os::unix::fs::symlink(outside.parent().unwrap(), home.join("data"))
+                        .unwrap()
+                }
+                "directory" => {
+                    fs::create_dir_all(home.join("data")).unwrap();
+                    std::os::unix::fs::symlink(&outside, &data).unwrap();
+                }
+                _ => {
+                    fs::create_dir_all(&data).unwrap();
+                    fs::write(data.join("opencode-preview.db"), b"synthetic metadata only")
+                        .unwrap();
+                    let target = match mode {
+                        "dangling" => outside.join("missing.sqlite"),
+                        "leaf-directory" => outside.clone(),
+                        _ => outside.join("opencode.db"),
+                    };
+                    std::os::unix::fs::symlink(target, data.join("opencode.db")).unwrap();
+                }
+            }
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.env_clear().current_dir(&work)
+                .env("HOME", &home).env("USERPROFILE", &home)
+                .env("XDG_DATA_HOME", home.join("data"))
+                .env("OPENCODE_DB", root.join("allowed.sqlite")).env(CHILD, mode)
+                .args(["--exact", "discovery::tests::opencode_environment_default_links_preserve_discovery_boundaries", "--nocapture"]);
+            for key in ["PATH", "SystemRoot", "windir"] {
+                if let Some(value) = std::env::var_os(key) {
+                    command.env(key, value);
+                }
+            }
+            let output = command.output().unwrap();
+            if !output.status.success() {
+                failures.push(format!("{mode}: {output:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
