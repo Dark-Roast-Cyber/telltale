@@ -43,6 +43,13 @@
   `schtasks` process-chain rules no longer score a read-only `schtasks /Query` as
   task creation, while a `/Create` whose action merely contains a query still scores.
 
+- Embed the published `telltale.community` 0.1.0 release
+  (`Dark-Roast-Cyber/telltale-detections` tag `v0.1.0`, source `d895523`). The
+  rules are unchanged from the earlier snapshot; the package now records its
+  release `revision`, so its content SHA-256 is
+  `09be5cf10bca843561725784f4d28c41f817ae24484d146471584a4e2ff45cd5`, matching
+  the release `SHA256SUMS` and its build-provenance attestation.
+
 - Add state-only `cursor list` / `cursor reset` for one exact stored OpenCode
   source/schema cursor, with a matching inspection digest, explicit history-gap
   acceptance and separate unfinished-drain abandonment acknowledgement. Baselines,
