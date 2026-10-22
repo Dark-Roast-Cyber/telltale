@@ -2,12 +2,13 @@
   "description": "A Claude Code 2.1 transcript with bookkeeping records between turns, a thinking block, a tool_use and its tool_result.",
   "harness": "claude-code",
   "upstream": [
-    "https://github.com/anthropics/claude-code/blob/2301018b1f61073c501a8e7a4813ef48c239163b/CHANGELOG.md#L145",
-    "https://github.com/anthropics/claude-code/blob/2301018b1f61073c501a8e7a4813ef48c239163b/CHANGELOG.md#L2588",
+    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L678",
+    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L3121",
+    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L315",
     "https://code.claude.com/docs/en/sessions"
   ],
   "status": "supported",
-  "note": "Claude Code's transcript serializer is not public, so no source line defines these records. The pinned release notes confirm saved sessions keep thinking, tool call and tool result blocks and attachment entries; record shapes follow Telltale's bounded live validation of 2.1.x transcripts.",
+  "note": "Claude Code's transcript serializer is not public, so no source line defines these records. The pinned release notes still confirm thinking, tool call, tool result and attachment entries; this fixture retains the earlier bounded 2.1.296 shape, not new live validation. v2.1.300 added API-request system prompts, tools and parameters to local transcripts, but their unpublished record schema is not characterized here. Supported applies only to the synthetic shape below, not every record written by v2.1.306.",
   "acquire": {
     "source_id": "claude.projects",
     "jsonl": [
