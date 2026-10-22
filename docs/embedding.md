@@ -14,7 +14,8 @@ own persistence and delivery while using the same analytic and event semantics.
 
 **Telltale owns** acquisition, canonical observations, Detection v2, action
 findings, contributions, redacted evidence, same-pass context, conditional replay
-identity, semantic provenance, and bundled rule metadata.
+identity, semantic provenance, bundled rule metadata, and their versioned wire
+forms: Event 3, action record v1, and rule catalog v1.
 
 **The host owns** watchers, debounce, safety scans and backfill, enabled/disabled
 lifecycle and allowlists, seen/excluded/pending state, rebaseline, ACK and retry,
@@ -26,7 +27,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`), `ActionFinding` accessors (including `session_event_index()`), `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -263,7 +264,8 @@ not carry; `session_event_index()` is then `None`.
   result or an action-only rule match) or the link would be ambiguous. Use it
   instead of matching session identifiers.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
-  `Serialize`; see [host wire and durable handoff](#host-wire-and-durable-handoff).
+  `Serialize`. Its wire form is `SourceScan::action_records()`; see
+  [host wire and durable handoff](#host-wire-and-durable-handoff).
 
 ### Scores, chains, and linked downloads
 
@@ -357,27 +359,57 @@ describes the default pipeline. Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
 promotion totals. It exposes no detector internals, custom documents, policy
 overrides, or executable process AST. Like `ActionFinding`, catalog entries do
-not implement `Serialize`; project accessors into the host's own catalog
-document.
+not implement `Serialize`. `rule_catalog_document(&options)` returns the same
+entries as a versioned `RuleCatalogV1` document (`telltale.rule_catalog.v1`)
+with the default pipeline's semantic identity; publish it to services that
+render detections. Its JSON Schema is
+[`schemas/rule-catalog-v1.schema.json`](../schemas/rule-catalog-v1.schema.json).
 
 ## Host wire and durable handoff
 
-`ActionFinding` is a Rust value. It deliberately does not implement `Serialize`:
-Telltale's cross-process formats are explicit, versioned schemas (Event 3 today),
-never the derive output of a facade struct. For independently versioned host
-components, project the needed accessors into a host-owned, versioned envelope and
-validate it at the receiving boundary. Read delivery identity from accessors
-(`coordinate()`, `replay_identity()`), never back out of serialized field names.
-Do not turn an unknown field or version into a rejected but acknowledged
-delivery. Keep terminal Event 3 separate from host extensions: `Event3Record`
-consumes one complete terminal Event 3 object (`Event` is the producer type, not
-a deserializer), and an augmented storage document is not a strict
-`Event3Record` input. Historical Event 3 rendering stays valid.
+`ActionFinding` is a Rust value and deliberately does not implement
+`Serialize`. Telltale's cross-process formats are explicit, versioned schemas:
+Event 3 for session events, action record v1 for actions, and rule catalog v1
+for presentation metadata. Hosts forward these; they do not design their own
+action format.
+
+`SourceScan::action_records()` returns one `ActionRecordV1`
+(`telltale.action.v1`) per action finding, in `action_findings` order, and none
+for a failed source. A record carries every accessor value (`coordinate` is
+the anchor observation ID) plus the scan's `client`, `source_id`,
+`source_path_hash` (as in Event 3) and `semantic_identity`, and
+`session_event_id`: the `event_id` of the session Event 3 object at
+`session_event_index()` in the same scan, or null. Event IDs
+are fresh per scan, so that link holds only for records and events delivered
+together. Every key is always serialized; absent values are null. Its JSON
+Schema is [`schemas/action-record-v1.schema.json`](../schemas/action-record-v1.schema.json).
+
+```text
+host envelope { host delivery key, tenancy, transport version,
+                record: ActionRecordV1 }      -- one per action
+Event 3 object                                -- session events, unchanged
+```
+
+- The receiver validates with `ActionRecordV1::from_json` (in
+  `telltale-schema`, no SQLite), as it validates Event 3 with `Event3Record`.
+  It rejects oversized input, another record version, unknown fields, values
+  outside the schema, and inconsistent values, with closed error codes that
+  contain no input text. Do not turn an unknown field or version into a
+  rejected but acknowledged delivery.
+- Delivery key: `replay_identity` when present, otherwise `source_path_hash`
+  plus `coordinate`. Equal coordinates alone do not distinguish stores. Never
+  derive a key from Event 3 IDs or invent a text hash.
+- A record version is frozen. Adding, removing or redefining a field is a new
+  version and a new type; plan to accept both during a host upgrade.
+- Keep terminal Event 3 separate from host extensions: `Event3Record` consumes
+  one complete terminal Event 3 object (`Event` is the producer type, not a
+  deserializer), and an augmented storage document is not a strict
+  `Event3Record` input. Historical Event 3 rendering stays valid.
 
 Do not reimplement replay hashing, occurrence matching, context rereads, YAML
 catalog parsing, or parser registration in a host; the facade supersedes them.
 
-Preserve stage and optional source time through that projection. If a host needs
+Preserve `stage` and optional `occurred_at` through storage. If a host needs
 an observation-time fallback for indexing, label that basis instead of presenting
 it as action time. Session-wide guidance and confidence are not action-specific.
 
@@ -556,8 +588,11 @@ emitted by scans or CLI watch.
 
 - API: install snapshots and signal types,
   `collect_install_inventory_with_context`, `collect_install_inventory_for_platform`,
-  `collect_install_inventory_with_sources`, `snapshot_to_event`, and
-  `discover_mcp_inventory(root)`.
+  `collect_install_inventory_with_sources`, `snapshot_to_event`,
+  `discover_mcp_inventory(root)` (Event 3 inventory events), and
+  `discover_mcp_inventory_servers(root)` (the same discovery as structured
+  `McpServerInventory` values; their `path` is host-local, so hash it before it
+  leaves the host).
 - Prefer an explicit `InstallInventoryContext`; `current()` and
   `collect_install_inventory` read the process environment (home, PATH, extension
   roots), which may not describe the intended host roots.

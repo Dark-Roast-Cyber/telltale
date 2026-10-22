@@ -17,8 +17,10 @@ include = [
     "/LICENSE",
     "build.rs",
     "/src/**",
+    "/data/action-record-v1.schema.json",
     "/data/event-3.0.schema.json",
     "/data/event-4.0.schema.json",
+    "/data/rule-catalog-v1.schema.json",
 ]
 
 [dependencies]
