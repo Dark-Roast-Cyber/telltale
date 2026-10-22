@@ -174,4 +174,20 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn v1_schema_is_frozen() {
+        // A catalog version is frozen: a schema change is a new version and a
+        // new type, never an edit of v1.
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(RULE_CATALOG_V1_SCHEMA.as_bytes());
+        let hex = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            hex,
+            "54720c4e630020c81d9ff8ae323268b768db9683cf6a5751d49a2f1c0b35e478"
+        );
+    }
 }

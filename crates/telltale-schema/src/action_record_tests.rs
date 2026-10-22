@@ -241,6 +241,22 @@ fn published_schema_matches_the_embedded_copy() {
 }
 
 #[test]
+fn v1_schema_is_frozen() {
+    // A record version is frozen: a schema change is a new version and a new
+    // type, never an edit of v1.
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(ACTION_RECORD_V1_SCHEMA.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        hex,
+        "4124821e09bab03b17dc11404b6694bc36b496dcc54bb98af1116ed4afa0289b"
+    );
+}
+
+#[test]
 fn schema_vocabularies_match_the_rust_types() {
     let schema: Value = serde_json::from_str(ACTION_RECORD_V1_SCHEMA).unwrap();
     let names = |values: Vec<Value>| -> Vec<String> {
