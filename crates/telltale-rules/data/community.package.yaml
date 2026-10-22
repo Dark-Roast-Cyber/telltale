@@ -6,6 +6,7 @@ publisher: "Telltale community detections"
 license: "Apache-2.0"
 rule_namespace: "tdx"
 source: "https://github.com/Dark-Roast-Cyber/telltale-detections"
+revision: "d8955234dd38f604d4e9db82cb8adccb8753aff8"
 documents:
   # packs/test/git-hook-persistence.yaml
   - version: 1
