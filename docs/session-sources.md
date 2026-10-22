@@ -27,6 +27,16 @@ macOS and Linux desktop bundle locations are not probed until confirmed on a
 real install. Install inventory runs on
 a configurable cadence and never reads transcript/session contents.
 
+Copilot inventory checks the `copilot` launcher on `PATH` (including Windows
+launcher suffixes) and the `@github/copilot` package in the existing Node package
+roots, alongside the retained VS Code extension evidence. These metadata-only
+signals do not execute Copilot or establish session acquisition support.
+The launcher name is ambiguous: [AWS Copilot CLI](https://aws.github.io/copilot-cli/docs/getting-started/install/)
+also installs `copilot`. A launcher alone therefore reports `Partial` confidence
+and `installed=false`; `@github/copilot` or GitHub extension evidence confirms the
+inventory entry. Standalone GitHub Copilot CLI installs without that evidence also remain
+`Partial`. Other agents' install-confidence rules are unchanged.
+
 ## Host Discovery Candidates
 
 These are the host-side locations Telltale currently resolves when
@@ -54,7 +64,7 @@ than by exact private path or transcript content.
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
 | OpenCode | `opencode.sqlite` | XDG OpenCode data directory; exact `$OPENCODE_DB` when configured | XDG OpenCode data directory plus retained `~/Library/Application Support/opencode/opencode.db`; exact `$OPENCODE_DB` | XDG OpenCode data directory plus retained Windows platform data and `~/.local/share` candidates; exact `%OPENCODE_DB%` | Default paths have prior bounded validation; relocation/channel discovery is synthetic-conformance tested | Environment-resolved mode adds direct-child channel databases and one configured file; see the OpenCode root rules below. Prior Desktop validation does not qualify these new paths or every version. |
-| Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Telltale-local operational model | **Project-local only** — discovered below configured project roots or applicable default project roots. No home-relative source root. |
+| Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Existing process format only; current CLI home logs unqualified | **Project-local only** — discovered below configured project roots or applicable default project roots. Neither `~/.copilot/logs` nor `COPILOT_HOME/logs` is discovered; see the qualification gap below. |
 
 ## Project Roots
 
@@ -180,6 +190,33 @@ fixture-equivalent scans whenever possible. Host-specific shipper setup should
 be reviewed before publication or reuse in another environment.
 
 ## Source Adapter Notes
+
+### Copilot CLI qualification gap
+
+Copilot CLI v1.0.96's [pinned changelog](https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484)
+and [official configuration-directory reference](https://github.com/github/docs/blob/92991ed6d17c5023f52e324ee70d36fe7c36dd7d/content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md#L345-L388)
+confirm `~/.copilot/logs/process-{timestamp}-{pid}.log`, with `COPILOT_HOME`
+replacing `~/.copilot`. The [pinned README](https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/README.md#installation)
+also establishes the launcher and package names used by install inventory.
+
+The existing adapter requires workspace initialization and accumulated-output
+arrays; a documented directory does not establish that record format. Static
+inspection of the official [v1.0.96 Linux runtime archive](https://github.com/github/copilot-cli/releases/download/v1.0.96/github-copilot-1.0.96-linux-x64.tgz)
+(`SHA256 e6c9513e7dcff38e424c247a8ae7b5b8a283e93973b77eb31fba9ef769f1c95b`)
+defines the named `default` log level as `info` in `cli-main.js`'s logging help,
+but does not establish the adapter's `Accumulated output items` format when the
+CLI is invoked without logging flags.
+The published repository does not contain the log writer. No CLI execution,
+installation, or live capture was used for this assessment.
+
+Home and relocated discovery therefore remain disabled, and both synthetic
+[upstream cases](../tests/upstream_formats/cases/copilot/) remain `known_gap`.
+They copy a Telltale fixture to the documented paths, not an upstream-generated
+v1.0.96 transcript. Promotion requires authoritative format/default-level
+evidence followed by successful discovery **and** acquisition, not merely
+finding that copied fixture. Explicit `--root`, fixture, and project-local
+discovery are unchanged. `session-state/*/events.jsonl` and `session-store.db`
+have no qualified schema here and are not acquired.
 
 Codex adapter notes:
 

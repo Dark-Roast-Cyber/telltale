@@ -69,6 +69,8 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) effective_session_id: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
+    pub(crate) envelope: CodexEnvelope,
+    pub(crate) message_phase: Option<String>,
     pub(crate) session_metadata: bool,
     pub(crate) auxiliary: bool,
     pub(crate) external_import: bool,
@@ -162,6 +164,44 @@ pub(crate) fn extract_codex_native_records_with_limits(
                 .and_then(|p| p.get("type"))
                 .and_then(Value::as_str)
                 == Some("message");
+        // Inter-agent messages persist as their own response item type, not as
+        // a misplaced legacy event. That unmapped unit is quarantined by itself
+        // and keeps no content; a nested wrapper still fails the source below.
+        let inter_agent = envelope == CodexEnvelope::ResponseItem
+            && value.get("payload").is_some_and(|p| {
+                p.get("type").and_then(Value::as_str) == Some("agent_message")
+                    && p.get("payload").is_none()
+            });
+        let legacy_message = !inter_agent
+            && [&value, record_value]
+                .into_iter()
+                .any(|value| codex_discriminator(value) == Some("agent_message"));
+        let web_search = [&value, record_value]
+            .into_iter()
+            .any(|value| codex_discriminator(value) == Some("web_search_call"));
+        for (selected, kind, wrapper) in [
+            (legacy_message, "agent_message", "event_msg"),
+            (web_search, "web_search_call", "response_item"),
+        ] {
+            if selected
+                && (value.get("type").and_then(Value::as_str) != Some(wrapper)
+                    || value
+                        .get("payload")
+                        .and_then(|p| p.get("type"))
+                        .and_then(Value::as_str)
+                        != Some(kind)
+                    || value
+                        .get("payload")
+                        .is_some_and(|p| p.get("payload").is_some()))
+            {
+                return Err(drift("Codex activity requires its exact direct wrapper"));
+            }
+        }
+        let message_phase = if response_message || legacy_message {
+            optional_string(semantic_value, "phase").map_err(drift)?
+        } else {
+            None
+        };
         let metadata_payload = (value.get("type").and_then(Value::as_str) == Some("session_meta"))
             .then(|| value.get("payload"))
             .flatten()
@@ -230,7 +270,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
             .get(&effective_session_id)
             .copied()
             .unwrap_or(false);
-        if response_message {
+        if response_message || legacy_message || web_search {
             for envelope in [&value, semantic_value] {
                 if let Some(thread) = envelope.get("thread_id")
                     && (thread.as_str().is_none_or(|id| id.trim().is_empty())
@@ -247,16 +287,37 @@ pub(crate) fn extract_codex_native_records_with_limits(
         } else {
             None
         };
-        let blocks = (!auxiliary)
-            .then(|| content_blocks(semantic_value))
-            .flatten()
-            .map(|blocks| blocks.iter().map(codex_content_block).collect());
-        let tool = if auxiliary {
-            CodexToolFields::default()
+        let blocks = if legacy_message {
+            Some(vec![CodexContentBlock::Text {
+                text: Some(
+                    semantic_value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| drift("Codex agent message must contain string text"))?
+                        .to_owned(),
+                ),
+            }])
+        } else if web_search || inter_agent {
+            None
         } else {
-            codex_tool_fields(semantic_value)
+            (!auxiliary)
+                .then(|| content_blocks(semantic_value))
+                .flatten()
+                .map(|blocks| blocks.iter().map(codex_content_block).collect())
         };
-        let role = if auxiliary {
+        let (tool, quarantine) = if web_search {
+            web_search_fields(semantic_value).map_err(drift)?
+        } else if auxiliary || legacy_message || inter_agent {
+            (
+                CodexToolFields::default(),
+                inter_agent.then_some("unknown_discriminator"),
+            )
+        } else {
+            (codex_tool_fields(semantic_value), None)
+        };
+        let role = if legacy_message {
+            Some("assistant".to_owned())
+        } else if auxiliary || web_search || inter_agent {
             None
         } else {
             codex_role(&value, semantic_value)
@@ -271,16 +332,23 @@ pub(crate) fn extract_codex_native_records_with_limits(
             effective_session_id,
             timestamp: nested_string_field(&value, "timestamp"),
             discriminator,
+            envelope,
+            message_phase,
             session_metadata,
             auxiliary,
             external_import,
             role: role.clone(),
-            message_content: if auxiliary {
+            message_content: if auxiliary || legacy_message || web_search || inter_agent {
                 None
             } else {
                 codex_message_content(semantic_value)
             },
-            contribution_strings: if is_tool_call {
+            contribution_strings: if web_search {
+                tool.arguments
+                    .as_ref()
+                    .map(collect_string_values)
+                    .unwrap_or_default()
+            } else if is_tool_call {
                 collect_string_values(record_value)
             } else {
                 Vec::new()
@@ -289,7 +357,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
             tool,
             completed: None,
             root_session_id: None,
-            response_id: response_message
+            response_id: (response_message || web_search)
                 .then(|| {
                     semantic_value
                         .get("id")
@@ -301,7 +369,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
             response_turn_id,
             paginated,
             mirrored: false,
-            quarantine: None,
+            quarantine,
         };
 
         if session_metadata
@@ -339,6 +407,62 @@ fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, &'static 
                 && !v.chars().any(char::is_control)
         })
         .ok_or("Codex source coordinates must be nonempty bounded strings")
+}
+
+fn optional_string(value: &Value, key: &str) -> Result<Option<String>, &'static str> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        _ => Err("Codex optional activity field must be a string"),
+    }
+}
+
+fn web_search_fields(
+    value: &Value,
+) -> Result<(CodexToolFields, Option<&'static str>), &'static str> {
+    if value.get("id").is_some_and(|id| !id.is_null()) {
+        required_string(value, "id")?;
+    }
+    let mut tool = CodexToolFields {
+        name: Some("web_search".to_owned()),
+        status: optional_string(value, "status")?,
+        ..CodexToolFields::default()
+    };
+    let action = match value.get("action") {
+        None | Some(Value::Null) => return Ok((tool, None)),
+        Some(action) if action.is_object() => action,
+        _ => return Err("Codex web search action must be an object"),
+    };
+    let kind = action
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or("Codex web search action requires a discriminator")?;
+    let keys: &[&str] = match kind {
+        "search" => &["query", "queries"],
+        "open_page" => &["url"],
+        "find_in_page" => &["url", "pattern"],
+        _ => return Ok((tool, Some("unknown_discriminator"))),
+    };
+    let mut fields =
+        serde_json::Map::from_iter([("type".to_owned(), Value::String(kind.to_owned()))]);
+    for &key in keys {
+        if let Some(value) = action.get(key) {
+            if !value.is_null()
+                && if key == "queries" {
+                    !value
+                        .as_array()
+                        .is_some_and(|items| items.iter().all(Value::is_string))
+                } else {
+                    !value.is_string()
+                }
+            {
+                return Err("Codex web search action field has invalid type");
+            }
+            fields.insert(key.to_owned(), value.clone());
+        }
+    }
+    tool.arguments = Some(Value::Object(fields));
+    Ok((tool, None))
 }
 
 fn validate_native_ordinals(values: &[Value]) -> Result<bool, &'static str> {
@@ -475,6 +599,8 @@ fn completed_record(
             effective_session_id: Some(file_owner.to_owned()),
             timestamp: None,
             discriminator: Some("item_completed".to_owned()),
+            envelope: CodexEnvelope::EventMessage,
+            message_phase: None,
             session_metadata: false,
             auxiliary: false,
             external_import: false,
@@ -534,6 +660,17 @@ fn completed_record(
             }
         }
         Some("Reasoning") => ("reasoning", None, true),
+        Some("Plan") => {
+            blocks = Some(vec![CodexContentBlock::Text {
+                text: Some(
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .ok_or("Codex completed plan text must be a string")?
+                        .to_owned(),
+                ),
+            }]);
+            ("plan", Some("assistant"), false)
+        }
         // Lifecycle markers: a compaction point and review-mode boundaries.
         Some("ContextCompaction" | "EnteredReviewMode" | "ExitedReviewMode") => {
             ("lifecycle", None, true)
@@ -637,6 +774,8 @@ fn completed_record(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         discriminator: Some(discriminator.to_owned()),
+        envelope: CodexEnvelope::EventMessage,
+        message_phase: None,
         session_metadata: false,
         auxiliary,
         external_import: false,
@@ -722,7 +861,9 @@ fn resolve_mirrors(records: &mut [CodexNativeRecord]) -> Result<(), &'static str
         ) else {
             continue;
         };
-        if record.role.as_deref() == Some("assistant") {
+        if record.role.as_deref() == Some("assistant")
+            && record.discriminator.as_deref() == Some("assistant_message")
+        {
             let key = (
                 owner.clone(),
                 coords.turn_id.clone(),
@@ -773,6 +914,52 @@ fn resolve_mirrors(records: &mut [CodexNativeRecord]) -> Result<(), &'static str
     Ok(())
 }
 
+/// Legacy events have no shared IDs. Pair only an adjacent, ordered per-text
+/// fanout with one raw response, never equal text elsewhere in the session.
+/// The canonical owner must validate the raw response before suppressing events.
+pub(crate) fn legacy_message_group(
+    records: &[CodexNativeRecord],
+    start: usize,
+) -> Option<(usize, usize)> {
+    let raw = if records[start].is_legacy_agent_message() {
+        start
+            + records[start..]
+                .iter()
+                .take_while(|record| record.is_legacy_agent_message())
+                .count()
+    } else {
+        start
+    };
+    let response = records.get(raw)?;
+    if response.paginated
+        || response.mirrored
+        || response.envelope != CodexEnvelope::ResponseItem
+        || response.discriminator.as_deref() != Some("message")
+        || response.role.as_deref() != Some("assistant")
+    {
+        return None;
+    }
+    let parts = response.blocks.as_ref().filter(|parts| !parts.is_empty())?;
+    let event_start = if raw == start { raw + 1 } else { start };
+    let event_end = event_start.checked_add(parts.len())?;
+    if raw != start && event_end != raw {
+        return None;
+    }
+    let events = records.get(event_start..event_end)?;
+    let owner = response.effective_session_id.as_ref()?;
+    for (part, event) in parts.iter().zip(events) {
+        if !matches!(part, CodexContentBlock::Text { text: Some(_) })
+            || !event.is_legacy_agent_message()
+            || event.effective_session_id.as_ref() != Some(owner)
+            || event.message_phase != response.message_phase
+            || event.blocks.as_deref() != Some(std::slice::from_ref(part))
+        {
+            return None;
+        }
+    }
+    Some((raw, if raw == start { event_end } else { raw + 1 }))
+}
+
 fn codex_attestation(value: &Value, semantic: &Value) -> Result<SessionMetadata, AcquisitionError> {
     let mut metadata = SessionMetadata::default();
     for envelope in codex_envelopes(value, semantic) {
@@ -794,7 +981,9 @@ fn codex_envelopes<'a>(value: &'a Value, semantic: &'a Value) -> Vec<&'a Value> 
         ];
     }
     let mut envelopes = vec![value, semantic];
-    if let Some(message) = semantic.get("message").filter(|v| v.is_object()) {
+    if semantic.get("type").and_then(Value::as_str) != Some("web_search_call")
+        && let Some(message) = semantic.get("message").filter(|v| v.is_object())
+    {
         envelopes.push(message);
     }
     if matches!(
@@ -819,6 +1008,12 @@ pub(crate) fn codex_record_value(value: &Value) -> &Value {
 }
 
 impl CodexNativeRecord {
+    pub(crate) fn is_legacy_agent_message(&self) -> bool {
+        !self.paginated
+            && self.envelope == CodexEnvelope::EventMessage
+            && self.discriminator.as_deref() == Some("agent_message")
+    }
+
     pub(crate) fn accounting_kind(&self) -> RecordKind {
         if self.auxiliary {
             return RecordKind::Other;
@@ -871,7 +1066,7 @@ fn codex_accounting_kind(
             .any(|block| matches!(block, CodexContentBlock::ToolUse { .. }))
     }) || matches!(
         discriminator,
-        Some("tool_call" | "function_call" | "custom_tool_call")
+        Some("tool_call" | "function_call" | "custom_tool_call" | "web_search_call")
     ) {
         return RecordKind::ToolCall;
     }
@@ -900,8 +1095,12 @@ fn codex_accounting_kind(
         (Some("user_message" | "user"), _) | (Some("text" | "message"), Some("user")) => {
             RecordKind::UserMessage
         }
-        (Some("assistant_message" | "assistant" | "gemini" | "model"), _)
-        | (Some("text" | "message"), Some("assistant" | "model")) => RecordKind::AssistantMessage,
+        // Legacy agent_message events carry an assistant role; an inter-agent
+        // response item sharing the discriminator stays Other.
+        (Some("assistant_message" | "assistant" | "gemini" | "model" | "plan"), _)
+        | (Some("text" | "message" | "agent_message"), Some("assistant" | "model")) => {
+            RecordKind::AssistantMessage
+        }
         (Some("session_meta"), _) => RecordKind::SessionMeta,
         _ => RecordKind::Other,
     }
@@ -935,12 +1134,14 @@ pub(crate) fn is_known_codex_discriminator(kind: &str) -> bool {
         "user_message"
             | "user"
             | "assistant_message"
+            | "agent_message"
             | "assistant"
             | "gemini"
             | "model"
             | "text"
             | "message"
             | "tool_call"
+            | "web_search_call"
             | "tool_result"
             | "custom_tool_call"
             | "custom_tool_call_output"
