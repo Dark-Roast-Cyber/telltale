@@ -164,9 +164,18 @@ pub(crate) fn extract_codex_native_records_with_limits(
                 .and_then(|p| p.get("type"))
                 .and_then(Value::as_str)
                 == Some("message");
-        let legacy_message = [&value, record_value]
-            .into_iter()
-            .any(|value| codex_discriminator(value) == Some("agent_message"));
+        // Inter-agent messages persist as their own response item type, not as
+        // a misplaced legacy event. That unmapped unit is quarantined by itself
+        // and keeps no content; a nested wrapper still fails the source below.
+        let inter_agent = envelope == CodexEnvelope::ResponseItem
+            && value.get("payload").is_some_and(|p| {
+                p.get("type").and_then(Value::as_str) == Some("agent_message")
+                    && p.get("payload").is_none()
+            });
+        let legacy_message = !inter_agent
+            && [&value, record_value]
+                .into_iter()
+                .any(|value| codex_discriminator(value) == Some("agent_message"));
         let web_search = [&value, record_value]
             .into_iter()
             .any(|value| codex_discriminator(value) == Some("web_search_call"));
@@ -288,7 +297,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
                         .to_owned(),
                 ),
             }])
-        } else if web_search {
+        } else if web_search || inter_agent {
             None
         } else {
             (!auxiliary)
@@ -298,14 +307,17 @@ pub(crate) fn extract_codex_native_records_with_limits(
         };
         let (tool, quarantine) = if web_search {
             web_search_fields(semantic_value).map_err(drift)?
-        } else if auxiliary || legacy_message {
-            (CodexToolFields::default(), None)
+        } else if auxiliary || legacy_message || inter_agent {
+            (
+                CodexToolFields::default(),
+                inter_agent.then_some("unknown_discriminator"),
+            )
         } else {
             (codex_tool_fields(semantic_value), None)
         };
         let role = if legacy_message {
             Some("assistant".to_owned())
-        } else if auxiliary || web_search {
+        } else if auxiliary || web_search || inter_agent {
             None
         } else {
             codex_role(&value, semantic_value)
@@ -326,7 +338,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
             auxiliary,
             external_import,
             role: role.clone(),
-            message_content: if auxiliary || legacy_message || web_search {
+            message_content: if auxiliary || legacy_message || web_search || inter_agent {
                 None
             } else {
                 codex_message_content(semantic_value)
@@ -1083,11 +1095,12 @@ fn codex_accounting_kind(
         (Some("user_message" | "user"), _) | (Some("text" | "message"), Some("user")) => {
             RecordKind::UserMessage
         }
-        (
-            Some("agent_message" | "assistant_message" | "assistant" | "gemini" | "model" | "plan"),
-            _,
-        )
-        | (Some("text" | "message"), Some("assistant" | "model")) => RecordKind::AssistantMessage,
+        // Legacy agent_message events carry an assistant role; an inter-agent
+        // response item sharing the discriminator stays Other.
+        (Some("assistant_message" | "assistant" | "gemini" | "model" | "plan"), _)
+        | (Some("text" | "message" | "agent_message"), Some("assistant" | "model")) => {
+            RecordKind::AssistantMessage
+        }
         (Some("session_meta"), _) => RecordKind::SessionMeta,
         _ => RecordKind::Other,
     }

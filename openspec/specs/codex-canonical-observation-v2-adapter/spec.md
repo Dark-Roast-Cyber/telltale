@@ -838,6 +838,10 @@ text SHALL remain separate, with possible duplicate analytics rather than loss.
 Raw-response quarantine SHALL NOT suppress usable legacy text. All physical
 native units SHALL count, including suppressed assistant records. Wrong/nested
 wrappers and malformed message fields SHALL reject source integrity atomically.
+Exact outer `response_item` with direct payload `type: agent_message` and no nested
+`payload` is a distinct inter-agent record, not a legacy event: it SHALL quarantine
+by itself as `unknown_discriminator`, retain no content, tool or contribution
+evidence, and count as native Other.
 
 #### Scenario: Mirror does not duplicate analytics or hide unique content
 

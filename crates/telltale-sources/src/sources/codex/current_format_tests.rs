@@ -568,6 +568,74 @@ fn legacy_agent_message_mirrors_are_local_one_to_one_and_keep_unique_text() {
 }
 
 #[test]
+fn inter_agent_response_items_stay_unit_quarantined_not_legacy_events() {
+    each(|source| {
+        // The pinned harness persists inter-agent messages as their own
+        // response item type; it is not a misplaced legacy assistant event.
+        let inter_agent = json!({"type":"response_item","payload":{"type":"agent_message","id":"amsg-synthetic","author":"/root","recipient":"/root/worker","content":[{"type":"input_text","text":"PRIVATE"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-a"}},"metadata":{"user_input_order":1}});
+        // Unmapped content, even tool-shaped, is neither a tool fact nor evidence.
+        let mut tool_shaped = Vec::new();
+        for part in [
+            json!({"type":"tool_use","id":"call-x","name":"shell","input":{"command":"curl https://private.invalid/PRIVATE /tmp/x"}}),
+            json!({"type":"tool_result","tool_use_id":"call-x","content":"PRIVATE"}),
+        ] {
+            let mut record = inter_agent.clone();
+            record["payload"]["content"] = json!([part]);
+            tool_shaped.push(record);
+        }
+        for record in std::iter::once(&inter_agent).chain(&tool_shaped) {
+            for history in ["legacy", "paginated"] {
+                let batch = acquire(
+                    source,
+                    &[
+                        meta(json!({"history_mode":history})),
+                        user("before"),
+                        record.clone(),
+                        assistant(&["after"]),
+                    ],
+                )
+                .expect("one unmapped unit must not fail the source");
+                assert_eq!(batch.observations.len(), 2);
+                assert_eq!(
+                    batch
+                        .quarantined
+                        .iter()
+                        .map(|unit| (unit.source_sequence, unit.code))
+                        .collect::<Vec<_>>(),
+                    [(2, "unknown_discriminator")]
+                );
+                assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+                let counts = &batch.accounting.sessions[0].counts;
+                let kinds = &counts.record_counts;
+                assert_eq!(
+                    (
+                        kinds.assistant_message,
+                        kinds.tool_call,
+                        kinds.tool_result,
+                        kinds.other
+                    ),
+                    (1, 0, 0, 1)
+                );
+                assert_eq!(counts.contributions, Default::default());
+                assert!(!private(&batch));
+                let native = super::native::extract_codex_native_records(source).unwrap();
+                assert!(native[2].blocks.is_none() && native[2].message_content.is_none());
+                assert!(native[2].contribution_strings.is_empty());
+            }
+        }
+        // An exact wrapper is required: a nested payload is still integrity drift.
+        let nested = json!({"type":"response_item","payload":{"type":"agent_message","payload":{"type":"agent_message","message":"PRIVATE"}}});
+        let error = acquire(
+            source,
+            &[meta(json!({})), user("supported neighbor"), nested],
+        )
+        .err()
+        .expect("nested wrapper must fail the source");
+        assert!(!format!("{error:?} {error}").contains("PRIVATE"));
+    });
+}
+
+#[test]
 fn record_gaps_keep_malformed_bounds_and_unknown_failures_visible() {
     each(|source| {
         let search = json!({"type":"response_item","payload":{"type":"web_search_call","action":{"type":"search","query":"synthetic"}}});
