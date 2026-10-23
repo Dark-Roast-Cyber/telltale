@@ -1493,7 +1493,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             });
     assert_eq!(
         severities,
-        BTreeMap::from([("high", 15), ("low", 4), ("medium", 4)])
+        BTreeMap::from([("high", 16), ("low", 4), ("medium", 3)])
     );
     let classes = export
         .rules()
@@ -1506,8 +1506,8 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
         classes,
         BTreeMap::from([
             ("policy_violation", 1),
-            ("security_detection", 16),
-            ("threat_hunting", 6),
+            ("security_detection", 20),
+            ("threat_hunting", 2),
         ])
     );
     assert_eq!(export.rules().iter().map(|rule| rule.score).min(), Some(0));

@@ -311,63 +311,59 @@ rules:
 
   - id: destructive.filesystem_wipe
     category: destructive
-    detection_class: threat_hunting
+    detection_class: security_detection
     signal_type: atomic
-    analytic_intent: hunt
+    analytic_intent: alert
     severity: high
-    score: 0
+    score: 55
     targets: [command]
     regex: '(\brm\s+(?:-{1,2}\S*\s+)+["'']?(?:/\*?|~/?\*?|\$\{?home\}?/?\*?)["'']?(?:$|[\s;&|)])|--no-preserve-root|\bmkfs(?:\.\w+)?\s|\bdd\b[^;&|\n]*\bof=/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|rdisk)|\bwipefs\b|\bshred\b[^;&|\n]*\s/dev/|\bfind\s+(?:/|~/?|\$\{?home\}?/?)\s[^;&|\n]*-delete\b|\bformat-volume\b|(?:^|[\s;&|])format(?:\.com)?\s+[a-z]:(?:$|[\s/])|\b(?:rd|rmdir)\s+/s\s+(?:/q\s+)?[a-z]:\\?(?:$|[\s;&|])|\bremove-item\b[^;&|\n]*-recurse\b[^;&|\n]*\s["'']?(?:[a-z]:\\?|~|\$home|\$env:userprofile)["'']?(?:$|[\s;&|]))'
     tags: [destructive, filesystem]
     explanation: A command can delete a home directory, a filesystem root or a disk.
     falsepositives:
       - Disposable containers and CI machines are sometimes reset this way on purpose; confirm the host and the request.
-      - This tag adds no score; it marks the command for review in the timeline.
 
   - id: destructive.git_discard
     category: destructive
-    detection_class: threat_hunting
+    detection_class: security_detection
     signal_type: atomic
-    analytic_intent: hunt
-    severity: medium
-    score: 0
+    analytic_intent: alert
+    severity: high
+    score: 55
     targets: [command]
     regex: '(\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*push\b[^;&|\n]*\s(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--delete|-d|\+[\w./-]+|:[\w./-]+)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*reset\b[^;&|\n]*\s--hard\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*clean\b(?:\s+-[a-z]*)*\s+-[a-z]*f|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:checkout\s+(?:--\s+)?|restore\s+(?:--worktree\s+)?)\.(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*branch\b[^;&|\n]*\s(?-i:-D)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*stash\s+(?:drop|clear)\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:filter-branch|filter-repo)\b)'
     tags: [destructive, git]
     explanation: A Git command discards uncommitted work, deletes a branch or stash, or rewrites remote history.
     falsepositives:
       - Developers often reset, clean or force-push their own branches deliberately; confirm the branch and the request.
-      - This tag adds no score; it marks the command for review in the timeline.
 
   - id: destructive.database_drop
     category: destructive
-    detection_class: threat_hunting
+    detection_class: security_detection
     signal_type: atomic
-    analytic_intent: hunt
+    analytic_intent: alert
     severity: high
-    score: 0
+    score: 55
     targets: [command]
     regex: '(\bdrop\s+(?:table|database|schema)\b|\btruncate\s+table\b|\bdelete\s+from\s+[\w."`]+\s*(?:;|$|["''])|\bdropdb\b|\bredis-cli\b[^;&|\n]*\bflush(?:all|db)\b|\.dropdatabase\s*\()'
     tags: [destructive, database]
     explanation: A command drops or empties a database, table or schema.
     falsepositives:
       - Resetting a local or test database is routine development work; confirm which database the command targets.
-      - This tag adds no score; it marks the command for review in the timeline.
 
   - id: destructive.infrastructure_teardown
     category: destructive
-    detection_class: threat_hunting
+    detection_class: security_detection
     signal_type: atomic
-    analytic_intent: hunt
+    analytic_intent: alert
     severity: high
-    score: 0
+    score: 55
     targets: [command]
-    regex: '(\b(?:terraform|tofu)\s+(?:-\S+\s+)*destroy\b|\b(?:terraform|tofu)\s+(?:-\S+\s+)*apply\b[^;&|\n]*\s-destroy\b|\bpulumi\s+(?:-\S+\s+)*destroy\b|\bkubectl\b[^;&|\n]*\sdelete\b(?:\s+(?:namespaces?|ns)\b|[^;&|\n]*\s--all(?:-namespaces)?\b)|\baws\s+s3\s+rb\b[^;&|\n]*\s--force\b|\baws\s+s3\s+rm\b[^;&|\n]*\s--recursive\b|\bgsutil\s+(?:-m\s+)?rm\s+(?:-\S+\s+)*-r|\bgcloud\s+projects\s+delete\b|\baz\s+group\s+delete\b|\bdocker\s+(?:system|volume)\s+prune\b)'
+    regex: '(\b(?:terraform|tofu)\s+(?:-\S+\s+)*destroy\b|\b(?:terraform|tofu)\s+(?:-\S+\s+)*apply\b[^;&|\n]*\s-destroy\b|\bpulumi\s+(?:-\S+\s+)*destroy\b|\bkubectl\b[^;&|\n]*\sdelete\b(?:\s+(?:namespaces?|ns)\b|[^;&|\n]*\s--all(?:-namespaces)?\b)|\baws\s+s3\s+rb\b[^;&|\n]*\s--force\b|\baws\s+s3\s+rm\b[^;&|\n]*\s--recursive\b|\bgsutil\s+(?:-m\s+)?rm\s+(?:-\S+\s+)*-r|\bgcloud\s+projects\s+delete\b|\baz\s+group\s+delete\b|\b(?:docker|podman)\s+volume\s+prune\b|\b(?:docker|podman)\s+system\s+prune\b[^;&|\n]*\s--volumes\b|\bpodman\s+(?:system|machine)\s+reset\b)'
     tags: [destructive, infrastructure]
-    explanation: A command tears down cloud infrastructure, a Kubernetes namespace or stored data.
+    explanation: A command tears down cloud infrastructure, a Kubernetes namespace, container storage or stored data.
     falsepositives:
       - Tearing down a disposable or test environment is routine; confirm which environment the command targets.
-      - This tag adds no score; it marks the command for review in the timeline.
 
 modifiers:
   - id: chain.secret_then_network

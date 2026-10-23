@@ -288,6 +288,10 @@ fn infrastructure_teardown_tags_destroyed_environments() {
             "gcloud projects delete example-project",
             "az group delete --name example-rg --yes",
             "docker volume prune -f",
+            "docker system prune -af --volumes",
+            "podman system reset --force",
+            "podman machine reset -f",
+            "podman volume prune",
         ],
         &[
             "terraform plan",
@@ -296,17 +300,31 @@ fn infrastructure_teardown_tags_destroyed_environments() {
             "kubectl get namespaces",
             "aws s3 rm s3://bucket/data/file.txt",
             "docker image prune",
+            "docker system prune -f",
+            "podman system prune -a",
+            "podman machine stop",
         ],
     );
 }
 
 #[test]
-fn destructive_tags_add_no_score() {
+fn destructive_commands_score_as_alerts() {
     let rules = bundled();
-    let result = rules
-        .evaluate(&[("command", "rm -rf ~/")])
-        .expect("evaluate")
-        .expect("match");
-    assert_eq!(result.rule_ids, ["destructive.filesystem_wipe"]);
-    assert!(result.contributions.is_empty());
+    for (command, rule_id) in [
+        ("rm -rf ~/", "destructive.filesystem_wipe"),
+        ("git reset --hard", "destructive.git_discard"),
+        ("dropdb app_production", "destructive.database_drop"),
+        (
+            "podman system reset --force",
+            "destructive.infrastructure_teardown",
+        ),
+    ] {
+        let result = rules
+            .evaluate(&[("command", command)])
+            .expect("evaluate")
+            .expect("match");
+        assert_eq!(result.rule_ids, [rule_id], "{command}");
+        // With shell credit (15) each one reaches the 70-point review threshold.
+        assert_eq!(result.score, 55, "{command}");
+    }
 }

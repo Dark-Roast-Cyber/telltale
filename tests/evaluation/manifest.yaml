@@ -1400,8 +1400,11 @@ cases:
         - rule_id: execution.shell
           expectation: expected_match
       exact_rule_set: true
-      expected_score: 15
+      expected_score: 70
       expected_contributions:
+        - id: destructive.filesystem_wipe
+          type: deterministic_rule
+          points: 55
         - id: execution.shell
           type: deterministic_rule
           points: 15
@@ -1425,8 +1428,11 @@ cases:
         - rule_id: execution.shell
           expectation: expected_match
       exact_rule_set: true
-      expected_score: 15
+      expected_score: 70
       expected_contributions:
+        - id: destructive.git_discard
+          type: deterministic_rule
+          points: 55
         - id: execution.shell
           type: deterministic_rule
           points: 15
@@ -1450,8 +1456,11 @@ cases:
         - rule_id: execution.shell
           expectation: expected_match
       exact_rule_set: true
-      expected_score: 15
+      expected_score: 70
       expected_contributions:
+        - id: destructive.database_drop
+          type: deterministic_rule
+          points: 55
         - id: execution.shell
           type: deterministic_rule
           points: 15
@@ -1475,8 +1484,11 @@ cases:
         - rule_id: execution.shell
           expectation: expected_match
       exact_rule_set: true
-      expected_score: 15
+      expected_score: 70
       expected_contributions:
+        - id: destructive.infrastructure_teardown
+          type: deterministic_rule
+          points: 55
         - id: execution.shell
           type: deterministic_rule
           points: 15

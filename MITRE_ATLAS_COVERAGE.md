@@ -101,10 +101,10 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 | `credential.cloud_harvest` | `credential_harvesting` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Cloud credential files read, copied, encoded, archived or sent; not a CLI authenticating with its configured path. |
 | `supply_chain.publish` | `supply_chain` | `security_detection` | `atomic` | `alert` | none | Package publishing command; the act itself does not prove publication of a poisoned AI artifact. |
 | `mcp.server_enumeration` | `mcp_enumeration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0084` | Current emitted tag. `AML.T0133` is more precise for runtime MCP/tool capability enumeration in ATLAS 2026.09. |
-| `destructive.filesystem_wipe` | `destructive` | `threat_hunting` | `atomic` | `hunt` | none | Zero-point tag for home, root or disk destruction; not AI-specific. |
-| `destructive.git_discard` | `destructive` | `threat_hunting` | `atomic` | `hunt` | none | Zero-point tag for discarded work or rewritten remote history. |
-| `destructive.database_drop` | `destructive` | `threat_hunting` | `atomic` | `hunt` | none | Zero-point tag for dropped or emptied databases. |
-| `destructive.infrastructure_teardown` | `destructive` | `threat_hunting` | `atomic` | `hunt` | none | Zero-point tag for destroyed environments or stored data. |
+| `destructive.filesystem_wipe` | `destructive` | `security_detection` | `atomic` | `alert` | none | Home, root or disk destruction; not AI-specific. |
+| `destructive.git_discard` | `destructive` | `security_detection` | `atomic` | `alert` | none | Discarded work or rewritten remote history. |
+| `destructive.database_drop` | `destructive` | `security_detection` | `atomic` | `alert` | none | Dropped or emptied databases. |
+| `destructive.infrastructure_teardown` | `destructive` | `security_detection` | `atomic` | `alert` | none | Destroyed environments, container storage or stored data. |
 
 ### Bundled Chain Modifiers (`config/rules/tool-call-regex.yaml`)
 

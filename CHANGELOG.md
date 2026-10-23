@@ -44,13 +44,17 @@
   `chain.credential_then_publish`, `chain.harvest_then_exfil`, both MCP chains,
   `chain.instruction_override_with_approval_bypass` and
   `chain.shell_encoded_payload`. Action findings are unchanged.
-- Add four zero-point `hunt` tags in the new `destructive` category so the
-  timeline marks commands that can delete or discard data. They add no score:
+- Add four alert rules in the new `destructive` category for commands that can
+  delete or discard data. Each scores 55, so one destructive shell command
+  reaches 70/high and security review. The rules cannot tell a requested reset
+  from an unrequested one:
   - `destructive.filesystem_wipe`: home, root or disk deletion;
   - `destructive.git_discard`: hard reset, clean, force push, branch or stash
     deletion;
   - `destructive.database_drop`;
-  - `destructive.infrastructure_teardown`.
+  - `destructive.infrastructure_teardown`: cloud, Kubernetes and stored-data
+    teardown, `podman system reset`, `podman machine reset`, and Docker or
+    Podman volume pruning (`system prune` only with `--volumes`).
 - Add the Rule v1 target `written_path` (`compat.v1.written_path`), the ninth
   compatibility view. It holds the file-keyed top-level arguments of a call that
   writes them: a native file-write tool (`Write`, `Edit`, `write_file`,
@@ -63,9 +67,10 @@
   the wget output-cluster parsing and the cloud credential scoping above;
   semantic identities change and replay identities do not.
 - Evaluation corpus: add eleven command-effect cases. Security-review confusion
-  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 15 / FP 0 / TN 32 / FN 4. The two
-  new false negatives are unrequested destructive commands, which the
-  zero-point tags do not escalate.
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 17 / FP 2 / TN 30 / FN 2. The two
+  false positives are a requested `git reset --hard` and a requested
+  test-database reset, which the destructive rules escalate like unrequested
+  ones.
 
 - Restore `execution.shell` session-scoring parity for shell-tool calls whose
   recorded command omits a shell wrapper, including Codex `exec_command` and
