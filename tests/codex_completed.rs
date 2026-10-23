@@ -408,9 +408,10 @@ fn completed_argv_command_view_is_counted_once_and_kept_private() {
 }
 
 // Conformance, not an efficacy case: a completed upload of a secret-named file
-// reaches the bundled secret-access and upload signatures through argv.
+// reaches the bundled secret-access and upload signatures through argv, and one
+// call that reads and sends a secret links `chain.secret_then_network`.
 #[test]
-fn completed_secret_file_upload_conformance_scores_95() {
+fn completed_secret_file_upload_conformance_chains_secret_and_upload() {
     let pipeline = Pipeline::builder()
         .without_community_rules()
         .build()
@@ -434,10 +435,14 @@ fn completed_secret_file_upload_conformance_scores_95() {
         assert_eq!(detections.len(), 1, "{status}");
         assert_eq!(
             detections[0]["rule_ids"],
-            json!(["exfil.outbound_upload", "secret.env.read"]),
+            json!([
+                "chain.secret_then_network",
+                "exfil.outbound_upload",
+                "secret.env.read"
+            ]),
             "{status}"
         );
-        assert_eq!(detections[0]["risk_score"], 95, "{status}");
+        assert_eq!(detections[0]["risk_score"], 130, "{status}");
     }
 }
 

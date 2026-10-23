@@ -40,10 +40,14 @@
   minutes, the window action findings already use; calls without a source time
   link only within themselves. A cloud credential read and a package publish two
   hours apart now score 110 without `chain.credential_then_publish` (40). This
-  covers `chain.secret_then_network`, `chain.install_then_persistence`,
-  `chain.credential_then_publish`, `chain.harvest_then_exfil`, both MCP chains,
+  covers `chain.secret_then_network`, `chain.credential_then_publish`, `chain.harvest_then_exfil`, both MCP chains,
   `chain.instruction_override_with_approval_bypass` and
   `chain.shell_encoded_payload`. Action findings are unchanged.
+- `chain.secret_then_network` now pairs secret access with exfiltration, not
+  with any download: reading a secrets file and then fetching a document no
+  longer adds 35. Remove `chain.install_then_persistence`, which matched the
+  ordinary "install a tool, add it to PATH in `.bashrc`" setup; both atomic
+  rules still score.
 - Add four alert rules in the new `destructive` category for commands that can
   delete or discard data. Each scores 55, so one destructive shell command
   reaches 70/high and security review. The rules cannot tell a requested reset
@@ -66,8 +70,8 @@
   a startup file. The native action profile version is now 4, which also covers
   the wget output-cluster parsing and the cloud credential scoping above;
   semantic identities change and replay identities do not.
-- Evaluation corpus: add eleven command-effect cases. Security-review confusion
-  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 17 / FP 2 / TN 30 / FN 2. The two
+- Evaluation corpus: add twelve command-effect cases. Security-review confusion
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 18 / FP 2 / TN 30 / FN 2. The two
   false positives are a requested `git reset --hard` and a requested
   test-database reset, which the destructive rules escalate like unrequested
   ones.

@@ -259,7 +259,7 @@ fn status_reports_latest_health_event() {
     assert_eq!(summary["threshold_config"]["medium"], 50);
     assert_eq!(summary["threshold_config"]["high"], 70);
     assert_eq!(summary["threshold_config"]["critical"], 90);
-    assert_eq!(summary["source_counts"]["codex.jsonl"], 41);
+    assert_eq!(summary["source_counts"]["codex.jsonl"], 42);
     assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
     assert_eq!(summary["source_counts"]["copilot.copilot_process_log"], 5);
 }

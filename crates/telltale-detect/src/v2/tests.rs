@@ -1455,7 +1455,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
     let rules = telltale_rules::load_default_rule_set().expect("bundled rules");
     let export = rules.compatibility_export();
     assert_eq!(export.rules().len(), 23);
-    assert_eq!(export.modifiers().len(), 9);
+    assert_eq!(export.modifiers().len(), 8);
     let matcher_count = export
         .rules()
         .iter()

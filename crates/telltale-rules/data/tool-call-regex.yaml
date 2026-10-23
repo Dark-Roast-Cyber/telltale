@@ -368,10 +368,10 @@ rules:
 modifiers:
   - id: chain.secret_then_network
     score: 35
-    when_all_categories: [secret_access, download]
-    explanation: Secret access near network activity materially increases exfiltration risk.
+    when_all_categories: [secret_access, exfiltration]
+    explanation: Secret access followed by outbound transfer materially increases exfiltration risk.
     falsepositives:
-      - Authorized troubleshooting may inspect environment files and fetch documented resources in the same session; confirm the network destination and user intent before escalating.
+      - Authorized backup or migration work may read secret files and upload artifacts; confirm the destination and the request before escalating.
   - id: chain.download_then_execute
     score: 35
     when_all_categories: [download, execution]
@@ -384,12 +384,6 @@ modifiers:
     explanation: Shell execution of decoded payload content should cross the triage threshold.
     falsepositives:
       - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
-  - id: chain.install_then_persistence
-    score: 30
-    when_all_categories: [install, persistence]
-    explanation: Install plus persistence modification requires triage.
-    falsepositives:
-      - Developer environment setup may install packages and update shell profiles or services when those changes match the requested setup steps.
   - id: chain.mcp_injection_then_egress
     score: 35
     detection_class: security_detection
