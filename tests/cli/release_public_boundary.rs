@@ -2178,10 +2178,12 @@ fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
         .split("function Get-TestLockUsers")
         .next()
         .unwrap();
-    let lexical_scope = target_guard.find("$full.StartsWith($temp +").unwrap();
+    let lexical_scope = target_guard
+        .find("$full.StartsWith($script:temp +")
+        .unwrap();
     let file_probe = target_guard.find("Get-TTPath $full").unwrap();
     assert!(lexical_scope < file_probe);
-    assert!(target_guard.contains("[IO.Path]::GetFileName($temp) -cnotmatch"));
+    assert!(target_guard.contains("[IO.Path]::GetFileName($script:temp) -cnotmatch"));
     assert!(target_guard.contains("Assert-TTFile $full -Owned"));
     assert!(
         script.contains("function Invoke-TestDiagnosticInstall"),
@@ -2334,6 +2336,83 @@ fn assert_windows_recovery_diagnostics(script: &str) {
             .count(),
         1
     );
+}
+
+#[test]
+fn windows_first_refusal_capture_precedes_rollback_and_stays_synthetic() {
+    let script = normalize_line_endings(fs::read_to_string("tests/windows_lifecycle.ps1").unwrap());
+    assert!(script.contains(". (Join-Path $PSScriptRoot 'windows_lifecycle_pre_rollback.ps1')"));
+    let helper = normalize_line_endings(
+        fs::read_to_string("tests/windows_lifecycle_pre_rollback.ps1").unwrap(),
+    );
+    for text in [&helper, &helper.replace('\n', "\r\n")] {
+        let text = normalize_line_endings(text.to_owned());
+        assert!(text.contains("$env:GITHUB_ACTIONS -cne 'true'"));
+        assert!(text.contains("$script:testScheduler -cne 'substituted'"));
+        assert!(
+            text.contains(
+                "$Failure.InvocationInfo.ScriptLineNumber -ne $script:testReplacementLine"
+            )
+        );
+        assert!(text.contains("$_.hresult -eq -2147024864"));
+        assert!(text.contains("$null -ne $script:testPreRollbackReport"));
+        assert!(text.contains("$Install -cne $script:testLayout.InstallDirectory"));
+        assert!(text.contains("$Data -cne $script:testLayout.DataDirectory"));
+        assert!(text.contains("$Path -cne $script:testPreRollbackQueryPath"));
+        assert!(text.contains("[object]::ReferenceEquals($Refusal, $script:testPreRollbackProbe)"));
+        assert!(text.contains("phase = 'before-installer-rollback'"));
+        assert!(text.contains("scenario_sha256 = Get-TTTextHash $script:testScenario"));
+        assert!(text.contains("@('telltale.exe', 'staged.exe', 'previous.exe')"));
+        assert!(text.contains("Assert-TestDiagnosticTarget $path -FixedLeaf -AllowMissing"));
+        assert!(text.contains("Get-TestLockUsers $path $probeFailure -BeforeRollback"));
+        assert!(text.contains("Set-PSBreakpoint -Script $installer -Line $rollbackLine -Action"));
+        assert!(text.contains("Write-TestPreRollbackRefusal $failure $install $data"));
+        assert!(text.contains("Remove-PSBreakpoint -Breakpoint $script:testPreRollbackBreakpoint"));
+        assert!(text.contains("controlled replacement refusal captured before rollback"));
+        assert!(text.contains("controlled stage remains locked and byte-identical"));
+        assert!(
+            !text.contains("break\n"),
+            "the observer must never enter an interactive debugger"
+        );
+        for forbidden in [
+            "Get-Process",
+            "Get-CimInstance",
+            "Get-WmiObject",
+            "Get-ChildItem",
+            "RmShutdown",
+            "RmRestart(",
+            "$global:Error",
+            ".Exception.Message",
+            ".InvocationInfo.Line",
+            ".PositionMessage",
+            ".TargetObject",
+            ".AppName",
+            ".ServiceName",
+            "Start-Sleep",
+            "Set-Content",
+            "WriteAllText",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "out-of-scope pre-rollback probe: {forbidden}"
+            );
+        }
+    }
+    assert!(script.contains("Assert-TestPreRollbackQuery $Path $Refusal"));
+    assert!(script.contains("public class InjectedRegistrationInterruption : IOException"));
+    assert!(script.contains(
+        "-ExpectedExceptionType 'TelltaleLifecycleTests.InjectedRegistrationInterruption'"
+    ));
+    assert!(
+        script.contains("unrelated failure cannot satisfy the registration interruption assertion")
+    );
+    let installer =
+        normalize_line_endings(fs::read_to_string("scripts/install-telltale.ps1").unwrap());
+    assert!(installer.contains(
+        "$failure = $_\n        try { Restore-TTTransaction $install $data | Out-Null }"
+    ));
+    assert!(!installer.contains("Set-PSBreakpoint"));
+    assert!(!installer.contains("PreRollback"));
 }
 
 #[test]

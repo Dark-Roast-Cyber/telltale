@@ -28,9 +28,14 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "Assertion failed: $Message" }
     $script:assertions++
 }
-function Assert-Fails([scriptblock]$Operation, [string]$Message) {
+function Assert-Fails([scriptblock]$Operation, [string]$Message, [string]$ExpectedExceptionType) {
     $failed = $false
-    try { & $Operation | Out-Null } catch { $failed = $true }
+    try { & $Operation | Out-Null } catch {
+        $failed = $true
+        if ($ExpectedExceptionType) {
+            Assert-True (@(Get-TestExceptionChain $_.Exception | Where-Object { $_.type -ceq $ExpectedExceptionType }).Count -eq 1) 'expected injected exception type, not an unrelated failure'
+        }
+    }
     Assert-True $failed $Message
 }
 function New-TestLayout([string]$Name) {
@@ -83,20 +88,20 @@ function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]
     # Lexical scope checks precede ALL filesystem/native probes. A similar
     # prefix, another test root, canonical installation or normalized escape fails.
     $parent = [IO.Path]::Combine($script:TTLocal, 'TelltaleLifecycleTests')
-    if (-not [string]::Equals($testParent, $parent, [StringComparison]::OrdinalIgnoreCase) -or
-        -not [string]::Equals([IO.Path]::GetDirectoryName($temp), $parent, [StringComparison]::OrdinalIgnoreCase) -or
-        [IO.Path]::GetFileName($temp) -cnotmatch '^telltale-lifecycle-tests-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+    if (-not [string]::Equals($script:testParent, $parent, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals([IO.Path]::GetDirectoryName($script:temp), $parent, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($script:temp) -cnotmatch '^telltale-lifecycle-tests-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
         $null -eq $script:testLayout) { throw 'Diagnostic root is not the current GUID-scoped synthetic root.' }
     $full = [IO.Path]::GetFullPath($Path)
     if (-not [string]::Equals($full, $Path, [StringComparison]::OrdinalIgnoreCase) -or
-        -not $full.StartsWith($temp + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is outside the exact synthetic root or is not normalized.' }
-    $relative = $full.Substring($temp.Length + 1)
+        -not $full.StartsWith($script:temp + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is outside the exact synthetic root or is not normalized.' }
+    $relative = $full.Substring($script:temp.Length + 1)
     $leaf = [IO.Path]::GetFileName($full)
     $allowed = if ($FixedLeaf) { @('telltale.exe', 'staged.exe', 'previous.exe', 'install-receipt.json', 'transaction.json') } else { @('telltale.exe', 'staged.exe') }
     if ($relative -cnotmatch '^[A-Za-z0-9-]{1,64}\\Application With Spaces\\[^\\]+$' -or $leaf -cnotin $allowed -or
         -not [string]::Equals($full, [IO.Path]::Combine($script:testLayout.InstallDirectory, $leaf), [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is not an exact selected synthetic leaf.' }
     Get-TTPath $full | Out-Null
-    foreach ($directory in @($testParent, $temp, $script:testLayout.InstallDirectory)) {
+    foreach ($directory in @($script:testParent, $script:temp, $script:testLayout.InstallDirectory)) {
         if (Test-Path -LiteralPath $directory) {
             if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw 'Diagnostic ancestor is not a directory.' }
             Assert-TTOwner $directory
@@ -107,13 +112,18 @@ function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]
     return $full
 }
 
-function Get-TestLockUsers([string]$Path, $Refusal = $null) {
+function Get-TestLockUsers([string]$Path, $Refusal = $null, [switch]$BeforeRollback) {
     $leaf = [IO.Path]::GetFileName($Path)
-    if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False') -or
-        $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
-        throw 'Staged attribution requires a selected scenario and an observed sharing refusal.'
+    if ($BeforeRollback) {
+        Assert-TestPreRollbackQuery $Path $Refusal
+        $checked = Assert-TestDiagnosticTarget $Path -FixedLeaf
+    } else {
+        if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False') -or
+            $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
+            throw 'Staged attribution requires a selected scenario and an observed sharing refusal.'
+        }
+        $checked = Assert-TestDiagnosticTarget $Path
     }
-    $checked = Assert-TestDiagnosticTarget $Path
     $report = @{ status = 'unknown'; scope = "exact synthetic $leaf"; processes = @(); limitation = 'post-failure resource users are not proof of lock ownership; kernel users may be absent' }
     if ($env:GITHUB_ACTIONS -cne 'true') { $report.reason = 'native attribution restricted to disposable CI'; return $report }
     try {
@@ -310,12 +320,15 @@ namespace TelltaleLifecycleTests {
         }
         public void Stop(int flags) { State = 3; }
     }
+    public class InjectedRegistrationInterruption : IOException {
+        public InjectedRegistrationInterruption() : base("Injected interruption before task registration.") {}
+    }
     public class Folder {
         public static Task Current;
         public static bool FailRegistrationOnce;
         public Task GetTask(string name) { if (Current == null) throw new FileNotFoundException(); return Current; }
         public Task RegisterTask(string name, string xml, int flags, string sid, object password, int logon, object security) {
-            if (FailRegistrationOnce) { FailRegistrationOnce = false; throw new IOException("Injected interruption before task registration."); }
+            if (FailRegistrationOnce) { FailRegistrationOnce = false; throw new InjectedRegistrationInterruption(); }
             if (flags == 4 && Current == null) throw new FileNotFoundException();
             if (flags == 2 && Current != null) throw new IOException("Task already exists.");
             if (xml.IndexOf("encoding=\"UTF-8\"", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -335,7 +348,13 @@ function New-Object {
     if ($ComObject -cne 'Schedule.Service') { throw 'Unexpected COM object in test.' }
     return [TelltaleLifecycleTests.Service]::new()
 }
+. (Join-Path $PSScriptRoot 'windows_lifecycle_pre_rollback.ps1')
 try {
+    Start-TestPreRollbackCapture
+    Invoke-TestPreRollbackControl $binary
+    Assert-Fails {
+        Assert-Fails { throw [IO.IOException]::new('unrelated synthetic error') } 'synthetic failure' -ExpectedExceptionType 'TelltaleLifecycleTests.InjectedRegistrationInterruption'
+    } 'unrelated failure cannot satisfy the registration interruption assertion'
     $layout = New-TestLayout 'fresh'
     $before = Get-TreeDigest $temp
     & $installer @layout -DevelopmentBinary $binary -WhatIf
@@ -856,7 +875,8 @@ try {
     [TelltaleLifecycleTests.Folder]::Current = [TelltaleLifecycleTests.Task]::new($disabledXml)
     Write-TTJson (Join-Path $layout.InstallDirectory 'transaction.json') @{ previous = $previous; next = $next; previous_task_enabled = $true; task_transition_xml = $disabledXml; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
     [TelltaleLifecycleTests.Folder]::FailRegistrationOnce = $true
-    Assert-Fails { & $installer @layout -DevelopmentBinary $binary } 'interruption immediately before rollback task registration reported'
+    Assert-Fails { & $installer @layout -DevelopmentBinary $binary } 'interruption immediately before rollback task registration reported' -ExpectedExceptionType 'TelltaleLifecycleTests.InjectedRegistrationInterruption'
+    Assert-True (-not [TelltaleLifecycleTests.Folder]::FailRegistrationOnce) 'registration interruption was consumed'
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTTask).Enabled) 'original transition proof survives interrupted rollback registration'
     & $uninstaller @layout -Confirm:$false
@@ -865,6 +885,7 @@ try {
     Write-TestFailure $_
     throw
 } finally {
+    Stop-TestPreRollbackCapture
     [TelltaleLifecycleTests.Folder]::Current = $null
     [TelltaleLifecycleTests.Folder]::FailRegistrationOnce = $false
     Remove-Item Function:New-Object
