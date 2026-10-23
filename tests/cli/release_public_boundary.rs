@@ -2179,11 +2179,13 @@ fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
         .next()
         .unwrap();
     let lexical_scope = target_guard
-        .find("$full.StartsWith($script:temp +")
+        .find("$full.StartsWith($diagnosticRoot +")
         .unwrap();
     let file_probe = target_guard.find("Get-TTPath $full").unwrap();
     assert!(lexical_scope < file_probe);
-    assert!(target_guard.contains("[IO.Path]::GetFileName($script:temp) -cnotmatch"));
+    assert!(target_guard.contains("[IO.Path]::GetFileName($diagnosticRoot) -cnotmatch"));
+    assert!(target_guard.contains("$Context.Root"));
+    assert!(target_guard.contains("$Context.Layout"));
     assert!(target_guard.contains("Assert-TTFile $full -Owned"));
     assert!(
         script.contains("function Invoke-TestDiagnosticInstall"),
@@ -2348,26 +2350,61 @@ fn windows_first_refusal_capture_precedes_rollback_and_stays_synthetic() {
     for text in [&helper, &helper.replace('\n', "\r\n")] {
         let text = normalize_line_endings(text.to_owned());
         assert!(text.contains("$env:GITHUB_ACTIONS -cne 'true'"));
-        assert!(text.contains("$script:testScheduler -cne 'substituted'"));
+        assert!(text.contains("$Context.Scheduler -cne 'substituted'"));
         assert!(
-            text.contains(
-                "$Failure.InvocationInfo.ScriptLineNumber -ne $script:testReplacementLine"
-            )
+            text.contains("$Failure.InvocationInfo.ScriptLineNumber -ne $Context.ReplacementLine")
         );
         assert!(text.contains("$_.hresult -eq -2147024864"));
-        assert!(text.contains("$null -ne $script:testPreRollbackReport"));
-        assert!(text.contains("$Install -cne $script:testLayout.InstallDirectory"));
-        assert!(text.contains("$Data -cne $script:testLayout.DataDirectory"));
-        assert!(text.contains("$Path -cne $script:testPreRollbackQueryPath"));
-        assert!(text.contains("[object]::ReferenceEquals($Refusal, $script:testPreRollbackProbe)"));
+        assert!(text.contains("$null -ne $Context.Report"));
+        assert!(text.contains("$Install -cne $Context.Layout.InstallDirectory"));
+        assert!(text.contains("$Data -cne $Context.Layout.DataDirectory"));
+        assert!(text.contains("$Path -cne $Context.QueryPath"));
+        assert!(text.contains("[object]::ReferenceEquals($Refusal, $Context.Probe)"));
         assert!(text.contains("phase = 'before-installer-rollback'"));
-        assert!(text.contains("scenario_sha256 = Get-TTTextHash $script:testScenario"));
+        assert!(text.contains("scenario_sha256 = Get-TTTextHash $Context.Scenario"));
         assert!(text.contains("@('telltale.exe', 'staged.exe', 'previous.exe')"));
-        assert!(text.contains("Assert-TestDiagnosticTarget $path -FixedLeaf -AllowMissing"));
-        assert!(text.contains("Get-TestLockUsers $path $probeFailure -BeforeRollback"));
-        assert!(text.contains("Set-PSBreakpoint -Script $installer -Line $rollbackLine -Action"));
-        assert!(text.contains("Write-TestPreRollbackRefusal $failure $install $data"));
-        assert!(text.contains("Remove-PSBreakpoint -Breakpoint $script:testPreRollbackBreakpoint"));
+        assert!(text.contains(
+            "Assert-TestDiagnosticTarget $path -FixedLeaf -AllowMissing -Context $Context"
+        ));
+        assert!(
+            text.contains(
+                "Get-TestLockUsers $path $probeFailure -BeforeRollback -Context $Context"
+            )
+        );
+        assert!(
+            text.contains(
+                "Set-PSBreakpoint -Script $Context.Installer -Line $Line -Action $action"
+            )
+        );
+        assert!(text.contains("Write-TestPreRollbackRefusal $context $failure $install $data"));
+        assert!(
+            text.contains(
+                "Remove-PSBreakpoint -Breakpoint $script:testPreRollbackContext.Breakpoint"
+            )
+        );
+        let actions = text
+            .split("function New-TestPreRollbackBreakpoint")
+            .nth(1)
+            .unwrap()
+            .split("function Start-TestPreRollbackCapture")
+            .next()
+            .unwrap();
+        assert!(actions.contains("$context = $_.TelltaleContext"));
+        assert!(
+            actions.contains(
+                "Add-Member -NotePropertyName TelltaleContext -NotePropertyValue $Context"
+            )
+        );
+        assert!(
+            !actions.contains("$script:"),
+            "target script scope cannot own test breakpoint state"
+        );
+        assert!(
+            actions.contains("$context.ControlErrors = @(Get-TestExceptionChain $_.Exception)")
+        );
+        assert!(
+            actions.contains("$context.ObserverErrors = @(Get-TestExceptionChain $_.Exception)")
+        );
         assert!(text.contains("controlled replacement refusal captured before rollback"));
         assert!(text.contains("controlled stage remains locked and byte-identical"));
         assert!(
@@ -2398,7 +2435,15 @@ fn windows_first_refusal_capture_precedes_rollback_and_stays_synthetic() {
             );
         }
     }
-    assert!(script.contains("Assert-TestPreRollbackQuery $Path $Refusal"));
+    assert!(script.contains("Assert-TestPreRollbackQuery $Path $Refusal $Context"));
+    assert!(script.contains("& (Join-Path $PSScriptRoot 'windows_lifecycle_breakpoints.ps1')"));
+    let engine = normalize_line_endings(
+        fs::read_to_string("tests/windows_lifecycle_breakpoints.ps1").unwrap(),
+    );
+    assert!(engine.contains("$control = New-TestPreRollbackBreakpoint $context 4 -Control"));
+    assert!(engine.contains("$observer = New-TestPreRollbackBreakpoint $context 8"));
+    assert!(engine.contains("$context.ControlErrors.Count -eq 0"));
+    assert!(engine.contains("not native Windows sharing validation"));
     assert!(script.contains("public class InjectedRegistrationInterruption : IOException"));
     assert!(script.contains(
         "-ExpectedExceptionType 'TelltaleLifecycleTests.InjectedRegistrationInterruption'"

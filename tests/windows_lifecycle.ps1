@@ -42,6 +42,10 @@ function New-TestLayout([string]$Name) {
     $directory = Join-Path $temp $Name
     $script:testScenario = $Name
     $script:testLayout = @{ InstallDirectory = (Join-Path $directory 'Application With Spaces'); DataDirectory = (Join-Path $directory 'Runtime Data') }
+    if ($null -ne $script:testPreRollbackContext) {
+        $script:testPreRollbackContext.Layout = $script:testLayout
+        $script:testPreRollbackContext.Scenario = $Name
+    }
     return $script:testLayout
 }
 function Get-TreeDigest([string]$Directory) {
@@ -84,24 +88,27 @@ function Get-TestErrorSummary($Failure) {
     }
 }
 
-function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]$AllowMissing) {
+function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]$AllowMissing, $Context = $null) {
     # Lexical scope checks precede ALL filesystem/native probes. A similar
     # prefix, another test root, canonical installation or normalized escape fails.
     $parent = [IO.Path]::Combine($script:TTLocal, 'TelltaleLifecycleTests')
-    if (-not [string]::Equals($script:testParent, $parent, [StringComparison]::OrdinalIgnoreCase) -or
-        -not [string]::Equals([IO.Path]::GetDirectoryName($script:temp), $parent, [StringComparison]::OrdinalIgnoreCase) -or
-        [IO.Path]::GetFileName($script:temp) -cnotmatch '^telltale-lifecycle-tests-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
-        $null -eq $script:testLayout) { throw 'Diagnostic root is not the current GUID-scoped synthetic root.' }
+    $diagnosticParent = if ($null -eq $Context) { $script:testParent } else { $Context.Parent }
+    $diagnosticRoot = if ($null -eq $Context) { $script:temp } else { $Context.Root }
+    $diagnosticLayout = if ($null -eq $Context) { $script:testLayout } else { $Context.Layout }
+    if (-not [string]::Equals($diagnosticParent, $parent, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals([IO.Path]::GetDirectoryName($diagnosticRoot), $parent, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($diagnosticRoot) -cnotmatch '^telltale-lifecycle-tests-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+        $null -eq $diagnosticLayout) { throw 'Diagnostic root is not the current GUID-scoped synthetic root.' }
     $full = [IO.Path]::GetFullPath($Path)
     if (-not [string]::Equals($full, $Path, [StringComparison]::OrdinalIgnoreCase) -or
-        -not $full.StartsWith($script:temp + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is outside the exact synthetic root or is not normalized.' }
-    $relative = $full.Substring($script:temp.Length + 1)
+        -not $full.StartsWith($diagnosticRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is outside the exact synthetic root or is not normalized.' }
+    $relative = $full.Substring($diagnosticRoot.Length + 1)
     $leaf = [IO.Path]::GetFileName($full)
     $allowed = if ($FixedLeaf) { @('telltale.exe', 'staged.exe', 'previous.exe', 'install-receipt.json', 'transaction.json') } else { @('telltale.exe', 'staged.exe') }
     if ($relative -cnotmatch '^[A-Za-z0-9-]{1,64}\\Application With Spaces\\[^\\]+$' -or $leaf -cnotin $allowed -or
-        -not [string]::Equals($full, [IO.Path]::Combine($script:testLayout.InstallDirectory, $leaf), [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is not an exact selected synthetic leaf.' }
+        -not [string]::Equals($full, [IO.Path]::Combine($diagnosticLayout.InstallDirectory, $leaf), [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic target is not an exact selected synthetic leaf.' }
     Get-TTPath $full | Out-Null
-    foreach ($directory in @($script:testParent, $script:temp, $script:testLayout.InstallDirectory)) {
+    foreach ($directory in @($diagnosticParent, $diagnosticRoot, $diagnosticLayout.InstallDirectory)) {
         if (Test-Path -LiteralPath $directory) {
             if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw 'Diagnostic ancestor is not a directory.' }
             Assert-TTOwner $directory
@@ -112,11 +119,11 @@ function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]
     return $full
 }
 
-function Get-TestLockUsers([string]$Path, $Refusal = $null, [switch]$BeforeRollback) {
+function Get-TestLockUsers([string]$Path, $Refusal = $null, [switch]$BeforeRollback, $Context = $null) {
     $leaf = [IO.Path]::GetFileName($Path)
     if ($BeforeRollback) {
-        Assert-TestPreRollbackQuery $Path $Refusal
-        $checked = Assert-TestDiagnosticTarget $Path -FixedLeaf
+        Assert-TestPreRollbackQuery $Path $Refusal $Context
+        $checked = Assert-TestDiagnosticTarget $Path -FixedLeaf -Context $Context
     } else {
         if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False') -or
             $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
@@ -350,6 +357,7 @@ function New-Object {
 }
 . (Join-Path $PSScriptRoot 'windows_lifecycle_pre_rollback.ps1')
 try {
+    & (Join-Path $PSScriptRoot 'windows_lifecycle_breakpoints.ps1')
     Start-TestPreRollbackCapture
     Invoke-TestPreRollbackControl $binary
     Assert-Fails {
