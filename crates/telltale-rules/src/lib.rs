@@ -1106,6 +1106,9 @@ fn policy_allows_modifier(modifier: &ModifierDefinition, policy: Option<&RulePol
 mod bundled_http_direction;
 
 #[cfg(test)]
+mod bundled_shell_execution;
+
+#[cfg(test)]
 mod tests {
     use super::{
         DetectionDefinition, ModifierDefinition, RuleDefaults, RuleDefinition, RulePolicy, RuleSet,

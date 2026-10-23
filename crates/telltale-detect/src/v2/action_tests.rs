@@ -245,6 +245,130 @@ fn second_review_large_harmless_timed_batch_has_no_sequence_state() {
 }
 
 #[test]
+fn large_shell_credit_batches_preserve_late_detection_and_match_counts() {
+    assert_large_shell_credit_batch(ClientId::Claude, "claude.projects", "Bash", false);
+}
+
+#[test]
+fn large_codex_shell_credit_batch() {
+    assert_large_shell_credit_batch(ClientId::Codex, "codex.sessions", "exec_command", false);
+}
+
+#[test]
+fn large_opencode_shell_credit_batch() {
+    assert_large_shell_credit_batch(ClientId::OpenCode, "opencode.sqlite", "shell", false);
+}
+
+#[test]
+fn large_legacy_codex_shell_credit_batch() {
+    assert_large_shell_credit_batch(ClientId::Codex, "codex.sessions", "shell", true);
+}
+
+fn assert_large_shell_credit_batch(client: ClientId, source_id: &str, name: &str, wrapper: bool) {
+    let observation = |index, command: &str| {
+        let arguments = if name == "exec_command" {
+            serde_json::json!({"cmd":command})
+        } else {
+            serde_json::json!({"command":command})
+        };
+        CanonicalObservationV2::builder(
+            ObservationBody::Tool(
+                ToolObservation::new()
+                    .with_name(name)
+                    .unwrap()
+                    .with_arguments(JsonValue::try_from_source_value(&arguments).unwrap()),
+            ),
+            ObservationStage::ToolRequested,
+            ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+            SourceProvenance::new(
+                IngestionMode::SessionStore,
+                if client == ClientId::Claude {
+                    "claude_code"
+                } else {
+                    client.as_str()
+                },
+                source_id,
+                Fidelity::FullNative,
+            )
+            .unwrap()
+            .with_native_id(format!("harmless-{index}"))
+            .unwrap(),
+        )
+        .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+        .sequence(index)
+        .occurred_at(SourceTimestamp::new("2026-09-17T00:00:00Z").unwrap())
+        .facet(
+            "command.text",
+            SemanticFacet::new(JsonValue::string(command)),
+        )
+        .unwrap()
+        .fact_metadata("command.text", FactMetadata::parsed().unwrap())
+        .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+        .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())
+        .capability_context(
+            CapabilityContext::new()
+                .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+        )
+        .build()
+        .unwrap()
+    };
+    let command = if wrapper {
+        "bash -lc 'echo ordinary'"
+    } else {
+        "echo ordinary"
+    };
+    let mut observations = (0..4000)
+        .map(|index| observation(index, command))
+        .collect::<Vec<_>>();
+    let rules = telltale_rules::load_default_rule_set().unwrap();
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let evaluate = |observations: &[CanonicalObservationV2]| {
+        let input = CanonicalSourceInput {
+            client,
+            source_id,
+            source_instance: Some(&instance),
+            observations,
+        };
+        if wrapper {
+            evaluate_source(input, &plan, None)
+        } else {
+            evaluate_source_with_options(input, &plan, None, &DetailedEvaluationOptions::default())
+        }
+        .unwrap()
+    };
+    let output = evaluate(&observations);
+    let session = &output.sessions()[0];
+    assert_eq!(session.rule_score(), 15, "{source_id}");
+    assert_eq!(session.rule_ids(), ["execution.shell"]);
+    assert!(session.action_findings().is_empty());
+    let shell = session
+        .detectors()
+        .iter()
+        .find(|d| d.detector_id() == "execution.shell")
+        .unwrap();
+    assert_eq!(shell.evaluated_match_count(), 4000);
+    assert!(
+        session.rules.projection().count() <= 3,
+        "only representative shell-credit evidence is retained"
+    );
+    observations.push(observation(
+        4000,
+        "systemctl --user enable synthetic-preview.service",
+    ));
+    let output = evaluate(&observations);
+    assert_eq!(
+        output.sessions()[0].rule_score(),
+        60,
+        "late persistence must still be detected: {source_id}"
+    );
+    assert_eq!(
+        output.sessions()[0].rule_ids(),
+        ["execution.shell", "persistence.shell_profile"]
+    );
+}
+
+#[test]
 fn second_review_predecessor_search_exhausts_explicit_work_budget() {
     let timestamp = time::OffsetDateTime::UNIX_EPOCH;
     let mut remaining = 1;
@@ -1193,6 +1317,8 @@ fn assert_credential_projections(
     assert_eq!(output.sessions().len(), 1);
     let session = &output.sessions()[0];
     assert_eq!(session.session_id(), observation.session_id());
+    let shell_match =
+        matches!(observation.body(), ObservationBody::Tool(tool) if tool.name() == Some("Bash"));
     assert_eq!(
         session.rule_ids().iter().any(|rule| rule == id),
         session_match,
@@ -1200,12 +1326,12 @@ fn assert_credential_projections(
     );
     assert_eq!(
         session.rule_score(),
-        if session_match { 30 } else { 0 },
+        u64::from(session_match) * 30 + u64::from(shell_match) * 15,
         "session: {case}"
     );
     assert_eq!(
         session.risk_contributions().len(),
-        usize::from(session_match)
+        usize::from(session_match) + usize::from(shell_match)
     );
     let findings = session.action_findings();
     assert_eq!(findings.len(), usize::from(action_match), "action: {case}");

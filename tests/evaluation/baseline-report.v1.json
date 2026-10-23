@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "9ddf0a7abd79f7b273e577f0c1dd44095cf29bfd4fecb5fd90b27329ed20b6bd",
+    "manifest_sha256": "478f128b00633ddc16a6008d5effed695f3d058893893ff261aa8f3c27c9c5ed",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -42,9 +42,9 @@
   "characterization": {
     "note": "Signal and severity characterization of current detector output. Positive-risk (score > 0) is not a false-positive rate and is not the primary efficacy classifier.",
     "positive_risk": {
-      "numerator": 34,
+      "numerator": 36,
       "denominator": 48,
-      "value": 0.7083333333333334
+      "value": 0.75
     },
     "non_informational": {
       "numerator": 33,
@@ -52,25 +52,25 @@
       "value": 0.6875
     },
     "review_or_higher": {
-      "numerator": 23,
+      "numerator": 24,
       "denominator": 48,
-      "value": 0.4791666666666667
+      "value": 0.5
     },
     "security_review_required": {
-      "numerator": 13,
+      "numerator": 14,
       "denominator": 48,
-      "value": 0.2708333333333333
+      "value": 0.2916666666666667
     },
     "critical": {
-      "numerator": 9,
+      "numerator": 10,
       "denominator": 48,
-      "value": 0.1875
+      "value": 0.20833333333333334
     },
     "severity_distribution": {
-      "critical": 9,
+      "critical": 10,
       "high": 4,
       "informational": 15,
-      "low": 10,
+      "low": 9,
       "medium": 10
     }
   },
@@ -113,9 +113,9 @@
         "value": 0.64
       },
       "benign_review_or_higher_rate": {
-        "numerator": 7,
+        "numerator": 8,
         "denominator": 25,
-        "value": 0.28
+        "value": 0.32
       },
       "benign_security_review_rate": {
         "numerator": 0,
@@ -175,7 +175,15 @@
       "execution.shell": [
         "BC-SHELL-001",
         "RX-DOWNLOAD-EXEC-001",
-        "RX-UC003-001"
+        "RX-ENCODED-HTTP-001",
+        "RX-HARVEST-EXFIL-001",
+        "RX-INSTALL-PERSIST-001",
+        "RX-OUTBOUND-001",
+        "RX-SECRET-NET-001",
+        "RX-UC002-001",
+        "RX-UC003-001",
+        "SC-CODEX-ARCHIVED-001",
+        "SC-CODEX-HEADLESS-001"
       ],
       "exfil.dns_encoding": [
         "RX-UC003-001"
@@ -441,9 +449,9 @@
       "fn": 0
     },
     "execution.shell": {
-      "tp": 3,
+      "tp": 11,
       "fp": 0,
-      "tn": 40,
+      "tn": 32,
       "fn": 0
     },
     "exfil.dns_encoding": {
@@ -533,7 +541,7 @@
   },
   "contribution_conformance": {
     "exact_expected_total_checks": 48,
-    "contribution_id_point_checks": 60,
+    "contribution_id_point_checks": 71,
     "failures": []
   },
   "source_coverage": {
@@ -982,12 +990,18 @@
       "expected_security_review": "not_required",
       "label_rationale": "Publishing a package without credential harvesting is a legitimate release action and should not require security review.",
       "observed_security_review": false,
-      "observed_severity": "low",
-      "score": 45,
+      "observed_severity": "medium",
+      "score": 60,
       "matched_rule_ids": [
+        "execution.shell",
         "supply_chain.publish"
       ],
       "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        },
         {
           "id": "supply_chain.publish",
           "type": "deterministic_rule",
@@ -1381,13 +1395,20 @@
       "expected_security_review": "required",
       "label_rationale": "Encoded data sent to an external HTTP endpoint is an exfiltration scenario that should require security review.",
       "observed_security_review": true,
-      "observed_severity": "high",
-      "score": 70,
+      "observed_severity": "critical",
+      "score": 120,
       "matched_rule_ids": [
+        "chain.download_then_execute",
+        "execution.shell",
         "exfil.encoded_http",
         "network.download"
       ],
       "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        },
         {
           "id": "exfil.encoded_http",
           "type": "deterministic_rule",
@@ -1397,6 +1418,11 @@
           "id": "network.download",
           "type": "deterministic_rule",
           "points": 20
+        },
+        {
+          "id": "chain.download_then_execute",
+          "type": "chain_modifier",
+          "points": 35
         }
       ],
       "efficacy_result": "tp",
@@ -1410,10 +1436,11 @@
       "label_rationale": "Cloud credential harvesting followed by outbound upload is an exfiltration scenario that should require security review.",
       "observed_security_review": true,
       "observed_severity": "critical",
-      "score": 145,
+      "score": 160,
       "matched_rule_ids": [
         "chain.harvest_then_exfil",
         "credential.cloud_harvest",
+        "execution.shell",
         "exfil.outbound_upload"
       ],
       "contributions": [
@@ -1421,6 +1448,11 @@
           "id": "credential.cloud_harvest",
           "type": "deterministic_rule",
           "points": 50
+        },
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
         },
         {
           "id": "exfil.outbound_upload",
@@ -1444,13 +1476,19 @@
       "label_rationale": "Installing a package and then modifying shell startup files is a persistence chain that should require security review.",
       "observed_security_review": true,
       "observed_severity": "critical",
-      "score": 95,
+      "score": 110,
       "matched_rule_ids": [
         "chain.install_then_persistence",
+        "execution.shell",
         "install.package_manager",
         "persistence.shell_profile"
       ],
       "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        },
         {
           "id": "install.package_manager",
           "type": "deterministic_rule",
@@ -1532,13 +1570,19 @@
       "disposition": "malicious",
       "expected_security_review": "not_scored",
       "label_rationale": "A lone outbound upload whose shell identity is only a tool name has no independent review contract. Canonical command text does not show a shell token, and this corpus does not rewrite the command or retune rules to manufacture one.",
-      "observed_security_review": false,
-      "observed_severity": "medium",
-      "score": 60,
+      "observed_security_review": true,
+      "observed_severity": "high",
+      "score": 75,
       "matched_rule_ids": [
+        "execution.shell",
         "exfil.outbound_upload"
       ],
       "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        },
         {
           "id": "exfil.outbound_upload",
           "type": "deterministic_rule",
@@ -1556,13 +1600,20 @@
       "label_rationale": "Reading local secrets and immediately fetching a remote payload is an adversarial collection-to-staging chain that should require security review.",
       "observed_security_review": true,
       "observed_severity": "critical",
-      "score": 90,
+      "score": 140,
       "matched_rule_ids": [
+        "chain.download_then_execute",
         "chain.secret_then_network",
+        "execution.shell",
         "network.download",
         "secret.env.read"
       ],
       "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        },
         {
           "id": "network.download",
           "type": "deterministic_rule",
@@ -1571,6 +1622,11 @@
         {
           "id": "secret.env.read",
           "type": "deterministic_rule",
+          "points": 35
+        },
+        {
+          "id": "chain.download_then_execute",
+          "type": "chain_modifier",
           "points": 35
         },
         {
@@ -1631,10 +1687,11 @@
       "label_rationale": "Explicit credential harvesting followed by package publication represents the high-signal supply-chain scenario this corpus intends to detect.",
       "observed_security_review": true,
       "observed_severity": "critical",
-      "score": 135,
+      "score": 150,
       "matched_rule_ids": [
         "chain.credential_then_publish",
         "credential.cloud_harvest",
+        "execution.shell",
         "supply_chain.publish"
       ],
       "contributions": [
@@ -1642,6 +1699,11 @@
           "id": "credential.cloud_harvest",
           "type": "deterministic_rule",
           "points": 50
+        },
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
         },
         {
           "id": "supply_chain.publish",
@@ -1719,9 +1781,17 @@
       "label_rationale": "Parser identity and visibility verification for an archived Codex source is not an independent security-review scenario.",
       "observed_security_review": false,
       "observed_severity": "informational",
-      "score": 0,
-      "matched_rule_ids": [],
-      "contributions": [],
+      "score": 15,
+      "matched_rule_ids": [
+        "execution.shell"
+      ],
+      "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        }
+      ],
       "efficacy_result": "not_scored",
       "conformance_failures": []
     },
@@ -1733,9 +1803,17 @@
       "label_rationale": "Parser identity and visibility verification for a headless Codex source is not an independent security-review scenario.",
       "observed_security_review": false,
       "observed_severity": "informational",
-      "score": 0,
-      "matched_rule_ids": [],
-      "contributions": [],
+      "score": 15,
+      "matched_rule_ids": [
+        "execution.shell"
+      ],
+      "contributions": [
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        }
+      ],
       "efficacy_result": "not_scored",
       "conformance_failures": []
     },
