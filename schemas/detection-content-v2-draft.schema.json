@@ -33,7 +33,7 @@
     },
     "selector": {
       "type": "string",
-      "pattern": "^(?:(?:session|message|tool|command|resource|network|process|inference|mcp|runtime|browser)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|compat\\.v1\\.(?:arguments|assistant_context|command|file_path|tool_name|tool_result|url|user_context)|local\\.structured_values\\.(?:tool|message|inference|tool_definition|mcp|browser|other)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|signal\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|finding\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*)$",
+      "pattern": "^(?:(?:session|message|tool|command|resource|network|process|inference|mcp|runtime|browser)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|compat\\.v1\\.(?:arguments|assistant_context|command|file_path|tool_name|tool_result|url|user_context|written_path)|local\\.structured_values\\.(?:tool|message|inference|tool_definition|mcp|browser|other)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|signal\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|finding\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*)$",
       "maxLength": 160
     },
     "provenance": {"enum": ["reported", "parsed", "derived", "inferred", "observed"]},
@@ -230,7 +230,7 @@
       "properties": {
         "source": {"const": "rule_v1"},
         "rule_version": {"const": 1},
-        "targets": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"enum": ["arguments", "assistant_context", "command", "file_path", "tool_name", "tool_result", "url", "user_context"]}}
+        "targets": {"type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": {"enum": ["arguments", "assistant_context", "command", "file_path", "tool_name", "tool_result", "url", "user_context", "written_path"]}}
       },
       "additionalProperties": false
     },

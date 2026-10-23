@@ -19,7 +19,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 2;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 3;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 4;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -614,6 +614,9 @@ fn view(
                     "read" | "read_file" | "readfile" | "view_file" | "glob" | "list" | "grep"
                 )
             });
+            for path in super::selector::tool_written_paths(tool.name(), tool.arguments()) {
+                out.put("written_path", path);
+            }
             let mut command = String::new();
             match tool.arguments() {
                 Some(JsonValue::Object(input)) => structured_input(input, &mut out, &mut command),
@@ -1162,7 +1165,12 @@ fn native_fields<'a>(
         return Ok(selected);
     }
     let fields = view.fields();
-    let action = |name: &str| matches!(name, "command" | "file_path" | "url" | "arguments");
+    let action = |name: &str| {
+        matches!(
+            name,
+            "command" | "file_path" | "url" | "arguments" | "written_path"
+        )
+    };
     for (field, text) in fields {
         let matches = match id {
             "execution.shell" => {

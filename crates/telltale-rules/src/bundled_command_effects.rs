@@ -68,33 +68,40 @@ fn persistence_requires_writing_a_startup_file_or_enabling_a_service() {
 }
 
 #[test]
-fn persistence_reads_codex_patch_targets_and_native_paths() {
+fn persistence_reads_patch_targets_and_written_paths_only() {
     assert_matches(
         "persistence.shell_profile",
         "arguments",
         &[
             "*** Begin Patch\n*** Update File: /home/synthetic/.bashrc\n@@\n+alias x=y\n*** End Patch",
             "*** Begin Patch\n*** Add File: /home/synthetic/.zprofile\n+export X=1\n*** End Patch",
-            r#"{"path":"~/.bashrc"}"#,
-            r#"{"filePath":"/home/synthetic/.zshrc","content":"alias x=y"}"#,
         ],
         &[
             "*** Begin Patch\n*** Update File: /home/synthetic/notes/bashrc-tips.md\n*** End Patch",
-            r#"{"path":"/home/synthetic/notes.md"}"#,
+            // A path argument alone does not say whether the call writes it.
+            r#"{"path":"~/.bashrc"}"#,
             r#"{"cmd":"grep -n PATH ~/.bashrc"}"#,
         ],
     );
     assert_matches(
         "persistence.shell_profile",
-        "file_path",
+        "written_path",
         &[
             "/home/synthetic/.bashrc",
+            "~/.zshenv",
             "/home/synthetic/.config/fish/config.fish",
+            "/home/synthetic/notes.md\n/home/synthetic/.profile",
         ],
         &[
             "/home/synthetic/.bashrc.bak",
             "/home/synthetic/docs/profile.md",
         ],
+    );
+    assert_matches(
+        "persistence.shell_profile",
+        "file_path",
+        &[],
+        &["/home/synthetic/.bashrc"],
     );
 }
 

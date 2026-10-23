@@ -138,15 +138,15 @@ rules:
     score: 45
     detection:
       selection:
-        command: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*|\"(?:path|file_?path|file)\"\s*:\s*\")[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
-        arguments: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*|\"(?:path|file_?path|file)\"\s*:\s*\")[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
-        file_path: '(?:(?:^|[\/\\])(?:\.bashrc|\.bash_profile|\.bash_login|\.profile|\.zshrc|\.zprofile|\.zshenv|\.zlogin)|config/fish/config\.fish)$'
+        command: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*)[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
+        arguments: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*)[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
+        written_path: '(?m)(?:(?:^|[\/\\])(?:\.bashrc|\.bash_profile|\.bash_login|\.profile|\.zshrc|\.zprofile|\.zshenv|\.zlogin)|config/fish/config\.fish)$'
       condition: selection
     tags: [persistence]
     explanation: A shell startup file, crontab or login service was written or enabled.
     falsepositives:
       - Shell profile edits and service enablement can be legitimate environment setup when user-approved.
-      - Shell commands that only read a startup file do not match. A native file tool's path or path argument still matches whether it reads or writes, because a Rule v1 target cannot tell the tool's operation.
+      - Shell commands and native file tools that only read a startup file do not match.
 
   - id: approval.bypass.context
     category: approval_bypass

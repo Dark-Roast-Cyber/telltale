@@ -6,8 +6,8 @@ canonical source evaluation. It implements the `observation_match` detector, bou
 Tool-derived parent/child, standalone, and caller-grouped session
 `process_chain` evaluation, the
 `DetectorResult` -> `Signal`
--> atomic `Finding` boundary, the final 56-selector registry (48 native plus
-exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
+-> atomic `Finding` boundary, the final 57-selector registry (48 native plus
+exactly nine Rule v1 compatibility views), their capability/provenance/matcher/
 identity contracts, and the read-only Rule v1 export/compatibility compiler and
 source-free session evaluator, source-instance-scoped session
 orchestration, and a source-free Event3 compatibility projection. Process-chain
@@ -186,14 +186,15 @@ MUST be rejected; a permitted namespace is not sufficient governance.
 The native selector counts by group MUST be: `session` 1, `message` 3,
 `tool` 15, `command` 1, `resource` 3, `network` 5, `process` 4,
 `inference` 5, `mcp` 4, `runtime` 4, and `browser` 3.
-The eight compatibility
+The nine compatibility
 targets MUST remain exactly `arguments`, `assistant_context`, `command`,
-`file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
+`file_path`, `tool_name`, `tool_result`, `url`, `user_context`, and
+`written_path`.
 
 #### Scenario: Selector group counts and compatibility targets are closed
 
 - **WHEN** the registry is published
-- **THEN** exact group counts and eight compatibility targets remain fixed
+- **THEN** exact group counts and nine compatibility targets remain fixed
 
 ### Requirement: Native selector names form a closed inventory
 

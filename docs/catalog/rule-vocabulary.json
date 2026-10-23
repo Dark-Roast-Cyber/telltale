@@ -83,6 +83,7 @@
     "tool_name",
     "tool_result",
     "url",
-    "user_context"
+    "user_context",
+    "written_path"
   ]
 }

@@ -594,13 +594,19 @@ valid regex is compiled before evaluation; invalid content is `detector_error`,
 not a type mismatch. The matcher status algebra is `match`, `no_match`, or
 `not_evaluated`; `not_evaluated` is never inverted into a clean match.
 
-The eight compatibility views are exact and remain separate from native
+The nine compatibility views are exact and remain separate from native
 selectors: `arguments` uses searchable or string tool arguments,
 `assistant_context` and `user_context` use role-specific message content,
 `command` uses `command.text`, `file_path` uses `resource.path`, `tool_name`
 uses the typed tool name, and `tool_result` uses searchable or string result
 content. `url` uses the URL-keyed top-level tool arguments; it does not
-manufacture URL, path, or network facts from other text. All tool-side
+manufacture URL, path, or network facts from other text. `written_path` uses
+the file-keyed top-level string arguments of a call that writes them: a native
+file-write tool (`Write`, `Edit`, `write_file`, `replace` and similar), or any
+call whose arguments also carry the written content (`content`, `new_string`,
+`newString`, `new_str`, `file_text`, `edits` and similar). Read, search and
+listing calls set `file_path` but never `written_path`; shell writes remain
+`command` text. All tool-side
 compatibility views require `ToolCall`, not `ToolExecution`.
 
 ## Sequence, correlation, and process declarations
@@ -671,8 +677,9 @@ The compatibility path is:
 Rule v1 -> compatibility compiler/adapter -> Detection v2 IR -> DetectorResult
 ```
 
-The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
-`command`, `file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
+The nine v1 targets are exactly `arguments`, `assistant_context`, `command`,
+`file_path`, `tool_name`, `tool_result`, `url`, `user_context`, and
+`written_path`.
 The compiler maps effective Rule v1 IDs and metadata into observation-match
 detector definitions with `rule_version: 1`; IDs are not renamed. Detection v2
 resolves canonical applicability, capabilities, and truthful selector values,

@@ -32,6 +32,8 @@ pub(crate) mod rule_v1;
 mod selector;
 pub mod session;
 mod types;
+#[cfg(test)]
+mod written_path_tests;
 
 pub use event3::{
     Event3CompatibilityContext, Event3SessionMetadata, ProjectedSource, project_event3,

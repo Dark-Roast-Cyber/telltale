@@ -426,6 +426,7 @@ fn all_compatibility_names_are_registered() {
         "tool_result",
         "url",
         "user_context",
+        "written_path",
     ] {
         let selector = SelectorId::parse(&format!("compat.v1.{target}"));
         assert!(selector.is_ok(), "compat target {target} must compile");
@@ -434,7 +435,7 @@ fn all_compatibility_names_are_registered() {
 
 #[test]
 fn selector_registry_has_only_contract_backed_names() {
-    assert_eq!(SelectorId::all().len(), 56);
+    assert_eq!(SelectorId::all().len(), 57);
     let counts = SelectorId::all()
         .iter()
         .map(|name| name.split('.').next().expect("selector group"))
@@ -447,7 +448,7 @@ fn selector_registry_has_only_contract_backed_names() {
         BTreeMap::from([
             ("browser", 3),
             ("command", 1),
-            ("compat", 8),
+            ("compat", 9),
             ("inference", 5),
             ("mcp", 4),
             ("message", 3),
@@ -477,7 +478,7 @@ fn selector_registry_has_only_contract_backed_names() {
     assert_eq!(
         backing_counts,
         BTreeMap::from([
-            (SelectorBacking::Compatibility, 8),
+            (SelectorBacking::Compatibility, 9),
             (SelectorBacking::Derived, 7),
             (SelectorBacking::Direct, 2),
             (SelectorBacking::GovernedFacet, 2),
@@ -1475,10 +1476,11 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             ("arguments", 18),
             ("assistant_context", 8),
             ("command", 20),
-            ("file_path", 4),
+            ("file_path", 3),
             ("tool_name", 2),
             ("tool_result", 7),
             ("url", 3),
+            ("written_path", 1),
         ])
     );
     let severities =

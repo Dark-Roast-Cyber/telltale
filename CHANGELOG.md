@@ -24,8 +24,9 @@
     redirects, `tee`, in-place `sed`/`perl`, copies onto a startup file, patch
     headers, `crontab` installs, `systemctl enable`, `launchctl load|bootstrap`.
     Reading `~/.bashrc` from a shell no longer scores 45. Startup files now
-    include `.zprofile`, `.zshenv`, `.zlogin` and `.bash_login`. A native file
-    tool's path still matches on reads and writes alike.
+    include `.zprofile`, `.zshenv`, `.zlogin` and `.bash_login`. Native file
+    tools match only startup files they write, through `written_path`; reading
+    one with a file tool no longer matches either.
 - Add four zero-point `hunt` tags in the new `destructive` category so the
   timeline marks commands that can delete or discard data. They add no score:
   - `destructive.filesystem_wipe`: home, root or disk deletion;
@@ -33,8 +34,19 @@
     deletion;
   - `destructive.database_drop`;
   - `destructive.infrastructure_teardown`.
-- Evaluation corpus: add eight command-effect cases. Security-review confusion
-  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 14 / FP 0 / TN 30 / FN 4. The two
+- Add the Rule v1 target `written_path` (`compat.v1.written_path`), the ninth
+  compatibility view. It holds the file-keyed top-level arguments of a call that
+  writes them: a native file-write tool (`Write`, `Edit`, `write_file`,
+  `replace` and similar) or any call whose arguments carry the written content
+  (`content`, `new_string`, `newString`, `new_str`, `file_text`, `edits` and
+  similar). `file_path` keeps reads and writes alike. Rules that use the new
+  target do not load in earlier releases. Action findings read the same field,
+  so detailed scans also stop matching persistence on shell or native reads of
+  a startup file. The native action profile version is now 4, which also covers
+  the wget output-cluster parsing above; semantic identities change and replay
+  identities do not.
+- Evaluation corpus: add nine command-effect cases. Security-review confusion
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 14 / FP 0 / TN 31 / FN 4. The two
   new false negatives are unrequested destructive commands, which the
   zero-point tags do not escalate.
 

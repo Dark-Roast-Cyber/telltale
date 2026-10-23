@@ -38,6 +38,7 @@ pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "tool_result",
     "url",
     "user_context",
+    "written_path",
 ];
 
 // Shared with the published vocabulary catalog, not a supported embedding API.
