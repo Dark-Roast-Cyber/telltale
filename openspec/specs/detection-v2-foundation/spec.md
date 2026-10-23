@@ -1107,9 +1107,10 @@ and the `event_id` of the session event at `session_event_index()`, or null
 when that index is `None`. Every key SHALL be serialized; absent values are
 null. `ActionRecordV1::from_json` SHALL reject oversized input, another record
 version, unknown fields, values outside the published JSON Schema, a stage
-incompatible with its family, invalid times or tool labels, and a promotion
-score that is not the sum of its contributions, with privacy-safe errors.
-Changing a field SHALL be a new record version.
+incompatible with its family, invalid times or tool labels, a promotion
+score that is not the sum of its contributions, and context, evidence or
+rationale text that `redact_sensitive_text` would change, with privacy-safe
+errors. Changing a field SHALL be a new record version.
 
 #### Scenario: Action records round-trip and link their session event
 
@@ -1120,6 +1121,33 @@ Changing a field SHALL be a new record version.
 
 - **WHEN** a record has another version, an unknown field, or a promotion score that differs from its contributions
 - **THEN** the consumer rejects it with a closed error code that contains no input text
+
+#### Scenario: Action records reject unredacted text
+
+- **WHEN** a record's context, evidence or rationale text contains a value redaction would replace
+- **THEN** the consumer rejects it as `unredacted_text`, and the error contains no input text
+
+### Requirement: Action records give hosts their delivery key and event link
+
+`ActionRecordV1::delivery_key()` SHALL return `delivery:v1:sha256:` over the
+semantic identity and the replay identity when present, otherwise the source
+path hash, coordinate and sorted canonical finding IDs. The derivation SHALL be
+pinned, and records of one scan SHALL have distinct keys.
+`ActionRecordV1::check_session_event` SHALL accept a detection or process-chain
+`Event3Record` with the record's client and source path hash, and its session
+when the record has one. For a record with `session_event_id`, the event SHALL
+also be that event, a process-chain event exactly for a process-chain action,
+and carry every record rule. It SHALL claim nothing more for an unlinked record.
+
+#### Scenario: One tool call carries several process-chain actions
+
+- **WHEN** one tool call yields several process-chain actions without replay identities
+- **THEN** each record has its own delivery key, and each linked record passes `check_session_event` against its own process-chain event
+
+#### Scenario: A mismatched event is rejected
+
+- **WHEN** a linked record meets an event with another client, source path hash, session, event ID, family, or without one of its rules
+- **THEN** `check_session_event` rejects it with a closed identity error code
 
 ### Requirement: Action observed facts are typed
 

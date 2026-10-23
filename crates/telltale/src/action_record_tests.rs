@@ -89,6 +89,9 @@ fn records_mirror_actions_and_link_their_session_event() {
             Some(record.source_path_hash.as_str()),
             event["source_path_hash"].as_str()
         );
+        let event = Event3Record::from_json(&serde_json::to_vec(event).unwrap()).unwrap();
+        record.check_session_event(&event).unwrap();
+        assert_link_mismatches_are_rejected(record, &event);
     }
     let linked = records
         .iter()
@@ -104,6 +107,37 @@ fn records_mirror_actions_and_link_their_session_event() {
             .iter()
             .any(|entry| entry.kind == "user_message")
     );
+}
+
+fn assert_link_mismatches_are_rejected(record: &ActionRecordV1, event: &Event3Record) {
+    let code = |record: ActionRecordV1| record.check_session_event(event).unwrap_err().code();
+    let mut other = record.clone();
+    other.client = "synthetic".into();
+    assert_eq!(code(other), "event_source_mismatch");
+    let mut other = record.clone();
+    other.source_path_hash = "0".repeat(64);
+    assert_eq!(code(other), "event_source_mismatch");
+    let mut other = record.clone();
+    other.session_id = Some("0199a2b4-5c6d-7e8f-9a0b-000000000000".into());
+    assert_eq!(code(other), "event_session_mismatch");
+    let mut other = record.clone();
+    other.session_event_id = Some("telltale-00000000-0000-4000-8000-000000000000".into());
+    assert_eq!(code(other), "event_link_mismatch");
+    let mut other = record.clone();
+    other.rule_ids.push("synthetic.unlisted_rule".into());
+    assert_eq!(code(other), "event_link_mismatch");
+    let mut other = record.clone();
+    other.detector_kind = if record.detector_kind == "process_chain" {
+        "rule_v1_action".into()
+    } else {
+        "process_chain".into()
+    };
+    assert_eq!(code(other), "event_link_mismatch");
+    // An unlinked record claims only the same source and session.
+    let mut unlinked = record.clone();
+    unlinked.session_event_id = None;
+    unlinked.rule_ids.push("synthetic.unlisted_rule".into());
+    unlinked.check_session_event(event).unwrap();
 }
 
 #[test]
@@ -146,15 +180,83 @@ fn every_fixture_action_produces_a_valid_record() {
     let mut options = full_context();
     options.process_chain = true;
     let mut produced = 0;
+    let mut linked = std::collections::BTreeMap::<String, usize>::new();
     for scan in pipeline.scan_root_detailed(&fixtures, &options).unwrap() {
-        for record in scan.action_records() {
+        let records = scan.action_records();
+        let keys = records
+            .iter()
+            .map(ActionRecordV1::delivery_key)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(keys.len(), records.len(), "{}", scan.source.source_id);
+        for record in records {
             record
                 .validate()
                 .unwrap_or_else(|error| panic!("{}: {}", scan.source.source_id, error.code()));
             produced += 1;
+            let Some(id) = &record.session_event_id else {
+                continue;
+            };
+            let event = scan
+                .events
+                .iter()
+                .find(|event| event.event_id == *id)
+                .expect("a linked event is in the same scan");
+            let event = Event3Record::from_json(&serde_json::to_vec(event).unwrap()).unwrap();
+            record
+                .check_session_event(&event)
+                .unwrap_or_else(|error| panic!("{}: {}", scan.source.source_id, error.code()));
+            *linked.entry(record.detector_kind.clone()).or_default() += 1;
         }
     }
     assert!(produced > 0);
+    assert!(linked.contains_key("rule_v1_action"), "{linked:?}");
+}
+
+#[test]
+fn process_chain_records_link_their_chain_event() {
+    let root = tempfile::tempdir().unwrap();
+    let source = claude_source(
+        root.path(),
+        &[bash(
+            "process",
+            "2026-10-20T12:00:00Z",
+            "cmd.exe /c hostname && cmd.exe /c whoami",
+        )],
+    );
+    let mut options = DetailedEvaluationOptions::default();
+    options.process_chain = true;
+    let scan = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_sources_detailed(std::slice::from_ref(&source), &options)
+        .unwrap()
+        .remove(0);
+    let records = scan.action_records();
+    let keys = records
+        .iter()
+        .map(ActionRecordV1::delivery_key)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), records.len());
+    let mut linked = 0;
+    for record in records
+        .iter()
+        .filter(|record| record.detector_kind == "process_chain")
+    {
+        let Some(id) = &record.session_event_id else {
+            continue;
+        };
+        let event = scan
+            .events
+            .iter()
+            .find(|event| event.event_id == *id)
+            .unwrap();
+        let event = Event3Record::from_json(&serde_json::to_vec(event).unwrap()).unwrap();
+        assert_eq!(event.event_type(), "process_chain");
+        record.check_session_event(&event).unwrap();
+        assert_link_mismatches_are_rejected(record, &event);
+        linked += 1;
+    }
+    assert!(linked > 0);
 }
 
 #[test]
