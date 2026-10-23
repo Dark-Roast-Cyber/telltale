@@ -226,6 +226,11 @@ otherwise ambiguous zero-detection result without exposing session content:
 - `source_processing` reports selected sources, successful parses, empty and
   failed parses, the number of normalized records, and fixed counts for user,
   assistant, tool-call, tool-result, session-metadata, and other records.
+  `unchanged_source_count` counts discovered sources skipped because their
+  current version was already processed successfully under the same
+  evaluation configuration; they are not in `selected_source_count`, and a
+  scan that skips every source reports `selected_source_coverage=no_sources`
+  without `no_sources_selected`.
   `evaluated_window_count` counts evaluated windows; it exceeds the parsed
   source count when a backlog was drained in several windows.
   `incomplete_window_source_count` counts sources whose last evaluated window

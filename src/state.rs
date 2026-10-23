@@ -26,6 +26,11 @@ const MIGRATION_GUIDANCE: &str =
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ScanState {
+    /// One `<source instance>:<version>` entry per source whose current on-disk
+    /// version was processed successfully under one evaluation configuration;
+    /// see [`processed_source_entry`]. Builds before 0.7.0-rc.3 stored
+    /// write-only content hashes here; nothing reads those, and a full scan
+    /// drops them. The family name is kept so no state migration is needed.
     pub seen_source_fingerprints: BTreeSet<String>,
     pub seen_detection_fingerprints: BTreeSet<String>,
     #[serde(default)]
@@ -209,18 +214,47 @@ impl ScanState {
     }
 
     pub fn should_emit(&mut self, source: &Source, event: &Event) -> bool {
-        let source_fingerprint = source_fingerprint(source);
-        let detection_fingerprint = detection_fingerprint(event, &source_fingerprint);
-        if self
-            .seen_detection_fingerprints
-            .contains(&detection_fingerprint)
-        {
-            return false;
-        }
-        self.seen_source_fingerprints.insert(source_fingerprint);
+        // The content fingerprint hashes the whole source file; it only stands
+        // in for a missing source path hash, so read the file only then.
+        let source_fingerprint = if event.source_path_hash.is_some() {
+            String::new()
+        } else {
+            source_fingerprint(source)
+        };
         self.seen_detection_fingerprints
-            .insert(detection_fingerprint);
-        true
+            .insert(detection_fingerprint(event, &source_fingerprint))
+    }
+
+    /// Whether this exact source version was already processed successfully
+    /// under the same evaluation configuration, so processing it again could
+    /// only reproduce state-deduplicated events.
+    pub fn source_processed(&self, entry: &str) -> bool {
+        self.seen_source_fingerprints.contains(entry)
+    }
+
+    /// Records a successfully processed source version, replacing the entry
+    /// for that source's earlier version.
+    pub fn record_source_processed(&mut self, entry: String) {
+        if let Some((instance, _)) = entry.split_once(':') {
+            let prefix = format!("{instance}:");
+            self.seen_source_fingerprints
+                .retain(|existing| !existing.starts_with(&prefix));
+        }
+        self.seen_source_fingerprints.insert(entry);
+    }
+
+    /// Keeps processed-source entries only for the sources a full scan
+    /// discovered, which bounds them by the source inventory.
+    pub fn retain_processed_sources(&mut self, sources: &[Source]) {
+        let current = sources
+            .iter()
+            .map(source_instance_id)
+            .collect::<BTreeSet<_>>();
+        self.seen_source_fingerprints.retain(|entry| {
+            entry
+                .split_once(':')
+                .is_some_and(|(instance, _)| current.contains(instance))
+        });
     }
 
     /// Records that a full scan saw `client` lose every source. True when the
@@ -1097,6 +1131,56 @@ fn source_instance_id(source: &Source) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Identifies the current on-disk version of a file-backed source under one
+/// evaluation configuration digest, from metadata alone. Take it before reading
+/// the source: content appended after it only causes one more evaluation.
+/// Length, modification time and, on Unix, change time and file identity
+/// change with every write; a user cannot set the change time. SQLite stores
+/// return `None`: their writes can land in a WAL sidecar, and their own
+/// cursors already make rescans incremental.
+pub fn processed_source_entry(source: &Source, evaluation: &str) -> Option<String> {
+    if source.kind == SourceKind::Sqlite {
+        return None;
+    }
+    let metadata = fs::metadata(&source.path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"telltale:processed-source:v1\0");
+    hasher.update((evaluation.len() as u64).to_le_bytes());
+    hasher.update(evaluation.as_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    hasher.update(modified.as_nanos().to_le_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        for value in [
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+            metadata.ino() as i64,
+            metadata.dev() as i64,
+        ] {
+            hasher.update(value.to_le_bytes());
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        hasher.update(metadata.creation_time().to_le_bytes());
+    }
+    Some(format!(
+        "{}:{:x}",
+        source_instance_id(source),
+        hasher.finalize()
+    ))
+}
+
 pub fn source_fingerprint(source: &Source) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source.path.to_string_lossy().as_bytes());
@@ -1254,6 +1338,54 @@ mod tests {
     };
 
     #[test]
+    fn processed_source_entries_track_one_version_per_current_source() {
+        use std::collections::BTreeSet;
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let source = |name: &str, kind| Source {
+            client: ClientId::Codex,
+            kind,
+            source_id: "codex.sessions".to_string(),
+            path: dir.path().join(name),
+        };
+        let jsonl = source("a.jsonl", SourceKind::Jsonl);
+        fs::write(&jsonl.path, "{}\n").unwrap();
+        let first = super::processed_source_entry(&jsonl, "config-a").unwrap();
+        assert_eq!(
+            super::processed_source_entry(&jsonl, "config-a").as_ref(),
+            Some(&first)
+        );
+        assert_ne!(
+            super::processed_source_entry(&jsonl, "config-b").unwrap(),
+            first
+        );
+        let sqlite = source("store.db", SourceKind::Sqlite);
+        fs::write(&sqlite.path, "").unwrap();
+        assert!(super::processed_source_entry(&sqlite, "config-a").is_none());
+        assert!(
+            super::processed_source_entry(&source("missing.jsonl", SourceKind::Jsonl), "config-a")
+                .is_none()
+        );
+
+        let mut state = ScanState::default();
+        state
+            .seen_source_fingerprints
+            .insert("legacy-content-hash".into());
+        state.record_source_processed(first.clone());
+        assert!(state.source_processed(&first));
+        fs::write(&jsonl.path, "{}\n{}\n").unwrap();
+        let second = super::processed_source_entry(&jsonl, "config-a").unwrap();
+        assert!(!state.source_processed(&second));
+        state.record_source_processed(second.clone());
+        assert!(!state.source_processed(&first));
+        let other = source("b.jsonl", SourceKind::Jsonl);
+        fs::write(&other.path, "{}\n").unwrap();
+        state.record_source_processed(super::processed_source_entry(&other, "config-a").unwrap());
+        state.retain_processed_sources(std::slice::from_ref(&jsonl));
+        assert_eq!(state.seen_source_fingerprints, BTreeSet::from([second]));
+    }
+
+    #[test]
     fn suppresses_duplicate_detections_for_same_source_content() {
         let source = Source {
             client: ClientId::Codex,
@@ -1293,7 +1425,7 @@ mod tests {
         let mut state = ScanState::default();
         assert!(state.should_emit(&source, &event));
         assert!(!state.should_emit(&source, &event));
-        assert_eq!(state.seen_source_fingerprints.len(), 1);
+        assert!(state.seen_source_fingerprints.is_empty());
         assert_eq!(state.seen_detection_fingerprints.len(), 1);
         assert_eq!(
             detection_fingerprint(&event, &source_fingerprint(&source)),

@@ -856,6 +856,7 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
     assert!(hashes.contains(&evidence_hash(&text).as_str()));
     assert!(hashes.contains(&evidence_hash(&punctuation).as_str()));
     assert!(hashes.contains(&evidence_hash("first\nsecond").as_str()));
+    super::forget_processed_sources(&state);
     assert_eq!(scan()["detection_count"], 1);
     let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
     let offset = fs::metadata(&log).unwrap().len() as usize;
@@ -3173,6 +3174,28 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_source_processing_accounting(&first_summary);
     assert_detection_flow_accounting(&first_summary, 30, 0);
 
+    // Unchanged file sources are skipped; only the OpenCode store, which
+    // relies on its cursor, is evaluated again.
+    let unchanged_summary = run_scan(&[]);
+    assert_eq!(unchanged_summary["emitted_count"], 0);
+    assert_eq!(
+        unchanged_summary["source_processing"]["unchanged_source_count"],
+        first_summary["source_processing"]["selected_source_count"]
+            .as_u64()
+            .unwrap()
+            - unchanged_summary["source_processing"]["selected_source_count"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(
+        !unchanged_summary["diagnostic_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["code"] == "no_sources_selected")
+    );
+
+    super::forget_processed_sources(&state_path);
     let second_summary = run_scan(&[]);
     assert_eq!(second_summary["detection_count"], 30);
     assert_eq!(second_summary["emitted_count"], 0);
@@ -3315,13 +3338,10 @@ fn repeated_telltale_scans_share_state_and_deduplicate() {
         String::from_utf8_lossy(&second.stderr)
     );
     let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
-    assert_eq!(
-        second_summary["detection_count"],
-        first_summary["detection_count"]
-    );
-    assert_eq!(
-        second_summary["activity_count"],
-        first_summary["activity_count"]
+    assert!(
+        second_summary["source_processing"]["unchanged_source_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
     );
     assert_eq!(second_summary["emitted_count"], 0);
     assert_eq!(
@@ -3390,6 +3410,7 @@ fn scan_once_persists_incremental_baseline_snapshots() {
 
     run_scan();
     let state_after_first = fs::read_to_string(&state_path).expect("first state json");
+    super::forget_processed_sources(&state_path);
     run_scan();
     let state_after_second = fs::read_to_string(&state_path).expect("second state json");
     let first_state: Value = serde_json::from_str(&state_after_first).expect("first state parses");

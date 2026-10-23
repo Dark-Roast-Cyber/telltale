@@ -6,6 +6,25 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Scans no longer re-read and re-evaluate unchanged sources. Every full scan,
+  including each run of the default five-minute timer, used to parse and
+  evaluate all discovered session history, only for state deduplication to
+  discard the result; on a synthetic 63 MB, 200-session history a no-change
+  scan took about 20 s of CPU and now takes about 0.5 s. A file-backed source
+  is skipped when its metadata version (length, modification time and, on Unix,
+  change time and file identity) was already processed successfully under the
+  same build, compiled rules, MCP inventory, allowlist and activity options;
+  any change to them evaluates every source again, so emitted events are
+  unchanged. Failed and quarantined sources, and history, backfill, baseline-rebuild,
+  baseline-deviation and session-risk-summary scans, evaluate as before, and OpenCode SQLite keeps its
+  cursors. The scan summary adds `source_processing.unchanged_source_count`.
+  The entries live in the existing `seen_source_fingerprints` state family,
+  one per current source, so the state schema is unchanged and earlier builds
+  read it. That family used to gain a never-read content hash whenever a source
+  emitted, and deduplication hashed the whole source file once per event; both
+  are gone. A bundled process-chain pack that fails to load now fails the scan
+  instead of silently disabling those detections.
+
 - Restore `execution.shell` session-scoring parity for shell-tool calls whose
   recorded command omits a shell wrapper, including Codex `exec_command` and
   OpenCode v2. Exact shell-tool names now contribute the existing 15 points;

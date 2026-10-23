@@ -266,6 +266,10 @@ fn aggregate_overflow_blocks_all_persistence_and_progress() {
     state.save(&fixture.state).unwrap();
     let before = fs::read(&fixture.state).unwrap();
     let output_before = fs::read(&fixture.log).unwrap();
+    // Rewrite the source so the scan evaluates it again instead of skipping
+    // it as unchanged.
+    let bytes = fs::read(&fixture.sources[0].path).unwrap();
+    fs::write(&fixture.sources[0].path, bytes).unwrap();
     let error = fixture
         .scan(&fixture.sinks(), true, false, false)
         .err()

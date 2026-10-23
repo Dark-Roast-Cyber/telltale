@@ -95,7 +95,13 @@ closed, content-free reasons distinguishing provider deferral, observed read
 failures, incomplete discovery, and exact correlation/session failures. Operator
 actions and limits are documented with the embedding API; there is no retry state.
 
-After discovery, the CLI selects new or changed sources using scanner state.
+After discovery, the CLI skips each file-backed source whose current version
+(path, length, modification time and, on Unix, change time and file identity)
+was already processed successfully under the same build, compiled rules, MCP
+inventory, allowlist and activity options; evaluating it again could only
+reproduce state-deduplicated events. History, backfill, baseline rebuild, baseline-deviation and session-risk-summary
+scans evaluate every source, and OpenCode SQLite stores rely
+on their own cursors.
 CLI scan/watch and `Pipeline::scan_root` then use the shared
 `telltale_core::canonical_runtime::process_source` path:
 

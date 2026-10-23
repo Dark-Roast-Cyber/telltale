@@ -302,16 +302,53 @@ fn run_scan_for_platform(
     let observed_at = ObservedAt::new(
         OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
     )?;
-    let process_chain_rules = load_process_chain_rules_if_enabled();
+    let process_chain_rules = load_process_chain_rules_if_enabled()?;
     let process_config = ProcessChainConfig::default();
     let mcp_scan = if config.execution.emit_activity && !targeted {
         discover_mcp_scan(config.execution.root)
     } else {
         Default::default()
     };
-    let processed_sources = sources
+    let baseline_deviation_enabled =
+        config.execution.emit_activity && config.execution.baseline_deviation_scoring;
+    // Re-evaluating an unchanged source can only reproduce state-deduplicated
+    // events, unless its output also depends on other sources (baseline
+    // deviation, and session risk summaries, which aggregate a session across
+    // files) or the run deliberately bypasses state.
+    let evaluation = (!config.history
+        && !config.backfill
+        && !config.rebuild_baselines
+        && !baseline_deviation_enabled
+        && !config.execution.emit_session_risk_summary)
+        .then(|| {
+            evaluation_digest(
+                &rules,
+                process_chain_rules.is_some(),
+                config.execution.emit_activity,
+                &mcp_scan.servers,
+                &allowlist,
+            )
+        });
+    let mut unchanged_clients = Vec::new();
+    let selected_sources = sources
         .iter()
-        .map(|source| {
+        .filter_map(|source| {
+            let entry = evaluation
+                .as_deref()
+                .and_then(|evaluation| crate::state::processed_source_entry(source, evaluation));
+            if entry
+                .as_deref()
+                .is_some_and(|entry| state.source_processed(entry))
+            {
+                unchanged_clients.push(source.client);
+                return None;
+            }
+            Some((source, entry))
+        })
+        .collect::<Vec<_>>();
+    let processed_sources = selected_sources
+        .iter()
+        .map(|(source, _)| {
             canonical::process_canonical_source(
                 source,
                 &state,
@@ -321,8 +358,7 @@ fn run_scan_for_platform(
                     backfill: config.backfill,
                     history: config.history,
                     baseline_deviation: BaselineDeviationConfig {
-                        enabled: config.execution.emit_activity
-                            && config.execution.baseline_deviation_scoring,
+                        enabled: baseline_deviation_enabled,
                         ..BaselineDeviationConfig::default()
                     },
                     pre_policy_rules: pre_policy_rules
@@ -337,17 +373,19 @@ fn run_scan_for_platform(
             )
         })
         .collect::<Vec<_>>();
-    let source_processing = source_processing_accounting(&processed_sources)?;
+    let mut source_processing = source_processing_accounting(&processed_sources)?;
+    source_processing.unchanged_source_count = unchanged_clients.len();
     // Targeted scans see only changed sources, so only a full scan can say a
-    // client lost every source.
+    // client lost every source. An unchanged source was processed successfully.
     let parse_outcomes = if targeted {
         Vec::new()
     } else {
         client_parse_outcomes(
-            sources
+            selected_sources
                 .iter()
                 .zip(&processed_sources)
-                .map(|(source, result)| (source.client, result.accounting.is_empty())),
+                .map(|((source, _), result)| (source.client, result.accounting.is_empty()))
+                .chain(unchanged_clients.iter().map(|&client| (client, false))),
         )
     };
     let policy_accounting = compute_policy_match_accounting(
@@ -358,7 +396,15 @@ fn run_scan_for_platform(
     let mut activities = Vec::new();
     let mut detections = Vec::new();
     let mut rebuild = config.rebuild_baselines;
-    for (source, result) in sources.iter().zip(processed_sources) {
+    for ((source, entry), result) in selected_sources.into_iter().zip(processed_sources) {
+        // Partial results are evaluated again next scan, as before.
+        if let Some(entry) = entry
+            && result.failure.is_none()
+            && result.quarantined.is_empty()
+            && result.status == SourceProcessingStatus::Succeeded
+        {
+            state.record_source_processed(entry);
+        }
         match result.sqlite_progress_cursor(
             config.execution.dry_run,
             config.backfill,
@@ -519,6 +565,7 @@ fn run_scan_for_platform(
         state.observe_sources(&sources, observed_at_unix_ms);
     } else {
         state.replace_source_observations(&sources, observed_at_unix_ms);
+        state.retain_processed_sources(&sources);
     }
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
@@ -810,6 +857,9 @@ impl StateChangeProbe {
 #[derive(Default)]
 struct SourceProcessingAccounting {
     selected_source_count: usize,
+    /// Discovered sources skipped because their current version was already
+    /// processed successfully under the same evaluation configuration.
+    unchanged_source_count: usize,
     parse_success_source_count: usize,
     empty_source_count: usize,
     parse_error_source_count: usize,
@@ -1333,12 +1383,46 @@ enum PolicyMatchAccountingState {
 /// alter the session `detection` event, so this stays a load-or-skip decision
 /// rather than another axis on the scan config. Set
 /// `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn them off.
-fn load_process_chain_rules_if_enabled()
--> Option<telltale_rules::process_chain::CompiledProcessChainRules> {
+/// The bundled pack is compiled into the binary, so a load failure is a build
+/// defect; it fails the scan instead of silently disabling these detections.
+fn load_process_chain_rules_if_enabled() -> Result<
+    Option<telltale_rules::process_chain::CompiledProcessChainRules>,
+    Box<dyn std::error::Error>,
+> {
     if !crate::config::process_chain_detections_enabled() {
-        return None;
+        return Ok(None);
     }
-    telltale_rules::process_chain::load_default_process_chain_rules().ok()
+    Ok(Some(
+        telltale_rules::process_chain::load_default_process_chain_rules()
+            .map_err(|error| format!("bundled process-chain rules failed to load: {error}"))?,
+    ))
+}
+
+/// Everything besides a source's own bytes that determines its events: this
+/// build, the compiled rules, and the scan options and inventories applied to
+/// each source. A change to any of them evaluates every source again.
+fn evaluation_digest(
+    rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
+    process_chain: bool,
+    emit_activity: bool,
+    mcp_servers: &[telltale_detect::mcp::McpServerInventory],
+    allowlist: &impl std::fmt::Debug,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [
+        env!("CARGO_PKG_VERSION"),
+        env!("TELLTALE_GIT_HASH"),
+        rules.semantic_provenance().identity(),
+        if process_chain { "process_chain" } else { "" },
+        if emit_activity { "activity" } else { "" },
+        &format!("{mcp_servers:?}"),
+        &format!("{allowlist:?}"),
+    ] {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAccounting {
@@ -1435,6 +1519,7 @@ impl SourceProcessingAccounting {
             .collect();
         serde_json::json!({
             "selected_source_count": self.selected_source_count,
+            "unchanged_source_count": self.unchanged_source_count,
             "parse_success_source_count": self.parse_success_source_count,
             "empty_source_count": self.empty_source_count,
             "parse_error_source_count": self.parse_error_source_count,
@@ -1519,7 +1604,7 @@ fn diagnostic_warnings(
 
     let selected = source_processing.selected_source_count;
     let records = source_processing.parsed_record_count;
-    if selected == 0 {
+    if selected == 0 && source_processing.unchanged_source_count == 0 {
         warnings.push(diagnostic_warning(
             "no_sources_selected",
             "suspicious_zero",

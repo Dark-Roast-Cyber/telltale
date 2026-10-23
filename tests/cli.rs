@@ -28,6 +28,16 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
 use tempfile::tempdir;
 
+/// Clears the record of processed source versions so the next scan evaluates
+/// every source again instead of skipping unchanged ones, exercising detection
+/// fingerprint deduplication.
+fn forget_processed_sources(state_path: &Path) {
+    let mut state: Value =
+        serde_json::from_slice(&fs::read(state_path).expect("state")).expect("state json");
+    state["seen_source_fingerprints"] = serde_json::json!([]);
+    fs::write(state_path, serde_json::to_vec(&state).expect("state bytes")).expect("write state");
+}
+
 /// Rules the CLI loads without local config: bundled core rules plus the
 /// embedded community package. Computed through the embedding facade so a
 /// community refresh does not rewrite every count, and so CLI and facade agree.

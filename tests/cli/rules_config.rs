@@ -2616,6 +2616,7 @@ modifiers: []
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary");
     let first_log = fs::read_to_string(&log_path).expect("partial event log");
     assert_eq!(first_log.lines().count(), 2);
+    super::forget_processed_sources(&state_path);
     let second = run();
     assert!(
         second.status.success(),

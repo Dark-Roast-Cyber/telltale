@@ -555,6 +555,9 @@ fn migrated_state_preserves_detection_deduplication() {
         .as_object_mut()
         .expect("state object")
         .remove("state_schema_version");
+    // Evaluate the unchanged fixture again so detection fingerprints, not
+    // processed-source entries, must suppress the repeat.
+    legacy["seen_source_fingerprints"] = serde_json::json!([]);
     fs::write(
         &legacy_source,
         serde_json::to_vec_pretty(&legacy).expect("legacy bytes"),
