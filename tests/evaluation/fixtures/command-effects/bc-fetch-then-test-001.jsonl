@@ -1,0 +1,4 @@
+{"type":"session_meta","session_id":"synthetic-bc-fetch-then-test-001","timestamp":"2026-04-03T08:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-fetch-then-test-001","timestamp":"2026-04-03T08:00:01Z","payload":{"type":"user_message","message":"Check the latest release tag, then run the tests."}}
+{"type":"event_msg","session_id":"synthetic-bc-fetch-then-test-001","timestamp":"2026-04-03T08:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"curl -fsSL https://api.example.invalid/repos/example/project/releases/latest","message":"Run a synthetic fixture command."}}
+{"type":"event_msg","session_id":"synthetic-bc-fetch-then-test-001","timestamp":"2026-04-03T08:00:20Z","payload":{"type":"tool_call","tool_name":"bash","command":"cargo test","message":"Run a synthetic fixture command."}}

@@ -65,8 +65,9 @@ When authoring or reviewing detection content:
 | `execution` | The agent used shell or interpreter execution, especially obfuscated execution. | `bash`, `python -c`, `node -e`, base64 decode, `certutil -decode`. | `execution.shell`, `execution.encoded_payload` |
 | `download` | The agent fetched remote content or invoked a download-capable client. | `wget`, `curl` GET/retrieval, PowerShell web requests, `fetch`. Outbound POST/`--data` is not a download. | `network.download` |
 | `install` | The agent invoked package managers or installers. | `npm install`, `pip install`, `cargo install`, `apt install`. | `install.package_manager` |
-| `exfiltration` | The agent sent, staged, or encoded data for outbound transfer. | HTTP POST/upload, object-store copy, encoded HTTP hostnames or base64 bodies, DNS encoding, controlled tester domains. | `exfil.outbound_upload`, `network.controlled_test_domain.darkroast`, `exfil.dns_encoding`, `exfil.encoded_http` |
-| `persistence` | The agent touched startup, profile, scheduled task, or service persistence surfaces. | `.bashrc`, `.zshrc`, `crontab`, `systemctl enable`, `launchctl load`. | `persistence.shell_profile` |
+| `exfiltration` | The agent sent, staged, or encoded data for outbound transfer. | HTTP POST/upload, object-store copy, encoded HTTP hostnames or base64 bodies, encoded data piped or substituted into a DNS lookup, controlled tester domains. | `exfil.outbound_upload`, `network.controlled_test_domain.darkroast`, `exfil.dns_encoding`, `exfil.encoded_http` |
+| `persistence` | The agent wrote or enabled startup, profile, scheduled task, or service persistence. | Redirects, `tee`, in-place edits or copies onto `.bashrc`/`.zshrc` and other startup files, patches to them, `crontab` installs, `systemctl enable`, `launchctl load`. Shell reads such as `grep … ~/.bashrc` do not match; a native file tool's path matches whether it reads or writes. | `persistence.shell_profile` |
+| `destructive` | The agent ran a command that can delete or discard data. These are zero-point `hunt` tags that mark the command in the timeline. | `rm -rf ~/`, `mkfs`, `dd of=/dev/…`; `git reset --hard`, `git push --force`, `git clean -f`; `DROP TABLE`, `dropdb`; `terraform destroy`, `kubectl delete namespace`. | `destructive.filesystem_wipe`, `destructive.git_discard`, `destructive.database_drop`, `destructive.infrastructure_teardown` |
 | `approval_bypass` | Context asks the agent to avoid user approval, hide behavior, or run silently. | "without asking", "do not tell", "bypass approval", "no confirm". | `approval.bypass.context` |
 | `instruction_override` | Assistant output repeats a generic instruction to ignore or disregard prior instructions. It is a zero-point corroborating signal. | "ignore previous instructions", "disregard all prior instructions". | `prompt_injection.instruction_override` |
 | `tool_injection` | Tool-call-shaped content appears where it may spoof or steer tool use. | `<tool_call>`, `tool_calls`, `function_call`, `recipient_name`, `arguments`. | `tool.injection.shape` |
@@ -89,7 +90,7 @@ Chain modifiers add score and derived rule IDs when multiple categories or rules
 | Modifier | Trigger | Meaning |
 | --- | --- | --- |
 | `chain.secret_then_network` | `secret_access` + `download` | Secret access occurred near network-capable behavior. |
-| `chain.download_then_execute` | `download` + `execution` | Remote content was fetched near executable behavior. |
+| `chain.download_then_execute` | `download` + `execution`, linked | Downloaded content ran: a download piped to an interpreter, or a downloaded file executed within 15 minutes. A download and an unrelated shell call do not chain. |
 | `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior appeared together. |
 | `chain.install_then_persistence` | `install` + `persistence` | Installation occurred near startup or service modification. |
 | `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning appeared near outbound transfer. |

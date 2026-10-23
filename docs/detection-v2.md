@@ -681,6 +681,11 @@ over canonical observations. Direct-record evaluation APIs were removed.
 Modifiers remain Rule v1 compatibility session constructs: the content evaluator
 triggers them from matched atomic Rule v1 IDs and categories, but they never
 become DetectorResults, Signals, Findings, or native v2 correlation detectors.
+The bundled `chain.download_then_execute` also needs the link that arms it for
+action findings: a download piped to an interpreter, or a downloaded file
+executed within the action chain window. Session evaluation withholds it when
+neither link exists; field-level `CompiledRuleSet::evaluate()` keeps category
+co-occurrence within one record.
 The evaluator uses the existing validated contribution primitives to construct
 Rule v1 compatibility contributions and a checked compatibility score. That sum
 is not native Detection v2 aggregate risk; Detection v2 still has no accepted

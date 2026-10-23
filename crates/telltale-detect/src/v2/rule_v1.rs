@@ -342,16 +342,27 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
         super::session::RetentionBudget::validate_text(&rule.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
     }
+    // The linked download modifier needs the downloaded content to run, as it
+    // does for action findings; co-occurrence alone withholds it.
+    let mut withheld = BTreeSet::new();
+    for modifier in plan.export.triggered_modifiers(&selected) {
+        if super::actions::linked_modifier(modifier)
+            && !super::actions::download_execution_linked(observations, budget)
+                .map_err(|_| RuleV1SessionError::Bounds)?
+        {
+            withheld.insert(modifier.id.as_str());
+        }
+    }
     for modifier in plan
         .export
-        .triggered_modifiers(&selected)
+        .triggered_modifiers_without(&selected, &withheld)
         .into_iter()
         .filter(|modifier| modifier.score > 0)
     {
         super::session::RetentionBudget::validate_text(&modifier.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
     }
-    let content = plan.export.evaluate_matched(&selected)?;
+    let content = plan.export.evaluate_matched_without(&selected, &withheld)?;
     let (
         triggered_modifier_ids,
         effective_rule_ids,

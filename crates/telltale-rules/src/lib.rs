@@ -748,6 +748,16 @@ impl RuleV1CompatibilityExport {
         &self,
         matched: &BTreeSet<&str>,
     ) -> Vec<&RuleV1CompatibilityModifier> {
+        self.triggered_modifiers_without(matched, &BTreeSet::new())
+    }
+
+    /// Eligible modifiers, except those the caller withholds because a session
+    /// link they require was not established.
+    pub fn triggered_modifiers_without(
+        &self,
+        matched: &BTreeSet<&str>,
+        withheld: &BTreeSet<&str>,
+    ) -> Vec<&RuleV1CompatibilityModifier> {
         let atomic = self
             .rules
             .iter()
@@ -773,6 +783,7 @@ impl RuleV1CompatibilityExport {
                         .when_all_rule_ids
                         .iter()
                         .all(|id| rule_ids.contains(id.as_str()))
+                    && !withheld.contains(modifier.id.as_str())
             })
             .collect()
     }
@@ -782,6 +793,15 @@ impl RuleV1CompatibilityExport {
     pub fn evaluate_matched(
         &self,
         matched: &BTreeSet<&str>,
+    ) -> Result<Option<MatchResult>, RiskAccountingError> {
+        self.evaluate_matched_without(matched, &BTreeSet::new())
+    }
+
+    /// [`Self::evaluate_matched`] without the withheld modifiers.
+    pub fn evaluate_matched_without(
+        &self,
+        matched: &BTreeSet<&str>,
+        withheld: &BTreeSet<&str>,
     ) -> Result<Option<MatchResult>, RiskAccountingError> {
         let atomic = self
             .rules
@@ -815,7 +835,7 @@ impl RuleV1CompatibilityExport {
                 )?);
             }
         }
-        for modifier in self.triggered_modifiers(matched) {
+        for modifier in self.triggered_modifiers_without(matched, withheld) {
             rule_ids.push(modifier.id.clone());
             detection_classes.insert(modifier.detection_class.clone());
             signal_types.insert(modifier.signal_type.clone());
@@ -1104,6 +1124,9 @@ fn policy_allows_modifier(modifier: &ModifierDefinition, policy: Option<&RulePol
 
 #[cfg(test)]
 mod bundled_http_direction;
+
+#[cfg(test)]
+mod bundled_command_effects;
 
 #[cfg(test)]
 mod bundled_shell_execution;

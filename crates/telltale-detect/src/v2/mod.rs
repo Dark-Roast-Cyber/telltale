@@ -19,6 +19,8 @@ pub use actions::{
 };
 #[cfg(test)]
 mod action_tests;
+#[cfg(test)]
+mod download_link_tests;
 pub mod event3;
 mod matcher;
 mod observation_match;

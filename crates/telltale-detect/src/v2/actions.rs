@@ -1289,10 +1289,75 @@ fn contains(
     Ok(text.contains(needle))
 }
 
-fn linked_modifier(modifier: &RuleV1CompatibilityModifier) -> bool {
+pub(super) fn linked_modifier(modifier: &RuleV1CompatibilityModifier) -> bool {
     modifier.id == "chain.download_then_execute"
         && modifier.when_all_categories == ["download", "execution"]
         && modifier.when_all_rule_ids.is_empty()
+}
+/// Whether downloaded content runs in the session, by the same links that arm
+/// the linked modifier for action findings: a download piped to an
+/// interpreter, or a downloaded file executed within the chain window. Session
+/// scoring uses it so the modifier needs execution of what was fetched, not a
+/// download and any shell call anywhere in the session.
+pub(super) fn download_execution_linked(
+    observations: &[&CanonicalObservationV2],
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    let mut pending: Vec<(String, OffsetDateTime, usize, usize)> = Vec::new();
+    let mut remaining_link_work = 1_000_000usize;
+    for (index, observation) in observations.iter().enumerate() {
+        if !matches!(observation.body(), ObservationBody::Tool(_))
+            || observation.stage() == ObservationStage::ToolResultReturned
+        {
+            continue;
+        }
+        let view = view(observation, budget)?;
+        if view.commands.is_empty() {
+            continue;
+        }
+        if piped_execution(view.text("command"), budget)? {
+            return Ok(true);
+        }
+        // A file link is timed, as for action findings; a pipe is not.
+        let Some(time) = observation
+            .occurred_at()
+            .and_then(|t| OffsetDateTime::parse(t.as_str(), &Rfc3339).ok())
+        else {
+            continue;
+        };
+        let work = pending
+            .len()
+            .checked_mul(view.commands.len() + 1)
+            .ok_or(ProcessingError::Bounds)?;
+        remaining_link_work = remaining_link_work
+            .checked_sub(work)
+            .ok_or(ProcessingError::Bounds)?;
+        pending.retain(|(_, start, _, _)| {
+            time - *start <= time::Duration::seconds(ACTION_CHAIN_WINDOW_SECONDS as i64)
+        });
+        for (artifact, command_index) in downloaded_artifacts(&view.commands, budget)? {
+            if artifact != "-" {
+                pending.push((artifact, time, index, command_index));
+            }
+        }
+        for (artifact, start, observation_index, command_index) in &pending {
+            if *start <= time
+                && executes(
+                    &view.commands,
+                    artifact,
+                    if *observation_index == index {
+                        command_index + 1
+                    } else {
+                        0
+                    },
+                    budget,
+                )?
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 fn linked_score(
     modifier: &RuleV1CompatibilityModifier,
@@ -2035,7 +2100,10 @@ fn downloaded_artifacts(
                                         && token[1..].contains(['o', 'O']))
                             }
                             "wget" => {
-                                token.starts_with("--output-document") || token.starts_with("-O")
+                                token.starts_with("--output-document")
+                                    || (token.starts_with('-')
+                                        && !token.starts_with("--")
+                                        && token[1..].contains('O'))
                             }
                             "invoke-webrequest" | "iwr" => token.eq_ignore_ascii_case("-OutFile"),
                             _ => false,
@@ -2084,15 +2152,25 @@ fn downloaded_artifacts(
                         }
                     }
                     "wget" => {
-                        if token == "-O" || token == "--output-document" {
+                        if token == "--output-document" {
                             artifact = next();
                             break;
                         }
-                        if let Some(path) = token
-                            .strip_prefix("--output-document=")
-                            .or_else(|| token.strip_prefix("-O").filter(|s| !s.is_empty()))
-                        {
+                        if let Some(path) = token.strip_prefix("--output-document=") {
                             artifact = Some(path.into());
+                            break;
+                        }
+                        // `-O` may close a flag cluster such as `-qO-`.
+                        if token.starts_with('-')
+                            && !token.starts_with("--")
+                            && let Some(position) = token[1..].find('O')
+                        {
+                            let suffix = &token[position + 2..];
+                            artifact = if suffix.is_empty() {
+                                next()
+                            } else {
+                                Some(suffix.into())
+                            };
                             break;
                         }
                     }

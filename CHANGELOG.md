@@ -6,6 +6,38 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Make four bundled detections depend on what a command does, not on words
+  that appear near it:
+  - `chain.download_then_execute` now needs downloaded content to run in session
+    scoring: a download piped to an interpreter, or a downloaded file executed
+    within 15 minutes. These are the links action findings already required.
+    Before, any download plus any shell call in a session added 35 points, so an
+    ordinary API `curl` through a shell tool scored 70/high, the same as
+    `curl … | sh`. Sessions that never run what they fetch lose the chain.
+    Field-level `CompiledRuleSet::evaluate()` keeps co-occurrence within one
+    record. `wget -qO-` and other wget flag clusters ending in `-O` are now read
+    as output to standard output.
+  - `exfil.dns_encoding` no longer matches every `base64 --encode`, which scored
+    70/high for encoding a word. It requires encoded data piped or substituted
+    into a DNS lookup, or the existing long-label forms.
+  - `persistence.shell_profile` shell matches now require a write or an enable:
+    redirects, `tee`, in-place `sed`/`perl`, copies onto a startup file, patch
+    headers, `crontab` installs, `systemctl enable`, `launchctl load|bootstrap`.
+    Reading `~/.bashrc` from a shell no longer scores 45. Startup files now
+    include `.zprofile`, `.zshenv`, `.zlogin` and `.bash_login`. A native file
+    tool's path still matches on reads and writes alike.
+- Add four zero-point `hunt` tags in the new `destructive` category so the
+  timeline marks commands that can delete or discard data. They add no score:
+  - `destructive.filesystem_wipe`: home, root or disk deletion;
+  - `destructive.git_discard`: hard reset, clean, force push, branch or stash
+    deletion;
+  - `destructive.database_drop`;
+  - `destructive.infrastructure_teardown`.
+- Evaluation corpus: add eight command-effect cases. Security-review confusion
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 14 / FP 0 / TN 30 / FN 4. The two
+  new false negatives are unrequested destructive commands, which the
+  zero-point tags do not escalate.
+
 - Restore `execution.shell` session-scoring parity for shell-tool calls whose
   recorded command omits a shell wrapper, including Codex `exec_command` and
   OpenCode v2. Exact shell-tool names now contribute the existing 15 points;
