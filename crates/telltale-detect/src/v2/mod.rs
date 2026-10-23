@@ -20,6 +20,8 @@ pub use actions::{
 #[cfg(test)]
 mod action_tests;
 #[cfg(test)]
+mod chain_link_tests;
+#[cfg(test)]
 mod cloud_credential_tests;
 #[cfg(test)]
 mod download_link_tests;

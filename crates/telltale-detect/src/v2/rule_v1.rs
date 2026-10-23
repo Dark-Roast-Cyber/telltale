@@ -319,12 +319,21 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
     let mut detectors = Vec::with_capacity(plan.detectors.len());
     let mut evidence_material = BTreeMap::new();
     let mut matched_atomic_rule_ids = BTreeSet::new();
+    // The observations each matched rule matched, for linking chain steps.
+    let mut occurrences = BTreeMap::new();
     for detector in &plan.detectors {
-        let aggregate =
-            aggregate_detector_session(detector, observations, budget, &mut evidence_material)?;
+        let mut matched = Vec::new();
+        let aggregate = aggregate_detector_session(
+            detector,
+            observations,
+            budget,
+            &mut evidence_material,
+            &mut matched,
+        )?;
         if aggregate.outcome == RuleV1DetectorOutcome::Match {
             retain_text(budget, &aggregate.detector_id)?;
             matched_atomic_rule_ids.insert(aggregate.detector_id.clone());
+            occurrences.insert(aggregate.detector_id.clone(), matched);
         }
         detectors.push(aggregate);
     }
@@ -342,14 +351,19 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
         super::session::RetentionBudget::validate_text(&rule.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
     }
-    // The linked download modifier needs the downloaded content to run, as it
-    // does for action findings; co-occurrence alone withholds it.
+    // A modifier needs its steps linked, not co-occurrence anywhere in the
+    // session. The linked download modifier needs the downloaded content to
+    // run, as it does for action findings; every other modifier needs its steps
+    // in one observation, or in declared order within the action chain window.
     let mut withheld = BTreeSet::new();
     for modifier in plan.export.triggered_modifiers(&selected) {
-        if super::actions::linked_modifier(modifier)
-            && !super::actions::download_execution_linked(observations, budget)
-                .map_err(|_| RuleV1SessionError::Bounds)?
-        {
+        let linked = if super::actions::linked_modifier(modifier) {
+            super::actions::download_execution_linked(observations, budget)
+        } else {
+            super::actions::steps_linked(modifier, &plan.export, &occurrences, observations, budget)
+        }
+        .map_err(|_| RuleV1SessionError::Bounds)?;
+        if !linked {
             withheld.insert(modifier.id.as_str());
         }
     }
@@ -432,6 +446,7 @@ fn aggregate_detector_session(
     observations: &[&telltale_schema::observation::CanonicalObservationV2],
     budget: &mut super::session::RetentionBudget,
     evidence_material: &mut BTreeMap<(usize, String), (String, String)>,
+    matched: &mut Vec<usize>,
 ) -> Result<RuleV1DetectorSessionEvaluation, RuleV1SessionError> {
     retain_text(budget, detector.detector().id())?;
     let mut aggregate = RuleV1DetectorSessionEvaluation {
@@ -442,6 +457,10 @@ fn aggregate_detector_session(
         let result = detector
             .try_evaluate(observation, budget)
             .map_err(|_| RuleV1SessionError::Bounds)?;
+        if result.evaluation_status() == EvaluationStatus::EvaluatedMatch {
+            budget.charge(1).map_err(|_| RuleV1SessionError::Bounds)?;
+            matched.push(occurrence);
+        }
         // Shell credit is score-once session context, not a per-action finding.
         // Retain its first matching observation only, but evaluate and count all
         // later observations so failures and other detectors remain visible.

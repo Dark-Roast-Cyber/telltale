@@ -1445,6 +1445,94 @@ fn ordered_support(
     .map_err(|_| ProcessingError::Bounds)
 }
 
+/// Whether a session's atomic matches link a modifier's steps: one observation
+/// matches every step, or distinct observations match them in declared order
+/// within the action chain window. Session scoring uses it so a chain needs
+/// linked steps, not co-occurrence anywhere in the session. `occurrences` maps
+/// each matched rule ID to the observations it matched. Observations without a
+/// source time link only within themselves.
+pub(super) fn steps_linked(
+    modifier: &RuleV1CompatibilityModifier,
+    export: &RuleV1CompatibilityExport,
+    occurrences: &BTreeMap<String, Vec<usize>>,
+    observations: &[&CanonicalObservationV2],
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    let requirements = modifier
+        .when_all_categories
+        .iter()
+        .map(|s| (true, s.as_str()))
+        .chain(
+            modifier
+                .when_all_rule_ids
+                .iter()
+                .map(|s| (false, s.as_str())),
+        )
+        .collect::<Vec<_>>();
+    if requirements.is_empty() {
+        return Ok(false);
+    }
+    let mut matched = BTreeMap::<usize, (BTreeSet<&str>, BTreeSet<&str>)>::new();
+    for (id, indexes) in occurrences {
+        let category = export
+            .rules()
+            .iter()
+            .find(|rule| &rule.id == id)
+            .map(|rule| rule.category.as_str());
+        for &index in indexes {
+            budget.charge(1)?;
+            let (ids, categories) = matched.entry(index).or_default();
+            ids.insert(id.as_str());
+            categories.extend(category);
+        }
+    }
+    let satisfies = |step: usize, index: usize| {
+        let (category, name) = requirements[step];
+        matched.get(&index).is_some_and(|(ids, categories)| {
+            if category {
+                categories.contains(name)
+            } else {
+                ids.contains(name)
+            }
+        })
+    };
+    if matched
+        .keys()
+        .any(|&index| (0..requirements.len()).all(|step| satisfies(step, index)))
+    {
+        return Ok(true);
+    }
+    let mut steps = Vec::new();
+    for &index in matched.keys() {
+        if let Some(time) = observations
+            .get(index)
+            .and_then(|observation| observation.occurred_at())
+        {
+            budget.charge(time.as_str().len())?;
+            if let Ok(time) = OffsetDateTime::parse(time.as_str(), &Rfc3339) {
+                steps.push((index, time));
+            }
+        }
+    }
+    let mut remaining_work = 1_000_000usize;
+    for end in 0..steps.len() {
+        if crate::process_chain_session::ordered_predecessors(
+            end,
+            time::Duration::seconds(ACTION_CHAIN_WINDOW_SECONDS as i64),
+            requirements.len(),
+            |position| steps[position].1,
+            |step, position| satisfies(step, steps[position].0),
+            &mut remaining_work,
+        )
+        .map_err(|_| ProcessingError::Bounds)?
+        .is_some()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub(crate) fn evaluate(
     export: &RuleV1CompatibilityExport,
     compiled: &[ActionRule],

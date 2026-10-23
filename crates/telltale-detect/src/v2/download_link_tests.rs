@@ -46,7 +46,7 @@ fn tool(id: &str, command: &str, time: Option<&str>) -> CanonicalObservationV2 {
     builder.build().unwrap()
 }
 
-fn session(steps: &[(&str, Option<&str>)]) -> (u64, Vec<String>) {
+pub(super) fn session(steps: &[(&str, Option<&str>)]) -> (u64, Vec<String>) {
     let observations = steps
         .iter()
         .enumerate()

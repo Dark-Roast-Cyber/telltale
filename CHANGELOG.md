@@ -34,6 +34,16 @@
   (`kubectl --kubeconfig ~/.kube/config`, `KUBECONFIG=`, `--key-file`) no longer
   scores 50; listing pods with an explicit kubeconfig dropped from 65 to 15.
   Action findings no longer treat such a CLI parameter as a credential read.
+- Session scoring now links the steps of the other chain modifiers too, instead
+  of counting co-occurrence anywhere in the session. One call must match all of
+  a chain's steps, or distinct calls must match them in declared order within 15
+  minutes, the window action findings already use; calls without a source time
+  link only within themselves. A cloud credential read and a package publish two
+  hours apart now score 110 without `chain.credential_then_publish` (40). This
+  covers `chain.secret_then_network`, `chain.install_then_persistence`,
+  `chain.credential_then_publish`, `chain.harvest_then_exfil`, both MCP chains,
+  `chain.instruction_override_with_approval_bypass` and
+  `chain.shell_encoded_payload`. Action findings are unchanged.
 - Add four zero-point `hunt` tags in the new `destructive` category so the
   timeline marks commands that can delete or discard data. They add no score:
   - `destructive.filesystem_wipe`: home, root or disk deletion;
@@ -52,8 +62,8 @@
   a startup file. The native action profile version is now 4, which also covers
   the wget output-cluster parsing and the cloud credential scoping above;
   semantic identities change and replay identities do not.
-- Evaluation corpus: add ten command-effect cases. Security-review confusion
-  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 14 / FP 0 / TN 32 / FN 4. The two
+- Evaluation corpus: add eleven command-effect cases. Security-review confusion
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 15 / FP 0 / TN 32 / FN 4. The two
   new false negatives are unrequested destructive commands, which the
   zero-point tags do not escalate.
 

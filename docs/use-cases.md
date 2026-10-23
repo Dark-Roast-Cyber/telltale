@@ -74,7 +74,7 @@ Detection requirements:
 
 - Match credential-store access with `credential.cloud_harvest`.
 - Match package publishing with `supply_chain.publish`.
-- Apply the `chain.credential_then_publish` modifier when both categories appear in the same session.
+- Apply the `chain.credential_then_publish` modifier when the credential access and the publish happen in one call, or the publish follows within 15 minutes.
 - Emit a `critical` detection when the chain is present.
 - Emit only bounded, redacted, hashed evidence; fixtures must not include real credentials.
 
@@ -90,7 +90,7 @@ Expected SIEM fields:
 Fixture guidance:
 
 - Keep fixtures synthetic and limited to fake commands.
-- Positive fixtures should show credential-store access and package publishing in the same session.
+- Positive fixtures should show credential-store access followed by package publishing within 15 minutes, or both in one call.
 - Negative fixtures should cover package publishing without credential harvesting, or credential review without publishing, so the chain modifier cannot fire.
 
 Example synthetic command:

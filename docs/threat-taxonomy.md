@@ -85,23 +85,22 @@ When authoring or reviewing detection content:
 
 ## Derived Chain Modifiers
 
-Chain modifiers add score and derived rule IDs when multiple categories or rules appear together. They do not replace the single category assigned to each base rule.
+Chain modifiers add score and derived rule IDs when the steps they name are linked. Session scoring links steps that one call matches together, or that distinct calls match in the declared order within 15 minutes; `chain.download_then_execute` has its own link, below. Matches spread across a session without that link do not chain. Modifiers do not replace the single category assigned to each base rule.
 
 | Modifier | Trigger | Meaning |
 | --- | --- | --- |
-| `chain.secret_then_network` | `secret_access` + `download` | Secret access occurred near network-capable behavior. |
+| `chain.secret_then_network` | `secret_access` + `download` | Secret access, then network-capable behavior within 15 minutes or in the same call. |
 | `chain.download_then_execute` | `download` + `execution`, linked | Downloaded content ran: a download piped to an interpreter, or a downloaded file executed within 15 minutes. A download and an unrelated shell call do not chain. |
-| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior appeared together. |
-| `chain.install_then_persistence` | `install` + `persistence` | Installation occurred near startup or service modification. |
-| `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning appeared near outbound transfer. |
-| `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting appeared near package publishing. |
-| `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting appeared near data theft behavior. |
-| `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing appeared near prompt-injection behavior. |
-| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override appeared in the same session as an approval-bypass directive. |
+| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior in the same call, or in that order within 15 minutes. |
+| `chain.install_then_persistence` | `install` + `persistence` | Installation, then startup or service modification within 15 minutes or in the same call. |
+| `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning, then outbound transfer within 15 minutes or in the same call. |
+| `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting, then package publishing within 15 minutes or in the same call. |
+| `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting, then data theft behavior within 15 minutes or in the same call. |
+| `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing, then prompt-injection behavior within 15 minutes or in the same call. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override, then an approval-bypass directive within 15 minutes or in the same message. |
 
 Process-chain correlations are separate from these modifiers: they require an
-ordered sequence within a time window and entity boundary rather than
-co-occurrence within a session. See
+ordered sequence within a time window and an entity boundary. See
 [process-chain-detections.md](process-chain-detections.md).
 
 ## ATLAS Alignment Guidance
