@@ -2256,7 +2256,15 @@ fn windows_lifecycle_diagnostics_are_command_and_exact_file_scoped() {
 
 #[test]
 fn windows_lifecycle_recovery_false_diagnostics_remain_narrow() {
-    let script = fs::read_to_string("tests/windows_lifecycle.ps1").unwrap();
+    let lf = normalize_line_endings(fs::read_to_string("tests/windows_lifecycle.ps1").unwrap());
+    let crlf = lf.replace('\n', "\r\n");
+    for script in [&lf, &crlf] {
+        assert_windows_recovery_diagnostics(script);
+    }
+}
+
+fn assert_windows_recovery_diagnostics(script: &str) {
+    let script = normalize_line_endings(script.to_owned());
     let install = script
         .split("function Invoke-TestDiagnosticInstall")
         .nth(1)
