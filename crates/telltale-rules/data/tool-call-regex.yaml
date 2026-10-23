@@ -369,6 +369,7 @@ modifiers:
   - id: chain.secret_then_network
     score: 35
     when_all_categories: [secret_access, exfiltration]
+    link: {calls: 3}
     explanation: Secret access followed by outbound transfer materially increases exfiltration risk.
     falsepositives:
       - Authorized backup or migration work may read secret files and upload artifacts; confirm the destination and the request before escalating.
@@ -381,6 +382,7 @@ modifiers:
   - id: chain.shell_encoded_payload
     score: 10
     when_all_rule_ids: [execution.shell, execution.encoded_payload]
+    link: {calls: 0, order: any}
     explanation: Shell execution of decoded payload content should cross the triage threshold.
     falsepositives:
       - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
@@ -393,12 +395,14 @@ modifiers:
       - atlas:AML.T0051
       - atlas:AML.T0086
     when_all_categories: [mcp_prompt_injection, exfiltration]
+    link: {calls: 3}
     explanation: MCP prompt injection near outbound egress is the first Telltale high-signal alert use case.
     falsepositives:
       - Telltale security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
   - id: chain.credential_then_publish
     score: 40
     when_all_categories: [credential_harvesting, supply_chain]
+    link: {calls: 3}
     explanation: Credential harvesting followed by package publishing is a supply chain attack pattern.
     falsepositives:
       - Authorized release automation may read cloud or package credentials before publishing; verify release intent, credential scope, and package destination.
@@ -408,6 +412,7 @@ modifiers:
       - atlas:AML.T0055
       - atlas:AML.T0025
     when_all_categories: [credential_harvesting, exfiltration]
+    link: {calls: 3}
     explanation: Credential harvesting followed by exfiltration is a data theft pattern.
     falsepositives:
       - Backup, migration, or inventory work may read credential-adjacent files and upload artifacts when both actions are explicitly approved.
@@ -417,6 +422,7 @@ modifiers:
       - atlas:AML.T0084
       - atlas:AML.T0051
     when_all_categories: [mcp_enumeration, mcp_prompt_injection]
+    link: {calls: 3}
     explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
     falsepositives:
       - MCP integration tests may enumerate tools and include synthetic injection strings to validate defenses.
@@ -428,6 +434,7 @@ modifiers:
     atlas_tags:
       - atlas:AML.T0051
     when_all_categories: [instruction_override, approval_bypass]
+    link: {calls: 3, order: any}
     explanation: An instruction override co-occurring with an approval-bypass directive in assistant output requires security review.
     falsepositives:
-      - Co-occurrence is evaluated per session, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase elsewhere in the session (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.
+      - The two phrases link within three tool calls of each other in either order, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase nearby (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.

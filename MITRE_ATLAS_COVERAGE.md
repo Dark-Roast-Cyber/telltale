@@ -117,7 +117,7 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | `security_detection` | `chain` | `alert` | none | Credential harvesting near package publishing. |
 | `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0055`, `atlas:AML.T0025` | Credential access followed by cyber exfiltration. |
 | `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | `security_detection` | `chain` | `alert` | `atlas:AML.T0084`, `atlas:AML.T0051` | Current emitted tags. `AML.T0133` is more precise for the runtime enumeration half of the chain. |
-| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051` | Instruction override corroborated by an approval-bypass directive in the same session. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051` | Instruction override corroborated by an approval-bypass directive within three tool calls. |
 
 ### Example Rules
 

@@ -34,15 +34,24 @@
   (`kubectl --kubeconfig ~/.kube/config`, `KUBECONFIG=`, `--key-file`) no longer
   scores 50; listing pods with an explicit kubeconfig dropped from 65 to 15.
   Action findings no longer treat such a CLI parameter as a credential read.
-- Session scoring now links the steps of the other chain modifiers too, instead
-  of counting co-occurrence anywhere in the session. One call must match all of
-  a chain's steps, or distinct calls must match them in declared order within 15
-  minutes, the window action findings already use; calls without a source time
-  link only within themselves. A cloud credential read and a package publish two
-  hours apart now score 110 without `chain.credential_then_publish` (40). This
-  covers `chain.secret_then_network`, `chain.credential_then_publish`, `chain.harvest_then_exfil`, both MCP chains,
-  `chain.instruction_override_with_approval_bypass` and
-  `chain.shell_encoded_payload`. Action findings are unchanged.
+- Chain modifiers can declare how their steps link with `link: {calls, order,
+  minutes}`: within `calls` tool calls of each other (0 means one call; a call
+  and its result count once, and messages add no distance), in declared order
+  unless `order: any`, and optionally within `minutes` of the completing step.
+  Session scoring and action findings apply the same link. Every bundled chain
+  except `chain.download_then_execute` declares one: the `_then_` chains link
+  within three calls in order, `chain.instruction_override_with_approval_bypass`
+  within three calls in either order, and `chain.shell_encoded_payload` within
+  one call. Before, session scoring counted co-occurrence anywhere in the
+  session, so a credential read early in a long session and an unrelated publish
+  much later chained. Calls without a source time now link by distance, and
+  action findings now link steps in one call. A modifier without a link keeps
+  session-wide co-occurrence and its earlier action semantics, so existing rule
+  packs are unchanged; releases before links ignore the field.
+  `ModifierDefinition` and `RuleV1CompatibilityModifier` gain a public `link`
+  field and `ActionModifierSemantics` gains `within_calls`, so code that builds
+  them with struct literals must set the new fields; the rule catalog reports a
+  declared link as `action_link: within_calls:N`.
 - `chain.secret_then_network` now pairs secret access with exfiltration, not
   with any download: reading a secrets file and then fetching a document no
   longer adds 35. Remove `chain.install_then_persistence`, which matched the

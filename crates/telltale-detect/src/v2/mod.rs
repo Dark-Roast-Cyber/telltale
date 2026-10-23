@@ -27,6 +27,9 @@ mod cloud_credential_tests;
 mod download_link_tests;
 pub mod event3;
 mod matcher;
+mod modifier_link;
+#[cfg(test)]
+mod modifier_link_tests;
 mod observation_match;
 pub mod policy_accounting;
 pub(crate) mod process_chain;

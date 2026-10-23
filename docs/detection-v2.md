@@ -691,11 +691,15 @@ become DetectorResults, Signals, Findings, or native v2 correlation detectors.
 Session evaluation withholds a modifier whose steps are not linked. The bundled
 `chain.download_then_execute` needs the link that arms it for action findings: a
 download piped to an interpreter, or a downloaded file executed within the
-action chain window. Every other modifier needs one observation that matches all
-of its steps, or distinct observations that match them in declared order within
-the same 15-minute window; observations without a source time link only within
-themselves. Field-level `CompiledRuleSet::evaluate()` sees one record, so its
-co-occurrence is the same-observation link.
+action chain window. A modifier that declares a `link` needs its steps within
+`link.calls` tool calls of each other by call position (a call and its result
+share one position, and other records take the next call's), in declared order
+unless `link.order` is `any`, and, with `link.minutes`, within that many minutes
+of the completing step when both have a source time. Action findings apply the
+same link and attach the chain to the completing action. A modifier without a
+link keeps co-occurrence anywhere in the session and its earlier action
+semantics. Field-level `CompiledRuleSet::evaluate()` sees one record, which
+satisfies any link.
 The evaluator uses the existing validated contribution primitives to construct
 Rule v1 compatibility contributions and a checked compatibility score. That sum
 is not native Detection v2 aggregate risk; Detection v2 still has no accepted

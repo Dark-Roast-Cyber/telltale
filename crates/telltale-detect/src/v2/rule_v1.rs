@@ -319,7 +319,7 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
     let mut detectors = Vec::with_capacity(plan.detectors.len());
     let mut evidence_material = BTreeMap::new();
     let mut matched_atomic_rule_ids = BTreeSet::new();
-    // The observations each matched rule matched, for linking chain steps.
+    // The observations each matched rule matched, for linked modifiers.
     let mut occurrences = BTreeMap::new();
     for detector in &plan.detectors {
         let mut matched = Vec::new();
@@ -351,16 +351,27 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
         super::session::RetentionBudget::validate_text(&rule.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
     }
-    // A modifier needs its steps linked, not co-occurrence anywhere in the
-    // session. The linked download modifier needs the downloaded content to
-    // run, as it does for action findings; every other modifier needs its steps
-    // in one observation, or in declared order within the action chain window.
+    // The linked download modifier needs the downloaded content to run, as it
+    // does for action findings. A modifier with a declared link needs its steps
+    // within that link; one without keeps co-occurrence anywhere in the session.
+    let triggered = plan.export.triggered_modifiers(&selected);
+    let steps = if triggered
+        .iter()
+        .any(|modifier| modifier.link.is_some() && !super::actions::linked_modifier(modifier))
+    {
+        super::modifier_link::session_steps(&plan.export, &occurrences, observations, budget)
+            .map_err(|_| RuleV1SessionError::Bounds)?
+    } else {
+        super::modifier_link::Steps::new()
+    };
     let mut withheld = BTreeSet::new();
-    for modifier in plan.export.triggered_modifiers(&selected) {
+    for modifier in triggered {
         let linked = if super::actions::linked_modifier(modifier) {
             super::actions::download_execution_linked(observations, budget)
+        } else if let Some(link) = &modifier.link {
+            super::modifier_link::linked_in_session(modifier, link, &steps)
         } else {
-            super::actions::steps_linked(modifier, &plan.export, &occurrences, observations, budget)
+            Ok(true)
         }
         .map_err(|_| RuleV1SessionError::Bounds)?;
         if !linked {

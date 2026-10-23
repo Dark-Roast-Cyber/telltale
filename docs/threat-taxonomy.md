@@ -85,18 +85,18 @@ When authoring or reviewing detection content:
 
 ## Derived Chain Modifiers
 
-Chain modifiers add score and derived rule IDs when the steps they name are linked. Session scoring links steps that one call matches together, or that distinct calls match in the declared order within 15 minutes; `chain.download_then_execute` has its own link, below. Matches spread across a session without that link do not chain. Modifiers do not replace the single category assigned to each base rule.
+Chain modifiers add score and derived rule IDs when the steps they name are linked. Each bundled chain declares its link: the steps fall within a number of tool calls of each other, counted so that a call and its result count once and messages add no distance, in declared order unless the link allows any order. One call that matches every step always links. `chain.download_then_execute` has its own link, below. A modifier without a link, such as one in a rule pack written before links, keeps co-occurrence anywhere in the session. Modifiers do not replace the single category assigned to each base rule.
 
 | Modifier | Trigger | Meaning |
 | --- | --- | --- |
-| `chain.secret_then_network` | `secret_access` + `exfiltration` | Secret access, then an outbound transfer within 15 minutes or in the same call. A secret read and a download do not chain. |
+| `chain.secret_then_network` | `secret_access` + `exfiltration` | Secret access, then an outbound transfer within three tool calls. A secret read and a download do not chain. |
 | `chain.download_then_execute` | `download` + `execution`, linked | Downloaded content ran: a download piped to an interpreter, or a downloaded file executed within 15 minutes. A download and an unrelated shell call do not chain. |
-| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior in the same call, or in that order within 15 minutes. |
-| `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning, then outbound transfer within 15 minutes or in the same call. |
-| `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting, then package publishing within 15 minutes or in the same call. |
-| `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting, then data theft behavior within 15 minutes or in the same call. |
-| `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing, then prompt-injection behavior within 15 minutes or in the same call. |
-| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override, then an approval-bypass directive within 15 minutes or in the same message. |
+| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior in the same call. |
+| `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning, then outbound transfer within three tool calls. |
+| `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting, then package publishing within three tool calls. |
+| `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting, then data theft behavior within three tool calls. |
+| `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing, then prompt-injection behavior within three tool calls. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override and an approval-bypass directive within three tool calls of each other, in either order. |
 
 Process-chain correlations are separate from these modifiers: they require an
 ordered sequence within a time window and an entity boundary. See

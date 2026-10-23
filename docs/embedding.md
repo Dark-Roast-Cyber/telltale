@@ -312,10 +312,11 @@ Three scores exist and must stay distinct: native finding risk
   same token; semantic identities change from profile 2, while replay identities
   and Event 3 session semantics remain unchanged. Native profile 4 reads a wget
   flag cluster ending in `-O` (such as `-qO-`) as output to standard output when
-  linking downloads, adds the `written_path` field for files a call writes, and
+  linking downloads, adds the `written_path` field for files a call writes,
   stops counting a shell parameter as a cloud credential read unless the command
-  reads paths; semantic identities change from profile 3, and replay identities
-  are unchanged.
+  reads paths, and applies declared modifier links; semantic identities change
+  from profile 3, and replay identities are unchanged.
+  `ActionModifierSemantics::within_calls` reports a declared link's call bound.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not
   permission to invent a substitute. Golden values are pinned by tests and change

@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::LazyLock;
 use telltale_rules::{
-    RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
+    ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
 };
 use telltale_schema::event::{
     PrivacySanitizer, SanitizationContext, terminal_identifier, terminal_session_id,
@@ -30,6 +30,8 @@ pub struct ActionModifierSemantics {
     pub score: u64,
     pub ordered: bool,
     pub within_seconds: Option<u64>,
+    /// How many tool calls apart a declared link's steps may be.
+    pub within_calls: Option<u32>,
     pub link: Option<&'static str>,
 }
 pub(crate) fn modifier_semantics(
@@ -37,7 +39,11 @@ pub(crate) fn modifier_semantics(
     options: &DetailedEvaluationOptions,
 ) -> ActionModifierSemantics {
     let linked = linked_modifier(modifier);
-    let ordered = linked || !modifier.when_all_categories.is_empty();
+    let declared = modifier.link.filter(|_| !linked);
+    let ordered = linked
+        || declared.map_or(!modifier.when_all_categories.is_empty(), |link| {
+            link.order == ModifierLinkOrder::Declared
+        });
     ActionModifierSemantics {
         score: if linked {
             linked_score(modifier, options)
@@ -45,7 +51,11 @@ pub(crate) fn modifier_semantics(
             modifier.score
         },
         ordered,
-        within_seconds: ordered.then_some(ACTION_CHAIN_WINDOW_SECONDS),
+        within_seconds: match declared {
+            Some(link) => link.minutes.map(|minutes| u64::from(minutes) * 60),
+            None => ordered.then_some(ACTION_CHAIN_WINDOW_SECONDS),
+        },
+        within_calls: declared.map(|link| link.calls),
         link: linked.then_some("downloaded_artifact"),
     }
 }
@@ -1302,6 +1312,13 @@ fn contains(
     Ok(text.contains(needle))
 }
 
+/// A modifier with neither the download link nor a declared link keeps the
+/// action semantics it had before links: same-action rule IDs, or categories in
+/// declared order within the chain window.
+fn legacy(modifier: &RuleV1CompatibilityModifier) -> bool {
+    !linked_modifier(modifier) && modifier.link.is_none()
+}
+
 pub(super) fn linked_modifier(modifier: &RuleV1CompatibilityModifier) -> bool {
     modifier.id == "chain.download_then_execute"
         && modifier.when_all_categories == ["download", "execution"]
@@ -1445,94 +1462,6 @@ fn ordered_support(
     .map_err(|_| ProcessingError::Bounds)
 }
 
-/// Whether a session's atomic matches link a modifier's steps: one observation
-/// matches every step, or distinct observations match them in declared order
-/// within the action chain window. Session scoring uses it so a chain needs
-/// linked steps, not co-occurrence anywhere in the session. `occurrences` maps
-/// each matched rule ID to the observations it matched. Observations without a
-/// source time link only within themselves.
-pub(super) fn steps_linked(
-    modifier: &RuleV1CompatibilityModifier,
-    export: &RuleV1CompatibilityExport,
-    occurrences: &BTreeMap<String, Vec<usize>>,
-    observations: &[&CanonicalObservationV2],
-    budget: &mut RetentionBudget,
-) -> Result<bool, ProcessingError> {
-    let requirements = modifier
-        .when_all_categories
-        .iter()
-        .map(|s| (true, s.as_str()))
-        .chain(
-            modifier
-                .when_all_rule_ids
-                .iter()
-                .map(|s| (false, s.as_str())),
-        )
-        .collect::<Vec<_>>();
-    if requirements.is_empty() {
-        return Ok(false);
-    }
-    let mut matched = BTreeMap::<usize, (BTreeSet<&str>, BTreeSet<&str>)>::new();
-    for (id, indexes) in occurrences {
-        let category = export
-            .rules()
-            .iter()
-            .find(|rule| &rule.id == id)
-            .map(|rule| rule.category.as_str());
-        for &index in indexes {
-            budget.charge(1)?;
-            let (ids, categories) = matched.entry(index).or_default();
-            ids.insert(id.as_str());
-            categories.extend(category);
-        }
-    }
-    let satisfies = |step: usize, index: usize| {
-        let (category, name) = requirements[step];
-        matched.get(&index).is_some_and(|(ids, categories)| {
-            if category {
-                categories.contains(name)
-            } else {
-                ids.contains(name)
-            }
-        })
-    };
-    if matched
-        .keys()
-        .any(|&index| (0..requirements.len()).all(|step| satisfies(step, index)))
-    {
-        return Ok(true);
-    }
-    let mut steps = Vec::new();
-    for &index in matched.keys() {
-        if let Some(time) = observations
-            .get(index)
-            .and_then(|observation| observation.occurred_at())
-        {
-            budget.charge(time.as_str().len())?;
-            if let Ok(time) = OffsetDateTime::parse(time.as_str(), &Rfc3339) {
-                steps.push((index, time));
-            }
-        }
-    }
-    let mut remaining_work = 1_000_000usize;
-    for end in 0..steps.len() {
-        if crate::process_chain_session::ordered_predecessors(
-            end,
-            time::Duration::seconds(ACTION_CHAIN_WINDOW_SECONDS as i64),
-            requirements.len(),
-            |position| steps[position].1,
-            |step, position| satisfies(step, steps[position].0),
-            &mut remaining_work,
-        )
-        .map_err(|_| ProcessingError::Bounds)?
-        .is_some()
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 pub(crate) fn evaluate(
     export: &RuleV1CompatibilityExport,
     compiled: &[ActionRule],
@@ -1562,6 +1491,16 @@ pub(crate) fn evaluate(
     for identity in identities.iter().flatten() {
         *counts.entry(identity.clone()).or_insert(0usize) += 1;
     }
+    let declared_links = export
+        .modifiers()
+        .iter()
+        .any(|m| m.link.is_some() && !linked_modifier(m));
+    let positions = if declared_links {
+        super::modifier_link::call_positions(observations, budget)?
+    } else {
+        Vec::new()
+    };
+    let mut link_steps = super::modifier_link::Steps::new();
     let mut pending: Vec<(String, OffsetDateTime, usize, usize)> = Vec::new();
     let mut history: VecDeque<ActionStep> = VecDeque::new();
     let mut remaining_sequence_work = 1_000_000usize;
@@ -1663,7 +1602,7 @@ pub(crate) fn evaluate(
         let sequence_candidate = export
             .modifiers()
             .iter()
-            .filter(|m| !linked_modifier(m) && !m.when_all_categories.is_empty())
+            .filter(|m| legacy(m) && !m.when_all_categories.is_empty())
             .any(|m| {
                 m.when_all_categories
                     .iter()
@@ -1690,7 +1629,7 @@ pub(crate) fn evaluate(
             for modifier in export
                 .modifiers()
                 .iter()
-                .filter(|m| !linked_modifier(m) && !m.when_all_categories.is_empty())
+                .filter(|m| legacy(m) && !m.when_all_categories.is_empty())
             {
                 let used = consumed.entry(modifier.id.clone()).or_default();
                 if let Some(indexes) = ordered_support(
@@ -1714,6 +1653,52 @@ pub(crate) fn evaluate(
                             .map_err(|_| ProcessingError::Evaluation)?,
                         );
                     }
+                }
+            }
+        }
+        // Declared links: steps within the link's calls, by call position. An
+        // unscoped observation cannot link.
+        if declared_links && observation.session_id().is_some() && !atomic_ids.is_empty() {
+            let key = (positions[index], index);
+            link_steps.insert(
+                key,
+                super::modifier_link::Step {
+                    time,
+                    ids: atomic_ids.clone(),
+                    categories: categories.clone(),
+                },
+            );
+            for modifier in export.modifiers().iter().filter(|m| !linked_modifier(m)) {
+                let Some(link) = &modifier.link else {
+                    continue;
+                };
+                let used = consumed.entry(modifier.id.clone()).or_default();
+                let Some(mut support) = super::modifier_link::support(
+                    modifier,
+                    link,
+                    &link_steps,
+                    key,
+                    |index| !used.contains(&index),
+                    &mut remaining_sequence_work,
+                )?
+                else {
+                    continue;
+                };
+                used.insert(support[0]);
+                support.sort_unstable();
+                support.dedup();
+                correlation_support.insert(modifier.id.clone(), support);
+                ids.insert(modifier.id.clone());
+                if modifier.score > 0 {
+                    contributions.push(
+                        RiskContribution::new(
+                            &modifier.id,
+                            RiskContributionType::ChainModifier,
+                            modifier.score,
+                            redact(&modifier.explanation, budget)?,
+                        )
+                        .map_err(|_| ProcessingError::Evaluation)?,
+                    );
                 }
             }
         }
@@ -1800,7 +1785,7 @@ pub(crate) fn evaluate(
         for modifier in export
             .triggered_modifiers(&atomic)
             .into_iter()
-            .filter(|m| !linked_modifier(m) && m.when_all_categories.is_empty())
+            .filter(|m| legacy(m) && m.when_all_categories.is_empty())
         {
             if modifier.score > 0 {
                 contributions.push(
@@ -1818,7 +1803,7 @@ pub(crate) fn evaluate(
         let modifiers = export
             .triggered_modifiers(&atomic)
             .into_iter()
-            .filter(|m| !linked_modifier(m) && m.when_all_categories.is_empty())
+            .filter(|m| legacy(m) && m.when_all_categories.is_empty())
             .map(|m| m.id.clone())
             .collect::<Vec<_>>();
         ids.extend(modifiers);

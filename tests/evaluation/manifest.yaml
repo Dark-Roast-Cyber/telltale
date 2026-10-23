@@ -1397,9 +1397,9 @@ cases:
         - rule_id: execution.shell
           expectation: expected_match
         - rule_id: chain.credential_then_publish
-          expectation: expected_absent
+          expectation: expected_match
       exact_rule_set: true
-      expected_score: 110
+      expected_score: 150
       expected_contributions:
         - id: credential.cloud_harvest
           type: deterministic_rule
@@ -1410,6 +1410,9 @@ cases:
         - id: supply_chain.publish
           type: deterministic_rule
           points: 45
+        - id: chain.credential_then_publish
+          type: chain_modifier
+          points: 40
     tags: [synthetic, command_effects, efficacy, characterization]
 
   - id: RX-HOME-WIPE-001

@@ -39,9 +39,9 @@ semantics used by the public provenance manifest. The export's
 used by `CompiledRuleSet::evaluate()` and Detection v2; canonical applicability
 and evidence selection remain with Detection v2. Detection v2 session evaluation
 calls `evaluate_matched_without()` to withhold a modifier whose steps are not
-linked in the session: matched by one observation, or in declared order within
-15 minutes. The bundled `chain.download_then_execute` needs downloaded content
-to run. Its `fingerprint()` is
+linked in the session: outside its declared `link`, or, for the bundled
+`chain.download_then_execute`, without downloaded content that runs. A modifier
+without a `link` is never withheld. Its `fingerprint()` is
 domain-separated and does not hash source YAML, formatting, filesystem paths,
 policy names, or descriptive rule metadata (`title`, `description`, and
 `falsepositives`). Rule and modifier order remains identity-bearing because
