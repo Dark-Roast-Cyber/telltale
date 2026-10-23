@@ -6,6 +6,17 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Restore `execution.shell` session-scoring parity for shell-tool calls whose
+  recorded command omits a shell wrapper, including Codex `exec_command` and
+  OpenCode v2. Exact shell-tool names now contribute the existing 15 points;
+  command/argument shell and interpreter patterns still apply, without counting
+  a rule twice. Recorded requests and denied attempts are not proof of execution.
+  User-approved shell activity can still combine with other rules to alert;
+  no user-context suppression is added.
+  Retain one representative shell-credit observation per session while evaluating
+  and counting every call, so long harmless shell histories do not exhaust the
+  unchanged evidence-retention bounds. Other rules and native actions are unchanged.
+
 - Add versioned wire forms for embedding hosts. `SourceScan::action_records()`
   returns one `ActionRecordV1` (`telltale.action.v1`) per action finding: the
   accessor values plus client, source ID, source path hash, semantic identity

@@ -431,7 +431,12 @@ fn aggregate_detector_session(
         let result = detector
             .try_evaluate(observation, budget)
             .map_err(|_| RuleV1SessionError::Bounds)?;
-        if result.evaluation_status() == EvaluationStatus::EvaluatedMatch {
+        // Shell credit is score-once session context, not a per-action finding.
+        // Retain its first matching observation only, but evaluate and count all
+        // later observations so failures and other detectors remain visible.
+        let retain_projection =
+            detector.detector().id() != "execution.shell" || aggregate.evaluated_match_count == 0;
+        if result.evaluation_status() == EvaluationStatus::EvaluatedMatch && retain_projection {
             for path in result.matched_selector_paths() {
                 if aggregate.projection.len() >= super::session::MAX_PROJECTION_ITEMS {
                     return Err(RuleV1SessionError::Bounds);
@@ -534,9 +539,11 @@ fn add_detector_result(
         EvaluationStatus::EvaluatedMatch => {
             aggregate.evaluated_match_count += 1;
             aggregate.outcome = max_outcome(aggregate.outcome, RuleV1DetectorOutcome::Match);
-            aggregate
-                .matched_selector_paths
-                .extend(result.matched_selector_paths().iter().cloned());
+            for path in result.matched_selector_paths() {
+                if !aggregate.matched_selector_paths.contains(path) {
+                    aggregate.matched_selector_paths.push(path.clone());
+                }
+            }
         }
         EvaluationStatus::EvaluatedNoMatch => {
             aggregate.evaluated_no_match_count += 1;

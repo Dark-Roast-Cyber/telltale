@@ -253,9 +253,14 @@ with the bounded Event3 consumer before returning any events, including its 1 Mi
 per-event limit. No partial successful batch is returned on projection failure.
 
 Event3 allows `timeline_anchors` on detection events, **not** process-chain events.
-Detection projection first aggregates one anchor per actual matching occurrence,
+Detection projection first aggregates one anchor per retained matching occurrence,
 with sorted unique atomic rule IDs, applicable modifier IDs, and evidence fields;
 Event3 canonicalization therefore cannot discard competing per-evidence anchors.
+Score-once `execution.shell` session credit retains only its first matching
+observation as representative evidence. Later shell-only matches do not add
+anchors or embedding occurrences, but every observation is still evaluated and
+included in the detector's match count. Other rules and native action findings
+retain their existing evidence semantics; no source budget is increased.
 Process events retain occurrence/observation references in
 existing evidence fields instead of expanding the schema. Terminal privacy can
 sanitize observation-ID snippets; their evidence hashes retain linkage. Event IDs

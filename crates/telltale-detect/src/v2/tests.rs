@@ -1460,7 +1460,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
         .iter()
         .map(|rule| rule.matchers.len())
         .sum::<usize>();
-    assert_eq!(matcher_count, 57);
+    assert_eq!(matcher_count, 58);
     let targets = export
         .rules()
         .iter()
@@ -1476,7 +1476,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             ("assistant_context", 8),
             ("command", 16),
             ("file_path", 4),
-            ("tool_name", 1),
+            ("tool_name", 2),
             ("tool_result", 7),
             ("url", 3),
         ])

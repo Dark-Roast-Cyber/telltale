@@ -1676,7 +1676,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 109);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 119);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -2604,14 +2604,14 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
         "private key event failed schema validation"
     );
     assert_eq!(private_key["event_type"], "detection");
-    assert_eq!(private_key["severity"], "medium");
+    assert_eq!(private_key["severity"], "high");
     assert!(
-        !private_key["rule_ids"]
+        private_key["rule_ids"]
             .as_array()
             .unwrap()
             .iter()
             .any(|id| id == "execution.shell"),
-        "the bash tool name must not be synthesized into command evidence"
+        "the bash tool name supplies shell credit without synthesizing command evidence"
     );
     assert!(
         private_key["rule_ids"]
@@ -3180,7 +3180,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 30);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        109
+        119
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -3376,12 +3376,15 @@ fn scan_once_persists_incremental_baseline_snapshots() {
         let summary: Value = serde_json::from_slice(&output.stdout).expect("scan summary");
         assert_eq!(
             summary["detection_flow"]["effective_detection_candidate_count"],
-            0
+            3
         );
         let events = fs::read_to_string(&log_path).expect("benign events");
         assert!(events.lines().all(|line| {
             let event: Value = serde_json::from_str(line).expect("Event3 JSON");
             event["event_type"] != "detection"
+                || (event["rule_ids"] == serde_json::json!(["execution.shell"])
+                    && event["risk_score"] == 15
+                    && event["severity"] == "informational")
         }));
     };
 
@@ -3618,7 +3621,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     );
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("summary json");
     assert_eq!(first_summary["activity_count"], 1);
-    assert_eq!(first_summary["emitted_count"], 1);
+    assert_eq!(first_summary["emitted_count"], 2);
 
     let mut state: Value =
         serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
@@ -3662,7 +3665,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 3);
+    assert_eq!(lines.lines().count(), 4);
 }
 
 #[test]
@@ -8030,13 +8033,28 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
         ]
     })
     .collect::<Vec<_>>();
+    expected_evidence.extend([
+        (
+            "tool_name",
+            Some("37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2"),
+            Some("execution.shell"),
+        ),
+        (
+            "canonical_observation_id",
+            Some(OBSERVATION_HASH),
+            Some("execution.shell"),
+        ),
+    ]);
     expected_evidence.sort_unstable();
     assert_eq!(evidence, expected_evidence);
 
     assert_eq!(event.timeline_anchors.len(), 1);
     assert_eq!(event.timeline_anchors[0].entry_index, 0);
     assert_eq!(event.timeline_anchors[0].rule_ids, event.rule_ids);
-    assert_eq!(event.timeline_anchors[0].evidence_fields, ["command"]);
+    assert_eq!(
+        event.timeline_anchors[0].evidence_fields,
+        ["command", "tool_name"]
+    );
 }
 
 #[test]

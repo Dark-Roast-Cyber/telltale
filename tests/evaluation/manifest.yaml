@@ -209,10 +209,10 @@ cases:
       optional_fields: [timestamp, tool_name, arguments, content]
       unavailable_fields: [pid, parent_pid]
     expected_detection:
-      rule_expectations: []
+      rule_expectations: [{rule_id: execution.shell, expectation: expected_match}]
       exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
+      expected_score: 15
+      expected_contributions: [{id: execution.shell, type: deterministic_rule, points: 15}]
     tags: [source_conformance, characterization]
 
   - id: SC-CODEX-HEADLESS-001
@@ -232,10 +232,10 @@ cases:
       optional_fields: [timestamp, tool_name, arguments, content]
       unavailable_fields: [pid, parent_pid]
     expected_detection:
-      rule_expectations: []
+      rule_expectations: [{rule_id: execution.shell, expectation: expected_match}]
       exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
+      expected_score: 15
+      expected_contributions: [{id: execution.shell, type: deterministic_rule, points: 15}]
     tags: [source_conformance, characterization]
 
   - id: SC-CLAUDE-001
@@ -351,19 +351,25 @@ cases:
         - rule_id: secret.env.read
           expectation: expected_match
         - rule_id: execution.shell
-          expectation: expected_absent
+          expectation: expected_match
         - rule_id: network.download
           expectation: expected_match
         - rule_id: chain.secret_then_network
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 90
+      expected_score: 140
       expected_contributions:
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: network.download
           type: deterministic_rule
           points: 20
         - id: secret.env.read
           type: deterministic_rule
+          points: 35
+        - id: chain.download_then_execute
+          type: chain_modifier
           points: 35
         - id: chain.secret_then_network
           type: chain_modifier
@@ -470,7 +476,7 @@ cases:
     expected_detection:
       rule_expectations:
         - rule_id: execution.shell
-          expectation: expected_absent
+          expectation: expected_match
         - rule_id: install.package_manager
           expectation: expected_match
         - rule_id: persistence.shell_profile
@@ -478,8 +484,11 @@ cases:
         - rule_id: chain.install_then_persistence
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 95
+      expected_score: 110
       expected_contributions:
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: install.package_manager
           type: deterministic_rule
           points: 20
@@ -512,10 +521,13 @@ cases:
         - rule_id: exfil.outbound_upload
           expectation: expected_match
         - rule_id: execution.shell
-          expectation: expected_absent
+          expectation: expected_match
       exact_rule_set: false
-      expected_score: 60
+      expected_score: 75
       expected_contributions:
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
@@ -542,16 +554,22 @@ cases:
         - rule_id: exfil.encoded_http
           expectation: expected_match
         - rule_id: execution.shell
-          expectation: expected_absent
+          expectation: expected_match
       exact_rule_set: false
-      expected_score: 70
+      expected_score: 120
       expected_contributions:
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: exfil.encoded_http
           type: deterministic_rule
           points: 50
         - id: network.download
           type: deterministic_rule
           points: 20
+        - id: chain.download_then_execute
+          type: chain_modifier
+          points: 35
     tags: [regex_coverage, efficacy, characterization]
 
   - id: RX-UC002-001
@@ -579,13 +597,16 @@ cases:
         - rule_id: chain.credential_then_publish
           expectation: expected_match
         - rule_id: execution.shell
-          expectation: expected_absent
+          expectation: expected_match
       exact_rule_set: false
-      expected_score: 135
+      expected_score: 150
       expected_contributions:
         - id: credential.cloud_harvest
           type: deterministic_rule
           points: 50
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: supply_chain.publish
           type: deterministic_rule
           points: 45
@@ -647,13 +668,16 @@ cases:
         - rule_id: chain.harvest_then_exfil
           expectation: expected_match
         - rule_id: execution.shell
-          expectation: expected_absent
+          expectation: expected_match
       exact_rule_set: false
-      expected_score: 145
+      expected_score: 160
       expected_contributions:
         - id: credential.cloud_harvest
           type: deterministic_rule
           points: 50
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
@@ -854,8 +878,11 @@ cases:
         - rule_id: supply_chain.publish
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 45
+      expected_score: 60
       expected_contributions:
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
         - id: supply_chain.publish
           type: deterministic_rule
           points: 45
