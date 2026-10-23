@@ -8,6 +8,9 @@
 //!
 //! A record is versioned as a whole: adding, removing, or redefining a field
 //! is a new record version and a new type, never an edit of this one.
+//!
+//! Hosts also get the record's delivery key and the check that it travels
+//! with its session event from here, so neither is re-derived per host.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -16,13 +19,19 @@ use std::sync::LazyLock;
 use jsonschema::{Validator, validator_for};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::event::{
-    EVENT3_MAX_INPUT_BYTES, parse_event_timestamp, terminal_historical_session_id,
-    terminal_historical_tool_label, validate_rule_ids,
+    EVENT3_MAX_INPUT_BYTES, Event3Family, Event3Record, parse_event_timestamp,
+    redact_sensitive_text, terminal_historical_session_id, terminal_historical_tool_label,
+    validate_rule_ids,
 };
-use crate::observation::{ObservationFamily, ObservationStage, valid_observation_id};
+use crate::observation::{
+    JsonValue, ObservationFamily, ObservationStage, canonical_identity_json, valid_observation_id,
+};
 use crate::scoring::RiskContributionType;
+
+const DELIVERY_KEY_PREFIX: &str = "delivery:v1:sha256:";
 
 /// Value of the `schema` field of every v1 record.
 pub const ACTION_RECORD_V1_ID: &str = "telltale.action.v1";
@@ -191,7 +200,9 @@ fn semantic(code: &'static str) -> ActionRecordError {
 impl ActionRecordV1 {
     /// Parse and validate one complete record from another process. Rejects
     /// oversized input, other versions, unknown fields, and values that the
-    /// producer cannot emit.
+    /// producer cannot emit, including text that redaction would still change.
+    /// Redaction only grows stricter, so a consumer newer than its producer
+    /// may reject text that the older redactor let through.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ActionRecordError> {
         if bytes.len() > ACTION_RECORD_MAX_INPUT_BYTES {
             return Err(structure("input_too_large"));
@@ -214,6 +225,76 @@ impl ActionRecordV1 {
         check_version(&value)?;
         check_schema(&value)?;
         self.validate_semantics()
+    }
+
+    /// Key for delivering this action at most once: `delivery:v1:sha256:`
+    /// over the semantic identity and `replay_identity` when present,
+    /// otherwise the source path hash, `coordinate` and canonical finding IDs.
+    /// Equal coordinates alone distinguish neither stores nor the several
+    /// process-chain actions one tool call can carry. Rescans under the same
+    /// rules give the same key. A new semantic identity gives new keys, so a
+    /// rules change delivers again instead of matching results from the old
+    /// rules.
+    pub fn delivery_key(&self) -> String {
+        let mut parts = vec![
+            JsonValue::string("telltale:action-delivery-v1"),
+            JsonValue::string(&self.semantic_identity),
+        ];
+        match &self.replay_identity {
+            Some(replay) => parts.extend([JsonValue::string("replay"), JsonValue::string(replay)]),
+            None => {
+                let findings = self
+                    .canonical_findings
+                    .iter()
+                    .map(|finding| finding.finding_id.as_str())
+                    .collect::<BTreeSet<_>>();
+                parts.extend([
+                    JsonValue::string("coordinate"),
+                    JsonValue::string(&self.source_path_hash),
+                    JsonValue::string(&self.coordinate),
+                    JsonValue::Array(findings.into_iter().map(JsonValue::string).collect()),
+                ]);
+            }
+        }
+        let bytes = canonical_identity_json(&JsonValue::Array(parts))
+            .expect("an array of strings always encodes");
+        format!("{DELIVERY_KEY_PREFIX}{:x}", Sha256::digest(bytes))
+    }
+
+    /// Check that `event`, a detection or process-chain Event 3 object, may
+    /// travel with this record: the same client and source path hash, and
+    /// the same session when the record has one. A linked record
+    /// (`session_event_id` set) also requires that `event` is that event, of
+    /// the family the action projects (process chain for a process-chain
+    /// action, otherwise detection), and carries every record rule. An
+    /// unlinked record names no event, so pairing it is the host's choice.
+    pub fn check_session_event(&self, event: &Event3Record) -> Result<(), ActionRecordError> {
+        let (chain, source_path_hash, rule_ids) = match event.family() {
+            Event3Family::Detection(detection) => {
+                (false, &detection.source_path_hash, &detection.rule_ids)
+            }
+            Event3Family::ProcessChain(chain) => (true, &chain.source_path_hash, &chain.rule_ids),
+            _ => return Err(identity("event_link_mismatch")),
+        };
+        let common = event.common();
+        if common.client != self.client || *source_path_hash != self.source_path_hash {
+            return Err(identity("event_source_mismatch"));
+        }
+        if self
+            .session_id
+            .as_ref()
+            .is_some_and(|id| *id != common.session_id)
+        {
+            return Err(identity("event_session_mismatch"));
+        }
+        if let Some(id) = &self.session_event_id
+            && (*id != common.event_id
+                || chain != (self.detector_kind == "process_chain")
+                || !self.rule_ids.iter().all(|rule| rule_ids.contains(rule)))
+        {
+            return Err(identity("event_link_mismatch"));
+        }
+        Ok(())
     }
 
     fn validate_semantics(&self) -> Result<(), ActionRecordError> {
@@ -276,6 +357,27 @@ impl ActionRecordV1 {
             {
                 return Err(semantic("invalid_time_or_tool"));
             }
+        }
+        // The producer redacts all three with the evidence sanitizer this
+        // function wraps; it is idempotent, so redacted text is a fixed point.
+        let redacted = |text: &str| redact_sensitive_text(text) == text;
+        if !self
+            .context
+            .iter()
+            .map(|entry| entry.redacted_text.as_str())
+            .chain(
+                self.evidence
+                    .iter()
+                    .map(|entry| entry.redacted_value.as_str()),
+            )
+            .chain(
+                self.contributions
+                    .iter()
+                    .map(|entry| entry.rationale.as_str()),
+            )
+            .all(redacted)
+        {
+            return Err(semantic("unredacted_text"));
         }
         Ok(())
     }

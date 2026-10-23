@@ -399,12 +399,22 @@ Event 3 object                                -- session events, unchanged
 - The receiver validates with `ActionRecordV1::from_json` (in
   `telltale-schema`, no SQLite), as it validates Event 3 with `Event3Record`.
   It rejects oversized input, another record version, unknown fields, values
-  outside the schema, and inconsistent values, with closed error codes that
-  contain no input text. Do not turn an unknown field or version into a
-  rejected but acknowledged delivery.
-- Delivery key: `replay_identity` when present, otherwise `source_path_hash`
-  plus `coordinate`. Equal coordinates alone do not distinguish stores. Never
-  derive a key from Event 3 IDs or invent a text hash.
+  outside the schema, inconsistent values, and text that redaction would
+  still change, with closed error codes that contain no input text. A
+  consumer newer than its producer may reject text that an older redactor let
+  through. Do not turn an unknown field or version into a rejected but
+  acknowledged delivery.
+- Delivery key: `record.delivery_key()`. It hashes the semantic identity with
+  `replay_identity` when present, otherwise with `source_path_hash`,
+  `coordinate` and the canonical finding IDs: equal coordinates distinguish
+  neither stores nor the several process-chain actions one tool call can
+  carry. A rules change gives new keys. Never derive a key from Event 3 IDs.
+- Event link: `record.check_session_event(&event)` checks that a detection or
+  process-chain `Event3Record` travelling with the record has the same client,
+  source path hash and session and, when `session_event_id` is set, that it
+  is that event, of the matching family, carrying every record rule. An
+  unlinked record names no event; which event it travels with is the host's
+  choice.
 - A record version is frozen. Adding, removing or redefining a field is a new
   version and a new type; plan to accept both during a host upgrade.
 - Keep terminal Event 3 separate from host extensions: `Event3Record` consumes
@@ -412,8 +422,9 @@ Event 3 object                                -- session events, unchanged
   deserializer), and an augmented storage document is not a strict
   `Event3Record` input. Historical Event 3 rendering stays valid.
 
-Do not reimplement replay hashing, occurrence matching, context rereads, YAML
-catalog parsing, or parser registration in a host; the facade supersedes them.
+Do not reimplement replay hashing, delivery keys, event-link checks, redaction
+re-checks, occurrence matching, context rereads, YAML catalog parsing, or
+parser registration in a host; the facade supersedes them.
 
 Preserve `stage` and optional `occurred_at` through storage. If a host needs
 an observation-time fallback for indexing, label that basis instead of presenting
