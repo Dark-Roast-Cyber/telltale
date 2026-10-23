@@ -29,6 +29,16 @@
   server discovery. Event 3.0, CLI output and existing APIs are unchanged; the
   migration guide adds an embedding-host checklist of changes since RC2.
 
+- Give embedding hosts the record checks they were re-deriving.
+  `ActionRecordV1::delivery_key()` returns a pinned key over the semantic
+  identity and the replay identity, or else the source path hash, coordinate
+  and finding IDs. The documented coordinate-only key merged the several
+  process-chain actions that one tool call can carry. `check_session_event`
+  checks that an Event 3 detection or process-chain event can travel with a
+  record and, for a linked record, that it is the linked event. The record
+  consumer now also rejects text that redaction would still change. The
+  record schema and Event 3.0 are unchanged.
+
 - Add generated contributor catalogs: `docs/catalog/sources.json` lists every
   registered source's exact client, source ID, root, relative path, pattern and
   discovery special cases, and `docs/catalog/rule-vocabulary.json` lists the

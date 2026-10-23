@@ -30,14 +30,11 @@ fn bash(id: &str, time: &str, command: &str) -> Value {
     json!({"type":"assistant","uuid":id,"timestamp":time,"message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":command}}]}})
 }
 
-/// Host-owned envelope: the host's delivery key and transport version around
-/// Telltale's record. Tenancy and host identity would also live here.
+/// Host-owned envelope: the record's delivery key and the host's transport
+/// version around Telltale's record. Tenancy and host identity would also
+/// live here.
 fn envelope(record: &ActionRecordV1) -> Value {
-    let key = match &record.replay_identity {
-        Some(replay) => replay.clone(),
-        None => format!("{}|{}", record.source_path_hash, record.coordinate),
-    };
-    json!({"host_version": 1, "delivery_key": key, "record": record})
+    json!({"host_version": 1, "delivery_key": record.delivery_key(), "record": record})
 }
 
 #[test]
@@ -85,6 +82,7 @@ fn records_cross_a_process_boundary_and_link_strict_event3() {
         .iter()
         .map(|bytes| Event3Record::from_json(bytes).unwrap())
         .collect::<Vec<_>>();
+    let mut keys = std::collections::BTreeSet::new();
     for bytes in &wire {
         let text = String::from_utf8_lossy(bytes);
         assert!(!text.contains(SECRET) && !text.contains(PRIVATE_PATH));
@@ -93,13 +91,14 @@ fn records_cross_a_process_boundary_and_link_strict_event3() {
             ActionRecordV1::from_json(&serde_json::to_vec(&envelope["record"]).unwrap()).unwrap();
         assert_eq!(record.schema, ACTION_RECORD_V1_ID);
         assert!(records.contains(&record));
+        assert_eq!(envelope["delivery_key"], record.delivery_key());
+        assert!(keys.insert(record.delivery_key()), "one key per action");
         if let Some(event_id) = &record.session_event_id {
-            assert!(
-                received_events
-                    .iter()
-                    .any(|event| &event.common().event_id == event_id),
-                "linked session event delivered with the record"
-            );
+            let event = received_events
+                .iter()
+                .find(|event| &event.common().event_id == event_id)
+                .expect("linked session event delivered with the record");
+            record.check_session_event(event).unwrap();
         }
     }
 
