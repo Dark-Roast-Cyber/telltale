@@ -98,7 +98,7 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 | `network.controlled_test_domain.darkroast` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Controlled-domain string match. Current tag is only semantically complete when the observation establishes actual egress. |
 | `exfil.dns_encoding` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded data piped or substituted into a DNS lookup, or long encoded labels. |
 | `exfil.encoded_http` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded hostname or base64 request material sent through an HTTP client. |
-| `credential.cloud_harvest` | `credential_harvesting` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Cloud provider credential files. |
+| `credential.cloud_harvest` | `credential_harvesting` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Cloud credential files read, copied, encoded, archived or sent; not a CLI authenticating with its configured path. |
 | `supply_chain.publish` | `supply_chain` | `security_detection` | `atomic` | `alert` | none | Package publishing command; the act itself does not prove publication of a poisoned AI artifact. |
 | `mcp.server_enumeration` | `mcp_enumeration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0084` | Current emitted tag. `AML.T0133` is more precise for runtime MCP/tool capability enumeration in ATLAS 2026.09. |
 | `destructive.filesystem_wipe` | `destructive` | `threat_hunting` | `atomic` | `hunt` | none | Zero-point tag for home, root or disk destruction; not AI-specific. |

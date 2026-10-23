@@ -1274,8 +1274,13 @@ fn native_fields<'a>(
                 text,
                 budget,
             )?,
-            "credential.cloud_harvest"
-            | "persistence.shell_profile"
+            // Shell parameters are path tokens too. A credential path handed to
+            // a CLI that authenticates with it is not a read of the file.
+            "credential.cloud_harvest" => {
+                action(field)
+                    && (field != "file_path" || view.reads_paths || view.text("command").is_empty())
+            }
+            "persistence.shell_profile"
             | "execution.encoded_payload"
             | "exfil.dns_encoding"
             | "supply_chain.publish" => action(field),

@@ -7,12 +7,16 @@ use telltale_schema::observation::*;
 const PERSISTENCE: &str = "persistence.shell_profile";
 
 /// A native file-tool call with the given name and JSON arguments.
-fn file_tool(id: &str, name: &str, arguments: serde_json::Value) -> CanonicalObservationV2 {
+pub(super) fn file_tool(
+    id: &str,
+    name: &str,
+    arguments: serde_json::Value,
+) -> CanonicalObservationV2 {
     call(id, name, arguments, None)
 }
 
 /// A shell call, with the command facet adapters derive from its arguments.
-fn shell(id: &str, command: &str) -> CanonicalObservationV2 {
+pub(super) fn shell(id: &str, command: &str) -> CanonicalObservationV2 {
     call(
         id,
         "Bash",
@@ -98,7 +102,7 @@ fn written_path(observation: &CanonicalObservationV2) -> Option<String> {
     }
 }
 
-fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<String> {
+pub(super) fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<String> {
     let rules = telltale_rules::load_default_rule_set().unwrap();
     let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
     evaluate_rule_v1_session_with_budget(&plan, &[observation], &mut RetentionBudget::new())
@@ -107,7 +111,7 @@ fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<String> {
         .to_vec()
 }
 
-fn action_rule_ids(observation: CanonicalObservationV2) -> Vec<String> {
+pub(super) fn action_rule_ids(observation: CanonicalObservationV2) -> Vec<String> {
     let rules = telltale_rules::load_default_rule_set().unwrap();
     let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();

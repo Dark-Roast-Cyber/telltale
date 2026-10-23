@@ -273,12 +273,17 @@ rules:
       - atlas:AML.T0055
     severity: high
     score: 50
-    targets: [command, arguments, file_path]
-    regex: '(\.aws/credentials|\.aws/config|\.gcloud/credentials\.json|\.kube/config|\.docker/config\.json|credentials\.json|service-account\.json|\.azure/accessTokens\.json|\.config/gcloud/credentials\.db)'
+    detection:
+      selection:
+        command: '(?:(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base64|base32|basenc|grep|egrep|fgrep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|ncat|socat|dd|tee|vim?|nano|type|get-content|gc|copy-item|compress-archive|invoke-webrequest|invoke-restmethod)(?:\.exe)?\s[^;&|\n]*?|(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?|[<@]\s*["'']?[^\s;&|<>"'']*?)(?:\.aws[\/\\](?:credentials|config)|\.gcloud[\/\\]credentials\.json|\.kube[\/\\]config|\.docker[\/\\]config\.json|credentials\.json|service-account\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)'
+        arguments: '(?:(?:(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base64|base32|basenc|grep|egrep|fgrep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|ncat|socat|dd|tee|vim?|nano|type|get-content|gc|copy-item|compress-archive|invoke-webrequest|invoke-restmethod)(?:\.exe)?\s[^;&|\n]*?|(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?|[<@]\s*["'']?[^\s;&|<>"'']*?)|"(?:file_?path|filePath|path|absolute_path|target_file|file|filename)"\s*:\s*"[^"]*?)(?:\.aws[\/\\](?:credentials|config)|\.gcloud[\/\\]credentials\.json|\.kube[\/\\]config|\.docker[\/\\]config\.json|credentials\.json|service-account\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)'
+        file_path: '(?m)(?:\.aws[\/\\](?:credentials|config)|\.kube[\/\\]config|\.docker[\/\\]config\.json|(?:^|[\/\\])(?:credentials|service-account)\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)$'
+      condition: selection
     tags: [credentials, cloud, harvesting]
-    explanation: Access to cloud provider credential files.
+    explanation: A cloud credential file was read, copied, encoded, archived or sent, or a native file tool opened it.
     falsepositives:
-      - Authorized cloud CLI troubleshooting or inventory may read credential paths under explicit operator direction.
+      - Authorized cloud CLI troubleshooting or inventory may read credential files under explicit operator direction.
+      - A cloud CLI given the credential path it authenticates with (`--kubeconfig`, `KUBECONFIG=`, `--key-file`) does not match.
 
   - id: supply_chain.publish
     category: supply_chain

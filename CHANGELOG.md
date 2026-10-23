@@ -27,6 +27,13 @@
     include `.zprofile`, `.zshenv`, `.zlogin` and `.bash_login`. Native file
     tools match only startup files they write, through `written_path`; reading
     one with a file tool no longer matches either.
+- `credential.cloud_harvest` now requires a cloud credential file to be read,
+  copied, encoded, archived or sent (`cat`, `grep`, `base64`, `cp`, `scp`, `tar`,
+  `curl`, input redirection, inline interpreter code and similar), or opened by
+  a native file tool. A CLI given the path it authenticates with
+  (`kubectl --kubeconfig ~/.kube/config`, `KUBECONFIG=`, `--key-file`) no longer
+  scores 50; listing pods with an explicit kubeconfig dropped from 65 to 15.
+  Action findings no longer treat such a CLI parameter as a credential read.
 - Add four zero-point `hunt` tags in the new `destructive` category so the
   timeline marks commands that can delete or discard data. They add no score:
   - `destructive.filesystem_wipe`: home, root or disk deletion;
@@ -43,10 +50,10 @@
   target do not load in earlier releases. Action findings read the same field,
   so detailed scans also stop matching persistence on shell or native reads of
   a startup file. The native action profile version is now 4, which also covers
-  the wget output-cluster parsing above; semantic identities change and replay
-  identities do not.
-- Evaluation corpus: add nine command-effect cases. Security-review confusion
-  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 14 / FP 0 / TN 31 / FN 4. The two
+  the wget output-cluster parsing and the cloud credential scoping above;
+  semantic identities change and replay identities do not.
+- Evaluation corpus: add ten command-effect cases. Security-review confusion
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 14 / FP 0 / TN 32 / FN 4. The two
   new false negatives are unrequested destructive commands, which the
   zero-point tags do not escalate.
 
