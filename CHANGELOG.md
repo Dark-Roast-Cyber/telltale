@@ -6,6 +6,10 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Avoid reserving unrelated tool arguments for scalar control-field lookups,
+  and skip encoded-URL candidate scanning when text contains no complete percent
+  escape. Genuine input scanning and valid encoded URLs retain their existing
+  work limits; redacted output is unchanged.
 - Keep an indivisible OpenCode timestamp group readable when adaptive windows
   shrink, within unchanged hard read and retention budgets. Over-capacity groups
   remain explicitly quarantined while later history can still be evaluated;
