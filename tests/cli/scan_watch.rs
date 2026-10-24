@@ -1582,7 +1582,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     assert_eq!(summary["event_type"], "health");
     // Copilot's mixed-context rules require unsupported UserContext and remain
     // visibility-limited. Commands also no longer include fabricated tool names.
-    assert_eq!(summary["detection_count"], 30);
+    assert_eq!(summary["detection_count"], 32);
     assert_runtime_snapshot(summary);
     assert_eq!(
         summary["effective_configuration"]["local_config"]["mode"],
@@ -1608,8 +1608,8 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
         crate::default_rule_source_count()
     );
     assert_source_processing_accounting(summary);
-    assert_detection_flow_accounting(summary, 30, 0);
-    assert_eq!(summary["source_processing"]["selected_source_count"], 57);
+    assert_detection_flow_accounting(summary, 32, 0);
+    assert_eq!(summary["source_processing"]["selected_source_count"], 59);
     assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
     assert_eq!(
         summary["source_discovery"]["performed_for_current_scan"],
@@ -1624,8 +1624,8 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
         summary["source_discovery"]["best_effort_fallback_used"],
         false
     );
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
-    assert_eq!(summary["source_discovery"]["operational_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 59);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 59);
     assert_eq!(
         summary["source_discovery"]["project_configuration"],
         serde_json::json!({
@@ -1660,25 +1660,25 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     );
     assert_eq!(
         summary["source_processing"]["parse_success_source_count"],
-        57
+        59
     );
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 126);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 133);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
-            "user_message": 19,
+            "user_message": 20,
             "assistant_message": 23,
-            "tool_call": 26,
+            "tool_call": 31,
             "tool_result": 14,
-            "session_meta": 44,
+            "session_meta": 45,
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 109);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 124);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
-    assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
+    assert_eq!(summary["source_counts"]["codex.jsonl"], 42);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
     assert_eq!(summary["source_counts"]["codex.headless_jsonl"], 2);
     assert_eq!(summary["source_counts"]["openclaw.jsonl"], 2);
@@ -1687,7 +1687,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     assert_eq!(summary["source_counts"]["copilot.copilot_process_log"], 5);
 
     let events = &fixture_scan().events;
-    assert_eq!(events.len(), 32);
+    assert_eq!(events.len(), 34);
 }
 
 struct FixtureScan {
@@ -1862,7 +1862,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["telltale_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
     assert_eq!(event["rule_count"], crate::default_rule_count());
-    assert_eq!(event["emitted_count"], 31);
+    assert_eq!(event["emitted_count"], 33);
     assert_eq!(event["suppressed_count"], 0);
     assert_eq!(event["scanner_error_count"], 0);
     assert_eq!(event["threshold_config"]["low"], 20);
@@ -1882,7 +1882,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][0]["field"], "source_inventory");
     assert_eq!(
         event["evidence"][0]["redacted_value"],
-        "sources=57; client_source_kinds=8"
+        "sources=59; client_source_kinds=8"
     );
     assert!(
         event["evidence"][0]["hash"]
@@ -1892,7 +1892,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][1]["field"], "source_inventory_change");
     assert_eq!(
         event["evidence"][1]["redacted_value"],
-        "baseline=true; added=57; removed=0; unchanged=0"
+        "baseline=true; added=59; removed=0; unchanged=0"
     );
     assert!(
         event["evidence"][1]["hash"]
@@ -2392,7 +2392,7 @@ fn scan_once_emits_token_injection_and_install_detections() {
         "install persistence event failed schema validation"
     );
     assert_eq!(install_persistence["event_type"], "detection");
-    assert_eq!(install_persistence["severity"], "critical");
+    assert_eq!(install_persistence["severity"], "high");
     assert!(
         install_persistence["rule_ids"]
             .as_array()
@@ -2407,12 +2407,14 @@ fn scan_once_emits_token_injection_and_install_detections() {
             .iter()
             .any(|rule| rule == "persistence.shell_profile")
     );
+    // Installing a package and editing a startup file is ordinary setup; no
+    // chain modifier pairs them.
     assert!(
         install_persistence["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
-            .any(|rule| rule == "chain.install_then_persistence")
+            .all(|rule| !rule.as_str().unwrap_or_default().starts_with("chain."))
     );
     assert!(
         install_persistence["categories"]
@@ -2550,7 +2552,7 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
         "secret network event failed schema validation"
     );
     assert_eq!(secret_network["event_type"], "detection");
-    assert_eq!(secret_network["severity"], "critical");
+    assert_eq!(secret_network["severity"], "high");
     assert!(
         secret_network["rule_ids"]
             .as_array()
@@ -2565,8 +2567,9 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
             .iter()
             .any(|rule| rule == "network.download")
     );
+    // A secret read and a download do not chain; the chain needs an upload.
     assert!(
-        secret_network["rule_ids"]
+        !secret_network["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
@@ -2604,14 +2607,14 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
         "private key event failed schema validation"
     );
     assert_eq!(private_key["event_type"], "detection");
-    assert_eq!(private_key["severity"], "medium");
+    assert_eq!(private_key["severity"], "high");
     assert!(
-        !private_key["rule_ids"]
+        private_key["rule_ids"]
             .as_array()
             .unwrap()
             .iter()
             .any(|id| id == "execution.shell"),
-        "the bash tool name must not be synthesized into command evidence"
+        "the bash tool name supplies shell credit without synthesizing command evidence"
     );
     assert!(
         private_key["rule_ids"]
@@ -2922,7 +2925,7 @@ fn scan_once_client_filter_limits_discovered_sources() {
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
     assert_eq!(source_counts["qwen.jsonl"], 2);
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 59);
     assert_eq!(summary["source_discovery"]["operational_source_count"], 2);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -2971,7 +2974,7 @@ fn scan_once_accepts_repeated_client_filters() {
         .as_object()
         .expect("source counts object");
     assert_eq!(source_counts.len(), 4);
-    assert_eq!(source_counts["codex.jsonl"], 40);
+    assert_eq!(source_counts["codex.jsonl"], 42);
     assert_eq!(source_counts["codex.archived_jsonl"], 2);
     assert_eq!(source_counts["codex.headless_jsonl"], 2);
     assert_eq!(source_counts["qwen.jsonl"], 2);
@@ -3048,7 +3051,7 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
     assert_eq!(source_counts["qwen.jsonl"], 1);
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 59);
     assert_eq!(summary["source_discovery"]["operational_source_count"], 1);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -3168,19 +3171,19 @@ fn repeated_scans_suppress_duplicate_detections() {
         serde_json::from_slice::<Value>(&output.stdout).expect("scan summary json")
     };
     let first_summary = run_scan(&[]);
-    assert_eq!(first_summary["detection_count"], 30);
-    assert_eq!(first_summary["emitted_count"], 31);
+    assert_eq!(first_summary["detection_count"], 32);
+    assert_eq!(first_summary["emitted_count"], 33);
     assert_source_processing_accounting(&first_summary);
-    assert_detection_flow_accounting(&first_summary, 30, 0);
+    assert_detection_flow_accounting(&first_summary, 32, 0);
 
     let second_summary = run_scan(&[]);
-    assert_eq!(second_summary["detection_count"], 30);
+    assert_eq!(second_summary["detection_count"], 32);
     assert_eq!(second_summary["emitted_count"], 0);
     assert_source_processing_accounting(&second_summary);
-    assert_detection_flow_accounting(&second_summary, 0, 30);
+    assert_detection_flow_accounting(&second_summary, 0, 32);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        109
+        124
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -3195,14 +3198,14 @@ fn repeated_scans_suppress_duplicate_detections() {
         .lines()
         .count();
     let backfill_summary = run_scan(&["--dry-run", "--backfill"]);
-    assert_eq!(backfill_summary["detection_count"], 30);
+    assert_eq!(backfill_summary["detection_count"], 32);
     assert_eq!(
         backfill_summary["detection_flow"]["effective_detection_candidate_count"],
-        30
+        32
     );
     assert_eq!(
         backfill_summary["detection_flow"]["emitted_detection_count"],
-        30
+        32
     );
     assert_eq!(
         backfill_summary["detection_flow"]["state_deduplicated_detection_count"],
@@ -3217,7 +3220,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 32);
+    assert_eq!(lines.lines().count(), 34);
 }
 
 #[test]
@@ -3376,12 +3379,15 @@ fn scan_once_persists_incremental_baseline_snapshots() {
         let summary: Value = serde_json::from_slice(&output.stdout).expect("scan summary");
         assert_eq!(
             summary["detection_flow"]["effective_detection_candidate_count"],
-            0
+            3
         );
         let events = fs::read_to_string(&log_path).expect("benign events");
         assert!(events.lines().all(|line| {
             let event: Value = serde_json::from_str(line).expect("Event3 JSON");
             event["event_type"] != "detection"
+                || (event["rule_ids"] == serde_json::json!(["execution.shell"])
+                    && event["risk_score"] == 15
+                    && event["severity"] == "informational")
         }));
     };
 
@@ -3618,7 +3624,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     );
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("summary json");
     assert_eq!(first_summary["activity_count"], 1);
-    assert_eq!(first_summary["emitted_count"], 1);
+    assert_eq!(first_summary["emitted_count"], 2);
 
     let mut state: Value =
         serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
@@ -3662,7 +3668,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 3);
+    assert_eq!(lines.lines().count(), 4);
 }
 
 #[test]
@@ -3696,7 +3702,7 @@ fn scan_once_can_emit_activity_events() {
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert!(summary["activity_count"].as_u64().unwrap_or_default() > 0);
-    assert_eq!(summary["detection_count"], 30);
+    assert_eq!(summary["detection_count"], 32);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -5234,7 +5240,7 @@ fn scan_once_allows_fixture_root_with_dry_run() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
-    assert_eq!(summary["detection_count"], 30);
+    assert_eq!(summary["detection_count"], 32);
 }
 
 #[test]
@@ -8415,13 +8421,28 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
         ]
     })
     .collect::<Vec<_>>();
+    expected_evidence.extend([
+        (
+            "tool_name",
+            Some("37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2"),
+            Some("execution.shell"),
+        ),
+        (
+            "canonical_observation_id",
+            Some(OBSERVATION_HASH),
+            Some("execution.shell"),
+        ),
+    ]);
     expected_evidence.sort_unstable();
     assert_eq!(evidence, expected_evidence);
 
     assert_eq!(event.timeline_anchors.len(), 1);
     assert_eq!(event.timeline_anchors[0].entry_index, 0);
     assert_eq!(event.timeline_anchors[0].rule_ids, event.rule_ids);
-    assert_eq!(event.timeline_anchors[0].evidence_fields, ["command"]);
+    assert_eq!(
+        event.timeline_anchors[0].evidence_fields,
+        ["command", "tool_name"]
+    );
 }
 
 #[test]

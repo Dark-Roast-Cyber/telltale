@@ -187,10 +187,13 @@ pub fn bundled_rule_catalog(
                 action_within_seconds: action
                     .as_ref()
                     .and_then(|semantics| semantics.within_seconds),
-                action_link: action
-                    .as_ref()
-                    .and_then(|semantics| semantics.link)
-                    .map(str::to_owned),
+                action_link: action.as_ref().and_then(|semantics| {
+                    semantics.link.map(str::to_owned).or_else(|| {
+                        semantics
+                            .within_calls
+                            .map(|calls| format!("within_calls:{calls}"))
+                    })
+                }),
                 atlas_tags: modifier.atlas_tags,
                 signal_type: modifier.signal_type,
                 tags: Vec::new(),
@@ -404,7 +407,7 @@ mod tests {
         }
     }
     #[test]
-    fn catalog_reports_native_link_and_same_action_semantics() {
+    fn catalog_reports_native_and_declared_link_semantics() {
         let mut options = DetailedEvaluationOptions::default();
         let catalog = bundled_rule_catalog(&options).unwrap();
         let link = catalog
@@ -417,13 +420,20 @@ mod tests {
         assert_eq!(link.action_within_seconds(), Some(900));
         assert_eq!(link.action_link(), Some("downloaded_artifact"));
         assert!(!link.falsepositives().is_empty());
-        let rule_ids = catalog
+        let same_call = catalog
             .iter()
             .find(|entry| entry.id() == "chain.shell_encoded_payload")
             .unwrap();
-        assert!(!rule_ids.action_ordered());
-        assert_eq!(rule_ids.action_within_seconds(), None);
-        assert_eq!(rule_ids.action_link(), None);
+        assert!(!same_call.action_ordered());
+        assert_eq!(same_call.action_within_seconds(), None);
+        assert_eq!(same_call.action_link(), Some("within_calls:0"));
+        let declared = catalog
+            .iter()
+            .find(|entry| entry.id() == "chain.credential_then_publish")
+            .unwrap();
+        assert!(declared.action_ordered());
+        assert_eq!(declared.action_within_seconds(), None);
+        assert_eq!(declared.action_link(), Some("within_calls:3"));
         options.linked_download_score = Some(7);
         let overridden = bundled_rule_catalog(&options).unwrap();
         let link = overridden

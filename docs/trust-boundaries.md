@@ -130,7 +130,7 @@ The following content sources in agent session stores should be treated as untru
 **Telltale handling**:
 - The `execution` category detects shell and interpreter invocations.
 - The `approval_bypass` category detects language that tries to skip user confirmation.
-- The `download_then_execute` chain modifier detects fetch-execute patterns.
+- The `download_then_execute` chain modifier detects downloaded content that is piped to an interpreter or run as a file.
 
 ## Trust Boundary Matrix
 

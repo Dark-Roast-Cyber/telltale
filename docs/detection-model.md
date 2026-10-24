@@ -168,6 +168,22 @@ available on the simple `targets` + `regex` form. Rule defaults apply
 case-insensitive compilation to both expressions. Rule v1 remains the supported
 production content format; there is no separate filter engine.
 
+The bundled `execution.shell` session rule uses this selection form to match
+exact shell-tool names (`shell`, `exec_command`, `shell_command`, and shell
+executable names) as well as shell/interpreter patterns in command and argument
+text. It contributes 15 points once per session, including when both a tool name
+and wrapper match. Thus omitting a wrapper from a recorded shell request does
+not remove execution credit. Requests and denied attempts are not proof of host
+execution. Existing category modifiers still apply, and legitimate user-approved
+shell activity can still alert in combination with other rules. Native
+per-action command precision is separate and unchanged.
+
+Shell-credit evidence retains the first matching observation per session, not
+one copy per shell call. Every observation is still evaluated and counted in the
+detector aggregate; other rules and native action findings keep their evidence.
+This prevents redundant score-once shell evidence from exhausting the existing
+source-retention budget on long histories. Retention and work limits are unchanged.
+
 Policy YAML can select active rule categories and rule ids without editing the rule files:
 
 ```yaml

@@ -122,8 +122,13 @@ harness = false
 name = "telltale"
 path = "src/main.rs"
 
-# Dev and test builds optimize third-party dependencies (bundled SQLite, regex,
-# serde) so integration tests do not spend their time in unoptimized library
-# code. Workspace crates keep unoptimized, incremental debug builds.
+# Tests inherit this profile. Keep incremental rebuilds and source-level
+# backtraces, without retaining full type/variable debug information by default.
+[profile.dev]
+debug = 1
+
+# Optimize third-party dependencies (bundled SQLite, regex, serde) so integration
+# tests do not spend their time in unoptimized library code. Workspace crates
+# remain unoptimized.
 [profile.dev.package."*"]
 opt-level = 2

@@ -107,6 +107,11 @@ make check        # broader Rust developer verification
 make ci-local     # locked Linux pre-push CI gate
 ```
 
+Routine workspace and embedding-fixture dev/test builds use limited debug
+information (`debug = 1`), retaining source locations, backtraces and incremental
+compilation. Reuse warm outputs rather than routinely cleaning them. For deeper
+debugger inspection only, see [Debugging test failures](#debugging-test-failures).
+
 `make ci-local` also runs the repository-owned contract, console/headless,
 documentation-boundary, security/supply-chain, fixture-smoke, and package checks.
 It is Linux-only and does not replace GitHub validation for Windows, macOS,
@@ -115,6 +120,33 @@ Use `make security-tools` once to install the pinned local security tools before
 the security portion of the gate. Release work remains separate: use
 `make release-preflight` and the release/native workflows when preparing an RC or
 release.
+
+### Debugging test failures
+
+Start with the focused failing test, logs and backtrace using the normal profile.
+
+<details>
+<summary>Escalate only when diagnosis needs local variables or detailed types</summary>
+
+Routine builds omit full type/local-variable debug information. If that blocks
+diagnosis, opt in for the affected dev/test run:
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_TEST_DEBUG=2 cargo test --locked
+```
+
+Retain the failing command's package, feature and test selectors when narrowing
+this command. The same overrides can prefix the relevant `make` gate; do not
+export them globally or make full debug a routine harness/CI default. Release
+profiles are unaffected.
+
+For hard-to-reproduce crashes, build with full debug before reproducing and keep
+the matching binary and symbols. Rebuilding afterward cannot recover debug data
+missing from an earlier crash. Changing debug levels can retain another artifact
+set; it does not remove older outputs. Keep validation logs outside disposable
+build outputs, and retain separate embedding and Rust 1.88 qualification targets.
+
+</details>
 
 ## Cargo packages
 

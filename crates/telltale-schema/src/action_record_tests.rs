@@ -228,6 +228,73 @@ fn errors_carry_no_input_text() {
 }
 
 #[test]
+fn delivery_key_prefers_replay_identity_and_is_pinned() {
+    // Hosts persist these keys, so the derivation is pinned like a schema.
+    let replayed = record();
+    assert_eq!(
+        replayed.delivery_key(),
+        "delivery:v1:sha256:b9da5ae4aa0ca5029b827f00a6a4ea911ec2fe9a8d94f2a54424f6d8bcf2d08a"
+    );
+    let mut moved = replayed.clone();
+    moved.source_path_hash = digest("", '7');
+    moved.coordinate = digest("obs:v2:sha256:", '8');
+    assert_eq!(moved.delivery_key(), replayed.delivery_key());
+
+    let mut unreplayed = replayed.clone();
+    unreplayed.replay_identity = None;
+    assert_eq!(
+        unreplayed.delivery_key(),
+        "delivery:v1:sha256:82f455395b36c551a69c908dd5ba74eec5c6e69cffc99465b276d03d459606db"
+    );
+    let mut reordered = unreplayed.clone();
+    reordered.canonical_findings.reverse();
+    assert_eq!(reordered.delivery_key(), unreplayed.delivery_key());
+
+    let mut other_store = unreplayed.clone();
+    other_store.source_path_hash = digest("", '7');
+    let mut other_action = unreplayed.clone();
+    other_action.coordinate = digest("obs:v2:sha256:", '8');
+    // One tool call can carry several process-chain actions on one coordinate.
+    let mut other_finding = unreplayed.clone();
+    other_finding.canonical_findings[0].finding_id = digest("fnd:v2:sha256:", '6');
+    let mut other_rules = replayed.clone();
+    other_rules.semantic_identity = digest("semantic:v1:sha256:", '9');
+    let keys = [
+        &replayed,
+        &unreplayed,
+        &other_store,
+        &other_action,
+        &other_finding,
+        &other_rules,
+    ]
+    .map(ActionRecordV1::delivery_key);
+    assert_eq!(keys.iter().collect::<BTreeSet<_>>().len(), keys.len());
+}
+
+#[test]
+fn consumer_rejects_text_that_redaction_would_change() {
+    let base = serde_json::to_value(record()).unwrap();
+    // A synthetic AWS access key ID: high-confidence, so always redacted.
+    let secret = "AKIAPRIVATEMARKER234";
+    for pointer in [
+        "/context/0/redacted_text",
+        "/evidence/0/redacted_value",
+        "/contributions/0/rationale",
+    ] {
+        let mut changed = base.clone();
+        *changed.pointer_mut(pointer).unwrap() = json!(format!("key {secret}"));
+        let error = rejected(changed);
+        assert_eq!(error.code(), "unredacted_text", "{pointer}");
+        assert!(!format!("{error} {error:?}").contains(secret));
+    }
+
+    let mut redacted = base.clone();
+    redacted["context"][0]["redacted_text"] =
+        json!(redact_sensitive_text(&format!("key {secret}")));
+    ActionRecordV1::from_json(&bytes(&redacted)).unwrap();
+}
+
+#[test]
 fn published_schema_matches_the_embedded_copy() {
     // The repository mirror is absent from the published crate.
     let published = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

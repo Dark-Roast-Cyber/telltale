@@ -426,6 +426,7 @@ fn all_compatibility_names_are_registered() {
         "tool_result",
         "url",
         "user_context",
+        "written_path",
     ] {
         let selector = SelectorId::parse(&format!("compat.v1.{target}"));
         assert!(selector.is_ok(), "compat target {target} must compile");
@@ -434,7 +435,7 @@ fn all_compatibility_names_are_registered() {
 
 #[test]
 fn selector_registry_has_only_contract_backed_names() {
-    assert_eq!(SelectorId::all().len(), 56);
+    assert_eq!(SelectorId::all().len(), 57);
     let counts = SelectorId::all()
         .iter()
         .map(|name| name.split('.').next().expect("selector group"))
@@ -447,7 +448,7 @@ fn selector_registry_has_only_contract_backed_names() {
         BTreeMap::from([
             ("browser", 3),
             ("command", 1),
-            ("compat", 8),
+            ("compat", 9),
             ("inference", 5),
             ("mcp", 4),
             ("message", 3),
@@ -477,7 +478,7 @@ fn selector_registry_has_only_contract_backed_names() {
     assert_eq!(
         backing_counts,
         BTreeMap::from([
-            (SelectorBacking::Compatibility, 8),
+            (SelectorBacking::Compatibility, 9),
             (SelectorBacking::Derived, 7),
             (SelectorBacking::Direct, 2),
             (SelectorBacking::GovernedFacet, 2),
@@ -1453,14 +1454,14 @@ fn evaluated_matches_require_observation_identity_before_materialization() {
 fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
     let rules = telltale_rules::load_default_rule_set().expect("bundled rules");
     let export = rules.compatibility_export();
-    assert_eq!(export.rules().len(), 19);
-    assert_eq!(export.modifiers().len(), 9);
+    assert_eq!(export.rules().len(), 23);
+    assert_eq!(export.modifiers().len(), 8);
     let matcher_count = export
         .rules()
         .iter()
         .map(|rule| rule.matchers.len())
         .sum::<usize>();
-    assert_eq!(matcher_count, 57);
+    assert_eq!(matcher_count, 62);
     let targets = export
         .rules()
         .iter()
@@ -1474,11 +1475,12 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
         BTreeMap::from([
             ("arguments", 18),
             ("assistant_context", 8),
-            ("command", 16),
-            ("file_path", 4),
-            ("tool_name", 1),
+            ("command", 20),
+            ("file_path", 3),
+            ("tool_name", 2),
             ("tool_result", 7),
             ("url", 3),
+            ("written_path", 1),
         ])
     );
     let severities =
@@ -1491,7 +1493,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             });
     assert_eq!(
         severities,
-        BTreeMap::from([("high", 12), ("low", 4), ("medium", 3)])
+        BTreeMap::from([("high", 16), ("low", 4), ("medium", 3)])
     );
     let classes = export
         .rules()
@@ -1504,7 +1506,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
         classes,
         BTreeMap::from([
             ("policy_violation", 1),
-            ("security_detection", 16),
+            ("security_detection", 20),
             ("threat_hunting", 2),
         ])
     );

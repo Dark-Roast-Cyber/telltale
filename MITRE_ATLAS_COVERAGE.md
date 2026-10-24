@@ -90,31 +90,34 @@ The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its ch
 | `network.download` | `download` | `security_detection` | `atomic` | `alert` | none | HTTP/FTP retrieval by a download client; outbound POST/`--data` is not a download. |
 | `install.package_manager` | `install` | `security_detection` | `atomic` | `alert` | none | Package manager install; no specific ATLAS technique is asserted. |
 | `exfil.outbound_upload` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Outbound upload or object-store copy. |
-| `persistence.shell_profile` | `persistence` | `security_detection` | `atomic` | `alert` | none | Shell profile/service persistence; traditional, not AI-specific. |
+| `persistence.shell_profile` | `persistence` | `security_detection` | `atomic` | `alert` | none | Startup-file writes, crontab installs and service enables; traditional, not AI-specific. |
 | `approval.bypass.context` | `approval_bypass` | `policy_violation` | `atomic` | `alert` | `atlas:AML.T0051` | Suspicious approval-bypass language. Current tag is strongest only when the instruction originated from an untrusted prompt or tool context. |
 | `tool.injection.shape` | `tool_injection` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0051` | Tool-call-shaped content may spoof or steer tool use; shape alone does not prove prompt injection. |
 | `mcp.tool_metadata.prompt_injection` | `mcp_prompt_injection` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0051` | Strong prompt-injection mapping. ATLAS 2026.09 also provides `AML.T0110.000` for poisoned tool definitions and `AML.T0110.002` for poisoned runtime responses. |
 | `prompt_injection.instruction_override` | `instruction_override` | `threat_hunting` | `atomic` | `hunt` | `atlas:AML.T0051` | Generic instruction-override phrase in assistant output. Zero points alone; it corroborates `approval.bypass.context` through `chain.instruction_override_with_approval_bypass`. |
 | `network.controlled_test_domain.darkroast` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Controlled-domain string match. Current tag is only semantically complete when the observation establishes actual egress. |
-| `exfil.dns_encoding` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Base64-encoded DNS exfiltration. |
+| `exfil.dns_encoding` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded data piped or substituted into a DNS lookup, or long encoded labels. |
 | `exfil.encoded_http` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded hostname or base64 request material sent through an HTTP client. |
-| `credential.cloud_harvest` | `credential_harvesting` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Cloud provider credential files. |
+| `credential.cloud_harvest` | `credential_harvesting` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Cloud credential files read, copied, encoded, archived or sent; not a CLI authenticating with its configured path. |
 | `supply_chain.publish` | `supply_chain` | `security_detection` | `atomic` | `alert` | none | Package publishing command; the act itself does not prove publication of a poisoned AI artifact. |
 | `mcp.server_enumeration` | `mcp_enumeration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0084` | Current emitted tag. `AML.T0133` is more precise for runtime MCP/tool capability enumeration in ATLAS 2026.09. |
+| `destructive.filesystem_wipe` | `destructive` | `security_detection` | `atomic` | `alert` | none | Home, root or disk destruction; not AI-specific. |
+| `destructive.git_discard` | `destructive` | `security_detection` | `atomic` | `alert` | none | Discarded work or rewritten remote history. |
+| `destructive.database_drop` | `destructive` | `security_detection` | `atomic` | `alert` | none | Dropped or emptied databases. |
+| `destructive.infrastructure_teardown` | `destructive` | `security_detection` | `atomic` | `alert` | none | Destroyed environments, container storage or stored data. |
 
 ### Bundled Chain Modifiers (`config/rules/tool-call-regex.yaml`)
 
 | Modifier | Trigger | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `chain.secret_then_network` | `secret_access` + `download` | `security_detection` | `chain` | `alert` | none | Telltale-specific correlation; no single ATLAS technique. |
-| `chain.download_then_execute` | `download` + `execution` | `security_detection` | `chain` | `alert` | none | Traditional download-execute pattern. |
+| `chain.secret_then_network` | `secret_access` + `exfiltration` | `security_detection` | `chain` | `alert` | none | Telltale-specific correlation; no single ATLAS technique. |
+| `chain.download_then_execute` | `download` + `execution`, linked | `security_detection` | `chain` | `alert` | none | Downloaded content piped to an interpreter or executed as a file; traditional, not AI-specific. |
 | `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | `security_detection` | `chain` | `alert` | none | Obfuscated shell execution. `AML.T0050` plus `AML.T0123` is a candidate mapping if rule metadata is revised. |
-| `chain.install_then_persistence` | `install` + `persistence` | `security_detection` | `chain` | `alert` | none | Install near persistence surfaces. |
 | `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051`, `atlas:AML.T0086` | `T0051` is strong. `T0086` should be retained only if the correlated egress is known to be an agent tool invocation rather than generic command/network egress. |
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | `security_detection` | `chain` | `alert` | none | Credential harvesting near package publishing. |
 | `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0055`, `atlas:AML.T0025` | Credential access followed by cyber exfiltration. |
 | `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | `security_detection` | `chain` | `alert` | `atlas:AML.T0084`, `atlas:AML.T0051` | Current emitted tags. `AML.T0133` is more precise for the runtime enumeration half of the chain. |
-| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051` | Instruction override corroborated by an approval-bypass directive in the same session. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051` | Instruction override corroborated by an approval-bypass directive within three tool calls. |
 
 ### Example Rules
 
