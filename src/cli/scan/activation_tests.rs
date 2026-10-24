@@ -100,6 +100,8 @@ impl Fixture {
                 clients: &[ClientId::Codex, ClientId::OpenCode],
                 project_config_paths: &[],
                 install_inventory_interval_seconds: None,
+                process_chain: true,
+                operational_alerts: Default::default(),
                 runtime: &value,
                 effective_configuration: &value,
             },

@@ -16,7 +16,7 @@ use telltale_sources::journal;
 /// date-stamped rotated file and a fresh active file is started. Rotated files
 /// beyond `keep` are deleted oldest-first. This provides cross-platform
 /// rotation without OS-specific tooling (logrotate, newsyslog, Scheduled Tasks).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotationConfig {
     /// Maximum size in bytes before the active file is rotated. 0 disables rotation.
     pub max_size_bytes: u64,
@@ -34,6 +34,7 @@ impl Default for RotationConfig {
 }
 
 impl RotationConfig {
+    #[cfg(test)]
     pub fn disabled() -> Self {
         Self {
             max_size_bytes: 0,

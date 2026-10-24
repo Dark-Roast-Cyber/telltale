@@ -6,6 +6,26 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Operational settings can be deployed as `settings.d/*.yaml` files in any
+  config root: community rules, process-chain detections, risk thresholds,
+  operational alert thresholds, log rotation, and install inventory. Precedence
+  is defaults, then files, then the existing `TELLTALE_*` variables, then flags.
+  `telltale config show` prints each effective value with its default and
+  origin, and scans record it under `effective_configuration.settings`.
+  Environment values that do not parse now fail the command instead of silently
+  falling back to defaults, including padded integers such as `" 5 "`; an empty
+  variable still counts as unset. `TELLTALE_PROCESS_CHAIN_DETECTIONS` accepts
+  the same boolean spellings as `TELLTALE_COMMUNITY_RULES` in any case, so
+  `FALSE` now disables the pack instead of leaving it enabled.
+- Telltale libraries no longer read the operational-settings variables (path
+  and source discovery variables are unchanged). Embedded Event 3
+  severity uses the default thresholds unless the host calls
+  `telltale_schema::scoring::configure_thresholds`.
+  `ProducerProvenanceOptions::default()` returns compiled defaults;
+  `ProducerProvenanceOptions::from_environment`,
+  `telltale_core::resolve_install_inventory_interval_seconds`, and
+  `telltale_schema::event::load_operational_alert_config` are removed.
+
 - Make four bundled detections depend on what a command does, not on words
   that appear near it:
   - `chain.download_then_execute` now needs downloaded content to run in session

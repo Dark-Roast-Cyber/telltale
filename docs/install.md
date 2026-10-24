@@ -433,6 +433,7 @@ Supported directories for this phase are:
   overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
+  settings.d/*.yaml|*.yml
 ```
 
 Rule packs resolve in fixed tier order: bundled core rules, rule packages (the
@@ -569,6 +570,63 @@ managed tier (`organization-rules.d`, `rules.d`, or `ui-rules.d`) when it should
 replace matching IDs. Passing an exported copy with `--rules` is additive-only;
 use `--no-default-rules` if it is intended to be the complete explicit rule set.
 Do not edit bundled defaults in place.
+
+### Operational settings
+
+`settings.d` files hold the operational choices that otherwise need `TELLTALE_*`
+variables or flags, so one deployed file gives every workstation, VM, and
+container the same behavior. Every key is optional; the values shown are the
+defaults:
+
+```yaml
+version: 1
+rules:
+  community: true               # TELLTALE_COMMUNITY_RULES, --no-community-rules
+detections:
+  process_chain: true           # TELLTALE_PROCESS_CHAIN_DETECTIONS
+risk_thresholds:                # TELLTALE_RISK_THRESHOLD_LOW, _MEDIUM, _HIGH, _CRITICAL
+  low: 20
+  medium: 50
+  high: 70
+  critical: 90
+operational_alerts:
+  max_scanner_errors: 3         # TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS
+  max_scan_duration_ms: 300000  # TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS
+log_rotation:
+  max_size_bytes: 104857600     # TELLTALE_LOG_ROTATE_MAX_SIZE, --log-rotate-max-size; 0 disables
+  keep: 5                       # TELLTALE_LOG_ROTATE_KEEP, --log-rotate-keep
+install_inventory:
+  enabled: true                 # --install-inventory-disabled
+  interval_seconds: 86400       # TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS, --install-inventory-interval-seconds
+```
+
+Precedence, lowest to highest: defaults, settings files (roots in order, files
+sorted within a root, so a later file wins per key), environment variables, then
+explicit flags. A vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can
+share one directory. Unknown keys, an unsupported `version`, files over 64 KiB,
+and environment values that do not parse fail the command before it scans or
+writes anything; an empty variable counts as unset. Integer variables must be
+plain digits, so a padded value such as `" 5 "` fails. Booleans ignore
+surrounding whitespace and accept `0`/`1`, `false`/`true`, `off`/`on`, and
+`no`/`yes` in any case.
+
+`telltale config show` prints each setting's effective value, default, origin
+(`default`, `settings_file`, `environment`, or `cli`), and `source` without
+reading session stores. `source` is the winning file's path hash, the variable,
+or the flag, and `files` lists each file read with its path hash. Each scan
+records the same view under `effective_configuration.settings`. Settings are
+read when a command starts, so restart `watch` or a service to apply a change;
+`export --correlate` reads the default roots. Log/state paths and project roots
+keep the precedence described above. Telltale libraries do not read these
+variables; an embedding host passes values through the [Rust API](embedding.md).
+
+`settings.d` is trusted like `rules.d` and `allowlists.d` in the same root:
+anything that can write the user config root, including a coding agent running
+as that user, can change these settings. A managed deployment that must not
+honor user files runs with `--config-dir /etc/telltale` (root-owned) and sets
+variables and flags in its service unit. Scan summaries record each setting's
+origin and source, so a SIEM can alert when a value comes from an unexpected
+file or variable.
 
 ## Project-Local Session Stores
 

@@ -27,8 +27,8 @@ Suppress policy-controlled Rule v1 detections while retaining conditional health
 events and activity with `--emit-activity`. Health events are emitted for dry-run
 or backfill, inventory changes, scanner errors, outages, or operational alerts;
 an unchanged routine scan need not emit one. Process-chain detections are independently
-enabled by default; set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` as well for a
-detection-free baseline scan.
+enabled by default; also set `detections.process_chain: false` in `settings.d`
+(or `TELLTALE_PROCESS_CHAIN_DETECTIONS=0`) for a detection-free baseline scan.
 
 | Behavior | Setting |
 | --- | --- |
