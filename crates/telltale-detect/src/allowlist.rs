@@ -79,7 +79,7 @@ impl Allowlist {
         let mut hasher = Sha256::new();
         hasher.update(SUPPRESSION_FINGERPRINT_DOMAIN);
         hasher.update(canonical);
-        let fingerprint = format!("sha256:{:x}", hasher.finalize());
+        let fingerprint = format!("sha256:{}", hex::encode(hasher.finalize()));
         ProducerSuppressionProvenance {
             canonicalization: SUPPRESSION_V1_CANONICALIZATION.to_string(),
             state: ProducerSuppressionState::Configured,

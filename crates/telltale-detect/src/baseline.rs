@@ -220,7 +220,10 @@ pub fn baseline_host_identity(host: &str) -> String {
     }
     let mut hasher = Sha256::new();
     hasher.update(host.trim().to_ascii_lowercase().as_bytes());
-    format!("{BASELINE_HOST_HASH_PREFIX}{:x}", hasher.finalize())
+    format!(
+        "{BASELINE_HOST_HASH_PREFIX}{}",
+        hex::encode(hasher.finalize())
+    )
 }
 
 fn is_canonical_host_hash(host: &str) -> bool {

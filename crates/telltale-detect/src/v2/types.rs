@@ -1304,7 +1304,7 @@ impl Signal {
             canonical_identity_json(&tuple).map_err(|_| DetectionError::RuntimeEvaluation)?,
         );
         Ok(Self {
-            signal_id: format!("{SIGNAL_ID_PREFIX}{digest:x}"),
+            signal_id: format!("{SIGNAL_ID_PREFIX}{}", hex::encode(digest)),
             detector: result.detector.clone(),
             evaluation_status: result.evaluation_status,
             observation_ids: result.observation_ids.clone(),
@@ -1513,7 +1513,7 @@ impl Finding {
             canonical_identity_json(&tuple).map_err(|_| DetectionError::RuntimeEvaluation)?,
         );
         Ok(Self {
-            finding_id: format!("{FINDING_ID_PREFIX}{digest:x}"),
+            finding_id: format!("{FINDING_ID_PREFIX}{}", hex::encode(digest)),
             signal_ids: vec![signal.signal_id.clone()],
             observation_ids: signal.observation_ids.clone(),
             detectors: vec![signal.detector.clone()],
@@ -1666,7 +1666,7 @@ pub(crate) fn selector_path_digest(paths: &[String]) -> Result<String, Detection
     let value = JsonValue::Array(paths.iter().map(JsonValue::string).collect());
     let bytes = canonical_identity_json(&value).map_err(|_| DetectionError::RuntimeEvaluation)?;
     let digest = Sha256::digest(bytes);
-    Ok(format!("{digest:x}"))
+    Ok(hex::encode(digest))
 }
 
 pub(crate) fn metadata_for_path(

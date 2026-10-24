@@ -259,7 +259,7 @@ pub fn load_manifest(path: &Path, repo_root: &Path) -> Result<Manifest, String> 
 
 pub fn manifest_sha256(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| format!("read manifest: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 pub fn validate_manifest_bytes(text: &str, repo_root: &Path) -> Result<Manifest, String> {

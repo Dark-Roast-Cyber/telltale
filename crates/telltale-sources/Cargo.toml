@@ -18,6 +18,7 @@ default = []
 opencode-sqlite = ["dep:rusqlite"]
 
 [dependencies]
+hex.workspace = true
 telltale-schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -32,7 +33,7 @@ rusqlite.workspace = true
 tempfile = "3.14"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",

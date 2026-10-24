@@ -19,7 +19,7 @@ RELEASE_ARTIFACT_DIR ?= release-downloads
 CARGO_LOCKED ?=
 CARGO_AUDIT_VERSION ?= 0.22.2
 CARGO_DENY_VERSION ?= 0.20.2
-RUST_TOOLCHAIN_VERSION ?= 1.95.0
+RUST_TOOLCHAIN_VERSION ?= 1.99.1
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
 .PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check upstream-formats-check catalog-update harness-drift-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight release-preflight-ci package-manifest package-verify status logs scan-dry scan help

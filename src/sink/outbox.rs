@@ -2515,7 +2515,7 @@ fn journal_path_hash(path: &Path) -> String {
             hasher.update(absolute.to_string_lossy().as_bytes());
         }
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn resolve_journal_path(path: &Path) -> Result<PathBuf, PathBuf> {

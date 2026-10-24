@@ -19,6 +19,7 @@ opencode-sqlite = ["telltale-sources/opencode-sqlite"]
 protected-assignment = ["dep:fs4", "dep:getrandom", "dep:hmac", "dep:rusqlite", "dep:libc"]
 
 [dependencies]
+hex.workspace = true
 fs4 = { version = "1.1", optional = true }
 getrandom = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }

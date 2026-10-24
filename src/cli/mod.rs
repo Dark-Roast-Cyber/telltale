@@ -795,7 +795,7 @@ where
     ExecutableObservation {
         status: "complete",
         path_hash: Some(hash),
-        sha256: Some(format!("{:x}", hasher.finalize())),
+        sha256: Some(hex::encode(hasher.finalize())),
     }
 }
 

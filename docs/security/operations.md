@@ -30,7 +30,7 @@ The current exact tool ownership is:
 
 | Tool | Version | Owned by |
 | --- | --- | --- |
-| Rust toolchain | `1.95.0` | CI/release workflow `toolchain` input and Makefile version check |
+| Rust toolchain | `1.99.1` | `rust-toolchain.toml`, CI/release workflow `toolchain` input and Makefile version check |
 | `cargo-audit` | `0.22.2` | `Makefile` `CARGO_AUDIT_VERSION` |
 | `cargo-deny` | `0.20.2` | `Makefile` `CARGO_DENY_VERSION` |
 | SBOM generator | repository `scripts/generate-sbom.py`, format revision `1` | repository |

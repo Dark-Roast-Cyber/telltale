@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use fs4::{FileExt, TryLockError};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
@@ -1953,7 +1953,10 @@ fn random_observation_id() -> Result<String, ProtectedAssignmentError> {
     let mut hasher = Sha256::new();
     hasher.update(OBSERVATION_ID_DOMAIN);
     hasher.update(seed);
-    Ok(format!("{OBSERVATION_ID_PREFIX}{:x}", hasher.finalize()))
+    Ok(format!(
+        "{OBSERVATION_ID_PREFIX}{}",
+        hex::encode(hasher.finalize())
+    ))
 }
 
 fn fill_random(bytes: &mut [u8]) -> Result<(), ProtectedAssignmentError> {

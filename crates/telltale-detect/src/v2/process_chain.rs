@@ -495,7 +495,7 @@ fn atomic_dedupe_key(reported: &str) -> String {
     let mut digest = sha2::Sha256::new();
     digest.update(b"telltale:process-atomic-dedupe:v1\0");
     digest.update(reported.as_bytes());
-    format!("process:sha256:{:x}", digest.finalize())
+    format!("process:sha256:{}", hex::encode(digest.finalize()))
 }
 
 fn correlation_result(
@@ -578,7 +578,7 @@ fn correlation_dedupe_key(rule_id: &str, session_scope: &str) -> Result<String, 
     let bytes =
         canonical_identity_json(&identity).map_err(|_| DetectionError::RuntimeEvaluation)?;
     let digest = sha2::Sha256::digest(bytes);
-    Ok(format!("correlation:sha256:{digest:x}"))
+    Ok(format!("correlation:sha256:{}", hex::encode(digest)))
 }
 
 fn severity(value: &str) -> Result<Severity, DetectionError> {
@@ -1273,16 +1273,14 @@ correlations: []
             (ObservationStage::ToolExecutionCompleted, "completed"),
         ] {
             let observation = tool(stage, Some("cmd.exe /c whoami"), None, None, "shell", id);
-            assert!(
-                evaluate_tool_process_chains(
-                    &rules,
-                    &observation,
-                    &ProcessChainContext::default(),
-                )
-                .unwrap()
-                .iter()
-                .any(|result| result.detector().id() == "procchain.discovery.cmd_whoami")
-            );
+            assert!(evaluate_tool_process_chains(
+                &rules,
+                &observation,
+                &ProcessChainContext::default(),
+            )
+            .unwrap()
+            .iter()
+            .any(|result| result.detector().id() == "procchain.discovery.cmd_whoami"));
         }
         let returned = tool(
             ObservationStage::ToolResultReturned,

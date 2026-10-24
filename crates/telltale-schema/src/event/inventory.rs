@@ -43,7 +43,7 @@ pub(crate) fn source_inventory_evidence(sources: &[Source]) -> Evidence {
             sources.len(),
             counts.len()
         ),
-        hash: Some(format!("{:x}", hasher.finalize())),
+        hash: Some(hex::encode(hasher.finalize())),
         rule_id: None,
     }
 }
@@ -72,11 +72,11 @@ pub(crate) fn display_name(source: &Source) -> String {
 pub fn path_hash(path: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub fn evidence_hash(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }

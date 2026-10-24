@@ -1810,7 +1810,7 @@ mod tests {
     #[test]
     fn schema_asset_matches_frozen_event3_hash() {
         assert_eq!(
-            format!("{:x}", Sha256::digest(EVENT3_SCHEMA.as_bytes())),
+            hex::encode(Sha256::digest(EVENT3_SCHEMA.as_bytes())),
             EVENT3_SCHEMA_SHA256
         );
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -391,7 +391,7 @@ fn inventory_hash(agents: &[AgentInstallObservation]) -> String {
             hasher.update(b"\n");
         }
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn path_hash(path: &Path) -> String {

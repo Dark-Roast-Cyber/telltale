@@ -322,7 +322,7 @@ pub(crate) fn domain_hash(domain: &[u8], canonical: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update(canonical);
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 fn validate_hash(value: &str) -> Result<(), ProducerProvenanceError> {

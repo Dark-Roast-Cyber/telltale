@@ -79,6 +79,10 @@ impl RetentionBudget {
         }
     }
 
+    #[allow(
+        deprecated,
+        reason = "try_update is unavailable on the supported Rust 1.88 embedding subset"
+    )]
     pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ProcessingError> {
         if self
             .work_bytes

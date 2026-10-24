@@ -64,8 +64,8 @@ The separate, unpublished `telltale-console` package is excluded from workspace
 default members and headless build/install dependencies. Core and CLI never
 depend on the GUI. State is independent of egui; rendering cannot poll the feed.
 
-`eframe = 0.36.1` and `egui = 0.36.1` are pinned and require this repository's
-stable Rust 1.95. This version avoids the unmaintained font parser in 0.33.
+`eframe = 0.37.0` and `egui = 0.37.0` are pinned and use this repository's
+stable Rust 1.99.1. These versions avoid the unmaintained font parser in 0.33.
 eframe defaults are disabled; only
 `default_fonts`, `glow`, and `x11` are selected. egui defaults are disabled
 (fonts are enabled through eframe). Glow avoids WGPU; X11 supports Linux and

@@ -1607,7 +1607,7 @@ fn assert_release_archive_gates(workflow: &serde_yaml::Value) {
     let manifest = workflow_step_index(steps, "run", "REQUIRE_SBOM=1");
     assert!(archives < rust && rust < graph && graph < checksum);
     assert!(checksum < required_sbom && required_sbom < manifest);
-    assert_eq!(steps[rust]["with"]["toolchain"], "1.95.0");
+    assert_eq!(steps[rust]["with"]["toolchain"], "1.99.1");
     for index in [archives, rust, graph, checksum, required_sbom, manifest] {
         assert_default_success_gate(&steps[index]);
         if index != rust {
@@ -3425,7 +3425,7 @@ fn public_docs_native_release_gate_guidance_is_complete() {
 fn release_native_verify_pin_and_workflow_are_fail_closed() {
     let pin_bytes = fs::read("scripts/release-native-verify-rc7.json").expect("release pin");
     assert_eq!(
-        format!("{:x}", sha2::Sha256::digest(&pin_bytes)),
+        hex::encode(sha2::Sha256::digest(&pin_bytes)),
         "9220cff11541ddd01db3b5b74d5bd3afbd9512c4992928e81e90874a34e11dd5"
     );
     let pin: Value = serde_json::from_slice(&pin_bytes).expect("release pin JSON");
@@ -4233,11 +4233,10 @@ fn release_native_verify_checks_archive_binary_and_release_id_against_real_fixtu
         .output()
         .expect("tar synthetic bundle");
     assert!(tar.status.success(), "{}", native_output(&tar));
-    let digest = format!("{:x}", sha2::Sha256::digest(fs::read(&archive).unwrap()));
-    let binary_digest = format!(
-        "{:x}",
-        sha2::Sha256::digest(fs::read(payload.join("telltale")).unwrap())
-    );
+    let digest = hex::encode(sha2::Sha256::digest(fs::read(&archive).unwrap()));
+    let binary_digest = hex::encode(sha2::Sha256::digest(
+        fs::read(payload.join("telltale")).unwrap(),
+    ));
     fs::write(
         downloads.join("SHA256SUMS"),
         format!("{digest}  {archive_name}\n"),

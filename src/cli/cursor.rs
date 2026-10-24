@@ -197,7 +197,7 @@ fn digest(cursor: &SqliteIngestionCursor) -> Result<String> {
     let mut hash = Sha256::new();
     hash.update(b"telltale:cursor-reset:v1\0");
     hash.update(bytes);
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 fn result_bytes(value: serde_json::Value) -> Result<Vec<u8>> {

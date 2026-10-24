@@ -127,7 +127,7 @@ fn verified_source(source: &Source) -> Result<(Source, CorrelationId), Processin
         hash.update(value);
     }
     let instance = CorrelationId::new(
-        format!("{:x}", hash.finalize()),
+        hex::encode(hash.finalize()),
         CorrelationOrigin::TelltaleOriginated,
     )
     .map_err(|_| ProcessingError::InvalidSource)?;

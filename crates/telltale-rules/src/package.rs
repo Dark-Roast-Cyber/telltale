@@ -116,7 +116,7 @@ impl RulePackage {
             rule_namespace: package.rule_namespace,
             source: package.source,
             revision: package.revision,
-            content_sha256: format!("{:x}", Sha256::digest(raw.as_bytes())),
+            content_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
             documents: package.documents,
         })
     }
@@ -530,7 +530,7 @@ documents:
         assert_eq!(parsed.documents().len(), 1);
         assert_eq!(
             parsed.content_sha256(),
-            format!("{:x}", Sha256::digest(raw.as_bytes()))
+            hex::encode(Sha256::digest(raw.as_bytes()))
         );
     }
 
