@@ -38,6 +38,7 @@ pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "tool_result",
     "url",
     "user_context",
+    "written_path",
 ];
 
 // Shared with the published vocabulary catalog, not a supported embedding API.
@@ -126,11 +127,51 @@ pub struct ModifierDefinition {
     pub when_all_categories: Vec<String>,
     #[serde(default)]
     pub when_all_rule_ids: Vec<String>,
+    /// How the steps must link. Without one, they may match anywhere in a
+    /// session.
+    #[serde(default)]
+    pub link: Option<ModifierLink>,
     #[serde(default)]
     pub falsepositives: Vec<String>,
     pub explanation: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+}
+
+/// Most tool calls a modifier link may span.
+pub const MAX_MODIFIER_LINK_CALLS: u32 = 10;
+/// Most minutes a modifier link may allow between steps.
+pub const MAX_MODIFIER_LINK_MINUTES: u32 = 1440;
+
+/// How a chain modifier's steps must link: within `calls` tool calls of each
+/// other (0 means within one call), in declared order unless `order` is `any`,
+/// and, with `minutes`, within that many minutes of the step that completes the
+/// chain when both have a source time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModifierLink {
+    pub calls: u32,
+    #[serde(default)]
+    pub order: ModifierLinkOrder,
+    #[serde(default)]
+    pub minutes: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModifierLinkOrder {
+    #[default]
+    Declared,
+    Any,
+}
+
+impl ModifierLinkOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Declared => "declared",
+            Self::Any => "any",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +225,7 @@ pub struct RuleV1CompatibilityModifier {
     pub atlas_tags: Vec<String>,
     pub when_all_categories: Vec<String>,
     pub when_all_rule_ids: Vec<String>,
+    pub link: Option<ModifierLink>,
     pub falsepositives: Vec<String>,
     pub explanation: String,
 }
@@ -589,6 +631,7 @@ impl RuleSet {
                     &modifier.analytic_intent,
                     &modifier.atlas_tags,
                 )?;
+                validate_modifier_link(&modifier)?;
                 Ok(modifier)
             })
             .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
@@ -614,6 +657,32 @@ fn validate_rule_ids(rule_set: &RuleSet) -> Result<(), Box<dyn std::error::Error
         for rule_id in &modifier.when_all_rule_ids {
             validate_canonical_rule_id(rule_id, "modifier rule reference")?;
         }
+    }
+    Ok(())
+}
+
+fn validate_modifier_link(modifier: &ModifierDefinition) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(link) = modifier.link else {
+        return Ok(());
+    };
+    let id = &modifier.id;
+    if modifier.when_all_categories.is_empty() && modifier.when_all_rule_ids.is_empty() {
+        return Err(format!("modifier '{id}' link has no steps to link").into());
+    }
+    if link.calls > MAX_MODIFIER_LINK_CALLS {
+        return Err(format!(
+            "modifier '{id}' link calls must be at most {MAX_MODIFIER_LINK_CALLS}"
+        )
+        .into());
+    }
+    if link
+        .minutes
+        .is_some_and(|minutes| minutes == 0 || minutes > MAX_MODIFIER_LINK_MINUTES)
+    {
+        return Err(format!(
+            "modifier '{id}' link minutes must be between 1 and {MAX_MODIFIER_LINK_MINUTES}"
+        )
+        .into());
     }
     Ok(())
 }
@@ -735,6 +804,7 @@ fn build_export(
                 atlas_tags: modifier.atlas_tags.clone(),
                 when_all_categories: modifier.when_all_categories.clone(),
                 when_all_rule_ids: modifier.when_all_rule_ids.clone(),
+                link: modifier.link,
                 falsepositives: modifier.falsepositives.clone(),
                 explanation: modifier.explanation.clone(),
             })
@@ -747,6 +817,16 @@ impl RuleV1CompatibilityExport {
     pub fn triggered_modifiers(
         &self,
         matched: &BTreeSet<&str>,
+    ) -> Vec<&RuleV1CompatibilityModifier> {
+        self.triggered_modifiers_without(matched, &BTreeSet::new())
+    }
+
+    /// Eligible modifiers, except those the caller withholds because a session
+    /// link they require was not established.
+    pub fn triggered_modifiers_without(
+        &self,
+        matched: &BTreeSet<&str>,
+        withheld: &BTreeSet<&str>,
     ) -> Vec<&RuleV1CompatibilityModifier> {
         let atomic = self
             .rules
@@ -773,6 +853,7 @@ impl RuleV1CompatibilityExport {
                         .when_all_rule_ids
                         .iter()
                         .all(|id| rule_ids.contains(id.as_str()))
+                    && !withheld.contains(modifier.id.as_str())
             })
             .collect()
     }
@@ -782,6 +863,15 @@ impl RuleV1CompatibilityExport {
     pub fn evaluate_matched(
         &self,
         matched: &BTreeSet<&str>,
+    ) -> Result<Option<MatchResult>, RiskAccountingError> {
+        self.evaluate_matched_without(matched, &BTreeSet::new())
+    }
+
+    /// [`Self::evaluate_matched`] without the withheld modifiers.
+    pub fn evaluate_matched_without(
+        &self,
+        matched: &BTreeSet<&str>,
+        withheld: &BTreeSet<&str>,
     ) -> Result<Option<MatchResult>, RiskAccountingError> {
         let atomic = self
             .rules
@@ -815,7 +905,7 @@ impl RuleV1CompatibilityExport {
                 )?);
             }
         }
-        for modifier in self.triggered_modifiers(matched) {
+        for modifier in self.triggered_modifiers_without(matched, withheld) {
             rule_ids.push(modifier.id.clone());
             detection_classes.insert(modifier.detection_class.clone());
             signal_types.insert(modifier.signal_type.clone());
@@ -1104,6 +1194,12 @@ fn policy_allows_modifier(modifier: &ModifierDefinition, policy: Option<&RulePol
 
 #[cfg(test)]
 mod bundled_http_direction;
+
+#[cfg(test)]
+mod bundled_command_effects;
+
+#[cfg(test)]
+mod modifier_link_tests;
 
 #[cfg(test)]
 mod bundled_shell_execution;
@@ -1416,6 +1512,7 @@ modifiers:
                             atlas_tags: vec!["atlas:AML.T0051".to_string()],
                             when_all_categories: vec!["execution".to_string()],
                             when_all_rule_ids: vec!["test.retained".to_string()],
+                            link: None,
                             falsepositives: Vec::new(),
                             explanation: "synthetic modifier".to_string(),
                             enabled: true,
@@ -1532,6 +1629,7 @@ modifiers:
                 atlas_tags: Vec::new(),
                 when_all_categories: vec!["execution".to_string()],
                 when_all_rule_ids: Vec::new(),
+                link: None,
                 falsepositives: Vec::new(),
                 explanation: "synthetic chain modifier".to_string(),
                 enabled: true,
@@ -2111,6 +2209,7 @@ modifiers: []
                         atlas_tags: Vec::new(),
                         when_all_categories: Vec::new(),
                         when_all_rule_ids: references.into_iter().map(str::to_string).collect(),
+                        link: None,
                         falsepositives: Vec::new(),
                         explanation: "test modifier".to_string(),
                         enabled: true,

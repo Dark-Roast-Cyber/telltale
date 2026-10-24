@@ -65,13 +65,14 @@ When authoring or reviewing detection content:
 | `execution` | The agent used shell or interpreter execution, especially obfuscated execution. | `bash`, `python -c`, `node -e`, base64 decode, `certutil -decode`. | `execution.shell`, `execution.encoded_payload` |
 | `download` | The agent fetched remote content or invoked a download-capable client. | `wget`, `curl` GET/retrieval, PowerShell web requests, `fetch`. Outbound POST/`--data` is not a download. | `network.download` |
 | `install` | The agent invoked package managers or installers. | `npm install`, `pip install`, `cargo install`, `apt install`. | `install.package_manager` |
-| `exfiltration` | The agent sent, staged, or encoded data for outbound transfer. | HTTP POST/upload, object-store copy, encoded HTTP hostnames or base64 bodies, DNS encoding, controlled tester domains. | `exfil.outbound_upload`, `network.controlled_test_domain.darkroast`, `exfil.dns_encoding`, `exfil.encoded_http` |
-| `persistence` | The agent touched startup, profile, scheduled task, or service persistence surfaces. | `.bashrc`, `.zshrc`, `crontab`, `systemctl enable`, `launchctl load`. | `persistence.shell_profile` |
+| `exfiltration` | The agent sent, staged, or encoded data for outbound transfer. | HTTP POST/upload, object-store copy, encoded HTTP hostnames or base64 bodies, encoded data piped or substituted into a DNS lookup, controlled tester domains. | `exfil.outbound_upload`, `network.controlled_test_domain.darkroast`, `exfil.dns_encoding`, `exfil.encoded_http` |
+| `persistence` | The agent wrote or enabled startup, profile, scheduled task, or service persistence. | Redirects, `tee`, in-place edits or copies onto `.bashrc`/`.zshrc` and other startup files, patches to them, `crontab` installs, `systemctl enable`, `launchctl load`. Shell reads such as `grep … ~/.bashrc` and native file-tool reads do not match. | `persistence.shell_profile` |
+| `destructive` | The agent ran a command that can delete or discard data. Each rule scores 55, so with shell credit one destructive command reaches security review; the rules cannot tell a requested reset from an unrequested one. | `rm -rf ~/`, `mkfs`, `dd of=/dev/…`; `git reset --hard`, `git push --force`, `git clean -f`; `DROP TABLE`, `dropdb`; `terraform destroy`, `kubectl delete namespace`, `podman system reset`, `docker system prune --volumes`. | `destructive.filesystem_wipe`, `destructive.git_discard`, `destructive.database_drop`, `destructive.infrastructure_teardown` |
 | `approval_bypass` | Context asks the agent to avoid user approval, hide behavior, or run silently. | "without asking", "do not tell", "bypass approval", "no confirm". | `approval.bypass.context` |
 | `instruction_override` | Assistant output repeats a generic instruction to ignore or disregard prior instructions. It is a zero-point corroborating signal. | "ignore previous instructions", "disregard all prior instructions". | `prompt_injection.instruction_override` |
 | `tool_injection` | Tool-call-shaped content appears where it may spoof or steer tool use. | `<tool_call>`, `tool_calls`, `function_call`, `recipient_name`, `arguments`. | `tool.injection.shape` |
 | `mcp_prompt_injection` | MCP metadata, server instructions, tool descriptions, parameters, or tool results try to steer the agent. | `tools/list`, tool description, parameter description, server instructions, tool result plus hidden instructions. | `mcp.tool_metadata.prompt_injection` |
-| `credential_harvesting` | The agent targeted local, cloud, container, or orchestration credential stores. | `.aws/credentials`, `.kube/config`, Docker config, service-account files. | `credential.cloud_harvest` |
+| `credential_harvesting` | The agent read, copied, encoded, archived or sent a cloud, container, or orchestration credential file, or opened one with a native file tool. | `cat ~/.aws/credentials`, `tar … ~/.kube/config`, `curl -T ~/.aws/credentials`, Docker config, service-account files. A CLI given the path it authenticates with (`kubectl --kubeconfig ~/.kube/config`, `KUBECONFIG=`, `--key-file`) does not match. | `credential.cloud_harvest` |
 | `supply_chain` | The agent attempted package publishing or release actions. | `npm publish`, `cargo publish`, `twine upload`, `gem push`. | `supply_chain.publish` |
 | `mcp_enumeration` | The agent probed MCP servers, tools, or capabilities. | Repeated `tools/list`, MCP server probing, enumeration language. | `mcp.server_enumeration` |
 | `defense_evasion` | LOLBin proxy execution, log or recovery tampering, or interference with security tooling. | `rundll32`, `mshta`, `regsvr32`, `wevtutil cl`, `fltmc unload`. | `procchain.evasion.*` |
@@ -84,23 +85,21 @@ When authoring or reviewing detection content:
 
 ## Derived Chain Modifiers
 
-Chain modifiers add score and derived rule IDs when multiple categories or rules appear together. They do not replace the single category assigned to each base rule.
+Chain modifiers add score and derived rule IDs when the steps they name are linked. Each bundled chain declares its link: the steps fall within a number of tool calls of each other, counted so that a call and its result count once and messages add no distance, in declared order unless the link allows any order. One call that matches every step always links. `chain.download_then_execute` has its own link, below. A modifier without a link, such as one in a rule pack written before links, keeps co-occurrence anywhere in the session. Modifiers do not replace the single category assigned to each base rule.
 
 | Modifier | Trigger | Meaning |
 | --- | --- | --- |
-| `chain.secret_then_network` | `secret_access` + `download` | Secret access occurred near network-capable behavior. |
-| `chain.download_then_execute` | `download` + `execution` | Remote content was fetched near executable behavior. |
-| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior appeared together. |
-| `chain.install_then_persistence` | `install` + `persistence` | Installation occurred near startup or service modification. |
-| `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning appeared near outbound transfer. |
-| `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting appeared near package publishing. |
-| `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting appeared near data theft behavior. |
-| `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing appeared near prompt-injection behavior. |
-| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override appeared in the same session as an approval-bypass directive. |
+| `chain.secret_then_network` | `secret_access` + `exfiltration` | Secret access, then an outbound transfer within three tool calls. A secret read and a download do not chain. |
+| `chain.download_then_execute` | `download` + `execution`, linked | Downloaded content ran: a download piped to an interpreter, or a downloaded file executed within 15 minutes. A download and an unrelated shell call do not chain. |
+| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior in the same call. |
+| `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning, then outbound transfer within three tool calls. |
+| `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting, then package publishing within three tool calls. |
+| `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting, then data theft behavior within three tool calls. |
+| `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing, then prompt-injection behavior within three tool calls. |
+| `chain.instruction_override_with_approval_bypass` | `instruction_override` + `approval_bypass` | An assistant instruction override and an approval-bypass directive within three tool calls of each other, in either order. |
 
 Process-chain correlations are separate from these modifiers: they require an
-ordered sequence within a time window and entity boundary rather than
-co-occurrence within a session. See
+ordered sequence within a time window and an entity boundary. See
 [process-chain-detections.md](process-chain-detections.md).
 
 ## ATLAS Alignment Guidance

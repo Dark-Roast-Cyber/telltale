@@ -302,7 +302,7 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (3),
+  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (4),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
@@ -310,7 +310,13 @@ Three scores exist and must stay distinct: native finding risk
   [producer provenance](telemetry-output.md#producer--detector-provenance-manifest).
   Native profile 3 applies credential boundaries and example exclusions to the
   same token; semantic identities change from profile 2, while replay identities
-  and Event 3 session semantics remain unchanged.
+  and Event 3 session semantics remain unchanged. Native profile 4 reads a wget
+  flag cluster ending in `-O` (such as `-qO-`) as output to standard output when
+  linking downloads, adds the `written_path` field for files a call writes,
+  stops counting a shell parameter as a cloud credential read unless the command
+  reads paths, and applies declared modifier links; semantic identities change
+  from profile 3, and replay identities are unchanged.
+  `ActionModifierSemantics::within_calls` reports a declared link's call bound.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not
   permission to invent a substitute. Golden values are pinned by tests and change

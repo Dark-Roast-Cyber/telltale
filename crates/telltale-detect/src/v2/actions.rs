@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::LazyLock;
 use telltale_rules::{
-    RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
+    ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
 };
 use telltale_schema::event::{
     PrivacySanitizer, SanitizationContext, terminal_identifier, terminal_session_id,
@@ -19,7 +19,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 2;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 3;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 4;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -30,6 +30,8 @@ pub struct ActionModifierSemantics {
     pub score: u64,
     pub ordered: bool,
     pub within_seconds: Option<u64>,
+    /// How many tool calls apart a declared link's steps may be.
+    pub within_calls: Option<u32>,
     pub link: Option<&'static str>,
 }
 pub(crate) fn modifier_semantics(
@@ -37,7 +39,11 @@ pub(crate) fn modifier_semantics(
     options: &DetailedEvaluationOptions,
 ) -> ActionModifierSemantics {
     let linked = linked_modifier(modifier);
-    let ordered = linked || !modifier.when_all_categories.is_empty();
+    let declared = modifier.link.filter(|_| !linked);
+    let ordered = linked
+        || declared.map_or(!modifier.when_all_categories.is_empty(), |link| {
+            link.order == ModifierLinkOrder::Declared
+        });
     ActionModifierSemantics {
         score: if linked {
             linked_score(modifier, options)
@@ -45,7 +51,11 @@ pub(crate) fn modifier_semantics(
             modifier.score
         },
         ordered,
-        within_seconds: ordered.then_some(ACTION_CHAIN_WINDOW_SECONDS),
+        within_seconds: match declared {
+            Some(link) => link.minutes.map(|minutes| u64::from(minutes) * 60),
+            None => ordered.then_some(ACTION_CHAIN_WINDOW_SECONDS),
+        },
+        within_calls: declared.map(|link| link.calls),
         link: linked.then_some("downloaded_artifact"),
     }
 }
@@ -614,6 +624,9 @@ fn view(
                     "read" | "read_file" | "readfile" | "view_file" | "glob" | "list" | "grep"
                 )
             });
+            for path in super::selector::tool_written_paths(tool.name(), tool.arguments()) {
+                out.put("written_path", path);
+            }
             let mut command = String::new();
             match tool.arguments() {
                 Some(JsonValue::Object(input)) => structured_input(input, &mut out, &mut command),
@@ -1162,7 +1175,12 @@ fn native_fields<'a>(
         return Ok(selected);
     }
     let fields = view.fields();
-    let action = |name: &str| matches!(name, "command" | "file_path" | "url" | "arguments");
+    let action = |name: &str| {
+        matches!(
+            name,
+            "command" | "file_path" | "url" | "arguments" | "written_path"
+        )
+    };
     for (field, text) in fields {
         let matches = match id {
             "execution.shell" => {
@@ -1266,8 +1284,13 @@ fn native_fields<'a>(
                 text,
                 budget,
             )?,
-            "credential.cloud_harvest"
-            | "persistence.shell_profile"
+            // Shell parameters are path tokens too. A credential path handed to
+            // a CLI that authenticates with it is not a read of the file.
+            "credential.cloud_harvest" => {
+                action(field)
+                    && (field != "file_path" || view.reads_paths || view.text("command").is_empty())
+            }
+            "persistence.shell_profile"
             | "execution.encoded_payload"
             | "exfil.dns_encoding"
             | "supply_chain.publish" => action(field),
@@ -1289,10 +1312,82 @@ fn contains(
     Ok(text.contains(needle))
 }
 
-fn linked_modifier(modifier: &RuleV1CompatibilityModifier) -> bool {
+/// A modifier with neither the download link nor a declared link keeps the
+/// action semantics it had before links: same-action rule IDs, or categories in
+/// declared order within the chain window.
+fn legacy(modifier: &RuleV1CompatibilityModifier) -> bool {
+    !linked_modifier(modifier) && modifier.link.is_none()
+}
+
+pub(super) fn linked_modifier(modifier: &RuleV1CompatibilityModifier) -> bool {
     modifier.id == "chain.download_then_execute"
         && modifier.when_all_categories == ["download", "execution"]
         && modifier.when_all_rule_ids.is_empty()
+}
+/// Whether downloaded content runs in the session, by the same links that arm
+/// the linked modifier for action findings: a download piped to an
+/// interpreter, or a downloaded file executed within the chain window. Session
+/// scoring uses it so the modifier needs execution of what was fetched, not a
+/// download and any shell call anywhere in the session.
+pub(super) fn download_execution_linked(
+    observations: &[&CanonicalObservationV2],
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    let mut pending: Vec<(String, OffsetDateTime, usize, usize)> = Vec::new();
+    let mut remaining_link_work = 1_000_000usize;
+    for (index, observation) in observations.iter().enumerate() {
+        if !matches!(observation.body(), ObservationBody::Tool(_))
+            || observation.stage() == ObservationStage::ToolResultReturned
+        {
+            continue;
+        }
+        let view = view(observation, budget)?;
+        if view.commands.is_empty() {
+            continue;
+        }
+        if piped_execution(view.text("command"), budget)? {
+            return Ok(true);
+        }
+        // A file link is timed, as for action findings; a pipe is not.
+        let Some(time) = observation
+            .occurred_at()
+            .and_then(|t| OffsetDateTime::parse(t.as_str(), &Rfc3339).ok())
+        else {
+            continue;
+        };
+        let work = pending
+            .len()
+            .checked_mul(view.commands.len() + 1)
+            .ok_or(ProcessingError::Bounds)?;
+        remaining_link_work = remaining_link_work
+            .checked_sub(work)
+            .ok_or(ProcessingError::Bounds)?;
+        pending.retain(|(_, start, _, _)| {
+            time - *start <= time::Duration::seconds(ACTION_CHAIN_WINDOW_SECONDS as i64)
+        });
+        for (artifact, command_index) in downloaded_artifacts(&view.commands, budget)? {
+            if artifact != "-" {
+                pending.push((artifact, time, index, command_index));
+            }
+        }
+        for (artifact, start, observation_index, command_index) in &pending {
+            if *start <= time
+                && executes(
+                    &view.commands,
+                    artifact,
+                    if *observation_index == index {
+                        command_index + 1
+                    } else {
+                        0
+                    },
+                    budget,
+                )?
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 fn linked_score(
     modifier: &RuleV1CompatibilityModifier,
@@ -1396,6 +1491,16 @@ pub(crate) fn evaluate(
     for identity in identities.iter().flatten() {
         *counts.entry(identity.clone()).or_insert(0usize) += 1;
     }
+    let declared_links = export
+        .modifiers()
+        .iter()
+        .any(|m| m.link.is_some() && !linked_modifier(m));
+    let positions = if declared_links {
+        super::modifier_link::call_positions(observations, budget)?
+    } else {
+        Vec::new()
+    };
+    let mut link_steps = super::modifier_link::Steps::new();
     let mut pending: Vec<(String, OffsetDateTime, usize, usize)> = Vec::new();
     let mut history: VecDeque<ActionStep> = VecDeque::new();
     let mut remaining_sequence_work = 1_000_000usize;
@@ -1497,7 +1602,7 @@ pub(crate) fn evaluate(
         let sequence_candidate = export
             .modifiers()
             .iter()
-            .filter(|m| !linked_modifier(m) && !m.when_all_categories.is_empty())
+            .filter(|m| legacy(m) && !m.when_all_categories.is_empty())
             .any(|m| {
                 m.when_all_categories
                     .iter()
@@ -1524,7 +1629,7 @@ pub(crate) fn evaluate(
             for modifier in export
                 .modifiers()
                 .iter()
-                .filter(|m| !linked_modifier(m) && !m.when_all_categories.is_empty())
+                .filter(|m| legacy(m) && !m.when_all_categories.is_empty())
             {
                 let used = consumed.entry(modifier.id.clone()).or_default();
                 if let Some(indexes) = ordered_support(
@@ -1548,6 +1653,52 @@ pub(crate) fn evaluate(
                             .map_err(|_| ProcessingError::Evaluation)?,
                         );
                     }
+                }
+            }
+        }
+        // Declared links: steps within the link's calls, by call position. An
+        // unscoped observation cannot link.
+        if declared_links && observation.session_id().is_some() && !atomic_ids.is_empty() {
+            let key = (positions[index], index);
+            link_steps.insert(
+                key,
+                super::modifier_link::Step {
+                    time,
+                    ids: atomic_ids.clone(),
+                    categories: categories.clone(),
+                },
+            );
+            for modifier in export.modifiers().iter().filter(|m| !linked_modifier(m)) {
+                let Some(link) = &modifier.link else {
+                    continue;
+                };
+                let used = consumed.entry(modifier.id.clone()).or_default();
+                let Some(mut support) = super::modifier_link::support(
+                    modifier,
+                    link,
+                    &link_steps,
+                    key,
+                    |index| !used.contains(&index),
+                    &mut remaining_sequence_work,
+                )?
+                else {
+                    continue;
+                };
+                used.insert(support[0]);
+                support.sort_unstable();
+                support.dedup();
+                correlation_support.insert(modifier.id.clone(), support);
+                ids.insert(modifier.id.clone());
+                if modifier.score > 0 {
+                    contributions.push(
+                        RiskContribution::new(
+                            &modifier.id,
+                            RiskContributionType::ChainModifier,
+                            modifier.score,
+                            redact(&modifier.explanation, budget)?,
+                        )
+                        .map_err(|_| ProcessingError::Evaluation)?,
+                    );
                 }
             }
         }
@@ -1634,7 +1785,7 @@ pub(crate) fn evaluate(
         for modifier in export
             .triggered_modifiers(&atomic)
             .into_iter()
-            .filter(|m| !linked_modifier(m) && m.when_all_categories.is_empty())
+            .filter(|m| legacy(m) && m.when_all_categories.is_empty())
         {
             if modifier.score > 0 {
                 contributions.push(
@@ -1652,7 +1803,7 @@ pub(crate) fn evaluate(
         let modifiers = export
             .triggered_modifiers(&atomic)
             .into_iter()
-            .filter(|m| !linked_modifier(m) && m.when_all_categories.is_empty())
+            .filter(|m| legacy(m) && m.when_all_categories.is_empty())
             .map(|m| m.id.clone())
             .collect::<Vec<_>>();
         ids.extend(modifiers);
@@ -2035,7 +2186,10 @@ fn downloaded_artifacts(
                                         && token[1..].contains(['o', 'O']))
                             }
                             "wget" => {
-                                token.starts_with("--output-document") || token.starts_with("-O")
+                                token.starts_with("--output-document")
+                                    || (token.starts_with('-')
+                                        && !token.starts_with("--")
+                                        && token[1..].contains('O'))
                             }
                             "invoke-webrequest" | "iwr" => token.eq_ignore_ascii_case("-OutFile"),
                             _ => false,
@@ -2084,15 +2238,25 @@ fn downloaded_artifacts(
                         }
                     }
                     "wget" => {
-                        if token == "-O" || token == "--output-document" {
+                        if token == "--output-document" {
                             artifact = next();
                             break;
                         }
-                        if let Some(path) = token
-                            .strip_prefix("--output-document=")
-                            .or_else(|| token.strip_prefix("-O").filter(|s| !s.is_empty()))
-                        {
+                        if let Some(path) = token.strip_prefix("--output-document=") {
                             artifact = Some(path.into());
+                            break;
+                        }
+                        // `-O` may close a flag cluster such as `-qO-`.
+                        if token.starts_with('-')
+                            && !token.starts_with("--")
+                            && let Some(position) = token[1..].find('O')
+                        {
+                            let suffix = &token[position + 2..];
+                            artifact = if suffix.is_empty() {
+                                next()
+                            } else {
+                                Some(suffix.into())
+                            };
                             break;
                         }
                     }

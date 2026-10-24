@@ -163,8 +163,35 @@ Chain modifiers in the `modifiers:` section must include:
 | `score` | Additional risk score when the chain fires. |
 | `explanation` | Why this combination is riskier than either signal alone. |
 | Trigger | Exactly one of `when_all_categories` or `when_all_rule_ids`. |
+| `link` | Optional. How the steps must link; see below. |
 
 Chain modifiers should not duplicate base rule logic. They exist to escalate multi-signal sessions.
+
+### Linking steps
+
+A `link` says how close the steps must be:
+
+```yaml
+modifiers:
+  - id: chain.harvest_then_exfil
+    score: 35
+    when_all_categories: [credential_harvesting, exfiltration]
+    link: {calls: 3}
+```
+
+- `calls` (required, 0 to 10): how many tool calls apart the steps may be; 0
+  means one call and 1 the next call. A call and its result count once, and
+  messages and other records add no distance.
+- `order`: `declared` (the default) needs the steps in the order the trigger
+  lists them, categories before rule IDs; `any` accepts any order. One
+  observation that matches every step always links.
+- `minutes` (optional, 1 to 1440): the most minutes between a step and the step
+  that completes the chain, applied only when both have a source time.
+
+Session scoring and action findings apply the same link. Without a `link`, a
+modifier fires when its steps match anywhere in the session, as modifiers did
+before links existed, so earlier rule packs keep their behavior. Releases before
+links ignore the field and apply that session-wide behavior.
 
 ## Fixture Expectations
 
