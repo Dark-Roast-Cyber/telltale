@@ -6,6 +6,118 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Make four bundled detections depend on what a command does, not on words
+  that appear near it:
+  - `chain.download_then_execute` now needs downloaded content to run in session
+    scoring: a download piped to an interpreter, or a downloaded file executed
+    within 15 minutes. These are the links action findings already required.
+    Before, any download plus any shell call in a session added 35 points, so an
+    ordinary API `curl` through a shell tool scored 70/high, the same as
+    `curl … | sh`. Sessions that never run what they fetch lose the chain.
+    Field-level `CompiledRuleSet::evaluate()` keeps co-occurrence within one
+    record. `wget -qO-` and other wget flag clusters ending in `-O` are now read
+    as output to standard output.
+  - `exfil.dns_encoding` no longer matches every `base64 --encode`, which scored
+    70/high for encoding a word. It requires encoded data piped or substituted
+    into a DNS lookup, or the existing long-label forms.
+  - `persistence.shell_profile` shell matches now require a write or an enable:
+    redirects, `tee`, in-place `sed`/`perl`, copies onto a startup file, patch
+    headers, `crontab` installs, `systemctl enable`, `launchctl load|bootstrap`.
+    Reading `~/.bashrc` from a shell no longer scores 45. Startup files now
+    include `.zprofile`, `.zshenv`, `.zlogin` and `.bash_login`. Native file
+    tools match only startup files they write, through `written_path`; reading
+    one with a file tool no longer matches either.
+- `credential.cloud_harvest` now requires a cloud credential file to be read,
+  copied, encoded, archived or sent (`cat`, `grep`, `base64`, `cp`, `scp`, `tar`,
+  `curl`, input redirection, inline interpreter code and similar), or opened by
+  a native file tool. A CLI given the path it authenticates with
+  (`kubectl --kubeconfig ~/.kube/config`, `KUBECONFIG=`, `--key-file`) no longer
+  scores 50; listing pods with an explicit kubeconfig dropped from 65 to 15.
+  Action findings no longer treat such a CLI parameter as a credential read.
+- Chain modifiers can declare how their steps link with `link: {calls, order,
+  minutes}`: within `calls` tool calls of each other (0 means one call; a call
+  and its result count once, and messages add no distance), in declared order
+  unless `order: any`, and optionally within `minutes` of the completing step.
+  Session scoring and action findings apply the same link. Every bundled chain
+  except `chain.download_then_execute` declares one: the `_then_` chains link
+  within three calls in order, `chain.instruction_override_with_approval_bypass`
+  within three calls in either order, and `chain.shell_encoded_payload` within
+  one call. Before, session scoring counted co-occurrence anywhere in the
+  session, so a credential read early in a long session and an unrelated publish
+  much later chained. Calls without a source time now link by distance, and
+  action findings now link steps in one call. A modifier without a link keeps
+  session-wide co-occurrence and its earlier action semantics, so existing rule
+  packs are unchanged; releases before links ignore the field.
+  `ModifierDefinition` and `RuleV1CompatibilityModifier` gain a public `link`
+  field and `ActionModifierSemantics` gains `within_calls`, so code that builds
+  them with struct literals must set the new fields; the rule catalog reports a
+  declared link as `action_link: within_calls:N`.
+- `chain.secret_then_network` now pairs secret access with exfiltration, not
+  with any download: reading a secrets file and then fetching a document no
+  longer adds 35. Remove `chain.install_then_persistence`, which matched the
+  ordinary "install a tool, add it to PATH in `.bashrc`" setup; both atomic
+  rules still score.
+- Add four alert rules in the new `destructive` category for commands that can
+  delete or discard data. Each scores 55, so one destructive shell command
+  reaches 70/high and security review. The rules cannot tell a requested reset
+  from an unrequested one:
+  - `destructive.filesystem_wipe`: home, root or disk deletion;
+  - `destructive.git_discard`: hard reset, clean, force push, branch or stash
+    deletion;
+  - `destructive.database_drop`;
+  - `destructive.infrastructure_teardown`: cloud, Kubernetes and stored-data
+    teardown, `podman system reset`, `podman machine reset`, and Docker or
+    Podman volume pruning (`system prune` only with `--volumes`).
+- Add the Rule v1 target `written_path` (`compat.v1.written_path`), the ninth
+  compatibility view. It holds the file-keyed top-level arguments of a call that
+  writes them: a native file-write tool (`Write`, `Edit`, `write_file`,
+  `replace` and similar) or any call whose arguments carry the written content
+  (`content`, `new_string`, `newString`, `new_str`, `file_text`, `edits` and
+  similar). `file_path` keeps reads and writes alike. Rules that use the new
+  target do not load in earlier releases. Action findings read the same field,
+  so detailed scans also stop matching persistence on shell or native reads of
+  a startup file. The native action profile version is now 4, which also covers
+  the wget output-cluster parsing and the cloud credential scoping above;
+  semantic identities change and replay identities do not.
+- Evaluation corpus: add twelve command-effect cases. Security-review confusion
+  moves from TP 13 / FP 0 / TN 25 / FN 2 to TP 18 / FP 2 / TN 30 / FN 2. The two
+  false positives are a requested `git reset --hard` and a requested
+  test-database reset, which the destructive rules escalate like unrequested
+  ones.
+
+- Restore `execution.shell` session-scoring parity for shell-tool calls whose
+  recorded command omits a shell wrapper, including Codex `exec_command` and
+  OpenCode v2. Exact shell-tool names now contribute the existing 15 points;
+  command/argument shell and interpreter patterns still apply, without counting
+  a rule twice. Recorded requests and denied attempts are not proof of execution.
+  User-approved shell activity can still combine with other rules to alert;
+  no user-context suppression is added.
+  Retain one representative shell-credit observation per session while evaluating
+  and counting every call, so long harmless shell histories do not exhaust the
+  unchanged evidence-retention bounds. Other rules and native actions are unchanged.
+
+- Add versioned wire forms for embedding hosts. `SourceScan::action_records()`
+  returns one `ActionRecordV1` (`telltale.action.v1`) per action finding: the
+  accessor values plus client, source ID, source path hash, semantic identity
+  and the `event_id` of the linked session Event 3 object. `rule_catalog_document`
+  returns the bundled catalog as `RuleCatalogV1` (`telltale.rule_catalog.v1`).
+  Both have strict consumers in `telltale-schema` that reject other versions,
+  unknown fields and inconsistent values, and JSON Schemas in `schemas/`.
+  Hosts wrap them in their own delivery envelope instead of designing an
+  action or catalog format. `telltale_core::inventory` re-exports structured MCP
+  server discovery. Event 3.0, CLI output and existing APIs are unchanged; the
+  migration guide adds an embedding-host checklist of changes since RC2.
+
+- Give embedding hosts the record checks they were re-deriving.
+  `ActionRecordV1::delivery_key()` returns a pinned key over the semantic
+  identity and the replay identity, or else the source path hash, coordinate
+  and finding IDs. The documented coordinate-only key merged the several
+  process-chain actions that one tool call can carry. `check_session_event`
+  checks that an Event 3 detection or process-chain event can travel with a
+  record and, for a linked record, that it is the linked event. The record
+  consumer now also rejects text that redaction would still change. The
+  record schema and Event 3.0 are unchanged.
+
 - Add generated contributor catalogs: `docs/catalog/sources.json` lists every
   registered source's exact client, source ID, root, relative path, pattern and
   discovery special cases, and `docs/catalog/rule-vocabulary.json` lists the
@@ -22,6 +134,15 @@
   literal regex escapes. U+2028 and U+2029 are rejected too: YAML breaks lines
   at them, so they could add package keys that a reviewer's viewer never shows.
 
+- Reject a carriage return in a rule package unless it ends a CRLF line. YAML
+  breaks lines there, so a lone one could add a key, such as `enabled: false`,
+  that a terminal draws over; CRLF packages still load. A `"\r"` escape in a
+  quoted string is rejected like other escaped controls. Two installed copies of
+  one package ID now fail with each copy's version and content SHA-256 prefix
+  instead of only the ID, since diagnostics never show their paths.
+  `TELLTALE_COMMUNITY_RULES` accepts `0`, `false`, `off`, and `no` in any case;
+  `FALSE` used to leave community rules on.
+
 - Fix three detection gaps that synthetic lab scenarios found. `approval.bypass.context`
   no longer fires on a documentation review that quotes any of its phrases as
   disallowed, including inside Codex exec output with its exit metadata; only
@@ -30,6 +151,13 @@
   options before the verb, such as `systemctl --user enable`. The cmd and PowerShell
   `schtasks` process-chain rules no longer score a read-only `schtasks /Query` as
   task creation, while a `/Create` whose action merely contains a query still scores.
+
+- Embed the published `telltale.community` 0.1.0 release
+  (`Dark-Roast-Cyber/telltale-detections` tag `v0.1.0`, source `d895523`). The
+  rules are unchanged from the earlier snapshot; the package now records its
+  release `revision`, so its content SHA-256 is
+  `09be5cf10bca843561725784f4d28c41f817ae24484d146471584a4e2ff45cd5`, matching
+  the release `SHA256SUMS` and its build-provenance attestation.
 
 - Add state-only `cursor list` / `cursor reset` for one exact stored OpenCode
   source/schema cursor, with a matching inspection digest, explicit history-gap

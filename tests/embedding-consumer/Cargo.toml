@@ -8,6 +8,11 @@ publish = false
 # Resolve as an external application, independently of the CLI's features/lock.
 [workspace]
 
+# This external workspace does not inherit the repository's dev/test profile.
+# Keep incremental rebuilds and backtraces without full type/variable debug data.
+[profile.dev]
+debug = 1
+
 [features]
 default = []
 opencode-sqlite = ["telltale-core/opencode-sqlite"]

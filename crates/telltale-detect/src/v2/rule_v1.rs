@@ -319,12 +319,21 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
     let mut detectors = Vec::with_capacity(plan.detectors.len());
     let mut evidence_material = BTreeMap::new();
     let mut matched_atomic_rule_ids = BTreeSet::new();
+    // The observations each matched rule matched, for linked modifiers.
+    let mut occurrences = BTreeMap::new();
     for detector in &plan.detectors {
-        let aggregate =
-            aggregate_detector_session(detector, observations, budget, &mut evidence_material)?;
+        let mut matched = Vec::new();
+        let aggregate = aggregate_detector_session(
+            detector,
+            observations,
+            budget,
+            &mut evidence_material,
+            &mut matched,
+        )?;
         if aggregate.outcome == RuleV1DetectorOutcome::Match {
             retain_text(budget, &aggregate.detector_id)?;
             matched_atomic_rule_ids.insert(aggregate.detector_id.clone());
+            occurrences.insert(aggregate.detector_id.clone(), matched);
         }
         detectors.push(aggregate);
     }
@@ -342,16 +351,43 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
         super::session::RetentionBudget::validate_text(&rule.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
     }
+    // The linked download modifier needs the downloaded content to run, as it
+    // does for action findings. A modifier with a declared link needs its steps
+    // within that link; one without keeps co-occurrence anywhere in the session.
+    let triggered = plan.export.triggered_modifiers(&selected);
+    let steps = if triggered
+        .iter()
+        .any(|modifier| modifier.link.is_some() && !super::actions::linked_modifier(modifier))
+    {
+        super::modifier_link::session_steps(&plan.export, &occurrences, observations, budget)
+            .map_err(|_| RuleV1SessionError::Bounds)?
+    } else {
+        super::modifier_link::Steps::new()
+    };
+    let mut withheld = BTreeSet::new();
+    for modifier in triggered {
+        let linked = if super::actions::linked_modifier(modifier) {
+            super::actions::download_execution_linked(observations, budget)
+        } else if let Some(link) = &modifier.link {
+            super::modifier_link::linked_in_session(modifier, link, &steps)
+        } else {
+            Ok(true)
+        }
+        .map_err(|_| RuleV1SessionError::Bounds)?;
+        if !linked {
+            withheld.insert(modifier.id.as_str());
+        }
+    }
     for modifier in plan
         .export
-        .triggered_modifiers(&selected)
+        .triggered_modifiers_without(&selected, &withheld)
         .into_iter()
         .filter(|modifier| modifier.score > 0)
     {
         super::session::RetentionBudget::validate_text(&modifier.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
     }
-    let content = plan.export.evaluate_matched(&selected)?;
+    let content = plan.export.evaluate_matched_without(&selected, &withheld)?;
     let (
         triggered_modifier_ids,
         effective_rule_ids,
@@ -421,6 +457,7 @@ fn aggregate_detector_session(
     observations: &[&telltale_schema::observation::CanonicalObservationV2],
     budget: &mut super::session::RetentionBudget,
     evidence_material: &mut BTreeMap<(usize, String), (String, String)>,
+    matched: &mut Vec<usize>,
 ) -> Result<RuleV1DetectorSessionEvaluation, RuleV1SessionError> {
     retain_text(budget, detector.detector().id())?;
     let mut aggregate = RuleV1DetectorSessionEvaluation {
@@ -432,6 +469,15 @@ fn aggregate_detector_session(
             .try_evaluate(observation, budget)
             .map_err(|_| RuleV1SessionError::Bounds)?;
         if result.evaluation_status() == EvaluationStatus::EvaluatedMatch {
+            budget.charge(1).map_err(|_| RuleV1SessionError::Bounds)?;
+            matched.push(occurrence);
+        }
+        // Shell credit is score-once session context, not a per-action finding.
+        // Retain its first matching observation only, but evaluate and count all
+        // later observations so failures and other detectors remain visible.
+        let retain_projection =
+            detector.detector().id() != "execution.shell" || aggregate.evaluated_match_count == 0;
+        if result.evaluation_status() == EvaluationStatus::EvaluatedMatch && retain_projection {
             for path in result.matched_selector_paths() {
                 if aggregate.projection.len() >= super::session::MAX_PROJECTION_ITEMS {
                     return Err(RuleV1SessionError::Bounds);
@@ -534,9 +580,11 @@ fn add_detector_result(
         EvaluationStatus::EvaluatedMatch => {
             aggregate.evaluated_match_count += 1;
             aggregate.outcome = max_outcome(aggregate.outcome, RuleV1DetectorOutcome::Match);
-            aggregate
-                .matched_selector_paths
-                .extend(result.matched_selector_paths().iter().cloned());
+            for path in result.matched_selector_paths() {
+                if !aggregate.matched_selector_paths.contains(path) {
+                    aggregate.matched_selector_paths.push(path.clone());
+                }
+            }
         }
         EvaluationStatus::EvaluatedNoMatch => {
             aggregate.evaluated_no_match_count += 1;
@@ -756,7 +804,9 @@ pub(super) fn evaluate_content_matcher(
 fn compat_selector(target: &str) -> Result<String, RuleV1CompileError> {
     match target {
         "arguments" | "assistant_context" | "command" | "file_path" | "tool_name"
-        | "tool_result" | "url" | "user_context" => Ok(format!("compat.v1.{target}")),
+        | "tool_result" | "url" | "user_context" | "written_path" => {
+            Ok(format!("compat.v1.{target}"))
+        }
         _ => Err(RuleV1CompileError::UnknownTarget),
     }
 }

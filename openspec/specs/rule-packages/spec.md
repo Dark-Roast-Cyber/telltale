@@ -6,7 +6,7 @@ Defines identified, versioned, namespaced Rule v1 content that Telltale adds to 
 ## Requirements
 ### Requirement: A package is one validated, namespaced document
 
-A rule package SHALL be one `telltale-rule-package/v1` YAML document with `format`, `id`, `version`, `publisher`, `license`, `rule_namespace`, optional informational `source` and `revision`, and one or more Rule v1 `documents`. Telltale SHALL reject unknown header fields, malformed identities, packages larger than 4 MiB, control or invisible formatting characters (including the U+2028 and U+2029 separators, which YAML treats as line breaks) anywhere in the text, definitions outside `<rule_namespace>.`, duplicate definition IDs, and packages without definitions. A namespace SHALL NOT reuse the first ID segment of a bundled core rule or modifier, `procchain`, or `telltale`.
+A rule package SHALL be one `telltale-rule-package/v1` YAML document with `format`, `id`, `version`, `publisher`, `license`, `rule_namespace`, optional informational `source` and `revision`, and one or more Rule v1 `documents`. Telltale SHALL reject unknown header fields, malformed identities, packages larger than 4 MiB, control or invisible formatting characters (including the U+2028 and U+2029 separators and a carriage return outside a CRLF line ending, which YAML treats as line breaks) anywhere in the text, definitions outside `<rule_namespace>.`, duplicate definition IDs, and packages without definitions. A namespace SHALL NOT reuse the first ID segment of a bundled core rule or modifier, `procchain`, or `telltale`.
 
 #### Scenario: Definition outside the namespace
 
@@ -17,6 +17,12 @@ A rule package SHALL be one `telltale-rule-package/v1` YAML document with `forma
 
 - **WHEN** a package line contains a bidirectional override such as U+202E
 - **THEN** loading fails and reports the line and code point without echoing the content
+
+#### Scenario: Bare carriage return
+
+- **WHEN** a package line contains a carriage return that is not part of a CRLF line ending
+- **THEN** loading fails and reports the line and U+000D
+- **AND** packages with CRLF line endings load like LF packages
 
 #### Scenario: YAML-escaped hidden character
 
@@ -37,6 +43,11 @@ Package definitions SHALL load at a package tier after bundled core rules and be
 
 - **WHEN** two installed packages declare the same `rule_namespace`
 - **THEN** rule resolution fails and names both packages
+
+#### Scenario: Two copies of one package
+
+- **WHEN** two installed packages declare the same `id`
+- **THEN** rule resolution fails and names each copy by version and content SHA-256 prefix, without paths
 
 ### Requirement: Community rules are on by default with an explicit opt-out
 

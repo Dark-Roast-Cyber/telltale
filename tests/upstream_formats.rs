@@ -353,6 +353,10 @@ fn run_discover(name: &str, discover: &Discover, dir: &Path) -> Outcome {
     let home = dir.join("home");
     let work = dir.join("work");
     fs::create_dir_all(&home).expect("home");
+    // Resolve macOS's temporary-directory alias without introducing Windows
+    // verbatim paths into the slash-separated {home} case templates.
+    #[cfg(target_os = "macos")]
+    let home = home.canonicalize().expect("canonical synthetic home");
     fs::create_dir_all(&work).expect("work");
     for (relative, input) in &discover.files {
         write_input(name, input, &home.join(relative));

@@ -13,6 +13,7 @@ use telltale_schema::observation::CanonicalBoundContext;
 
 use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
+    legacy_message_group,
 };
 
 #[derive(Clone)]
@@ -109,31 +110,72 @@ pub(crate) fn project_codex_native_records(
 ) -> Result<CodexProjection, CodexCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::default();
     let mut quarantined = Vec::new();
-    for record in records {
-        let mut unit = crate::acquisition::CanonicalCollector::default();
-        match project_record(record, options, &mut unit) {
-            Ok(()) => {
-                for observation in unit.finish() {
-                    observations.push(observation)?;
+    let mut index = 0;
+    while index < records.len() {
+        if let Some((raw, end)) = legacy_message_group(records, index) {
+            if !project_unit(&records[raw], options, &mut observations, &mut quarantined)? {
+                // A quarantined raw message cannot hide usable legacy text.
+                for (offset, record) in records[index..end].iter().enumerate() {
+                    if index + offset != raw {
+                        project_unit(record, options, &mut observations, &mut quarantined)?;
+                    }
                 }
             }
-            Err(error) => match quarantine_code(&error) {
-                Some(code) => quarantined.push(CodexQuarantinedRecord {
+            index = end;
+        } else {
+            // An unmatched event run is visited once, not rescanned for every
+            // event while looking for an adjacent raw response.
+            let end = if records[index].is_legacy_agent_message() {
+                index
+                    + records[index..]
+                        .iter()
+                        .take_while(|record| record.is_legacy_agent_message())
+                        .count()
+            } else {
+                index + 1
+            };
+            for record in &records[index..end] {
+                project_unit(record, options, &mut observations, &mut quarantined)?;
+            }
+            index = end;
+        }
+    }
+    quarantined.sort_by_key(|record| record.source_sequence);
+    Ok(CodexProjection {
+        observations: observations.finish(),
+        quarantined,
+    })
+}
+
+fn project_unit(
+    record: &CodexNativeRecord,
+    options: &CodexCanonicalOptions,
+    observations: &mut crate::acquisition::CanonicalCollector,
+    quarantined: &mut Vec<CodexQuarantinedRecord>,
+) -> Result<bool, CodexCanonicalError> {
+    let mut unit = crate::acquisition::CanonicalCollector::default();
+    match project_record(record, options, &mut unit) {
+        Ok(()) => {
+            for observation in unit.finish() {
+                observations.push(observation)?;
+            }
+            Ok(true)
+        }
+        Err(error) => match quarantine_code(&error) {
+            Some(code) => {
+                quarantined.push(CodexQuarantinedRecord {
                     source_sequence: record.source_sequence,
                     code,
                     bound: match &error {
                         CodexCanonicalError::Observation(error) => error.bound_context(),
                         CodexCanonicalError::Mapping { .. } => None,
                     },
-                }),
-                None => return Err(error),
-            },
-        }
+                });
+                Ok(false)
+            }
+            None => Err(error),
+        },
     }
-    Ok(CodexProjection {
-        observations: observations.finish(),
-        quarantined,
-    })
 }
 
 fn quarantine_code(error: &CodexCanonicalError) -> Option<&'static str> {
@@ -171,7 +213,9 @@ fn project_record(
         ));
     }
     if record.discriminator.as_deref().is_some_and(|kind| {
-        !is_known_codex_discriminator(kind) && !is_known_canonical_discriminator(kind)
+        !(is_known_codex_discriminator(kind)
+            || is_known_canonical_discriminator(kind)
+            || kind == "plan" && record.completed.is_some())
     }) {
         return Err(mapping(
             "unknown_discriminator",
@@ -237,13 +281,13 @@ fn project_record(
 
     match record.discriminator.as_deref() {
         Some(
-            "user_message" | "user" | "assistant_message" | "assistant" | "gemini" | "model"
-            | "text" | "message",
+            "user_message" | "user" | "agent_message" | "assistant_message" | "assistant"
+            | "gemini" | "model" | "text" | "message" | "plan",
         ) => {
             let body = build_message_body(record, canonical_role(record)?, &[])?;
             emit_message_body(record, options, body, &mut child_ordinal, observations)
         }
-        Some("tool_call" | "custom_tool_call" | "function_call") => emit_tool(
+        Some("tool_call" | "custom_tool_call" | "function_call" | "web_search_call") => emit_tool(
             record,
             options,
             record.tool.clone(),
@@ -294,11 +338,13 @@ fn is_message_record(record: &CodexNativeRecord) -> bool {
             "user_message"
                 | "user"
                 | "assistant_message"
+                | "agent_message"
                 | "assistant"
                 | "gemini"
                 | "model"
                 | "text"
                 | "message"
+                | "plan"
         )
     )
 }
@@ -315,7 +361,9 @@ fn canonical_role(record: &CodexNativeRecord) -> Result<MessageRole, CodexCanoni
     let role = record.role.as_deref().or_else(|| {
         record.discriminator.as_deref().and_then(|kind| match kind {
             "user_message" | "user" => Some("user"),
-            "assistant_message" | "assistant" | "gemini" | "model" => Some("assistant"),
+            "agent_message" | "assistant_message" | "assistant" | "gemini" | "model" => {
+                Some("assistant")
+            }
             _ => None,
         })
     });
@@ -523,7 +571,9 @@ fn emit_tool(
     }
 
     let generic = record.discriminator.as_deref() == Some("tool");
-    let source_error = fields.error_present || fields.status.as_deref() == Some("error");
+    let hosted_search = record.discriminator.as_deref() == Some("web_search_call");
+    let source_error =
+        !hosted_search && (fields.error_present || fields.status.as_deref() == Some("error"));
     let has_result = fields.result_present || fields.error_present;
     let has_explicit_body = fields.name.is_some()
         || fields.arguments.is_some()
@@ -546,14 +596,25 @@ fn emit_tool(
     let mut paths = Vec::new();
     if let Some(name) = &fields.name {
         body = body.with_name(name)?;
-        paths.push(("tool.name", FactProvenance::Reported));
+        paths.push((
+            "tool.name",
+            if hosted_search {
+                FactProvenance::Parsed
+            } else {
+                FactProvenance::Reported
+            },
+        ));
     }
     if let Some(arguments) = &fields.arguments {
-        body = body.with_arguments(
+        let arguments =
             JsonValue::try_from_source_tool_arguments(fields.name.as_deref(), arguments).map_err(
                 |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
-            )?,
-        );
+            )?;
+        if hosted_search && let Some(text) = web_search_searchable_arguments(&arguments) {
+            body = body.with_searchable_arguments(text)?;
+            paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
+        }
+        body = body.with_arguments(arguments);
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
@@ -644,7 +705,7 @@ fn emit_tool(
         }
     }
 
-    if fields.completed_file_change
+    if (fields.completed_file_change || hosted_search)
         && let Some(status) = &fields.status
     {
         builder = builder
@@ -733,6 +794,30 @@ fn shell_quote(word: &str) -> String {
     } else {
         format!("'{}'", word.replace('\'', r"'\''"))
     }
+}
+
+fn web_search_searchable_arguments(action: &JsonValue) -> Option<String> {
+    let JsonValue::Object(action) = action else {
+        unreachable!("validated web search action")
+    };
+    let mut text = String::new();
+    for key in ["query", "queries", "url", "pattern"] {
+        let values: &[JsonValue] = match action.get(key) {
+            Some(JsonValue::Array(values)) => values,
+            Some(value @ JsonValue::String(_)) => std::slice::from_ref(value),
+            _ => continue,
+        };
+        for value in values {
+            let JsonValue::String(value) = value else {
+                unreachable!("validated search text")
+            };
+            text.push_str(key);
+            text.push('\n');
+            text.push_str(value);
+            text.push('\n');
+        }
+    }
+    (!text.is_empty()).then(|| text.replace(['\r', '\n'], " "))
 }
 
 /// Only the closed native patch fields become text. Deletion content and both
@@ -841,6 +926,10 @@ fn common_builder(
             correlation =
                 correlation.with_response_id(CorrelationId::source_reported(&coords.item_id)?);
         }
+    } else if record.discriminator.as_deref() == Some("web_search_call")
+        && let Some(id) = &record.response_id
+    {
+        correlation = correlation.with_response_id(CorrelationId::source_reported(id)?);
     }
     builder = builder.correlation(correlation);
     if let Some(root_id) = &record.root_session_id {

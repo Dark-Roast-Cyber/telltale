@@ -9,7 +9,7 @@
     "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/history/src/lib.rs#L369-L375",
     "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rollout/src/ordinal.rs#L20-L52"
   ],
-  "status": "known_gap",
+  "status": "supported",
   "acquire": {
     "source_id": "codex.sessions",
     "jsonl": [
@@ -20,10 +20,8 @@
     ]
   },
   "expect": {
-    "observations": 2,
-    "quarantine_codes": [
-      "unknown_discriminator"
-    ]
+    "min_observations": 3,
+    "min_families": {"message": 3}
   },
-  "note": "The Plan item is quarantined as unknown_discriminator, so the source is reported as partial. The surrounding messages are still read."
+  "note": "Plan text is assistant-authored message evidence with typed owner/turn/item identity, not a tool request or reasoning. Synthetic acquisition/conformance coverage only."
 }

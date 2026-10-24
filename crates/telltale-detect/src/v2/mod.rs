@@ -19,8 +19,17 @@ pub use actions::{
 };
 #[cfg(test)]
 mod action_tests;
+#[cfg(test)]
+mod chain_link_tests;
+#[cfg(test)]
+mod cloud_credential_tests;
+#[cfg(test)]
+mod download_link_tests;
 pub mod event3;
 mod matcher;
+mod modifier_link;
+#[cfg(test)]
+mod modifier_link_tests;
 mod observation_match;
 pub mod policy_accounting;
 pub(crate) mod process_chain;
@@ -30,6 +39,8 @@ pub(crate) mod rule_v1;
 mod selector;
 pub mod session;
 mod types;
+#[cfg(test)]
+mod written_path_tests;
 
 pub use event3::{
     Event3CompatibilityContext, Event3SessionMetadata, ProjectedSource, project_event3,

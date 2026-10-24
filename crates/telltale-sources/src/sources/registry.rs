@@ -114,8 +114,8 @@ mod tests {
             },
             AgentInstallDef {
                 agent: "copilot",
-                executables: &[],
-                node_packages: &[],
+                executables: &["copilot"],
+                node_packages: &["@github/copilot"],
                 extension_ids: &["github.copilot", "github.copilot-chat"],
                 global_storage_ids: &["github.copilot", "github.copilot-chat"],
             },

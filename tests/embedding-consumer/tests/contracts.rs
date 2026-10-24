@@ -66,8 +66,8 @@ fn event_projection(event: &Event) -> Value {
     wire
 }
 
-/// The supported host pattern: project accessors into a host-owned, versioned
-/// envelope. `ActionFinding` is a Rust value, not a wire format.
+/// Every accessor projected to JSON, to check that none carries private input.
+/// The host wire form is `SourceScan::action_records()` (see `record_contract.rs`).
 fn host_envelope(action: &ActionFinding) -> serde_json::Value {
     json!({
         "version": 1,

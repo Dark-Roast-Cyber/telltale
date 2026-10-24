@@ -2,6 +2,61 @@ use super::*;
 
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn scan_once_reports_ambiguous_copilot_launcher_without_claiming_install_or_session_coverage() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let bin = temp.path().join("PRIVATE_INSTALL_PATH/bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let launcher = if cfg!(windows) {
+        "copilot.exe"
+    } else {
+        "copilot"
+    };
+    fs::write(bin.join(launcher), b"not executable: PRIVATE_CONTENT").unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .env_clear()
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("PATH", &bin)
+        .args(["scan", "--once", "--no-local-config", "--root"])
+        .arg(&home)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .arg("--log-path")
+        .arg(temp.path().join("events.jsonl"));
+    for key in ["SystemRoot", "windir"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let summary: Value = serde_json::from_str(&stdout).unwrap();
+    let log = fs::read_to_string(temp.path().join("events.jsonl")).unwrap();
+    let events = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    let inventory = events
+        .iter()
+        .find(|event| event["check_name"] == "install_inventory")
+        .expect("install inventory event");
+    assert!(event_schema_validator().is_valid(inventory));
+    assert!(inventory["evidence"].as_array().unwrap().iter().any(|item| {
+        item["redacted_value"].as_str().is_some_and(|value| value == "agent=copilot; installed=false; confidence=Partial; present_signals=executable:copilot")
+    }));
+    assert_eq!(summary["source_processing"]["selected_source_count"], 0);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 0);
+    for text in [&stdout, &log] {
+        assert!(!text.contains("PRIVATE_INSTALL_PATH"));
+        assert!(!text.contains("PRIVATE_CONTENT"));
+    }
+}
+
 // Opt-in measurements stay at the process boundary, not in the scanner.
 #[cfg(target_os = "linux")]
 mod workload {
@@ -1527,7 +1582,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     assert_eq!(summary["event_type"], "health");
     // Copilot's mixed-context rules require unsupported UserContext and remain
     // visibility-limited. Commands also no longer include fabricated tool names.
-    assert_eq!(summary["detection_count"], 30);
+    assert_eq!(summary["detection_count"], 32);
     assert_runtime_snapshot(summary);
     assert_eq!(
         summary["effective_configuration"]["local_config"]["mode"],
@@ -1553,8 +1608,8 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
         crate::default_rule_source_count()
     );
     assert_source_processing_accounting(summary);
-    assert_detection_flow_accounting(summary, 30, 0);
-    assert_eq!(summary["source_processing"]["selected_source_count"], 57);
+    assert_detection_flow_accounting(summary, 32, 0);
+    assert_eq!(summary["source_processing"]["selected_source_count"], 59);
     assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
     assert_eq!(
         summary["source_discovery"]["performed_for_current_scan"],
@@ -1569,8 +1624,8 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
         summary["source_discovery"]["best_effort_fallback_used"],
         false
     );
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
-    assert_eq!(summary["source_discovery"]["operational_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 59);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 59);
     assert_eq!(
         summary["source_discovery"]["project_configuration"],
         serde_json::json!({
@@ -1605,25 +1660,25 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     );
     assert_eq!(
         summary["source_processing"]["parse_success_source_count"],
-        57
+        59
     );
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 126);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 133);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
-            "user_message": 19,
+            "user_message": 20,
             "assistant_message": 23,
-            "tool_call": 26,
+            "tool_call": 31,
             "tool_result": 14,
-            "session_meta": 44,
+            "session_meta": 45,
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 109);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 124);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
-    assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
+    assert_eq!(summary["source_counts"]["codex.jsonl"], 42);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
     assert_eq!(summary["source_counts"]["codex.headless_jsonl"], 2);
     assert_eq!(summary["source_counts"]["openclaw.jsonl"], 2);
@@ -1632,7 +1687,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     assert_eq!(summary["source_counts"]["copilot.copilot_process_log"], 5);
 
     let events = &fixture_scan().events;
-    assert_eq!(events.len(), 32);
+    assert_eq!(events.len(), 34);
 }
 
 struct FixtureScan {
@@ -1807,7 +1862,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["telltale_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
     assert_eq!(event["rule_count"], crate::default_rule_count());
-    assert_eq!(event["emitted_count"], 31);
+    assert_eq!(event["emitted_count"], 33);
     assert_eq!(event["suppressed_count"], 0);
     assert_eq!(event["scanner_error_count"], 0);
     assert_eq!(event["threshold_config"]["low"], 20);
@@ -1827,7 +1882,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][0]["field"], "source_inventory");
     assert_eq!(
         event["evidence"][0]["redacted_value"],
-        "sources=57; client_source_kinds=8"
+        "sources=59; client_source_kinds=8"
     );
     assert!(
         event["evidence"][0]["hash"]
@@ -1837,7 +1892,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][1]["field"], "source_inventory_change");
     assert_eq!(
         event["evidence"][1]["redacted_value"],
-        "baseline=true; added=57; removed=0; unchanged=0"
+        "baseline=true; added=59; removed=0; unchanged=0"
     );
     assert!(
         event["evidence"][1]["hash"]
@@ -2337,7 +2392,7 @@ fn scan_once_emits_token_injection_and_install_detections() {
         "install persistence event failed schema validation"
     );
     assert_eq!(install_persistence["event_type"], "detection");
-    assert_eq!(install_persistence["severity"], "critical");
+    assert_eq!(install_persistence["severity"], "high");
     assert!(
         install_persistence["rule_ids"]
             .as_array()
@@ -2352,12 +2407,14 @@ fn scan_once_emits_token_injection_and_install_detections() {
             .iter()
             .any(|rule| rule == "persistence.shell_profile")
     );
+    // Installing a package and editing a startup file is ordinary setup; no
+    // chain modifier pairs them.
     assert!(
         install_persistence["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
-            .any(|rule| rule == "chain.install_then_persistence")
+            .all(|rule| !rule.as_str().unwrap_or_default().starts_with("chain."))
     );
     assert!(
         install_persistence["categories"]
@@ -2495,7 +2552,7 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
         "secret network event failed schema validation"
     );
     assert_eq!(secret_network["event_type"], "detection");
-    assert_eq!(secret_network["severity"], "critical");
+    assert_eq!(secret_network["severity"], "high");
     assert!(
         secret_network["rule_ids"]
             .as_array()
@@ -2510,8 +2567,9 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
             .iter()
             .any(|rule| rule == "network.download")
     );
+    // A secret read and a download do not chain; the chain needs an upload.
     assert!(
-        secret_network["rule_ids"]
+        !secret_network["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
@@ -2549,14 +2607,14 @@ fn scan_once_emits_execution_secret_and_api_key_detections() {
         "private key event failed schema validation"
     );
     assert_eq!(private_key["event_type"], "detection");
-    assert_eq!(private_key["severity"], "medium");
+    assert_eq!(private_key["severity"], "high");
     assert!(
-        !private_key["rule_ids"]
+        private_key["rule_ids"]
             .as_array()
             .unwrap()
             .iter()
             .any(|id| id == "execution.shell"),
-        "the bash tool name must not be synthesized into command evidence"
+        "the bash tool name supplies shell credit without synthesizing command evidence"
     );
     assert!(
         private_key["rule_ids"]
@@ -2867,7 +2925,7 @@ fn scan_once_client_filter_limits_discovered_sources() {
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
     assert_eq!(source_counts["qwen.jsonl"], 2);
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 59);
     assert_eq!(summary["source_discovery"]["operational_source_count"], 2);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -2916,7 +2974,7 @@ fn scan_once_accepts_repeated_client_filters() {
         .as_object()
         .expect("source counts object");
     assert_eq!(source_counts.len(), 4);
-    assert_eq!(source_counts["codex.jsonl"], 40);
+    assert_eq!(source_counts["codex.jsonl"], 42);
     assert_eq!(source_counts["codex.archived_jsonl"], 2);
     assert_eq!(source_counts["codex.headless_jsonl"], 2);
     assert_eq!(source_counts["qwen.jsonl"], 2);
@@ -2993,7 +3051,7 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
     assert_eq!(source_counts["qwen.jsonl"], 1);
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 59);
     assert_eq!(summary["source_discovery"]["operational_source_count"], 1);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -3113,19 +3171,19 @@ fn repeated_scans_suppress_duplicate_detections() {
         serde_json::from_slice::<Value>(&output.stdout).expect("scan summary json")
     };
     let first_summary = run_scan(&[]);
-    assert_eq!(first_summary["detection_count"], 30);
-    assert_eq!(first_summary["emitted_count"], 31);
+    assert_eq!(first_summary["detection_count"], 32);
+    assert_eq!(first_summary["emitted_count"], 33);
     assert_source_processing_accounting(&first_summary);
-    assert_detection_flow_accounting(&first_summary, 30, 0);
+    assert_detection_flow_accounting(&first_summary, 32, 0);
 
     let second_summary = run_scan(&[]);
-    assert_eq!(second_summary["detection_count"], 30);
+    assert_eq!(second_summary["detection_count"], 32);
     assert_eq!(second_summary["emitted_count"], 0);
     assert_source_processing_accounting(&second_summary);
-    assert_detection_flow_accounting(&second_summary, 0, 30);
+    assert_detection_flow_accounting(&second_summary, 0, 32);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        109
+        124
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -3140,14 +3198,14 @@ fn repeated_scans_suppress_duplicate_detections() {
         .lines()
         .count();
     let backfill_summary = run_scan(&["--dry-run", "--backfill"]);
-    assert_eq!(backfill_summary["detection_count"], 30);
+    assert_eq!(backfill_summary["detection_count"], 32);
     assert_eq!(
         backfill_summary["detection_flow"]["effective_detection_candidate_count"],
-        30
+        32
     );
     assert_eq!(
         backfill_summary["detection_flow"]["emitted_detection_count"],
-        30
+        32
     );
     assert_eq!(
         backfill_summary["detection_flow"]["state_deduplicated_detection_count"],
@@ -3162,7 +3220,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 32);
+    assert_eq!(lines.lines().count(), 34);
 }
 
 #[test]
@@ -3321,12 +3379,15 @@ fn scan_once_persists_incremental_baseline_snapshots() {
         let summary: Value = serde_json::from_slice(&output.stdout).expect("scan summary");
         assert_eq!(
             summary["detection_flow"]["effective_detection_candidate_count"],
-            0
+            3
         );
         let events = fs::read_to_string(&log_path).expect("benign events");
         assert!(events.lines().all(|line| {
             let event: Value = serde_json::from_str(line).expect("Event3 JSON");
             event["event_type"] != "detection"
+                || (event["rule_ids"] == serde_json::json!(["execution.shell"])
+                    && event["risk_score"] == 15
+                    && event["severity"] == "informational")
         }));
     };
 
@@ -3563,7 +3624,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     );
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("summary json");
     assert_eq!(first_summary["activity_count"], 1);
-    assert_eq!(first_summary["emitted_count"], 1);
+    assert_eq!(first_summary["emitted_count"], 2);
 
     let mut state: Value =
         serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
@@ -3607,7 +3668,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 3);
+    assert_eq!(lines.lines().count(), 4);
 }
 
 #[test]
@@ -3641,7 +3702,7 @@ fn scan_once_can_emit_activity_events() {
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert!(summary["activity_count"].as_u64().unwrap_or_default() > 0);
-    assert_eq!(summary["detection_count"], 30);
+    assert_eq!(summary["detection_count"], 32);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -5179,7 +5240,7 @@ fn scan_once_allows_fixture_root_with_dry_run() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
-    assert_eq!(summary["detection_count"], 30);
+    assert_eq!(summary["detection_count"], 32);
 }
 
 #[test]
@@ -5200,6 +5261,391 @@ fn watch_command_is_available_for_realtime_scans() {
     assert!(stdout.contains("--min-scan-interval-ms"));
     assert!(stdout.contains("--iterations"));
     assert!(stdout.contains("--client"));
+}
+
+fn seed_relocated_opencode(path: &Path) -> rusqlite::Connection {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, agent TEXT, model TEXT);
+         CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT,
+             seq INTEGER, time_updated INTEGER, data TEXT);
+         INSERT INTO session_v2 VALUES ('synthetic-relocation', 'build', NULL);",
+        )
+        .unwrap();
+    append_relocated_opencode(&connection, 1);
+    connection
+}
+
+fn append_relocated_opencode(connection: &rusqlite::Connection, sequence: i64) {
+    connection
+        .execute(
+            "INSERT INTO session_message VALUES (?1, 'synthetic-relocation', 'user', ?2, ?3, ?4)",
+            rusqlite::params![
+                format!("synthetic-{sequence}"),
+                sequence,
+                1791849600000_i64 + sequence,
+                serde_json::json!({"time":{"created":1791849600000_i64 + sequence},
+                "text":"List the synthetic workspace.","files":[],"agents":[],"skills":[]})
+                .to_string()
+            ],
+        )
+        .unwrap();
+}
+
+fn relocated_opencode_command(home: &Path, work: &Path, subcommand: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .env_clear()
+        .current_dir(work)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .arg(subcommand)
+        .args([
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--client",
+            "opencode",
+        ])
+        .arg("--state-path")
+        .arg(work.join("state.json"))
+        .arg("--log-path")
+        .arg(work.join("events.jsonl"));
+    if subcommand == "scan" {
+        command.arg("--once");
+    }
+    for key in ["PATH", "SystemRoot", "windir"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    command
+}
+
+#[test]
+fn opencode_relocation_discovery_is_exact_additive_and_root_isolated() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    let data = home.join(".local/share/opencode");
+    drop(seed_relocated_opencode(&data.join("opencode.db")));
+    drop(seed_relocated_opencode(&data.join("opencode-stable.db")));
+    drop(seed_relocated_opencode(
+        &data.join("nested/opencode-other.db"),
+    ));
+    let outside = root.join("PRIVATE-RELOCATION/custom-name.sqlite");
+    drop(seed_relocated_opencode(&outside));
+    drop(seed_relocated_opencode(
+        &outside.with_file_name("opencode-neighbor.db"),
+    ));
+    for name in [
+        "opencode-.db",
+        "opencode-stable.db-wal",
+        "opencode-stable.db-shm",
+        "opencode-stable.db.bak",
+        "unrelated.db",
+    ] {
+        fs::write(data.join(name), b"PRIVATE-RELOCATION not SQLite").unwrap();
+    }
+    let scan = |value: Option<&std::ffi::OsStr>, explicit: Option<&Path>, expected: u64| {
+        let mut command = relocated_opencode_command(&home, &work, "scan");
+        if let Some(value) = value {
+            command.env("OPENCODE_DB", value);
+        }
+        if let Some(explicit) = explicit {
+            command.arg("--root").arg(explicit);
+            if explicit.join(".telltale-fixtures").is_file() {
+                command.arg("--allow-fixtures");
+            }
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let summary: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            summary["source_counts"]["opencode.sqlite"], expected,
+            "{summary}"
+        );
+        assert_eq!(
+            summary["source_processing"]["selected_source_count"],
+            expected
+        );
+        assert_eq!(
+            summary["source_processing"]["parsed_record_count"],
+            expected
+        );
+        assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+        let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+        for text in [&stdout, &log] {
+            assert!(!text.contains("PRIVATE-RELOCATION"));
+        }
+    };
+    scan(Some(outside.as_os_str()), None, 3);
+    let relative = Path::new("../../../../PRIVATE-RELOCATION/custom-name.sqlite");
+    scan(Some(relative.as_os_str()), None, 3);
+    scan(None, None, 2);
+    scan(Some(std::ffi::OsStr::new("")), None, 2);
+    scan(Some(std::ffi::OsStr::new(":memory:")), None, 2);
+    // Explicit roots retain their old exact-file contract, regardless of the variable.
+    let explicit = root.join("explicit");
+    drop(seed_relocated_opencode(
+        &explicit.join("opencode/opencode.db"),
+    ));
+    drop(seed_relocated_opencode(
+        &explicit.join("opencode/opencode-stable.db"),
+    ));
+    scan(Some(outside.as_os_str()), Some(&explicit), 1);
+    fs::write(home.join(".telltale-fixtures"), b"").unwrap();
+    drop(seed_relocated_opencode(&home.join("opencode/opencode.db")));
+    drop(seed_relocated_opencode(
+        &home.join("opencode/opencode-preview.db"),
+    ));
+    scan(Some(outside.as_os_str()), Some(&home), 1);
+}
+
+#[test]
+fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_watch() {
+    use std::io::BufRead;
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let store = root.join("PRIVATE-RELOCATION");
+    let nested = store.join("unrelated/nested");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    let database = store.join("custom-store.sqlite");
+    let writer = seed_relocated_opencode(&database);
+    writer
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        .unwrap();
+    drop(seed_relocated_opencode(&store.join("opencode-neighbor.db")));
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .arg("--emit-activity")
+        .args([
+            "--iterations",
+            "2",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+        ])
+        .env("OPENCODE_DB", &database)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let line = line.unwrap();
+            if let Ok(summary) = serde_json::from_str::<Value>(&line) {
+                let _ = send.send(summary);
+            }
+        }
+    });
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            wait_for_watch_ready(&mut child, &store);
+            #[cfg(target_os = "linux")]
+            assert!(
+                !observed_inotify_directories(child.id())
+                    .unwrap()
+                    .contains(&inotify_directory_identity(&nested))
+            );
+            append_relocated_opencode(&writer, 2);
+            let first = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+            assert_eq!(
+                first["source_processing"]["selected_source_count"], 1,
+                "{first}"
+            );
+            assert_eq!(
+                first["source_processing"]["parsed_record_count"], 2,
+                "{first}"
+            );
+            assert_eq!(
+                first["source_discovery"]["basis"],
+                "watch_source_index_snapshot"
+            );
+            let read_only = rusqlite::Connection::open_with_flags(
+                &database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert_eq!(
+                read_only
+                    .query_row("SELECT COUNT(*) FROM session_message", [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                2
+            );
+            drop(read_only);
+            let mut shm = database.as_os_str().to_os_string();
+            shm.push("-shm");
+            fs::OpenOptions::new()
+                .write(true)
+                .open(Path::new(&shm))
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+                .unwrap();
+            fs::write(nested.join("ignored"), b"synthetic nested change").unwrap();
+            fs::write(store.join("unrelated.txt"), b"synthetic sibling change").unwrap();
+            assert!(
+                matches!(
+                    receive.recv_timeout(Duration::from_millis(750)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ),
+                "reader SHM or unrelated siblings/descendants triggered a scan"
+            );
+            assert!(child.try_wait().unwrap().is_none());
+            append_relocated_opencode(&writer, 3);
+            let second = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+            assert_eq!(
+                second["source_processing"]["parsed_record_count"], 3,
+                "{second}"
+            );
+            assert_eq!(second["source_processing"]["parse_error_source_count"], 0);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while child.try_wait().unwrap().is_none() {
+                if Instant::now() >= deadline {
+                    fail_watch(&mut child, "relocated watcher did not exit");
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert!(child.wait().unwrap().success());
+            let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+            assert!(!log.contains("PRIVATE-RELOCATION"));
+            assert!(!log.is_empty());
+            assert!(log.lines().map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .any(|event| event["client"] == "opencode" && event["event_type"] == "activity"));
+            assert!(
+                log.lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .all(|event| event_schema_validator().is_valid(&event))
+            );
+        }));
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    reader.join().unwrap();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opencode_relocation_watch_skips_linked_default_database() {
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let data = home.join("data/opencode");
+    fs::create_dir_all(&work).unwrap();
+    drop(seed_relocated_opencode(&data.join("opencode-preview.db")));
+    let outside = root.join("PRIVATE-DEFAULT/foreign.sqlite");
+    drop(seed_relocated_opencode(&outside));
+    std::os::unix::fs::symlink(&outside, data.join("opencode.db")).unwrap();
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .env("XDG_DATA_HOME", home.join("data"))
+        .args([
+            "--iterations",
+            "1",
+            "--emit-activity",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = WatchChildGuard::new(command.spawn().unwrap());
+    let mut stdout = child.child_mut().stdout.take().unwrap();
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    wait_for_watch_ready(child.child_mut(), &data);
+    fs::write(
+        data.join("rediscovery-trigger.txt"),
+        b"synthetic watch trigger",
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.child_mut().try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            fail_watch(child.child_mut(), "linked-default watcher did not exit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let output = child.disarm().wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let bytes = reader.join().unwrap().unwrap();
+    let summary: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        summary["source_processing"]["selected_source_count"], 1,
+        "{summary}"
+    );
+    assert_eq!(
+        summary["source_processing"]["parsed_record_count"], 1,
+        "{summary}"
+    );
+    assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+    assert_eq!(
+        summary["source_discovery"]["best_effort_fallback_used"],
+        true
+    );
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+    assert!(!log.is_empty());
+    assert!(!log.contains("PRIVATE-DEFAULT"));
+}
+
+#[cfg(unix)]
+#[test]
+fn opencode_relocation_channel_roots_do_not_follow_symlink_components() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let outside = root.join("PRIVATE-CHANNEL/opencode");
+    fs::create_dir_all(home.join("data")).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    drop(seed_relocated_opencode(
+        &outside.join("opencode-foreign.db"),
+    ));
+    std::os::unix::fs::symlink(&outside, home.join("data/opencode")).unwrap();
+    std::os::unix::fs::symlink(outside.parent().unwrap(), root.join("linked-parent")).unwrap();
+    for xdg in [home.join("data"), root.join("linked-parent")] {
+        let mut command = relocated_opencode_command(&home, &work, "scan");
+        let output = command.env("XDG_DATA_HOME", xdg).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            summary["source_processing"]["selected_source_count"], 0,
+            "{summary}"
+        );
+        assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+        assert_eq!(
+            summary["source_discovery"]["best_effort_fallback_used"],
+            true
+        );
+        assert!(
+            !String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("PRIVATE-CHANNEL")
+        );
+    }
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) {
@@ -7975,13 +8421,28 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
         ]
     })
     .collect::<Vec<_>>();
+    expected_evidence.extend([
+        (
+            "tool_name",
+            Some("37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2"),
+            Some("execution.shell"),
+        ),
+        (
+            "canonical_observation_id",
+            Some(OBSERVATION_HASH),
+            Some("execution.shell"),
+        ),
+    ]);
     expected_evidence.sort_unstable();
     assert_eq!(evidence, expected_evidence);
 
     assert_eq!(event.timeline_anchors.len(), 1);
     assert_eq!(event.timeline_anchors[0].entry_index, 0);
     assert_eq!(event.timeline_anchors[0].rule_ids, event.rule_ids);
-    assert_eq!(event.timeline_anchors[0].evidence_fields, ["command"]);
+    assert_eq!(
+        event.timeline_anchors[0].evidence_fields,
+        ["command", "tool_name"]
+    );
 }
 
 #[test]

