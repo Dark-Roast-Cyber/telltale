@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"synthetic-bc-encode-001","timestamp":"2026-04-03T08:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-encode-001","timestamp":"2026-04-03T08:00:01Z","payload":{"type":"user_message","message":"Base64-encode the word Demo for the badge URL."}}
+{"type":"event_msg","session_id":"synthetic-bc-encode-001","timestamp":"2026-04-03T08:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"printf 'Demo' | base64","message":"Run a synthetic fixture command."}}

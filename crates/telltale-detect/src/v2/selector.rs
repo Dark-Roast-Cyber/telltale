@@ -1,5 +1,6 @@
 //! Explicit Canonical Observation v2 selector registry.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -32,6 +33,7 @@ const SELECTORS: &[&str] = &[
     "compat.v1.tool_result",
     "compat.v1.url",
     "compat.v1.user_context",
+    "compat.v1.written_path",
     "message.text",
     "tool.call_id",
     "tool.stage",
@@ -106,6 +108,7 @@ const SELECTOR_BACKING: &[(&str, SelectorBacking)] = &[
     ("compat.v1.tool_result", SelectorBacking::Compatibility),
     ("compat.v1.url", SelectorBacking::Compatibility),
     ("compat.v1.user_context", SelectorBacking::Compatibility),
+    ("compat.v1.written_path", SelectorBacking::Compatibility),
     ("message.text", SelectorBacking::Derived),
     ("tool.call_id", SelectorBacking::Direct),
     ("tool.stage", SelectorBacking::Derived),
@@ -166,6 +169,7 @@ pub enum SelectorId {
     CompatToolResult,
     CompatUrl,
     CompatUserContext,
+    CompatWrittenPath,
     GovernedFacet(&'static str),
 }
 
@@ -193,6 +197,7 @@ impl SelectorId {
             "compat.v1.tool_result" => Ok(Self::CompatToolResult),
             "compat.v1.url" => Ok(Self::CompatUrl),
             "compat.v1.user_context" => Ok(Self::CompatUserContext),
+            "compat.v1.written_path" => Ok(Self::CompatWrittenPath),
             _ => SELECTORS
                 .iter()
                 .copied()
@@ -225,6 +230,7 @@ impl SelectorId {
             Self::CompatToolResult => "compat.v1.tool_result",
             Self::CompatUrl => "compat.v1.url",
             Self::CompatUserContext => "compat.v1.user_context",
+            Self::CompatWrittenPath => "compat.v1.written_path",
             Self::GovernedFacet(value) => value,
         }
     }
@@ -247,7 +253,8 @@ impl SelectorId {
             | Self::CompatFilePath
             | Self::CompatToolName
             | Self::CompatToolResult
-            | Self::CompatUrl => Some(CapabilityId::ToolCall),
+            | Self::CompatUrl
+            | Self::CompatWrittenPath => Some(CapabilityId::ToolCall),
             Self::ToolName
             | Self::ToolArguments
             | Self::ToolSearchableArguments
@@ -413,6 +420,7 @@ impl SelectorRegistry {
                 | SelectorId::CompatFilePath
                 | SelectorId::CompatToolName
                 | SelectorId::CompatUrl
+                | SelectorId::CompatWrittenPath
         ) {
             match observation.body() {
                 ObservationBody::Tool(tool) => match tool.result() {
@@ -452,6 +460,7 @@ impl SelectorRegistry {
                 | SelectorId::CompatToolResult
                 | SelectorId::CompatUrl
                 | SelectorId::CompatUserContext
+                | SelectorId::CompatWrittenPath
         ) {
             Self::resolve_compat(selector, observation, required_capability)
         } else {
@@ -718,6 +727,24 @@ impl SelectorRegistry {
                 }
                 _ => absent(selector, required_capability),
             },
+            // The v1 written-path view is the file-keyed top-level string
+            // arguments of a call that writes them. A path a call only reads
+            // stays a `file_path` fact; shell writes remain command text.
+            SelectorId::CompatWrittenPath => match observation.body() {
+                ObservationBody::Tool(tool) => {
+                    let paths = tool_written_paths(tool.name(), tool.arguments());
+                    if paths.is_empty() {
+                        absent(selector, required_capability)
+                    } else {
+                        derived_field(
+                            selector,
+                            JsonValue::string(paths.join("\n")),
+                            required_capability,
+                        )
+                    }
+                }
+                _ => absent(selector, required_capability),
+            },
             _ => absent(selector, required_capability),
         }
     }
@@ -732,21 +759,98 @@ pub(crate) fn is_url_argument_key(key: &str) -> bool {
 /// or a JSON-encoded object string. Nothing else in the arguments is a URL fact.
 /// Callers charge the argument bytes before resolution.
 pub(crate) fn tool_argument_urls(arguments: Option<&JsonValue>) -> Vec<String> {
-    let decoded;
-    let object = match arguments {
-        Some(JsonValue::Object(object)) => object,
-        Some(JsonValue::String(text)) => match decoded_argument_object(text) {
-            Some((object, _)) => {
-                decoded = object;
-                &decoded
-            }
-            None => return Vec::new(),
-        },
-        _ => return Vec::new(),
-    };
+    argument_object(arguments).map_or_else(Vec::new, |object| {
+        string_arguments(&object, is_url_argument_key)
+    })
+}
+
+/// Native file tools that write the file their path argument names.
+fn is_file_write_tool(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "write"
+            | "write_file"
+            | "writefile"
+            | "create"
+            | "create_file"
+            | "edit"
+            | "edit_file"
+            | "multiedit"
+            | "multi_edit"
+            | "notebookedit"
+            | "replace"
+    )
+}
+
+/// Top-level tool argument keys whose string value names one file.
+fn is_file_argument_key(key: &str) -> bool {
+    matches!(
+        key,
+        "file_path"
+            | "filePath"
+            | "path"
+            | "notebook_path"
+            | "absolute_path"
+            | "target_file"
+            | "file"
+            | "filename"
+    )
+}
+
+/// Top-level tool argument keys that carry the content a call writes.
+fn is_written_content_argument_key(key: &str) -> bool {
+    matches!(
+        key,
+        "content"
+            | "contents"
+            | "new_string"
+            | "newString"
+            | "new_str"
+            | "newText"
+            | "file_text"
+            | "new_source"
+            | "edits"
+            | "code_edit"
+    )
+}
+
+/// File-keyed top-level non-empty string arguments of a call that writes them:
+/// a native file-write tool, or any call whose arguments also carry the content
+/// written. Read, search and listing calls name a path without content and
+/// yield nothing. Callers charge the argument bytes before resolution.
+pub(crate) fn tool_written_paths(name: Option<&str>, arguments: Option<&JsonValue>) -> Vec<String> {
+    argument_object(arguments).map_or_else(Vec::new, |object| {
+        if name.is_some_and(is_file_write_tool)
+            || object
+                .keys()
+                .any(|key| is_written_content_argument_key(key))
+        {
+            string_arguments(&object, is_file_argument_key)
+        } else {
+            Vec::new()
+        }
+    })
+}
+
+/// The top-level argument object, from an object or a JSON-encoded object string.
+fn argument_object(arguments: Option<&JsonValue>) -> Option<Cow<'_, BTreeMap<String, JsonValue>>> {
+    match arguments {
+        Some(JsonValue::Object(object)) => Some(Cow::Borrowed(object)),
+        Some(JsonValue::String(text)) => {
+            decoded_argument_object(text).map(|(object, _)| Cow::Owned(object))
+        }
+        _ => None,
+    }
+}
+
+/// Selected non-empty top-level string arguments, in key order.
+fn string_arguments(
+    object: &BTreeMap<String, JsonValue>,
+    selected: fn(&str) -> bool,
+) -> Vec<String> {
     object
         .iter()
-        .filter(|(key, _)| is_url_argument_key(key))
+        .filter(|(key, _)| selected(key))
         .filter_map(|(_, value)| match value {
             JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
             _ => None,

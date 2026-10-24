@@ -594,13 +594,19 @@ valid regex is compiled before evaluation; invalid content is `detector_error`,
 not a type mismatch. The matcher status algebra is `match`, `no_match`, or
 `not_evaluated`; `not_evaluated` is never inverted into a clean match.
 
-The eight compatibility views are exact and remain separate from native
+The nine compatibility views are exact and remain separate from native
 selectors: `arguments` uses searchable or string tool arguments,
 `assistant_context` and `user_context` use role-specific message content,
 `command` uses `command.text`, `file_path` uses `resource.path`, `tool_name`
 uses the typed tool name, and `tool_result` uses searchable or string result
 content. `url` uses the URL-keyed top-level tool arguments; it does not
-manufacture URL, path, or network facts from other text. All tool-side
+manufacture URL, path, or network facts from other text. `written_path` uses
+the file-keyed top-level string arguments of a call that writes them: a native
+file-write tool (`Write`, `Edit`, `write_file`, `replace` and similar), or any
+call whose arguments also carry the written content (`content`, `new_string`,
+`newString`, `new_str`, `file_text`, `edits` and similar). Read, search and
+listing calls set `file_path` but never `written_path`; shell writes remain
+`command` text. All tool-side
 compatibility views require `ToolCall`, not `ToolExecution`.
 
 ## Sequence, correlation, and process declarations
@@ -671,8 +677,9 @@ The compatibility path is:
 Rule v1 -> compatibility compiler/adapter -> Detection v2 IR -> DetectorResult
 ```
 
-The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
-`command`, `file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
+The nine v1 targets are exactly `arguments`, `assistant_context`, `command`,
+`file_path`, `tool_name`, `tool_result`, `url`, `user_context`, and
+`written_path`.
 The compiler maps effective Rule v1 IDs and metadata into observation-match
 detector definitions with `rule_version: 1`; IDs are not renamed. Detection v2
 resolves canonical applicability, capabilities, and truthful selector values,
@@ -681,6 +688,18 @@ over canonical observations. Direct-record evaluation APIs were removed.
 Modifiers remain Rule v1 compatibility session constructs: the content evaluator
 triggers them from matched atomic Rule v1 IDs and categories, but they never
 become DetectorResults, Signals, Findings, or native v2 correlation detectors.
+Session evaluation withholds a modifier whose steps are not linked. The bundled
+`chain.download_then_execute` needs the link that arms it for action findings: a
+download piped to an interpreter, or a downloaded file executed within the
+action chain window. A modifier that declares a `link` needs its steps within
+`link.calls` tool calls of each other by call position (a call and its result
+share one position, and other records take the next call's), in declared order
+unless `link.order` is `any`, and, with `link.minutes`, within that many minutes
+of the completing step when both have a source time. Action findings apply the
+same link and attach the chain to the completing action. A modifier without a
+link keeps co-occurrence anywhere in the session and its earlier action
+semantics. Field-level `CompiledRuleSet::evaluate()` sees one record, which
+satisfies any link.
 The evaluator uses the existing validated contribution primitives to construct
 Rule v1 compatibility contributions and a checked compatibility score. That sum
 is not native Detection v2 aggregate risk; Detection v2 still has no accepted

@@ -136,12 +136,17 @@ rules:
     category: persistence
     severity: high
     score: 45
-    targets: [command, arguments, file_path]
-    regex: '(\.bashrc|\.zshrc|\.profile|\.bash_profile|config/fish/config\.fish|crontab|systemctl\s+(?:-\S+\s+)*enable|launchctl\s+load)'
+    detection:
+      selection:
+        command: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*)[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
+        arguments: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*)[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
+        written_path: '(?m)(?:(?:^|[\/\\])(?:\.bashrc|\.bash_profile|\.bash_login|\.profile|\.zshrc|\.zprofile|\.zshenv|\.zlogin)|config/fish/config\.fish)$'
+      condition: selection
     tags: [persistence]
-    explanation: Persistence-sensitive startup or profile modification.
+    explanation: A shell startup file, crontab or login service was written or enabled.
     falsepositives:
       - Shell profile edits and service enablement can be legitimate environment setup when user-approved.
+      - Shell commands and native file tools that only read a startup file do not match.
 
   - id: approval.bypass.context
     category: approval_bypass
@@ -238,11 +243,12 @@ rules:
     severity: high
     score: 55
     targets: [command, arguments]
-    regex: '(base64\s+(-e|--encode)|echo\s+[A-Za-z0-9+/]{40,}={0,2}\s*\|\s*(nslookup|dig|host)\b|nslookup\s+[A-Za-z0-9+/]{20,}|dig\s+[A-Za-z0-9+/]{20,}|host\s+[A-Za-z0-9+/]{20,})'
+    regex: '(\b(?:base64|base32|basenc|xxd|od|hexdump)\b[^;&\n]*\|\s*(?:xargs\s+(?:-\S+\s+)*)?(?:nslookup|dig|host|drill)\b|\b(?:nslookup|dig|host|drill)\s+[^;&|\n]*\$\([^)]*\b(?:base64|base32|basenc|xxd|od|hexdump)\b|echo\s+[A-Za-z0-9+/]{40,}={0,2}\s*\|\s*(nslookup|dig|host)\b|nslookup\s+[A-Za-z0-9+/]{20,}|dig\s+[A-Za-z0-9+/]{20,}|host\s+[A-Za-z0-9+/]{20,})'
     tags: [exfiltration, dns, encoding, obfuscation]
-    explanation: Base64-encoded data being exfiltrated via DNS queries.
+    explanation: Encoded data was sent toward a DNS lookup, a common exfiltration channel.
     falsepositives:
       - DNS troubleshooting or demonstrations may include encoded labels, but secret-adjacent context should raise priority.
+      - Encoding alone, without a DNS lookup in the same command, does not match.
 
   - id: exfil.encoded_http
     category: exfiltration
@@ -267,12 +273,17 @@ rules:
       - atlas:AML.T0055
     severity: high
     score: 50
-    targets: [command, arguments, file_path]
-    regex: '(\.aws/credentials|\.aws/config|\.gcloud/credentials\.json|\.kube/config|\.docker/config\.json|credentials\.json|service-account\.json|\.azure/accessTokens\.json|\.config/gcloud/credentials\.db)'
+    detection:
+      selection:
+        command: '(?:(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base64|base32|basenc|grep|egrep|fgrep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|ncat|socat|dd|tee|vim?|nano|type|get-content|gc|copy-item|compress-archive|invoke-webrequest|invoke-restmethod)(?:\.exe)?\s[^;&|\n]*?|(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?|[<@]\s*["'']?[^\s;&|<>"'']*?)(?:\.aws[\/\\](?:credentials|config)|\.gcloud[\/\\]credentials\.json|\.kube[\/\\]config|\.docker[\/\\]config\.json|credentials\.json|service-account\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)'
+        arguments: '(?:(?:(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base64|base32|basenc|grep|egrep|fgrep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|ncat|socat|dd|tee|vim?|nano|type|get-content|gc|copy-item|compress-archive|invoke-webrequest|invoke-restmethod)(?:\.exe)?\s[^;&|\n]*?|(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?|[<@]\s*["'']?[^\s;&|<>"'']*?)|"(?:file_?path|filePath|path|absolute_path|target_file|file|filename)"\s*:\s*"[^"]*?)(?:\.aws[\/\\](?:credentials|config)|\.gcloud[\/\\]credentials\.json|\.kube[\/\\]config|\.docker[\/\\]config\.json|credentials\.json|service-account\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)'
+        file_path: '(?m)(?:\.aws[\/\\](?:credentials|config)|\.kube[\/\\]config|\.docker[\/\\]config\.json|(?:^|[\/\\])(?:credentials|service-account)\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)$'
+      condition: selection
     tags: [credentials, cloud, harvesting]
-    explanation: Access to cloud provider credential files.
+    explanation: A cloud credential file was read, copied, encoded, archived or sent, or a native file tool opened it.
     falsepositives:
-      - Authorized cloud CLI troubleshooting or inventory may read credential paths under explicit operator direction.
+      - Authorized cloud CLI troubleshooting or inventory may read credential files under explicit operator direction.
+      - A cloud CLI given the credential path it authenticates with (`--kubeconfig`, `KUBECONFIG=`, `--key-file`) does not match.
 
   - id: supply_chain.publish
     category: supply_chain
@@ -298,13 +309,70 @@ rules:
     falsepositives:
       - Inventory, diagnostics, and integration tests may enumerate MCP tools with operator approval.
 
+  - id: destructive.filesystem_wipe
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\brm\s+(?:-{1,2}\S*\s+)+["'']?(?:/\*?|~/?\*?|\$\{?home\}?/?\*?)["'']?(?:$|[\s;&|)])|--no-preserve-root|\bmkfs(?:\.\w+)?\s|\bdd\b[^;&|\n]*\bof=/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|rdisk)|\bwipefs\b|\bshred\b[^;&|\n]*\s/dev/|\bfind\s+(?:/|~/?|\$\{?home\}?/?)\s[^;&|\n]*-delete\b|\bformat-volume\b|(?:^|[\s;&|])format(?:\.com)?\s+[a-z]:(?:$|[\s/])|\b(?:rd|rmdir)\s+/s\s+(?:/q\s+)?[a-z]:\\?(?:$|[\s;&|])|\bremove-item\b[^;&|\n]*-recurse\b[^;&|\n]*\s["'']?(?:[a-z]:\\?|~|\$home|\$env:userprofile)["'']?(?:$|[\s;&|]))'
+    tags: [destructive, filesystem]
+    explanation: A command can delete a home directory, a filesystem root or a disk.
+    falsepositives:
+      - Disposable containers and CI machines are sometimes reset this way on purpose; confirm the host and the request.
+
+  - id: destructive.git_discard
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*push\b[^;&|\n]*\s(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--delete|-d|\+[\w./-]+|:[\w./-]+)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*reset\b[^;&|\n]*\s--hard\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*clean\b(?:\s+-[a-z]*)*\s+-[a-z]*f|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:checkout\s+(?:--\s+)?|restore\s+(?:--worktree\s+)?)\.(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*branch\b[^;&|\n]*\s(?-i:-D)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*stash\s+(?:drop|clear)\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:filter-branch|filter-repo)\b)'
+    tags: [destructive, git]
+    explanation: A Git command discards uncommitted work, deletes a branch or stash, or rewrites remote history.
+    falsepositives:
+      - Developers often reset, clean or force-push their own branches deliberately; confirm the branch and the request.
+
+  - id: destructive.database_drop
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\bdrop\s+(?:table|database|schema)\b|\btruncate\s+table\b|\bdelete\s+from\s+[\w."`]+\s*(?:;|$|["''])|\bdropdb\b|\bredis-cli\b[^;&|\n]*\bflush(?:all|db)\b|\.dropdatabase\s*\()'
+    tags: [destructive, database]
+    explanation: A command drops or empties a database, table or schema.
+    falsepositives:
+      - Resetting a local or test database is routine development work; confirm which database the command targets.
+
+  - id: destructive.infrastructure_teardown
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\b(?:terraform|tofu)\s+(?:-\S+\s+)*destroy\b|\b(?:terraform|tofu)\s+(?:-\S+\s+)*apply\b[^;&|\n]*\s-destroy\b|\bpulumi\s+(?:-\S+\s+)*destroy\b|\bkubectl\b[^;&|\n]*\sdelete\b(?:\s+(?:namespaces?|ns)\b|[^;&|\n]*\s--all(?:-namespaces)?\b)|\baws\s+s3\s+rb\b[^;&|\n]*\s--force\b|\baws\s+s3\s+rm\b[^;&|\n]*\s--recursive\b|\bgsutil\s+(?:-m\s+)?rm\s+(?:-\S+\s+)*-r|\bgcloud\s+projects\s+delete\b|\baz\s+group\s+delete\b|\b(?:docker|podman)\s+volume\s+prune\b|\b(?:docker|podman)\s+system\s+prune\b[^;&|\n]*\s--volumes\b|\bpodman\s+(?:system|machine)\s+reset\b)'
+    tags: [destructive, infrastructure]
+    explanation: A command tears down cloud infrastructure, a Kubernetes namespace, container storage or stored data.
+    falsepositives:
+      - Tearing down a disposable or test environment is routine; confirm which environment the command targets.
+
 modifiers:
   - id: chain.secret_then_network
     score: 35
-    when_all_categories: [secret_access, download]
-    explanation: Secret access near network activity materially increases exfiltration risk.
+    when_all_categories: [secret_access, exfiltration]
+    link: {calls: 3}
+    explanation: Secret access followed by outbound transfer materially increases exfiltration risk.
     falsepositives:
-      - Authorized troubleshooting may inspect environment files and fetch documented resources in the same session; confirm the network destination and user intent before escalating.
+      - Authorized backup or migration work may read secret files and upload artifacts; confirm the destination and the request before escalating.
   - id: chain.download_then_execute
     score: 35
     when_all_categories: [download, execution]
@@ -314,15 +382,10 @@ modifiers:
   - id: chain.shell_encoded_payload
     score: 10
     when_all_rule_ids: [execution.shell, execution.encoded_payload]
+    link: {calls: 0, order: any}
     explanation: Shell execution of decoded payload content should cross the triage threshold.
     falsepositives:
       - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
-  - id: chain.install_then_persistence
-    score: 30
-    when_all_categories: [install, persistence]
-    explanation: Install plus persistence modification requires triage.
-    falsepositives:
-      - Developer environment setup may install packages and update shell profiles or services when those changes match the requested setup steps.
   - id: chain.mcp_injection_then_egress
     score: 35
     detection_class: security_detection
@@ -332,12 +395,14 @@ modifiers:
       - atlas:AML.T0051
       - atlas:AML.T0086
     when_all_categories: [mcp_prompt_injection, exfiltration]
+    link: {calls: 3}
     explanation: MCP prompt injection near outbound egress is the first Telltale high-signal alert use case.
     falsepositives:
       - Telltale security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
   - id: chain.credential_then_publish
     score: 40
     when_all_categories: [credential_harvesting, supply_chain]
+    link: {calls: 3}
     explanation: Credential harvesting followed by package publishing is a supply chain attack pattern.
     falsepositives:
       - Authorized release automation may read cloud or package credentials before publishing; verify release intent, credential scope, and package destination.
@@ -347,6 +412,7 @@ modifiers:
       - atlas:AML.T0055
       - atlas:AML.T0025
     when_all_categories: [credential_harvesting, exfiltration]
+    link: {calls: 3}
     explanation: Credential harvesting followed by exfiltration is a data theft pattern.
     falsepositives:
       - Backup, migration, or inventory work may read credential-adjacent files and upload artifacts when both actions are explicitly approved.
@@ -356,6 +422,7 @@ modifiers:
       - atlas:AML.T0084
       - atlas:AML.T0051
     when_all_categories: [mcp_enumeration, mcp_prompt_injection]
+    link: {calls: 3}
     explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
     falsepositives:
       - MCP integration tests may enumerate tools and include synthetic injection strings to validate defenses.
@@ -367,6 +434,7 @@ modifiers:
     atlas_tags:
       - atlas:AML.T0051
     when_all_categories: [instruction_override, approval_bypass]
+    link: {calls: 3, order: any}
     explanation: An instruction override co-occurring with an approval-bypass directive in assistant output requires security review.
     falsepositives:
-      - Co-occurrence is evaluated per session, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase elsewhere in the session (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.
+      - The two phrases link within three tool calls of each other in either order, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase nearby (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.

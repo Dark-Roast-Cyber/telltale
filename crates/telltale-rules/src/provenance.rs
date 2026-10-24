@@ -77,6 +77,11 @@ fn canonical_modifier(modifier: &RuleV1CompatibilityModifier) -> CanonicalModifi
         atlas_tags: sorted_unique(&modifier.atlas_tags),
         when_all_categories: sorted_unique(&modifier.when_all_categories),
         when_all_rule_ids: sorted_unique(&modifier.when_all_rule_ids),
+        link: modifier.link.map(|link| CanonicalLink {
+            calls: link.calls,
+            order: link.order.as_str(),
+            minutes: link.minutes,
+        }),
         explanation: &modifier.explanation,
     }
 }
@@ -126,15 +131,25 @@ struct CanonicalModifier<'a> {
     atlas_tags: Vec<&'a str>,
     when_all_categories: Vec<&'a str>,
     when_all_rule_ids: Vec<&'a str>,
+    // Absent for unlinked modifiers, so their fingerprints do not change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link: Option<CanonicalLink>,
     explanation: &'a str,
+}
+
+#[derive(Serialize)]
+struct CanonicalLink {
+    calls: u32,
+    order: &'static str,
+    minutes: Option<u32>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::rule_v1_fingerprint;
     use crate::{
-        DetectionDefinition, ModifierDefinition, RuleDefaults, RuleDefinition, RulePolicy, RuleSet,
-        load_rule_set_from_documents,
+        DetectionDefinition, ModifierDefinition, ModifierLink, ModifierLinkOrder, RuleDefaults,
+        RuleDefinition, RulePolicy, RuleSet, load_rule_set_from_documents,
     };
     use std::collections::BTreeMap;
 
@@ -230,6 +245,7 @@ mod tests {
             atlas_tags: vec!["atlas:A".to_string()],
             when_all_categories: vec!["execution".to_string()],
             when_all_rule_ids: vec!["rule.synthetic".to_string()],
+            link: None,
             falsepositives: vec!["base guidance".to_string()],
             explanation: "modifier explanation".to_string(),
             enabled: true,
@@ -256,6 +272,7 @@ mod tests {
                 atlas_tags: vec!["atlas:A".to_string()],
                 when_all_categories: vec!["execution".to_string()],
                 when_all_rule_ids: vec!["rule.synthetic".to_string()],
+                link: None,
                 falsepositives: vec!["none".to_string()],
                 explanation: "modifier explanation".to_string(),
                 enabled: true,
@@ -308,6 +325,7 @@ mod tests {
             atlas_tags: vec!["atlas:A".to_string()],
             when_all_categories: vec!["execution".to_string()],
             when_all_rule_ids: vec!["rule.synthetic".to_string()],
+            link: None,
             falsepositives: vec!["none".to_string()],
             explanation: "modifier explanation".to_string(),
             enabled: true,
@@ -429,6 +447,14 @@ modifiers: []
         assert_eq!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&unique));
     }
 
+    fn link() -> ModifierLink {
+        ModifierLink {
+            calls: 3,
+            order: ModifierLinkOrder::Declared,
+            minutes: None,
+        }
+    }
+
     #[test]
     fn every_fingerprinted_modifier_field_changes_identity() {
         let modifier = || ModifierDefinition {
@@ -440,6 +466,7 @@ modifiers: []
             atlas_tags: vec!["atlas:A".to_string()],
             when_all_categories: vec!["execution".to_string()],
             when_all_rule_ids: vec!["rule.synthetic".to_string()],
+            link: Some(link()),
             falsepositives: vec!["none".to_string()],
             explanation: "modifier explanation".to_string(),
             enabled: true,
@@ -458,6 +485,22 @@ modifiers: []
             |value: &mut ModifierDefinition| value.when_all_categories.push("other".to_string()),
             |value: &mut ModifierDefinition| value.when_all_rule_ids.push("rule.other".to_string()),
             |value: &mut ModifierDefinition| value.explanation = "other".to_string(),
+            |value: &mut ModifierDefinition| value.link = None,
+            |value: &mut ModifierDefinition| {
+                value.link = Some(ModifierLink { calls: 2, ..link() });
+            },
+            |value: &mut ModifierDefinition| {
+                value.link = Some(ModifierLink {
+                    order: ModifierLinkOrder::Any,
+                    ..link()
+                });
+            },
+            |value: &mut ModifierDefinition| {
+                value.link = Some(ModifierLink {
+                    minutes: Some(15),
+                    ..link()
+                });
+            },
         ] {
             let mut changed = modifier();
             mutate(&mut changed);
