@@ -458,7 +458,20 @@ pub(super) fn extract_incremental_messages(
                     .get("data")
                     .and_then(Value::as_str)
                     .map_or(0, str::len);
-                if !records.is_empty() && read.saturating_add(bytes) > read_bytes {
+                // A reduced evaluation target cannot divide the first
+                // timestamp group: the cursor has no within-group coordinate.
+                // Keep that group readable up to the unchanged production
+                // read budget, so evaluation can quarantine it if necessary.
+                let first_group =
+                    records
+                        .first()
+                        .is_some_and(|record: &OpenCodeSessionMessageRecord| {
+                            record.time_updated == key.0
+                        });
+                if !records.is_empty()
+                    && read.saturating_add(bytes) > read_bytes
+                    && (!first_group || read.saturating_add(bytes) > window_read_bytes(None))
+                {
                     full = true;
                     return Err(SourceReadError::Bounded(
                         crate::source_read::BoundedReadError::LimitExceeded,

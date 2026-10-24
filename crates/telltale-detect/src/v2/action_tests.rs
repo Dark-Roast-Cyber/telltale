@@ -12,7 +12,7 @@ fn action_evidence_sanitizer_reservation_uses_shared_budget() {
     let compiled = super::actions::compile(&export).unwrap();
     let observation = tool(
         "encoded-evidence",
-        &format!("echo MATCH {}", "%".repeat(4000)),
+        &format!("echo MATCH {}", "%25".repeat(1333)),
         None,
     );
     let mut budget = super::session::RetentionBudget::new();
@@ -36,7 +36,7 @@ fn action_context_sanitizer_reservation_fails_source_atomically() {
     let export = sanitizer_budget_rules();
     let plan = compile_rule_v1(&export).unwrap();
     let observations = [
-        tool("encoded-context", &"%".repeat(4000), None),
+        tool("encoded-context", &"%25".repeat(1333), None),
         tool("match", "echo MATCH", None),
     ];
     let mut options = DetailedEvaluationOptions::default();

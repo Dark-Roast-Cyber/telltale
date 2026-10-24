@@ -6,6 +6,21 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Avoid reserving unrelated tool arguments for scalar control-field lookups,
+  and skip encoded-URL candidate scanning when text contains no complete percent
+  escape. Genuine input scanning and valid encoded URLs retain their existing
+  work limits; redacted output is unchanged.
+- Keep an indivisible OpenCode timestamp group readable when adaptive windows
+  shrink, within unchanged hard read and retention budgets. Over-capacity groups
+  remain explicitly quarantined while later history can still be evaluated;
+  malformed data and groups exceeding hard budgets still fail visibly.
+- Recognize additional Claude session bookkeeping and API-request replay record
+  kinds without interpreting their nested messages as new conversation or tool
+  activity. Keep unknown kinds quarantined and conflicting session identities
+  rejected; nested payload types cannot override the outer record kind.
+- Retain content-free processing failure reasons in local scan diagnostics
+  instead of reporting only the failed stage; Event 3.0 error codes and source
+  failure behavior are unchanged.
 - Make four bundled detections depend on what a command does, not on words
   that appear near it:
   - `chain.download_then_execute` now needs downloaded content to run in session

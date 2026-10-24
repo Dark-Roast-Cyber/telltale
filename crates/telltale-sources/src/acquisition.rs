@@ -175,7 +175,9 @@ pub struct OpenCodeSqliteReadOptions {
     pub message_resume_high_water: Option<i64>,
     /// Retained-semantics budget for one OpenCode v2 window, at most the
     /// source-wide budget; `None` uses the source-wide budget. Callers lower
-    /// it when evaluating a full window would exceed their work budget.
+    /// it when evaluating a full window would exceed their work budget. The
+    /// first whole timestamp group may exceed this adaptive target, but never
+    /// the source-wide budget: a cursor cannot continue inside that group.
     pub message_window_bytes: Option<usize>,
 }
 
@@ -825,7 +827,15 @@ pub fn acquire_opencode_sqlite(
                             .map(CanonicalObservationV2::retained_byte_len)
                             .fold(0usize, usize::saturating_add);
                         if retained.saturating_add(bytes) > window_bytes {
-                            if !window.is_empty() {
+                            let first_group = extraction
+                                .records
+                                .first()
+                                .is_some_and(|first| first.time_updated == record.time_updated);
+                            if !window.is_empty()
+                                && (!first_group
+                                    || retained.saturating_add(bytes)
+                                        > MAX_CANONICAL_RETAINED_BYTES)
+                            {
                                 cut = true;
                                 break;
                             }
@@ -833,7 +843,8 @@ pub fn acquire_opencode_sqlite(
                                 // A single row larger than any window.
                                 outcome = Err(("unbounded_value", None));
                             } else {
-                                // The first row always fits a reduced window.
+                                // The first cursor-safe timestamp group fits a
+                                // reduced target, subject to the hard budget.
                                 retained += bytes;
                             }
                         } else {

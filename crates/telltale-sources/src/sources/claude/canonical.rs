@@ -1249,9 +1249,22 @@ mod tests {
             "summary",
             "system",
             "progress",
+            "api-request",
+            "api-request-blob",
+            "api-request-shape",
+            "mode",
+            "permission-mode",
+            "relocated",
+            "worktree-state",
+            "cost-state",
+            "pr-link",
+            "artifact-autoreact-ledger",
+            "artifact-comment-monitor",
+            "continued-in",
         ]
         .map(|kind| format!(r#"{{"type":"{kind}","sessionId":"s","content":"synthetic"}}"#))
         .to_vec();
+        let metadata_count = lines.len();
         lines.push(
             r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic turn."}}"#
                 .to_owned(),
@@ -1261,7 +1274,7 @@ mod tests {
         assert_eq!(projection.observations.len(), 1);
         assert_eq!(
             projection.observations[0].source().source_sequence(),
-            Some(12)
+            Some(metadata_count as u64)
         );
     }
 
