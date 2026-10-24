@@ -6,6 +6,10 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Recognize additional Claude session bookkeeping and API-request replay record
+  kinds without interpreting their nested messages as new conversation or tool
+  activity. Keep unknown kinds quarantined and conflicting session identities
+  rejected; nested payload types cannot override the outer record kind.
 - Retain content-free processing failure reasons in local scan diagnostics
   instead of reporting only the failed stage; Event 3.0 error codes and source
   failure behavior are unchanged.

@@ -339,6 +339,9 @@ are not guaranteed. Accounting remains partial, not whole-database coverage.
 Claude Code adapter notes:
 
 - JSONL entries commonly use top-level `type` values such as `user` and `assistant`.
+- An explicit outer string `type` takes precedence over nested payload types;
+  a replay or unknown outer kind cannot be reinterpreted as a tool turn by a
+  nested discriminator.
 - Message payloads can live under `message.role`, `message.model`, and `message.content`.
 - `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; the adapter maps `tool_use` and `tool_result` blocks to their canonical Tool semantics.
 - The Claude desktop app's Code tab writes the same transcripts as the CLI;
@@ -347,7 +350,14 @@ Claude Code adapter notes:
 - Bookkeeping records between turns (`attachment`, `queue-operation`,
   `last-prompt`, `custom-title`, `ai-title`, `agent-name`, `atis-latch`,
   `file-history-snapshot`, `file-history-delta`, `summary`, `system`,
-  `progress`) are skipped.
+  `progress`, `mode`, `permission-mode`, `relocated`, `worktree-state`,
+  `cost-state`, `api-request`, `api-request-blob`, `api-request-shape`, `pr-link`,
+  `artifact-autoreact-ledger`, `artifact-comment-monitor`, `continued-in`) are
+  counted as other native records but not projected as conversation or tool
+  activity. API request replays are opaque bookkeeping, not another execution
+  of any tool calls they contain. Their nested text and tools contribute no
+  activity facts. This is not inference-traffic normalization or a claim of
+  full support for unpublished request schemas.
 - `thinking`, `redacted_thinking`, `image`, and `document` blocks are dropped
   from messages; reasoning text is not retained.
 - A message's `tool_use`/`tool_result` part keeps only its call id, name and
@@ -360,6 +370,9 @@ Claude Code adapter notes:
   exceed a canonical bound, is quarantined by itself and reported by session,
   record `uuid`, sequence and bound, never content; the rest of the
   transcript is still evaluated and coverage is reported as partial.
+- Conflicting session identity aliases remain an integrity failure for the
+  entire source, including when they occur in bookkeeping records. No alias
+  is silently preferred over another.
 - A full scan in which every selected Claude source fails processing, at
   acquisition, parsing, evaluation or any later stage, also emits a `warning` `operational_alert` with `alert_type=source_parse_outage`; see
   [telemetry-output.md](telemetry-output.md).
