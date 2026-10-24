@@ -713,17 +713,19 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
         part_max_time_updated: Some(42),
     };
     let plan = plan("user_context");
-    for (observations, expected) in [
+    for (observations, expected, reason) in [
         (
             vec![
                 message("duplicate", Some("s")),
                 message("duplicate", Some("s")),
             ],
             FailureStage::Evaluation,
+            "canonical_duplicate_observation",
         ),
         (
             vec![message("scoped", Some("s")), message("unscoped", None)],
             FailureStage::Projection,
+            "event3_projection_failed",
         ),
     ] {
         let result = finish_batch(
@@ -748,6 +750,7 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
         let error = result.err().expect("failure must discard source output");
         assert_eq!(error.stage, expected);
         assert_eq!(error.progress, progress);
+        assert!(error.to_string().contains(reason));
         for diagnostic in [error.to_string(), format!("{error:?}")] {
             assert!(!diagnostic.contains("PRIVATE"));
             assert!(!diagnostic.contains("needle"));

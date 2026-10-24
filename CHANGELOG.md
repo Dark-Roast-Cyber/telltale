@@ -6,6 +6,9 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Retain content-free processing failure reasons in local scan diagnostics
+  instead of reporting only the failed stage; Event 3.0 error codes and source
+  failure behavior are unchanged.
 - Make four bundled detections depend on what a command does, not on words
   that appear near it:
   - `chain.download_then_execute` now needs downloaded content to run in session
