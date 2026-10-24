@@ -214,13 +214,15 @@ struct WatchCommandArgs {
     iterations: Option<u32>,
 
     /// Milliseconds to wait after a filesystem event before scanning.
-    #[arg(long, default_value_t = 500)]
-    debounce_ms: u64,
+    /// Overrides watch.debounce_ms (settings.d; default 500).
+    #[arg(long)]
+    debounce_ms: Option<u64>,
 
     /// Minimum milliseconds between watch-triggered scans. Events arriving
-    /// sooner are coalesced into the next scan.
-    #[arg(long, default_value_t = 10_000)]
-    min_scan_interval_ms: u64,
+    /// sooner are coalesced into the next scan. Overrides
+    /// watch.min_scan_interval_ms (settings.d; default 10000).
+    #[arg(long)]
+    min_scan_interval_ms: Option<u64>,
 }
 
 #[derive(ClapArgs)]
@@ -246,10 +248,12 @@ struct ScanExecutionArgs {
     dry_run: bool,
 
     /// Emit per-session activity summary events in addition to detections.
+    /// Same as events.emit_activity: true in settings.d.
     #[arg(long)]
     emit_activity: bool,
 
     /// Emit per-session risk summary events derived from activity and detection events.
+    /// Same as events.emit_session_risk_summary: true in settings.d.
     #[arg(long)]
     emit_session_risk_summary: bool,
 
@@ -283,7 +287,8 @@ struct ScanExecutionArgs {
     allowlist: Option<PathBuf>,
 
     /// Opt in to bounded risk-score modifiers for model baseline deviations in activity events.
-    /// Has effect only when --emit-activity is also set.
+    /// Has effect only when activity events are emitted. Same as
+    /// events.baseline_deviation_scoring: true in settings.d.
     #[arg(long)]
     baseline_deviation_scoring: bool,
 
@@ -605,12 +610,9 @@ struct PreparedScanExecution {
     sink_set: crate::sink::SinkSet,
     state_path: PathBuf,
     dry_run: bool,
-    emit_activity: bool,
-    emit_session_risk_summary: bool,
     allow_fixtures: bool,
     resolved_config: ResolvedScanConfig,
     rule_load_mode: RuleLoadMode,
-    baseline_deviation_scoring: bool,
     clients: Vec<ClientId>,
     project_config_paths: Vec<PathBuf>,
     effective_configuration: serde_json::Value,
@@ -618,9 +620,11 @@ struct PreparedScanExecution {
 }
 
 impl ScanExecutionArgs {
+    /// `cli` carries flags from outside these arguments, such as watch timing.
     fn prepare(
         self,
         splunk: SplunkCliOverrides<'_>,
+        cli: crate::settings::CliSettings,
     ) -> Result<PreparedScanExecution, Box<dyn std::error::Error>> {
         let path_profile = self.path_profile.into();
         let log_origin = path_origin(self.log_path.as_deref(), paths::LOG_PATH_ENV);
@@ -636,6 +640,10 @@ impl ScanExecutionArgs {
                 log_rotate_disabled: self.log_rotate_disabled,
                 install_inventory_interval_seconds: self.install_inventory_interval_seconds,
                 install_inventory_disabled: self.install_inventory_disabled,
+                emit_activity: self.emit_activity,
+                emit_session_risk_summary: self.emit_session_risk_summary,
+                baseline_deviation_scoring: self.baseline_deviation_scoring,
+                ..cli
             })?;
         let rotation = settings.rotation();
         let project_config_paths = if self.project_config_paths.is_empty() {
@@ -699,12 +707,9 @@ impl ScanExecutionArgs {
             sink_set,
             state_path,
             dry_run: self.dry_run,
-            emit_activity: self.emit_activity,
-            emit_session_risk_summary: self.emit_session_risk_summary,
             allow_fixtures: self.allow_fixtures,
             resolved_config,
             rule_load_mode: rule_load_mode(self.no_default_rules),
-            baseline_deviation_scoring: self.baseline_deviation_scoring,
             clients: self.clients,
             project_config_paths,
             effective_configuration,
@@ -731,8 +736,8 @@ impl PreparedScanExecution {
             sinks: &self.sink_set,
             state_path: &self.state_path,
             dry_run: self.dry_run,
-            emit_activity: self.emit_activity,
-            emit_session_risk_summary: self.emit_session_risk_summary,
+            emit_activity: self.settings.emit_activity.value,
+            emit_session_risk_summary: self.settings.emit_session_risk_summary.value,
             allow_fixtures: self.allow_fixtures,
             rule_pack_paths: &self.resolved_config.rule_pack_paths,
             rule_paths: &self.resolved_config.explicit_rule_paths,
@@ -740,7 +745,7 @@ impl PreparedScanExecution {
             rule_load_mode: self.rule_load_mode,
             policy_path: self.resolved_config.policy_path.as_deref(),
             allowlist_path: self.resolved_config.allowlist_path.as_deref(),
-            baseline_deviation_scoring: self.baseline_deviation_scoring,
+            baseline_deviation_scoring: self.settings.baseline_deviation_scoring.value,
             clients: &self.clients,
             project_config_paths: &self.project_config_paths,
             install_inventory_interval_seconds: self.settings.install_inventory_interval_seconds(),
@@ -1412,6 +1417,9 @@ fn run_config_provenance(args: ConfigProvenanceArgs<'_>) -> Result<(), Box<dyn s
         .load_settings(crate::settings::CliSettings {
             install_inventory_interval_seconds: requested_inventory_interval,
             install_inventory_disabled: args.install_inventory_disabled,
+            emit_activity: args.emit_activity,
+            emit_session_risk_summary: args.emit_session_risk_summary,
+            baseline_deviation_scoring: args.baseline_deviation_scoring,
             ..Default::default()
         })
         // An environment error names only the variable, so it can pass.
@@ -1440,9 +1448,9 @@ fn run_config_provenance(args: ConfigProvenanceArgs<'_>) -> Result<(), Box<dyn s
         ..Default::default()
     };
     options.features.process_chain_detections = settings.process_chain.value;
-    options.features.emit_activity = args.emit_activity;
-    options.features.emit_session_risk_summary = args.emit_session_risk_summary;
-    options.features.baseline_deviation_scoring = args.baseline_deviation_scoring;
+    options.features.emit_activity = settings.emit_activity.value;
+    options.features.emit_session_risk_summary = settings.emit_session_risk_summary.value;
+    options.features.baseline_deviation_scoring = settings.baseline_deviation_scoring.value;
     options.features.install_inventory = install_inventory_interval_seconds.is_some();
     options.features.install_inventory_interval_seconds = install_inventory_interval_seconds;
 
@@ -1520,10 +1528,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             max_sources,
             history,
         }) => {
-            let mut prepared = execution.prepare(SplunkCliOverrides {
-                endpoint: splunk_hec_endpoint.as_deref(),
-                token: splunk_hec_token.as_deref(),
-            })?;
+            let mut prepared = execution.prepare(
+                SplunkCliOverrides {
+                    endpoint: splunk_hec_endpoint.as_deref(),
+                    token: splunk_hec_token.as_deref(),
+                },
+                Default::default(),
+            )?;
             if !once && interval_seconds.is_none() {
                 return Err("scan requires --once or --interval-seconds".into());
             }
@@ -1751,15 +1762,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             debounce_ms,
             min_scan_interval_ms,
         }) => {
-            let mut prepared = execution.prepare(SplunkCliOverrides::default())?;
+            let mut prepared = execution.prepare(
+                SplunkCliOverrides::default(),
+                crate::settings::CliSettings {
+                    watch_debounce_ms: debounce_ms,
+                    watch_min_scan_interval_ms: min_scan_interval_ms,
+                    ..Default::default()
+                },
+            )?;
             let watch_roots = scan::watch::validate_watch_roots(prepared.config(&runtime.value))?;
             prepared.activate(&runtime.value)?;
             let watch_config = scan::watch::WatchConfig {
                 execution: prepared.config(&runtime.value),
                 trigger: scan::watch::WatchTriggerConfig {
                     iterations,
-                    debounce: std::time::Duration::from_millis(debounce_ms),
-                    min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
+                    debounce: std::time::Duration::from_millis(
+                        prepared.settings.watch_debounce_ms.value,
+                    ),
+                    min_scan_interval: std::time::Duration::from_millis(
+                        prepared.settings.watch_min_scan_interval_ms.value,
+                    ),
                 },
             };
             scan::watch::run_watch(watch_config, watch_roots)?;

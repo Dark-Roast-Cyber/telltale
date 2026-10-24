@@ -35,7 +35,7 @@ fn deployed_settings_drive_scan_and_report_each_origin() {
     let deployed = settings_file(
         &config_root,
         "10-deployed.yaml",
-        "version: 1\nrisk_thresholds: {low: 1, medium: 1, high: 1, critical: 1}\ninstall_inventory: {enabled: false}\n",
+        "version: 1\nrisk_thresholds: {low: 1, medium: 1, high: 1, critical: 1}\ninstall_inventory: {enabled: false}\nevents: {emit_activity: true}\n",
     );
     let log_path = temp.path().join("events.jsonl");
 
@@ -74,6 +74,7 @@ fn deployed_settings_drive_scan_and_report_each_origin() {
             .iter()
             .any(|event| event["event_type"] == "install_inventory")
     );
+    assert!(events.iter().any(|event| event["event_type"] == "activity"));
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     let settings = &summary["effective_configuration"]["settings"];
@@ -93,6 +94,22 @@ fn deployed_settings_drive_scan_and_report_each_origin() {
     );
     assert_eq!(settings["log_rotation.keep"]["source"], "--log-rotate-keep");
     assert_eq!(settings["rules.community"]["origin"], "default");
+    assert_eq!(settings["events.emit_activity"]["origin"], "settings_file");
+
+    // Provenance represents what the deployed file enables.
+    let output = telltale(temp.path())
+        .args(["config", "provenance", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run telltale config provenance");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest: Value = serde_json::from_slice(&output.stdout).expect("provenance json");
+    assert_eq!(manifest["features"]["emit_activity"], true);
+    assert_eq!(manifest["features"]["install_inventory"], false);
 }
 
 #[test]

@@ -8,8 +8,10 @@
 
 - Operational settings can be deployed as `settings.d/*.yaml` files in any
   config root: community rules, process-chain detections, risk thresholds,
-  operational alert thresholds, log rotation, and install inventory. Precedence
-  is defaults, then files, then the existing `TELLTALE_*` variables, then flags.
+  operational alert thresholds, log rotation, install inventory, the activity,
+  session risk summary, and baseline deviation event options, and watch timing.
+  Precedence is defaults, then files, then the existing `TELLTALE_*` variables,
+  then flags. `config provenance` represents the event options a file enables.
   `telltale config show` prints each effective value with its default and
   origin, and scans record it under `effective_configuration.settings`.
   Environment values that do not parse now fail the command instead of silently

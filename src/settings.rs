@@ -1,5 +1,6 @@
 //! Operator settings: each setting is defined once, with its default, its
-//! validation, and the file key, environment variable, and flag that set it.
+//! validation, and the file key and any environment variable or flag that set
+//! it.
 //!
 //! Precedence, lowest to highest: compiled defaults, `settings.d/*.yaml` in
 //! config-root order (sorted within a root, so a later file wins per key),
@@ -131,6 +132,11 @@ pub(crate) struct CliSettings {
     pub(crate) log_rotate_disabled: bool,
     pub(crate) install_inventory_interval_seconds: Option<u64>,
     pub(crate) install_inventory_disabled: bool,
+    pub(crate) emit_activity: bool,
+    pub(crate) emit_session_risk_summary: bool,
+    pub(crate) baseline_deviation_scoring: bool,
+    pub(crate) watch_debounce_ms: Option<u64>,
+    pub(crate) watch_min_scan_interval_ms: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -148,6 +154,11 @@ pub(crate) struct Settings {
     log_rotate_keep: Setting<usize>,
     install_inventory: Setting<bool>,
     install_inventory_interval_seconds: Setting<u64>,
+    pub(crate) emit_activity: Setting<bool>,
+    pub(crate) emit_session_risk_summary: Setting<bool>,
+    pub(crate) baseline_deviation_scoring: Setting<bool>,
+    pub(crate) watch_debounce_ms: Setting<u64>,
+    pub(crate) watch_min_scan_interval_ms: Setting<u64>,
 }
 
 impl Default for Settings {
@@ -171,6 +182,11 @@ impl Default for Settings {
             install_inventory_interval_seconds: Setting::new(
                 telltale_core::DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS,
             ),
+            emit_activity: Setting::new(false),
+            emit_session_risk_summary: Setting::new(false),
+            baseline_deviation_scoring: Setting::new(false),
+            watch_debounce_ms: Setting::new(500),
+            watch_min_scan_interval_ms: Setting::new(10_000),
         }
     }
 }
@@ -192,6 +208,10 @@ struct SettingsDocument {
     log_rotation: LogRotationSection,
     #[serde(default)]
     install_inventory: InstallInventorySection,
+    #[serde(default)]
+    events: EventsSection,
+    #[serde(default)]
+    watch: WatchSection,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -234,6 +254,21 @@ struct LogRotationSection {
 struct InstallInventorySection {
     enabled: Option<bool>,
     interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventsSection {
+    emit_activity: Option<bool>,
+    emit_session_risk_summary: Option<bool>,
+    baseline_deviation_scoring: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WatchSection {
+    debounce_ms: Option<u64>,
+    min_scan_interval_ms: Option<u64>,
 }
 
 /// Discover, resolve, and apply settings for this process. Event 3 risk
@@ -319,6 +354,16 @@ impl Settings {
             .set(document.install_inventory.enabled, origin());
         self.install_inventory_interval_seconds
             .set(document.install_inventory.interval_seconds, origin());
+        self.emit_activity
+            .set(document.events.emit_activity, origin());
+        self.emit_session_risk_summary
+            .set(document.events.emit_session_risk_summary, origin());
+        self.baseline_deviation_scoring
+            .set(document.events.baseline_deviation_scoring, origin());
+        self.watch_debounce_ms
+            .set(document.watch.debounce_ms, origin());
+        self.watch_min_scan_interval_ms
+            .set(document.watch.min_scan_interval_ms, origin());
     }
 
     fn apply_environment(
@@ -370,6 +415,25 @@ impl Settings {
         self.install_inventory.set(
             cli.install_inventory_disabled.then_some(false),
             Origin::Cli("--install-inventory-disabled"),
+        );
+        // These flags can only turn their settings on.
+        self.emit_activity.set(
+            cli.emit_activity.then_some(true),
+            Origin::Cli("--emit-activity"),
+        );
+        self.emit_session_risk_summary.set(
+            cli.emit_session_risk_summary.then_some(true),
+            Origin::Cli("--emit-session-risk-summary"),
+        );
+        self.baseline_deviation_scoring.set(
+            cli.baseline_deviation_scoring.then_some(true),
+            Origin::Cli("--baseline-deviation-scoring"),
+        );
+        self.watch_debounce_ms
+            .set(cli.watch_debounce_ms, Origin::Cli("--debounce-ms"));
+        self.watch_min_scan_interval_ms.set(
+            cli.watch_min_scan_interval_ms,
+            Origin::Cli("--min-scan-interval-ms"),
         );
     }
 
@@ -436,6 +500,11 @@ impl Settings {
             "log_rotation.keep": entry(&self.log_rotate_keep),
             "install_inventory.enabled": entry(&self.install_inventory),
             "install_inventory.interval_seconds": entry(&self.install_inventory_interval_seconds),
+            "events.emit_activity": entry(&self.emit_activity),
+            "events.emit_session_risk_summary": entry(&self.emit_session_risk_summary),
+            "events.baseline_deviation_scoring": entry(&self.baseline_deviation_scoring),
+            "watch.debounce_ms": entry(&self.watch_debounce_ms),
+            "watch.min_scan_interval_ms": entry(&self.watch_min_scan_interval_ms),
         })
     }
 }
@@ -526,7 +595,7 @@ mod tests {
         let second = write(
             temp.path(),
             "90-local.yaml",
-            "version: 1\nrisk_thresholds: {high: 65}\nlog_rotation: {keep: 3, max_size_bytes: 1024}\n",
+            "version: 1\nrisk_thresholds: {high: 65}\nlog_rotation: {keep: 3, max_size_bytes: 1024}\nevents: {emit_activity: true}\nwatch: {debounce_ms: 50, min_scan_interval_ms: 100}\n",
         );
         let settings = resolve(
             &[first.clone(), second.clone()],
@@ -537,6 +606,8 @@ mod tests {
             ]),
             &CliSettings {
                 log_rotate_max_size: Some(2048),
+                emit_session_risk_summary: true,
+                watch_min_scan_interval_ms: Some(200),
                 ..CliSettings::default()
             },
         )
@@ -548,6 +619,14 @@ mod tests {
         assert_eq!(settings.rotation().keep, 4);
         assert_eq!(settings.rotation().max_size_bytes, 2048);
         assert!(!settings.process_chain.value);
+        assert!(settings.emit_activity.value && settings.emit_session_risk_summary.value);
+        assert!(!settings.baseline_deviation_scoring.value);
+        assert_eq!(settings.watch_debounce_ms.value, 50);
+        assert_eq!(settings.watch_min_scan_interval_ms.value, 200);
+        assert_eq!(
+            origin(&settings, "watch.min_scan_interval_ms"),
+            ("cli".into(), "--min-scan-interval-ms".into())
+        );
         assert_eq!(
             origin(&settings, "risk_thresholds.low"),
             ("settings_file".into(), path_hash(&first).into())

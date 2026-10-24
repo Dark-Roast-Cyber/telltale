@@ -581,29 +581,37 @@ defaults:
 ```yaml
 version: 1
 rules:
-  community: true               # TELLTALE_COMMUNITY_RULES, --no-community-rules
+  community: true                    # TELLTALE_COMMUNITY_RULES, --no-community-rules
 detections:
-  process_chain: true           # TELLTALE_PROCESS_CHAIN_DETECTIONS
-risk_thresholds:                # TELLTALE_RISK_THRESHOLD_LOW, _MEDIUM, _HIGH, _CRITICAL
+  process_chain: true                # TELLTALE_PROCESS_CHAIN_DETECTIONS
+risk_thresholds:                     # TELLTALE_RISK_THRESHOLD_LOW, _MEDIUM, _HIGH, _CRITICAL
   low: 20
   medium: 50
   high: 70
   critical: 90
 operational_alerts:
-  max_scanner_errors: 3         # TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS
-  max_scan_duration_ms: 300000  # TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS
+  max_scanner_errors: 3              # TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS
+  max_scan_duration_ms: 300000       # TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS
 log_rotation:
-  max_size_bytes: 104857600     # TELLTALE_LOG_ROTATE_MAX_SIZE, --log-rotate-max-size; 0 disables
-  keep: 5                       # TELLTALE_LOG_ROTATE_KEEP, --log-rotate-keep
+  max_size_bytes: 104857600          # TELLTALE_LOG_ROTATE_MAX_SIZE, --log-rotate-max-size; 0 disables
+  keep: 5                            # TELLTALE_LOG_ROTATE_KEEP, --log-rotate-keep
 install_inventory:
-  enabled: true                 # --install-inventory-disabled
-  interval_seconds: 86400       # TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS, --install-inventory-interval-seconds
+  enabled: true                      # --install-inventory-disabled
+  interval_seconds: 86400            # TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS, --install-inventory-interval-seconds
+events:
+  emit_activity: false               # --emit-activity
+  emit_session_risk_summary: false   # --emit-session-risk-summary
+  baseline_deviation_scoring: false  # --baseline-deviation-scoring; needs emit_activity
+watch:
+  debounce_ms: 500                   # watch --debounce-ms
+  min_scan_interval_ms: 10000        # watch --min-scan-interval-ms
 ```
 
 Precedence, lowest to highest: defaults, settings files (roots in order, files
 sorted within a root, so a later file wins per key), environment variables, then
-explicit flags. A vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can
-share one directory. Unknown keys, an unsupported `version`, files over 64 KiB,
+explicit flags. The `events` flags can only turn their setting on. A
+vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can share one
+directory. Unknown keys, an unsupported `version`, files over 64 KiB,
 and environment values that do not parse fail the command before it scans or
 writes anything; an empty variable counts as unset. Integer variables must be
 plain digits, so a padded value such as `" 5 "` fails. Booleans ignore
