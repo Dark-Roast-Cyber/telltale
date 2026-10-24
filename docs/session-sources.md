@@ -113,7 +113,7 @@ escaping rules.
   nonempty `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`, on
   every platform. It retains the existing platform `opencode.db` candidates,
   including macOS Application Support and Windows AppData/`.local/share` paths.
-  This follows the pinned CLI's [XDG roots](https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/util/src/global-roots.ts#L4-L18),
+  This follows the pinned CLI's [XDG roots](https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/util/src/global-roots.ts#L4-L18),
   without treating Desktop installation metadata as a storage contract.
 - In those OpenCode data directories only, direct-child `opencode.db` and
   `opencode-<channel>.db` files are candidates. A channel is nonempty and contains
@@ -125,7 +125,7 @@ escaping rules.
   candidates; watch registers only validated directories, never a linked default
   directory target. Non-`.` explicit-root behavior remains unchanged.
   Native filesystem aliases can still be case-insensitive. The pinned
-  [filename resolver](https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13)
+  [filename resolver](https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/cli/src/database-path.ts#L4-L13)
   sanitizes the baked build channel; setting runtime `OPENCODE_CHANNEL` does not
   change it. Discovery retains every matching store rather than guessing an
   active channel from the scanner's environment.
@@ -193,10 +193,10 @@ be reviewed before publication or reuse in another environment.
 
 ### Copilot CLI qualification gap
 
-Copilot CLI v1.0.96's [pinned changelog](https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484)
+Copilot CLI v1.0.101's [pinned changelog](https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/changelog.md#L1585)
 and [official configuration-directory reference](https://github.com/github/docs/blob/92991ed6d17c5023f52e324ee70d36fe7c36dd7d/content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md#L345-L388)
 confirm `~/.copilot/logs/process-{timestamp}-{pid}.log`, with `COPILOT_HOME`
-replacing `~/.copilot`. The [pinned README](https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/README.md#installation)
+replacing `~/.copilot`. The [pinned README](https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/README.md#installation)
 also establishes the launcher and package names used by install inventory.
 
 The existing adapter requires workspace initialization and accumulated-output
@@ -206,13 +206,15 @@ inspection of the official [v1.0.96 Linux runtime archive](https://github.com/gi
 defines the named `default` log level as `info` in `cli-main.js`'s logging help,
 but does not establish the adapter's `Accumulated output items` format when the
 CLI is invoked without logging flags.
+That assessment is historical v1.0.96 evidence; it does not qualify the current
+v1.0.101 pin's default-level format either.
 The published repository does not contain the log writer. No CLI execution,
 installation, or live capture was used for this assessment.
 
 Home and relocated discovery therefore remain disabled, and both synthetic
 [upstream cases](../tests/upstream_formats/cases/copilot/) remain `known_gap`.
 They copy a Telltale fixture to the documented paths, not an upstream-generated
-v1.0.96 transcript. Promotion requires authoritative format/default-level
+transcript from either version. Promotion requires authoritative format/default-level
 evidence followed by successful discovery **and** acquisition, not merely
 finding that copied fixture. Explicit `--root`, fixture, and project-local
 discovery are unchanged. `session-state/*/events.jsonl` and `session-store.db`
