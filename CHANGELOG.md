@@ -6,6 +6,10 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Keep an indivisible OpenCode timestamp group readable when adaptive windows
+  shrink, within unchanged hard read and retention budgets. Over-capacity groups
+  remain explicitly quarantined while later history can still be evaluated;
+  malformed data and groups exceeding hard budgets still fail visibly.
 - Recognize additional Claude session bookkeeping and API-request replay record
   kinds without interpreting their nested messages as new conversation or tool
   activity. Keep unknown kinds quarantined and conflicting session identities
