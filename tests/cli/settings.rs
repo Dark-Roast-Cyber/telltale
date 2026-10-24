@@ -113,6 +113,39 @@ fn deployed_settings_drive_scan_and_report_each_origin() {
 }
 
 #[test]
+fn documented_settings_file_sets_every_key_to_its_default() {
+    // Windows checkouts may convert the guide to CRLF.
+    let install = fs::read_to_string("docs/install.md")
+        .expect("install docs")
+        .replace("\r\n", "\n");
+    let block = install
+        .split("### Operational settings")
+        .nth(1)
+        .and_then(|section| section.split("```yaml\n").nth(1))
+        .and_then(|rest| rest.split("```").next())
+        .expect("documented settings block");
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    settings_file(&config_root, "settings.yaml", block);
+
+    let output = telltale(temp.path())
+        .args(["config", "show", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run telltale config show");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let shown: Value = serde_json::from_slice(&output.stdout).expect("config show json");
+    for (key, entry) in shown["settings"].as_object().expect("settings") {
+        assert_eq!(entry["origin"], "settings_file", "{key} is undocumented");
+        assert_eq!(entry["value"], entry["default"], "{key}");
+    }
+}
+
+#[test]
 fn invalid_setting_fails_before_any_output_and_names_only_the_variable() {
     let temp = tempdir().expect("tempdir");
     let stores = temp.path().join("session_stores");

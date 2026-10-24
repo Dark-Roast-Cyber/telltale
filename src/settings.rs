@@ -567,24 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn documented_settings_file_sets_every_key_to_its_default() {
-        let block = include_str!("../docs/install.md")
-            .split("### Operational settings")
-            .nth(1)
-            .and_then(|section| section.split("```yaml\n").nth(1))
-            .and_then(|rest| rest.split("```").next())
-            .expect("documented settings block");
-        let temp = tempdir().expect("tempdir");
-        let path = write(temp.path(), "settings.yaml", block);
-        let settings =
-            resolve(&[path], &env(&[]), &CliSettings::default()).expect("documented settings");
-        for (key, entry) in settings.to_json().as_object().expect("object") {
-            assert_eq!(entry["origin"], "settings_file", "{key} is undocumented");
-            assert_eq!(entry["value"], entry["default"], "{key}");
-        }
-    }
-
-    #[test]
     fn files_then_environment_then_cli_win_per_key() {
         let temp = tempdir().expect("tempdir");
         let first = write(
