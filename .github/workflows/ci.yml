@@ -180,8 +180,6 @@ jobs:
       - name: Test protected assignment unsupported-platform boundary
         run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
       - run: cargo clippy --all-targets -- -D warnings
-      - name: Trace synthetic relocated WAL watch ordering
-        run: cargo test --locked --test cli scan_watch::opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_watch -- --exact --nocapture
       - run: cargo test
       - name: Build official Windows release configuration
         shell: pwsh
