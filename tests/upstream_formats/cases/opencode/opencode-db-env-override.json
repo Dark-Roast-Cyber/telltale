@@ -5,8 +5,8 @@
     "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/cli/src/database-path.ts#L4-L13",
     "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/core/src/session/sql.ts#L22-L94"
   ],
-  "status": "known_gap",
-  "note": "Telltale does not read OPENCODE_DB. Tables are reduced to the columns session history needs.",
+  "status": "supported",
+  "note": "The configured file is additive to default discovery; its parent is not enumerated. Tables are reduced to the columns session history needs. Relative and symlink controls have separate synthetic discovery tests.",
   "discover": {
     "client": "opencode",
     "env": {
@@ -126,6 +126,7 @@
     }
   },
   "expect": {
-    "selected_sources": 0
+    "selected_sources": 1,
+    "min_records": 4
   }
 }
