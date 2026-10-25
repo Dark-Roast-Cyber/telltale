@@ -48,8 +48,8 @@ pub use local_event_feed::{
 
 pub use canonical_runtime::FailureStage as SourceFailureStage;
 pub use provenance::{
-    ProducerProvenanceOptions, assemble_producer_provenance_manifest,
-    resolve_install_inventory_interval_seconds,
+    DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS, ProducerProvenanceOptions,
+    assemble_producer_provenance_manifest,
 };
 pub use telltale_detect::v2::RuleV1CompileError;
 pub use telltale_schema::clients::{ClientId, SourceKind};

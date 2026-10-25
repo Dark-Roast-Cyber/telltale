@@ -35,10 +35,12 @@ would not preserve the canonical `u64` contract.
 | 70-89 | high | Emit deterministic response metadata for security review. |
 | 90+ | critical | Emit deterministic response metadata for immediate investigation. |
 
-Default thresholds are configured by `TELLTALE_RISK_THRESHOLD_LOW`,
-`TELLTALE_RISK_THRESHOLD_MEDIUM`, `TELLTALE_RISK_THRESHOLD_HIGH`, and
-`TELLTALE_RISK_THRESHOLD_CRITICAL`. Unknown inherited variables do not affect
-threshold resolution.
+The CLI sets these thresholds from the `risk_thresholds` operational setting
+(`settings.d`, or `TELLTALE_RISK_THRESHOLD_LOW`, `TELLTALE_RISK_THRESHOLD_MEDIUM`,
+`TELLTALE_RISK_THRESHOLD_HIGH`, and `TELLTALE_RISK_THRESHOLD_CRITICAL`; see
+[operational settings](install.md#operational-settings)). Unknown inherited
+variables do not affect threshold resolution, and Telltale libraries never read
+them.
 
 ## Rule Categories
 
@@ -70,8 +72,8 @@ staying silent, so weak steps can still anchor a correlated finding.
 
 See [process-chain-detections.md](process-chain-detections.md) for the scoring
 model, deduplication, correlation windows, false-positive controls, and the
-`process_chain` event schema. Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to disable
-the pack for a scan.
+`process_chain` event schema. Set `detections.process_chain: false` in
+`settings.d`, or `TELLTALE_PROCESS_CHAIN_DETECTIONS=0`, to disable the pack.
 
 ## Configurable Rules And Policies
 

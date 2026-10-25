@@ -23,26 +23,6 @@ pub enum LocalConfigDiscoveryKind {
     Scan,
 }
 
-pub(crate) fn process_chain_detections_enabled() -> bool {
-    std::env::var("TELLTALE_PROCESS_CHAIN_DETECTIONS")
-        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
-        .unwrap_or(true)
-}
-
-/// `TELLTALE_COMMUNITY_RULES=0` opts a process out of community rules, like
-/// `--no-community-rules`, for services whose arguments are fixed. `false`,
-/// `off` and `no` work too, in any case.
-pub(crate) fn community_rules_enabled() -> bool {
-    std::env::var("TELLTALE_COMMUNITY_RULES")
-        .map(|value| {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off" | "no"
-            )
-        })
-        .unwrap_or(true)
-}
-
 pub fn discover_local_config_files(
     explicit_roots: &[PathBuf],
     no_local_config: bool,
@@ -81,6 +61,17 @@ pub fn discover_local_config_files(
         allowlist_paths,
         output_paths,
     })
+}
+
+/// `settings.d/*.yaml` files in root order, sorted within each root.
+pub fn discover_settings_files(
+    explicit_roots: &[PathBuf],
+    no_local_config: bool,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    if no_local_config {
+        return Ok(Vec::new());
+    }
+    discover_yaml_files(&active_config_roots(explicit_roots)?, "settings.d")
 }
 
 pub fn effective_rule_paths(discovered: &[PathBuf], explicit: &[PathBuf]) -> Vec<PathBuf> {

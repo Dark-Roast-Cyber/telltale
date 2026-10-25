@@ -248,6 +248,20 @@ explain its origin, what it overrode, and whether it is locally or externally ma
 
 Expose meaningful operator choices without turning every internal tuning value into a public configuration option.
 
+Configurable by design: when variation is legitimate, an operational behavior
+has one documented default, one typed definition, and validation that rejects
+bad values before activation. Standalone users get safe defaults without
+configuration; operators and managed deployments set the same settings through
+deployed files, environment, or flags; embedding hosts pass typed values
+through the Rust API. New operational settings are not read from process
+environment or local files inside libraries; older path and source-discovery
+defaults in `telltale-sources` are the remaining exception. Extend the existing
+settings boundary rather than adding a
+subsystem-specific mechanism. Safety invariants, privacy and evidence
+integrity, schema contracts, and fixed source-admission ceilings are not
+settings. CPU and memory ceilings belong to the operating system, container, or
+embedding host.
+
 Major capabilities should be optional and composable where practical.
 
 ### Managed Policy Maturity

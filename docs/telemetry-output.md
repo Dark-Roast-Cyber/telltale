@@ -276,7 +276,11 @@ otherwise ambiguous zero-detection result without exposing session content:
   version, content SHA-256, origin, and any replaced embedded version. Output projections expose only sink name/type,
   selection/origin, JSONL destination hashes, secret/TLS posture, and delivery
   posture; endpoints, credentials, credential references, hosts, indices,
-  sourcetypes, and CA paths are excluded.
+  sourcetypes, and CA paths are excluded. `settings` lists each
+  [operational setting](install.md#operational-settings) with its effective
+  `value`, `default`, `origin` (`default`, `settings_file`, `environment`, or
+  `cli`), and `source`: the winning file's path hash, the variable name, or the
+  flag.
 - `source_discovery` reports privacy-safe discovery accounting. A full scan uses
   `basis=current_full_scan` and performs checked discovery for that scan. A
   targeted watch scan uses the retained

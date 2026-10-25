@@ -753,6 +753,8 @@ mod release_public_boundary;
 mod rules_config;
 #[path = "cli/scan_watch.rs"]
 mod scan_watch;
+#[path = "cli/settings.rs"]
+mod settings;
 #[path = "cli/sinks.rs"]
 mod sinks;
 
