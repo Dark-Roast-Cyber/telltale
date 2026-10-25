@@ -255,8 +255,10 @@ otherwise ambiguous zero-detection result without exposing session content:
   `failures` groups rejected sources by typed processing stage, acquisition
   code, and optional canonical bound category/dimension, with `source_count`.
   These aggregates contain no paths, identities, content, measured sizes, or
-  raw error text; later-stage failures without acquisition details have null
-  acquisition and bound fields. Existing parse counters retain their meaning:
+  raw error text. `processing_code` preserves a closed, content-free processing
+  error reason when available; acquisition failures have a null processing code,
+  while later-stage failures without acquisition details have null acquisition
+  and bound fields. Event 3.0 scanner error codes are unchanged. Existing parse counters retain their meaning:
   `parse_error_source_count` includes any source-processing rejection.
 - `detection_flow` reports effective detection candidates before state
   deduplication, matched rule-ID references, allowlist-marked candidates,
@@ -274,7 +276,11 @@ otherwise ambiguous zero-detection result without exposing session content:
   version, content SHA-256, origin, and any replaced embedded version. Output projections expose only sink name/type,
   selection/origin, JSONL destination hashes, secret/TLS posture, and delivery
   posture; endpoints, credentials, credential references, hosts, indices,
-  sourcetypes, and CA paths are excluded.
+  sourcetypes, and CA paths are excluded. `settings` lists each
+  [operational setting](install.md#operational-settings) with its effective
+  `value`, `default`, `origin` (`default`, `settings_file`, `environment`, or
+  `cli`), and `source`: the winning file's path hash, the variable name, or the
+  flag.
 - `source_discovery` reports privacy-safe discovery accounting. A full scan uses
   `basis=current_full_scan` and performs checked discovery for that scan. A
   targeted watch scan uses the retained

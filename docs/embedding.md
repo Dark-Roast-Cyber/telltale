@@ -145,6 +145,16 @@ reporting. Package validation lives in `telltale_rules::package`
 
 What an embedder inherits:
 
+- **No ambient operational settings.** Telltale libraries do not read
+  `settings.d` or the [operational settings](install.md#operational-settings)
+  variables; the CLI resolves those. Event 3 severity bands use
+  `RiskThresholds::default()` (20/50/70/90) unless the host calls
+  `telltale_schema::scoring::configure_thresholds` once before scanning, and
+  `ProducerProvenanceOptions::default()` holds compiled defaults. Default path
+  and source discovery in `telltale-sources` still reads host variables such as
+  `HOME`, `TELLTALE_LOG_PATH`, `TELLTALE_STATE_PATH`, and
+  `TELLTALE_PROJECT_CONFIG`.
+
 - **Redaction stays on.** Evidence carries redacted excerpts and hashes; raw
   transcripts never appear. Do not log raw session content around the pipeline;
   see the [privacy model](privacy-model.md).

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::env;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -390,6 +390,31 @@ pub struct RiskThresholds {
     pub critical: u32,
 }
 
+impl Default for RiskThresholds {
+    fn default() -> Self {
+        Self {
+            low: 20,
+            medium: 50,
+            high: 70,
+            critical: 90,
+        }
+    }
+}
+
+/// A process already runs with different configured thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThresholdsAlreadyConfigured;
+
+impl std::fmt::Display for ThresholdsAlreadyConfigured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("risk thresholds are already configured with different values")
+    }
+}
+
+impl std::error::Error for ThresholdsAlreadyConfigured {}
+
+static CONFIGURED_THRESHOLDS: OnceLock<RiskThresholds> = OnceLock::new();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiskSeverity {
     Informational,
@@ -438,41 +463,36 @@ pub fn assess_risk_with_thresholds(score: u64, thresholds: RiskThresholds) -> Ri
     }
 }
 
-pub fn load_thresholds() -> RiskThresholds {
-    load_thresholds_with(|name| env::var(name).ok())
-}
-
-fn load_thresholds_with(get: impl Fn(&str) -> Option<String>) -> RiskThresholds {
-    RiskThresholds {
-        low: read_threshold("TELLTALE_RISK_THRESHOLD_LOW", 20, &get),
-        medium: read_threshold("TELLTALE_RISK_THRESHOLD_MEDIUM", 50, &get),
-        high: read_threshold("TELLTALE_RISK_THRESHOLD_HIGH", 70, &get),
-        critical: read_threshold("TELLTALE_RISK_THRESHOLD_CRITICAL", 90, &get),
+/// Fix this process's Event 3 severity thresholds before any event is built.
+///
+/// The library never reads the environment: a host that resolves operator
+/// settings configures them here once, and an unconfigured process uses
+/// [`RiskThresholds::default`]. Repeating the same values is accepted.
+pub fn configure_thresholds(thresholds: RiskThresholds) -> Result<(), ThresholdsAlreadyConfigured> {
+    if *CONFIGURED_THRESHOLDS.get_or_init(|| thresholds) == thresholds {
+        Ok(())
+    } else {
+        Err(ThresholdsAlreadyConfigured)
     }
 }
 
-fn read_threshold(name: &str, default: u32, get: &impl Fn(&str) -> Option<String>) -> u32 {
-    get(name)
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(default)
+/// The thresholds every Event 3 constructor in this process uses.
+pub fn load_thresholds() -> RiskThresholds {
+    CONFIGURED_THRESHOLDS.get().copied().unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         MAX_RISK_RATIONALE_LENGTH, RiskAccountingError, RiskContribution, RiskContributionType,
-        RiskSeverity, RiskThresholds, assess_risk_with_thresholds, canonicalize_contributions,
-        checked_risk_sum, is_canonical_contribution_id, load_thresholds_with,
+        RiskSeverity, RiskThresholds, ThresholdsAlreadyConfigured, assess_risk_with_thresholds,
+        canonicalize_contributions, checked_risk_sum, configure_thresholds,
+        is_canonical_contribution_id, load_thresholds,
     };
 
     #[test]
     fn maps_scores_to_expected_severity_bands() {
-        let thresholds = RiskThresholds {
-            low: 20,
-            medium: 50,
-            high: 70,
-            critical: 90,
-        };
+        let thresholds = RiskThresholds::default();
 
         for (score, expected) in [
             (19, RiskSeverity::Informational),
@@ -515,40 +535,20 @@ mod tests {
     }
 
     #[test]
-    fn only_canonical_threshold_names_control_native_scores() {
-        let canonical_names =
-            load_thresholds_with(|name| name.starts_with("TELLTALE_").then(|| "1".to_string()));
+    fn configured_thresholds_are_fixed_once_per_process() {
+        // Other tests in this binary build events with the defaults, so only
+        // the defaults are ever configured here.
+        let defaults = RiskThresholds::default();
+        configure_thresholds(defaults).expect("configure defaults");
+        configure_thresholds(defaults).expect("repeat the same values");
         assert_eq!(
-            canonical_names,
-            RiskThresholds {
-                low: 1,
-                medium: 1,
+            configure_thresholds(RiskThresholds {
                 high: 1,
-                critical: 1,
-            }
+                ..defaults
+            }),
+            Err(ThresholdsAlreadyConfigured)
         );
-
-        let custom_telltale_names = load_thresholds_with(|name| {
-            Some(
-                match name {
-                    "TELLTALE_RISK_THRESHOLD_LOW" => "11",
-                    "TELLTALE_RISK_THRESHOLD_MEDIUM" => "22",
-                    "TELLTALE_RISK_THRESHOLD_HIGH" => "33",
-                    "TELLTALE_RISK_THRESHOLD_CRITICAL" => "44",
-                    _ => return None,
-                }
-                .to_string(),
-            )
-        });
-        assert_eq!(
-            custom_telltale_names,
-            RiskThresholds {
-                low: 11,
-                medium: 22,
-                high: 33,
-                critical: 44,
-            }
-        );
+        assert_eq!(load_thresholds(), defaults);
     }
 
     #[test]

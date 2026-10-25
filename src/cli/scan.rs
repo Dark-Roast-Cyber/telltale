@@ -12,9 +12,8 @@ use crate::discovery::is_fixture_root;
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertConfig, OperationalAlertInput,
     PrivacySanitizer, SanitizationContext, SessionRiskSummaryEventInput, evidence_hash,
-    health_event_with_metadata, load_operational_alert_config, opaque_identifier,
-    operational_alert_event, sanitize_serialized_event, session_risk_summary_event,
-    terminal_identifier,
+    health_event_with_metadata, opaque_identifier, operational_alert_event,
+    sanitize_serialized_event, session_risk_summary_event, terminal_identifier,
 };
 use crate::file_lock::validate_runtime_paths;
 use crate::install_inventory::{
@@ -82,6 +81,8 @@ pub(crate) struct ScanExecutionConfig<'a> {
     pub(crate) clients: &'a [ClientId],
     pub(crate) project_config_paths: &'a [PathBuf],
     pub(crate) install_inventory_interval_seconds: Option<u64>,
+    pub(crate) process_chain: bool,
+    pub(crate) operational_alerts: OperationalAlertConfig,
     pub(crate) runtime: &'a serde_json::Value,
     pub(crate) effective_configuration: &'a serde_json::Value,
 }
@@ -302,7 +303,7 @@ fn run_scan_for_platform(
     let observed_at = ObservedAt::new(
         OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
     )?;
-    let process_chain_rules = load_process_chain_rules_if_enabled();
+    let process_chain_rules = load_process_chain_rules_if_enabled(config.execution.process_chain);
     let process_config = ProcessChainConfig::default();
     let mcp_scan = if config.execution.emit_activity && !targeted {
         discover_mcp_scan(config.execution.root)
@@ -436,7 +437,7 @@ fn run_scan_for_platform(
         Some(state.source_inventory_change_summary(&sources))
     };
 
-    let op_config = load_operational_alert_config();
+    let op_config = config.execution.operational_alerts;
     let scanner_error_count = detections
         .iter()
         .filter(|(_, event)| event.event_type == "scanner_error")
@@ -839,6 +840,7 @@ const MAX_REPORTED_QUARANTINED_UNITS: usize = 1_000;
 struct SourceFailureCategory {
     stage: String,
     acquisition_code: Option<&'static str>,
+    processing_code: Option<String>,
     bound_category: Option<String>,
     bound_dimension: Option<String>,
 }
@@ -906,6 +908,7 @@ fn source_processing_accounting(
             let key = SourceFailureCategory {
                 stage: format!("{:?}", failure.stage),
                 acquisition_code: failure.acquisition.map(|error| error.code()),
+                processing_code: failure.processing.map(|error| error.to_string()),
                 bound_category: context.map(|context| format!("{:?}", context.category)),
                 bound_dimension: context.map(|context| format!("{:?}", context.dimension)),
             };
@@ -1331,11 +1334,12 @@ enum PolicyMatchAccountingState {
 ///
 /// Process-chain detections emit their own `process_chain` events and never
 /// alter the session `detection` event, so this stays a load-or-skip decision
-/// rather than another axis on the scan config. Set
-/// `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn them off.
-fn load_process_chain_rules_if_enabled()
--> Option<telltale_rules::process_chain::CompiledProcessChainRules> {
-    if !crate::config::process_chain_detections_enabled() {
+/// rather than another axis on the scan config. The
+/// `detections.process_chain` setting turns them off.
+fn load_process_chain_rules_if_enabled(
+    enabled: bool,
+) -> Option<telltale_rules::process_chain::CompiledProcessChainRules> {
+    if !enabled {
         return None;
     }
     telltale_rules::process_chain::load_default_process_chain_rules().ok()
@@ -1427,6 +1431,7 @@ impl SourceProcessingAccounting {
                 serde_json::json!({
                     "stage": category.stage,
                     "acquisition_code": category.acquisition_code,
+                    "processing_code": category.processing_code,
                     "bound_category": category.bound_category,
                     "bound_dimension": category.bound_dimension,
                     "source_count": count,
@@ -2044,6 +2049,8 @@ mod tests {
                 clients: &clients,
                 project_config_paths: &project_config_paths,
                 install_inventory_interval_seconds: None,
+                process_chain: true,
+                operational_alerts: Default::default(),
                 runtime: &runtime,
                 effective_configuration: &effective_configuration,
             },

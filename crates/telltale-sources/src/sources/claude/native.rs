@@ -80,17 +80,15 @@ pub(crate) fn extract_claude_native_records_with_limits(
             }));
         let session_id = ownership.as_ref().ok().cloned().flatten();
         let discriminator = claude_discriminator(&value);
-        let source_blocks = content_blocks(&value);
+        let conversational = discriminator.is_none_or(is_known_claude_discriminator);
+        let source_blocks = conversational.then(|| content_blocks(&value)).flatten();
         // Only mapped records interpret these arrays as content-block envelopes.
         // Skipped bookkeeping and unknown record payloads remain opaque.
-        if !discriminator.is_some_and(is_claude_metadata_discriminator)
-            && discriminator.is_none_or(is_known_claude_discriminator)
-            && source_blocks.is_some_and(|blocks| {
-                blocks
-                    .iter()
-                    .any(|block| block.get("type").and_then(Value::as_str).is_none())
-            })
-        {
+        if source_blocks.is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str).is_none())
+        }) {
             return Err(SourceReadError::SchemaDrift {
                 client: source.client,
                 source_id: source.source_id.clone(),
@@ -115,7 +113,9 @@ pub(crate) fn extract_claude_native_records_with_limits(
             timestamp: nested_string_field(&value, "timestamp"),
             discriminator: discriminator.map(ToOwned::to_owned),
             role: nested_string_field(&value, "role"),
-            message_content: claude_message_content(&value),
+            message_content: conversational
+                .then(|| claude_message_content(&value))
+                .flatten(),
             contribution_strings: if is_tool_call {
                 collect_string_values(&value)
             } else {
@@ -201,9 +201,14 @@ fn claude_envelopes(value: &Value) -> Vec<&Value> {
 
 pub(crate) fn claude_discriminator(value: &Value) -> Option<&str> {
     value
-        .get("payload")
-        .and_then(|payload| payload.get("type"))
+        .get("type")
         .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("type"))
+                .and_then(Value::as_str)
+        })
         .or_else(|| {
             value
                 .get("payload")
@@ -211,7 +216,6 @@ pub(crate) fn claude_discriminator(value: &Value) -> Option<&str> {
                 .and_then(|payload| payload.get("type"))
                 .and_then(Value::as_str)
         })
-        .or_else(|| value.get("type").and_then(Value::as_str))
         .or_else(|| value.get("role").and_then(Value::as_str))
         .or_else(|| {
             value
@@ -256,6 +260,18 @@ pub(crate) fn is_claude_metadata_discriminator(kind: &str) -> bool {
             | "summary"
             | "system"
             | "progress"
+            | "api-request"
+            | "api-request-blob"
+            | "api-request-shape"
+            | "mode"
+            | "permission-mode"
+            | "relocated"
+            | "worktree-state"
+            | "cost-state"
+            | "pr-link"
+            | "artifact-autoreact-ledger"
+            | "artifact-comment-monitor"
+            | "continued-in"
     )
 }
 

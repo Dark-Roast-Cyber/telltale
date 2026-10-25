@@ -395,6 +395,38 @@ impl SelectorRegistry {
                 selector.required_capability(),
             ));
         }
+        // Closed scalar controls copy only their selected text and metadata,
+        // not unrelated authored arguments. Structured facets keep the generic
+        // conservative reservation; matcher passes still charge reached input.
+        let control_bytes = match selector {
+            SelectorId::ToolName | SelectorId::CompatToolName => Some(match observation.body() {
+                ObservationBody::Tool(tool) => tool.name().map_or(0, str::len),
+                _ => 0,
+            }),
+            SelectorId::CommandText
+            | SelectorId::CompatCommand
+            | SelectorId::ResourcePath
+            | SelectorId::CompatFilePath => {
+                let path = if matches!(
+                    selector,
+                    SelectorId::CommandText | SelectorId::CompatCommand
+                ) {
+                    "command.text"
+                } else {
+                    "resource.path"
+                };
+                match observation.facets().get(path).map(|facet| facet.value()) {
+                    Some(JsonValue::String(text)) => Some(text.len()),
+                    None => Some(0),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(bytes) = control_bytes {
+            budget.charge(bytes.saturating_mul(2))?;
+            return Ok(self.resolve_value(selector, observation));
+        }
         // Resolution can copy a structured value, canonicalize its strings, and
         // clone field metadata. These closed selectors never visit tool.result;
         // exclude its direct text length in O(1), retaining the conservative

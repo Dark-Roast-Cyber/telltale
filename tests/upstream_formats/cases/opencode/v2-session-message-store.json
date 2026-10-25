@@ -1,12 +1,15 @@
 {
-  "description": "A fresh OpenCode v2 database: session_v2 and session_message rows, with a bash tool call and its result as content[] entries of the assistant message.",
+  "description": "An OpenCode v2.1.2 database: session_v2 and session_message rows, with a bash tool call and its result as content[] entries of the assistant message, optional native replay metadata, and a completed compaction without the retired recent/providerContext fields.",
   "harness": "opencode",
   "upstream": [
-    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/core/src/database/schema.gen.ts#L148-L224",
-    "https://github.com/anomalyco/opencode/blob/1f4d07a4a519185955ae8ab2ea3607805509e386/packages/core/src/session/sql.ts#L22-L94"
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/database/schema.gen.ts#L148-L224",
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/session/sql.ts#L22-L94",
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/schema/src/session-message.ts#L38-L45",
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/schema/src/session-message.ts#L142-L240",
+    "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/schema/src/session-message.ts#L258-L268"
   ],
   "status": "supported",
-  "note": "Tables are reduced to the columns session history needs.",
+  "note": "Tables are reduced to the columns session history needs. Empty native objects exercise the published optional replay-data fields without inventing provider-specific keys. Compaction is recognized bookkeeping, not a new conversation turn; this case does not claim replay of native.messages.",
   "acquire": {
     "source_id": "opencode.sqlite",
     "sqlite": {
@@ -34,7 +37,7 @@
             "slug": "synthetic",
             "directory": "/synthetic/work",
             "title": "Synthetic session",
-            "version": "2.0.27",
+            "version": "2.1.2",
             "agent": "build",
             "model": {
               "id": "synthetic-model",
@@ -75,6 +78,7 @@
                 "completed": 1791849604000
               },
               "agent": "build",
+              "native": {},
               "model": {
                 "id": "synthetic-model",
                 "providerID": "synthetic"
@@ -85,6 +89,7 @@
                   "id": "call_0001",
                   "name": "bash",
                   "executed": true,
+                  "native": {},
                   "state": {
                     "status": "completed",
                     "input": {
@@ -109,9 +114,27 @@
                 },
                 {
                   "type": "text",
-                  "text": "The workspace has a README."
+                  "text": "The workspace has a README.",
+                  "native": {}
                 }
               ]
+            }
+          },
+          {
+            "id": "msg_0003",
+            "session_id": "ses_synthetic",
+            "type": "compaction",
+            "seq": 3,
+            "time_created": 1791849605000,
+            "time_updated": 1791849605000,
+            "data": {
+              "time": {
+                "created": 1791849605000
+              },
+              "status": "completed",
+              "reason": "auto",
+              "summary": "Synthetic workspace listing completed.",
+              "native": {}
             }
           }
         ]

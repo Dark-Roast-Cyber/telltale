@@ -2,14 +2,14 @@
   "description": "COPILOT_HOME replaces ~/.copilot, so process logs are written to $COPILOT_HOME/logs/process-<timestamp>-<pid>.log.",
   "harness": "copilot-cli",
   "upstream": [
-    "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1484",
-    "https://github.com/github/copilot-cli/blob/dcdc0273c0250d8b32677ca99bc0e1f5006daa89/changelog.md#L1694",
+    "https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/changelog.md#L1585",
+    "https://github.com/github/copilot-cli/blob/84a2bd392a397e3dafaa9a1212b2964c3bd694bc/changelog.md#L1795",
     "https://github.com/github/docs/blob/92991ed6d17c5023f52e324ee70d36fe7c36dd7d/content/copilot/reference/copilot-cli-reference/cli-config-dir-reference.md#L378-L388",
     "https://github.com/github/copilot-cli/releases/download/v1.0.96/github-copilot-1.0.96-linux-x64.tgz",
     "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
   ],
   "status": "known_gap",
-  "note": "Path-only characterization: upstream documents COPILOT_HOME as replacing ~/.copilot, but Telltale does not read it. As in home-process-log, the official v1.0.96 Linux runtime archive (SHA256 e6c9513e7dcff38e424c247a8ae7b5b8a283e93973b77eb31fba9ef769f1c95b) documents the named default log level as info without establishing the adapter-required accumulated-output format when invoked without logging flags. The copied Telltale fixture is not upstream output. Relocated discovery and supported promotion remain blocked on authoritative format/default-level evidence and successful discovery plus acquisition; do not infer events.jsonl or session-store.db schemas. No live capture was performed.",
+  "note": "Path-only characterization: the pinned v1.0.101 changelog documents COPILOT_HOME replacing ~/.copilot, but Telltale does not read it. As in home-process-log, static inspection of the earlier v1.0.96 runtime (SHA256 e6c9513e7dcff38e424c247a8ae7b5b8a283e93973b77eb31fba9ef769f1c95b) does not qualify the default-level accumulated-output format for either version. The copied Telltale fixture is not upstream output. Relocated discovery and supported promotion require authoritative format/default-level evidence and successful discovery plus acquisition; do not infer events.jsonl or session-store.db schemas. No live capture was performed.",
   "discover": {
     "client": "copilot",
     "files": {

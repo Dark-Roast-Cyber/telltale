@@ -84,11 +84,16 @@ pub struct SourceFailure {
     pub stage: FailureStage,
     pub progress: AcquisitionProgress,
     pub acquisition: Option<AcquisitionError>,
+    pub processing: Option<ProcessingError>,
 }
 
 impl std::fmt::Display for SourceFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "canonical source processing failed: {:?}", self.stage)
+        write!(f, "canonical source processing failed: {:?}", self.stage)?;
+        if let Some(reason) = self.processing {
+            write!(f, ": {reason}")?;
+        }
+        Ok(())
     }
 }
 impl std::error::Error for SourceFailure {}
@@ -174,10 +179,11 @@ fn process_source_inner(
     context: SourceContext<'_>,
     detailed: Option<&telltale_detect::v2::DetailedEvaluationOptions>,
 ) -> Result<SourceResult, SourceFailure> {
-    let (resolved, instance) = verified_source(source).map_err(|_| SourceFailure {
+    let (resolved, instance) = verified_source(source).map_err(|error| SourceFailure {
         stage: FailureStage::SourceScope,
         progress: AcquisitionProgress::None,
         acquisition: None,
+        processing: Some(error),
     })?;
     let mut sqlite = sqlite;
     let mut previous_window = None;
@@ -191,6 +197,7 @@ fn process_source_inner(
             stage: FailureStage::Acquisition,
             progress: AcquisitionProgress::None,
             acquisition: Some(error),
+            processing: None,
         })?;
         let window = matches!(
             batch.progress,
@@ -249,6 +256,7 @@ fn process_source_inner(
                 stage: FailureStage::Acquisition,
                 progress: AcquisitionProgress::None,
                 acquisition: Some(error),
+                processing: None,
             })?;
             batch.observations.clear();
             batch.quarantined.extend(units);
@@ -335,12 +343,14 @@ fn finish_batch_with_work(
             stage,
             progress: batch.progress,
             acquisition: None,
+            processing: Some(error),
         }
     };
     let fail = |stage| SourceFailure {
         stage,
         progress: batch.progress,
         acquisition: None,
+        processing: None,
     };
     let input = CanonicalSourceInput {
         client: source.client,
@@ -410,7 +420,7 @@ fn finish_batch_with_work(
         )
     });
     if work.is_exhausted() {
-        return Err(fail(FailureStage::Evaluation));
+        return Err(bounded(ProcessingError::Bounds, FailureStage::Evaluation));
     }
     let policy_accounting = before.as_ref().map(|before| {
         let before = before.as_ref().map_err(|_| PolicyMatchAccountingError)?;

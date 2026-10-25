@@ -6,6 +6,42 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Operational settings can be deployed as `settings.d/*.yaml` files in any
+  config root: community rules, process-chain detections, risk thresholds,
+  operational alert thresholds, log rotation, install inventory, the activity,
+  session risk summary, and baseline deviation event options, and watch timing.
+  Precedence is defaults, then files, then the existing `TELLTALE_*` variables,
+  then flags. `config provenance` represents the event options a file enables.
+  `telltale config show` prints each effective value with its default and
+  origin, and scans record it under `effective_configuration.settings`.
+  Environment values that do not parse now fail the command instead of silently
+  falling back to defaults, including padded integers such as `" 5 "`; an empty
+  variable still counts as unset. `TELLTALE_PROCESS_CHAIN_DETECTIONS` accepts
+  the same boolean spellings as `TELLTALE_COMMUNITY_RULES` in any case, so
+  `FALSE` now disables the pack instead of leaving it enabled.
+- Telltale libraries no longer read the operational-settings variables (path
+  and source discovery variables are unchanged). Embedded Event 3
+  severity uses the default thresholds unless the host calls
+  `telltale_schema::scoring::configure_thresholds`.
+  `ProducerProvenanceOptions::default()` returns compiled defaults;
+  `ProducerProvenanceOptions::from_environment`,
+  `telltale_core::resolve_install_inventory_interval_seconds`, and
+  `telltale_schema::event::load_operational_alert_config` are removed.
+- Avoid reserving unrelated tool arguments for scalar control-field lookups,
+  and skip encoded-URL candidate scanning when text contains no complete percent
+  escape. Genuine input scanning and valid encoded URLs retain their existing
+  work limits; redacted output is unchanged.
+- Keep an indivisible OpenCode timestamp group readable when adaptive windows
+  shrink, within unchanged hard read and retention budgets. Over-capacity groups
+  remain explicitly quarantined while later history can still be evaluated;
+  malformed data and groups exceeding hard budgets still fail visibly.
+- Recognize additional Claude session bookkeeping and API-request replay record
+  kinds without interpreting their nested messages as new conversation or tool
+  activity. Keep unknown kinds quarantined and conflicting session identities
+  rejected; nested payload types cannot override the outer record kind.
+- Retain content-free processing failure reasons in local scan diagnostics
+  instead of reporting only the failed stage; Event 3.0 error codes and source
+  failure behavior are unchanged.
 - Make four bundled detections depend on what a command does, not on words
   that appear near it:
   - `chain.download_then_execute` now needs downloaded content to run in session

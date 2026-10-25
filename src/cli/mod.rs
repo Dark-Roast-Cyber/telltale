@@ -214,13 +214,15 @@ struct WatchCommandArgs {
     iterations: Option<u32>,
 
     /// Milliseconds to wait after a filesystem event before scanning.
-    #[arg(long, default_value_t = 500)]
-    debounce_ms: u64,
+    /// Overrides watch.debounce_ms (settings.d; default 500).
+    #[arg(long)]
+    debounce_ms: Option<u64>,
 
     /// Minimum milliseconds between watch-triggered scans. Events arriving
-    /// sooner are coalesced into the next scan.
-    #[arg(long, default_value_t = 10_000)]
-    min_scan_interval_ms: u64,
+    /// sooner are coalesced into the next scan. Overrides
+    /// watch.min_scan_interval_ms (settings.d; default 10000).
+    #[arg(long)]
+    min_scan_interval_ms: Option<u64>,
 }
 
 #[derive(ClapArgs)]
@@ -246,10 +248,12 @@ struct ScanExecutionArgs {
     dry_run: bool,
 
     /// Emit per-session activity summary events in addition to detections.
+    /// Same as events.emit_activity: true in settings.d.
     #[arg(long)]
     emit_activity: bool,
 
     /// Emit per-session risk summary events derived from activity and detection events.
+    /// Same as events.emit_session_risk_summary: true in settings.d.
     #[arg(long)]
     emit_session_risk_summary: bool,
 
@@ -270,7 +274,7 @@ struct ScanExecutionArgs {
     no_default_rules: bool,
 
     /// Do not load community rules, embedded or installed, and use bundled core rules.
-    /// TELLTALE_COMMUNITY_RULES=0 has the same effect.
+    /// Overrides rules.community in settings.d and TELLTALE_COMMUNITY_RULES.
     #[arg(long)]
     no_community_rules: bool,
 
@@ -283,7 +287,8 @@ struct ScanExecutionArgs {
     allowlist: Option<PathBuf>,
 
     /// Opt in to bounded risk-score modifiers for model baseline deviations in activity events.
-    /// Has effect only when --emit-activity is also set.
+    /// Has effect only when activity events are emitted. Same as
+    /// events.baseline_deviation_scoring: true in settings.d.
     #[arg(long)]
     baseline_deviation_scoring: bool,
 
@@ -296,11 +301,13 @@ struct ScanExecutionArgs {
     project_config_paths: Vec<PathBuf>,
 
     /// Maximum size in bytes before the active JSONL file is rotated.
-    /// Defaults to TELLTALE_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
+    /// Overrides log_rotation.max_size_bytes (settings.d, TELLTALE_LOG_ROTATE_MAX_SIZE;
+    /// default 104857600, 100 MB). 0 disables rotation.
     #[arg(long)]
     log_rotate_max_size: Option<u64>,
 
-    /// Number of rotated files to keep. Defaults to TELLTALE_LOG_ROTATE_KEEP or 5.
+    /// Number of rotated files to keep. Overrides log_rotation.keep (settings.d,
+    /// TELLTALE_LOG_ROTATE_KEEP; default 5).
     #[arg(long)]
     log_rotate_keep: Option<usize>,
 
@@ -309,7 +316,8 @@ struct ScanExecutionArgs {
     log_rotate_disabled: bool,
 
     /// Seconds between metadata-only installed-agent inventory observations.
-    /// Defaults to TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
+    /// Overrides install_inventory.interval_seconds (settings.d,
+    /// TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS; default 86400). Use 0 to collect every scan.
     #[arg(long)]
     install_inventory_interval_seconds: Option<u64>,
 
@@ -394,6 +402,13 @@ enum ConfigCommand {
         config: ConfigRuleCliArgs,
     },
 
+    /// Print each effective setting with its default and the file, environment
+    /// variable, or default it came from. Command flags still override these.
+    Show {
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+    },
+
     /// Print the deterministic effective producer and detector provenance manifest.
     Provenance {
         #[command(flatten)]
@@ -436,7 +451,7 @@ struct ConfigRuleCliArgs {
     no_default_rules: bool,
 
     /// Do not load community rules, embedded or installed, and use bundled core rules.
-    /// TELLTALE_COMMUNITY_RULES=0 has the same effect.
+    /// Overrides rules.community in settings.d and TELLTALE_COMMUNITY_RULES.
     #[arg(long)]
     no_community_rules: bool,
 
@@ -533,7 +548,7 @@ struct RuleConfigCliArgs {
     no_default_rules: bool,
 
     /// Do not load community rules, embedded or installed, and use bundled core rules.
-    /// TELLTALE_COMMUNITY_RULES=0 has the same effect.
+    /// Overrides rules.community in settings.d and TELLTALE_COMMUNITY_RULES.
     #[arg(long)]
     no_community_rules: bool,
 
@@ -549,9 +564,18 @@ struct LocalConfigCliArgs {
     config_dirs: Vec<PathBuf>,
 
     /// Disable local config discovery from organization-rules.d, rules.d, ui-rules.d,
-    /// rule-packages.d, overrides.d, policies.d, allowlists.d, and outputs.d.
+    /// rule-packages.d, overrides.d, policies.d, allowlists.d, outputs.d, and settings.d.
     #[arg(long)]
     no_local_config: bool,
+}
+
+impl LocalConfigCliArgs {
+    fn load_settings(
+        &self,
+        cli: crate::settings::CliSettings,
+    ) -> Result<crate::settings::Settings, Box<dyn std::error::Error>> {
+        crate::settings::load(&self.config_dirs, self.no_local_config, &cli)
+    }
 }
 
 struct ResolvedRuleConfig {
@@ -586,37 +610,42 @@ struct PreparedScanExecution {
     sink_set: crate::sink::SinkSet,
     state_path: PathBuf,
     dry_run: bool,
-    emit_activity: bool,
-    emit_session_risk_summary: bool,
     allow_fixtures: bool,
     resolved_config: ResolvedScanConfig,
     rule_load_mode: RuleLoadMode,
-    baseline_deviation_scoring: bool,
     clients: Vec<ClientId>,
     project_config_paths: Vec<PathBuf>,
-    install_inventory_interval_seconds: Option<u64>,
     effective_configuration: serde_json::Value,
+    settings: crate::settings::Settings,
 }
 
 impl ScanExecutionArgs {
+    /// `cli` carries flags from outside these arguments, such as watch timing.
     fn prepare(
         self,
         splunk: SplunkCliOverrides<'_>,
+        cli: crate::settings::CliSettings,
     ) -> Result<PreparedScanExecution, Box<dyn std::error::Error>> {
         let path_profile = self.path_profile.into();
         let log_origin = path_origin(self.log_path.as_deref(), paths::LOG_PATH_ENV);
         let state_origin = path_origin(self.state_path.as_deref(), paths::STATE_PATH_ENV);
         let log_path = paths::resolve_log_path(path_profile, self.log_path);
         let state_path = paths::resolve_state_path(path_profile, self.state_path);
-        let rotation = resolve_rotation_config(
-            self.log_rotate_max_size,
-            self.log_rotate_keep,
-            self.log_rotate_disabled,
-        );
-        let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
-            self.install_inventory_interval_seconds,
-            self.install_inventory_disabled,
-        );
+        let settings = self
+            .local_config
+            .load_settings(crate::settings::CliSettings {
+                no_community_rules: self.no_community_rules,
+                log_rotate_max_size: self.log_rotate_max_size,
+                log_rotate_keep: self.log_rotate_keep,
+                log_rotate_disabled: self.log_rotate_disabled,
+                install_inventory_interval_seconds: self.install_inventory_interval_seconds,
+                install_inventory_disabled: self.install_inventory_disabled,
+                emit_activity: self.emit_activity,
+                emit_session_risk_summary: self.emit_session_risk_summary,
+                baseline_deviation_scoring: self.baseline_deviation_scoring,
+                ..cli
+            })?;
+        let rotation = settings.rotation();
         let project_config_paths = if self.project_config_paths.is_empty() {
             crate::projects::project_config_paths_from_env()
         } else {
@@ -627,7 +656,7 @@ impl ScanExecutionArgs {
             &self.rule_paths,
             self.policy.as_deref(),
             self.allowlist.as_deref(),
-            community_rules(self.no_community_rules),
+            community_rules(settings.community_rules.value),
         )?;
         let loaded_outputs = sink_config::load_outputs_config_with_delivery(
             &resolved_config.discovered.output_paths,
@@ -656,7 +685,7 @@ impl ScanExecutionArgs {
             splunk.token,
             &sink_set,
         );
-        let effective_configuration = effective_configuration_base(
+        let mut effective_configuration = effective_configuration_base(
             &self.local_config,
             EffectiveConfigurationPaths {
                 profile: path_profile,
@@ -670,6 +699,7 @@ impl ScanExecutionArgs {
             &project_config_paths,
             outputs,
         );
+        effective_configuration["settings"] = settings.to_json();
 
         Ok(PreparedScanExecution {
             root: self.root,
@@ -677,16 +707,13 @@ impl ScanExecutionArgs {
             sink_set,
             state_path,
             dry_run: self.dry_run,
-            emit_activity: self.emit_activity,
-            emit_session_risk_summary: self.emit_session_risk_summary,
             allow_fixtures: self.allow_fixtures,
             resolved_config,
             rule_load_mode: rule_load_mode(self.no_default_rules),
-            baseline_deviation_scoring: self.baseline_deviation_scoring,
             clients: self.clients,
             project_config_paths,
-            install_inventory_interval_seconds,
             effective_configuration,
+            settings,
         })
     }
 }
@@ -709,8 +736,8 @@ impl PreparedScanExecution {
             sinks: &self.sink_set,
             state_path: &self.state_path,
             dry_run: self.dry_run,
-            emit_activity: self.emit_activity,
-            emit_session_risk_summary: self.emit_session_risk_summary,
+            emit_activity: self.settings.emit_activity.value,
+            emit_session_risk_summary: self.settings.emit_session_risk_summary.value,
             allow_fixtures: self.allow_fixtures,
             rule_pack_paths: &self.resolved_config.rule_pack_paths,
             rule_paths: &self.resolved_config.explicit_rule_paths,
@@ -718,10 +745,12 @@ impl PreparedScanExecution {
             rule_load_mode: self.rule_load_mode,
             policy_path: self.resolved_config.policy_path.as_deref(),
             allowlist_path: self.resolved_config.allowlist_path.as_deref(),
-            baseline_deviation_scoring: self.baseline_deviation_scoring,
+            baseline_deviation_scoring: self.settings.baseline_deviation_scoring.value,
             clients: &self.clients,
             project_config_paths: &self.project_config_paths,
-            install_inventory_interval_seconds: self.install_inventory_interval_seconds,
+            install_inventory_interval_seconds: self.settings.install_inventory_interval_seconds(),
+            process_chain: self.settings.process_chain.value,
+            operational_alerts: self.settings.operational_alerts(),
             runtime,
             effective_configuration: &self.effective_configuration,
         }
@@ -888,11 +917,11 @@ fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json
     })
 }
 
-fn community_rules(no_community_rules: bool) -> CommunityRules {
-    if no_community_rules || !crate::config::community_rules_enabled() {
-        CommunityRules::Disabled
-    } else {
+fn community_rules(enabled: bool) -> CommunityRules {
+    if enabled {
         CommunityRules::Embedded
+    } else {
+        CommunityRules::Disabled
     }
 }
 
@@ -1067,6 +1096,12 @@ fn rule_load_mode(no_default_rules: bool) -> RuleLoadMode {
 
 impl RuleConfigCliArgs {
     fn resolve(&self) -> Result<ResolvedRuleConfig, Box<dyn std::error::Error>> {
+        let settings = self
+            .local_config
+            .load_settings(crate::settings::CliSettings {
+                no_community_rules: self.no_community_rules,
+                ..Default::default()
+            })?;
         let discovered = crate::config::discover_local_config_files(
             &self.local_config.config_dirs,
             self.local_config.no_local_config,
@@ -1077,7 +1112,7 @@ impl RuleConfigCliArgs {
             deployment: discovered.deployment_rule_paths.clone(),
             local: discovered.local_rule_paths.clone(),
             packages: discovered.rule_package_paths.clone(),
-            community: community_rules(self.no_community_rules),
+            community: community_rules(settings.community_rules.value),
         };
         Ok(ResolvedRuleConfig {
             explicit_rule_paths: self.rule_paths.clone(),
@@ -1170,8 +1205,20 @@ fn resolve_scan_config(
 }
 
 impl ConfigRuleCliArgs {
+    fn load_settings(
+        &self,
+        cli: crate::settings::CliSettings,
+    ) -> Result<crate::settings::Settings, Box<dyn std::error::Error>> {
+        self.local_config
+            .load_settings(crate::settings::CliSettings {
+                no_community_rules: self.no_community_rules,
+                ..cli
+            })
+    }
+
     fn resolve_rules(
         &self,
+        settings: &crate::settings::Settings,
     ) -> Result<(ResolvedScanConfig, crate::rules::RuleResolution), Box<dyn std::error::Error>>
     {
         let resolved_config = resolve_scan_config(
@@ -1179,7 +1226,7 @@ impl ConfigRuleCliArgs {
             &self.rule_paths,
             self.policy.as_deref(),
             self.allowlist.as_deref(),
-            community_rules(self.no_community_rules),
+            community_rules(settings.community_rules.value),
         )?;
         let resolution =
             resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
@@ -1206,7 +1253,8 @@ fn display_path(path: Option<&Path>) -> Option<String> {
 }
 
 fn run_config_validate(config: &ConfigRuleCliArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let (resolved_config, resolution) = config.resolve_rules()?;
+    let settings = config.load_settings(Default::default())?;
+    let (resolved_config, resolution) = config.resolve_rules(&settings)?;
     let rule_set = &resolution.rule_set;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
     let loaded_outputs =
@@ -1218,7 +1266,7 @@ fn run_config_validate(config: &ConfigRuleCliArgs) -> Result<(), Box<dyn std::er
         outputs_config_present,
         &sink_config::CliSinkOverrides {
             log_path: Path::new("telltale-events.jsonl"),
-            rotation: crate::sink::RotationConfig::default(),
+            rotation: settings.rotation(),
             splunk_hec_endpoint: None,
             splunk_hec_token: None,
         },
@@ -1311,6 +1359,7 @@ fn run_config_validate(config: &ConfigRuleCliArgs) -> Result<(), Box<dyn std::er
                 "discovered_policy_count": resolved_config.discovered.policy_paths.len(),
                 "discovered_allowlist_count": resolved_config.discovered.allowlist_paths.len(),
                 "discovered_output_count": resolved_config.discovered.output_paths.len(),
+                "discovered_settings_count": settings.files().len(),
             },
             "outputs": {
                 "paths": display_paths(&resolved_config.discovered.output_paths),
@@ -1359,9 +1408,31 @@ struct ConfigProvenanceArgs<'a> {
 }
 
 fn run_config_provenance(args: ConfigProvenanceArgs<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    let requested_inventory_interval = args
+        .install_inventory_interval_seconds
+        .map(|value| value.parse::<u64>().map_err(|_| private_provenance_error()))
+        .transpose()?;
+    let settings = args
+        .config
+        .load_settings(crate::settings::CliSettings {
+            install_inventory_interval_seconds: requested_inventory_interval,
+            install_inventory_disabled: args.install_inventory_disabled,
+            emit_activity: args.emit_activity,
+            emit_session_risk_summary: args.emit_session_risk_summary,
+            baseline_deviation_scoring: args.baseline_deviation_scoring,
+            ..Default::default()
+        })
+        // An environment error names only the variable, so it can pass.
+        .map_err(|error| {
+            if error.is::<crate::settings::InvalidEnvironment>() {
+                error
+            } else {
+                private_provenance_error()
+            }
+        })?;
     let (resolved_config, resolution) = args
         .config
-        .resolve_rules()
+        .resolve_rules(&settings)
         .map_err(|_| private_provenance_error())?;
     let allowlist_document = resolved_config
         .allowlist_path
@@ -1369,19 +1440,17 @@ fn run_config_provenance(args: ConfigProvenanceArgs<'_>) -> Result<(), Box<dyn s
         .map(fs::read_to_string)
         .transpose()
         .map_err(|_| private_provenance_error())?;
-    let requested_inventory_interval = args
-        .install_inventory_interval_seconds
-        .map(|value| value.parse::<u64>().map_err(|_| private_provenance_error()))
-        .transpose()?;
-    let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
-        requested_inventory_interval,
-        args.install_inventory_disabled,
-    );
-    let mut options = telltale_core::ProducerProvenanceOptions::from_environment();
-    options.allowlist_document = allowlist_document;
-    options.features.emit_activity = args.emit_activity;
-    options.features.emit_session_risk_summary = args.emit_session_risk_summary;
-    options.features.baseline_deviation_scoring = args.baseline_deviation_scoring;
+    let install_inventory_interval_seconds = settings.install_inventory_interval_seconds();
+    let mut options = telltale_core::ProducerProvenanceOptions {
+        allowlist_document,
+        risk_thresholds: settings.risk_thresholds(),
+        operational_alert_thresholds: settings.operational_alerts(),
+        ..Default::default()
+    };
+    options.features.process_chain_detections = settings.process_chain.value;
+    options.features.emit_activity = settings.emit_activity.value;
+    options.features.emit_session_risk_summary = settings.emit_session_risk_summary.value;
+    options.features.baseline_deviation_scoring = settings.baseline_deviation_scoring.value;
     options.features.install_inventory = install_inventory_interval_seconds.is_some();
     options.features.install_inventory_interval_seconds = install_inventory_interval_seconds;
 
@@ -1441,46 +1510,6 @@ pub(crate) fn read_jsonl_events(
         .collect())
 }
 
-/// Resolve rotation config from CLI flags and environment variables.
-///
-/// Precedence: `--log-rotate-disabled` > `--log-rotate-max-size`/`TELLTALE_LOG_ROTATE_MAX_SIZE` >
-/// `--log-rotate-keep`/`TELLTALE_LOG_ROTATE_KEEP` > defaults (100 MB, keep 5).
-fn resolve_rotation_config(
-    max_size: Option<u64>,
-    keep: Option<usize>,
-    disabled: bool,
-) -> crate::sink::RotationConfig {
-    if disabled {
-        return crate::sink::RotationConfig::disabled();
-    }
-
-    let max_size_bytes = max_size.unwrap_or_else(|| {
-        std::env::var("TELLTALE_LOG_ROTATE_MAX_SIZE")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(100 * 1024 * 1024)
-    });
-
-    let keep_count = keep.unwrap_or_else(|| {
-        std::env::var("TELLTALE_LOG_ROTATE_KEEP")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(5)
-    });
-
-    crate::sink::RotationConfig {
-        max_size_bytes,
-        keep: keep_count,
-    }
-}
-
-fn resolve_install_inventory_interval_seconds(
-    interval_seconds: Option<u64>,
-    disabled: bool,
-) -> Option<u64> {
-    telltale_core::resolve_install_inventory_interval_seconds(interval_seconds, disabled)
-}
-
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = observe_runtime();
     let command = Args::command();
@@ -1499,10 +1528,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             max_sources,
             history,
         }) => {
-            let mut prepared = execution.prepare(SplunkCliOverrides {
-                endpoint: splunk_hec_endpoint.as_deref(),
-                token: splunk_hec_token.as_deref(),
-            })?;
+            let mut prepared = execution.prepare(
+                SplunkCliOverrides {
+                    endpoint: splunk_hec_endpoint.as_deref(),
+                    token: splunk_hec_token.as_deref(),
+                },
+                Default::default(),
+            )?;
             if !once && interval_seconds.is_none() {
                 return Err("scan requires --once or --interval-seconds".into());
             }
@@ -1693,6 +1725,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
         Command::Config { command } => match command {
             ConfigCommand::Validate { config } => run_config_validate(&config)?,
+            ConfigCommand::Show { local_config } => {
+                let settings = local_config.load_settings(Default::default())?;
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        // Private roots sanitize to one marker, so each file
+                        // carries the path hash that `source` refers to.
+                        "files": settings.files().iter().map(|path| serde_json::json!({
+                            "path": display_path(Some(path)),
+                            "path_hash": path_hash(path),
+                        })).collect::<Vec<_>>(),
+                        "settings": settings.to_json(),
+                    }))?
+                );
+            }
             ConfigCommand::Provenance {
                 config,
                 emit_activity,
@@ -1715,15 +1762,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             debounce_ms,
             min_scan_interval_ms,
         }) => {
-            let mut prepared = execution.prepare(SplunkCliOverrides::default())?;
+            let mut prepared = execution.prepare(
+                SplunkCliOverrides::default(),
+                crate::settings::CliSettings {
+                    watch_debounce_ms: debounce_ms,
+                    watch_min_scan_interval_ms: min_scan_interval_ms,
+                    ..Default::default()
+                },
+            )?;
             let watch_roots = scan::watch::validate_watch_roots(prepared.config(&runtime.value))?;
             prepared.activate(&runtime.value)?;
             let watch_config = scan::watch::WatchConfig {
                 execution: prepared.config(&runtime.value),
                 trigger: scan::watch::WatchTriggerConfig {
                     iterations,
-                    debounce: std::time::Duration::from_millis(debounce_ms),
-                    min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
+                    debounce: std::time::Duration::from_millis(
+                        prepared.settings.watch_debounce_ms.value,
+                    ),
+                    min_scan_interval: std::time::Duration::from_millis(
+                        prepared.settings.watch_min_scan_interval_ms.value,
+                    ),
                 },
             };
             scan::watch::run_watch(watch_config, watch_roots)?;
@@ -1762,6 +1820,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             timeline,
         } => {
             let log_path = paths::resolve_log_path(path_profile.into(), log_path);
+            if correlate {
+                // Correlation events carry Event 3 severity bands.
+                LocalConfigCliArgs::default().load_settings(Default::default())?;
+            }
             export::run_export(export::ExportConfig {
                 log_path: &log_path,
                 severities: &severities,

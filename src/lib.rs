@@ -3,6 +3,7 @@ mod config;
 mod event;
 mod file_lock;
 mod rules;
+mod settings;
 mod sink;
 mod state;
 

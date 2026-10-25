@@ -2162,7 +2162,7 @@ pub struct OperationalAlertInput {
     pub scanner_error_count: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperationalAlertConfig {
     pub max_scanner_errors: u32,
     pub max_scan_duration_ms: u64,
@@ -2174,19 +2174,6 @@ impl Default for OperationalAlertConfig {
             max_scanner_errors: 3,
             max_scan_duration_ms: 300_000, // 5 minutes
         }
-    }
-}
-
-pub fn load_operational_alert_config() -> OperationalAlertConfig {
-    OperationalAlertConfig {
-        max_scanner_errors: std::env::var("TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(3),
-        max_scan_duration_ms: std::env::var("TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(300_000),
     }
 }
 
@@ -5428,8 +5415,8 @@ mod tests {
     }
 
     #[test]
-    fn load_operational_alert_config_returns_defaults() {
-        let config = super::load_operational_alert_config();
+    fn operational_alert_config_defaults() {
+        let config = super::OperationalAlertConfig::default();
         assert_eq!(config.max_scanner_errors, 3);
         assert_eq!(config.max_scan_duration_ms, 300_000);
     }

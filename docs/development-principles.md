@@ -248,6 +248,20 @@ explain its origin, what it overrode, and whether it is locally or externally ma
 
 Expose meaningful operator choices without turning every internal tuning value into a public configuration option.
 
+Configurable by design: when variation is legitimate, an operational behavior
+has one documented default, one typed definition, and validation that rejects
+bad values before activation. Standalone users get safe defaults without
+configuration; operators and managed deployments set the same settings through
+deployed files, environment, or flags; embedding hosts pass typed values
+through the Rust API. New operational settings are not read from process
+environment or local files inside libraries; older path and source-discovery
+defaults in `telltale-sources` are the remaining exception. Extend the existing
+settings boundary rather than adding a
+subsystem-specific mechanism. Safety invariants, privacy and evidence
+integrity, schema contracts, and fixed source-admission ceilings are not
+settings. CPU and memory ceilings belong to the operating system, container, or
+embedding host.
+
 Major capabilities should be optional and composable where practical.
 
 ### Managed Policy Maturity
@@ -433,3 +447,30 @@ remain explicit because they cannot always be reconstructed after flattening.
 
 Evaluate changes against the boundaries above, keeping the design understandable
 to an open-source contributor. Revise violations or explicitly justify exceptions.
+
+### PR scope and Git workflow
+
+Default to one coherent engineering outcome per branch and PR, implemented with
+meaningful, reviewable commits. Group related implementation, diagnosis and fixes,
+regression tests, documentation, and necessary cleanup. There is no target commit
+count; a completed task, worker, session, or commit is not a new PR boundary.
+Inspect existing work before creating another branch and keep related review
+corrections in the owning PR.
+
+Split work when it can ship or roll back independently, crosses a materially
+different risk or approval boundary, or becomes difficult to review coherently.
+Do not accumulate unrelated work, hold an urgent independent fix for a batch, or
+turn a long workstream into one unbounded PR. Cross-repository work retains each
+repository's ownership, review, and publication boundaries.
+
+Use isolated worktrees for independent concurrent writers and one integration
+owner for the final branch. A worker worktree does not require a worker PR.
+Temporary integration branches may supply evidence, but do not make a second
+validation-only PR the routine workflow or treat it as final-head qualification.
+
+Run focused checks while developing and the required broader checks on the
+integrated revision. Batch authorized pushes at meaningful checkpoints instead
+of pushing every local commit by default. Preserve required CI, platform checks,
+review, signing, private/ignored-file boundaries, and human merge approval.
+This policy does not change any gate, grant lifecycle authority, or authorize
+rewriting history, regrouping existing PRs, or destructive cleanup.

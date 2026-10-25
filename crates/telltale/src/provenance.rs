@@ -7,7 +7,7 @@ use telltale_schema::provenance::{
     ProducerFeatureSwitches, ProducerOperationalAlertThresholds, ProducerProvenanceError,
     ProducerProvenanceManifestV1, ProducerRiskThresholds, ProducerRuleProvenance,
 };
-use telltale_schema::scoring::{RiskThresholds, load_thresholds};
+use telltale_schema::scoring::RiskThresholds;
 
 pub const DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
@@ -22,52 +22,33 @@ pub struct ProducerProvenanceOptions {
     pub features: ProducerFeatureSwitches,
 }
 
+/// Compiled producer defaults. Telltale libraries do not read the process
+/// environment; a host resolves operator settings and overrides fields.
 impl Default for ProducerProvenanceOptions {
     fn default() -> Self {
-        Self::from_environment()
-    }
-}
-
-impl ProducerProvenanceOptions {
-    /// Resolve the same environment-controlled semantic defaults used by scan.
-    pub fn from_environment() -> Self {
-        let install_inventory_interval_seconds =
-            resolve_install_inventory_interval_seconds(None, false);
         Self {
             allowlist_document: None,
-            risk_thresholds: load_thresholds(),
-            operational_alert_thresholds: telltale_schema::event::load_operational_alert_config(),
+            risk_thresholds: RiskThresholds::default(),
+            operational_alert_thresholds: OperationalAlertConfig::default(),
             features: ProducerFeatureSwitches {
                 emit_activity: false,
                 emit_session_risk_summary: false,
                 baseline_deviation_scoring: false,
-                process_chain_detections: process_chain_enabled(),
-                install_inventory: install_inventory_interval_seconds.is_some(),
-                install_inventory_interval_seconds,
+                process_chain_detections: true,
+                install_inventory: true,
+                install_inventory_interval_seconds: Some(
+                    DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS,
+                ),
             },
         }
     }
+}
 
+impl ProducerProvenanceOptions {
     pub fn with_allowlist_document(mut self, document: impl Into<String>) -> Self {
         self.allowlist_document = Some(document.into());
         self
     }
-}
-
-/// Resolve the inventory cadence used by both scan and provenance materialization.
-pub fn resolve_install_inventory_interval_seconds(
-    interval_seconds: Option<u64>,
-    disabled: bool,
-) -> Option<u64> {
-    if disabled {
-        return None;
-    }
-    Some(interval_seconds.unwrap_or_else(|| {
-        std::env::var("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS)
-    }))
 }
 
 /// Assemble a manifest from an already effective compiled rule set and resolved
@@ -112,12 +93,6 @@ fn producer_risk_thresholds(thresholds: RiskThresholds) -> ProducerRiskThreshold
         high: thresholds.high,
         critical: thresholds.critical,
     }
-}
-
-fn process_chain_enabled() -> bool {
-    std::env::var("TELLTALE_PROCESS_CHAIN_DETECTIONS")
-        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
-        .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -204,24 +179,19 @@ mod tests {
     }
 
     #[test]
-    fn environment_defaults_use_the_shared_inventory_interval_resolver() {
-        let previous = std::env::var_os("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS");
-        unsafe {
-            std::env::set_var("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS", "37");
-        }
-        let options = ProducerProvenanceOptions::from_environment();
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS", value)
-            },
-            None => unsafe { std::env::remove_var("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS") },
-        }
-
+    fn defaults_are_the_compiled_producer_defaults() {
+        let options = ProducerProvenanceOptions::default();
+        assert_eq!(options.risk_thresholds, RiskThresholds::default());
+        assert_eq!(
+            options.operational_alert_thresholds,
+            OperationalAlertConfig::default()
+        );
+        assert!(options.features.process_chain_detections);
+        assert!(options.features.install_inventory);
         assert_eq!(
             options.features.install_inventory_interval_seconds,
-            Some(37)
+            Some(DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS)
         );
-        assert!(options.features.install_inventory);
     }
 
     #[test]

@@ -276,6 +276,108 @@ fn skipped_or_unknown_record_payloads_remain_opaque() {
 }
 
 #[test]
+fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-bookkeeping.jsonl"),
+    };
+    let prefix = json!({"type":"user","sessionId":"synthetic","content":"valid turn"});
+    for kind in [
+        "attachment",
+        "api-request",
+        "api-request-blob",
+        "api-request-shape",
+        "mode",
+        "permission-mode",
+        "relocated",
+        "worktree-state",
+        "cost-state",
+        "pr-link",
+        "artifact-autoreact-ledger",
+        "artifact-comment-monitor",
+        "continued-in",
+    ] {
+        let record = json!({"type":kind,"sessionId":"synthetic","message":{
+            "role":"assistant","content":[{"type":"tool_use","id":"synthetic-call",
+                "name":"Bash","input":{"command":"curl https://fixture.invalid/example"}}]}});
+        std::fs::write(&source.path, format!("{prefix}\n{record}\n")).unwrap();
+        let batch = acquire_source(&source, options()).unwrap();
+        assert!(batch.quarantined.is_empty(), "{kind}");
+        assert_eq!(batch.observations.len(), 1, "{kind}");
+        assert_eq!(
+            batch.accounting.coverage,
+            AccountingCoverage::CompleteSource,
+            "{kind}"
+        );
+        let counts = &batch.accounting.sessions[0].counts;
+        assert_eq!(counts.native_units, 2, "{kind}");
+        assert_eq!(counts.record_counts.other, 1, "{kind}");
+        assert_eq!(counts.record_counts.tool_call, 0, "{kind}");
+        assert_eq!(counts.contributions, Default::default(), "{kind}");
+        assert!(counts.tool_usage.is_empty(), "{kind}");
+        let mut conflict = record;
+        conflict["session_id"] = json!("synthetic-other");
+        std::fs::write(&source.path, format!("{prefix}\n{conflict}\n")).unwrap();
+        assert!(
+            matches!(
+                acquire_source(&source, options()),
+                Err(AcquisitionError::ConflictingSessionOwnership)
+            ),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn explicit_outer_record_types_cannot_be_shadowed_by_payload_types() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory
+            .path()
+            .join("synthetic-discriminator-shadow.jsonl"),
+    };
+    let prefix = json!({"type":"user","sessionId":"synthetic","content":"valid turn"});
+    for kind in [
+        "api-request",
+        "api-request-blob",
+        "api-request-shape",
+        "attachment",
+        "pr-link",
+        "artifact-autoreact-ledger",
+        "artifact-comment-monitor",
+        "continued-in",
+        "Future",
+    ] {
+        for payload in [
+            json!({"type":"assistant"}),
+            json!({"payload":{"type":"assistant"}}),
+        ] {
+            let record = json!({"type":kind,"sessionId":"synthetic","payload":payload,
+                "message":{"role":"assistant","content":[{"type":"tool_use","id":"synthetic-call",
+                    "name":"Bash","input":{"command":"printf synthetic"}}]}});
+            std::fs::write(&source.path, format!("{prefix}\n{record}\n")).unwrap();
+            let batch = acquire_source(&source, options()).unwrap();
+            assert_eq!(batch.observations.len(), 1, "{kind}");
+            assert_eq!(
+                batch.quarantined.len(),
+                usize::from(kind == "Future"),
+                "{kind}"
+            );
+            assert_eq!(
+                batch.accounting.sessions[0].counts.record_counts.tool_call, 0,
+                "{kind}"
+            );
+        }
+    }
+}
+
+#[test]
 fn malformed_jsonl_is_a_json_read_error() {
     let source = Source {
         client: ClientId::Claude,
