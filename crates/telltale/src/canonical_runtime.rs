@@ -143,7 +143,7 @@ fn verified_source(source: &Source) -> Result<(Source, CorrelationId), Processin
 
 #[derive(Clone, Copy)]
 pub struct SourceContext<'a> {
-    pub mcp_servers: &'a [telltale_detect::mcp::McpServerInventory],
+    pub mcp_servers: &'a [crate::inventory::McpServerInventory],
     pub rules: &'a RuleV1CompatibilityPlan,
     pub pre_policy_rules: Option<&'a RuleV1CompatibilityPlan>,
     pub process: Option<(&'a CompiledProcessChainRules, &'a ProcessChainConfig)>,

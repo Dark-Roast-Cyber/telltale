@@ -6,7 +6,14 @@ use telltale_schema::source::Source;
 use telltale_sources::acquisition::{AcquisitionOptions, SourceAccounting, acquire_source};
 use tempfile::tempdir;
 
-use super::{McpServerInventory, discover_mcp_inventory_servers, project_mcp_usage};
+use super::{McpServerInventory, project_mcp_usage};
+
+fn discover_mcp_inventory_servers(root: &std::path::Path) -> Vec<McpServerInventory> {
+    telltale_sources::mcp::acquire_mcp_inventory(root)
+        .into_iter()
+        .flat_map(|config| config.servers.expect("synthetic MCP acquisition"))
+        .collect()
+}
 
 const OBSERVED_AT: &str = "2026-09-20T00:00:00Z";
 
@@ -43,6 +50,182 @@ fn summary(event: &telltale_schema::event::Event) -> serde_json::Value {
         .find(|evidence| evidence.field == "tool_usage_summary")
         .expect("tool usage summary");
     serde_json::from_str(&evidence.redacted_value).expect("tool usage summary JSON")
+}
+
+#[test]
+fn builds_mcp_tool_index_from_declared_tools() {
+    let temp = tempdir().unwrap();
+    fs::write(
+        temp.path().join(".mcp.json"),
+        r#"{"mcpServers":{
+            "github":{"command":"npx","tools":[{"name":"list_issues"},{"name":"create_issue"}]},
+            "empty":{"command":"npx"}
+        }}"#,
+    )
+    .unwrap();
+    let servers = discover_mcp_inventory_servers(temp.path());
+    let index = super::McpToolIndex::from_servers(&servers);
+    let matches = index.lookup(ClientId::Claude, "LIST_ISSUES").unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].server_name, "github");
+    assert!(index.lookup(ClientId::Claude, "not_declared").is_none());
+    assert!(index.lookup(ClientId::Qwen, "list_issues").is_none());
+}
+
+#[test]
+fn emits_mcp_usage_event_for_attributed_tool_calls() {
+    let temp = tempdir().unwrap();
+    fs::write(
+        temp.path().join(".mcp.json"),
+        r#"{"mcpServers":{"github":{
+            "type":"streamable-http","url":"https://api.githubcopilot.com/mcp/",
+            "tools":[{"name":"list_issues"},{"name":"create_issue"}]
+        }}}"#,
+    )
+    .unwrap();
+    let session_path = temp.path().join("session-a.jsonl");
+    fs::write(
+        &session_path,
+        concat!(
+            r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-04-03T06:00:00Z","agent":"claude","model":"fixture-model","provider":"anthropic","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-list","name":"list_issues","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-04-03T06:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-create","name":"create_issue","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-04-03T06:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-view","name":"view","input":{}}]}}"#,
+            "\n",
+        ),
+    ).unwrap();
+    let source = source(ClientId::Claude, "claude.projects", session_path);
+    let accounting = acquire_accounting(&source);
+    let servers = discover_mcp_inventory_servers(temp.path());
+    let events = project(&source, &accounting, &servers);
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.event_type, "activity");
+    assert_eq!(event.session_id, "session-a");
+    assert_eq!(event.tool_name.as_deref(), Some("mcp::github"));
+    assert!(event.tags.iter().any(|tag| tag == "mcp_usage"));
+    assert_eq!(event.risk_score, 0);
+    let usage = summary(event);
+    assert_eq!(
+        usage["tools_used"],
+        serde_json::json!([
+            {"tool_name":"create_issue", "call_count":1},
+            {"tool_name":"list_issues", "call_count":1},
+        ])
+    );
+    assert_eq!(usage["configured_host"], "api.githubcopilot.com");
+    assert_eq!(usage["unattributed_tool_calls"], 1);
+}
+
+#[test]
+fn skips_mcp_usage_when_no_declared_tools_match() {
+    let temp = tempdir().unwrap();
+    fs::write(
+        temp.path().join(".mcp.json"),
+        r#"{"mcpServers":{"github":{"command":"npx","tools":[{"name":"list_issues"}]}}}"#,
+    )
+    .unwrap();
+    let servers = discover_mcp_inventory_servers(temp.path());
+    let (source, accounting) = lookup_accounting(temp.path());
+    assert!(project(&source, &accounting, &servers).is_empty());
+}
+
+fn lookup_accounting(root: &std::path::Path) -> (Source, SourceAccounting) {
+    let path = root.join("session.jsonl");
+    fs::write(
+        &path,
+        r#"{"type":"tool_call","role":"assistant","session_id":"lookup-session","timestamp":"2026-09-20T01:00:00Z","content":[{"type":"tool_use","id":"lookup-call","name":"lookup","input":{}}]}"#,
+    )
+    .unwrap();
+    let source = source(ClientId::Claude, "claude.projects", path);
+    let accounting = acquire_accounting(&source);
+    fs::remove_file(&source.path).unwrap();
+    (source, accounting)
+}
+
+#[test]
+fn mcp_usage_separates_same_named_config_servers() {
+    for directories in [["", "workspace"], ["workspace-a", "workspace-b"]] {
+        let temp = tempdir().unwrap();
+        let mut expected = std::collections::BTreeMap::new();
+        for (index, directory) in directories.iter().enumerate() {
+            let parent = temp.path().join(directory);
+            fs::create_dir_all(&parent).unwrap();
+            let path = parent.join(".mcp.json");
+            let command = format!("synthetic-{index}");
+            fs::write(
+                &path,
+                serde_json::json!({"mcpServers": {
+                    "shared": {"command": command, "tools": ["lookup"]}
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            expected.insert(
+                telltale_schema::event::path_hash(&path),
+                (
+                    command,
+                    if directory.is_empty() {
+                        "claude.project_mcp_config"
+                    } else {
+                        "claude.workspace_mcp_config"
+                    },
+                ),
+            );
+        }
+        let servers = discover_mcp_inventory_servers(temp.path());
+        let (source, accounting) = lookup_accounting(temp.path());
+        let events = project(&source, &accounting, &servers);
+        assert_eq!(
+            events.len(),
+            2,
+            "each configuration retains its attribution"
+        );
+        for event in &events {
+            let config = event
+                .evidence
+                .iter()
+                .find(|e| e.field == "mcp_config_path")
+                .unwrap();
+            let (command, source_id) = expected.remove(config.hash.as_ref().unwrap()).unwrap();
+            let usage = summary(event);
+            assert_eq!(usage["tool_call_count"], 1);
+            assert_eq!(usage["tools_used"][0]["call_count"], 1);
+            assert_eq!(usage["unattributed_tool_calls"], 0);
+            assert_eq!(usage["server_command"], command);
+            assert_eq!(usage["source_id"], source_id);
+            assert_eq!(config.redacted_value, source_id);
+            assert_eq!(usage["attribution_method"], "declared_tools");
+            assert_eq!(
+                event.event_time.as_deref(),
+                Some("2026-09-20T01:00:00.000Z")
+            );
+        }
+        assert!(expected.is_empty());
+    }
+}
+
+#[test]
+fn mcp_usage_deduplicates_normalized_declarations() {
+    let temp = tempdir().unwrap();
+    fs::write(
+        temp.path().join(".mcp.json"),
+        r#"{"mcpServers":{"actual":{"command":"node","tools":["lookup","LOOKUP"," lookup "]}}}"#,
+    )
+    .unwrap();
+    let servers = discover_mcp_inventory_servers(temp.path());
+    let (source, accounting) = lookup_accounting(temp.path());
+    let events = project(&source, &accounting, &servers);
+    assert_eq!(events.len(), 1);
+    let usage = summary(&events[0]);
+    assert_eq!(usage["tool_call_count"], 1);
+    assert_eq!(usage["tools_used"][0]["call_count"], 1);
+    assert_eq!(usage["unattributed_tool_calls"], 0);
+    assert_eq!(
+        usage["declared_tool_count"], 3,
+        "inventory declarations remain unchanged"
+    );
 }
 
 #[test]

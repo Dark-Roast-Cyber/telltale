@@ -1482,7 +1482,6 @@ dependencies = [
  "telltale-schema",
  "telltale-sources",
  "time",
- "walkdir",
  "yaml_serde",
 ]
 

@@ -46,7 +46,7 @@ pub(super) struct CanonicalProcessingResult {
 
 #[derive(Default)]
 pub(super) struct CanonicalProcessingOptions<'a> {
-    pub mcp_servers: &'a [telltale_detect::mcp::McpServerInventory],
+    pub mcp_servers: &'a [telltale_core::inventory::McpServerInventory],
     pub backfill: bool,
     /// Forensic history: read OpenCode v2 stores from their earliest message
     /// and drain without a window limit. Scan state is neither read nor kept.

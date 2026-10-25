@@ -12,6 +12,20 @@ The first implementation is static and local-only. It reads known MCP configurat
 
 Telltale does not connect to MCP servers during scan. That keeps the batch scanner side-effect free and avoids executing arbitrary configured commands. Actual tool names are only emitted when a local config or exported inventory payload explicitly declares a `tools` array. Otherwise Telltale reports the configured MCP server as configured tooling and leaves runtime tool enumeration to later active-inspection work.
 
+Usage attribution matches declared tools within the same client. Each configuration
+path, source identity, and server name keeps its own candidate attribution, even
+when names overlap. Case/whitespace variants of one server's declaration do not
+multiply calls. Multiple matching configurations remain ambiguous: their usage
+counts are not additive observed-call totals, and do not prove which server ran.
+
+The supported Rust inventory facade remains `telltale_core::inventory`.
+`collect_mcp_inventory` accepts explicit files or fixed-root paths without a
+workspace walk and returns construction-sanitized observations. The discovery
+functions also inspect workspace configurations and can return host-local raw
+`McpServerInventory` values. Codex TOML tool declarations contribute counts to the
+structured collector, but remain excluded from scan Event3 inventory and usage
+inference.
+
 ## Supported Static Config Sources
 
 | Client | Static config path | Status | Notes |

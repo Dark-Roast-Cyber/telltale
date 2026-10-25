@@ -22,7 +22,7 @@ pub use telltale_sources::install_inventory::{
     collect_install_inventory_with_sources, install_inventory_due, snapshot_to_event,
 };
 
-pub use telltale_detect::mcp::{
+pub use telltale_sources::mcp::{
     McpConfigInput, McpInventoryInput, McpInventoryObservation, McpInventoryState,
     McpServerInventory, collect_mcp_inventory,
 };
@@ -33,7 +33,7 @@ pub use telltale_detect::mcp::{
 /// `Source.path` retains the local config path for caller correlation; only the
 /// returned `Event` is the telemetry projection. No raw MCP inventory is exposed.
 pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
-    telltale_detect::mcp::discover_mcp_inventory(root)
+    discover_mcp_scan(root).events
 }
 
 /// The same bounded static discovery as [`discover_mcp_inventory`], returned as
@@ -41,13 +41,124 @@ pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
 /// the local config path, host data like `Source.path`: hash it before it
 /// leaves the host. No server connection or command execution occurs.
 pub fn discover_mcp_inventory_servers(root: &Path) -> Vec<McpServerInventory> {
-    telltale_detect::mcp::discover_mcp_inventory_servers(root)
+    discover_mcp_scan(root).servers
+}
+
+/// Internal scan composition, not an additional supported embedding interface.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct McpScan {
+    pub servers: Vec<McpServerInventory>,
+    pub events: Vec<(Source, Event)>,
+}
+
+/// One bounded scan-local acquisition supplies inventory and usage inference.
+#[doc(hidden)]
+pub fn discover_mcp_scan(root: &Path) -> McpScan {
+    use telltale_detect::mcp::{project_mcp_inventory, project_mcp_inventory_error};
+
+    let mut scan = McpScan::default();
+    for config in telltale_sources::mcp::acquire_mcp_inventory(root) {
+        match config.servers {
+            Ok(servers) => {
+                scan.events.extend(
+                    servers
+                        .iter()
+                        .map(|server| (config.source.clone(), project_mcp_inventory(server))),
+                );
+                scan.servers.extend(servers);
+            }
+            Err(reason) => {
+                let event = project_mcp_inventory_error(config.source.client, reason);
+                scan.events.push((config.source, event));
+            }
+        }
+    }
+    scan
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Pipeline;
+
+    #[test]
+    fn emits_static_mcp_inventory_for_json_configs() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(".mcp.json"),
+            r#"{"mcpServers": {
+                "github": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-github"],
+                    "env": {"GITHUB_TOKEN": "synthetic-secret"},
+                    "tools": [{"name": "list_issues"}, {"name": "create_issue"}]
+                },
+                "remote": {"type": "streamable-http", "url": "https://mcp.example.invalid/mcp"}
+            }}"#,
+        )
+        .unwrap();
+        let events = discover_mcp_inventory(temp.path());
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().any(|(_, event)| {
+            event.event_type == "activity"
+                && event.session_id == "mcp_inventory"
+                && event.tool_name.as_deref() == Some("mcp::github")
+                && event.tags.iter().any(|tag| tag == "mcp_inventory")
+                && event.evidence.iter().any(|evidence| {
+                    evidence.field == "mcp_server_inventory"
+                        && evidence.redacted_value.contains("list_issues")
+                        && evidence.redacted_value.contains("GITHUB_TOKEN")
+                        && !evidence.redacted_value.contains("synthetic-secret")
+                })
+        }));
+    }
+
+    #[test]
+    fn mcp_scan_preserves_config_error_order_and_toml_tool_policy() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".codex")).unwrap();
+        std::fs::create_dir(root.path().join(".mcp.json")).unwrap();
+        std::fs::write(
+            root.path().join(".codex/config.toml"),
+            "[mcp_servers.s]\ncommand = 'node'\ntools = ['lookup']\n[mcp_servers.s.env]\ncommand = 'TT_ENV_COMMAND_VALUE'\nurl = 'TT_ENV_URL_VALUE'\n",
+        ).unwrap();
+        let scan = discover_mcp_scan(root.path());
+        assert_eq!(scan.servers.len(), 1);
+        assert!(scan.servers[0].declared_tools.is_empty());
+        assert_eq!(scan.events.len(), 2);
+        assert_eq!(scan.events[0].0.source_id, "claude.project_mcp_config");
+        assert!(
+            scan.events[0]
+                .1
+                .tags
+                .contains(&"mcp_inventory_error".into())
+        );
+        assert!(scan.events[0].1.evidence.iter().any(|e| {
+            matches!(
+                e.redacted_value.as_str(),
+                "non_regular_source" | "source_permission_denied"
+            )
+        }));
+        assert_eq!(scan.events[1].0.source_id, "codex.mcp_config");
+        assert!(
+            scan.events[1]
+                .1
+                .tags
+                .contains(&"mcp_inventory_supported".into())
+        );
+        assert!(
+            !serde_json::to_string(&scan.events[1].1)
+                .unwrap()
+                .contains("TT_ENV_")
+        );
+        let structured = collect_mcp_inventory(&McpInventoryInput::FixedRoot(root.path().into()));
+        let codex = structured
+            .iter()
+            .find(|s| s.client() == crate::ClientId::Codex)
+            .unwrap();
+        assert_eq!(codex.declared_tool_count(), 1);
+    }
 
     #[test]
     fn structured_mcp_rejects_credential_urls_before_identity_projection() {
