@@ -347,7 +347,7 @@ mod tests {
     }
 
     fn sha256_hex(value: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(value))
+        hex::encode(Sha256::digest(value))
     }
 
     fn assert_no_canary(error: HistoricalEventValidationError, canary: &str) {

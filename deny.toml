@@ -34,12 +34,12 @@ confidence-threshold = 0.8
 # These exceptions are intentionally package-specific. They are the only
 # unusual license identifiers reported by the current graph:
 # - ryu@1.0.23: Apache-2.0 OR BSL-1.0; transitive serializer dependency.
-# - webpki-roots@1.0.10: CDLA-Permissive-2.0; root certificates for rustls.
+# - webpki-roots@1.0.11: CDLA-Permissive-2.0; root certificates for rustls.
 # - r-efi@5.3.0 and r-efi@6.0.0: target-specific firmware support and the
 #   live MIT/Apache-2.0/LGPL-2.1-or-later expression.
 exceptions = [
     { crate = "ryu@1.0.23", allow = ["Apache-2.0", "BSL-1.0"] },
-    { crate = "webpki-roots@1.0.10", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "webpki-roots@1.0.11", allow = ["CDLA-Permissive-2.0"] },
     { crate = "r-efi@5.3.0", allow = ["MIT", "Apache-2.0", "LGPL-2.1-or-later"] },
     { crate = "r-efi@6.0.0", allow = ["MIT", "Apache-2.0", "LGPL-2.1-or-later"] },
 ]
@@ -63,10 +63,9 @@ skip = [
     { crate = "hashbrown@0.14.5", reason = "Live Cargo.lock: SQLite-compatible rusqlite 0.32 uses hashlink 0.9 with hashbrown 0.14 while indexmap uses 0.17." },
     { crate = "r-efi@5.3.0", reason = "Live Cargo.lock: getrandom 0.3 and 0.4 require incompatible r-efi lines." },
     { crate = "windows-sys@0.52.0", reason = "Live Cargo.lock: ring requires 0.52 while direct and notify paths require newer lines." },
-    { crate = "syn@3.0.5", reason = "Live Cargo.lock: clap derive and rusqlite's SQLite WASM path require syn 3 while the broader derive ecosystem retains syn 2." },
-    { crate = "windows-sys@0.59.0", reason = "Live Cargo.lock: direct Windows support and rustix 0.38 retain 0.59 while other paths use newer lines." },
+    { crate = "syn@3.0.9", reason = "Live Cargo.lock: clap/serde derive and ref-cast require syn 3 while strum and zerocopy derive retain syn 2." },
     { crate = "windows-sys@0.60.2", reason = "Live Cargo.lock: notify retains 0.60 while direct and terminal dependencies use 0.61." },
-    { crate = "windows-targets@0.52.6", reason = "Live Cargo.lock: windows-sys 0.52 and 0.59 retain the 0.52 target family." },
+    { crate = "windows-targets@0.52.6", reason = "Live Cargo.lock: ring's windows-sys 0.52 retains the 0.52 target family." },
     { crate = "windows_aarch64_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
     { crate = "windows_aarch64_msvc@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
     { crate = "windows_i686_gnu@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
@@ -75,7 +74,6 @@ skip = [
     { crate = "windows_x86_64_gnu@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
     { crate = "windows_x86_64_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
     { crate = "windows_x86_64_msvc@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
-    { crate = "wit-bindgen@0.51.0", reason = "Live Cargo.lock: wasip3 and wasip2 require incompatible wit-bindgen lines." },
 ]
 
 [sources]

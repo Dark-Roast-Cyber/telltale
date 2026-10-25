@@ -258,7 +258,10 @@ impl ActionRecordV1 {
         }
         let bytes = canonical_identity_json(&JsonValue::Array(parts))
             .expect("an array of strings always encodes");
-        format!("{DELIVERY_KEY_PREFIX}{:x}", Sha256::digest(bytes))
+        format!(
+            "{DELIVERY_KEY_PREFIX}{}",
+            hex::encode(Sha256::digest(bytes))
+        )
     }
 
     /// Check that `event`, a detection or process-chain Event 3 object, may

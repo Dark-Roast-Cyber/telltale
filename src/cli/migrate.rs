@@ -618,7 +618,7 @@ fn run_event_migration_inner(
             .ok_or_else(|| migration_failure("event migration destination spool unavailable"))?
             .sync()?;
         let destination_hash = destination.hasher.clone().finalize();
-        let destination_hash = format!("{:x}", destination_hash);
+        let destination_hash = hex::encode(destination_hash);
         let mut reader = destination
             .temporary
             .as_ref()
@@ -660,8 +660,8 @@ fn run_event_migration_inner(
         manifest_version: "1.0",
         source_format: "event_jsonl_set",
         destination_format: "event_jsonl_set",
-        source_sha256: format!("{:x}", source_hasher.finalize()),
-        destination_sha256: format!("{:x}", destination_hasher.finalize()),
+        source_sha256: hex::encode(source_hasher.finalize()),
+        destination_sha256: hex::encode(destination_hasher.finalize()),
         source_bytes: budget.raw_bytes,
         destination_bytes,
         pair_count: pairs.len(),
@@ -1430,7 +1430,7 @@ fn canonical_destination(path: &Path) -> Result<PathBuf, Box<dyn std::error::Err
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]

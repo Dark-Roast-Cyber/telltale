@@ -241,7 +241,7 @@ fn pipeline_error_typed_conversions_preserve_sources_and_display() {
             .unwrap();
     let clock = time::Date::from_calendar_date(2026, time::Month::October, 4)
         .unwrap()
-        .format(&time::format_description::parse("[offset_hour]").unwrap())
+        .format(&time::format_description::parse_borrowed::<1>("[offset_hour]").unwrap())
         .unwrap_err();
     let errors: [PipelineError; 5] = [
         discovery.into(),

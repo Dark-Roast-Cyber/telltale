@@ -24,6 +24,7 @@ include = [
 ]
 
 [dependencies]
+hex.workspace = true
 hmac.workspace = true
 jsonschema.workspace = true
 regex.workspace = true

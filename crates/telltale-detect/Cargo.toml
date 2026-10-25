@@ -18,6 +18,7 @@ default = ["source-io"]
 source-io = ["dep:telltale-sources", "dep:walkdir"]
 
 [dependencies]
+hex.workspace = true
 telltale-schema.workspace = true
 telltale-rules.workspace = true
 telltale-sources = { workspace = true, optional = true }

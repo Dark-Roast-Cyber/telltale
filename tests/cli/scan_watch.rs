@@ -243,7 +243,7 @@ mod workload {
             let Some(directory) = std::env::var_os("TELLTALE_WORKLOAD_REPORT_DIR") else {
                 return;
             };
-            let digest = |bytes: &[u8]| format!("{:x}", sha2::Sha256::digest(bytes));
+            let digest = |bytes: &[u8]| hex::encode(sha2::Sha256::digest(bytes));
             let output = |program: &str, args: &[&str]| {
                 let result = Command::new(program).args(args).output().unwrap();
                 assert!(
@@ -1572,7 +1572,7 @@ fn assert_runtime_snapshot(summary: &Value) {
     );
     assert_eq!(
         summary["runtime"]["executable"]["sha256"],
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     );
 }
 
@@ -6856,7 +6856,7 @@ mod sustained_process {
                                     "received_unix_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
                                     "received_since_start_ms":received.duration_since(epoch).as_secs_f64()*1000.0,
                                     "request_to_response_ms":Value::Null,"response_write_completed":false,
-                                    "wire_body_sha256":format!("{:x}",sha2::Sha256::digest(&bytes)),
+                                    "wire_body_sha256":hex::encode(sha2::Sha256::digest(&bytes)),
                                     "hash_scope":"wire HEC envelope bytes, NOT canonical raw Event bytes",
                                 }));
                                 index
@@ -6955,7 +6955,7 @@ mod sustained_process {
                 assert_eq!(hash.as_slice(), computed.as_slice(), "canonical payload hash mismatch");
                 (
                     id,
-                    serde_json::json!({"canonical_payload_sha256":format!("{computed:x}"),"payload_bytes":payload.len(),"event":serde_json::from_slice::<Value>(&payload).unwrap()}),
+                    serde_json::json!({"canonical_payload_sha256":hex::encode(computed),"payload_bytes":payload.len(),"event":serde_json::from_slice::<Value>(&payload).unwrap()}),
                 )
             })
             .collect::<serde_json::Map<_, _>>();
@@ -7100,17 +7100,15 @@ fn watch_synthetic_durable_capacity_case(byte_limit: bool, mode: sustained_proce
     );
     let outputs_path = config.join("outputs.d/outputs.yaml");
     fs::write(&outputs_path, &outputs).unwrap();
-    let binary_hash = format!(
-        "{:x}",
-        sha2::Sha256::digest(fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap())
-    );
+    let binary_hash = hex::encode(sha2::Sha256::digest(
+        fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap(),
+    ));
     let spawn = |name: &str| {
         assert_eq!(fs::read_to_string(&outputs_path).unwrap(), outputs);
         assert_eq!(
-            format!(
-                "{:x}",
-                sha2::Sha256::digest(fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap())
-            ),
+            hex::encode(sha2::Sha256::digest(
+                fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap()
+            )),
             binary_hash
         );
         let mut command = sustained_process::command(temp.path(), &root, &state);
@@ -7454,7 +7452,7 @@ fn watch_synthetic_durable_capacity_case(byte_limit: bool, mode: sustained_proce
         "codex first.jsonl/rejected.jsonl initially empty; compiled defaults; phase A fill; TERM; same-binary restart before due; phase B rejected before append; restore same receiver; same-binary restart; ack pending before separate 30s deadline; phase B retry then dedup; pending_events={count_cap}; pending_bytes={byte_cap}; timeout={timeout_ms}ms; retry_base=30000ms; debounce=100ms; min_scan_interval=0ms; quiet=250ms"
     );
     measurements.finish(&[&phases[0],&phases[1],recipe.as_bytes()], "ordered two synthetic fixed source phases plus deterministic capacity recipe; actual binary admission only", serde_json::json!({
-        "recipe":recipe,"recipe_sha256":format!("{:x}",sha2::Sha256::digest(recipe.as_bytes())),
+        "recipe":recipe,"recipe_sha256":hex::encode(sha2::Sha256::digest(recipe.as_bytes())),
         "max_pending_events":count_cap,"max_pending_bytes":byte_cap,"saturated_dimension":dimension,
         "full_definition":"cannot admit one more fixed-size synthetic detection; byte cap need not be exactly filled",
         "fill_to_reject_start_cadence_ms":2000,"reject_schedule_lateness_ms":reject_lateness.as_secs_f64()*1000.0,
@@ -7789,7 +7787,7 @@ fn watch_synthetic_settled_case(
         .collect::<Vec<_>>();
     fixtures.push(recipe.as_bytes());
     measurements.finish(&fixtures, "ordered fixed-size synthetic phases for every fixed identity plus deterministic sustained recipe", serde_json::json!({
-        "recipe":recipe,"recipe_sha256":format!("{:x}",sha2::Sha256::digest(recipe.as_bytes())),
+        "recipe":recipe,"recipe_sha256":hex::encode(sha2::Sha256::digest(recipe.as_bytes())),
         "cycles":cycles,"default_cycles":default_cycles,"developer_cycle_override":std::env::var("TELLTALE_WORKLOAD_CYCLES").ok(),
         "full_default_duration_measured":cycles == default_cycles,"actual_elapsed_seconds":actual_elapsed,
         "first_to_last_write_seconds":write_times.last().unwrap()-write_times.first().unwrap(),"shutdown_ms":shutdown_ms,

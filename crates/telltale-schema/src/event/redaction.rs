@@ -3548,7 +3548,7 @@ safe=value"#,
         // Pin the pre-optimization output, including truncation and redaction;
         // this regression changes visited work, not any emitted text.
         assert_eq!(
-            format!("{:x}", digest.finalize()),
+            hex::encode(digest.finalize()),
             "38146e099800500680c449b99f088770071d00f7e04e24ea03b743a55d52415b"
         );
     }

@@ -1619,6 +1619,11 @@ fn sensitive_semantics_use_keyed_digest_not_raw_value() {
         PRODUCER_KEY,
     )
     .unwrap();
+    // Independently calculated HMAC-SHA256 over the canonical JSON tuple.
+    assert_eq!(
+        fingerprint.digest(),
+        "hmac-sha256:v1:aa046bae2d93160005553c2dcbc5e5307169b61df38fae2db735709f4a0cc285"
+    );
     let facts = FactMetadata::new(FactProvenance::Reported, Sensitivity::Secret)
         .unwrap()
         .with_keyed_fingerprint(fingerprint)

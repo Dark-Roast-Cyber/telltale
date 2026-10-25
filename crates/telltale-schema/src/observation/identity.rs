@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use super::value::{nfc, opaque_text};
@@ -462,7 +462,10 @@ pub(crate) fn semantic_fingerprint(
         local_value,
     ]);
     let digest = Sha256::digest(canonical_identity_json(&value)?);
-    Ok(format!("{SEMANTIC_FINGERPRINT_PREFIX}{:x}", digest))
+    Ok(format!(
+        "{SEMANTIC_FINGERPRINT_PREFIX}{}",
+        hex::encode(digest)
+    ))
 }
 
 pub(crate) fn derive_stable_id(
@@ -485,7 +488,7 @@ pub(crate) fn derive_stable_id(
         JsonValue::Unsigned(child_ordinal as u64),
     ]);
     let digest = Sha256::digest(canonical_identity_json(&tuple)?);
-    Ok(format!("{OBSERVATION_ID_PREFIX}{:x}", digest))
+    Ok(format!("{OBSERVATION_ID_PREFIX}{}", hex::encode(digest)))
 }
 
 fn semantic_body(

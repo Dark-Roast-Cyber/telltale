@@ -14,6 +14,7 @@ categories = ["parser-implementations", "development-tools"]
 include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/data/**", "/examples/**", "/src/**"]
 
 [dependencies]
+hex.workspace = true
 telltale-schema.workspace = true
 regex.workspace = true
 serde.workspace = true

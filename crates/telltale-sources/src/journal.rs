@@ -286,7 +286,7 @@ fn identity_token(identity: PhysicalIdentity) -> io::Result<String> {
             "file identity is unsupported",
         ));
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn path_metadata(path: &Path) -> io::Result<FileMetadata> {

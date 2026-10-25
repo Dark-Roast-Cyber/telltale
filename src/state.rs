@@ -346,7 +346,7 @@ impl ScanState {
             added: added.len() as u32,
             removed: removed.len() as u32,
             unchanged: unchanged as u32,
-            hash: format!("{:x}", hasher.finalize()),
+            hash: hex::encode(hasher.finalize()),
         }
     }
 
@@ -1094,7 +1094,7 @@ pub(crate) fn sqlite_ingestion_cursor_key_for_instance(
 fn source_instance_id(source: &Source) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source.path.to_string_lossy().as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 pub fn source_fingerprint(source: &Source) -> String {
@@ -1110,7 +1110,7 @@ pub fn source_fingerprint(source: &Source) -> String {
                 hasher.update(duration.subsec_nanos().to_le_bytes());
             }
         }
-        return format!("{:x}", hasher.finalize());
+        return hex::encode(hasher.finalize());
     }
     // Acquisition owns validity and progress. Fingerprinting must not reread a
     // rejected source into an unbounded allocation (including scanner errors).
@@ -1148,16 +1148,15 @@ pub fn source_fingerprint(source: &Source) -> String {
             }
         }
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Kept among the detection fingerprints, so outage tracking needs no state
 /// schema change; the prefix keeps it apart from any event fingerprint.
 fn source_outage_fingerprint(client: &str) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(format!("telltale:source_parse_outage:{client}").as_bytes())
-    )
+    hex::encode(Sha256::digest(
+        format!("telltale:source_parse_outage:{client}").as_bytes(),
+    ))
 }
 
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {
@@ -1205,7 +1204,7 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
             hasher.update(hash.as_bytes());
         }
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -1224,11 +1223,11 @@ mod tests {
         std::fs::write(&source.path, &bytes).unwrap();
         let mut expected = Sha256::new();
         expected.update(source.path.to_string_lossy().as_bytes());
-        let path_hash = format!("{:x}", expected.clone().finalize());
+        let path_hash = hex::encode(expected.clone().finalize());
         expected.update(bytes);
         assert_eq!(
             super::source_fingerprint(&source),
-            format!("{:x}", expected.finalize())
+            hex::encode(expected.finalize())
         );
         std::fs::File::create(&source.path)
             .unwrap()

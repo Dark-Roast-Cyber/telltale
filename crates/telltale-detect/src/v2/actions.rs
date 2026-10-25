@@ -514,7 +514,7 @@ pub(crate) fn provenance(
         action_semantics_version: ACTION_SEMANTICS_VERSION,
         native_profile_version: NATIVE_ACTION_PROFILE_VERSION,
         replay_algorithm_version: REPLAY_ALGORITHM_VERSION,
-        identity: format!("semantic:v1:sha256:{:x}", hash.finalize()),
+        identity: format!("semantic:v1:sha256:{}", hex::encode(hash.finalize())),
     }
 }
 fn frame(hash: &mut Sha256, bytes: &[u8]) {
@@ -2461,7 +2461,10 @@ fn replay(
         budget.charge(value.len())?;
         frame(&mut hash, value.as_bytes());
     }
-    Ok(Some(format!("replay:v1:sha256:{:x}", hash.finalize())))
+    Ok(Some(format!(
+        "replay:v1:sha256:{}",
+        hex::encode(hash.finalize())
+    )))
 }
 
 pub(crate) fn context(

@@ -16,7 +16,7 @@ pub fn rule_v1_fingerprint(export: &RuleV1CompatibilityExport) -> String {
     let mut hasher = Sha256::new();
     hasher.update(RULE_V1_FINGERPRINT_DOMAIN);
     hasher.update(canonical);
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 fn canonical_export(export: &RuleV1CompatibilityExport) -> Vec<u8> {

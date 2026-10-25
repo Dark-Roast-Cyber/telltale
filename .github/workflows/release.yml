@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           components: clippy,rustfmt
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
           targets: ${{ matrix.target }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -298,7 +298,7 @@ jobs:
           done
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
       - name: Verify release SBOM matches tagged locked graph
         shell: bash
         run: |

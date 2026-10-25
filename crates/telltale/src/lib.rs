@@ -416,7 +416,7 @@ fn resume_binding(source: &Source) -> String {
         hasher.update((part.len() as u64).to_le_bytes());
         hasher.update(part);
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Path encoding tag and exact bytes: Unix bytes, or Windows UTF-16LE units.
@@ -1123,7 +1123,10 @@ modifiers: []
                 .scan_sources_with_time(batch, || {
                     time::Date::from_calendar_date(2026, time::Month::October, 4)
                         .unwrap()
-                        .format(&time::format_description::parse("[offset_hour]").unwrap())
+                        .format(
+                            &time::format_description::parse_borrowed::<1>("[offset_hour]")
+                                .unwrap(),
+                        )
                 })
                 .err()
                 .expect("clock failure");
