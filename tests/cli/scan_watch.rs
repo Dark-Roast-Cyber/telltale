@@ -5422,9 +5422,35 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
     fs::create_dir_all(&nested).unwrap();
     let database = store.join("custom-store.sqlite");
     let writer = seed_relocated_opencode(&database);
+    // This test measures commits to an already-open WAL. Initialize sidecars
+    // before watch registration rather than mixing their creation notifications
+    // into the two measured commits. Creation has its own eventual-read test.
+    // Dirty and restore the page in one transaction: SQLite can elide seq = seq.
     writer
-        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+             BEGIN IMMEDIATE;
+             UPDATE session_message SET seq = seq + 1;
+             UPDATE session_message SET seq = seq - 1;
+             COMMIT;",
+        )
         .unwrap();
+    assert!(
+        fs::metadata(store.join("custom-store.sqlite-wal"))
+            .unwrap()
+            .len()
+            > 0
+    );
+    assert_eq!(
+        writer
+            .query_row(
+                "SELECT COUNT(*), MIN(seq) FROM session_message",
+                [],
+                |row| { Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)) }
+            )
+            .unwrap(),
+        (1, 1)
+    );
     drop(seed_relocated_opencode(&store.join("opencode-neighbor.db")));
     let mut command = relocated_opencode_command(&home, &work, "watch");
     command
@@ -5534,9 +5560,120 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
     if child.try_wait().unwrap().is_none() {
         let _ = child.kill();
     }
-    let _ = child.wait();
+    let status = child.wait().unwrap();
     reader.join().unwrap();
     if let Err(panic) = result {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+        }
+        eprintln!("synthetic existing-WAL child status: {status:?}; stderr: {stderr}");
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Sidecar creation can generate several native notifications. Unlike the
+/// existing-WAL isolation test, require eventual committed-row visibility, not
+/// a one-to-one relationship between filesystem events and SQLite commits.
+#[test]
+fn opencode_relocation_watch_observes_new_wal_sidecars() {
+    use std::io::BufRead;
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let store = root.join("PRIVATE-RELOCATION");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    let database = store.join("new-wal.sqlite");
+    let writer = seed_relocated_opencode(&database);
+    writer
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+        .unwrap();
+    assert!(!store.join("new-wal.sqlite-wal").exists());
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .arg("--emit-activity")
+        .args(["--debounce-ms", "100", "--min-scan-interval-ms", "0"])
+        .env("OPENCODE_DB", &database)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let line = line.unwrap();
+            if let Ok(summary) = serde_json::from_str::<Value>(&line) {
+                let _ = send.send(summary);
+            }
+        }
+    });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_watch_ready(&mut child, &store);
+        append_relocated_opencode(&writer, 2);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut observed_commit = false;
+        for _ in 0..64 {
+            let summary = receive
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("watch must observe committed rows after WAL creation");
+            let processing = &summary["source_processing"];
+            assert_eq!(processing["selected_source_count"], 1, "{summary}");
+            assert_eq!(processing["parse_error_source_count"], 0, "{summary}");
+            assert_eq!(processing["quarantined_unit_count"], 0, "{summary}");
+            let count = processing["parsed_record_count"].as_u64().unwrap();
+            assert!((1..=2).contains(&count), "{summary}");
+            if count == 2 {
+                observed_commit = true;
+                break;
+            }
+        }
+        assert!(
+            observed_commit,
+            "WAL notifications never exposed the committed row"
+        );
+        assert!(
+            fs::metadata(store.join("new-wal.sqlite-wal"))
+                .unwrap()
+                .len()
+                > 0
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "watch exited unexpectedly"
+        );
+        let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
+        assert!(!log.contains("PRIVATE-RELOCATION"));
+        let events = log
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|event| event["client"] == "opencode" && event["event_type"] == "activity")
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event_schema_validator().is_valid(event))
+        );
+    }));
+    // This watcher is intentionally unbounded: stop it only after observing the
+    // required commit, or when unwinding a failed assertion.
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+    }
+    let status = child.wait().unwrap();
+    reader.join().unwrap();
+    if let Err(panic) = result {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+        }
+        eprintln!("synthetic WAL creation child status: {status:?}; stderr: {stderr}");
         std::panic::resume_unwind(panic);
     }
 }

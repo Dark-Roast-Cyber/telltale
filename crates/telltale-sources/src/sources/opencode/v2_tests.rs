@@ -1986,6 +1986,98 @@ fn incremental_reads_stop_at_their_stored_byte_budget() {
     assert_eq!(next, None);
 }
 
+/// Adaptive budgets may not split the first timestamp group. It is the
+/// smallest cursor-safe unit, but the production retained limit still applies.
+#[test]
+fn adaptive_windows_keep_the_first_timestamp_group_within_hard_limits() {
+    let store = Store::v2();
+    for seq in 1..=3 {
+        store.message(&format!("msg_{seq}"), seq, T0, user(&"x".repeat(1_000), T0));
+    }
+    store.message("later", 4, T0 + 1, user("later", T0));
+    let bounds = OpenCodeSqliteReadOptions {
+        message_min_time_updated: Some(T0),
+        message_window_bytes: Some(1),
+        ..Default::default()
+    };
+    for read in [
+        bounds,
+        OpenCodeSqliteReadOptions {
+            message_min_time_updated: None,
+            ..bounds
+        },
+    ] {
+        let batch = store.acquire(read).unwrap();
+        assert_eq!(batch.observations.len(), 3);
+        assert!(batch.quarantined.is_empty());
+        assert_eq!(
+            batch.progress,
+            AcquisitionProgress::OpenCodeSessionMessages {
+                message_max_time_updated: Some(T0),
+                window_complete: false,
+            }
+        );
+        let later = store
+            .acquire(read.continue_session_messages_after(T0))
+            .unwrap();
+        assert_eq!(later.observations.len(), 1);
+        assert_eq!(
+            later.progress,
+            AcquisitionProgress::OpenCodeSessionMessages {
+                message_max_time_updated: Some(T0 + 1),
+                window_complete: true,
+            }
+        );
+    }
+    store.connection.execute(
+        "UPDATE session_message SET data = '{\"content\":\"not an array\"}', type = 'assistant' WHERE id = 'msg_2'", [],
+    ).unwrap();
+    assert_eq!(
+        mapping_code(store.acquire(bounds).err().unwrap()),
+        "invalid_assistant_content"
+    );
+    let large = Store::v2();
+    for seq in 1..=140 {
+        large.message(
+            &format!("msg_{seq}"),
+            seq,
+            T0,
+            user(&"x".repeat(64_000), T0),
+        );
+    }
+    assert_eq!(
+        large.acquire(bounds).err(),
+        Some(AcquisitionError::BoundedSourceRead(
+            BoundedReadError::LimitExceeded
+        ))
+    );
+}
+
+#[test]
+fn adaptive_timestamp_groups_do_not_exceed_the_production_stored_byte_budget() {
+    let store = Store::v2();
+    for seq in 1..=3 {
+        store.message(
+            &format!("msg_{seq}"),
+            seq,
+            T0,
+            user(&"x".repeat(6 * 1024 * 1024), T0),
+        );
+    }
+    let (records, truncated, next) = extract_incremental_messages(
+        &store.connection,
+        T0,
+        10,
+        2,
+        &mut SqliteAdmission::default(),
+        1,
+    )
+    .unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(truncated);
+    assert_eq!(next, Some(T0));
+}
+
 /// OpenCode stores the tool name a model requested, even one the canonical
 /// body cannot hold. That row is quarantined like an oversized one instead of
 /// failing the source.

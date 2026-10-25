@@ -563,6 +563,7 @@ impl SourceScan {
                             stage: canonical_runtime::FailureStage::Projection,
                             progress: result.progress,
                             acquisition: None,
+                            processing: Some(telltale_detect::v2::ProcessingError::Projection),
                         });
                     }
                     Ok(DetectionOccurrence {

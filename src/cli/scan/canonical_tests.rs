@@ -21,6 +21,7 @@ fn runtime_failures_become_private_scanner_errors_without_staging_eligibility() 
                 stage,
                 progress,
                 acquisition: None,
+                processing: None,
             }),
         );
         assert_eq!(result.status, SourceProcessingStatus::Failed);
@@ -56,6 +57,53 @@ fn runtime_failures_become_private_scanner_errors_without_staging_eligibility() 
             summary["failures"][0]["bound_dimension"],
             serde_json::Value::Null
         );
+    }
+}
+
+#[test]
+fn processing_failures_retain_distinct_content_free_diagnostic_codes() {
+    use telltale_core::canonical_runtime::SourceFailure;
+    use telltale_detect::v2::ProcessingError;
+    let source = source("PRIVATE-path".into());
+    for reason in [
+        ProcessingError::InvalidSource,
+        ProcessingError::DuplicateObservation,
+        ProcessingError::Bounds,
+        ProcessingError::Evaluation,
+        ProcessingError::Projection,
+    ] {
+        let stage = if reason == ProcessingError::Projection {
+            FailureStage::Projection
+        } else {
+            FailureStage::Evaluation
+        };
+        let result = adapt_result(
+            &source,
+            Err(SourceFailure {
+                stage,
+                progress: AcquisitionProgress::None,
+                acquisition: None,
+                processing: Some(reason),
+            }),
+        );
+        let error = result.events[0]
+            .evidence
+            .iter()
+            .find(|item| item.field == "error")
+            .unwrap();
+        assert_eq!(error.redacted_value, stage.code());
+        let summary = super::super::source_processing_accounting(&[result])
+            .unwrap()
+            .json();
+        assert_eq!(
+            summary["failures"][0]["processing_code"],
+            reason.to_string()
+        );
+        assert_eq!(
+            summary["failures"][0]["acquisition_code"],
+            serde_json::Value::Null
+        );
+        assert!(!summary.to_string().contains("PRIVATE"));
     }
 }
 

@@ -68,8 +68,11 @@ so a large backlog is read a window at a time. A v2 selection is evaluated in
   detections exceed the retained projection capacity (4,096 items, 4 MiB), the
   scan re-reads a window at half its size until it fits. Later windows of that
   scan keep the size that fit, and it doubles again after four windows fit.
-  Rows whose smallest window still does not fit are quarantined as
-  `evaluation_capacity_exceeded`, so one dense row cannot stop a drain;
+  The first whole timestamp group may exceed the reduced target, but never
+  the unchanged production read or retained-semantics budgets: it is the
+  smallest window the cursor can represent. If that window still exceeds
+  evaluation capacity, its mapped rows are quarantined as
+  `evaluation_capacity_exceeded`, so one dense row or tied group cannot stop a drain;
 - `source_processing.evaluated_window_count` counts the windows. A source
   still cut after 64 windows is counted in `incomplete_window_source_count`;
    its cursor carries a `draining` flag and a raw `continue_after_time_updated`

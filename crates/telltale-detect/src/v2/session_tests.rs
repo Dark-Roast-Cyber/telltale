@@ -5,6 +5,232 @@ use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
 #[test]
+fn work_budget_control_rules_do_not_scan_unrelated_authored_arguments() {
+    let observations = (0..128)
+        .map(|index| {
+            CanonicalObservationV2::builder(
+                ObservationBody::Tool(
+                    ToolObservation::new()
+                        .with_name("Bash")
+                        .unwrap()
+                        .with_arguments(
+                            JsonValue::object([(
+                                "command".into(),
+                                JsonValue::string("x".repeat(60_000)),
+                            )])
+                            .unwrap(),
+                        ),
+                ),
+                ObservationStage::ToolRequested,
+                ObservedAt::new("2026-10-06T12:00:00Z").unwrap(),
+                SourceProvenance::new(
+                    IngestionMode::SessionStore,
+                    "claude_code",
+                    "claude.projects",
+                    Fidelity::FullNative,
+                )
+                .unwrap()
+                .with_native_id(format!("synthetic-{index}"))
+                .unwrap(),
+            )
+            .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+            .capability_context(
+                CapabilityContext::new()
+                    .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+            )
+            .fact_metadata("tool.name", metadata())
+            .fact_metadata("tool.arguments", metadata())
+            .build()
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        observations
+            .iter()
+            .map(|o| o.retained_byte_len())
+            .sum::<usize>()
+            < telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES
+    );
+    let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
+    for target in ["arguments", "tool_name"] {
+        let definitions = (0..40)
+            .map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [{target}]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n"))
+            .collect::<String>();
+        let document = format!(
+            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n{definitions}modifiers: []\n"
+        );
+        let rules = telltale_rules::load_rule_set_from_documents(&[&document], None).unwrap();
+        let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+        let work = EvaluationWorkBudget::default();
+        let result = evaluate_source_with_work_budget(
+            CanonicalSourceInput {
+                client: ClientId::Claude,
+                source_id: "claude.projects",
+                source_instance: Some(&instance),
+                observations: &observations,
+            },
+            &plan,
+            None,
+            &work,
+        );
+        if target == "arguments" {
+            assert!(matches!(result, Err(ProcessingError::Bounds)));
+            assert!(work.is_exhausted(), "actual full-input scans remain fatal");
+        } else {
+            let evaluation = result.expect("name lookups must not reserve unrelated arguments");
+            assert!(!work.is_exhausted());
+            for detector in evaluation.sessions()[0].detectors() {
+                assert_eq!(detector.evaluated_no_match_count(), 128);
+            }
+        }
+    }
+}
+
+#[test]
+fn work_budget_scalar_controls_preserve_resolution_and_structured_fallback() {
+    use super::{SelectorId, SelectorRegistry};
+
+    for structured in [false, true] {
+        let facet_value = if structured {
+            JsonValue::array(vec![JsonValue::string("synthetic")])
+        } else {
+            JsonValue::string("synthetic")
+        };
+        let observation = CanonicalObservationV2::builder(
+            ObservationBody::Tool(
+                ToolObservation::new()
+                    .with_name("Bash")
+                    .unwrap()
+                    .with_arguments(
+                        JsonValue::object([(
+                            "command".into(),
+                            JsonValue::string("x".repeat(60_000)),
+                        )])
+                        .unwrap(),
+                    ),
+            ),
+            ObservationStage::ToolRequested,
+            ObservedAt::new("2026-10-06T12:00:00Z").unwrap(),
+            SourceProvenance::new(
+                IngestionMode::SessionStore,
+                "claude_code",
+                "claude.projects",
+                Fidelity::FullNative,
+            )
+            .unwrap()
+            .with_native_id("synthetic-control")
+            .unwrap(),
+        )
+        .fact_metadata("tool.name", metadata())
+        .fact_metadata("tool.arguments", metadata())
+        .facet("command.text", SemanticFacet::new(facet_value.clone()))
+        .unwrap()
+        .fact_metadata(
+            "command.text",
+            FactMetadata::parsed()
+                .unwrap()
+                .with_fidelity_override(Fidelity::PartialStructured),
+        )
+        .facet("resource.path", SemanticFacet::new(facet_value))
+        .unwrap()
+        .fact_metadata("resource.path", metadata())
+        .build()
+        .unwrap();
+        let registry = SelectorRegistry::new();
+        for selector in [
+            SelectorId::ToolName,
+            SelectorId::CompatToolName,
+            SelectorId::CommandText,
+            SelectorId::CompatCommand,
+            SelectorId::ResourcePath,
+            SelectorId::CompatFilePath,
+        ] {
+            let ordinary = registry.resolve(selector, &observation).unwrap();
+            let mut budget = RetentionBudget::new();
+            budget.charge(MAX_EVALUATION_BYTE_VISITS - 1024).unwrap();
+            let constrained = registry.try_resolve(selector, &observation, &mut budget);
+            if structured && !matches!(selector, SelectorId::ToolName | SelectorId::CompatToolName)
+            {
+                assert!(
+                    matches!(constrained, Err(ProcessingError::Bounds)),
+                    "structured facets keep their conservative reservation"
+                );
+                continue;
+            }
+            let constrained = constrained.expect("scalar control must not visit arguments");
+            assert_eq!(constrained.selector(), ordinary.selector());
+            assert_eq!(constrained.presence(), ordinary.presence());
+            assert_eq!(constrained.value(), ordinary.value());
+            assert_eq!(constrained.metadata(), ordinary.metadata());
+            assert_eq!(
+                constrained.required_capability(),
+                ordinary.required_capability()
+            );
+        }
+    }
+    let observation = message(
+        "synthetic-absent",
+        None,
+        &"x".repeat(60_000),
+        CapabilityAvailability::Supported,
+    );
+    for selector in [
+        SelectorId::ToolName,
+        SelectorId::CompatToolName,
+        SelectorId::CommandText,
+        SelectorId::CompatCommand,
+        SelectorId::ResourcePath,
+        SelectorId::CompatFilePath,
+    ] {
+        let mut budget = RetentionBudget::new();
+        budget.charge(MAX_EVALUATION_BYTE_VISITS - 1024).unwrap();
+        let resolution = SelectorRegistry::new()
+            .try_resolve(selector, &observation, &mut budget)
+            .unwrap();
+        assert_eq!(resolution.presence(), super::SelectorPresence::Absent);
+        assert!(resolution.value().is_none());
+        assert!(resolution.metadata().is_none());
+    }
+}
+
+#[test]
+fn work_budget_literal_percent_messages_do_not_reserve_encoded_url_scans() {
+    for suffix in ['~', '%'] {
+        let text = format!("needle {}{suffix}", "ordinary ".repeat(368));
+        assert_eq!(text.len(), 3_320);
+        let observations = (0..8)
+            .map(|index| {
+                message(
+                    &format!("synthetic-{index}"),
+                    Some("synthetic-session"),
+                    &text,
+                    CapabilityAvailability::Supported,
+                )
+            })
+            .collect::<Vec<_>>();
+        let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
+        let work = EvaluationWorkBudget::default();
+        let evaluation = evaluate_source_with_work_budget(
+            CanonicalSourceInput {
+                client: ClientId::Claude,
+                source_id: "claude.projects",
+                source_instance: Some(&instance),
+                observations: &observations,
+            },
+            &target_plan("user_context", "needle"),
+            None,
+            &work,
+        )
+        .expect("literal percent without an escape cannot hide an encoded URL");
+        assert!(!work.is_exhausted());
+        assert_eq!(
+            evaluation.sessions()[0].detectors()[0].evaluated_match_count(),
+            8
+        );
+    }
+}
+
+#[test]
 fn tool_control_lookup_does_not_visit_unrelated_large_result() {
     let observation = CanonicalObservationV2::builder(
         ObservationBody::Tool(

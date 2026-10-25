@@ -580,7 +580,7 @@ fn persisted_claude_baseline_survives_quarantine_and_malformed_then_replaces_on_
             processing["failures"],
             if is_malformed {
                 serde_json::json!([{
-                    "stage":"Acquisition","acquisition_code":"source_read","bound_category":null,"bound_dimension":null,"source_count":1
+                    "stage":"Acquisition","acquisition_code":"source_read","processing_code":null,"bound_category":null,"bound_dimension":null,"source_count":1
                 }])
             } else {
                 serde_json::json!([])

@@ -255,8 +255,10 @@ otherwise ambiguous zero-detection result without exposing session content:
   `failures` groups rejected sources by typed processing stage, acquisition
   code, and optional canonical bound category/dimension, with `source_count`.
   These aggregates contain no paths, identities, content, measured sizes, or
-  raw error text; later-stage failures without acquisition details have null
-  acquisition and bound fields. Existing parse counters retain their meaning:
+  raw error text. `processing_code` preserves a closed, content-free processing
+  error reason when available; acquisition failures have a null processing code,
+  while later-stage failures without acquisition details have null acquisition
+  and bound fields. Event 3.0 scanner error codes are unchanged. Existing parse counters retain their meaning:
   `parse_error_source_count` includes any source-processing rejection.
 - `detection_flow` reports effective detection candidates before state
   deduplication, matched rule-ID references, allowlist-marked candidates,

@@ -840,6 +840,7 @@ const MAX_REPORTED_QUARANTINED_UNITS: usize = 1_000;
 struct SourceFailureCategory {
     stage: String,
     acquisition_code: Option<&'static str>,
+    processing_code: Option<String>,
     bound_category: Option<String>,
     bound_dimension: Option<String>,
 }
@@ -907,6 +908,7 @@ fn source_processing_accounting(
             let key = SourceFailureCategory {
                 stage: format!("{:?}", failure.stage),
                 acquisition_code: failure.acquisition.map(|error| error.code()),
+                processing_code: failure.processing.map(|error| error.to_string()),
                 bound_category: context.map(|context| format!("{:?}", context.category)),
                 bound_dimension: context.map(|context| format!("{:?}", context.dimension)),
             };
@@ -1429,6 +1431,7 @@ impl SourceProcessingAccounting {
                 serde_json::json!({
                     "stage": category.stage,
                     "acquisition_code": category.acquisition_code,
+                    "processing_code": category.processing_code,
                     "bound_category": category.bound_category,
                     "bound_dimension": category.bound_dimension,
                     "source_count": count,
