@@ -1,14 +1,81 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{
-    Event, PrivacySanitizer, SanitizationContext, append_jsonl_bytes, ensure_jsonl_tail,
-    serialize_jsonl_events,
+use crate::event::{Event, PrivacySanitizer, SanitizationContext, serialize_event_for_emission};
+use crate::file_lock::{
+    RotationNamespace, SidecarLock, atomic_rename_no_replace, open_append, safe_path_info,
+    sync_parent,
 };
-use crate::file_lock::{RotationNamespace, SidecarLock, atomic_rename_no_replace, sync_parent};
 use crate::sink::EventSink;
 use telltale_sources::journal;
+
+pub(crate) fn serialize_jsonl_events(
+    events: &[Event],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut bytes = Vec::new();
+    for event in events {
+        let mut serializer = serde_json::Serializer::new(&mut bytes);
+        serialize_event_for_emission(event, &mut serializer)?;
+        bytes.push(b'\n');
+    }
+    Ok(bytes)
+}
+
+fn append_jsonl_bytes(path: &Path, bytes: &[u8]) -> Result<bool, Box<dyn std::error::Error>> {
+    ensure_jsonl_tail(path)?;
+    let (mut file, created, info) = open_append(path)?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.sync_all()?;
+    let current = safe_path_info(path)?.ok_or("log target disappeared during append")?;
+    if current.identity != info.identity || current.links != info.links {
+        return Err("log target changed during append".into());
+    }
+    Ok(created)
+}
+
+fn ensure_jsonl_tail(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let length = file.metadata()?.len();
+    if length == 0 {
+        return Ok(());
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    if last[0] != b'\n' {
+        return Err(
+            "local JSONL ends with a partial record; repair or replace it before retrying".into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn append_jsonl_events(
+    path: &Path,
+    events: &[Event],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = serialize_jsonl_events(events)?;
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _lock = SidecarLock::acquire_lock_only(path)?;
+    let created = append_jsonl_bytes(path, &bytes)?;
+    if created {
+        sync_parent(path)?;
+    }
+    Ok(())
+}
 
 /// Built-in size-based log rotation configuration.
 ///
@@ -328,6 +395,10 @@ fn date_from_days_since_epoch(days: i64) -> String {
     let y = if m <= 2 { y + 1 } else { y };
     format!("{y:04}-{m:02}-{d:02}")
 }
+
+#[cfg(test)]
+#[path = "jsonl_privacy_tests.rs"]
+mod privacy_tests;
 
 #[cfg(test)]
 mod tests {

@@ -174,10 +174,9 @@ telltale-detect = "=$VERSION"
 EOF
 
 cat > "$DETECT_CONSUMER_DIR/src/main.rs" <<'EOF'
-use std::path::Path;
-
 fn main() {
-    let _inventory = telltale_detect::mcp::discover_mcp_inventory_servers(Path::new("."));
+    let _project_inventory = telltale_detect::mcp::project_mcp_inventory;
+    let _project_usage = telltale_detect::mcp::project_mcp_usage;
 }
 EOF
 
@@ -516,6 +515,8 @@ fn main() {
         _ => "other source pattern",
     };
     let _ = telltale_sources::clients::supported_clients();
+    let _acquire_inventory = telltale_sources::mcp::acquire_mcp_inventory;
+    let _collect_inventory = telltale_sources::mcp::collect_mcp_inventory;
     let _ = telltale_sources::discovery::discover_sources(Path::new("."));
 }
 EOF

@@ -15,7 +15,7 @@ include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**", "/tes
 
 [features]
 default = ["source-io"]
-source-io = ["dep:telltale-sources", "dep:walkdir"]
+source-io = ["dep:telltale-sources"]
 
 [dependencies]
 hex.workspace = true
@@ -29,7 +29,6 @@ serde_yaml.workspace = true
 regex.workspace = true
 sha2.workspace = true
 time.workspace = true
-walkdir = { version = "2.5", optional = true }
 
 [dev-dependencies]
 tempfile = "3.14"

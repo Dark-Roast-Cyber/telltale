@@ -20,12 +20,14 @@ declares canonicalization `suppression-v1-effective-v1`. Criteria remain in the
 digest preimage only; public materialization exposes only suppression state,
 count, canonicalization, and fingerprint, not names or criteria.
 
-The default `source-io` feature enables source-dependent support such as MCP
-inventory and its I/O dependencies (`telltale-sources`, `walkdir`). It does not
-expose a filesystem-backed detection/parser pipeline. Detection v2 evaluation
-remains I/O-free; consumers can use
-`default-features = false` to omit source I/O, SQLite, and `walkdir`. Pair the
-crate with `telltale-rules` and `telltale-schema` for rule sets and record types.
+The default `source-io` feature retains its compatibility name and enables
+analysis over source-owned accounting and MCP inventory values. MCP discovery,
+reads, and parsing live in `telltale-sources`; MCP attribution and Event3
+projection here are I/O-free. Activity and baseline accounting also use the
+`telltale-sources` dependency, which brings `walkdir` transitively. Consumers can
+use `default-features = false` to omit that dependency and its source-backed
+analysis surfaces. Pair the crate with `telltale-rules` and `telltale-schema` for
+rule sets and record types.
 
 Process-chain evaluation uses canonical Tool observations through
 `v2::session::evaluate_source` and projects Event3 through `v2::event3`.

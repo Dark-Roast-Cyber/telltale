@@ -19,7 +19,6 @@ use crate::file_lock::validate_runtime_paths;
 use crate::install_inventory::{
     collect_install_inventory, install_inventory_due, snapshot_to_event,
 };
-use crate::mcp::discover_mcp_scan;
 use crate::process_chain::ProcessChainConfig;
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
@@ -29,6 +28,7 @@ use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
 use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
+use telltale_core::inventory::discover_mcp_scan;
 use telltale_detect::v2::PolicyMatchAccounting;
 use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::clients::{ClientId, SourceKind};

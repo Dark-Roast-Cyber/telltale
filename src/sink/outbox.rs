@@ -2996,10 +2996,10 @@ mod tests {
         mark_generation_prune_pending, read_generation_metadata, write_ingest_cursor,
     };
     use crate::event::{
-        ActivityEventInput, ControlledMarker, Event, Evidence, append_jsonl_events,
-        check_serialized_event_markers, serialize_event_for_emission,
+        ActivityEventInput, ControlledMarker, Event, Evidence, check_serialized_event_markers,
+        serialize_event_for_emission,
     };
-    use crate::sink::jsonl::{JsonlGeneration, discover_jsonl_generations};
+    use crate::sink::jsonl::{JsonlGeneration, append_jsonl_events, discover_jsonl_generations};
     use crate::sink::{DeliveryError, DeliveryErrorClass, EventSink, LocalJsonlSink};
     use telltale_schema::clients::ClientId;
 

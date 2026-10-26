@@ -582,7 +582,7 @@ fn mcp_projection_is_atomic_with_late_activity_failure() {
         r#"{"mcpServers":{"synthetic":{"command":"synthetic","tools":["lookup"]}}}"#,
     )
     .unwrap();
-    let servers = telltale_detect::mcp::discover_mcp_inventory_servers(directory.path());
+    let servers = crate::inventory::discover_mcp_inventory_servers(directory.path());
     let mut accounting = SourceAccounting::default();
     let mut counts = telltale_sources::acquisition::NativeCounts::default();
     counts.record_counts.tool_call = 1;

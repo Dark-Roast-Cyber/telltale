@@ -10,6 +10,7 @@ pub mod clients;
 pub mod discovery;
 pub mod install_inventory;
 pub mod journal;
+pub mod mcp;
 pub mod paths;
 pub mod projects;
 pub(crate) mod source_read;

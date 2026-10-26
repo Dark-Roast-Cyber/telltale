@@ -6,13 +6,6 @@ use sha2::{Digest, Sha256};
 
 use telltale_schema::event::{Event, Evidence, evidence_hash, install_inventory_event};
 
-/// Internal cross-crate inventory read boundary, sharing the direct source
-/// reader's regular-file, no-follow, nonblocking-open and byte-limit enforcement.
-#[doc(hidden)]
-pub fn read_inventory_config_bytes(path: &Path, cap: usize) -> Result<Vec<u8>, &'static str> {
-    crate::source_read::bounded_file_bytes(path, cap).map_err(|error| error.code())
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstallInventorySnapshot {
     pub observed_at_unix_ms: u64,
@@ -602,21 +595,6 @@ mod tests {
                 InstallPlatform::Windows
             )
             .present
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn inventory_config_fifo_returns_without_waiting_for_a_writer() {
-        use std::os::unix::ffi::OsStrExt;
-        let root = tempdir().unwrap();
-        let path = root.path().join("fifo");
-        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        // Synthetic FIFO, with no writer: blocking open would hang this regression.
-        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
-        assert_eq!(
-            read_inventory_config_bytes(&path, 1024),
-            Err("non_regular_source")
         );
     }
 
