@@ -246,8 +246,10 @@ after opting into PATH. The scripts are repository tooling, not additional
 release ZIP members; there is no production checksum bypass.
 
 An exclusive current-user lifecycle mutex, file lock, journal, staged executable, digest-bound backup and
-atomic file replacement support rollback. A running or locked executable blocks
-replacement safely: close it and retry. Rerun the installer after interruption;
+journaled executable rename support rollback. A running or locked executable blocks
+replacement safely: close it and retry. A reader of the new staged executable that
+permits renaming does not block the swap; one that forbids renaming fails it before
+either executable is renamed. Rerun the installer after interruption;
 changed recovery files or task declarations fail closed for operator inspection.
 
 For isolated tests, `-InstallDirectory` and `-DataDirectory` accept separate,

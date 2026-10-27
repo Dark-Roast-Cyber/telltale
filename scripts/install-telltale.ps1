@@ -130,7 +130,9 @@ try {
             $next.task_xml = Set-TTTask $next.task_xml -CreateOnly
             Write-TTJson $journalPath $journal
         }
-        if (Test-Path -LiteralPath $binary) { [IO.File]::Replace($stage, $binary, (Join-Path $install 'previous.exe')) }
+        # An outside reader of the new stage that permits renaming must not block
+        # the swap; one that forbids renaming still fails before any change.
+        if (Test-Path -LiteralPath $binary) { [TelltaleLifecycle.Native]::ReplaceExecutable($stage, $binary, (Join-Path $install 'previous.exe')) }
         else { [IO.File]::Move($stage, $binary) }
         if ((Get-TTHash $binary) -cne $hash) { throw 'Installed executable digest mismatch.' }
         Write-TTJson (Join-Path $install 'install-receipt.json') $next
