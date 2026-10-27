@@ -481,33 +481,32 @@ Legacy identities SHALL remain unchanged; no filename fallback is allowed.
 - **WHEN** a typed completed fact is constructed
 - **THEN** owner/turn/item identity is scoped independently of source position and reported correlations
 
-### Requirement: Codex native ordinals require all-record self-contained history
+### Requirement: Codex native ordinals validate the whole local source
 
-Native `ordinal` SHALL be supported only in strict self-contained mode.
-Presence
-of the key on any nonblank JSONL record SHALL require a valid u64 ordinal on every
-nonblank record, including metadata, auxiliaries and suppressed mirrors.
-The
-sequence SHALL start at zero and advance strictly consecutively using checked
-arithmetic.
+Presence of any ordinal key SHALL select strict ordinal mode. Every nonblank
+record, including metadata, auxiliaries and suppressed mirrors, SHALL contain a
+nonnegative u64 ordinal. With absent or null history_base the sequence SHALL
+start at zero. With a validated history_base it SHALL start at that base's
+end_ordinal_exclusive. All subsequent ordinals SHALL advance consecutively using
+checked arithmetic; blank lines SHALL NOT consume ordinals.
 
-#### Scenario: Codex native ordinals require all-record self-contained history
+#### Scenario: A local fork starts at its validated history base
 
-- **WHEN** any nonblank record has an ordinal key
-- **THEN** every nonblank record has a consecutive checked u64 starting at zero
+- **WHEN** the first paginated session metadata has a valid history_base ending at ordinal 40
+- **THEN** local records start at 40 and continue at 41, 42 and so on without reading the parent's file
 
 ### Requirement: Codex paginated history rejects invalid initial metadata or coordinates
 
-The first record SHALL be exact public session_meta with object
-payload, exact history_mode paginated and a truthful nonempty owning id.
-The
-entire source SHALL reject mixed absent/null/malformed, negative, fractional,
-overflowing, duplicate, descending or gapped coordinates, invalid first metadata,
-and nonzero-start slices before returning any observations, accounting or progress.
+The first record SHALL be exact public session_meta with object payload, exact
+history_mode paginated and a truthful nonempty owning id. The entire source
+SHALL reject mixed absent/null/malformed, negative, fractional, overflowing,
+duplicate, descending or gapped coordinates, invalid first metadata, nonzero
+starts without a valid history_base, and starts that disagree with that base
+before returning observations, accounting or progress.
 
-#### Scenario: Codex paginated history rejects invalid initial metadata or coordinates
+#### Scenario: A malformed base or ordinal sequence fails atomically
 
-- **WHEN** paginated history is not a complete zero-start self-contained sequence
+- **WHEN** the base is invalid or any record disagrees with the validated consecutive sequence
 - **THEN** the whole source rejects before returning observations, accounting or progress
 
 ### Requirement: Codex reported ordinal does not replace typed item identity
@@ -525,19 +524,25 @@ identities and sequences SHALL remain exactly unchanged.
 - **WHEN** strict ordinal mode is valid
 - **THEN** reported sequence is used without positional fallback or consuming blank lines
 
-### Requirement: Codex referenced history remains unsupported
+### Requirement: Codex forked history bases do not reconstruct parent history
 
-Non-null history_base or
-subagent_history_start_ordinal, even zero, SHALL remain unsupported.
-Referenced
-history and inherited prefixes SHALL NOT be supported or guessed.
-No acquisition
-progress, cursor or public API changes SHALL be introduced.
+A non-null history_base SHALL be accepted only on the initial paginated metadata
+of a source in strict ordinal mode. Its object SHALL have exactly thread_id,
+end_ordinal_exclusive and end_byte_offset: a nonempty bounded thread ID and two
+nonnegative u64 offsets. The reported end_ordinal_exclusive supplies the first
+local ordinal. The reference SHALL NOT cause parent-prefix reads or a claim
+that the parent history was acquired; accounting remains scoped to the local
+physical source instance.
 
-#### Scenario: Codex referenced history remains unsupported
+Non-null subagent_history_start_ordinal, even zero, SHALL remain unsupported.
+Invalid or misplaced history bases SHALL reject the source atomically. No
+acquisition progress, cursor or public API changes SHALL be introduced.
 
-- **WHEN** history_base or subagent_history_start_ordinal is non-null
-- **THEN** referenced history is rejected without guessing prefixes or adding progress APIs
+#### Scenario: A validated fork reference preserves local scope
+
+- **WHEN** the local source has a valid history_base and consecutive ordinals beginning at its reported end
+- **THEN** local acquisition succeeds without resolving the parent prefix
+- **AND** a non-null subagent_history_start_ordinal still rejects the whole source
 
 ### Requirement: Mirror authority is narrowly coordinate-proven
 
