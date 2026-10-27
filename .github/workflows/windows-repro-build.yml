@@ -1,0 +1,64 @@
+name: Build exact Windows executable for lock investigation
+
+on:
+  push:
+    branches: [codex/windows-lock-repro-build]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fe8df3d6628c17a5c981f2bed794d85d32b2482f
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc
+      - name: Build pinned source with static CRT
+        shell: pwsh
+        run: |
+          $expected = 'fe8df3d6628c17a5c981f2bed794d85d32b2482f'
+          if ((git rev-parse HEAD) -cne $expected) { throw 'Source revision mismatch.' }
+          cargo build --locked --release --bin telltale --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+      - name: Verify runtime imports and record binary provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = (Resolve-Path '.\target\x86_64-pc-windows-msvc\release\telltale.exe').Path
+          $stage = Join-Path $env:RUNNER_TEMP 'telltale-lock-investigation'
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          .\scripts\verify-windows-runtime.ps1 -BinaryPath $binary |
+            Set-Content -LiteralPath (Join-Path $stage 'runtime-verification.txt') -Encoding utf8
+          $version = @(& $binary --version)
+          if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or
+              $version[0] -cnotmatch '^telltale \S+ \(fe8df3d6628c\)$') { throw 'Binary source revision mismatch.' }
+          Copy-Item -LiteralPath $binary -Destination (Join-Path $stage 'telltale.exe')
+          $hash = (Get-FileHash -LiteralPath (Join-Path $stage 'telltale.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          [ordered]@{
+            source_revision = 'fe8df3d6628c17a5c981f2bed794d85d32b2482f'
+            target = 'x86_64-pc-windows-msvc'
+            version = $version[0]
+            sha256 = $hash
+            rustc = ((rustc --version) -join ' ')
+            cargo = ((cargo --version) -join ' ')
+            run_id = $env:GITHUB_RUN_ID
+            workflow_revision = $env:GITHUB_SHA
+            development_only = $true
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'provenance.json') -Encoding utf8
+          "$hash  telltale.exe" | Set-Content -LiteralPath (Join-Path $stage 'SHA256SUMS') -Encoding utf8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: telltale-windows-msvc-fe8df3d6628c
+          path: ${{ runner.temp }}/telltale-lock-investigation/
+          if-no-files-found: error
+          retention-days: 7
