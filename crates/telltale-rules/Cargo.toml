@@ -2,6 +2,7 @@
 name = "telltale-rules"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Telltale rule language: YAML parsing, validation, policy merge, and in-memory evaluation"
 license.workspace = true
 authors.workspace = true

@@ -87,16 +87,16 @@ pub(crate) fn extract_copilot_native_events(
         let accumulated = copilot_accumulated_output_array(line);
         let control = copilot_trusted_control(line, accumulated);
 
-        if accumulated.is_none()
-            && let Some(TrustedControl::WorkspaceInitialized { message }) = control
-        {
-            let source_session_id = copilot_workspace_session_id(message);
-            canonical_active_session_id = source_session_id.clone();
-            push_event(
-                &mut events,
-                CopilotNativeEvent::WorkspaceInitialized { source_session_id },
-            )?;
-            continue;
+        if accumulated.is_none() {
+            if let Some(TrustedControl::WorkspaceInitialized { message }) = control {
+                let source_session_id = copilot_workspace_session_id(message);
+                canonical_active_session_id = source_session_id.clone();
+                push_event(
+                    &mut events,
+                    CopilotNativeEvent::WorkspaceInitialized { source_session_id },
+                )?;
+                continue;
+            }
         }
 
         if accumulated.is_none() && matches!(control, Some(TrustedControl::SessionCompleted)) {

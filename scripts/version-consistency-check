@@ -12,6 +12,8 @@ import tomllib
 NUMBER = r"(0|[1-9][0-9]*)"
 STABLE = re.compile(rf"{NUMBER}\.{NUMBER}\.{NUMBER}")
 VERSION = re.compile(rf"{STABLE.pattern}(?:-rc\.{NUMBER})?")
+MSRV = re.compile(rf"{NUMBER}\.{NUMBER}(?:\.{NUMBER})?")
+EMBEDDING_FACADE = "telltale-core"
 
 
 def require(condition, message):
@@ -62,6 +64,29 @@ def validate_packages(version, packages, lock):
                 require(not dependency.get("path"),
                         f"path dependency outside workspace: {name} -> {target}")
     return graph
+
+
+def embedding_members(packages):
+    """The embedding facade and every member it builds with (not dev-only)."""
+    members, pending = set(), [EMBEDDING_FACADE]
+    while pending:
+        name = pending.pop()
+        require(name in packages, f"embedding member missing: {name}")
+        if name not in members:
+            members.add(name)
+            pending.extend(dependency["name"] for dependency in packages[name]["dependencies"]
+                           if dependency["name"] in packages and dependency.get("kind") != "dev")
+    return members
+
+
+def validate_embedding_msrv(msrv, declared, packages, consumer_msrv):
+    require(isinstance(msrv, str) and MSRV.fullmatch(msrv),
+            "workspace rust-version (the embedding MSRV) is missing or malformed")
+    for name in sorted(embedding_members(packages)):
+        require(declared.get(name) == {"workspace": True},
+                f"embedding member must inherit the workspace rust-version: {name}")
+    require(consumer_msrv == msrv,
+            "external embedding consumer rust-version drift from the workspace rust-version")
 
 
 def publication_order(packages, graph):
@@ -118,6 +143,16 @@ def load_workspace(root):
     return version, packages, validate_packages(version, packages, lock)
 
 
+def check_embedding_msrv(root, packages):
+    msrv = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"].get(
+        "rust-version")
+    declared = {name: tomllib.loads(Path(package["manifest_path"]).read_text())["package"]
+                .get("rust-version") for name, package in packages.items()}
+    consumer = tomllib.loads((root / "tests/embedding-consumer/Cargo.toml").read_text())
+    validate_embedding_msrv(msrv, declared, packages, consumer["package"].get("rust-version"))
+    return msrv, sorted(embedding_members(packages))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", help="prospective or current exact release tag")
@@ -128,11 +163,18 @@ def main():
                         help="print graph-derived publishable package order (metadata only)")
     mode.add_argument("--check-publication-order", nargs="+",
                         help="validate an explicit packaging order (metadata only)")
+    mode.add_argument("--embedding-msrv", action="store_true",
+                      help="validate the embedding crates' shared rust-version (metadata only)")
     args = parser.parse_args()
-    require(args.tag is None or not (args.publication_order or args.check_publication_order),
+    require(args.tag is None or not (args.publication_order or args.check_publication_order
+                                     or args.embedding_msrv),
             "release tag validation cannot use a metadata-only mode")
     root = Path(__file__).resolve().parents[1]
     version, packages, graph = load_workspace(root)
+    if args.embedding_msrv:
+        msrv, members = check_embedding_msrv(root, packages)
+        print(f"Embedding MSRV consistency passed: Rust {msrv} for " + ", ".join(members))
+        return
     if args.pre_tag and args.tag is None:
         args.tag = f"v{version}"
     order = publication_order(packages, graph)

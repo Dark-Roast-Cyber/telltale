@@ -1,13 +1,38 @@
 #!/bin/sh
 set -eu
 
-[ "$#" -eq 0 ] || { echo 'usage: embedding-contract-check' >&2; exit 2; }
+usage() { echo 'usage: embedding-contract-check [--msrv | --print-msrv]' >&2; exit 2; }
+[ "$#" -le 1 ] || usage
 
-# RUSTUP_TOOLCHAIN=1.88.0 exercises the locked external supported subset, not
-# the CLI/workspace MSRV. The fixture lock was resolved with Cargo 1.88.0.
+# The external consumer declares the embedding crates' rust-version (the MSRV,
+# not a CLI promise); --msrv runs it on exactly that toolchain. Its lock holds
+# the newest releases that version allows (`make embedding-lock-update`).
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 manifest="$root/tests/embedding-consumer/Cargo.toml"
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"$root/target/embedding-contract-check"}
+declared_msrv() {
+    msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' "$manifest")
+    case "$msrv" in
+        *.*.*) ;;
+        *.*) msrv="$msrv.0" ;;
+        *) echo "No rust-version in $manifest" >&2; exit 1 ;;
+    esac
+}
+target=embedding-contract-check
+case "${1-}" in
+    '') ;;
+    --print-msrv) declared_msrv; printf '%s\n' "$msrv"; exit 0 ;;
+    --msrv)
+        declared_msrv
+        rustup run "$msrv" cargo --version >/dev/null 2>&1 || {
+            echo "Install Rust $msrv before the MSRV check: rustup toolchain install $msrv --profile minimal" >&2
+            exit 1
+        }
+        export RUSTUP_TOOLCHAIN="$msrv"
+        target=embedding-msrv-check
+        ;;
+    *) usage ;;
+esac
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"$root/target/$target"}
 # Leave temporary storage to the platform default unless the caller selects it.
 # A target directory may have writable, non-sticky ancestors unsafe for assignment.
 printf 'External embedding contracts: '

@@ -2,6 +2,7 @@
 name = "telltale-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Telltale embedding facade: discover, parse, and detect agentic coding activity in-process"
 license.workspace = true
 authors.workspace = true

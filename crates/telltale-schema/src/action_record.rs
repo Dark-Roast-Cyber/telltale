@@ -290,11 +290,11 @@ impl ActionRecordV1 {
         {
             return Err(identity("event_session_mismatch"));
         }
-        if let Some(id) = &self.session_event_id
-            && (*id != common.event_id
+        if self.session_event_id.as_ref().is_some_and(|id| {
+            *id != common.event_id
                 || chain != (self.detector_kind == "process_chain")
-                || !self.rule_ids.iter().all(|rule| rule_ids.contains(rule)))
-        {
+                || !self.rule_ids.iter().all(|rule| rule_ids.contains(rule))
+        }) {
             return Err(identity("event_link_mismatch"));
         }
         Ok(())

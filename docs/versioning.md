@@ -13,7 +13,7 @@ dependencies are prepared at `0.7.0-rc.3` for the prospective unused tag
 implementation landed in [PR #96](https://github.com/Dark-Roast-Cyber/telltale/pull/96),
 merge `883bab7cc846c06e30c3976385cceb9c387125f1`. Normal CI checks the exact
 reviewed source SHA, prospective release preflight, supported embedding contracts,
-the Rust 1.88 embedding subset and a fresh standalone Git consumer. A proposed
+the embedding MSRV on Linux, macOS and Windows, and a fresh standalone Git consumer. A proposed
 freeze must be recorded separately in Issue #87 after this preparation is reviewed,
 merged and checked at its exact commit. No RC3 freeze is accepted by this text.
 Windows installation defaults to the official stable Release; `-ReleaseTag` selects one exact published
@@ -105,12 +105,21 @@ stable promotion stay separate under Issue #87.
 
 ## Rust Toolchain Policy
 
-The current support policy is the current stable Rust toolchain used by CI. No
-minimum supported Rust version (MSRV) is promised and no `rust-version` field is
-set until a dedicated MSRV CI lane exists. The external supported subset of embedding
-contracts is separately qualified against Rust 1.88 (`make embedding-rust188-check`),
-which exercises only its explicit dependency subset and does not establish a global
-CLI/workspace MSRV promise.
+Telltale is built, tested and released with the toolchain pinned in
+`rust-toolchain.toml`. The CLI and Console promise no minimum supported Rust
+version (MSRV); build them with that toolchain.
+
+The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-sources`,
+`telltale-detect` and `telltale-core`) declare `rust-version = "1.85"`, the first
+Rust with their 2024 edition. Every CI run checks the independently locked
+external consumer, in all eight feature combinations, on exactly Rust 1.85.0 on
+Linux, macOS and Windows (`make embedding-msrv-check`). That lock holds the newest
+dependency releases Rust 1.85 can build (`make embedding-lock-update`). A host
+on an older Rust than current stable should resolve with Cargo's
+`incompatible-rust-versions = "fallback"` (the default with resolver 3) so that
+Cargo selects dependency releases its toolchain can build. Raising the embedding
+MSRV is a breaking change for the next planned minor line and is recorded in the
+changelog and migration guide.
 
 ## SemVer Policy
 

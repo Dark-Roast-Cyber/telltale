@@ -657,11 +657,12 @@ fn view(
             if tool
                 .name()
                 .is_some_and(|name| matches!(name, "exec" | "multi_tool_use.parallel"))
-                && let Some((commands, written, paths)) = script_actions(&command, budget)?
             {
-                command = commands;
-                out.put("authored_content", written);
-                out.put("file_path", paths);
+                if let Some((commands, written, paths)) = script_actions(&command, budget)? {
+                    command = commands;
+                    out.put("authored_content", written);
+                    out.put("file_path", paths);
+                }
             }
             budget.charge(command.len())?;
             let (command, authored) = strip_heredocs(&command);
@@ -734,9 +735,10 @@ fn script_actions(
         if let Some((_, value)) = object
             .split_once("cmd:")
             .or_else(|| object.split_once("\"cmd\":"))
-            && let Some(value) = script_literal(value, budget)?
         {
-            commands.push(value);
+            if let Some(value) = script_literal(value, budget)? {
+                commands.push(value);
+            }
         }
     }
     budget.charge(script.len())?;
@@ -925,10 +927,10 @@ fn structured_input(
             "edits" => {
                 if let JsonValue::Array(edits) = value {
                     for edit in edits {
-                        if let JsonValue::Object(edit) = edit
-                            && let Some(v) = edit.get("new_string").and_then(string)
-                        {
-                            out.put("authored_content", v.to_owned());
+                        if let JsonValue::Object(edit) = edit {
+                            if let Some(v) = edit.get("new_string").and_then(string) {
+                                out.put("authored_content", v.to_owned());
+                            }
                         }
                     }
                 }
@@ -2220,17 +2222,16 @@ fn downloaded_artifacts(
                             artifact = Some(path.into());
                             break;
                         }
-                        if token.starts_with('-')
-                            && !token.starts_with("--")
-                            && let Some(position) = token[1..].find('o')
-                        {
-                            let suffix = &token[position + 2..];
-                            artifact = if suffix.is_empty() {
-                                next()
-                            } else {
-                                Some(suffix.into())
-                            };
-                            break;
+                        if token.starts_with('-') && !token.starts_with("--") {
+                            if let Some(position) = token[1..].find('o') {
+                                let suffix = &token[position + 2..];
+                                artifact = if suffix.is_empty() {
+                                    next()
+                                } else {
+                                    Some(suffix.into())
+                                };
+                                break;
+                            }
                         }
                         if token == "-O" || token == "--remote-name" {
                             artifact = remote_basename(t);
@@ -2247,17 +2248,16 @@ fn downloaded_artifacts(
                             break;
                         }
                         // `-O` may close a flag cluster such as `-qO-`.
-                        if token.starts_with('-')
-                            && !token.starts_with("--")
-                            && let Some(position) = token[1..].find('O')
-                        {
-                            let suffix = &token[position + 2..];
-                            artifact = if suffix.is_empty() {
-                                next()
-                            } else {
-                                Some(suffix.into())
-                            };
-                            break;
+                        if token.starts_with('-') && !token.starts_with("--") {
+                            if let Some(position) = token[1..].find('O') {
+                                let suffix = &token[position + 2..];
+                                artifact = if suffix.is_empty() {
+                                    next()
+                                } else {
+                                    Some(suffix.into())
+                                };
+                                break;
+                            }
                         }
                     }
                     "invoke-webrequest" | "iwr" if token.eq_ignore_ascii_case("-OutFile") => {

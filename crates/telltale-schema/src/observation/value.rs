@@ -111,11 +111,14 @@ impl JsonValue {
         name: Option<&str>,
         value: &serde_json::Value,
     ) -> Result<Self, ObservationError> {
-        if let serde_json::Value::Object(members) = value
-            && let Some(fields) = authored_text_fields(name, |field| {
+        let authored = match value {
+            serde_json::Value::Object(members) => authored_text_fields(name, |field| {
                 members.get(field).map(serde_json::Value::as_str)
             })?
-        {
+            .map(|fields| (members, fields)),
+            _ => None,
+        };
+        if let Some((members, fields)) = authored {
             if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
                 return Err(ObservationError::bound(BoundDimension::ObjectMembers));
             }
@@ -150,10 +153,10 @@ impl JsonValue {
             }
             return Ok(Self::Object(converted));
         }
-        if let serde_json::Value::String(text) = value
-            && is_bare_text_tool(name)
-        {
-            return Self::try_from_source_message_text(text);
+        if let serde_json::Value::String(text) = value {
+            if is_bare_text_tool(name) {
+                return Self::try_from_source_message_text(text);
+            }
         }
         Self::try_from_source_value(value)
     }
@@ -623,14 +626,17 @@ pub(crate) fn bounded_tool_arguments_bytes(
     name: Option<&str>,
     value: &JsonValue,
 ) -> Result<usize, ObservationError> {
-    if let JsonValue::Object(members) = value
-        && let Some(fields) = authored_text_fields(name, |field| {
+    let authored = match value {
+        JsonValue::Object(members) => authored_text_fields(name, |field| {
             members.get(field).map(|item| match item {
                 JsonValue::String(text) => Some(text.as_str()),
                 _ => None,
             })
         })?
-    {
+        .map(|fields| (members, fields)),
+        _ => None,
+    };
+    if let Some((members, fields)) = authored {
         if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
             return Err(ObservationError::bound(BoundDimension::ObjectMembers));
         }
@@ -662,10 +668,10 @@ pub(crate) fn bounded_tool_arguments_bytes(
             .checked_add(text_bytes)
             .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes));
     }
-    if let JsonValue::String(text) = value
-        && is_bare_text_tool(name)
-    {
-        return bounded_message_text_bytes(text);
+    if let JsonValue::String(text) = value {
+        if is_bare_text_tool(name) {
+            return bounded_message_text_bytes(text);
+        }
     }
     let bytes = bounded_json_bytes(value, 1)?;
     if bytes > LOCAL_MAX_VALUE_BYTES {

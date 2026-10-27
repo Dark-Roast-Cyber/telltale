@@ -24,9 +24,10 @@ preparation. Before recording a proposed freeze, merge the reviewed version
 preparation, recheck that the tag/Release is unused, and obtain fresh CI/CodeQL
 at the exact merged SHA. The normal CI prospective-source job checks that SHA,
 trusted full history, canonical local release context, release preflight,
-independently locked embedding contracts, the supported Rust 1.88 subset and
-a fresh exact-SHA standalone Git consumer. Preflight skips downloaded-archive
-inspection when unpublished archives are absent; it does not qualify artifacts.
+independently locked embedding contracts and a fresh exact-SHA standalone Git
+consumer; the embedding MSRV job checks Rust 1.85.0 on Linux, macOS and Windows.
+Preflight skips downloaded-archive inspection when unpublished archives are
+absent; it does not qualify artifacts.
 No release workflow is dispatched. Preserve all RC2 pins and historical evidence.
 
 A public release should include the open-source core, public technical
@@ -210,9 +211,8 @@ The 0.7 source scope remains the six families/eight exact identities in the
 Do not restore retired adapters or expand scope to Event 4 or active blocking.
 Event 3 remains the production contract. Keep action-promotion scores distinct
 from native finding assessments and Event 3 session scores. Retain
-`rusqlite = "=0.32.1"`, SQLx coexistence, and the Rust 1.88 supported embedding
-subset; do not claim the CLI/workspace has Rust 1.88 MSRV or full historical
-client parity.
+`rusqlite = "=0.32.1"`, SQLx coexistence, and the Rust 1.85 embedding MSRV; do
+not claim a CLI MSRV or full historical client parity.
 
 Before stable qualification, finish supported-source synthetic fixture coverage
 and make documentation limits truthful. OpenClaw and Qwen CLI remain
@@ -275,7 +275,7 @@ separate open PR is not by itself a release blocker.
 The published `v0.7.0-rc.2` embedding facade is an intended 0.7.0 contract, not
 qualification evidence for unpublished `0.7.0-rc.3`. Before claiming the upstream facade qualified, bind
 results to the reviewed candidate SHA and retain results for
-`make embedding-contract-check`, the explicit Rust 1.88 embedding subset, and an
+`make embedding-contract-check`, the embedding MSRV job on all three platforms, and an
 exact standalone Git consumer using strict Event 3 and the public facade. Native
 platform/artifact qualification is a separate upstream gate. Integrated
 downstream-consumer host validation is a separate integration gate, not a

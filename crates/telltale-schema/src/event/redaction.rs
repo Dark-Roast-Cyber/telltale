@@ -435,12 +435,13 @@ struct MarkerCheckState {
 
 impl MarkerCheckState {
     fn check(&mut self, text: &str, field: &str, markers: &[ControlledMarker<'_>]) -> bool {
-        if self.match_info.is_none()
-            && let Some(marker) = markers
+        if self.match_info.is_none() {
+            if let Some(marker) = markers
                 .iter()
                 .find(|marker| !marker.value.is_empty() && text.contains(marker.value))
-        {
-            self.match_info = Some((field.to_string(), safe_report_label(marker.id)));
+            {
+                self.match_info = Some((field.to_string(), safe_report_label(marker.id)));
+            }
         }
         self.match_info.is_some()
     }
@@ -857,10 +858,10 @@ fn redact_classified_assignment(
             REDACTED_SECRET
         );
     }
-    if let Some(quote @ (b'"' | b'\'')) = value.as_bytes().first().copied()
-        && value.as_bytes().last() == Some(&quote)
-        && value.len() >= 2
-    {
+    let quoted = value.len() >= 2
+        && matches!(value.as_bytes().first(), Some(b'"' | b'\''))
+        && value.as_bytes().first() == value.as_bytes().last();
+    if quoted {
         let opening_end = classified.source_offset(value_start + 1);
         let closing_start = classified.source_offset(value_end - 1);
         return format!(
@@ -1344,11 +1345,10 @@ fn find_encoded_url_candidate(
 
         let end = encoded_url_candidate_end(text, start);
         let candidate = &text[start..end];
-        if candidate.contains('%')
-            && url_prefix_and_authority(candidate).is_none()
-            && let Some(decoded) = decode_url_candidate_until_scheme(candidate)
-        {
-            return Some((start, end, decoded));
+        if candidate.contains('%') && url_prefix_and_authority(candidate).is_none() {
+            if let Some(decoded) = decode_url_candidate_until_scheme(candidate) {
+                return Some((start, end, decoded));
+            }
         }
     }
     None
@@ -1512,8 +1512,9 @@ fn decoded_authority_has_structural_delimiter(authority: &str) -> bool {
 }
 
 fn url_prefix_and_authority(url: &str) -> Option<(&str, &str)> {
-    if let Some((scheme, rest)) = url.split_once("://")
-        && is_supported_url_scheme(scheme)
+    if let Some((scheme, rest)) = url
+        .split_once("://")
+        .filter(|(scheme, _)| is_supported_url_scheme(scheme))
     {
         let prefix_length = scheme.len() + 3;
         return Some((&url[..prefix_length], rest));
@@ -1776,14 +1777,14 @@ fn percent_decode_once(value: &str) -> String {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) =
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-        {
-            decoded.push(high * 16 + low);
-            index += 3;
-            continue;
+            {
+                decoded.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
         }
         decoded.push(bytes[index]);
         index += 1;

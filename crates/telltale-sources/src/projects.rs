@@ -95,10 +95,10 @@ fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
-    if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix("~/"))
-        && let Some(home) = home
-    {
-        return home.join(rest);
+    if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix("~/")) {
+        if let Some(home) = home {
+            return home.join(rest);
+        }
     }
     path.to_path_buf()
 }

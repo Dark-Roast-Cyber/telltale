@@ -299,13 +299,15 @@ impl AccountingBuilder {
             .count
             .checked_add(1)
             .ok_or(AcquisitionError::AccountingOverflow)?;
-        if usage.first_timestamp.is_none()
-            && let Some(timestamp) = timestamp
-        {
-            if timestamp.len() > LOCAL_MAX_STRING_BYTES || timestamp.chars().any(char::is_control) {
-                return Err(AcquisitionError::InvalidContribution);
+        if usage.first_timestamp.is_none() {
+            if let Some(timestamp) = timestamp {
+                if timestamp.len() > LOCAL_MAX_STRING_BYTES
+                    || timestamp.chars().any(char::is_control)
+                {
+                    return Err(AcquisitionError::InvalidContribution);
+                }
+                usage.first_timestamp = Some((self.tool_order, timestamp.to_owned()));
             }
-            usage.first_timestamp = Some((self.tool_order, timestamp.to_owned()));
         }
         Ok(())
     }

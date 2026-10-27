@@ -79,25 +79,26 @@ pub fn evaluate_activity(
             budget.retain_text(name)?;
         }
         let mut deviation = None;
-        if accounting.coverage == AccountingCoverage::CompleteSource
-            && let Some(current) = baseline::accounting::summary(evaluation.client, session)
+        if accounting.coverage == AccountingCoverage::CompleteSource {
+            if let Some(current) = baseline::accounting::summary(evaluation.client, session)
                 .map_err(|_| ProcessingError::Evaluation)?
-        {
-            let previous = prior
-                .snapshots
-                .get(&baseline_snapshot_id(&current.key))
-                .filter(|previous| previous.key == current.key);
-            deviation = assess_baseline_deviation(previous, &current, config)
-                .map_err(|_| ProcessingError::Evaluation)?;
-            match summaries.entry(current.key.clone()) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(current);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry
-                        .get_mut()
-                        .checked_merge_from(current)
-                        .map_err(|_| ProcessingError::Evaluation)?;
+            {
+                let previous = prior
+                    .snapshots
+                    .get(&baseline_snapshot_id(&current.key))
+                    .filter(|previous| previous.key == current.key);
+                deviation = assess_baseline_deviation(previous, &current, config)
+                    .map_err(|_| ProcessingError::Evaluation)?;
+                match summaries.entry(current.key.clone()) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(current);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        entry
+                            .get_mut()
+                            .checked_merge_from(current)
+                            .map_err(|_| ProcessingError::Evaluation)?;
+                    }
                 }
             }
         }

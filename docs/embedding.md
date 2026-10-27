@@ -82,8 +82,9 @@ Consumers that already import `telltale::Pipeline` can alias the package during
 migration: `telltale = { package = "telltale-core", git = "…", rev = "<commit>" }`.
 
 Gates: `make embedding-contract-check` tests eight feature combinations and is
-part of `ci-local`. `make embedding-rust188-check` qualifies this external subset
-on Rust 1.88.0; it is not a CLI/workspace MSRV promise. External coverage lives in
+part of `ci-local`. `make embedding-msrv-check` runs the same combinations on the
+embedding crates' declared `rust-version` (Rust 1.85.0), which CI checks on Linux,
+macOS and Windows; it is not a CLI MSRV promise. External coverage lives in
 [`tests/embedding-consumer`](../tests/embedding-consumer/tests).
 
 ## Quick start

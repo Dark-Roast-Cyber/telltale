@@ -2,6 +2,7 @@
 name = "telltale-schema"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Telltale canonical event model and normalized record schema"
 license.workspace = true
 authors.workspace = true
