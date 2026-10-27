@@ -307,6 +307,12 @@
 - Digest-bound receipts, staged replacement and transaction recovery. Default
   uninstall retains data; confirmed purge removes owned generated data, with
   configuration requiring separate explicit selection. Legacy installs are retained.
+- Windows reinstallation no longer fails with `0x80070020` when another process
+  briefly reads the new staged executable while sharing delete access (#147).
+  `File.Replace` opened that file with no sharing, so any such reader refused it.
+  The installer now performs the same journaled backup and rename under shared
+  delete handles. A reader that forbids renaming still blocks the swap before
+  either file is renamed.
 - Synthetic Windows lifecycle regressions and disposable-runner scheduling
   validation. ZIP inventory and Event 3.0 are unchanged. OpenCode persisted
   cursor/token compatibility is covered by the current

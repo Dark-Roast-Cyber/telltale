@@ -89,7 +89,7 @@ function Start-TestPreRollbackCapture {
     $lines = [IO.File]::ReadAllLines($installer)
     $replacement = @(); $rollback = @()
     for ($index = 0; $index -lt $lines.Length; $index++) {
-        if ($lines[$index].Trim() -ceq 'if (Test-Path -LiteralPath $binary) { [IO.File]::Replace($stage, $binary, (Join-Path $install ''previous.exe'')) }') { $replacement += $index + 1 }
+        if ($lines[$index].Trim() -ceq 'if (Test-Path -LiteralPath $binary) { [TelltaleLifecycle.Native]::ReplaceExecutable($stage, $binary, (Join-Path $install ''previous.exe'')) }') { $replacement += $index + 1 }
         if ($lines[$index].Trim() -ceq 'try { Restore-TTTransaction $install $data | Out-Null }') { $rollback += $index + 1 }
     }
     if ($replacement.Count -ne 1 -or $rollback.Count -ne 1 -or $rollback[0] -le $replacement[0] -or

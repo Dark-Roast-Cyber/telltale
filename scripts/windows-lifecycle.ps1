@@ -69,10 +69,40 @@ namespace TelltaleLifecycle {
         [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
         static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr parameter,
             string text, uint flags, uint timeout, out UIntPtr result);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security,
+            uint disposition, uint flags, IntPtr template);
         public static void SingleLink(FileStream stream) {
             Info info;
             if (!GetFileInformationByHandle(stream.SafeFileHandle, out info) || info.Links != 1)
                 throw new IOException("File must have exactly one link.");
+        }
+        static SafeFileHandle OpenForRename(string path, string role) {
+            // DELETE|SYNCHRONIZE|FILE_READ_ATTRIBUTES, share read/write/delete,
+            // OPEN_EXISTING, and the exact name rather than a reparse target.
+            SafeFileHandle handle = CreateFile(path, 0x00110080, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+            if (handle.IsInvalid) {
+                int result = Marshal.GetHRForLastWin32Error();
+                handle.Dispose();
+                throw new IOException(role + " cannot be renamed.", result);
+            }
+            return handle;
+        }
+        public static void ReplaceExecutable(string replacement, string replaced, string backup) {
+            // File.Replace opens the replacement with no sharing, so a reader that
+            // shares read, write and delete still refuses it. Perform the same two
+            // renames under shared DELETE handles: a user that forbids renaming fails
+            // here before any change, and later openers must also permit renaming.
+            using (OpenForRename(replacement, "Replacement executable"))
+            using (OpenForRename(replaced, "Installed executable")) {
+                File.Move(replaced, backup);
+                try { File.Move(replacement, replaced); }
+                catch {
+                    // The journal remains authoritative if this best-effort undo fails.
+                    try { File.Move(backup, replaced); } catch { }
+                    throw;
+                }
+            }
         }
         public static void EnvironmentChanged() {
             UIntPtr result;
