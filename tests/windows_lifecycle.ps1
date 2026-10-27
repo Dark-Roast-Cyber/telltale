@@ -140,7 +140,7 @@ function Get-TestLockUsers([string]$Path, $Refusal = $null, [switch]$BeforeRollb
         $report.code = $result.Code
         $report.end_code = $result.EndCode
         $report.truncated = $result.Truncated
-        foreach ($user in $result.Processes) { $report.processes += @{ pid = $user.Pid; start_filetime = $user.StartFileTime } }
+        foreach ($user in $result.Processes) { $report.processes += @{ pid = $user.Pid; start_filetime = $user.StartFileTime; image = $user.Image } }
     } catch { $report.reason = 'native attribution unavailable'; $report.exceptions = @(Get-TestExceptionChain $_.Exception) }
     return $report
 }
@@ -161,6 +161,11 @@ function Get-TestFileDiagnostic([string]$Name) {
                     try { $entry.lock_users = Get-TestLockUsers $path $probeFailure }
                     catch { $entry.lock_users = @{ status = 'unknown'; reason = 'synthetic stage validation or attribution failed'; processes = @(); exceptions = @(Get-TestExceptionChain $_.Exception) } }
                 }
+            }
+            if ($Name -cin @('telltale.exe', 'staged.exe', 'previous.exe')) {
+                # Distinguishes a sharing reader from a running image or a user that blocks replacement.
+                try { [TelltaleLifecycle.Native]::AssertReplaceable($path); $entry.replace_probe = 'available' }
+                catch { $entry.replace_probe = 'refused'; $entry.replace_probe_error = @(Get-TestExceptionChain $_.Exception) }
             }
             if ($Name -cin @('install-receipt.json', 'transaction.json')) {
                 try {
@@ -273,7 +278,30 @@ namespace TelltaleLifecycleTests {
             [In, Out] ProcessInfo[] processes, out uint rebootReasons);
         [DllImport("rstrtmgr.dll")]
         static extern uint RmEndSession(uint session);
-        public class Identity { public uint Pid; public long StartFileTime; }
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr handle);
+        // Only a reported PID whose live creation time matches yields an image
+        // basename; exited, reused or inaccessible identities stay explicit unknowns.
+        static string ImageName(uint pid, long started) {
+            IntPtr process = OpenProcess(0x1000, false, pid);
+            if (process == IntPtr.Zero) return "unknown: not accessible";
+            try {
+                long created, exited, kernel, user;
+                if (!GetProcessTimes(process, out created, out exited, out kernel, out user)) return "unknown: start time unavailable";
+                if (created != started) return "unknown: identity changed";
+                var name = new StringBuilder(1024);
+                uint size = 1024;
+                if (!QueryFullProcessImageName(process, 0, name, ref size)) return "unknown: image unavailable";
+                return Path.GetFileName(name.ToString());
+            } finally { CloseHandle(process); }
+        }
+        public class Identity { public uint Pid; public long StartFileTime; public string Image; }
         public class Result {
             public string Status = "unknown", Stage = "start_session";
             public uint Code, EndCode;
@@ -299,10 +327,8 @@ namespace TelltaleLifecycleTests {
                 result.Processes = new Identity[retained];
                 for (int index = 0; index < retained; index++) {
                     var process = buffer[index].Process;
-                    result.Processes[index] = new Identity {
-                        Pid = process.Pid,
-                        StartFileTime = ((long)(uint)process.Started.dwHighDateTime << 32) | (uint)process.Started.dwLowDateTime
-                    };
+                    long started = ((long)(uint)process.Started.dwHighDateTime << 32) | (uint)process.Started.dwLowDateTime;
+                    result.Processes[index] = new Identity { Pid = process.Pid, StartFileTime = started, Image = ImageName(process.Pid, started) };
                 }
                 result.Stage = count == 0 ? "no_resource_users_reported" : "resource_users_reported";
                 if (count != 0) result.Status = "reported";
@@ -591,9 +617,9 @@ try {
         $users = Get-TestLockUsers $installed
         Assert-True ($users.status -cin @('reported', 'unknown') -and @($users.processes).Count -le 8) 'exact-file attribution has bounded explicit reported or unknown result'
         foreach ($user in @($users.processes)) {
-            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime') }).Count -eq 0) 'attribution exposes only resource-associated process identity'
+            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime', 'image') }).Count -eq 0 -and $user.image -cmatch '^(?:unknown: [a-z ]+|[^\\/:]{1,255})$') 'attribution exposes only process identity and an image basename or explicit unknown'
             if ($user.pid -eq $workerId) {
-                Assert-True ($user.start_filetime -eq $workerStart.ToFileTimeUtc()) 'reported controlled worker has the recorded start identity'
+                Assert-True ($user.start_filetime -eq $workerStart.ToFileTimeUtc() -and $user.image -ceq $engineName) 'reported controlled worker has the recorded start identity and engine image'
             }
         }
         foreach ($invalidTarget in @($binary, (Join-Path $temp 'telltale.exe'), (Join-Path $layout.InstallDirectory 'install-receipt.json'), (Join-Path $layout.InstallDirectory '..\Application With Spaces\telltale.exe'))) {
@@ -685,7 +711,7 @@ try {
         Assert-True ($stageDiagnostic.exclusive_probe -ceq 'refused' -and $stageDiagnostic.lock_users.status -cin @('reported', 'unknown')) 'refused exact stage has bounded attribution or explicit unknown'
         Assert-True (@($stageDiagnostic.lock_users.processes).Count -le 8) 'staged-file attribution is bounded'
         foreach ($user in @($stageDiagnostic.lock_users.processes)) {
-            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime') }).Count -eq 0) 'stage attribution exposes only PID and start identity'
+            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime', 'image') }).Count -eq 0 -and $user.image -cmatch '^(?:unknown: [a-z ]+|[^\\/:]{1,255})$') 'stage attribution exposes only process identity and an image basename or explicit unknown'
         }
         Assert-True ($stageStream.CanRead -and (Get-TreeDigest $layout.InstallDirectory) -ceq $beforeStageDiagnostic) 'stage diagnostics preserve open lock and all protected bytes'
         Assert-Fails { Assert-TTUnlocked $stage } 'stage diagnostics do not release or remediate the lock'
@@ -796,6 +822,54 @@ try {
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant() -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'refused swap recovers only after explicit reader release'
     & $uninstaller @layout -Confirm:$false
+
+    # Managed executables require replaceability, not exclusivity: a transient reader
+    # that shares everything cannot block reinstall, rollback or removal, while a
+    # running image or a user that forbids deletion still can.
+    $layout = New-TestLayout 'shared-executable-reader'
+    & $installer @layout -DevelopmentBinary $binary
+    $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
+    $stage = Join-Path $layout.InstallDirectory 'staged.exe'
+    $backup = Join-Path $layout.InstallDirectory 'previous.exe'
+    $journalPath = Join-Path $layout.InstallDirectory 'transaction.json'
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $variantHash = Get-TTHash $variant
+    $readers = @()
+    try {
+        $readers += [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
+        Assert-Fails { Assert-TTUnlocked $installed } 'sharing reader still fails the exclusive probe kept for data and configuration'
+        & $installer @layout -DevelopmentBinary $variant
+        $current = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+        Assert-True ($current.id -ceq $previous.id -and $current.binary_sha256 -ceq $variantHash -and (Get-TTHash $installed) -ceq $variantHash -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $backup)) 'reinstall tolerates a sharing reader of the installed executable'
+    } finally { foreach ($reader in $readers) { $reader.Dispose() } }
+    # Emulate interruption after a complete swap, then roll back under sharing readers.
+    $next = ($current | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+    $next.binary_sha256 = $previous.binary_sha256
+    Write-TTJson $journalPath @{ previous = $current; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+    Copy-Item -LiteralPath $binary -Destination $stage
+    Set-TTCreatedOwner $stage
+    [TelltaleLifecycle.Native]::ReplaceExecutable($stage, $installed, $backup)
+    $readers = @()
+    try {
+        $readers += [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
+        $readers += [IO.File]::Open($backup, 'Open', 'Read', 'ReadWrite, Delete')
+        & $installer @layout -DevelopmentBinary $variant
+        $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+        Assert-True ($recovered.id -ceq $previous.id -and $recovered.binary_sha256 -ceq $variantHash -and (Get-TTHash $installed) -ceq $variantHash) 'rollback restores the journaled executable under sharing readers'
+        Assert-True (-not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage) -and -not (Test-Path -LiteralPath $backup)) 'rollback under sharing readers clears the transaction'
+        Assert-True (@($readers | Where-Object { -not $_.CanRead }).Count -eq 0) 'rollback leaves outside readers open'
+    } finally { foreach ($reader in $readers) { $reader.Dispose() } }
+    $reader = [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite')
+    try {
+        $beforeBlocked = Get-TreeDigest $layout.InstallDirectory
+        Assert-Fails { & $uninstaller @layout -Confirm:$false } 'reader that forbids deletion still blocks uninstall'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeBlocked) 'blocked uninstall preserves executable and receipt'
+    } finally { $reader.Dispose() }
+    $reader = [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
+    try {
+        & $uninstaller @layout -Confirm:$false
+        Assert-True (-not (Test-Path -LiteralPath $installed) -and -not (Test-Path -LiteralPath $layout.InstallDirectory) -and $reader.CanRead) 'uninstall removes the executable and owned root despite a sharing reader'
+    } finally { $reader.Dispose() }
 
     $layout = New-TestLayout 'partial-rollback'
     Invoke-TestDiagnosticInstall $layout $binary

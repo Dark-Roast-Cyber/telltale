@@ -94,7 +94,7 @@ try {
     $taskWasEnabled = $null -ne $task -and $task.Enabled
     if ($null -eq $task -and $null -ne $previous) { $previous.task_xml = $null }
     $binary = Join-Path $install 'telltale.exe'
-    Assert-TTUnlocked $binary
+    Assert-TTReplaceable $binary
     $id = if ($null -ne $previous) { $previous.id } else { [guid]::NewGuid().ToString() }
     $directoryOwned = if ($null -ne $previous) { $previous.PSObject.Properties['directory_created'] -and $previous.directory_created }
         else { $createdDirectory -or ($null -ne $recovery -and $recovery.DirectoryCreated) }
