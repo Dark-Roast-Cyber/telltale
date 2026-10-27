@@ -30,7 +30,7 @@ repository = "https://github.com/Dark-Roast-Cyber/telltale"
 
 [workspace.dependencies]
 regex = "1.11"
-rusqlite = { version = "=0.32.1", features = ["bundled"] }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # YAML Organization successor; Cargo's rename preserves the Serde YAML imports.
