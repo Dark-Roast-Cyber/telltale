@@ -79,10 +79,7 @@ impl RetentionBudget {
         }
     }
 
-    #[allow(
-        deprecated,
-        reason = "try_update is unavailable on the supported Rust 1.88 embedding subset"
-    )]
+    #[allow(deprecated, reason = "try_update is unavailable on the embedding MSRV")]
     pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ProcessingError> {
         if self
             .work_bytes
@@ -480,11 +477,11 @@ fn evaluate_source_inner(
                     observation.stage().as_str()
                 ))
                 .or_default() += 1;
-            if let ObservationBody::Tool(tool) = observation.body()
-                && let Some(name) = tool.name()
-            {
-                RetentionBudget::validate_text(name)?;
-                tools.insert(name);
+            if let ObservationBody::Tool(tool) = observation.body() {
+                if let Some(name) = tool.name() {
+                    RetentionBudget::validate_text(name)?;
+                    tools.insert(name);
+                }
             }
         }
         for name in tools {

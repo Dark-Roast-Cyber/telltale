@@ -227,12 +227,9 @@ fn process_source_inner(
         // evaluating or projecting it exceeds the work budget or retained
         // capacity, evaluate a smaller one. Every attempt must shrink the
         // window, so this always ends.
-        if over_capacity
-            && let Some(bounds) = sqlite
-            && let Some(bytes) = window
-            && bytes > 1
-            && previous_window.is_none_or(|previous| bytes < previous)
-        {
+        if let Some((bounds, bytes)) = sqlite.zip(window).filter(|&(_, bytes)| {
+            over_capacity && bytes > 1 && previous_window.is_none_or(|previous| bytes < previous)
+        }) {
             previous_window = Some(bytes);
             sqlite = Some(OpenCodeSqliteReadOptions {
                 message_window_bytes: Some(bytes / 2),
@@ -243,10 +240,7 @@ fn process_source_inner(
         // capacity: quarantine its rows by coordinates, like rows over a
         // size bound, so one row cannot stop a forensic drain. The same
         // selection is re-read and evaluated without them.
-        else if over_capacity
-            && let Some(bounds) = sqlite
-            && let Some(units) = units
-        {
+        else if let (true, Some(bounds), Some(units)) = (over_capacity, sqlite, units) {
             let mut batch = acquire_opencode_sqlite(
                 &resolved,
                 AcquisitionOptions::new(observed_at.clone()),

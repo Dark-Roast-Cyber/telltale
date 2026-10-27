@@ -233,8 +233,11 @@ impl ProducerProvenanceManifestV1 {
         {
             return Err(ProducerProvenanceError::InvalidHash);
         }
-        if let Some(name) = &self.rules.active_policy_name
-            && !is_canonical_opaque_identifier_for_kind("policy", name)
+        if self
+            .rules
+            .active_policy_name
+            .as_ref()
+            .is_some_and(|name| !is_canonical_opaque_identifier_for_kind("policy", name))
         {
             return Err(ProducerProvenanceError::InvalidPublicLabel);
         }

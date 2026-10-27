@@ -1854,12 +1854,12 @@ fn is_schema_valid_telltale_version(value: &str) -> bool {
     let (version, build) = value
         .split_once('+')
         .map_or((value, None), |(version, build)| (version, Some(build)));
-    if let Some(build) = build
-        && (build.is_empty()
+    if build.is_some_and(|build| {
+        build.is_empty()
             || !build
                 .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')))
-    {
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    }) {
         return false;
     }
 
@@ -1868,12 +1868,12 @@ fn is_schema_valid_telltale_version(value: &str) -> bool {
         .map_or((version, None), |(core, prerelease)| {
             (core, Some(prerelease))
         });
-    if let Some(prerelease) = prerelease
-        && (prerelease.is_empty()
+    if prerelease.is_some_and(|prerelease| {
+        prerelease.is_empty()
             || !prerelease
                 .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')))
-    {
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    }) {
         return false;
     }
 
@@ -3566,9 +3566,10 @@ mod tests {
                 }
             }
             serde_json::Value::Object(values) => {
-                if let Some(event_type) = values.get("event_type")
-                    && let Some(event_type) =
-                        event_type.get("const").and_then(|value| value.as_str())
+                if let Some(event_type) = values
+                    .get("event_type")
+                    .and_then(|event_type| event_type.get("const"))
+                    .and_then(|value| value.as_str())
                 {
                     event_types.insert(event_type.to_string());
                 }

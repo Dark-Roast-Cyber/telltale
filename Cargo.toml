@@ -21,6 +21,8 @@ default-members = [
 [workspace.package]
 version = "0.7.0-rc.3"
 edition = "2024"
+# Embedding crates only; the CLI and console build with rust-toolchain.toml.
+rust-version = "1.85"
 license = "Apache-2.0"
 authors = ["Dark Roast Cyber"]
 homepage = "https://github.com/Dark-Roast-Cyber/telltale"
@@ -34,7 +36,7 @@ serde_json = "1.0"
 # YAML Organization successor; Cargo's rename preserves the Serde YAML imports.
 serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 jsonschema = { version = "0.60.1", default-features = false }
-sha2 = "0.11.1"
+sha2 = "0.11"
 flate2 = "1.0"
 getrandom = "0.4.3"
 hmac = "0.13"

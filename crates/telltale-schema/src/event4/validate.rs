@@ -801,8 +801,7 @@ fn validate_evidence(evidence: &Evidence) -> Result<(), Event4ValidationError> {
     if let Some(id) = &evidence.observation_id {
         require_observation_id(id)?;
     }
-    if let Some(ExtensionScalar::Number(value)) = evidence.value.as_ref()
-        && !value.is_finite()
+    if matches!(evidence.value.as_ref(), Some(ExtensionScalar::Number(value)) if !value.is_finite())
     {
         return Err(error(
             Event4ErrorCategory::Semantic,
@@ -873,10 +872,8 @@ fn validate_extensions(extensions: Option<&Extensions>) -> Result<(), Event4Vali
 }
 
 fn validate_finite(candidate: &Event4Candidate) -> Result<(), Event4ValidationError> {
-    if let EventBody::Finding(body) = &candidate.body
-        && body
-            .confidence_score
-            .is_some_and(|value| !value.is_finite())
+    if matches!(&candidate.body, EventBody::Finding(body)
+        if body.confidence_score.is_some_and(|value| !value.is_finite()))
     {
         return Err(error(
             Event4ErrorCategory::Semantic,

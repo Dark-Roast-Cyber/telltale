@@ -382,18 +382,21 @@ impl SelectorRegistry {
             SelectorId::ToolResult
                 | SelectorId::CompatToolResult
                 | SelectorId::GovernedFacet("tool.result.text")
-        ) && let ObservationBody::Tool(tool) = observation.body()
-            && (selector == SelectorId::ToolResult || tool.searchable_result().is_none())
-            && let Some(JsonValue::String(text)) = tool.result()
-        {
-            budget.charge(text.len())?;
-            return Ok(field(
-                selector,
-                observation,
-                "tool.result",
-                JsonValue::String(text.clone()),
-                selector.required_capability(),
-            ));
+        ) {
+            if let ObservationBody::Tool(tool) = observation.body() {
+                if selector == SelectorId::ToolResult || tool.searchable_result().is_none() {
+                    if let Some(JsonValue::String(text)) = tool.result() {
+                        budget.charge(text.len())?;
+                        return Ok(field(
+                            selector,
+                            observation,
+                            "tool.result",
+                            JsonValue::String(text.clone()),
+                            selector.required_capability(),
+                        ));
+                    }
+                }
+            }
         }
         // Closed scalar controls copy only their selected text and metadata,
         // not unrelated authored arguments. Structured facets keep the generic

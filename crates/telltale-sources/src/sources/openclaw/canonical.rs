@@ -357,8 +357,10 @@ fn content_part(block: &OpenClawContentBlock) -> Result<ContentPart, OpenClawCan
             if let Some(name) = name {
                 fields.push(("name".to_owned(), JsonValue::string(name)));
             }
-            if *input_present && let Some(input) = input {
-                fields.push(("input".to_owned(), value_to_json(input)?));
+            if *input_present {
+                if let Some(input) = input {
+                    fields.push(("input".to_owned(), value_to_json(input)?));
+                }
             }
             Ok(ContentPart::new(
                 ContentPartKind::ToolUse,
@@ -382,8 +384,10 @@ fn content_part(block: &OpenClawContentBlock) -> Result<ContentPart, OpenClawCan
             if let Some(tool_use_id) = tool_use_id {
                 fields.push(("tool_use_id".to_owned(), JsonValue::string(tool_use_id)));
             }
-            if *result_present && let Some(result) = result {
-                fields.push(("content".to_owned(), value_to_json(result)?));
+            if *result_present {
+                if let Some(result) = result {
+                    fields.push(("content".to_owned(), value_to_json(result)?));
+                }
             }
             if let Some(is_error) = is_error {
                 fields.push(("is_error".to_owned(), JsonValue::Bool(*is_error)));
@@ -610,10 +614,10 @@ fn common_builder(
     if let Some(correlation) = correlation {
         builder = builder.correlation(correlation);
     }
-    if let Some(timestamp) = &record.source_timestamp
-        && let Ok(timestamp) = SourceTimestamp::new(timestamp)
-    {
-        builder = builder.occurred_at(timestamp);
+    if let Some(timestamp) = &record.source_timestamp {
+        if let Ok(timestamp) = SourceTimestamp::new(timestamp) {
+            builder = builder.occurred_at(timestamp);
+        }
     }
     Ok(builder.child_ordinal(
         u32::try_from(child_ordinal)

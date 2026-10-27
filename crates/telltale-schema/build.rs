@@ -112,11 +112,9 @@ fn main() {
     if cfg!(windows) {
         println!("cargo:rerun-if-env-changed=PATHEXT");
     }
-    if packaged_sha(&manifest_dir).is_none()
-        && let Some(root) = checkout_root(&manifest_dir)
-        && let Ok(paths) = git_metadata_paths(&root)
-    {
-        for path in paths {
+    if packaged_sha(&manifest_dir).is_none() {
+        let paths = checkout_root(&manifest_dir).and_then(|root| git_metadata_paths(&root).ok());
+        for path in paths.into_iter().flatten() {
             println!("cargo:rerun-if-changed={}", path.display());
         }
     }

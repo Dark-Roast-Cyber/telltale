@@ -532,13 +532,14 @@ impl LocalEventFeed {
         let current_active = generations
             .last()
             .map(|generation| generation.identity.clone());
-        if let (Some(previous), Some(current)) = (&self.active_identity, &current_active)
-            && previous != current
-            && !generations
-                .iter()
-                .any(|generation| &generation.identity == previous)
-        {
-            context.notices.add(FeedNoticeCode::ReplacedGeneration);
+        if let (Some(previous), Some(current)) = (&self.active_identity, &current_active) {
+            if previous != current
+                && !generations
+                    .iter()
+                    .any(|generation| &generation.identity == previous)
+            {
+                context.notices.add(FeedNoticeCode::ReplacedGeneration);
+            }
         }
         self.active_identity = current_active;
 
@@ -617,10 +618,10 @@ impl LocalEventFeed {
             .is_some_and(|recent| recent.phase == RecentPhase::Scanning)
         {
             self.scan_recent(generations, context);
-            if self.recent_scan_complete(generations)
-                && let Some(recent) = self.recent.as_mut()
-            {
-                recent.phase = RecentPhase::Draining;
+            if self.recent_scan_complete(generations) {
+                if let Some(recent) = self.recent.as_mut() {
+                    recent.phase = RecentPhase::Draining;
+                }
             }
         }
 
@@ -634,9 +635,10 @@ impl LocalEventFeed {
                 .recent
                 .as_ref()
                 .is_some_and(|recent| recent.selected.is_empty())
-                && let Some(recent) = self.recent.as_mut()
             {
-                recent.phase = RecentPhase::Live;
+                if let Some(recent) = self.recent.as_mut() {
+                    recent.phase = RecentPhase::Live;
+                }
             }
         }
 
@@ -1323,12 +1325,10 @@ fn validate_config(config: &LocalEventFeedConfig) -> Result<(), LocalEventFeedEr
             code: LocalEventFeedErrorCode::InvalidLimit,
         });
     }
-    if let StartupMode::Recent {
-        max_events,
-        max_bytes,
-    } = config.startup
-        && (max_events == 0 || max_bytes == 0)
-    {
+    if matches!(
+        config.startup,
+        StartupMode::Recent { max_events, max_bytes } if max_events == 0 || max_bytes == 0
+    ) {
         return Err(LocalEventFeedError {
             code: LocalEventFeedErrorCode::InvalidRecentLimit,
         });
@@ -1387,38 +1387,38 @@ fn process_generation(
         cursor.complete = false;
         cursor.partial_reported = false;
     }
-    if truncated
-        && let Some(minimum) = options.minimum_offset
-        && cursor.offset == minimum
-        && length >= minimum
-    {
-        set_minimum_boundary(cursor, minimum, &mut file, context);
-        floor_boundary_reset = true;
-    }
-    if let Some(minimum) = options.minimum_offset
-        && cursor.offset < minimum
-    {
-        if length < minimum {
-            if let Some(target) = options.scan_target.as_deref_mut() {
-                *target = length;
+    if truncated {
+        if let Some(minimum) = options.minimum_offset {
+            if cursor.offset == minimum && length >= minimum {
+                set_minimum_boundary(cursor, minimum, &mut file, context);
+                floor_boundary_reset = true;
             }
-            cursor.offset = length;
-            cursor.safe_offset = length;
-            cursor.frame_start = length;
+        }
+    }
+    if let Some(minimum) = options.minimum_offset {
+        if cursor.offset < minimum {
+            if length < minimum {
+                if let Some(target) = options.scan_target.as_deref_mut() {
+                    *target = length;
+                }
+                cursor.offset = length;
+                cursor.safe_offset = length;
+                cursor.frame_start = length;
+                cursor.frame.clear();
+                cursor.discarding = false;
+                cursor.skipping_until_lf = false;
+                cursor.complete = false;
+                return;
+            }
+            cursor.offset = minimum;
+            cursor.safe_offset = minimum;
+            cursor.frame_start = minimum;
             cursor.frame.clear();
             cursor.discarding = false;
-            cursor.skipping_until_lf = false;
+            set_minimum_boundary(cursor, minimum, &mut file, context);
             cursor.complete = false;
-            return;
+            floor_boundary_reset = true;
         }
-        cursor.offset = minimum;
-        cursor.safe_offset = minimum;
-        cursor.frame_start = minimum;
-        cursor.frame.clear();
-        cursor.discarding = false;
-        set_minimum_boundary(cursor, minimum, &mut file, context);
-        cursor.complete = false;
-        floor_boundary_reset = true;
     }
     let mut stop_offset = options.stop_offset;
     let mut scan_target_shrunk = false;
@@ -1430,19 +1430,21 @@ fn process_generation(
             *target = length;
             scan_target_shrunk = true;
         }
-        if scan_target_shrunk && let Some(minimum) = options.minimum_offset {
-            if length < minimum {
-                cursor.offset = length;
-                cursor.safe_offset = length;
-                cursor.frame_start = length;
-                cursor.frame.clear();
-                cursor.discarding = false;
-                cursor.skipping_until_lf = false;
-                cursor.complete = false;
-                return;
-            }
-            if cursor.offset == minimum && !floor_boundary_reset {
-                set_minimum_boundary(cursor, minimum, &mut file, context);
+        if scan_target_shrunk {
+            if let Some(minimum) = options.minimum_offset {
+                if length < minimum {
+                    cursor.offset = length;
+                    cursor.safe_offset = length;
+                    cursor.frame_start = length;
+                    cursor.frame.clear();
+                    cursor.discarding = false;
+                    cursor.skipping_until_lf = false;
+                    cursor.complete = false;
+                    return;
+                }
+                if cursor.offset == minimum && !floor_boundary_reset {
+                    set_minimum_boundary(cursor, minimum, &mut file, context);
+                }
             }
         }
         stop_offset = Some(*target);
@@ -1707,12 +1709,12 @@ fn emit_body(
         }
         return;
     }
-    if dedup.len() >= max_dedup_entries
-        && let Some(oldest) = dedup_order.pop_front()
-    {
-        dedup.remove(&oldest);
-        context.dedup_evictions = context.dedup_evictions.saturating_add(1);
-        context.notices.add(FeedNoticeCode::DedupEvicted);
+    if dedup.len() >= max_dedup_entries {
+        if let Some(oldest) = dedup_order.pop_front() {
+            dedup.remove(&oldest);
+            context.dedup_evictions = context.dedup_evictions.saturating_add(1);
+            context.notices.add(FeedNoticeCode::DedupEvicted);
+        }
     }
     dedup.insert(event_id.clone(), digest);
     dedup_order.push_back(event_id);
