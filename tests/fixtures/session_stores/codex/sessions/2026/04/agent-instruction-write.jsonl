@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"synthetic-instruction-write","timestamp":"2026-04-04T08:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-instruction-write","timestamp":"2026-04-04T08:00:01Z","payload":{"type":"user_message","message":"Update the repository agent instructions with the approved test command."}}
+{"type":"event_msg","session_id":"synthetic-instruction-write","timestamp":"2026-04-04T08:00:02Z","payload":{"type":"tool_call","tool_name":"write_file","arguments":"{\"file_path\":\"/workspace/AGENTS.md\",\"content\":\"Run cargo test before review. SYNTHETIC-ALERT-PRIVATE\"}","message":"Write the requested agent instructions."}}

@@ -1454,14 +1454,14 @@ fn evaluated_matches_require_observation_identity_before_materialization() {
 fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
     let rules = telltale_rules::load_default_rule_set().expect("bundled rules");
     let export = rules.compatibility_export();
-    assert_eq!(export.rules().len(), 23);
-    assert_eq!(export.modifiers().len(), 8);
+    assert_eq!(export.rules().len(), 25);
+    assert_eq!(export.modifiers().len(), 9);
     let matcher_count = export
         .rules()
         .iter()
         .map(|rule| rule.matchers.len())
         .sum::<usize>();
-    assert_eq!(matcher_count, 62);
+    assert_eq!(matcher_count, 64);
     let targets = export
         .rules()
         .iter()
@@ -1478,9 +1478,9 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             ("command", 20),
             ("file_path", 3),
             ("tool_name", 2),
-            ("tool_result", 7),
+            ("tool_result", 8),
             ("url", 3),
-            ("written_path", 1),
+            ("written_path", 2),
         ])
     );
     let severities =
@@ -1493,7 +1493,12 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             });
     assert_eq!(
         severities,
-        BTreeMap::from([("high", 16), ("low", 4), ("medium", 3)])
+        BTreeMap::from([
+            ("high", 16),
+            ("informational", 1),
+            ("low", 4),
+            ("medium", 4),
+        ])
     );
     let classes = export
         .rules()
@@ -1507,7 +1512,7 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
         BTreeMap::from([
             ("policy_violation", 1),
             ("security_detection", 20),
-            ("threat_hunting", 2),
+            ("threat_hunting", 4),
         ])
     );
     assert_eq!(export.rules().iter().map(|rule| rule.score).min(), Some(0));
