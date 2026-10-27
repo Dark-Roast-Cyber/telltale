@@ -83,6 +83,56 @@ class VersionConsistency(unittest.TestCase):
         with self.assertRaises(ValueError):
             GATE["publication_order"](packages, graph)
 
+    def test_embedding_msrv_covers_the_facade_build_graph(self):
+        packages = {
+            "telltale-core": {"dependencies": [
+                {"name": "schema", "kind": None}, {"name": "helper", "kind": "dev"},
+                {"name": "serde", "kind": None}]},
+            "schema": {"dependencies": [{"name": "build-helper", "kind": "build"}]},
+            "build-helper": {"dependencies": []},
+            "helper": {"dependencies": []},
+            "cli": {"dependencies": [{"name": "telltale-core", "kind": None}]},
+        }
+        self.assertEqual(GATE["embedding_members"](packages),
+                         {"telltale-core", "schema", "build-helper"})
+        inherit = {"workspace": True}
+        declared = {"telltale-core": inherit, "schema": inherit, "build-helper": inherit}
+        check = GATE["validate_embedding_msrv"]
+        check("1.85", declared, packages, "1.85")
+        check("1.85.0", declared, packages, "1.85.0")
+        for msrv, members, consumer in [
+            (None, declared, None), ("1.85.x", declared, "1.85.x"),
+            ("1.85", {**declared, "build-helper": "1.85"}, "1.85"),
+            ("1.85", {**declared, "schema": None}, "1.85"),
+            ("1.85", declared, "1.88"), ("1.85", declared, None),
+        ]:
+            with self.subTest(msrv=msrv, members=members, consumer=consumer), \
+                    self.assertRaises(ValueError):
+                check(msrv, members, packages, consumer)
+        with self.assertRaisesRegex(ValueError, "embedding member missing"):
+            GATE["embedding_members"]({"cli": {"dependencies": []}})
+
+    def test_embedding_msrv_reads_workspace_members_and_consumer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "core").mkdir()
+            (root / "tests/embedding-consumer").mkdir(parents=True)
+            (root / "Cargo.toml").write_text('[workspace.package]\nrust-version = "1.85"\n')
+            core = root / "core/Cargo.toml"
+            consumer = root / "tests/embedding-consumer/Cargo.toml"
+            packages = {"telltale-core": {"manifest_path": str(core), "dependencies": []}}
+            check = GATE["check_embedding_msrv"]
+            core.write_text('[package]\nrust-version.workspace = true\n')
+            consumer.write_text('[package]\nrust-version = "1.85"\n')
+            self.assertEqual(check(root, packages), ("1.85", ["telltale-core"]))
+            consumer.write_text('[package]\nrust-version = "1.88"\n')
+            with self.assertRaisesRegex(ValueError, "consumer rust-version drift"):
+                check(root, packages)
+            consumer.write_text('[package]\nrust-version = "1.85"\n')
+            core.write_text('[package]\nrust-version = "1.85"\n')
+            with self.assertRaisesRegex(ValueError, "inherit the workspace rust-version"):
+                check(root, packages)
+
     def test_real_preflight_tag_review_rejects_drift(self):
         result = subprocess.run(
             ["make", "--silent", "release-tag-review", "PUBLIC_RELEASE_TAG=v999.0.0"],

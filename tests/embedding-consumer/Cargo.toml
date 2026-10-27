@@ -2,7 +2,7 @@
 name = "telltale-embedding-consumer"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.85"
 publish = false
 
 # Resolve as an external application, independently of the CLI's features/lock.

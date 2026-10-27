@@ -1,0 +1,6 @@
+# Only the embedding crates declare rust-version; the CLI, console and tests
+# build with rust-toolchain.toml. Without this, Cargo would resolve this whole
+# lock against that lowest member rust-version. The embedding floor is proven by
+# tests/embedding-consumer's own lock (`make embedding-lock-update`).
+[resolver]
+incompatible-rust-versions = "allow"

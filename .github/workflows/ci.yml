@@ -249,6 +249,29 @@ jobs:
             --emit-activity --emit-session-risk-summary \
             --root tests/fixtures/session_stores
 
+  embedding-msrv:
+    name: Embedding MSRV (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('tests/embedding-consumer/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+      - name: Check the embedding crates on their declared rust-version
+        shell: bash
+        run: |
+          rustup toolchain install "$(sh scripts/embedding-contract-check --print-msrv)" --profile minimal
+          sh scripts/embedding-contract-check --msrv
+
   source-preflight:
     name: Prospective source preflight (exact SHA)
     runs-on: ubuntu-latest
@@ -331,11 +354,6 @@ jobs:
       - name: Check independently locked embedding contracts
         if: steps.identity.outputs.prospective == 'true'
         run: make --silent embedding-contract-check
-      - name: Check the supported Rust 1.88 embedding subset
-        if: steps.identity.outputs.prospective == 'true'
-        run: |
-          rustup toolchain install 1.88.0 --profile minimal
-          make --silent embedding-rust188-check
       - name: Check a fresh standalone Git consumer at the exact source
         if: steps.identity.outputs.prospective == 'true'
         run: |

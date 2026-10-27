@@ -182,6 +182,71 @@ fi
 }
 
 #[test]
+fn embedding_msrv_gate_runs_every_combination_on_the_declared_toolchain() {
+    let dir = fixture();
+    let consumer = dir.path().join("tests/embedding-consumer");
+    fs::create_dir_all(&consumer).unwrap();
+    fs::write(
+        consumer.join("Cargo.toml"),
+        "[package]\nname = \"consumer\"\nrust-version = \"1.85\"\n",
+    )
+    .unwrap();
+    for (name, script) in [
+        (
+            "cargo",
+            r#"#!/bin/sh
+set -eu
+printf '%s %s\n' "${RUSTUP_TOOLCHAIN-unset}" "$1" >> "$RECORD"
+if test "$1" = tree; then
+    case "$*" in
+        *opencode-sqlite*) printf 'telltale-sources v0.0.0 features=opencode-sqlite\n' ;;
+        *) printf 'telltale-sources v0.0.0 features=\n' ;;
+    esac
+    case "$*" in
+        *opencode-sqlite*|*protected-assignment*) printf 'rusqlite v0.32.1\nlibsqlite3-sys v0.30.1\n' ;;
+        *--prune*) : ;;
+        *sqlx-sqlite*) printf 'libsqlite3-sys v0.30.1\n' ;;
+    esac
+fi
+"#,
+        ),
+        (
+            "rustup",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"rustup $*\" >> \"$RECORD\"\ntest \"$FAULT\" != missing\n",
+        ),
+    ] {
+        let path = dir.path().join("bin").join(name);
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let script = "scripts/embedding-contract-check";
+
+    let (output, calls) = run(&dir, "sh", &[script, "--print-msrv"], "");
+    success(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "1.85.0\n");
+    assert!(calls.is_empty());
+
+    let (output, calls) = run(&dir, "sh", &[script, "--msrv"], "");
+    success(&output);
+    assert_eq!(calls[0], "rustup run 1.85.0 cargo --version");
+    let cargo = &calls[1..];
+    assert!(cargo.iter().all(|call| call.starts_with("1.85.0 ")));
+    assert_eq!(
+        cargo.iter().filter(|call| call.ends_with(" test")).count(),
+        8
+    );
+
+    let (output, calls) = run(&dir, "sh", &[script, "--msrv"], "missing");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Install Rust 1.85.0"));
+    assert_eq!(calls, ["rustup run 1.85.0 cargo --version"]);
+
+    let (output, calls) = run(&dir, "sh", &[script, "--msrv", "extra"], "");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(calls.is_empty());
+}
+
+#[test]
 fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
     let dir = fixture();
     let (output, calls) = run(

@@ -144,7 +144,7 @@ For hard-to-reproduce crashes, build with full debug before reproducing and keep
 the matching binary and symbols. Rebuilding afterward cannot recover debug data
 missing from an earlier crash. Changing debug levels can retain another artifact
 set; it does not remove older outputs. Keep validation logs outside disposable
-build outputs, and retain separate embedding and Rust 1.88 qualification targets.
+build outputs, and retain separate embedding and embedding MSRV targets.
 
 </details>
 

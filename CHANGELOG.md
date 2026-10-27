@@ -6,6 +6,10 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- The embedding crates declare `rust-version = "1.85"` and are checked on Rust
+  1.85.0 on Linux, macOS and Windows in every CI run; the previously qualified
+  floor was 1.88, checked only on Linux before a tag. The CLI and Console build with
+  the pinned toolchain and make no MSRV promise.
 - Operational settings can be deployed as `settings.d/*.yaml` files in any
   config root: community rules, process-chain detections, risk thresholds,
   operational alert thresholds, log rotation, install inventory, the activity,

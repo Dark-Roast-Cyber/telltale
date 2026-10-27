@@ -27,7 +27,7 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 .PHONY: telltale-console-check
 .PHONY: version-consistency-check
 .PHONY: session-investigation-check
-.PHONY: embedding-contract-check embedding-rust188-check
+.PHONY: embedding-contract-check embedding-msrv-check embedding-lock-update
 
 ## Check read-only session investigation using only synthetic source fixtures
 session-investigation-check:
@@ -119,6 +119,7 @@ ci-linux-test: ci-version-consistency-check
 ## Verify package metadata without release-tag or public-branch preflight semantics
 ci-version-consistency-check:
 	@python3 scripts/version-consistency-check --publication-order
+	@python3 scripts/version-consistency-check --embedding-msrv
 	@python3 tests/version_consistency_test.py
 
 ## Run the canonical locked Linux pre-push CI gate with uv-managed validator dependencies
@@ -141,10 +142,13 @@ local-event-feed-check:
 embedding-contract-check:
 	@scripts/embedding-contract-check
 
-## Explicit installed-toolchain qualification of the external Rust 1.88 subset
-embedding-rust188-check:
-	@rustup run 1.88.0 cargo --version >/dev/null || { echo "Install Rust 1.88.0 before running embedding-rust188-check." >&2; exit 1; }
-	@RUSTUP_TOOLCHAIN=1.88.0 CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target/embedding-rust188-check)" scripts/embedding-contract-check
+## The same contracts on the embedding crates' declared rust-version (installed toolchain)
+embedding-msrv-check:
+	@scripts/embedding-contract-check --msrv
+
+## Re-resolve the external consumer lock to the newest releases its rust-version allows
+embedding-lock-update:
+	cargo update --manifest-path tests/embedding-consumer/Cargo.toml --config 'resolver.incompatible-rust-versions="fallback"'
 
 ## Install the exact security gate tool versions
 security-tools:
