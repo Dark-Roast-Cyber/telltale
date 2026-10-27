@@ -83,7 +83,7 @@ migration: `telltale = { package = "telltale-core", git = "…", rev = "<commit>
 
 Gates: `make embedding-contract-check` tests eight feature combinations and is
 part of `ci-local`. `make embedding-msrv-check` runs the same combinations on the
-embedding crates' declared `rust-version` (Rust 1.85.0), which CI checks on Linux,
+embedding crates' declared `rust-version` (Rust 1.88.0), which CI checks on Linux,
 macOS and Windows; it is not a CLI MSRV promise. External coverage lives in
 [`tests/embedding-consumer`](../tests/embedding-consumer/tests).
 

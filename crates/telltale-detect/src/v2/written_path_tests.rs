@@ -5,6 +5,7 @@ use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
 const PERSISTENCE: &str = "persistence.shell_profile";
+const AGENT_INSTRUCTION_WRITE: &str = "persistence.agent_instruction_write";
 
 /// A native file-tool call with the given name and JSON arguments.
 pub(super) fn file_tool(
@@ -236,4 +237,43 @@ fn startup_file_paths_in_shell_reads_are_not_persistence() {
     let write = shell("shell-write", "echo 'alias ll=ls' >> ~/.bashrc");
     assert!(session_rule_ids(&write).iter().any(|id| id == PERSISTENCE));
     assert!(action_rule_ids(write).iter().any(|id| id == PERSISTENCE));
+}
+
+#[test]
+fn agent_instruction_hunt_requires_a_native_write() {
+    let write = file_tool(
+        "instruction-write",
+        "Write",
+        serde_json::json!({"file_path": "/workspace/AGENTS.md", "content": "Follow these project instructions."}),
+    );
+    assert!(
+        session_rule_ids(&write)
+            .iter()
+            .any(|id| id == AGENT_INSTRUCTION_WRITE)
+    );
+    assert!(
+        action_rule_ids(write)
+            .iter()
+            .any(|id| id == AGENT_INSTRUCTION_WRITE)
+    );
+
+    for read in [
+        file_tool(
+            "instruction-read",
+            "Read",
+            serde_json::json!({"file_path": "/workspace/AGENTS.md"}),
+        ),
+        shell("instruction-mention", "rg AGENTS.md ."),
+    ] {
+        assert!(
+            !session_rule_ids(&read)
+                .iter()
+                .any(|id| id == AGENT_INSTRUCTION_WRITE)
+        );
+        assert!(
+            !action_rule_ids(read)
+                .iter()
+                .any(|id| id == AGENT_INSTRUCTION_WRITE)
+        );
+    }
 }

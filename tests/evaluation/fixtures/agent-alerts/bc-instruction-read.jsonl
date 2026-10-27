@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"synthetic-instruction-read","timestamp":"2026-04-04T08:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-instruction-read","timestamp":"2026-04-04T08:00:01Z","payload":{"type":"user_message","message":"Read the repository agent instructions."}}
+{"type":"event_msg","session_id":"synthetic-instruction-read","timestamp":"2026-04-04T08:00:02Z","payload":{"type":"tool_call","tool_name":"read_file","arguments":"{\"file_path\":\"/workspace/AGENTS.md\"}","message":"Read the requested agent instructions."}}

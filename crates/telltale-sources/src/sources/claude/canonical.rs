@@ -240,17 +240,9 @@ fn project_record(
                     emit_tool(record, options, block, &mut child_ordinal, observations)?;
                 }
                 ClaudeContentBlock::Text { .. } | ClaudeContentBlock::ToolUse { .. } => {
-                    if !message_emitted {
-                        if let Some(body) = message.clone() {
-                            emit_message_body(
-                                record,
-                                options,
-                                body,
-                                &mut child_ordinal,
-                                observations,
-                            )?;
-                            message_emitted = true;
-                        }
+                    if !message_emitted && let Some(body) = message.clone() {
+                        emit_message_body(record, options, body, &mut child_ordinal, observations)?;
+                        message_emitted = true;
                     }
                     if let ClaudeContentBlock::ToolUse { .. } = block {
                         emit_tool(record, options, block, &mut child_ordinal, observations)?;
@@ -259,10 +251,11 @@ fn project_record(
                 ClaudeContentBlock::Ignored | ClaudeContentBlock::Unknown => unreachable!(),
             }
         }
-        if message_required && !message_emitted {
-            if let Some(body) = message {
-                emit_message_body(record, options, body, &mut child_ordinal, observations)?;
-            }
+        if message_required
+            && !message_emitted
+            && let Some(body) = message
+        {
+            emit_message_body(record, options, body, &mut child_ordinal, observations)?;
         }
     }
     Ok(())
@@ -448,19 +441,17 @@ fn emit_tool(
         input: Some(serde_json::Value::Object(input)),
         ..
     } = block
-    {
-        if let Some(command) = input
+        && let Some(command) = input
             .get("command")
             .and_then(serde_json::Value::as_str)
             .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str))
-        {
-            builder = builder
-                .facet(
-                    "command.text",
-                    SemanticFacet::new(JsonValue::string(command)),
-                )?
-                .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
-        }
+    {
+        builder = builder
+            .facet(
+                "command.text",
+                SemanticFacet::new(JsonValue::string(command)),
+            )?
+            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
     }
     if let Some(path) = resource_path {
         builder = builder
@@ -602,10 +593,10 @@ fn common_builder(
     if let Some(correlation) = correlation {
         builder = builder.correlation(correlation);
     }
-    if let Some(timestamp) = &record.timestamp {
-        if let Ok(timestamp) = SourceTimestamp::new(timestamp) {
-            builder = builder.occurred_at(timestamp);
-        }
+    if let Some(timestamp) = &record.timestamp
+        && let Ok(timestamp) = SourceTimestamp::new(timestamp)
+    {
+        builder = builder.occurred_at(timestamp);
     }
     builder = builder.child_ordinal(
         u32::try_from(child_ordinal)

@@ -6,10 +6,14 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
-- The embedding crates declare `rust-version = "1.85"` and are checked on Rust
-  1.85.0 on Linux, macOS and Windows in every CI run; the previously qualified
-  floor was 1.88, checked only on Linux before a tag. The CLI and Console build with
-  the pinned toolchain and make no MSRV promise.
+- Raise the embedding crates' minimum Rust version from the unpublished 1.85
+  declaration to 1.88 so they can use patched `time` releases. Require
+  `time >=0.3.47` and update the independent embedding consumer lock to 0.3.55
+  for GHSA-r6v5-fh4h-64xc (RFC2822 stack-exhaustion denial of service).
+  Every CI run checks Rust 1.88.0 on Linux, macOS and Windows. The CLI and Console
+  build with the pinned toolchain and make no MSRV promise.
+- Update the independent embedding consumer lock to `ctutils 0.4.5` for
+  RUSTSEC-2026-0385 (non-constant-time mask generation and `u128` comparisons).
 - Operational settings can be deployed as `settings.d/*.yaml` files in any
   config root: community rules, process-chain detections, risk thresholds,
   operational alert thresholds, log rotation, install inventory, the activity,

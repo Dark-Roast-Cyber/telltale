@@ -800,17 +800,16 @@ fn completed_result(content: &[Value], facts: &mut OpenCodeToolResultFacts) -> V
             .iter()
             .map(|part| {
                 let mut part = part.clone();
-                if part.get("type").and_then(Value::as_str) == Some("file") {
-                    if let Some(Value::String(uri)) = part.get_mut("uri") {
-                        if let Some(rest) = uri.strip_prefix("data:") {
-                            let media = rest.split([';', ',']).next().unwrap_or_default();
-                            let kept = format!("data:{media}");
-                            let omitted = (uri.len() - kept.len()) as u64;
-                            facts.omitted_bytes =
-                                Some(facts.omitted_bytes.unwrap_or(0).saturating_add(omitted));
-                            *uri = kept;
-                        }
-                    }
+                if part.get("type").and_then(Value::as_str) == Some("file")
+                    && let Some(Value::String(uri)) = part.get_mut("uri")
+                    && let Some(rest) = uri.strip_prefix("data:")
+                {
+                    let media = rest.split([';', ',']).next().unwrap_or_default();
+                    let kept = format!("data:{media}");
+                    let omitted = (uri.len() - kept.len()) as u64;
+                    facts.omitted_bytes =
+                        Some(facts.omitted_bytes.unwrap_or(0).saturating_add(omitted));
+                    *uri = kept;
                 }
                 part
             })

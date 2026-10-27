@@ -153,10 +153,10 @@ impl JsonValue {
             }
             return Ok(Self::Object(converted));
         }
-        if let serde_json::Value::String(text) = value {
-            if is_bare_text_tool(name) {
-                return Self::try_from_source_message_text(text);
-            }
+        if let serde_json::Value::String(text) = value
+            && is_bare_text_tool(name)
+        {
+            return Self::try_from_source_message_text(text);
         }
         Self::try_from_source_value(value)
     }
@@ -668,10 +668,10 @@ pub(crate) fn bounded_tool_arguments_bytes(
             .checked_add(text_bytes)
             .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes));
     }
-    if let JsonValue::String(text) = value {
-        if is_bare_text_tool(name) {
-            return bounded_message_text_bytes(text);
-        }
+    if let JsonValue::String(text) = value
+        && is_bare_text_tool(name)
+    {
+        return bounded_message_text_bytes(text);
     }
     let bytes = bounded_json_bytes(value, 1)?;
     if bytes > LOCAL_MAX_VALUE_BYTES {

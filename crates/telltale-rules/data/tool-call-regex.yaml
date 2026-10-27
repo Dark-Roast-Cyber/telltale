@@ -148,6 +148,23 @@ rules:
       - Shell profile edits and service enablement can be legitimate environment setup when user-approved.
       - Shell commands and native file tools that only read a startup file do not match.
 
+  - id: persistence.agent_instruction_write
+    title: Agent instruction or skill entrypoint written
+    category: persistence
+    detection_class: threat_hunting
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0081
+    severity: medium
+    score: 40
+    targets: [written_path]
+    regex: '(?:^|[\/\\])(?:AGENTS\.md|CLAUDE\.md)$|(?:^|[\/\\])(?:\.agents|\.claude)[\/\\]skills[\/\\][^\/\\]+[\/\\]SKILL\.md$'
+    tags: [agent-instructions, skill, persistence, file-write]
+    explanation: A native file tool wrote an agent instruction or skill entrypoint; review the change and user request for persistent behavioral redirection.
+    falsepositives:
+      - Authorized project maintenance often edits agent instructions or skills; a write alone does not establish poisoning.
+      - Shell writes are outside this native file-tool rule and require separate command evidence.
+
   - id: approval.bypass.context
     category: approval_bypass
     detection_class: policy_violation
@@ -222,6 +239,26 @@ rules:
     explanation: Assistant output contains a generic instruction-override phrase. It carries no points by itself and corroborates other behavior through chain modifiers.
     falsepositives:
       - Prompt-injection discussions, triage notes, and security documentation quote override phrases without acting on them.
+
+  - id: prompt_injection.tool_result_egress_directive
+    title: Tool result directs secret upload after instruction override
+    category: instruction_override
+    detection_class: threat_hunting
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: informational
+    score: 0
+    detection:
+      selection:
+        tool_result: '(?s:(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior)\s+instructions?.{0,240}\b(?:upload|send|post|transfer)\b.{0,160}\b(?:secrets?|credentials?|tokens?|api[_ -]?keys?)\b)'
+      exclude:
+        tool_result: '(?s:(?:for documentation review|security test vector|quoted example).{0,400}(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior)\s+instructions?.{0,240}(?:should not be treated as an instruction|quoted example))'
+      condition: selection
+    tags: [prompt-injection, tool-result, exfiltration-intent]
+    explanation: A tool result contains an instruction override directing secret transfer; this zero-point hunt corroborates a later observed upload.
+    falsepositives:
+      - Documentation and security tests may quote attack instructions; a directive alone does not prove the agent followed it.
 
   - id: network.controlled_test_domain.darkroast
     category: exfiltration
@@ -438,3 +475,16 @@ modifiers:
     explanation: An instruction override co-occurring with an approval-bypass directive in assistant output requires security review.
     falsepositives:
       - The two phrases link within three tool calls of each other in either order, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase nearby (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.
+  - id: chain.tool_result_egress_directive_then_upload
+    score: 15
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+      - atlas:AML.T0086
+    when_all_rule_ids: [prompt_injection.tool_result_egress_directive, exfil.outbound_upload]
+    link: {calls: 2}
+    explanation: An untrusted tool result directed secret transfer before a nearby outbound upload command.
+    falsepositives:
+      - A quoted attack instruction followed by an authorized upload can still link when the quote is not recognized as documentation; confirm the user request and destination.

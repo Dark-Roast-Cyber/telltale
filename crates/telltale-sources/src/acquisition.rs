@@ -451,22 +451,21 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
-                {
-                    if let Err(error) = ActivityContributions::default().observe(
+                    && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
                         record.contribution_strings().iter().map(String::as_str),
                         &mut keys,
-                    ) {
-                        match error {
-                            AcquisitionError::InvalidContribution => {
-                                excluded.insert(
-                                    record.source_sequence,
-                                    ("invalid_native_contribution", None),
-                                );
-                            }
-                            error => return Err(error),
+                    )
+                {
+                    match error {
+                        AcquisitionError::InvalidContribution => {
+                            excluded.insert(
+                                record.source_sequence,
+                                ("invalid_native_contribution", None),
+                            );
                         }
+                        error => return Err(error),
                     }
                 }
                 if let Some((code, bound)) = excluded.get(&record.source_sequence) {
@@ -536,22 +535,21 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
-                {
-                    if let Err(error) = ActivityContributions::default().observe(
+                    && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
                         record.contribution_strings().iter().map(String::as_str),
                         &mut keys,
-                    ) {
-                        match error {
-                            AcquisitionError::InvalidContribution => {
-                                excluded.insert(
-                                    record.source_sequence,
-                                    ("invalid_native_contribution", None),
-                                );
-                            }
-                            error => return Err(error),
+                    )
+                {
+                    match error {
+                        AcquisitionError::InvalidContribution => {
+                            excluded.insert(
+                                record.source_sequence,
+                                ("invalid_native_contribution", None),
+                            );
                         }
+                        error => return Err(error),
                     }
                 }
                 if let Some((code, bound)) = excluded.get(&record.source_sequence) {

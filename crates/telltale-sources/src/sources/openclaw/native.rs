@@ -223,13 +223,13 @@ fn openclaw_selected_envelope(value: &Value) -> Option<OpenClawSelectedEnvelope<
                 discriminator,
             });
         }
-        if let Some(nested_payload) = payload.get("payload") {
-            if let Some(discriminator) = nested_payload.get("type").and_then(Value::as_str) {
-                return Some(OpenClawSelectedEnvelope {
-                    value: nested_payload,
-                    discriminator,
-                });
-            }
+        if let Some(nested_payload) = payload.get("payload")
+            && let Some(discriminator) = nested_payload.get("type").and_then(Value::as_str)
+        {
+            return Some(OpenClawSelectedEnvelope {
+                value: nested_payload,
+                discriminator,
+            });
         }
     }
     if let Some(discriminator) = value.get("type").and_then(Value::as_str) {

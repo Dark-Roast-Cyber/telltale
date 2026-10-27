@@ -48,7 +48,7 @@ rules or contributions that `DEFAULT_PROFILE_EXPECTED_DIFFERENCES` does not list
 or on a listed difference that does not occur. The list is currently empty.
 
 The two profiles' counts are reported separately and never combined. Each
-currently reports session security-review confusion of **TP 18 / FP 2 / TN 30 /
+currently reports session security-review confusion of **TP 19 / FP 2 / TN 33 /
 FN 2**. The default report's rule coverage lists the community rules as uncovered
 because no manifest case exercises them; the coverage gate applies to core-only.
 The CLI canonical-efficacy test runs each fixture under both profiles with a
@@ -133,6 +133,21 @@ credential-harvest/publish chain. These are conformance gates, not additional
 efficacy cases, and do not change the manifest or golden report.
 
 `make evaluation-check` validates the manifest and compares the generated deterministic report with the tracked baseline. `make evaluation-report` writes a current report only under `target/evaluation/`.
+
+## Agent-alert cases
+
+Four synthetic Codex source fixtures add an operation-aware agent-instruction
+write hunt and a non-MCP tool-result directive followed by an upload. A
+user-approved instruction write matches at 40 while a read does not match;
+both are independently labeled benign. The unauthorized tool-result/upload
+sequence is independently labeled review-required and scores 75; a quoted
+security example with a separately approved artifact upload scores 60 and
+does not link. These cases increase the scored corpus from 52 to 56. They do
+not alter the two known upload-attempt false negatives or the two requested
+destructive-command false positives above. One CLI test checks Event 3 schema,
+response escalation, and credential-shaped fixture redaction for the two
+positive signals. Native conformance is limited to Codex; the canonical
+rule-session tests exercise the source-neutral matching behavior.
 
 ## Native source inputs only
 
