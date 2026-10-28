@@ -204,7 +204,10 @@ fn evidence_highlights_the_hit_that_counted() {
 
     let link = evidence(&records[4], "chain.download_then_execute");
     assert_eq!(highlighted(link), "sh setup.sh --quiet");
-    assert_eq!(link.redacted_value, "chmod +x setup.sh && sh setup.sh --quiet");
+    assert_eq!(
+        link.redacted_value,
+        "chmod +x setup.sh && sh setup.sh --quiet"
+    );
 }
 
 #[test]
@@ -309,11 +312,7 @@ fn records_fit_the_consumer_bound_at_evidence_and_context_maxima() {
             ..entry.clone()
         })
         .collect();
-    let context = inflated
-        .context
-        .first()
-        .cloned()
-        .expect("context enabled");
+    let context = inflated.context.first().cloned().expect("context enabled");
     inflated.context = (0..64)
         .map(|_| ActionRecordContext {
             redacted_text: worst.clone(),
@@ -321,7 +320,11 @@ fn records_fit_the_consumer_bound_at_evidence_and_context_maxima() {
         })
         .collect();
     let bytes = serde_json::to_vec(&inflated).unwrap();
-    assert!(bytes.len() <= ACTION_RECORD_MAX_INPUT_BYTES, "{}", bytes.len());
+    assert!(
+        bytes.len() <= ACTION_RECORD_MAX_INPUT_BYTES,
+        "{}",
+        bytes.len()
+    );
 }
 
 fn scan_records(source: &Source) -> Vec<ActionRecordV1> {

@@ -87,9 +87,7 @@ fn no_findings_verdict(scan: &SourceScan) -> &'static str {
 fn partial_coverage_without_findings_is_not_clean() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("session.jsonl");
-    let row = |content: &str| {
-        serde_json::json!({"type":"assistant","uuid":"call","sessionId":"session","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":content}}]}})
-    };
+    let row = |content: &str| serde_json::json!({"type":"assistant","uuid":"call","sessionId":"session","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":content}}]}});
     let scan = |text: String| {
         std::fs::write(&path, text).unwrap();
         pipeline()
@@ -107,7 +105,8 @@ fn partial_coverage_without_findings_is_not_clean() {
 
     // A record Telltale cannot interpret is quarantined, not failed: the rest
     // of the source is evaluated, but no finding says nothing about it.
-    let future = serde_json::json!({"type":"future_record","sessionId":"session","content":"synthetic"});
+    let future =
+        serde_json::json!({"type":"future_record","sessionId":"session","content":"synthetic"});
     let quarantined = scan(format!("{}\n{future}\n", row("echo ordinary")));
     assert!(quarantined.action_findings.is_empty());
     assert!(quarantined.failure().is_none());

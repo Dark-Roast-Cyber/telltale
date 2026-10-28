@@ -377,8 +377,15 @@ fn explicit_roots_ignore_relocation_variables() {
         return;
     }
     let root = tempfile::tempdir().unwrap();
-    let explicit = root.path().join("explicit");
-    let relocated = root.path().join("relocated");
+    // Discovery refuses symlinked path components, and macOS temporary
+    // directories sit under the `/var` symlink.
+    let base = if cfg!(unix) {
+        root.path().canonicalize().unwrap()
+    } else {
+        root.path().to_path_buf()
+    };
+    let explicit = base.join("explicit");
+    let relocated = base.join("relocated");
     let rows = [call("one", "cat .env")];
     for directory in [
         explicit.join(".claude/projects/synthetic"),
