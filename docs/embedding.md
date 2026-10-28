@@ -348,6 +348,38 @@ changes after `build()`, so replace it as a whole:
 Telltale does not fetch, sign, or schedule rule content. Obtaining and
 authenticating documents is the host's job.
 
+### Evidence
+
+`action.evidence()` holds one `ActionEvidence` per rule or modifier that
+counted for the action: `field()`, `rule_id()`, and `redacted_value()`, which
+crossed `redact_sensitive_text` and is at most 512 bytes and 80 tokens.
+
+- A field whose redaction fits is shown whole. A longer field is shown as an
+  excerpt of about 160 bytes before and 240 after the hit that counted:
+  the first match of the rule's counting matcher for a Rule v1 rule, the
+  command stage that satisfied a native predicate, or, for a download link, the
+  stage that runs the artifact or the piped pipeline. `elided_before()` and
+  `elided_after()` say whether field text was cut on each side. Evidence
+  without a single span (a whole-field predicate) starts at the field start.
+- A hit past the sanitizer's 4 KiB input bound is still shown: the excerpt is
+  cut from the redaction of a region around the hit. Both cuts of that region
+  drop the fragment that holds them, as the input bound does, including a
+  quoted value that spans the cut, so a secret that straddles a cut is never
+  partly shown. A leading cut inside a private key block moves past the
+  block's end. The first 256 bytes after a leading cut, in whole fragments and
+  at least three of them, are redacted but never shown: a label that would
+  mask them (`--password`, `key =`, `Bearer`, the start of a path with
+  spaces) may lie before the cut. Evidence can therefore be empty, with
+  `elided_before` set.
+- `highlight()` is the UTF-8 byte range of the hit in `redacted_value()`, set
+  only when the position is exact: redacting the text before, at and after the
+  hit separately gives the same text. It is `None` when redaction joins the hit
+  to its neighbors (a secret's label outside the hit, for example), when a
+  dropped fragment holds the hit, or when the hit does not fit the bounds.
+  Never infer a position from the text.
+- Evidence is not reread from the source and rules are not rerun to place it.
+  Event 3 evidence is unchanged.
+
 ### Same-pass context
 
 `action.context()` is scan-time context from the same acquired observations; it
@@ -370,9 +402,16 @@ never reopens a source.
 `bundled_rule_catalog(&options)` returns immutable presentation metadata
 (`RuleCatalogEntry`: `id`, `kind`, `title`, `explanation`, `falsepositives`,
 `category`, `severity`, `session_score`, `action_score`, `action_ordered`,
-`action_within_seconds`, `action_link`, `package_id`) for core rules and the
-embedded community package; `package_id` is `None` for core rules and `enabled`
-describes the default pipeline. Session scores are frozen compatibility
+`action_within_seconds`, `action_link`, `atlas_tags`, `attack_techniques`,
+`package_id`) for core rules and the embedded community package; `package_id`
+is `None` for core rules and `enabled` describes the default pipeline. When
+`options.process_chain` is set, it also lists every rule of the bundled
+process-chain pack as `RuleCatalogKind::ProcessChain` (`"process_chain"` on the
+wire), with its title, reason as `explanation`, category false-positive
+guidance, score before environment false-positive controls, signal type
+(`chain`, `atomic` or `correlation`) and, for correlations, its window in
+`action_within_seconds`. Process-chain entries carry MITRE ATT&CK technique IDs
+in `attack_techniques`; Rule v1 rules and modifiers carry only `atlas_tags`. Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
 promotion totals. It exposes no detector internals, custom documents, policy
 overrides, or executable process AST. Like `ActionFinding`, catalog entries do
@@ -421,14 +460,25 @@ Event 3 object                                -- session events, unchanged
   `coordinate` and the canonical finding IDs: equal coordinates distinguish
   neither stores nor the several process-chain actions one tool call can
   carry. A rules change gives new keys. Never derive a key from Event 3 IDs.
+- Delivery aliases: `record.delivery_aliases()` starts with `delivery_key()`
+  and, when `replay_identity` is present, adds the source-bound key the action
+  has without one. Replay identity can come and go between scans of one store:
+  a later identical candidate makes an earlier action ambiguous and withdraws
+  its replay identity, and a rewrite that removes the candidate restores it.
+  The source-bound alias survives both transitions; the replay alias matches a
+  copy of the action in another source. Treat an action as handled when any of
+  its aliases is known, and remember all of them.
 - Event link: `record.check_session_event(&event)` checks that a detection or
   process-chain `Event3Record` travelling with the record has the same client,
   source path hash and session and, when `session_event_id` is set, that it
   is that event, of the matching family, carrying every record rule. An
   unlinked record names no event; which event it travels with is the host's
   choice.
-- A record version is frozen. Adding, removing or redefining a field is a new
-  version and a new type; plan to accept both during a host upgrade.
+- A record or catalog version is frozen from the first release tag that
+  carries it. After that, adding, removing or redefining a field is a new
+  version and a new type; plan to accept both during a host upgrade. Before
+  that tag, a Git pin can see v1 amended in place; see the
+  [migration guide](migrations/0.7.0.md).
 - Keep terminal Event 3 separate from host extensions: `Event3Record` consumes
   one complete terminal Event 3 object (`Event` is the producer type, not a
   deserializer), and an augmented storage document is not a strict

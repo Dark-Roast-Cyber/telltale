@@ -1,4 +1,4 @@
-use super::observations_from_command_line;
+use super::{observations_from_command_line, split_statements, statement_spans};
 
 #[test]
 fn explicit_nested_shells_preserve_statement_order_without_wrapper_observations() {
@@ -70,4 +70,29 @@ git status"#,
             .command_line_text()
             .contains("a;b|c&d")
     );
+}
+
+#[test]
+fn statement_spans_locate_each_statement_in_the_command() {
+    let command = "cd /w && curl -o a 'x|y' | sh; echo \"a;b\" || true &\nlast";
+    let statements: Vec<&str> = statement_spans(command)
+        .into_iter()
+        .map(|span| &command[span])
+        .collect();
+    assert_eq!(
+        statements,
+        [
+            "cd /w ",
+            " curl -o a 'x|y' ",
+            " sh",
+            " echo \"a;b\" ",
+            " true ",
+            "last"
+        ]
+    );
+    assert_eq!(split_statements(command), statements);
+    assert!(statement_spans("  ;; && ").is_empty());
+    let multibyte = "echo café | wc";
+    let spans = statement_spans(multibyte);
+    assert_eq!(&multibyte[spans[1].clone()], " wc");
 }

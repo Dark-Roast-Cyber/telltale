@@ -1,11 +1,12 @@
 //! Action interpretation beside the frozen session compatibility view. No I/O.
 use super::Severity;
 use super::session::{ProcessingError, RetentionBudget};
-use crate::process_chain::{split_statements, tokenize};
+use crate::process_chain::{statement_spans, tokenize};
 use regex::Regex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ops::Range;
 use std::sync::LazyLock;
 use telltale_rules::{
     ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
@@ -242,16 +243,52 @@ pub struct ActionEvidence {
     field: String,
     rule_id: String,
     redacted_value: String,
+    highlight: Option<Range<usize>>,
+    elided_before: bool,
+    elided_after: bool,
 }
 impl ActionEvidence {
+    fn new(
+        field: &str,
+        rule_id: &str,
+        text: &str,
+        hit: Option<Range<usize>>,
+        budget: &mut RetentionBudget,
+    ) -> Result<Self, ProcessingError> {
+        let excerpt =
+            PrivacySanitizer::try_sanitize_excerpt(text, hit, &mut |bytes| budget.charge(bytes))?;
+        Ok(Self {
+            field: field.to_owned(),
+            rule_id: rule_id.to_owned(),
+            redacted_value: excerpt.text,
+            highlight: excerpt.highlight,
+            elided_before: excerpt.elided_before,
+            elided_after: excerpt.elided_after,
+        })
+    }
     pub fn field(&self) -> &str {
         &self.field
     }
     pub fn rule_id(&self) -> &str {
         &self.rule_id
     }
+    /// Redacted field text: whole when it fits, otherwise an excerpt around
+    /// the hit that counted for the rule.
     pub fn redacted_value(&self) -> &str {
         &self.redacted_value
+    }
+    /// UTF-8 byte range of the hit in [`Self::redacted_value`], only when the
+    /// position is exact.
+    pub fn highlight(&self) -> Option<Range<usize>> {
+        self.highlight.clone()
+    }
+    /// Field text was cut before the excerpt.
+    pub fn elided_before(&self) -> bool {
+        self.elided_before
+    }
+    /// Field text was cut after the excerpt.
+    pub fn elided_after(&self) -> bool {
+        self.elided_after
     }
 }
 
@@ -526,7 +563,8 @@ fn frame(hash: &mut Sha256, bytes: &[u8]) {
 struct ActionView {
     fields: BTreeMap<&'static str, String>,
     commands: Vec<Vec<String>>,
-    stages: Vec<String>,
+    /// Byte ranges of the command stages in the `command` field.
+    stage_spans: Vec<Range<usize>>,
     reads_paths: bool,
 }
 impl ActionView {
@@ -668,13 +706,14 @@ fn view(
             let (command, authored) = strip_heredocs(&command);
             out.put("authored_content", authored);
             budget.charge(command.len())?;
-            out.stages = if shell_comment(&command) {
+            out.stage_spans = if shell_comment(&command) {
                 Vec::new()
             } else {
                 budget.charge(command.len())?;
-                split_statements(&command)
+                statement_spans(&command)
             };
-            for stage in &out.stages {
+            for span in &out.stage_spans {
+                let stage = &command[span.clone()];
                 budget.charge(stage.len())?;
                 out.commands.push(tokenize(stage));
             }
@@ -1142,17 +1181,20 @@ fn remote(value: &str) -> bool {
         || (value.contains(':') && !value.contains(":/"))
 }
 
+/// Fields a native predicate selects, each with the byte offset of the
+/// selected text in its field: a command stage, or a whole field at 0.
 fn native_fields<'a>(
     id: &str,
     view: &'a ActionView,
     budget: &mut RetentionBudget,
-) -> Result<Vec<(&'a str, &'a str)>, ProcessingError> {
+) -> Result<Vec<(&'a str, &'a str, usize)>, ProcessingError> {
     let mut selected = Vec::new();
     if matches!(
         id,
         "network.download" | "exfil.outbound_upload" | "exfil.encoded_http"
     ) {
-        for (stage, tokens) in view.stages.iter().zip(&view.commands) {
+        for (span, tokens) in view.stage_spans.iter().zip(&view.commands) {
+            let stage = &view.text("command")[span.clone()];
             let matches = match id {
                 "network.download" => is_download(tokens, budget)?,
                 "exfil.outbound_upload" => is_upload(tokens, budget)?,
@@ -1171,7 +1213,7 @@ fn native_fields<'a>(
                 }
             };
             if matches {
-                selected.push(("command", stage.as_str()));
+                selected.push(("command", stage, span.start));
             }
         }
         return Ok(selected);
@@ -1299,7 +1341,7 @@ fn native_fields<'a>(
             _ => true,
         };
         if matches {
-            selected.push((field, text));
+            selected.push((field, text, 0));
         }
     }
     Ok(selected)
@@ -1347,7 +1389,7 @@ pub(super) fn download_execution_linked(
         if view.commands.is_empty() {
             continue;
         }
-        if piped_execution(view.text("command"), budget)? {
+        if piped_execution(view.text("command"), budget)?.is_some() {
             return Ok(true);
         }
         // A file link is timed, as for action findings; a pipe is not.
@@ -1384,6 +1426,7 @@ pub(super) fn download_execution_linked(
                     },
                     budget,
                 )?
+                .is_some()
             {
                 return Ok(true);
             }
@@ -1521,13 +1564,16 @@ pub(crate) fn evaluate(
                 native_fields(&rule.id, view, budget)?
             } else {
                 view.fields()
+                    .into_iter()
+                    .map(|(field, text)| (field, text, 0))
+                    .collect()
             };
             // Native profiles are canonical interpretation of bundled predicates;
             // custom predicates always retain the effective Rule v1 matcher.
-            let matched: Vec<(&str, &str)> = {
+            let matched: Vec<(&str, &str, Range<usize>)> = {
                 let mapped = fields
                     .iter()
-                    .map(|(k, v)| {
+                    .map(|(k, v, _)| {
                         (
                             if compiled.native
                                 && matches!(*k, "authored_content" | "user_context")
@@ -1542,11 +1588,11 @@ pub(crate) fn evaluate(
                     })
                     .collect::<Vec<_>>();
                 let mut matched = Vec::new();
-                for (name, value) in compiled
+                for (name, value, hit) in compiled
                     .matcher
-                    .try_matching_fields(&mapped, &mut |bytes| budget.charge(bytes))?
+                    .try_matching_spans(&mapped, &mut |bytes| budget.charge(bytes))?
                 {
-                    for &(field, text) in &fields {
+                    for &(field, text, offset) in &fields {
                         budget.charge(field.len() + name.len())?;
                         if field == name
                             || (name == "tool_result"
@@ -1554,7 +1600,7 @@ pub(crate) fn evaluate(
                         {
                             budget.charge(text.len() + value.len())?;
                             if text == value {
-                                matched.push((field, text));
+                                matched.push((field, text, offset + hit.start..offset + hit.end));
                                 break;
                             }
                         }
@@ -1572,16 +1618,18 @@ pub(crate) fn evaluate(
                     break;
                 }
             }
-            let Some((field, value)) = candidate else {
+            let Some((field, _, hit)) = candidate else {
                 continue;
             };
             ids.insert(rule.id.clone());
             categories.insert(rule.category.clone());
-            evidence.push(ActionEvidence {
-                field: (*field).to_owned(),
-                rule_id: rule.id.clone(),
-                redacted_value: redact(value, budget)?,
-            });
+            evidence.push(ActionEvidence::new(
+                field,
+                &rule.id,
+                view.text(field),
+                Some(hit.clone()),
+                budget,
+            )?);
             if rule.score > 0 {
                 contributions.push(
                     RiskContribution::new(
@@ -1731,27 +1779,36 @@ pub(crate) fn evaluate(
                 for (position, (artifact, start, observation_index, command_index)) in
                     pending.iter().enumerate()
                 {
-                    if *start <= time
-                        && executes(
-                            &view.commands,
-                            artifact,
-                            if *observation_index == index {
-                                command_index + 1
-                            } else {
-                                0
-                            },
-                            budget,
-                        )?
-                    {
-                        linked = Some(position);
+                    if *start > time {
+                        continue;
+                    }
+                    if let Some(stage) = executes(
+                        &view.commands,
+                        artifact,
+                        if *observation_index == index {
+                            command_index + 1
+                        } else {
+                            0
+                        },
+                        budget,
+                    )? {
+                        linked = Some((position, view.stage_spans[stage].clone()));
                         break;
                     }
                 }
-                let pipe = ids.contains("network.download")
-                    && piped_execution(view.text("command"), budget)?;
-                if linked.is_some() || pipe {
+                let pipe = if ids.contains("network.download") {
+                    piped_execution(view.text("command"), budget)?
+                } else {
+                    None
+                };
+                if linked.is_some() || pipe.is_some() {
+                    let link = linked
+                        .as_ref()
+                        .map(|(_, span)| span.clone())
+                        .or(pipe)
+                        .map(|span| trimmed(view.text("command"), span));
                     let mut support = vec![index];
-                    if let Some(i) = linked {
+                    if let Some((i, _)) = linked {
                         support.push(pending.remove(i).2);
                     }
                     support.sort_unstable();
@@ -1771,11 +1828,13 @@ pub(crate) fn evaluate(
                             .map_err(|_| ProcessingError::Evaluation)?,
                         );
                     }
-                    evidence.push(ActionEvidence {
-                        field: "command".into(),
-                        rule_id: modifier.id.clone(),
-                        redacted_value: redact(view.text("command"), budget)?,
-                    });
+                    evidence.push(ActionEvidence::new(
+                        "command",
+                        &modifier.id,
+                        view.text("command"),
+                        link,
+                        budget,
+                    )?);
                 }
             }
         }
@@ -2298,13 +2357,14 @@ fn remote_basename(tokens: &[String]) -> Option<String> {
     let basename = path.rsplit('/').next()?;
     (!basename.is_empty()).then(|| basename.to_owned())
 }
+/// The index of the first stage from `start` that runs `artifact`.
 fn executes(
     commands: &[Vec<String>],
     artifact: &str,
     start: usize,
     budget: &mut RetentionBudget,
-) -> Result<bool, ProcessingError> {
-    for t in commands.iter().skip(start) {
+) -> Result<Option<usize>, ProcessingError> {
+    for (stage, t) in commands.iter().enumerate().skip(start) {
         let first = t.first().map(String::as_str).unwrap_or("");
         budget.charge(first.len() + artifact.len())?;
         if matches!(
@@ -2328,12 +2388,23 @@ fn executes(
                     w[0].eq_ignore_ascii_case("-File") && w[1].trim_start_matches("./") == artifact
                 }));
         if matches {
-            return Ok(true);
+            return Ok(Some(stage));
         }
     }
-    Ok(false)
+    Ok(None)
 }
-fn piped_execution(command: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+/// `span` without the whitespace at either end.
+fn trimmed(text: &str, span: Range<usize>) -> Range<usize> {
+    let inner = &text[span.clone()];
+    let start = span.start + (inner.len() - inner.trim_start().len());
+    start..start + inner.trim().len()
+}
+/// The byte range of a download piped into an interpreter: the download
+/// stage, the pipe and the interpreter stage.
+fn piped_execution(
+    command: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(command.len())?;
     let mut quote = None;
     let mut pipes = Vec::new();
@@ -2363,23 +2434,24 @@ fn piped_execution(command: &str, budget: &mut RetentionBudget) -> Result<bool, 
         }
     }
     if quote.is_some() || pipes.len() != 1 {
-        return Ok(false);
+        return Ok(None);
     }
     let index = pipes[0];
     budget.charge(command.len())?;
-    let left = split_statements(&command[..index]);
-    let right = split_statements(&command[index + 1..]);
+    let left = statement_spans(&command[..index]);
+    let right = statement_spans(&command[index + 1..]);
     if let Some((left, right)) = left.last().zip(right.first()) {
+        let right = index + 1 + right.start..index + 1 + right.end;
         budget.charge(left.len())?;
-        let tokens = tokenize(left);
+        let tokens = tokenize(&command[left.clone()]);
         if is_download(&tokens, budget)? && download_stdout(&tokens, budget)? {
             budget.charge(right.len())?;
-            let tokens = tokenize(right);
+            let tokens = tokenize(&command[right.clone()]);
             charge_tokens(&tokens, budget)?;
-            return Ok(consumes_stdin_code(&tokens));
+            return Ok(consumes_stdin_code(&tokens).then_some(left.start..right.end));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 fn download_stdout(
     tokens: &[String],
@@ -2631,6 +2703,15 @@ struct EncodedEvidence<'a> {
     field: &'a str,
     rule_id: &'a str,
     redacted_value: &'a str,
+    highlight: Option<EncodedHighlight>,
+    elided_before: bool,
+    elided_after: bool,
+}
+
+#[derive(Serialize)]
+struct EncodedHighlight {
+    start: usize,
+    end: usize,
 }
 
 #[derive(Serialize)]
@@ -2702,6 +2783,12 @@ impl<'a> From<&'a ActionFinding> for EncodedActionFinding<'a> {
                     field: &e.field,
                     rule_id: &e.rule_id,
                     redacted_value: &e.redacted_value,
+                    highlight: e.highlight.as_ref().map(|range| EncodedHighlight {
+                        start: range.start,
+                        end: range.end,
+                    }),
+                    elided_before: e.elided_before,
+                    elided_after: e.elided_after,
                 })
                 .collect(),
             context: a

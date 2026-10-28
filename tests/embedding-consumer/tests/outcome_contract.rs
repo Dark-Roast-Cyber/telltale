@@ -67,6 +67,81 @@ fn successful_jsonl_scan_reports_whole_source_coverage_and_no_failure() {
     assert!(!scan.action_findings.is_empty());
 }
 
+/// What a host may conclude from a scan that found nothing. Only a whole,
+/// unlimited, successful read is clean; the other outcomes stay distinct.
+fn no_findings_verdict(scan: &SourceScan) -> &'static str {
+    if scan.failure().is_some() {
+        "failed"
+    } else if !scan.quarantined().is_empty() {
+        "quarantined"
+    } else if scan.coverage() != Some(SourceCoverage::WholeSource) {
+        "partial"
+    } else if !scan.visibility_limits().is_empty() {
+        "limited"
+    } else {
+        "clean"
+    }
+}
+
+#[test]
+fn partial_coverage_without_findings_is_not_clean() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("session.jsonl");
+    let row = |content: &str| {
+        serde_json::json!({"type":"assistant","uuid":"call","sessionId":"session","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":content}}]}})
+    };
+    let scan = |text: String| {
+        std::fs::write(&path, text).unwrap();
+        pipeline()
+            .scan_sources_detailed(
+                &[claude_source(path.clone())],
+                &DetailedEvaluationOptions::default(),
+            )
+            .unwrap()
+            .remove(0)
+    };
+
+    let clean = scan(format!("{}\n", row("echo ordinary")));
+    assert!(clean.action_findings.is_empty());
+    assert_eq!(no_findings_verdict(&clean), "clean");
+
+    // A record Telltale cannot interpret is quarantined, not failed: the rest
+    // of the source is evaluated, but no finding says nothing about it.
+    let future = serde_json::json!({"type":"future_record","sessionId":"session","content":"synthetic"});
+    let quarantined = scan(format!("{}\n{future}\n", row("echo ordinary")));
+    assert!(quarantined.action_findings.is_empty());
+    assert!(quarantined.failure().is_none());
+    assert_eq!(quarantined.coverage(), Some(SourceCoverage::Partial));
+    assert_eq!(quarantined.quarantined().len(), 1);
+    assert_eq!(no_findings_verdict(&quarantined), "quarantined");
+
+    let failed = pipeline()
+        .scan_sources_detailed(
+            &[claude_source(root.path().join("missing.jsonl"))],
+            &DetailedEvaluationOptions::default(),
+        )
+        .unwrap()
+        .remove(0);
+    assert!(failed.action_findings.is_empty());
+    assert_eq!(no_findings_verdict(&failed), "failed");
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn a_bounded_window_without_findings_is_partial_not_clean() {
+    let root = tempfile::tempdir().unwrap();
+    let scan = pipeline()
+        .scan_sources_detailed(
+            &[opencode_source(root.path())],
+            &DetailedEvaluationOptions::default(),
+        )
+        .unwrap()
+        .remove(0);
+    assert!(scan.failure().is_none() && scan.quarantined().is_empty());
+    assert_eq!(scan.coverage(), Some(SourceCoverage::Partial));
+    assert_eq!(no_findings_verdict(&scan), "partial");
+}
+
 #[test]
 fn source_failure_is_typed_and_content_free() {
     let root = tempfile::tempdir().unwrap();
