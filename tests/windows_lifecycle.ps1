@@ -842,22 +842,39 @@ try {
         $current = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
         Assert-True ($current.id -ceq $previous.id -and $current.binary_sha256 -ceq $variantHash -and (Get-TTHash $installed) -ceq $variantHash -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $backup)) 'reinstall tolerates a sharing reader of the installed executable'
     } finally { foreach ($reader in $readers) { $reader.Dispose() } }
-    # Emulate interruption after a complete swap, then roll back under sharing readers.
+    # Emulate interruption after the swap and receipt write, before commit. Observe
+    # recovery itself: a later install of the same variant could conceal bad rollback.
+    $receiptPath = Join-Path $layout.InstallDirectory 'install-receipt.json'
+    $receiptBeforeRecovery = Get-TTHash $receiptPath
     $next = ($current | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
     $next.binary_sha256 = $previous.binary_sha256
     Write-TTJson $journalPath @{ previous = $current; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
     Copy-Item -LiteralPath $binary -Destination $stage
     Set-TTCreatedOwner $stage
     [TelltaleLifecycle.Native]::ReplaceExecutable($stage, $installed, $backup)
+    Write-TTJson $receiptPath $next
+    Assert-True ((Get-TTHash $installed) -ceq $next.binary_sha256 -and (Get-TTHash $backup) -ceq $current.binary_sha256 -and $next.binary_sha256 -cne $current.binary_sha256 -and (Get-TTHash $receiptPath) -cne $receiptBeforeRecovery) 'interrupted transaction has distinct next executable and receipt, plus the previous backup'
     $readers = @()
     try {
         $readers += [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
         $readers += [IO.File]::Open($backup, 'Open', 'Read', 'ReadWrite, Delete')
-        & $installer @layout -DevelopmentBinary $variant
-        $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
-        Assert-True ($recovered.id -ceq $previous.id -and $recovered.binary_sha256 -ceq $variantHash -and (Get-TTHash $installed) -ceq $variantHash) 'rollback restores the journaled executable under sharing readers'
-        Assert-True (-not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage) -and -not (Test-Path -LiteralPath $backup)) 'rollback under sharing readers clears the transaction'
-        Assert-True (@($readers | Where-Object { -not $_.CanRead }).Count -eq 0) 'rollback leaves outside readers open'
+        $mutex = Open-TTLifecycleMutex
+        $lock = $null
+        try {
+            $lock = Open-TTLock $layout.InstallDirectory
+            Restore-TTTransaction $layout.InstallDirectory $layout.DataDirectory | Out-Null
+            $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+            Assert-True ((Get-TTHash $installed) -ceq $current.binary_sha256) 'recovery alone restores the exact previous executable under sharing readers'
+            Assert-True ($recovered.id -ceq $current.id -and $recovered.binary_sha256 -ceq $current.binary_sha256 -and (Get-TTHash $receiptPath) -ceq $receiptBeforeRecovery) 'recovery alone restores the exact previous receipt and installation identity'
+            Assert-True (-not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage) -and -not (Test-Path -LiteralPath $backup)) 'recovery alone clears the transaction under sharing readers'
+            Assert-True (@($readers | Where-Object { -not $_.CanRead }).Count -eq 0) 'recovery alone leaves outside readers open'
+        } finally {
+            if ($null -ne $lock) { $lock.Dispose() }
+            Close-TTLifecycleMutex $mutex
+        }
+        & $installer @layout -DevelopmentBinary $binary
+        $reinstalled = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+        Assert-True ($reinstalled.id -ceq $current.id -and $reinstalled.binary_sha256 -ceq $next.binary_sha256 -and (Get-TTHash $installed) -ceq $next.binary_sha256) 'separate reinstall succeeds after the recovery assertions'
     } finally { foreach ($reader in $readers) { $reader.Dispose() } }
     $reader = [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite')
     try {
