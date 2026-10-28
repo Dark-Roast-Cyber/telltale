@@ -63,3 +63,94 @@ this report nor a source build accepts an RC3 freeze or qualifies a published
 RC3 artifact. Tagging/publication, five-platform artifact verification,
 candidate-specific clean-host qualification, live canary and stable promotion
 remain controlled separately under Issue #87.
+
+## Issue #147 recovery observation correction (2026-10-27)
+
+The fresh Windows session reused #148's clean existing branch,
+`claude/issue-147-investigation-46b328`, at
+`baf34dcc77c84a86e4bc6da09ba0eff836c66a97` (tree
+`b74c2f3ddbb0410baa3fe5b20dbe38350ec9b304`). The maintainer explicitly transferred
+implementation ownership to this session. The original `main` checkout remained
+clean at `7c67cb0c2be72e94d946a3c8fbecb8991ef19c71`; no existing edits were removed.
+
+`shared-executable-reader` now models interruption after both executable swap
+and receipt write. While the installed executable and backup have outside sharing
+readers, it calls the real `Restore-TTTransaction` under the lifecycle mutex and
+installation file lock. Before any subsequent install, it verifies the exact
+previous executable digest, exact previous receipt bytes and installation ID,
+transaction cleanup and still-open readers. A separate install then changes the
+digest again. The refusal/release and interruption cases remain intact. No
+production helper, installer, uninstaller, Rust or diagnostic behavior changed.
+
+The tested working source is the HEAD above plus the test correction; it is not
+a new committed head. `tests/windows_lifecycle.ps1` SHA-256 was
+`c24ad400dfe6ef99bf76844d0ca4c5872dbf84bdb0ab77edfee016ffeb13fbd6` throughout
+validation. The raw `git diff --no-ext-diff --binary HEAD -- tests/windows_lifecycle.ps1`
+patch SHA-256 was `7d5c674c1831b4d714150fd651455956dd3e1d8afe8f2b506aff5ebc1693f706`.
+This documentation was added after the executable/test checks.
+
+The repository development-build helper produced `telltale 0.7.0-rc.3 (baf34dcc77c8)`
+for `x86_64-pc-windows-msvc`, Rust/Cargo 1.99.1, MSVC 14.51.36231, optimized with
+`-C target-feature=+crt-static`. Binary SHA-256:
+`b8ed46fcc0be6fef7d15f1087e55749ead7c2ebddade433f85b4703a777b6e33`.
+`verify-windows-runtime.ps1` passed using MSVC `dumpbin.exe`. Rust build inputs
+match HEAD; this is an unpublished development binary. The real validator used
+Python 3.12.14 and `jsonschema[format-nongpl]` 4.26.0 in an isolated local venv.
+
+| Check | Native result |
+| --- | --- |
+| Focused actual `shared-executable-reader` scenario | 11 assertions passed in Windows PowerShell 5.1.26100.9711 and PowerShell 7.6.5. |
+| Focused negative controls in both shells | Omitting recovery fails the previous-executable assertion; changing valid receipt metadata after recovery fails the exact-previous-receipt assertion. |
+| Complete local lifecycle matrix, real validator | 172 assertions passed in each shell; 108.74 seconds in 5.1 and 136.93 seconds in 7.6.5. |
+| Existing breakpoint scope/order/error suite | Passed separately in both shells and within both matrices. |
+| Source checks | PowerShell parse and `git diff --check` passed; test and binary hashes stayed unchanged. |
+
+Commands ran from the existing checkout with child-process-only execution policy:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-development.ps1
+$binary = (Resolve-Path target/x86_64-pc-windows-msvc/release/telltale.exe).Path
+$python = (Resolve-Path target/issue-147-review-20261027/validator-venv/Scripts/python.exe).Path
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-windows-runtime.ps1 -BinaryPath $binary
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_lifecycle_breakpoints.ps1
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_lifecycle_breakpoints.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_lifecycle.ps1 -BinaryPath $binary -Python $python
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows_lifecycle.ps1 -BinaryPath $binary -Python $python
+```
+
+The focused local harness extracted the actual scenario/setup from the repository
+test and is retained with raw logs, full command arguments, attempt outcomes and
+hash manifests under ignored `target/issue-147-review-20261027`. Setup attempts
+initially encountered execution policy, missing validator/network access, CRLF
+extraction and sandbox-user ownership refusal. Native tests used the real
+non-administrator account, with ownership guards intact and existing parent
+permissions unchanged.
+An initial receipt negative control was caught earlier by the production
+digest/receipt guard; the corrected control reached the intended assertion.
+Those harness/setup failures and their corrections are recorded locally and are
+not unexpected sharing reproductions. No full matrix needed a rerun.
+
+The specific permissions acceptance is recorded in the maintainer's
+[Approved change / Permissions bullet](https://github.com/Dark-Roast-Cyber/telltale/issues/147#issuecomment-6457521336).
+It covers inherited permissions and not carrying the old executable's explicit
+ACEs or alternate streams. Existing acceptance is preserved; required custom
+permissions must still be reapplied after reinstall, as documented in the install
+guide. This session made no further permissions-policy change.
+
+`GITHUB_ACTIONS` remained unset, Scheduler was substituted, and
+`-TestScheduledTask` was not used. The desktop package LocalCache redirection
+limitation remains; unredirected production-path equivalence is not established
+by these runs. CI-only attribution/pre-rollback capture and live Scheduler/PATH
+remain disposable-runner coverage. Full Rust tests and Clippy were not repeated
+for this PowerShell-test-only correction. Historical holder/share-mode attribution
+remains unknown; passing controls do not eliminate all possible refusals.
+
+[CI 40606167394](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/40606167394)
+passed all 14 jobs at the old head, and CodeQL passed; those checks predate this
+correction. This local-validation snapshot precedes publication and final-source
+CI. The maintainer subsequently authorized committing and pushing the correction,
+one complete normal CI run, and one additional Windows job execution at the same
+unchanged source, both with the real validator and live disposable-runner slice.
+Record actual checkout/tree and binary identities; inspect any unexpected refusal
+before spending further runs. Merge, diagnostic cleanup, release, deployment and
+issue closure remain separate decisions.
