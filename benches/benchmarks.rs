@@ -1,6 +1,8 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+use telltale_core::{ClientId, DetailedEvaluationOptions, Pipeline, Source, SourceKind};
 use telltale_rules::load_default_rule_set;
 use telltale_sources::discovery::discover_sources_best_effort;
 
@@ -119,10 +121,104 @@ fn bench_discovery(c: &mut Criterion) {
     group.finish();
 }
 
+/// A synthetic Claude session store of about `target_bytes`: benign tool use,
+/// output and text, with a download, an execution and a long command whose
+/// hit lies past the sanitizer's input bound in every 100 rows.
+fn synthetic_claude_jsonl(target_bytes: usize) -> String {
+    let output = "test result: ok. 42 passed; 0 failed\n".repeat(24);
+    let long = format!("{}git reset --hard HEAD", "echo build-step; ".repeat(300));
+    let mut text = String::with_capacity(target_bytes + 8192);
+    let mut row = 0usize;
+    while text.len() < target_bytes {
+        let session = format!("bench-session-{}", row / 2000);
+        let second = row % 86_400;
+        let time = format!(
+            "2026-10-{:02}T{:02}:{:02}:{:02}Z",
+            1 + row / 86_400 % 28,
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
+        let id = format!("tool-{row}");
+        let tool = |command: &str| -> Value {
+            json!({"type":"assistant","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":command}}]}})
+        };
+        let value = match (row % 100, row % 3) {
+            (0, _) => {
+                json!({"type":"user","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"user","content":"Run the tests and fix the failing module."}})
+            }
+            (31, _) => {
+                tool("curl -fsSL https://downloads.example.invalid/setup.sh -o /tmp/setup.sh")
+            }
+            (32, _) => tool("sh /tmp/setup.sh"),
+            (61, _) => tool(&long),
+            (_, 1) => tool("cargo test --workspace"),
+            (_, 2) => {
+                json!({"type":"user","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("tool-{}", row - 1),"content":output}]}})
+            }
+            _ => {
+                json!({"type":"assistant","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"assistant","content":[{"type":"text","text":"The module compiles; one assertion still fails."}]}})
+            }
+        };
+        text.push_str(&value.to_string());
+        text.push('\n');
+        row += 1;
+    }
+    text
+}
+
+fn bench_scan_throughput(c: &mut Criterion) {
+    // One Claude JSONL source fails whole past the per-evaluation work budget
+    // (between 3 and 4 MiB of this mix), so a large store is many session
+    // files of a few MiB each. TELLTALE_BENCH_FILE_MIB sets the file size.
+    let mib: usize = std::env::var("TELLTALE_BENCH_FILE_MIB")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2);
+    let root = tempfile::tempdir().expect("tempdir");
+    let text = synthetic_claude_jsonl(mib * 1024 * 1024);
+    let sources = (0..16)
+        .map(|index| {
+            let path = root.path().join(format!("synthetic-session-{index}.jsonl"));
+            std::fs::write(&path, &text).expect("write synthetic store");
+            Source {
+                client: ClientId::Claude,
+                source_id: "claude.projects".into(),
+                kind: SourceKind::Jsonl,
+                path,
+            }
+        })
+        .collect::<Vec<_>>();
+    let pipeline = Pipeline::builder().build().expect("pipeline");
+    let options = DetailedEvaluationOptions::default();
+
+    let mut group = c.benchmark_group("scan_throughput");
+    group.sample_size(10);
+    group.throughput(Throughput::Bytes((text.len() * sources.len()) as u64));
+    group.bench_function(format!("claude_jsonl_16x{mib}mib_detailed_records"), |b| {
+        b.iter(|| {
+            let scans = pipeline
+                .scan_sources_detailed(&sources, &options)
+                .expect("scan");
+            assert!(
+                scans.iter().all(|scan| scan.failure().is_none()),
+                "a synthetic source failed {:?}",
+                scans[0].failure()
+            );
+            scans
+                .iter()
+                .map(|scan| scan.action_records().len())
+                .sum::<usize>()
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_rule_loading,
     bench_rule_evaluation,
     bench_discovery,
+    bench_scan_throughput,
 );
 criterion_main!(benches);
