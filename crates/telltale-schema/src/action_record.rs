@@ -201,8 +201,9 @@ impl ActionRecordV1 {
     /// Parse and validate one complete record from another process. Rejects
     /// oversized input, other versions, unknown fields, and values that the
     /// producer cannot emit, including text that redaction would still change.
-    /// Redaction only grows stricter, so a consumer newer than its producer
-    /// may reject text that the older redactor let through.
+    /// A consumer whose redactor differs from its producer's may therefore
+    /// reject valid output: a newer consumer when redaction grew stricter, an
+    /// older consumer when it kept more text.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ActionRecordError> {
         if bytes.len() > ACTION_RECORD_MAX_INPUT_BYTES {
             return Err(structure("input_too_large"));
