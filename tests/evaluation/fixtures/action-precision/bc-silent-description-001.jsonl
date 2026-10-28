@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"synthetic-bc-silent-description-001","timestamp":"2026-04-05T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-silent-description-001","timestamp":"2026-04-05T09:00:01Z","payload":{"type":"user_message","message":"Why did the database schema change on deploy?"}}
+{"type":"event_msg","session_id":"synthetic-bc-silent-description-001","timestamp":"2026-04-05T09:00:10Z","payload":{"type":"assistant_message","message":"The old entrypoint silently runs pending migrations at startup; I added a log line so the next deploy records them."}}

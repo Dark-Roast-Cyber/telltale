@@ -1,0 +1,4 @@
+{"type":"session_meta","session_id":"synthetic-bc-package-info-001","timestamp":"2026-04-05T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-package-info-001","timestamp":"2026-04-05T09:00:01Z","payload":{"type":"user_message","message":"Which versions of react and requests are published?"}}
+{"type":"event_msg","session_id":"synthetic-bc-package-info-001","timestamp":"2026-04-05T09:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"npm info react versions --json","message":"Run a synthetic fixture command."}}
+{"type":"event_msg","session_id":"synthetic-bc-package-info-001","timestamp":"2026-04-05T09:00:20Z","payload":{"type":"tool_call","tool_name":"bash","command":"pip index versions requests","message":"Run a synthetic fixture command."}}
