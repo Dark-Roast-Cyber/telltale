@@ -27,8 +27,8 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
-| Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
 
@@ -284,8 +284,17 @@ Three scores exist and must stay distinct: native finding risk
 (`risk_points()`), the action `promotion_score()` (the sum of the action's
 `contributions()`), and the Event 3 session `risk_score`.
 
-- Category chains are ordered within a 15-minute source-time window
-  (`ACTION_CHAIN_WINDOW_SECONDS = 900`).
+- A chain with a declared link (`link: {calls: N}` in rule content) completes
+  only when its steps lie within N tool calls of each other, in declared order
+  unless the link says `order: any`. It has no time window unless the link sets
+  `minutes`, which applies when both steps carry a source time. The catalog
+  reports it as `action_link: "within_calls:N"` with `action_within_seconds`
+  null, or the link's `minutes` converted to seconds. Every bundled category
+  chain except `chain.download_then_execute` declares such a link.
+- A category chain without a declared link is ordered within a 15-minute
+  source-time window (`ACTION_CHAIN_WINDOW_SECONDS = 900`,
+  `action_within_seconds: 900`). A modifier that names only rule IDs and
+  declares no link is a same-action predicate: unordered, with no time window.
 - The bundled downloaded-artifact correlation links supported download and
   execution forms. A link needs a literal artifact match, temporal order, and
   source time; unknown or unsupported syntax establishes no link.
@@ -678,10 +687,22 @@ emitted by scans or CLI watch.
 - API: install snapshots and signal types,
   `collect_install_inventory_with_context`, `collect_install_inventory_for_platform`,
   `collect_install_inventory_with_sources`, `snapshot_to_event`,
-  `discover_mcp_inventory(root)` (Event 3 inventory events), and
-  `discover_mcp_inventory_servers(root)` (the same discovery as structured
-  `McpServerInventory` values; their `path` is host-local, so hash it before it
-  leaves the host).
+  `collect_mcp_inventory`, and `discover_mcp_inventory(root)` (Event 3
+  inventory events).
+- MCP configuration: `collect_mcp_inventory` reads the files a host names
+  (`McpInventoryInput::Configs`) or the known fixed paths under one root
+  (`McpInventoryInput::FixedRoot`), without a workspace walk. It returns
+  sanitized `McpInventoryObservation` values with a config path hash. A named
+  config it cannot read, invalid JSON, and MCP TOML sections it recognizes but
+  cannot parse are reported as observations with a `reason`. Limits:
+  `FixedRoot` includes only paths whose metadata it can read, so a config
+  under an unreadable directory yields nothing; TOML forms the line scanner
+  does not recognize, such as inline tables or keys directly under a bare
+  `[mcp_servers]` table, also yield no observation.
+- Compatibility: `discover_mcp_inventory_servers(root)` also walks workspace
+  configurations and returns raw `McpServerInventory` values whose `path` is
+  host-local. A config it cannot read contributes no servers, so an empty list
+  does not mean no configuration. Prefer `collect_mcp_inventory`.
 - Prefer an explicit `InstallInventoryContext`; `current()` and
   `collect_install_inventory` read the process environment (home, PATH, extension
   roots), which may not describe the intended host roots.

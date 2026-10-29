@@ -1051,8 +1051,9 @@ fn linked_and_process_correlations_preserve_supporting_action_coordinates() {
 fn bounded_context_is_opt_in_anchor_and_results_excluded_and_private() {
     let root = tempfile::tempdir().unwrap();
     let rows = [
-        json!({"type":"user","timestamp":TIME,"message":{"role":"user","content":format!("password={SECRET} inspect {PRIVATE_PATH}/.env")}}),
-        json!({"type":"assistant","timestamp":TIME,"message":{"role":"assistant","content":"I will inspect the requested file"}}),
+        // Native Claude turns carry record metadata beside the message.
+        json!({"type":"user","timestamp":TIME,"cwd":"/home/synthetic/project","gitBranch":"main","isSidechain":false,"userType":"external","version":"2.0.0","message":{"role":"user","content":format!("password={SECRET} inspect {PRIVATE_PATH}/.env")}}),
+        json!({"type":"assistant","timestamp":TIME,"cwd":"/home/synthetic/project","gitBranch":"main","isSidechain":false,"userType":"external","version":"2.0.0","message":{"role":"assistant","content":[{"type":"text","text":"I will inspect the requested file"}]}}),
         call("context", &format!("cat {PRIVATE_PATH}/.env")),
         json!({"type":"user","timestamp":TIME,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"context","content":"TT_RESULT_MUST_NOT_APPEAR"}]}}),
         json!({"type":"assistant","timestamp":TIME,"message":{"role":"assistant","content":"Inspection complete"}}),
@@ -1085,11 +1086,21 @@ fn bounded_context_is_opt_in_anchor_and_results_excluded_and_private() {
     let opted = pipeline
         .scan_sources_detailed(&[selected], &context)
         .unwrap();
-    assert!(
-        opted[0].action_findings[0]
-            .context()
-            .iter()
-            .any(|c| c.kind() == ActionContextKind::UserMessage)
+    // Each message entry is the turn's own words: none of the record metadata
+    // precedes them, so a bounded excerpt starts with what was said.
+    let entries = opted[0].action_findings[0].context();
+    let user = entries
+        .iter()
+        .find(|c| c.kind() == ActionContextKind::UserMessage)
+        .expect("user turn in context");
+    assert!(user.redacted_text().starts_with("password="));
+    let assistant = entries
+        .iter()
+        .find(|c| c.kind() == ActionContextKind::AssistantMessage)
+        .expect("assistant turn in context");
+    assert_eq!(
+        assistant.redacted_text(),
+        "I will inspect the requested file"
     );
     assert_eq!(
         action.replay_identity(),
