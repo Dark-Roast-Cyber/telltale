@@ -289,10 +289,12 @@ Three scores exist and must stay distinct: native finding risk
   unless the link says `order: any`. It has no time window unless the link sets
   `minutes`, which applies when both steps carry a source time. The catalog
   reports it as `action_link: "within_calls:N"` with `action_within_seconds`
-  null or the link's minutes. Every bundled category chain except
-  `chain.download_then_execute` declares such a link.
-- A chain without a declared link is ordered within a 15-minute source-time
-  window (`ACTION_CHAIN_WINDOW_SECONDS = 900`, `action_within_seconds: 900`).
+  null, or the link's `minutes` converted to seconds. Every bundled category
+  chain except `chain.download_then_execute` declares such a link.
+- A category chain without a declared link is ordered within a 15-minute
+  source-time window (`ACTION_CHAIN_WINDOW_SECONDS = 900`,
+  `action_within_seconds: 900`). A modifier that names only rule IDs and
+  declares no link is a same-action predicate: unordered, with no time window.
 - The bundled downloaded-artifact correlation links supported download and
   execution forms. A link needs a literal artifact match, temporal order, and
   source time; unknown or unsupported syntax establishes no link.
@@ -629,9 +631,13 @@ emitted by scans or CLI watch.
 - MCP configuration: `collect_mcp_inventory` reads the files a host names
   (`McpInventoryInput::Configs`) or the known fixed paths under one root
   (`McpInventoryInput::FixedRoot`), without a workspace walk. It returns
-  sanitized `McpInventoryObservation` values with a config path hash. A config
-  it cannot read or parse is reported as an observation with a `reason`, not
-  dropped.
+  sanitized `McpInventoryObservation` values with a config path hash. A named
+  config it cannot read, invalid JSON, and MCP TOML sections it recognizes but
+  cannot parse are reported as observations with a `reason`. Limits:
+  `FixedRoot` includes only paths whose metadata it can read, so a config
+  under an unreadable directory yields nothing; TOML forms the line scanner
+  does not recognize, such as inline tables or keys directly under a bare
+  `[mcp_servers]` table, also yield no observation.
 - Compatibility: `discover_mcp_inventory_servers(root)` also walks workspace
   configurations and returns raw `McpServerInventory` values whose `path` is
   host-local. A config it cannot read contributes no servers, so an empty list
