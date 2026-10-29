@@ -319,9 +319,6 @@ pub enum AcquisitionError {
     CanonicalBoundValidation {
         context: CanonicalBoundContext,
     },
-    /// A JSONL session source read more than `MAX_SCALED_SOURCE_BYTES`
-    /// (64 MiB), the largest source whose bounds scale. Nothing is evaluated.
-    UnsupportedSourceSize,
 }
 
 impl AcquisitionError {
@@ -342,7 +339,6 @@ impl AcquisitionError {
             Self::AccountingOverflow => "native_accounting_overflow",
             Self::CanonicalMapping { code } | Self::CanonicalValidation { code } => code,
             Self::CanonicalBoundValidation { .. } => "unbounded_value",
-            Self::UnsupportedSourceSize => "unsupported_source_size",
         }
     }
 
@@ -747,9 +743,6 @@ fn acquire_source_impl(
 }
 
 fn map_source_read(error: SourceReadError, limits: Option<DirectReadLimits>) -> AcquisitionError {
-    if matches!(error, SourceReadError::UnsupportedSize) {
-        return AcquisitionError::UnsupportedSourceSize;
-    }
     if limits.is_none() {
         return AcquisitionError::SourceRead;
     }

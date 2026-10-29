@@ -39,8 +39,9 @@ pub const OTHER_REGISTRY_VERSION: &str = "other-v1";
 pub const MAX_CANONICAL_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 /// A per-source bound grows by its floor for each this many bytes read.
 pub const SOURCE_SCALE_UNIT_BYTES: usize = 1024 * 1024;
-/// The largest whole JSONL session source that acquisition reads and scales
-/// bounds for. A larger source fails as `unsupported_source_size`.
+/// The JSONL session source size at which per-source bounds stop growing. A
+/// larger source keeps these bounds and fails only if it exceeds them or the
+/// reader's own limits.
 pub const MAX_SCALED_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 
 /// How far one source's bounds scale with the bytes read from it. Each bound

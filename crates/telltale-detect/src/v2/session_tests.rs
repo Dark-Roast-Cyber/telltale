@@ -1956,3 +1956,94 @@ fn scaled_work_stays_proportional_for_costly_input() {
     assert_eq!(short.err(), Some(ProcessingError::Bounds));
     assert!(work.is_exhausted(), "not a compatibility retention failure");
 }
+
+fn dense_needles(count: usize, text: &str) -> Vec<CanonicalObservationV2> {
+    (0..count)
+        .map(|index| {
+            message(
+                &format!("dense{index:05}"),
+                Some("session"),
+                text,
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect()
+}
+
+fn omitted_markers(
+    event: &telltale_schema::event::Event,
+) -> Vec<&telltale_schema::event::Evidence> {
+    event
+        .evidence
+        .iter()
+        .filter(|item| item.field == telltale_schema::event::EVIDENCE_OMITTED_FIELD)
+        .collect()
+}
+
+#[test]
+fn oversized_detection_event_keeps_anchors_and_marks_omitted_evidence() {
+    use telltale_schema::event::{EVENT3_MAX_INPUT_BYTES, Event3Record, evidence_hash};
+    let observations = dense_needles(3_000, &format!("needle {}", "ordinary ".repeat(60)));
+    let (evaluation, _) = evaluate_scaled(&observations, 64 << 20);
+    let projected = super::event3::project_event3(&evaluation.unwrap(), &context()).unwrap();
+    let [event] = projected.events.as_slice() else {
+        panic!("one detection event");
+    };
+    let bytes = serde_json::to_vec(event).unwrap();
+    assert!(bytes.len() <= EVENT3_MAX_INPUT_BYTES);
+    Event3Record::from_json(&bytes).expect("the strict consumer accepts the fitted event");
+    assert_eq!(event.timeline_anchors.len(), observations.len());
+    assert_eq!(projected.occurrences.len(), observations.len());
+    let markers = omitted_markers(event);
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].rule_id.as_deref(), Some("synthetic.atomic"));
+    assert_eq!(markers[0].hash, None);
+    let omitted = markers[0].redacted_value.parse::<usize>().unwrap();
+    let kept = &event.evidence[..event.evidence.len() - 1];
+    assert!(omitted > 0 && !kept.is_empty());
+    assert_eq!(kept.len() + omitted, observations.len() * 2);
+    // The earliest occurrences keep their evidence pairs, in order.
+    let kept_ids = kept
+        .iter()
+        .filter(|item| item.field == "canonical_observation_id")
+        .map(|item| item.hash.clone().unwrap())
+        .collect::<Vec<_>>();
+    let earliest = observations[..kept.len() / 2]
+        .iter()
+        .map(|observation| evidence_hash(observation.observation_id()))
+        .collect::<Vec<_>>();
+    assert_eq!(kept_ids, earliest);
+    // Rules and score are those of the same rule in an event that fits.
+    let (small, _) = evaluate_scaled(&observations[..1], 64 << 20);
+    let small = super::event3::project_event3(&small.unwrap(), &context()).unwrap();
+    assert_eq!(event.rule_ids, small.events[0].rule_ids);
+    assert_eq!(event.risk_score, small.events[0].risk_score);
+    assert!(omitted_markers(&small.events[0]).is_empty());
+}
+
+#[test]
+fn detection_event_within_the_limit_is_not_changed_by_fitting() {
+    let observations = dense_needles(200, &format!("needle {}", "ordinary ".repeat(60)));
+    let (evaluation, _) = evaluate_scaled(&observations, 64 << 20);
+    let projected = super::event3::project_event3(&evaluation.unwrap(), &context()).unwrap();
+    let event = &projected.events[0];
+    let before = serde_json::to_vec(event).unwrap();
+    assert!(before.len() <= telltale_schema::event::EVENT3_MAX_INPUT_BYTES);
+    assert_eq!(event.evidence.len(), observations.len() * 2);
+    assert!(omitted_markers(event).is_empty());
+    let mut fitted = event.clone();
+    let occurrences = (0..observations.len()).collect::<Vec<_>>();
+    super::event3::fit_detection_evidence(&mut fitted, &occurrences, &mut RetentionBudget::new())
+        .unwrap();
+    assert_eq!(serde_json::to_vec(&fitted).unwrap(), before);
+}
+
+#[test]
+fn detection_event_whose_anchors_alone_exceed_the_limit_fails_projection() {
+    let observations = dense_needles(10_000, "needle");
+    let (evaluation, _) = evaluate_scaled(&observations, 64 << 20);
+    assert!(matches!(
+        super::event3::project_event3(&evaluation.unwrap(), &context()),
+        Err(ProcessingError::Projection)
+    ));
+}

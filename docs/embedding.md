@@ -234,28 +234,34 @@ second detector or an Event 3 conversion loop.
 
 A JSONL session source (Claude Code, Codex, OpenClaw, Qwen) of up to 64 MiB
 (`MAX_SCALED_SOURCE_BYTES`) is evaluated whole. Its per-source bounds scale with
-the bytes read: each is its floor per MiB, never below the floor and at most 64
-times it. The floors are 256 MiB of evaluation byte visits, 65,536 observations,
+the bytes read: each is its floor per MiB, never below the floor, and stops
+growing at 64 MiB. The floors are 256 MiB of evaluation byte visits, 65,536 observations,
 8 MiB of canonical retention, 100,000 native units, 4,096 retained or projection
 items and 4 MiB of compatibility text. Limits on one value, such as a record's
 8 MiB or a retained string's 4,096 bytes, do not scale. OpenCode windows and
 Copilot process logs keep the floors.
 
-- A source that reads more than 64 MiB fails before evaluation:
-  `failure().acquisition_error()` is `AcquisitionError::UnsupportedSourceSize`
-  (`unsupported_source_size`) and the Event 3 code stays
-  `canonical_acquisition_failed`. Nothing of it is evaluated, but each scan
-  still reads and parses its first 64 MiB. Windowed evaluation of larger
+- A larger source keeps the 64 MiB bounds. It is evaluated whole when it fits
+  them and the reader's limits (128 MiB read, 8 MiB per record), and otherwise
+  fails with the same codes as any other source. Windowed evaluation of larger
   sources is not built.
 - Cost grows linearly with size. On synthetic sessions it was about 80 byte
-  visits per input byte (about 100 with process-chain detections), 5 MiB/s and
-  a peak RSS of about 15 bytes per input byte: about 940 MiB for a 64 MiB
-  source. The whole source is re-evaluated on every scan, so throttle rescans
-  of large, growing sources.
-- One limit does not scale: a session's Event 3 detection event must serialize
-  within 1 MiB (`EVENT3_MAX_INPUT_BYTES`). It carries two evidence items per
-  retained match, so a single session with about 1,300 retained matches fails
-  at projection (`canonical_projection_failed`) at any source size.
+  visits per input byte (about 100 with process-chain detections) and 5 MiB/s.
+  The whole source is re-evaluated on every scan, so throttle rescans of large,
+  growing sources.
+- Memory is not bounded by these limits. Peak RSS was about 15 times the source
+  size: 939 MiB for one 64 MiB source. Size the host for that per source
+  scanned at once, or scan large sources one at a time.
+- A session's Event 3 detection event must still serialize within 1 MiB
+  (`EVENT3_MAX_INPUT_BYTES`). It carries two evidence items per retained match.
+  When they do not fit, the event keeps every timeline anchor and the evidence
+  of the earliest occurrences that fits, and adds one item per rule that lost
+  evidence: `{"field": "evidence_omitted", "redacted_value": "<omitted item
+  count>", "rule_id": "<rule>"}` (`EVIDENCE_OMITTED_FIELD`), without a hash.
+  Rules, scores, risk and action records are unchanged, and an event that fits
+  is unchanged. If the anchors alone exceed 1 MiB (about 6,000 matched
+  occurrences in one session, at about 170 bytes per anchor), the source fails
+  at projection (`canonical_projection_failed`).
 
 ### Rule v1 URL target
 

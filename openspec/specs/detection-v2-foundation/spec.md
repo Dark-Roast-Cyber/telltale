@@ -945,6 +945,12 @@ per-string limit SHALL be multiplied by the MiB read, never below 1 and at most
 - **THEN** each per-source limit is its floor times the source's MiB
 - **AND** an input that exceeds those scaled limits still fails atomically
 
+#### Scenario: An oversized session detection event marks omitted evidence
+- **WHEN** a session detection event's evidence would exceed the 1 MiB Event3 limit
+- **THEN** it keeps every timeline anchor and the earliest occurrences' evidence that fits
+- **AND** it adds one `evidence_omitted` item per rule that lost evidence, with the omitted item count
+- **AND** an event whose anchors alone exceed the limit fails projection
+
 #### Scenario: Unsupported capability
 - **WHEN** a required capability is unsupported or unknown
 - **THEN** evaluation SHALL preserve that distinction from no-match and error

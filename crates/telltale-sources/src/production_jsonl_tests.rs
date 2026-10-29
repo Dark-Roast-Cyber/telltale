@@ -3,7 +3,7 @@ use std::io::Write;
 use telltale_schema::clients::SourceKind;
 
 const RECORD_BYTES: usize = 8 * 1024 * 1024;
-const SOURCE_BYTES: usize = 64 * 1024 * 1024;
+const SOURCE_BYTES: usize = 128 * 1024 * 1024;
 
 fn source(path: std::path::PathBuf) -> Source {
     Source {
@@ -89,10 +89,7 @@ fn production_jsonl_aggregate_inclusive_counts_all_blank_bytes() {
     assert!(read_jsonl_values(&source).unwrap().is_empty());
     file.write_all(b"\n").unwrap();
     assert!(
-        matches!(
-            read_jsonl_values(&source),
-            Err(SourceReadError::UnsupportedSize)
-        ),
+        read_jsonl_values(&source).is_err(),
         "aggregate blank bytes admitted"
     );
 }

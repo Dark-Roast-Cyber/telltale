@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Read;
 
 use telltale_schema::clients::ClientId;
-use telltale_schema::observation::{MAX_SCALED_SOURCE_BYTES, SourceScale};
+use telltale_schema::observation::SourceScale;
 use telltale_schema::source::Source;
 
 /// Bounded failure while reading a supported source. Display and Debug stay
@@ -36,8 +36,6 @@ pub enum SourceReadError {
         source_id: String,
         detail: &'static str,
     },
-    /// A JSONL session source is larger than `MAX_SCALED_SOURCE_BYTES`.
-    UnsupportedSize,
 }
 
 impl fmt::Display for SourceReadError {
@@ -50,7 +48,6 @@ impl fmt::Display for SourceReadError {
             Self::Locked => formatter.write_str("sqlite locked"),
             Self::ResumeRegressed => formatter.write_str("resume_regressed"),
             Self::UnsupportedSchema => formatter.write_str("unsupported_source_schema"),
-            Self::UnsupportedSize => formatter.write_str("unsupported_source_size"),
             Self::SchemaDrift {
                 client,
                 source_id,
@@ -158,8 +155,6 @@ pub(crate) fn read_jsonl_values_with_limits(
 }
 
 pub(crate) const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
-/// Copilot process logs only; JSONL session sources stop at
-/// `MAX_SCALED_SOURCE_BYTES`.
 pub(crate) const PRODUCTION_SOURCE_BYTES: usize = 128 * 1024 * 1024;
 /// The native unit floor; JSONL session sources scale it by bytes read.
 pub(crate) const PRODUCTION_NATIVE_UNITS: usize = 100_000;
@@ -195,8 +190,8 @@ fn read_production_jsonl(mut reader: impl Read) -> Result<(Vec<Value>, usize), S
         }
         total = total
             .checked_add(read)
-            .filter(|bytes| *bytes <= MAX_SCALED_SOURCE_BYTES)
-            .ok_or(SourceReadError::UnsupportedSize)?;
+            .filter(|bytes| *bytes <= PRODUCTION_SOURCE_BYTES)
+            .ok_or_else(production_limit_error)?;
         units = SourceScale::for_source_bytes(total).apply(PRODUCTION_NATIVE_UNITS);
         for part in chunk[..read].split_inclusive(|byte| *byte == b'\n') {
             record
