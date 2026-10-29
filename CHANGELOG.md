@@ -6,6 +6,15 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Embed the published `telltale.community` 0.1.1 release
+  (`Dark-Roast-Cyber/telltale-detections` tag `v0.1.1`, source `90f735e`). It
+  adds `tdx.persistence.windows_service_change`,
+  `tdx.persistence.powershell_profile_write` and
+  `tdx.persistence.wmi_event_subscription`, and revises the patterns of
+  `tdx.persistence.git_hook_change`, `tdx.persistence.mcp_server_registration`
+  and `tdx.persistence.windows_agent_command`; scores are unchanged. Its content
+  SHA-256 is `235069d57246398f29fc5671c400618623737d617bd854f96df5a07ffe7f8a2b`,
+  matching the release `SHA256SUMS` and its build-provenance attestation.
 - A JSONL session source (Claude Code, Codex, OpenClaw, Qwen) of up to 64 MiB
   is evaluated whole. Its per-source bounds (evaluation work, observations,
   canonical retention, native units, retained and projection items, and
