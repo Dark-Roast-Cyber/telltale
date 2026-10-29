@@ -251,17 +251,15 @@ pub(crate) fn extract_codex_native_records_with_limits(
             && (discriminator.as_deref() == Some("session_meta")
                 || (discriminator.is_none() && value.get("session_meta").is_some()));
         let effective_session_id = session_id.clone().or(inherited_session_id.clone());
-        if value.get("type").and_then(Value::as_str) == Some("event_msg") {
-            if let Some(payload) = value.get("payload") {
-                if payload.get("type").and_then(Value::as_str) == Some("task_started") {
-                    if let Some(turn) = payload.get("turn_id").and_then(Value::as_str) {
-                        import_turns.insert(
-                            effective_session_id.clone(),
-                            turn.starts_with("external-import-turn-"),
-                        );
-                    }
-                }
-            }
+        if value.get("type").and_then(Value::as_str) == Some("event_msg")
+            && let Some(payload) = value.get("payload")
+            && payload.get("type").and_then(Value::as_str) == Some("task_started")
+            && let Some(turn) = payload.get("turn_id").and_then(Value::as_str)
+        {
+            import_turns.insert(
+                effective_session_id.clone(),
+                turn.starts_with("external-import-turn-"),
+            );
         }
         let external_import = import_turns
             .get(&effective_session_id)
@@ -269,14 +267,13 @@ pub(crate) fn extract_codex_native_records_with_limits(
             .unwrap_or(false);
         if response_message || legacy_message || web_search {
             for envelope in [&value, semantic_value] {
-                if let Some(thread) = envelope.get("thread_id") {
-                    if thread.as_str().is_none_or(|id| id.trim().is_empty())
+                if let Some(thread) = envelope.get("thread_id")
+                    && (thread.as_str().is_none_or(|id| id.trim().is_empty())
                         || effective_session_id
                             .as_deref()
-                            .is_some_and(|owner| thread.as_str() != Some(owner))
-                    {
-                        return Err(drift("Codex raw response has conflicting thread ownership"));
-                    }
+                            .is_some_and(|owner| thread.as_str() != Some(owner)))
+                {
+                    return Err(drift("Codex raw response has conflicting thread ownership"));
                 }
             }
         }
@@ -370,18 +367,19 @@ pub(crate) fn extract_codex_native_records_with_limits(
             quarantine,
         };
 
-        if session_metadata && value.get("type").and_then(Value::as_str) == Some("session_meta") {
-            if let Some(session_id) = session_id {
-                inherited_session_id = Some(session_id);
-                inherited_root_id = public_meta
-                    .and_then(|p| p.get("session_id"))
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-                    .map(ToOwned::to_owned);
-                paginated = public_meta.is_some_and(|p| {
-                    p.get("history_mode").and_then(Value::as_str) == Some("paginated")
-                });
-            }
+        if session_metadata
+            && value.get("type").and_then(Value::as_str) == Some("session_meta")
+            && let Some(session_id) = session_id
+        {
+            inherited_session_id = Some(session_id);
+            inherited_root_id = public_meta
+                .and_then(|p| p.get("session_id"))
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+            paginated = public_meta.is_some_and(|p| {
+                p.get("history_mode").and_then(Value::as_str) == Some("paginated")
+            });
         }
         records.push(native);
     }
@@ -573,16 +571,16 @@ fn completed_record(
     let item_id = required_string(item, "id")?.to_owned();
     for envelope in [value, payload, item] {
         for key in ["session_id", "sessionID", "sessionId", "thread_id"] {
-            if let Some(id) = envelope.get(key) {
-                if id.as_str() != Some(owner) {
-                    return Err("Codex completed item has conflicting owner coordinates");
-                }
+            if let Some(id) = envelope.get(key)
+                && id.as_str() != Some(owner)
+            {
+                return Err("Codex completed item has conflicting owner coordinates");
             }
         }
-        if let Some(turn) = envelope.get("turn_id") {
-            if turn.as_str() != Some(&turn_id) {
-                return Err("Codex completed item has conflicting turn coordinates");
-            }
+        if let Some(turn) = envelope.get("turn_id")
+            && turn.as_str() != Some(&turn_id)
+        {
+            return Err("Codex completed item has conflicting turn coordinates");
         }
     }
     if let Some(file_owner) = inherited_owner.filter(|id| *id != owner) {
@@ -817,13 +815,13 @@ fn completed_file_change_result(item: &Value) -> Result<Option<Value>, &'static 
             ("type".to_owned(), Value::String(kind.to_owned())),
             (text_key.to_owned(), text.clone()),
         ]);
-        if kind == "update" {
-            if let Some(path) = change.get("move_path") {
-                if !path.is_null() && !path.is_string() {
-                    return Err(invalid);
-                }
-                fields.insert("move_path".to_owned(), path.clone());
+        if kind == "update"
+            && let Some(path) = change.get("move_path")
+        {
+            if !path.is_null() && !path.is_string() {
+                return Err(invalid);
             }
+            fields.insert("move_path".to_owned(), path.clone());
         }
         admitted.insert(path.clone(), Value::Object(fields));
     }
@@ -866,10 +864,10 @@ fn resolve_mirrors(records: &mut [CodexNativeRecord]) -> Result<(), &'static str
                 coords.turn_id.clone(),
                 coords.item_id.clone(),
             );
-            if let Some(previous) = assistant.insert(key, index) {
-                if records[previous].blocks != record.blocks {
-                    return Err("Codex stable-ID completed messages disagree");
-                }
+            if let Some(previous) = assistant.insert(key, index)
+                && records[previous].blocks != record.blocks
+            {
+                return Err("Codex stable-ID completed messages disagree");
             }
         } else if record.role.as_deref() == Some("user") && record.paginated {
             user_turns.insert((owner.clone(), coords.turn_id.clone()));
@@ -890,13 +888,13 @@ fn resolve_mirrors(records: &mut [CodexNativeRecord]) -> Result<(), &'static str
             continue;
         }
         if record.role.as_deref() == Some("assistant") {
-            if let Some(id) = &record.response_id {
-                if let Some(completed) = assistant.get(&(owner.clone(), turn.clone(), id.clone())) {
-                    if records[*completed].blocks != record.blocks {
-                        return Err("Codex stable-ID message mirrors disagree");
-                    }
-                    mirrored.push(index);
+            if let Some(id) = &record.response_id
+                && let Some(completed) = assistant.get(&(owner.clone(), turn.clone(), id.clone()))
+            {
+                if records[*completed].blocks != record.blocks {
+                    return Err("Codex stable-ID message mirrors disagree");
                 }
+                mirrored.push(index);
             }
         } else if record.role.as_deref() == Some("user")
             && record.paginated
@@ -978,18 +976,17 @@ fn codex_envelopes<'a>(value: &'a Value, semantic: &'a Value) -> Vec<&'a Value> 
         ];
     }
     let mut envelopes = vec![value, semantic];
-    if semantic.get("type").and_then(Value::as_str) != Some("web_search_call") {
-        if let Some(message) = semantic.get("message").filter(|v| v.is_object()) {
-            envelopes.push(message);
-        }
+    if semantic.get("type").and_then(Value::as_str) != Some("web_search_call")
+        && let Some(message) = semantic.get("message").filter(|v| v.is_object())
+    {
+        envelopes.push(message);
     }
     if matches!(
         value.get("type").and_then(Value::as_str),
         Some("session_meta" | "response_item" | "event_msg" | "turn_context")
-    ) {
-        if let Some(payload) = value.get("payload").filter(|v| v.is_object()) {
-            envelopes.push(payload);
-        }
+    ) && let Some(payload) = value.get("payload").filter(|v| v.is_object())
+    {
+        envelopes.push(payload);
     }
     envelopes
 }
@@ -1255,14 +1252,14 @@ fn codex_role(value: &Value, semantic_value: &Value) -> Option<String> {
 }
 
 fn codex_message_content(value: &Value) -> Option<Value> {
-    if let Some(message) = value.get("message") {
-        if !message.is_array() {
-            if let Some(content) = message.get("content") {
-                return Some(content.clone());
-            }
-            if !message.is_object() {
-                return Some(message.clone());
-            }
+    if let Some(message) = value.get("message")
+        && !message.is_array()
+    {
+        if let Some(content) = message.get("content") {
+            return Some(content.clone());
+        }
+        if !message.is_object() {
+            return Some(message.clone());
         }
     }
     value

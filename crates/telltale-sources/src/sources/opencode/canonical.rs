@@ -395,31 +395,25 @@ fn emit_tool_observation(
         body = body.with_name(name)?;
         metadata.push(("tool.name", FactProvenance::Reported));
     }
-    if has_arguments {
-        if let Some(arguments) = arguments {
-            body = body.with_arguments(
-                JsonValue::try_from_source_tool_arguments(tool_name, arguments).map_err(
-                    |error| {
-                        error.with_bound_category(
-                            telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
-                        )
-                    },
-                )?,
-            );
-            metadata.push(("tool.arguments", FactProvenance::Reported));
-        }
+    if has_arguments && let Some(arguments) = arguments {
+        body = body.with_arguments(
+            JsonValue::try_from_source_tool_arguments(tool_name, arguments).map_err(|error| {
+                error.with_bound_category(
+                    telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
+                )
+            })?,
+        );
+        metadata.push(("tool.arguments", FactProvenance::Reported));
     }
-    if has_result {
-        if let Some(result) = result {
-            body = body.with_result(JsonValue::try_from_source_tool_result(result).map_err(
-                |error| {
-                    error.with_bound_category(
-                        telltale_schema::observation::CanonicalFieldCategory::ToolResult,
-                    )
-                },
-            )?);
-            metadata.push(("tool.result", FactProvenance::Reported));
-        }
+    if has_result && let Some(result) = result {
+        body = body.with_result(JsonValue::try_from_source_tool_result(result).map_err(
+            |error| {
+                error.with_bound_category(
+                    telltale_schema::observation::CanonicalFieldCategory::ToolResult,
+                )
+            },
+        )?);
+        metadata.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = state.is_error {
         body = body.with_is_error(is_error);
@@ -556,10 +550,10 @@ fn common_builder(
         builder = builder
             .session_id(telltale_schema::observation::CorrelationId::source_reported(session_id)?);
     }
-    if let Some(timestamp) = occurrence_time {
-        if let Ok(timestamp) = SourceTimestamp::new(timestamp) {
-            builder = builder.occurred_at(timestamp);
-        }
+    if let Some(timestamp) = occurrence_time
+        && let Ok(timestamp) = SourceTimestamp::new(timestamp)
+    {
+        builder = builder.occurred_at(timestamp);
     }
     Ok(builder.child_ordinal(0))
 }

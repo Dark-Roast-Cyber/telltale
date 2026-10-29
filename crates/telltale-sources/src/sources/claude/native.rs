@@ -186,10 +186,10 @@ fn claude_envelopes(value: &Value) -> Vec<&Value> {
     if let Some(message) = value.get("message").filter(|v| v.is_object()) {
         envelopes.push(message);
     }
-    if value.get("type").and_then(Value::as_str) == Some("session_meta") {
-        if let Some(payload) = value.get("payload").filter(|v| v.is_object()) {
-            envelopes.push(payload);
-        }
+    if value.get("type").and_then(Value::as_str) == Some("session_meta")
+        && let Some(payload) = value.get("payload").filter(|v| v.is_object())
+    {
+        envelopes.push(payload);
     }
     envelopes
 }

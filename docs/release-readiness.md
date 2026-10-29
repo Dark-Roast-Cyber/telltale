@@ -25,7 +25,7 @@ preparation, recheck that the tag/Release is unused, and obtain fresh CI/CodeQL
 at the exact merged SHA. The normal CI prospective-source job checks that SHA,
 trusted full history, canonical local release context, release preflight,
 independently locked embedding contracts and a fresh exact-SHA standalone Git
-consumer; the embedding MSRV job checks Rust 1.85.0 on Linux, macOS and Windows.
+consumer; the embedding MSRV job checks Rust 1.88.0 on Linux, macOS and Windows.
 Preflight skips downloaded-archive inspection when unpublished archives are
 absent; it does not qualify artifacts.
 No release workflow is dispatched. Preserve all RC2 pins and historical evidence.
@@ -211,7 +211,7 @@ The 0.7 built-in registry remains the six families/eight exact identities in the
 Do not restore retired adapters or expand scope to Event 4 or active blocking.
 Event 3 remains the production contract. Keep action-promotion scores distinct
 from native finding assessments and Event 3 session scores. Retain
-`rusqlite = "=0.32.1"`, SQLx coexistence, and the Rust 1.85 embedding MSRV; do
+`rusqlite = "=0.32.1"`, SQLx coexistence, and the Rust 1.88 embedding MSRV; do
 not claim a CLI MSRV or full historical client parity.
 
 Before stable qualification, finish required synthetic fixture coverage and make
