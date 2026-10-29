@@ -47,7 +47,10 @@ Source: `claude.projects` (JSONL).
 
 ### OpenClaw
 
-Source: `openclaw.agents` (JSONL, including archived/reset suffixes).
+Source: `openclaw.agents` (existing JSONL fixtures, including archived/reset
+suffixes). This profile does not describe the current default SQLite store,
+which is not discovered or qualified; see the [OpenClaw compatibility
+boundary](source-validation-matrix.md#openclaw-compatibility-boundary).
 
 | Capability | Status | Notes |
 | --- | --- | --- |

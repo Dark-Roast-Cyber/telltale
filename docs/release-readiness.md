@@ -206,7 +206,7 @@ reviewed final source SHA and exact standalone Git-consumer proof/preflight are
 required after polish. Freezing that source remains a separate acceptance action;
 integration pins and acceptance are a distinct gate.
 
-The 0.7 source scope remains the six families/eight exact identities in the
+The 0.7 built-in registry remains the six families/eight exact identities in the
 [supported-source denominator](migrations/0.7.0.md#supported-source-denominator).
 Do not restore retired adapters or expand scope to Event 4 or active blocking.
 Event 3 remains the production contract. Keep action-promotion scores distinct
@@ -214,14 +214,33 @@ from native finding assessments and Event 3 session scores. Retain
 `rusqlite = "=0.32.1"`, SQLx coexistence, and the Rust 1.85 embedding MSRV; do
 not claim a CLI MSRV or full historical client parity.
 
-Before stable qualification, finish supported-source synthetic fixture coverage
-and make documentation limits truthful. OpenClaw and Qwen CLI remain
-fixture-only/preview for live stores until bounded, approved validation uses
-client-generated synthetic stores; handwritten fixtures do not prove live
-compatibility, and existing personal stores must not be scanned. Keep their
-current labels until that evidence is accepted. This is a stable-qualification
-gate, not a retroactive change to fixture-based source support. Any unavailable
-host gate remains BLOCKED, never PASS.
+Before stable qualification, finish required synthetic fixture coverage and make
+documentation limits truthful. Handwritten fixtures do not prove live
+compatibility, and existing personal stores must not be scanned. Any unavailable
+required host gate remains BLOCKED, never PASS.
+
+**OpenClaw scope decision — 2026-10-20.** Default SQLite-store acquisition and
+live-store qualification are deferred beyond 0.7 and are not blockers for this
+release. At the pinned v2026.10.2 revision, OpenClaw stores runtime sessions and
+transcripts in `openclaw-agent.sqlite`; Telltale's registered `openclaw.agents`
+adapter discovers JSONL, not that default SQLite store. Keep the adapter and its
+existing fixture checks, and retain the upstream SQLite `known_gap` case. Do not
+advertise current default-store compatibility or live use. This is a documented
+scope limit, not a fix, a passing validation result, adapter retirement, or
+permission to weaken privacy and failure behavior. Qualification of a future
+SQLite adapter requires separately accepted source work and bounded evidence;
+older JSONL formats do not receive new development attention.
+
+**Qwen Code scope decision — 2026-10-20.** Current-format compatibility repair and
+live-store qualification are deferred beyond 0.7 and are not blockers for this
+release. Retain `qwen.projects`, its existing conformance gates and exact known-gap
+tests; inclusion in the registry does not establish current-format compatibility.
+The pinned v0.25.1 cases lose plain-turn text and reject function-response/system
+records, as recorded in the [source validation matrix](source-validation-matrix.md#qwen-code-compatibility-boundary).
+Do not advertise current Qwen Code formats or live stores as qualified. This is
+an explicit scope deferral, not a fix, a passing validation result, adapter
+retirement, or permission to weaken privacy and failure behavior. It does not
+change other sources' qualification gates or historical RC2 evidence.
 
 **Accepted risk — UPGRADE-01 (deferred), accepted 2026-10-05.** Lossless
 legacy-state upgrades, an executable drain runbook, coordinated
@@ -311,8 +330,9 @@ the CLI cursor transition only through a host-persisted resume token. Retain sou
 and empty whole-source baselines for OpenCode `PartialSource` accounting.
 UPGRADE-01 defers only cross-version migration; same-version privacy/durability
 and release gates remain required. Current adoption is fresh-install scope, with
-OpenClaw/Qwen live-store support still preview. No checklist authorizes lifecycle
-actions or claims stable qualification.
+OpenClaw default SQLite/current-store and Qwen Code current-format/live-store
+qualification explicitly deferred beyond 0.7 as described above. No checklist
+authorizes lifecycle actions or claims stable qualification.
 
 ## Historical RC Candidate Handoff
 

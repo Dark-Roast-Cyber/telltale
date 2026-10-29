@@ -1,7 +1,7 @@
 # Source Validation Matrix
 
 This matrix is the canonical public record for source-support claims. It tracks
-the eight supported source identities across discovery, native extraction,
+the eight registered source identities across discovery, native extraction,
 canonical acquisition, detection coverage, live validation, and capability gaps.
 README and installation guidance link here rather than assigning
 subjective confidence labels. A source is only considered supported when the
@@ -24,8 +24,9 @@ All eight exact source identities have source-owned native extraction and
 Canonical Observation v2 adapters. Acquisition retains native accounting and
 operational progress; canonical observations feed Detection v2 in the shared
 scan/watch runtime. Synthetic adapter/conformance and detection/evaluation
-fixtures establish support, not broad live-host validation. OpenClaw and Qwen
-report ToolCall and UserContext **Supported**, ToolExecution **Unknown**;
+fixtures characterize the implemented formats, not current-format compatibility
+or broad live-host validation. OpenClaw and Qwen report ToolCall and UserContext
+**Supported**, ToolExecution **Unknown**;
 Copilot reports ToolCall **Supported**, UserContext **Unsupported**, and
 ToolExecution **Unknown**.
 
@@ -37,10 +38,42 @@ ToolExecution **Unknown**.
 | Codex | `codex.archived_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Same as `codex.sessions` |
 | Codex | `codex.headless_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Same as `codex.sessions` |
 | Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Workspace, process ID and exit code absent; timestamps and call ID/error state/parts conditional |
-| OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
-| Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
+| OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ⚠️ Existing JSONL fixtures only; default SQLite-store compatibility deferred beyond 0.7 | Current runtime transcripts not discovered; workspace, process ID and exit code absent; ToolExecution unknown |
+| Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ⚠️ Existing fixtures only; current-format compatibility deferred beyond 0.7 | Known v0.25.1 text/tool/system gaps; workspace, process ID and exit code absent; ToolExecution unknown |
 | OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (legacy schema); bounded v2.0.28 shell-stage acquisition live-validated; v2 routine drain and full `--history all` pass live-validated after the request-side contribution fix, with oversized rows quarantined | Workspace conditional; process ID absent; exit code only for v2 shell commands and settled v2 `shell` tool calls; v2 tool-entry ToolExecution stays Unknown even when `executed: true` or a settled `shell` tool call emits an execution stage; v2 user shell commands report Supported; call ID/error state/parts conditional |
 | Copilot | `copilot.process_log` | ✅ project-local; ⚠️ CLI home | ✅ existing format | ✅ | ✅ | ⚠️ | ✅ | — | ✅ Existing-format fixtures + historical bounded project-local live validation; v1.0.96 default logs unqualified | Home/COPILOT_HOME discovery blocked on current default-level format evidence; events.jsonl and session-store.db not acquired; UC-001 capability-indeterminate: UserContext unsupported; content parts absent; tool results conditional; ToolExecution unknown |
+
+### OpenClaw compatibility boundary
+
+The OpenClaw row describes existing synthetic JSONL adapter/conformance coverage,
+not compatibility with current default stores. At the pinned v2026.10.2 revision,
+runtime transcripts are stored in `agents/<agentId>/agent/openclaw-agent.sqlite`;
+JSONL is the older migration source. Telltale discovers JSONL under
+`~/.openclaw/agents` but does not discover that SQLite store. The
+[SQLite-store case](../tests/upstream_formats/cases/openclaw/agent-sqlite-store.json)
+remains `known_gap` (`selected_sources: 0`), not a passing support claim.
+
+Default SQLite-store acquisition and live-store qualification are deferred
+beyond 0.7 under the [release scope decision](release-readiness.md#07-stable-readiness-decisions).
+The `openclaw.agents` adapter remains registered with its existing fixture
+checks. Current default-store and live OpenClaw use are unqualified; this
+deferral neither retires the identity nor changes other sources' gates.
+
+### Qwen Code compatibility boundary
+
+The Qwen row's fixture checks describe existing synthetic adapter/conformance
+coverage, not compatibility with current Qwen Code releases. At the pinned
+v0.25.1 revision, the [plain-turn case](../tests/upstream_formats/cases/qwen/text-turn.json)
+loses both messages' text; the [function-call/response case](../tests/upstream_formats/cases/qwen/function-call-parts.json)
+and [system-record case](../tests/upstream_formats/cases/qwen/system-record.json)
+reject acquisition. Those cases remain `known_gap`, not passing support claims.
+
+Current-format repair and live-store qualification are deferred beyond 0.7 under
+the [release scope decision](release-readiness.md#07-stable-readiness-decisions).
+The adapter remains registered and its existing conformance checks remain
+required. Qwen live-store use is unqualified/experimental; no current-format
+compatibility claim is made. This deferral does not retire the identity or change
+other sources' coverage gates.
 
 ## Coverage Gates
 

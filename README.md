@@ -64,16 +64,18 @@ Qwen, and GitHub Copilot. Current client-level status is:
 
 - **Fixture-backed plus bounded live validation**: Codex, OpenCode, Claude Code,
   and GitHub Copilot.
-- **Fixture-backed only**: OpenClaw and Qwen CLI.
+- **Existing-format fixtures only**: OpenClaw and Qwen CLI. Telltale does not
+  discover current OpenClaw's default SQLite agent store; current Qwen Code
+  text/tool/system formats have known gaps. Neither is qualified for live use.
 
 These labels describe source-store validation, not broad live coverage.
 Release archives and CI smoke checks cover binary packaging and execution on
 Linux, macOS, and Windows; they do not establish broad live source-store
-validation. Fixture-backed-only clients remain preview/experimental for live use.
+validation. Existing-format-only clients remain preview/experimental for live use.
 
 Canonical Observation v2 acquisition and the Detection v2 runtime are now the
 authoritative path for CLI scan/watch and every `Pipeline` scan method across the
-eight supported source identities. Rule v1 remains the content-compatibility
+eight registered source identities. Rule v1 remains the content-compatibility
 format, and Event 3.0 remains the compatibility projection. Rust hosts embed
 `telltale-core` and use detailed scans for per-action findings with typed
 outcomes; see [embedding](docs/embedding.md) for the contract and surface
