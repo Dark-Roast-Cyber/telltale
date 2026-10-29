@@ -1825,13 +1825,58 @@ fn redact_encoded_blobs_outside_urls(text: &str) -> String {
     let mut redacted = String::with_capacity(text.len());
     let mut offset = 0;
     for url in URL_RE.find_iter(text) {
-        redacted
-            .push_str(&ENCODED_BLOB_RE.replace_all(&text[offset..url.start()], "[encoded-blob]"));
+        redacted.push_str(&mask_encoded_blobs(&text[offset..url.start()]));
         redacted.push_str(url.as_str());
         offset = url.end();
     }
-    redacted.push_str(&ENCODED_BLOB_RE.replace_all(&text[offset..], "[encoded-blob]"));
+    redacted.push_str(&mask_encoded_blobs(&text[offset..]));
     redacted
+}
+
+/// Mask a run of twenty or more blob characters only when it looks encoded.
+/// Base64 and hex carry digits or padding; a long mixed-case identifier (a
+/// registry value name or a Pascal-case cmdlet noun) carries neither and tells
+/// a reviewer what the action did. This is a heuristic, not a decoder:
+/// encoded data that is mixed case, has fewer than two digits and no `+`, `/`
+/// or `=` is kept.
+fn mask_encoded_blobs(text: &str) -> std::borrow::Cow<'_, str> {
+    ENCODED_BLOB_RE.replace_all(text, |captures: &regex::Captures<'_>| {
+        let token = &captures[0];
+        if looks_encoded(token) {
+            "[encoded-blob]".to_string()
+        } else {
+            token.to_string()
+        }
+    })
+}
+
+fn looks_encoded(token: &str) -> bool {
+    let digits = token.chars().filter(char::is_ascii_digit).count();
+    if digits >= 2 || token.contains(['+', '/', '=']) {
+        return true;
+    }
+    // No digits and no padding: an identifier is mixed case (camel or Pascal
+    // case). A single-case run of letters is still treated as a blob (hex
+    // spelled from a-f alone, a padding run).
+    let upper = token.chars().any(|c| c.is_ascii_uppercase());
+    let lower = token.chars().any(|c| c.is_ascii_lowercase());
+    !(upper && lower)
+}
+
+/// A bare `/word` is far more often a command flag (`cmd.exe /c`, `reg add
+/// /v`, `schtasks /create`) than a path. One segment of 1-16 characters from
+/// `[A-Za-z0-9_-]` is kept, including a bare top-level directory such as
+/// `/etc`. Anything with more shape (`/home/u`, `/tmp/x.sh`, `~/notes`) is
+/// still a path.
+fn is_flag_like(path: &str) -> bool {
+    let Some(word) = path.strip_prefix('/') else {
+        return false;
+    };
+    !word.is_empty()
+        && word.len() <= 16
+        && word
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
 }
 
 fn split_url_before_absolute_path(url: &str) -> (&str, &str) {
@@ -1852,6 +1897,11 @@ fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
         .into_owned();
     let redacted = POSIX_PRIVATE_PATH_RE
         .replace_all(&redacted, |captures: &regex::Captures<'_>| {
+            let whole = &captures[0];
+            let path = &whole[captures["prefix"].len()..];
+            if is_flag_like(path) {
+                return whole.to_string();
+            }
             format!("{}{}", &captures["prefix"], marker)
         })
         .into_owned();
@@ -1999,6 +2049,155 @@ mod tests {
 
         assert!(!redacted.contains("U1lOVEhFVElDX1BBWUxPQUQ"));
         assert!(redacted.contains("[encoded-blob]"));
+    }
+
+    /// Windows persistence evidence stays reviewable: command flags and plain
+    /// identifiers are kept while drive paths remain masked.
+    #[test]
+    fn windows_command_evidence_keeps_flags_and_plain_identifiers() {
+        for (input, expected) in [
+            ("cmd.exe /c exit", "cmd.exe /c exit"),
+            (
+                r"schtasks /create /tn Updater /tr C:\tools\a.exe /sc onlogon",
+                "schtasks /create /tn Updater /tr [sensitive-path] /sc onlogon",
+            ),
+            (
+                r"reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v ContosoDetectionTest /d calc.exe",
+                r"reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v ContosoDetectionTest /d calc.exe",
+            ),
+            (
+                "New-ScheduledTaskTrigger -AtLogOn",
+                "New-ScheduledTaskTrigger -AtLogOn",
+            ),
+        ] {
+            assert_eq!(redact_sensitive_text(input), expected);
+        }
+
+        let redacted = redact_sensitive_text(
+            r"cmd.exe /c exit && reg add HKCU\Software\Run /v ContosoDetectionTest /t REG_SZ /d x",
+        );
+        assert!(redacted.contains("cmd.exe /c exit"), "{redacted}");
+        assert!(
+            redacted.contains("/v ContosoDetectionTest /t REG_SZ"),
+            "{redacted}"
+        );
+        assert!(!redacted.contains("[encoded-blob]"), "{redacted}");
+    }
+
+    /// Characterizes the kept side of the flag and identifier heuristics,
+    /// including the approved ambiguities: a bare top-level directory reads
+    /// as a flag, and mixed-case text with fewer than two digits and no
+    /// padding reads as an identifier, whether it is base64 or an unlabeled
+    /// passphrase. Labeled and flagged secrets are still masked.
+    #[test]
+    fn flag_and_identifier_heuristics_keep_characterized_tokens() {
+        assert_eq!(
+            redact_sensitive_text("mysql -pCorrectHorseBatteryStaple db"),
+            "mysql -pCorrectHorseBatteryStaple db"
+        );
+        for labeled in [
+            "mysql --password CorrectHorseBatteryStaple db",
+            "PASSWORD=CorrectHorseBatteryStaple",
+        ] {
+            assert!(
+                !redact_sensitive_text(labeled).contains("CorrectHorse"),
+                "{labeled}"
+            );
+        }
+        for kept in [
+            "/c",
+            "/create",
+            "/tn",
+            "/delete",
+            "/sc",
+            "/f",
+            "/RL",
+            "/run-once_2",
+            "/abcdefghijklmnop",
+            "/etc",
+            "/home",
+            "ContosoDetectionTest",
+            "ScheduledTaskTrigger",
+            "ConvertToSecureString1",
+            "YWJjYWJjYWJjYWJjYWJjYWJj",
+        ] {
+            let input = format!("run {kept} now");
+            assert_eq!(redact_sensitive_text(&input), input, "{kept}");
+        }
+
+        let redacted =
+            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, "open /etc failed /c");
+        assert_eq!(redacted, "open /etc failed /c");
+    }
+
+    /// Characterizes the masked side: paths with shape, drive and UNC paths,
+    /// encoded-looking runs, secrets and credentialed URLs are unchanged.
+    #[test]
+    fn flag_and_identifier_heuristics_still_mask_paths_blobs_and_secrets() {
+        for (input, marker, hidden) in [
+            ("cat /home/u/notes.txt", "[sensitive-path]", "/home/u"),
+            ("sh /tmp/x.sh", "[sensitive-path]", "/tmp/x.sh"),
+            ("cat ~/plan", "[sensitive-path]", "~/plan"),
+            ("cat /notes.txt", "[sensitive-path]", "notes.txt"),
+            (
+                "cd /abcdefghijklmnopq",
+                "[sensitive-path]",
+                "abcdefghijklmnopq",
+            ),
+            ("cd /a+b", "[sensitive-path]", "a+b"),
+            (r"run C:\tools\a.exe", "[sensitive-path]", r"tools\a.exe"),
+            (r"run \\server\share\a.exe", "[sensitive-path]", "server"),
+            (
+                "token U1lOVEhFVElDX1BBWUxPQUQ= end",
+                "[encoded-blob]",
+                "U1lOVEhF",
+            ),
+            (
+                "hash 0123456789abcdef0123456789abcdef end",
+                "[encoded-blob]",
+                "0123456789abcdef",
+            ),
+            (
+                "hex deadbeefdeadbeefdeadbeef end",
+                "[encoded-blob]",
+                "deadbeef",
+            ),
+            (
+                "pad AAAAAAAAAAAAAAAAAAAAAAAA end",
+                "[encoded-blob]",
+                "AAAAAAAA",
+            ),
+            ("id ContosoDetectionTest12 end", "[encoded-blob]", "Contoso"),
+            (
+                "b64 YWJjYWJjYWJjYWJjYWJjYWJj+w end",
+                "[encoded-blob]",
+                "YWJj",
+            ),
+            (
+                "flag /ghp_abcdefgh123 end",
+                "[redacted-secret]",
+                "ghp_abcdefgh",
+            ),
+            (
+                "flag /sk-abcdefgh1234 end",
+                "[redacted-secret]",
+                "sk-abcdefgh",
+            ),
+            (
+                "fetch https://user:tt_privacy_url_25@example.invalid/x end",
+                "example.invalid",
+                "tt_privacy_url_25",
+            ),
+            (
+                "API_KEY=tt_privacy_key_25 /c",
+                "[redacted-secret]",
+                "tt_privacy_key_25",
+            ),
+        ] {
+            let redacted = redact_sensitive_text(input);
+            assert!(redacted.contains(marker), "{input}: {redacted}");
+            assert!(!redacted.contains(hidden), "{input}: {redacted}");
+        }
     }
 
     #[test]
@@ -2180,7 +2379,7 @@ safe=value"#,
 
     #[test]
     fn sanitization_is_idempotent_for_every_emission_context() {
-        let input = "TOKEN=TT_PRIVACY_IDEMPOTENT_25 https://user:TT_PRIVACY_URL_25@example.invalid/path?sig=TT_PRIVACY_SIG_25 /opt/TT_PRIVACY_PATH_25";
+        let input = "TOKEN=TT_PRIVACY_IDEMPOTENT_25 https://user:TT_PRIVACY_URL_25@example.invalid/path?sig=TT_PRIVACY_SIG_25 /opt/TT_PRIVACY_PATH_25 cmd.exe /c schtasks /create /tn ContosoDetectionTest YWJjYWJjYWJjYWJjYWJjYWJj /etc";
         for context in [
             SanitizationContext::Evidence,
             SanitizationContext::Diagnostic,

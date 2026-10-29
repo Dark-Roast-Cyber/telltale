@@ -31,6 +31,14 @@
   `ProducerProvenanceOptions::from_environment`,
   `telltale_core::resolve_install_inventory_interval_seconds`, and
   `telltale_schema::event::load_operational_alert_config` are removed.
+- Keep Windows command evidence readable. Redacted text keeps a bare `/word`
+  of up to 16 plain characters as a command flag (`cmd.exe /c`,
+  `schtasks /create /tn`; this also keeps a bare `/etc`) and a mixed-case run
+  with fewer than two digits and no `+`, `/` or `=` as an identifier
+  (`New-ScheduledTaskTrigger`, a registry value name). Before, both became
+  `[sensitive-path]` or `[encoded-blob]`. Paths with more shape, drive and UNC
+  paths, secrets and encoded-looking runs are masked as before. The identifier
+  rule is a heuristic: mixed-case encoded data of that shape is kept.
 - Avoid reserving unrelated tool arguments for scalar control-field lookups,
   and skip encoded-URL candidate scanning when text contains no complete percent
   escape. Genuine input scanning and valid encoded URLs retain their existing

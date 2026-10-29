@@ -412,9 +412,10 @@ Event 3 object                                -- session events, unchanged
   It rejects oversized input, another record version, unknown fields, values
   outside the schema, inconsistent values, and text that redaction would
   still change, with closed error codes that contain no input text. A
-  consumer newer than its producer may reject text that an older redactor let
-  through. Do not turn an unknown field or version into a rejected but
-  acknowledged delivery.
+  consumer whose redactor differs from its producer's may reject valid output:
+  a newer consumer when redaction grew stricter, an older consumer when it
+  kept more text, so move producer and consumer pins together. Do not turn an unknown
+  field or version into a rejected but acknowledged delivery.
 - Delivery key: `record.delivery_key()`. It hashes the semantic identity with
   `replay_identity` when present, otherwise with `source_path_hash`,
   `coordinate` and the canonical finding IDs: equal coordinates distinguish
