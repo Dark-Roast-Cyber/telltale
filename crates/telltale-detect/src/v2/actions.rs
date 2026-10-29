@@ -1,11 +1,12 @@
 //! Action interpretation beside the frozen session compatibility view. No I/O.
 use super::Severity;
 use super::session::{ProcessingError, RetentionBudget};
-use crate::process_chain::{split_statements, tokenize};
+use crate::process_chain::{statement_spans, tokenize};
 use regex::Regex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ops::Range;
 use std::sync::LazyLock;
 use telltale_rules::{
     ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
@@ -242,16 +243,52 @@ pub struct ActionEvidence {
     field: String,
     rule_id: String,
     redacted_value: String,
+    highlight: Option<Range<usize>>,
+    elided_before: bool,
+    elided_after: bool,
 }
 impl ActionEvidence {
+    fn new(
+        field: &str,
+        rule_id: &str,
+        text: &str,
+        hit: Option<Range<usize>>,
+        budget: &mut RetentionBudget,
+    ) -> Result<Self, ProcessingError> {
+        let excerpt =
+            PrivacySanitizer::try_sanitize_excerpt(text, hit, &mut |bytes| budget.charge(bytes))?;
+        Ok(Self {
+            field: field.to_owned(),
+            rule_id: rule_id.to_owned(),
+            redacted_value: excerpt.text,
+            highlight: excerpt.highlight,
+            elided_before: excerpt.elided_before,
+            elided_after: excerpt.elided_after,
+        })
+    }
     pub fn field(&self) -> &str {
         &self.field
     }
     pub fn rule_id(&self) -> &str {
         &self.rule_id
     }
+    /// Redacted field text: whole when it fits, otherwise an excerpt around
+    /// the hit that counted for the rule.
     pub fn redacted_value(&self) -> &str {
         &self.redacted_value
+    }
+    /// UTF-8 byte range of the hit in [`Self::redacted_value`], only when the
+    /// position is exact.
+    pub fn highlight(&self) -> Option<Range<usize>> {
+        self.highlight.clone()
+    }
+    /// Field text was cut before the excerpt.
+    pub fn elided_before(&self) -> bool {
+        self.elided_before
+    }
+    /// Field text was cut after the excerpt.
+    pub fn elided_after(&self) -> bool {
+        self.elided_after
     }
 }
 
@@ -526,7 +563,8 @@ fn frame(hash: &mut Sha256, bytes: &[u8]) {
 struct ActionView {
     fields: BTreeMap<&'static str, String>,
     commands: Vec<Vec<String>>,
-    stages: Vec<String>,
+    /// Byte ranges of the command stages in the `command` field.
+    stage_spans: Vec<Range<usize>>,
     reads_paths: bool,
 }
 impl ActionView {
@@ -668,13 +706,14 @@ fn view(
             let (command, authored) = strip_heredocs(&command);
             out.put("authored_content", authored);
             budget.charge(command.len())?;
-            out.stages = if shell_comment(&command) {
+            out.stage_spans = if shell_comment(&command) {
                 Vec::new()
             } else {
                 budget.charge(command.len())?;
-                split_statements(&command)
+                statement_spans(&command)
             };
-            for stage in &out.stages {
+            for span in &out.stage_spans {
+                let stage = &command[span.clone()];
                 budget.charge(stage.len())?;
                 out.commands.push(tokenize(stage));
             }
@@ -1004,6 +1043,14 @@ fn regex(
     text: &str,
     budget: &mut RetentionBudget,
 ) -> Result<bool, ProcessingError> {
+    Ok(find(pattern, text, budget)?.is_some())
+}
+/// The first match of a native predicate pattern.
+fn find(
+    pattern: &'static str,
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(text.len())?;
     // Closed, versioned native interpretation predicates, compiled once.
     static PATTERNS: LazyLock<std::sync::Mutex<BTreeMap<&'static str, Regex>>> =
@@ -1012,7 +1059,8 @@ fn regex(
     Ok(patterns
         .entry(pattern)
         .or_insert_with(|| Regex::new(pattern).expect("native predicate"))
-        .is_match(text))
+        .find(text)
+        .map(|found| found.range()))
 }
 fn charge_commands(
     commands: &[Vec<String>],
@@ -1142,17 +1190,26 @@ fn remote(value: &str) -> bool {
         || (value.contains(':') && !value.contains(":/"))
 }
 
+/// A field a native predicate selects: the field name, the selected text, its
+/// byte offset in the field, and the occurrence in that text the predicate
+/// counted, if it counts one.
+type NativeField<'a> = (&'a str, &'a str, usize, Option<Range<usize>>);
+
+/// Fields a native predicate selects: a command stage, or a whole field at 0.
+/// A predicate over one command stage, path token or key reference of a
+/// whole field also returns that occurrence, so the hit can be placed there.
 fn native_fields<'a>(
     id: &str,
     view: &'a ActionView,
     budget: &mut RetentionBudget,
-) -> Result<Vec<(&'a str, &'a str)>, ProcessingError> {
+) -> Result<Vec<NativeField<'a>>, ProcessingError> {
     let mut selected = Vec::new();
     if matches!(
         id,
         "network.download" | "exfil.outbound_upload" | "exfil.encoded_http"
     ) {
-        for (stage, tokens) in view.stages.iter().zip(&view.commands) {
+        for (span, tokens) in view.stage_spans.iter().zip(&view.commands) {
+            let stage = &view.text("command")[span.clone()];
             let matches = match id {
                 "network.download" => is_download(tokens, budget)?,
                 "exfil.outbound_upload" => is_upload(tokens, budget)?,
@@ -1171,7 +1228,7 @@ fn native_fields<'a>(
                 }
             };
             if matches {
-                selected.push(("command", stage.as_str()));
+                selected.push(("command", stage, span.start, None));
             }
         }
         return Ok(selected);
@@ -1184,125 +1241,147 @@ fn native_fields<'a>(
         )
     };
     for (field, text) in fields {
-        let matches = match id {
-            "execution.shell" => {
-                field == "command" && {
-                    charge_commands(&view.commands, budget)?;
-                    view.commands.iter().any(|t| {
-                        matches!(
-                            command_word(t),
-                            "bash" | "sh" | "zsh" | "fish" | "pwsh" | "powershell" | "cmd.exe"
-                        ) || t.windows(2).any(|w| {
-                            matches!(w[0].as_str(), "python" | "node" | "perl" | "ruby")
-                                && matches!(w[1].as_str(), "-c" | "-e")
-                        })
-                    })
-                }
+        // `Some(counted)` selects the field; `counted` is the occurrence a
+        // predicate over one stage, token or reference counted.
+        let whole = |matches: bool| matches.then_some(None);
+        let selection = match id {
+            "execution.shell" | "install.package_manager" if field == "command" => {
+                charge_commands(&view.commands, budget)?;
+                let counts = if id == "execution.shell" {
+                    shell_stage
+                } else {
+                    package_stage
+                };
+                view.commands
+                    .iter()
+                    .position(|tokens| counts(tokens))
+                    .map(|stage| Some(view.stage_spans[stage].clone()))
             }
+            "execution.shell" | "install.package_manager" => None,
             "secret.env.read" => {
-                field == "file_path"
+                if field == "file_path"
                     && view.reads_paths
                     && !contains(view.text("command"), "<<", budget)?
-                    && {
-                        budget.charge(text.len())?;
-                        let mut found = false;
-                        for token in text.split_whitespace() {
-                            if regex(
-                                r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$",
-                                token,
-                                budget,
-                            )? && !regex(
-                                r"(?i)\.(example|sample|template|dist)$",
-                                token,
-                                budget,
-                            )? {
-                                found = true;
-                                break;
-                            }
-                        }
-                        found
-                    }
+                {
+                    secret_file_token(text, budget)?.map(Some)
+                } else {
+                    None
+                }
             }
             "secret.private_key.read" => {
-                (field == "file_path"
-                    && view.reads_paths
-                    && regex(
+                if field == "file_path" && view.reads_paths {
+                    find(
                         r"(?i)(^|[/\\\s])id_(rsa|ed25519|ecdsa|dsa)($|\s)|(^|[/\\\s])[^\s]*key[^\s]*\.(pem|p12)($|\s)|\*\.(pem|p12)",
                         text,
                         budget,
-                    )?)
-                    || (field == "tool_result"
-                        && regex(
-                            r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}",
-                            text,
-                            budget,
-                        )?)
-            }
-            "install.package_manager" => {
-                field == "command" && {
-                    charge_commands(&view.commands, budget)?;
-                    view.commands.iter().any(|t| {
-                        matches!(
-                            command_word(t),
-                            "npm"
-                                | "pnpm"
-                                | "yarn"
-                                | "bun"
-                                | "pip"
-                                | "pipx"
-                                | "uv"
-                                | "cargo"
-                                | "go"
-                                | "brew"
-                                | "apt"
-                                | "apt-get"
-                                | "dnf"
-                                | "yum"
-                        ) && t.iter().skip(1).any(|s| {
-                            matches!(
-                                s.as_str(),
-                                "install" | "add" | "i" | "get" | "run" | "create" | "x"
-                            )
-                        })
-                    })
+                    )?
+                    .map(Some)
+                } else if field == "tool_result" {
+                    find(
+                        r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}",
+                        text,
+                        budget,
+                    )?
+                    .map(Some)
+                } else {
+                    None
                 }
             }
-            "mcp.server_enumeration" => {
+            "mcp.server_enumeration" => whole(
                 field == "command"
                     && regex(r"(?i)\bmcp(?:-scan)?\b", text, budget)?
                     && regex(
                         r"(?i)\b(enumerate|probe|scan)\b|tools/list.*tools/list",
                         text,
                         budget,
-                    )?
-            }
-            "approval.bypass.context" => regex(
+                    )?,
+            ),
+            "approval.bypass.context" => whole(regex(
                 r"(?i)\b(run|execute|call|hide|bypass|do not tell)\b.{0,100}\b(without (asking|approval|confirmation|telling)|approval|user)\b|--dangerously-skip-permissions|--no-approval",
                 text,
                 budget,
-            )?,
-            "tool.injection.shape" => regex(
+            )?),
+            "tool.injection.shape" => whole(regex(
                 r#"<tool_call>|</tool_call>|"tool_calls"\s*:|recipient_name\s*:|arguments\s*:\s*\{"#,
                 text,
                 budget,
-            )?,
+            )?),
             // Shell parameters are path tokens too. A credential path handed to
             // a CLI that authenticates with it is not a read of the file.
-            "credential.cloud_harvest" => {
+            "credential.cloud_harvest" => whole(
                 action(field)
-                    && (field != "file_path" || view.reads_paths || view.text("command").is_empty())
-            }
+                    && (field != "file_path"
+                        || view.reads_paths
+                        || view.text("command").is_empty()),
+            ),
             "persistence.shell_profile"
             | "execution.encoded_payload"
             | "exfil.dns_encoding"
-            | "supply_chain.publish" => action(field),
-            _ => true,
+            | "supply_chain.publish" => whole(action(field)),
+            _ => whole(true),
         };
-        if matches {
-            selected.push((field, text));
+        if let Some(counted) = selection {
+            selected.push((field, text, 0, counted));
         }
     }
     Ok(selected)
+}
+
+/// The first path token naming a secrets file that is not a template copy.
+fn secret_file_token(
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
+    budget.charge(text.len())?;
+    for token in text.split_whitespace() {
+        if regex(
+            r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$",
+            token,
+            budget,
+        )? && !regex(r"(?i)\.(example|sample|template|dist)$", token, budget)?
+        {
+            let start = token.as_ptr() as usize - text.as_ptr() as usize;
+            return Ok(Some(start..start + token.len()));
+        }
+    }
+    Ok(None)
+}
+
+/// A command stage that runs a shell, or an interpreter on inline code.
+fn shell_stage(tokens: &[String]) -> bool {
+    matches!(
+        command_word(tokens),
+        "bash" | "sh" | "zsh" | "fish" | "pwsh" | "powershell" | "cmd.exe"
+    ) || tokens.windows(2).any(|w| {
+        matches!(w[0].as_str(), "python" | "node" | "perl" | "ruby")
+            && matches!(w[1].as_str(), "-c" | "-e")
+    })
+}
+
+/// A command stage that installs or runs a package.
+fn package_stage(tokens: &[String]) -> bool {
+    matches!(
+        command_word(tokens),
+        "npm"
+            | "pnpm"
+            | "yarn"
+            | "bun"
+            | "pip"
+            | "pipx"
+            | "uv"
+            | "cargo"
+            | "go"
+            | "brew"
+            | "apt"
+            | "apt-get"
+            | "dnf"
+            | "yum"
+    ) && tokens.iter().skip(1).any(|s| {
+        matches!(
+            s.as_str(),
+            "install" | "add" | "i" | "get" | "run" | "create" | "x"
+        )
+    })
 }
 
 fn contains(
@@ -1347,7 +1426,7 @@ pub(super) fn download_execution_linked(
         if view.commands.is_empty() {
             continue;
         }
-        if piped_execution(view.text("command"), budget)? {
+        if piped_execution(view.text("command"), budget)?.is_some() {
             return Ok(true);
         }
         // A file link is timed, as for action findings; a pipe is not.
@@ -1384,6 +1463,7 @@ pub(super) fn download_execution_linked(
                     },
                     budget,
                 )?
+                .is_some()
             {
                 return Ok(true);
             }
@@ -1521,40 +1601,43 @@ pub(crate) fn evaluate(
                 native_fields(&rule.id, view, budget)?
             } else {
                 view.fields()
+                    .into_iter()
+                    .map(|(field, text)| (field, text, 0, None))
+                    .collect()
             };
             // Native profiles are canonical interpretation of bundled predicates;
             // custom predicates always retain the effective Rule v1 matcher.
-            let matched: Vec<(&str, &str)> = {
-                let mapped = fields
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            if compiled.native
-                                && matches!(*k, "authored_content" | "user_context")
-                                && rule.id == "credential.api_key.pattern"
-                            {
-                                "tool_result"
-                            } else {
-                                *k
-                            },
-                            *v,
-                        )
-                    })
-                    .collect::<Vec<_>>();
+            let mapped = fields
+                .iter()
+                .map(|(k, v, _, _)| {
+                    (
+                        if compiled.native
+                            && matches!(*k, "authored_content" | "user_context")
+                            && rule.id == "credential.api_key.pattern"
+                        {
+                            "tool_result"
+                        } else {
+                            *k
+                        },
+                        *v,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let matched = {
                 let mut matched = Vec::new();
-                for (name, value) in compiled
+                for (name, value, hit) in compiled
                     .matcher
-                    .try_matching_fields(&mapped, &mut |bytes| budget.charge(bytes))?
+                    .try_matching_spans(&mapped, &mut |bytes| budget.charge(bytes))?
                 {
-                    for &(field, text) in &fields {
+                    for (field, text, offset, counted) in &fields {
                         budget.charge(field.len() + name.len())?;
-                        if field == name
+                        if *field == name
                             || (name == "tool_result"
-                                && matches!(field, "authored_content" | "user_context"))
+                                && matches!(*field, "authored_content" | "user_context"))
                         {
                             budget.charge(text.len() + value.len())?;
-                            if text == value {
-                                matched.push((field, text));
+                            if *text == value {
+                                matched.push((name, *field, *text, *offset, counted.clone(), hit));
                                 break;
                             }
                         }
@@ -1563,25 +1646,43 @@ pub(crate) fn evaluate(
                 matched
             };
             let mut candidate = None;
-            for matched_field in &matched {
-                if !compiled.native
-                    || rule.id != "credential.api_key.pattern"
-                    || credential_value(matched_field.1, budget)?
-                {
-                    candidate = Some(matched_field);
-                    break;
-                }
+            for (name, field, text, offset, counted, hit) in matched {
+                let counted = if compiled.native && rule.id == "credential.api_key.pattern" {
+                    let Some(token) = credential_token(text, budget)? else {
+                        continue;
+                    };
+                    Some(token)
+                } else {
+                    counted
+                };
+                // The hit is the matcher's first match in the occurrence a
+                // native predicate counted, never one the predicate rejected.
+                let hit = match counted {
+                    None => Some(hit),
+                    Some(counted) => {
+                        let occurrence = [(name, &text[counted.clone()])];
+                        compiled
+                            .matcher
+                            .try_matching_spans(&occurrence, &mut |bytes| budget.charge(bytes))?
+                            .first()
+                            .map(|(_, _, hit)| counted.start + hit.start..counted.start + hit.end)
+                    }
+                };
+                candidate = Some((field, hit.map(|hit| offset + hit.start..offset + hit.end)));
+                break;
             }
-            let Some((field, value)) = candidate else {
+            let Some((field, hit)) = candidate else {
                 continue;
             };
             ids.insert(rule.id.clone());
             categories.insert(rule.category.clone());
-            evidence.push(ActionEvidence {
-                field: (*field).to_owned(),
-                rule_id: rule.id.clone(),
-                redacted_value: redact(value, budget)?,
-            });
+            evidence.push(ActionEvidence::new(
+                field,
+                &rule.id,
+                view.text(field),
+                hit,
+                budget,
+            )?);
             if rule.score > 0 {
                 contributions.push(
                     RiskContribution::new(
@@ -1731,27 +1832,36 @@ pub(crate) fn evaluate(
                 for (position, (artifact, start, observation_index, command_index)) in
                     pending.iter().enumerate()
                 {
-                    if *start <= time
-                        && executes(
-                            &view.commands,
-                            artifact,
-                            if *observation_index == index {
-                                command_index + 1
-                            } else {
-                                0
-                            },
-                            budget,
-                        )?
-                    {
-                        linked = Some(position);
+                    if *start > time {
+                        continue;
+                    }
+                    if let Some(stage) = executes(
+                        &view.commands,
+                        artifact,
+                        if *observation_index == index {
+                            command_index + 1
+                        } else {
+                            0
+                        },
+                        budget,
+                    )? {
+                        linked = Some((position, view.stage_spans[stage].clone()));
                         break;
                     }
                 }
-                let pipe = ids.contains("network.download")
-                    && piped_execution(view.text("command"), budget)?;
-                if linked.is_some() || pipe {
+                let pipe = if ids.contains("network.download") {
+                    piped_execution(view.text("command"), budget)?
+                } else {
+                    None
+                };
+                if linked.is_some() || pipe.is_some() {
+                    let link = linked
+                        .as_ref()
+                        .map(|(_, span)| span.clone())
+                        .or(pipe)
+                        .map(|span| trimmed(view.text("command"), span));
                     let mut support = vec![index];
-                    if let Some(i) = linked {
+                    if let Some((i, _)) = linked {
                         support.push(pending.remove(i).2);
                     }
                     support.sort_unstable();
@@ -1771,11 +1881,13 @@ pub(crate) fn evaluate(
                             .map_err(|_| ProcessingError::Evaluation)?,
                         );
                     }
-                    evidence.push(ActionEvidence {
-                        field: "command".into(),
-                        rule_id: modifier.id.clone(),
-                        redacted_value: redact(view.text("command"), budget)?,
-                    });
+                    evidence.push(ActionEvidence::new(
+                        "command",
+                        &modifier.id,
+                        view.text("command"),
+                        link,
+                        budget,
+                    )?);
                 }
             }
         }
@@ -2102,7 +2214,12 @@ pub(crate) fn process_findings(
     Ok(output)
 }
 
-fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+/// The first credential token that is not an example, placeholder, or part
+/// of a longer word.
+fn credential_token(
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(text.len())?;
     // The compiled Rule v1 matcher already filters candidate fields. Native
     // case, boundary and example refinements must all apply to the same token,
@@ -2132,10 +2249,10 @@ fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, Pr
                 || !(text.as_bytes()[m.start() - 1].is_ascii_alphanumeric()
                     || text.as_bytes()[m.start() - 1] == b'_'))
         {
-            return Ok(true);
+            return Ok(Some(m.range()));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn redact(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
@@ -2298,13 +2415,14 @@ fn remote_basename(tokens: &[String]) -> Option<String> {
     let basename = path.rsplit('/').next()?;
     (!basename.is_empty()).then(|| basename.to_owned())
 }
+/// The index of the first stage from `start` that runs `artifact`.
 fn executes(
     commands: &[Vec<String>],
     artifact: &str,
     start: usize,
     budget: &mut RetentionBudget,
-) -> Result<bool, ProcessingError> {
-    for t in commands.iter().skip(start) {
+) -> Result<Option<usize>, ProcessingError> {
+    for (stage, t) in commands.iter().enumerate().skip(start) {
         let first = t.first().map(String::as_str).unwrap_or("");
         budget.charge(first.len() + artifact.len())?;
         if matches!(
@@ -2328,12 +2446,23 @@ fn executes(
                     w[0].eq_ignore_ascii_case("-File") && w[1].trim_start_matches("./") == artifact
                 }));
         if matches {
-            return Ok(true);
+            return Ok(Some(stage));
         }
     }
-    Ok(false)
+    Ok(None)
 }
-fn piped_execution(command: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+/// `span` without the whitespace at either end.
+fn trimmed(text: &str, span: Range<usize>) -> Range<usize> {
+    let inner = &text[span.clone()];
+    let start = span.start + (inner.len() - inner.trim_start().len());
+    start..start + inner.trim().len()
+}
+/// The byte range of a download piped into an interpreter: the download
+/// stage, the pipe and the interpreter stage.
+fn piped_execution(
+    command: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(command.len())?;
     let mut quote = None;
     let mut pipes = Vec::new();
@@ -2363,23 +2492,24 @@ fn piped_execution(command: &str, budget: &mut RetentionBudget) -> Result<bool, 
         }
     }
     if quote.is_some() || pipes.len() != 1 {
-        return Ok(false);
+        return Ok(None);
     }
     let index = pipes[0];
     budget.charge(command.len())?;
-    let left = split_statements(&command[..index]);
-    let right = split_statements(&command[index + 1..]);
+    let left = statement_spans(&command[..index]);
+    let right = statement_spans(&command[index + 1..]);
     if let Some((left, right)) = left.last().zip(right.first()) {
+        let right = index + 1 + right.start..index + 1 + right.end;
         budget.charge(left.len())?;
-        let tokens = tokenize(left);
+        let tokens = tokenize(&command[left.clone()]);
         if is_download(&tokens, budget)? && download_stdout(&tokens, budget)? {
             budget.charge(right.len())?;
-            let tokens = tokenize(right);
+            let tokens = tokenize(&command[right.clone()]);
             charge_tokens(&tokens, budget)?;
-            return Ok(consumes_stdin_code(&tokens));
+            return Ok(consumes_stdin_code(&tokens).then_some(left.start..right.end));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 fn download_stdout(
     tokens: &[String],
@@ -2631,6 +2761,15 @@ struct EncodedEvidence<'a> {
     field: &'a str,
     rule_id: &'a str,
     redacted_value: &'a str,
+    highlight: Option<EncodedHighlight>,
+    elided_before: bool,
+    elided_after: bool,
+}
+
+#[derive(Serialize)]
+struct EncodedHighlight {
+    start: usize,
+    end: usize,
 }
 
 #[derive(Serialize)]
@@ -2702,6 +2841,12 @@ impl<'a> From<&'a ActionFinding> for EncodedActionFinding<'a> {
                     field: &e.field,
                     rule_id: &e.rule_id,
                     redacted_value: &e.redacted_value,
+                    highlight: e.highlight.as_ref().map(|range| EncodedHighlight {
+                        start: range.start,
+                        end: range.end,
+                    }),
+                    elided_before: e.elided_before,
+                    elided_after: e.elided_after,
                 })
                 .collect(),
             context: a

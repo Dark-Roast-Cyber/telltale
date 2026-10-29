@@ -1098,6 +1098,20 @@ an implied contract.
 - **WHEN** a host transports or stores an action finding or catalog entry
 - **THEN** it transports `ActionRecordV1` or `RuleCatalogV1` inside its own envelope, and Telltale adding a private facade field changes no host bytes
 
+### Requirement: The rule catalog describes every rule a detailed scan can report
+
+`bundled_rule_catalog` and `rule_catalog_document` SHALL list core and
+embedded community Rule v1 rules and modifiers and, when the options enable the
+process-chain pack, every rule of the bundled pack as kind `process_chain`.
+Each entry SHALL carry `attack_techniques`: MITRE ATT&CK technique IDs for
+process-chain rules and none for Rule v1 rules and modifiers, which carry
+`atlas_tags`.
+
+#### Scenario: Process-chain rules appear only when enabled
+
+- **WHEN** a host builds the catalog with and without `process_chain`
+- **THEN** only the enabled catalog lists the pack's rules, with their signal types and ATT&CK IDs, and both documents pass the strict consumer
+
 ### Requirement: Action records are versioned terminal projections
 
 `SourceScan::action_records()` SHALL return one `ActionRecordV1` per action
@@ -1110,8 +1124,11 @@ null. `ActionRecordV1::from_json` SHALL reject oversized input, another record
 version, unknown fields, values outside the published JSON Schema, a stage
 incompatible with its family, invalid times or tool labels, a promotion
 score that is not the sum of its contributions, and context, evidence or
-rationale text that `redact_sensitive_text` would change, with privacy-safe
-errors. Changing a field SHALL be a new record version.
+rationale text that `redact_sensitive_text` would change, and an evidence
+highlight that is empty, reversed, out of range or off a character boundary,
+with privacy-safe errors. From the first release tag that carries a record
+version, changing a field SHALL be a new record version; the same holds for
+the rule catalog.
 
 #### Scenario: Action records round-trip and link their session event
 
@@ -1128,6 +1145,44 @@ errors. Changing a field SHALL be a new record version.
 - **WHEN** a record's context, evidence or rationale text contains a value redaction would replace
 - **THEN** the consumer rejects it as `unredacted_text`, and the error contains no input text
 
+### Requirement: Action evidence locates the hit that counted
+
+Each action evidence entry SHALL show its field whole when the field's
+redaction fits the evidence bounds, and otherwise an excerpt cut from the
+redaction of a raw region around the hit that counted: the first match of the
+rule's counting matcher; for a native predicate that counts one command stage,
+path, key reference or credential token, the first match inside that
+occurrence; or the stage or pipeline of a download link. Both raw cuts SHALL
+drop the fragment that holds them, including a quoted value that spans them; a
+leading cut SHALL move past a private key block that starts before it and past
+an authorization or quoted value whose label is earlier on the cut's line, and
+text within the leading guard after a leading cut SHALL NOT be shown.
+`highlight` SHALL be the UTF-8 byte range of the hit in `redacted_value` only
+when redacting the text before, at and after the hit separately reproduces the
+redaction, and null otherwise. `elided_before` and `elided_after` SHALL say whether field text
+was cut on each side. Evidence SHALL NOT reread sources or rerun rules, and
+Event 3 evidence SHALL be unchanged.
+
+#### Scenario: A late ordinary hit is highlighted
+
+- **WHEN** a non-sensitive hit lies past the sanitizer's input bound, after multibyte text, as the first of repeated matches, at a native predicate stage, or at a download link
+- **THEN** its evidence has a highlight whose text is the hit, and both elision flags describe the cut
+
+#### Scenario: A position redaction hides is not guessed
+
+- **WHEN** redaction joins the hit to its neighbors or a dropped fragment holds it
+- **THEN** the highlight is null and no part of the dropped fragment is shown
+
+#### Scenario: A rejected occurrence is not highlighted
+
+- **WHEN** a rule's matcher first matches a word its native predicate does not count, or a copy of the hit that a value before it masks
+- **THEN** the highlight is in the occurrence that counted, or null
+
+#### Scenario: A line value that a leading cut enters is not shown
+
+- **WHEN** an authorization value, or a value quoted with literal, escaped or encoded (`\u0022`) quotes, opens before a leading cut and runs past the leading guard
+- **THEN** no part of the value is shown
+
 ### Requirement: Action records give hosts their delivery key and event link
 
 `ActionRecordV1::delivery_key()` SHALL return `delivery:v1:sha256:` over the
@@ -1139,6 +1194,13 @@ pinned, and records of one scan SHALL have distinct keys.
 when the record has one. For a record with `session_event_id`, the event SHALL
 also be that event, a process-chain event exactly for a process-chain action,
 and carry every record rule. It SHALL claim nothing more for an unlinked record.
+`ActionRecordV1::delivery_aliases()` SHALL return `delivery_key()` and, when
+the replay identity is present, the key the record has without it.
+
+#### Scenario: Delivery aliases survive replay withdrawal
+
+- **WHEN** a later identical candidate withdraws an action's replay identity, a rewrite restores it, or a copy of the store is scanned elsewhere
+- **THEN** the withdrawn and restored records share an alias with the original, the new candidate shares none, and the copy shares only the replay alias
 
 #### Scenario: One tool call carries several process-chain actions
 

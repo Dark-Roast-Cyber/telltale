@@ -46,8 +46,8 @@ use identifier::{
 
 pub use inventory::{evidence_hash, path_hash};
 pub use redaction::{
-    ControlledMarker, PrivacySanitizer, SanitizationContext, SerializedMarkerCheckError,
-    check_serialized_event_markers, redact_sensitive_text,
+    ControlledMarker, EvidenceExcerpt, PrivacySanitizer, SanitizationContext,
+    SerializedMarkerCheckError, check_serialized_event_markers, redact_sensitive_text,
 };
 pub(crate) use redaction::{
     contains_credential_material, contains_high_confidence_credential_marker,

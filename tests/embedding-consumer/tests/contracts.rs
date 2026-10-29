@@ -355,6 +355,91 @@ fn detailed_scanning_is_source_selected_session_scoped_and_source_atomic() {
 }
 
 #[test]
+fn explicit_roots_ignore_relocation_variables() {
+    // Discovery under an explicit root reads that root's default layout; the
+    // relocation variables only steer discovery of the environment's own
+    // stores. The child process sees only the variables set here.
+    const CHILD: &str = "TELLTALE_EMBEDDING_RELOCATION_CHILD";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let root = std::path::PathBuf::from(root);
+        let relocated = std::path::PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap());
+        let explicit = discover_sources(&root).unwrap();
+        assert!(explicit.iter().any(|s| s.path.starts_with(&root)));
+        assert!(!explicit.iter().any(|s| s.path.starts_with(&relocated)));
+        // The environment-resolved root does follow the relocation.
+        let environment = discover_sources(Path::new(".")).unwrap();
+        assert!(
+            environment
+                .iter()
+                .any(|s| s.path.starts_with(relocated.join("projects")))
+        );
+        println!("relocation-child-checked");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    // Discovery refuses symlinked path components, and macOS temporary
+    // directories sit under the `/var` symlink.
+    let base = if cfg!(unix) {
+        root.path().canonicalize().unwrap()
+    } else {
+        root.path().to_path_buf()
+    };
+    let explicit = base.join("explicit");
+    let relocated = base.join("relocated");
+    let rows = [call("one", "cat .env")];
+    for directory in [
+        explicit.join(".claude/projects/synthetic"),
+        relocated.join("projects/synthetic"),
+        relocated.join("codex/sessions/2026/10/20"),
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    source(
+        &explicit.join(".claude/projects/synthetic"),
+        "session.jsonl",
+        "explicit",
+        &rows,
+    );
+    source(
+        &relocated.join("projects/synthetic"),
+        "session.jsonl",
+        "relocated",
+        &rows,
+    );
+    source(
+        &relocated.join("codex/sessions/2026/10/20"),
+        "rollout-2026-10-20T12-00-00-synthetic.jsonl",
+        "codex",
+        &rows,
+    );
+    let home = relocated.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .env_clear()
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("CLAUDE_CONFIG_DIR", &relocated)
+        .env("CODEX_HOME", relocated.join("codex"))
+        .env("XDG_DATA_HOME", relocated.join("data"))
+        .env(CHILD, &explicit)
+        .args([
+            "--exact",
+            "explicit_roots_ignore_relocation_variables",
+            "--nocapture",
+        ]);
+    for key in ["PATH", "SystemRoot", "windir"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("relocation-child-checked"));
+}
+
+#[test]
 fn discovery_selected_sources_event3_and_occurrence_links_share_the_facade() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join(".claude/projects/synthetic");
