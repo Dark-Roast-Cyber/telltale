@@ -356,9 +356,11 @@ crossed `redact_sensitive_text` and is at most 512 bytes and 80 tokens.
 
 - A field whose redaction fits is shown whole. A longer field is shown as an
   excerpt of about 160 bytes before and 240 after the hit that counted:
-  the first match of the rule's counting matcher for a Rule v1 rule, the
-  command stage that satisfied a native predicate, or, for a download link, the
-  stage that runs the artifact or the piped pipeline. `elided_before()` and
+  the first match of the rule's counting matcher for a Rule v1 rule; for a
+  native predicate that counts one command stage, path, key reference or
+  credential token, the first match inside that occurrence, never an earlier
+  one the predicate rejected; or, for a download link, the stage that runs the
+  artifact or the piped pipeline. `elided_before()` and
   `elided_after()` say whether field text was cut on each side. Evidence
   without a single span (a whole-field predicate) starts at the field start.
 - A hit past the sanitizer's 4 KiB input bound is still shown: the excerpt is
@@ -366,16 +368,23 @@ crossed `redact_sensitive_text` and is at most 512 bytes and 80 tokens.
   drop the fragment that holds them, as the input bound does, including a
   quoted value that spans the cut, so a secret that straddles a cut is never
   partly shown. A leading cut inside a private key block moves past the
-  block's end. The first 256 bytes after a leading cut, in whole fragments and
-  at least three of them, are redacted but never shown: a label that would
-  mask them (`--password`, `key =`, `Bearer`, the start of a path with
-  spaces) may lie before the cut. Evidence can therefore be empty, with
+  block's end. A leading cut also moves past the end of a value whose label is
+  earlier on the cut's line: an authorization value, which runs to the line end
+  or `;`, or a quoted value, including one whose quotes are escaped or encoded
+  (`\u0022`). Only the 16 KiB of the line before the cut are read for such
+  labels; a longer line whose earlier part holds a backslash or an
+  authorization word is skipped to its end. The first 256 bytes after a
+  leading cut, in whole fragments and at least three of them, are redacted but
+  never shown: a label that would mask them (`--password`, `key =`, `Bearer`,
+  the start of a path with spaces) may lie before the cut. Evidence can therefore be empty, with
   `elided_before` set.
 - `highlight()` is the UTF-8 byte range of the hit in `redacted_value()`, set
   only when the position is exact: redacting the text before, at and after the
   hit separately gives the same text. It is `None` when redaction joins the hit
   to its neighbors (a secret's label outside the hit, for example), when a
-  dropped fragment holds the hit, or when the hit does not fit the bounds.
+  dropped fragment holds the hit, when the hit does not fit the bounds, or
+  when the matcher does not match inside the occurrence a native predicate
+  counted.
   Never infer a position from the text.
 - Evidence is not reread from the source and rules are not rerun to place it.
   Event 3 evidence is unchanged.
@@ -410,7 +419,8 @@ process-chain pack as `RuleCatalogKind::ProcessChain` (`"process_chain"` on the
 wire), with its title, reason as `explanation`, category false-positive
 guidance, score before environment false-positive controls, signal type
 (`chain`, `atomic` or `correlation`) and, for correlations, its window in
-`action_within_seconds`. Process-chain entries carry MITRE ATT&CK technique IDs
+`action_within_seconds` and `action_ordered` true, because their steps match in
+sequence order. Process-chain entries carry MITRE ATT&CK technique IDs
 in `attack_techniques`; Rule v1 rules and modifiers carry only `atlas_tags`. Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
 promotion totals. It exposes no detector internals, custom documents, policy

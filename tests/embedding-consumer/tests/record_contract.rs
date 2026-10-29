@@ -211,6 +211,49 @@ fn evidence_highlights_the_hit_that_counted() {
 }
 
 #[test]
+fn evidence_highlights_the_occurrence_a_native_predicate_counted() {
+    // Each rule's regex also matches an earlier word its native predicate does
+    // not count: an argument, or a token excluded as an example. The counted
+    // occurrence is the last word; the highlight is there or null.
+    let records = scanned(&[
+        "echo sh; bash -c whoami",
+        "echo npm install demo; pip install requests",
+        "echo AKIAIOSFODNN7EXAMPLE then ghp_Zq3Wt9LmP2kR7vX4nB8c",
+        "cat docs/id_rsa_notes.md keys/id_rsa",
+        "cat notes/.env.example config/.env",
+    ]);
+    assert_eq!(
+        highlighted(evidence(&records[0], "execution.shell")),
+        "bash"
+    );
+    for (index, rule) in [
+        "install.package_manager",
+        "credential.api_key.pattern",
+        "secret.private_key.read",
+        "secret.env.read",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let found = evidence(&records[index + 1], rule);
+        let counted = found.redacted_value.rfind(' ').unwrap() + 1;
+        assert!(
+            found
+                .highlight
+                .is_none_or(|hit| hit.start as usize >= counted),
+            "{rule}"
+        );
+        // Redacting the secrets file path alone differs from redacting it in
+        // place, so that position is not exact.
+        assert_eq!(
+            found.highlight.is_some(),
+            rule != "secret.env.read",
+            "{rule}"
+        );
+    }
+}
+
+#[test]
 fn evidence_highlight_is_null_where_redaction_hides_the_position() {
     // The hit sits in a quoted value longer than the input bound. The value
     // is dropped whole at the cut, so neither part of it nor a position is

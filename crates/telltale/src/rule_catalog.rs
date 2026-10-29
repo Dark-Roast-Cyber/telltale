@@ -235,7 +235,8 @@ pub fn bundled_rule_catalog(
                 severity: Some(rule.severity),
                 session_score: rule.score,
                 action_score: rule.enabled.then_some(rule.score),
-                action_ordered: false,
+                // Correlation steps match in sequence order.
+                action_ordered: rule.signal_type == "correlation",
                 action_within_seconds: rule.window_seconds,
                 action_link: None,
                 atlas_tags: Vec::new(),
@@ -543,6 +544,7 @@ mod tests {
         assert_eq!(anydesk.attack_techniques(), ["T1219"]);
         assert_eq!(anydesk.signal_type(), "chain");
         assert_eq!(anydesk.action_within_seconds(), None);
+        assert!(!anydesk.action_ordered());
         for correlation in compiled.correlations() {
             let entry = process
                 .iter()
@@ -556,6 +558,7 @@ mod tests {
                 entry.action_within_seconds(),
                 Some(correlation.window_seconds)
             );
+            assert!(entry.action_ordered());
         }
 
         let document = rule_catalog_document(&options).unwrap();

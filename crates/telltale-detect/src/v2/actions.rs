@@ -1043,6 +1043,14 @@ fn regex(
     text: &str,
     budget: &mut RetentionBudget,
 ) -> Result<bool, ProcessingError> {
+    Ok(find(pattern, text, budget)?.is_some())
+}
+/// The first match of a native predicate pattern.
+fn find(
+    pattern: &'static str,
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(text.len())?;
     // Closed, versioned native interpretation predicates, compiled once.
     static PATTERNS: LazyLock<std::sync::Mutex<BTreeMap<&'static str, Regex>>> =
@@ -1051,7 +1059,8 @@ fn regex(
     Ok(patterns
         .entry(pattern)
         .or_insert_with(|| Regex::new(pattern).expect("native predicate"))
-        .is_match(text))
+        .find(text)
+        .map(|found| found.range()))
 }
 fn charge_commands(
     commands: &[Vec<String>],
@@ -1181,13 +1190,19 @@ fn remote(value: &str) -> bool {
         || (value.contains(':') && !value.contains(":/"))
 }
 
-/// Fields a native predicate selects, each with the byte offset of the
-/// selected text in its field: a command stage, or a whole field at 0.
+/// A field a native predicate selects: the field name, the selected text, its
+/// byte offset in the field, and the occurrence in that text the predicate
+/// counted, if it counts one.
+type NativeField<'a> = (&'a str, &'a str, usize, Option<Range<usize>>);
+
+/// Fields a native predicate selects: a command stage, or a whole field at 0.
+/// A predicate over one command stage, path token or key reference of a
+/// whole field also returns that occurrence, so the hit can be placed there.
 fn native_fields<'a>(
     id: &str,
     view: &'a ActionView,
     budget: &mut RetentionBudget,
-) -> Result<Vec<(&'a str, &'a str, usize)>, ProcessingError> {
+) -> Result<Vec<NativeField<'a>>, ProcessingError> {
     let mut selected = Vec::new();
     if matches!(
         id,
@@ -1213,7 +1228,7 @@ fn native_fields<'a>(
                 }
             };
             if matches {
-                selected.push(("command", stage, span.start));
+                selected.push(("command", stage, span.start, None));
             }
         }
         return Ok(selected);
@@ -1226,125 +1241,147 @@ fn native_fields<'a>(
         )
     };
     for (field, text) in fields {
-        let matches = match id {
-            "execution.shell" => {
-                field == "command" && {
-                    charge_commands(&view.commands, budget)?;
-                    view.commands.iter().any(|t| {
-                        matches!(
-                            command_word(t),
-                            "bash" | "sh" | "zsh" | "fish" | "pwsh" | "powershell" | "cmd.exe"
-                        ) || t.windows(2).any(|w| {
-                            matches!(w[0].as_str(), "python" | "node" | "perl" | "ruby")
-                                && matches!(w[1].as_str(), "-c" | "-e")
-                        })
-                    })
-                }
+        // `Some(counted)` selects the field; `counted` is the occurrence a
+        // predicate over one stage, token or reference counted.
+        let whole = |matches: bool| matches.then_some(None);
+        let selection = match id {
+            "execution.shell" | "install.package_manager" if field == "command" => {
+                charge_commands(&view.commands, budget)?;
+                let counts = if id == "execution.shell" {
+                    shell_stage
+                } else {
+                    package_stage
+                };
+                view.commands
+                    .iter()
+                    .position(|tokens| counts(tokens))
+                    .map(|stage| Some(view.stage_spans[stage].clone()))
             }
+            "execution.shell" | "install.package_manager" => None,
             "secret.env.read" => {
-                field == "file_path"
+                if field == "file_path"
                     && view.reads_paths
                     && !contains(view.text("command"), "<<", budget)?
-                    && {
-                        budget.charge(text.len())?;
-                        let mut found = false;
-                        for token in text.split_whitespace() {
-                            if regex(
-                                r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$",
-                                token,
-                                budget,
-                            )? && !regex(
-                                r"(?i)\.(example|sample|template|dist)$",
-                                token,
-                                budget,
-                            )? {
-                                found = true;
-                                break;
-                            }
-                        }
-                        found
-                    }
+                {
+                    secret_file_token(text, budget)?.map(Some)
+                } else {
+                    None
+                }
             }
             "secret.private_key.read" => {
-                (field == "file_path"
-                    && view.reads_paths
-                    && regex(
+                if field == "file_path" && view.reads_paths {
+                    find(
                         r"(?i)(^|[/\\\s])id_(rsa|ed25519|ecdsa|dsa)($|\s)|(^|[/\\\s])[^\s]*key[^\s]*\.(pem|p12)($|\s)|\*\.(pem|p12)",
                         text,
                         budget,
-                    )?)
-                    || (field == "tool_result"
-                        && regex(
-                            r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}",
-                            text,
-                            budget,
-                        )?)
-            }
-            "install.package_manager" => {
-                field == "command" && {
-                    charge_commands(&view.commands, budget)?;
-                    view.commands.iter().any(|t| {
-                        matches!(
-                            command_word(t),
-                            "npm"
-                                | "pnpm"
-                                | "yarn"
-                                | "bun"
-                                | "pip"
-                                | "pipx"
-                                | "uv"
-                                | "cargo"
-                                | "go"
-                                | "brew"
-                                | "apt"
-                                | "apt-get"
-                                | "dnf"
-                                | "yum"
-                        ) && t.iter().skip(1).any(|s| {
-                            matches!(
-                                s.as_str(),
-                                "install" | "add" | "i" | "get" | "run" | "create" | "x"
-                            )
-                        })
-                    })
+                    )?
+                    .map(Some)
+                } else if field == "tool_result" {
+                    find(
+                        r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}",
+                        text,
+                        budget,
+                    )?
+                    .map(Some)
+                } else {
+                    None
                 }
             }
-            "mcp.server_enumeration" => {
+            "mcp.server_enumeration" => whole(
                 field == "command"
                     && regex(r"(?i)\bmcp(?:-scan)?\b", text, budget)?
                     && regex(
                         r"(?i)\b(enumerate|probe|scan)\b|tools/list.*tools/list",
                         text,
                         budget,
-                    )?
-            }
-            "approval.bypass.context" => regex(
+                    )?,
+            ),
+            "approval.bypass.context" => whole(regex(
                 r"(?i)\b(run|execute|call|hide|bypass|do not tell)\b.{0,100}\b(without (asking|approval|confirmation|telling)|approval|user)\b|--dangerously-skip-permissions|--no-approval",
                 text,
                 budget,
-            )?,
-            "tool.injection.shape" => regex(
+            )?),
+            "tool.injection.shape" => whole(regex(
                 r#"<tool_call>|</tool_call>|"tool_calls"\s*:|recipient_name\s*:|arguments\s*:\s*\{"#,
                 text,
                 budget,
-            )?,
+            )?),
             // Shell parameters are path tokens too. A credential path handed to
             // a CLI that authenticates with it is not a read of the file.
-            "credential.cloud_harvest" => {
+            "credential.cloud_harvest" => whole(
                 action(field)
-                    && (field != "file_path" || view.reads_paths || view.text("command").is_empty())
-            }
+                    && (field != "file_path"
+                        || view.reads_paths
+                        || view.text("command").is_empty()),
+            ),
             "persistence.shell_profile"
             | "execution.encoded_payload"
             | "exfil.dns_encoding"
-            | "supply_chain.publish" => action(field),
-            _ => true,
+            | "supply_chain.publish" => whole(action(field)),
+            _ => whole(true),
         };
-        if matches {
-            selected.push((field, text, 0));
+        if let Some(counted) = selection {
+            selected.push((field, text, 0, counted));
         }
     }
     Ok(selected)
+}
+
+/// The first path token naming a secrets file that is not a template copy.
+fn secret_file_token(
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
+    budget.charge(text.len())?;
+    for token in text.split_whitespace() {
+        if regex(
+            r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$",
+            token,
+            budget,
+        )? && !regex(r"(?i)\.(example|sample|template|dist)$", token, budget)?
+        {
+            let start = token.as_ptr() as usize - text.as_ptr() as usize;
+            return Ok(Some(start..start + token.len()));
+        }
+    }
+    Ok(None)
+}
+
+/// A command stage that runs a shell, or an interpreter on inline code.
+fn shell_stage(tokens: &[String]) -> bool {
+    matches!(
+        command_word(tokens),
+        "bash" | "sh" | "zsh" | "fish" | "pwsh" | "powershell" | "cmd.exe"
+    ) || tokens.windows(2).any(|w| {
+        matches!(w[0].as_str(), "python" | "node" | "perl" | "ruby")
+            && matches!(w[1].as_str(), "-c" | "-e")
+    })
+}
+
+/// A command stage that installs or runs a package.
+fn package_stage(tokens: &[String]) -> bool {
+    matches!(
+        command_word(tokens),
+        "npm"
+            | "pnpm"
+            | "yarn"
+            | "bun"
+            | "pip"
+            | "pipx"
+            | "uv"
+            | "cargo"
+            | "go"
+            | "brew"
+            | "apt"
+            | "apt-get"
+            | "dnf"
+            | "yum"
+    ) && tokens.iter().skip(1).any(|s| {
+        matches!(
+            s.as_str(),
+            "install" | "add" | "i" | "get" | "run" | "create" | "x"
+        )
+    })
 }
 
 fn contains(
@@ -1565,42 +1602,42 @@ pub(crate) fn evaluate(
             } else {
                 view.fields()
                     .into_iter()
-                    .map(|(field, text)| (field, text, 0))
+                    .map(|(field, text)| (field, text, 0, None))
                     .collect()
             };
             // Native profiles are canonical interpretation of bundled predicates;
             // custom predicates always retain the effective Rule v1 matcher.
-            let matched: Vec<(&str, &str, Range<usize>)> = {
-                let mapped = fields
-                    .iter()
-                    .map(|(k, v, _)| {
-                        (
-                            if compiled.native
-                                && matches!(*k, "authored_content" | "user_context")
-                                && rule.id == "credential.api_key.pattern"
-                            {
-                                "tool_result"
-                            } else {
-                                *k
-                            },
-                            *v,
-                        )
-                    })
-                    .collect::<Vec<_>>();
+            let mapped = fields
+                .iter()
+                .map(|(k, v, _, _)| {
+                    (
+                        if compiled.native
+                            && matches!(*k, "authored_content" | "user_context")
+                            && rule.id == "credential.api_key.pattern"
+                        {
+                            "tool_result"
+                        } else {
+                            *k
+                        },
+                        *v,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let matched = {
                 let mut matched = Vec::new();
                 for (name, value, hit) in compiled
                     .matcher
                     .try_matching_spans(&mapped, &mut |bytes| budget.charge(bytes))?
                 {
-                    for &(field, text, offset) in &fields {
+                    for (field, text, offset, counted) in &fields {
                         budget.charge(field.len() + name.len())?;
-                        if field == name
+                        if *field == name
                             || (name == "tool_result"
-                                && matches!(field, "authored_content" | "user_context"))
+                                && matches!(*field, "authored_content" | "user_context"))
                         {
                             budget.charge(text.len() + value.len())?;
-                            if text == value {
-                                matched.push((field, text, offset + hit.start..offset + hit.end));
+                            if *text == value {
+                                matched.push((name, *field, *text, *offset, counted.clone(), hit));
                                 break;
                             }
                         }
@@ -1609,16 +1646,32 @@ pub(crate) fn evaluate(
                 matched
             };
             let mut candidate = None;
-            for matched_field in &matched {
-                if !compiled.native
-                    || rule.id != "credential.api_key.pattern"
-                    || credential_value(matched_field.1, budget)?
-                {
-                    candidate = Some(matched_field);
-                    break;
-                }
+            for (name, field, text, offset, counted, hit) in matched {
+                let counted = if compiled.native && rule.id == "credential.api_key.pattern" {
+                    let Some(token) = credential_token(text, budget)? else {
+                        continue;
+                    };
+                    Some(token)
+                } else {
+                    counted
+                };
+                // The hit is the matcher's first match in the occurrence a
+                // native predicate counted, never one the predicate rejected.
+                let hit = match counted {
+                    None => Some(hit),
+                    Some(counted) => {
+                        let occurrence = [(name, &text[counted.clone()])];
+                        compiled
+                            .matcher
+                            .try_matching_spans(&occurrence, &mut |bytes| budget.charge(bytes))?
+                            .first()
+                            .map(|(_, _, hit)| counted.start + hit.start..counted.start + hit.end)
+                    }
+                };
+                candidate = Some((field, hit.map(|hit| offset + hit.start..offset + hit.end)));
+                break;
             }
-            let Some((field, _, hit)) = candidate else {
+            let Some((field, hit)) = candidate else {
                 continue;
             };
             ids.insert(rule.id.clone());
@@ -1627,7 +1680,7 @@ pub(crate) fn evaluate(
                 field,
                 &rule.id,
                 view.text(field),
-                Some(hit.clone()),
+                hit,
                 budget,
             )?);
             if rule.score > 0 {
@@ -2161,7 +2214,12 @@ pub(crate) fn process_findings(
     Ok(output)
 }
 
-fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+/// The first credential token that is not an example, placeholder, or part
+/// of a longer word.
+fn credential_token(
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(text.len())?;
     // The compiled Rule v1 matcher already filters candidate fields. Native
     // case, boundary and example refinements must all apply to the same token,
@@ -2191,10 +2249,10 @@ fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, Pr
                 || !(text.as_bytes()[m.start() - 1].is_ascii_alphanumeric()
                     || text.as_bytes()[m.start() - 1] == b'_'))
         {
-            return Ok(true);
+            return Ok(Some(m.range()));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn redact(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {

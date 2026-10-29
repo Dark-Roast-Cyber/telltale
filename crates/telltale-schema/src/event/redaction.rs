@@ -327,6 +327,13 @@ const EXCERPT_REGION_BEFORE_BYTES: usize = 1536;
 /// while its value follows it.
 const LEADING_GUARD_BYTES: usize = 256;
 const LEADING_GUARD_FRAGMENTS: usize = 3;
+/// Raw text before a leading cut, on the cut's line, read for labels whose
+/// value runs past the cut.
+const LEADING_LINE_SCAN_BYTES: usize = 16 * 1024;
+/// What could open such a value in a line's unscanned start: an escape, or an
+/// authorization word.
+static UNSCANNED_LINE_VALUE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\\|auth|bearer").expect("unscanned line value regex"));
 
 /// Redacted evidence that locates one hit in its field.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -352,12 +359,14 @@ impl PrivacySanitizer {
     /// the input bound uses: the fragment holding a cut, including a quoted
     /// value that spans it, is dropped, so a secret that straddles a cut is
     /// never partly shown. A leading cut inside a private key block moves past
-    /// the block's end, and the text just after a leading cut is redacted but
-    /// not shown, since the label that would mask it may lie before the cut.
-    /// The excerpt is then cut from the region's redaction. The highlight is set only when redacting the text before,
-    /// at and after the hit separately reproduces the region's redaction, so
-    /// it never points at a guessed position; a hit that redaction merges
-    /// with its neighbors, or that a dropped fragment holds, gets `None`.
+    /// the block's end, and past an authorization or quoted value whose label
+    /// is earlier on the cut's line. The text just after a leading cut is
+    /// redacted but not shown, since the label that would mask it may lie
+    /// before the cut. The excerpt is then cut from the region's redaction.
+    /// The highlight is set only when redacting the text before, at and after
+    /// the hit separately reproduces the region's redaction, so it never
+    /// points at a guessed position; a hit that redaction merges with its
+    /// neighbors, or that a dropped fragment holds, gets `None`.
     pub fn try_sanitize_excerpt<E>(
         text: &str,
         hit: Option<Range<usize>>,
@@ -377,6 +386,7 @@ impl PrivacySanitizer {
             if start > 0 {
                 start = neutralize_leading_cut(text, start, end, charge)?;
                 start = skip_open_private_key_block(text, start, end, charge)?;
+                start = skip_open_line_value(text, start, end, charge)?;
             }
             if end < text.len() {
                 end = neutralize_trailing_cut(text, start, end, charge)?;
@@ -514,6 +524,135 @@ fn skip_open_private_key_block<E>(
     }
 }
 
+/// Move a leading cut past the end of an assignment value that a label before
+/// it opened on the cut's line. Such a value can outlast the leading guard: an
+/// authorization value runs to the line end or `;`, and a quoted value to its
+/// closing quote, which may be escaped or encoded (`\u0022`), as the
+/// assignment pass decodes it. Any key run that holds a secret key word
+/// counts, wherever the assignment pass would resume, so the scan stays linear
+/// and errs toward dropping text. Only the last `LEADING_LINE_SCAN_BYTES`
+/// before the cut are scanned; a longer line whose unscanned start holds a
+/// backslash or an authorization word is dropped to its end. Plain values end
+/// at the fragment the cut drops. YAML block values are not covered.
+fn skip_open_line_value<E>(
+    text: &str,
+    start: usize,
+    end: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<usize, E> {
+    if start >= end {
+        return Ok(start);
+    }
+    charge(start)?;
+    let line_start = text[..start].rfind(['\r', '\n']).map_or(0, |at| at + 1);
+    let mut window_start = line_start;
+    if start - line_start > LEADING_LINE_SCAN_BYTES {
+        // Begin at whitespace, which no unquoted key or escape spans.
+        let from = floor_char_boundary(text, start - LEADING_LINE_SCAN_BYTES);
+        window_start = text[from..start]
+            .find(char::is_whitespace)
+            .map_or(start, |at| from + at);
+        if UNSCANNED_LINE_VALUE_RE.is_match(&text[line_start..window_start]) {
+            let skipped = line_end(text, start).min(end);
+            return neutralize_leading_cut(text, skipped, end, charge);
+        }
+    }
+    let window = &text[window_start..end];
+    charge(window.len().saturating_mul(8))?;
+    let decoded = decode_assignment_syntax(window);
+    let scan = decoded
+        .as_ref()
+        .map_or(window, |decoded| decoded.text.as_str());
+    let source = |offset: usize| {
+        window_start
+            + decoded.as_ref().map_or(offset, |decoded| {
+                decoded
+                    .source_boundaries
+                    .binary_search_by_key(&offset, |boundary| boundary.0)
+                    .map_or(window.len(), |at| decoded.source_boundaries[at].1)
+            })
+    };
+    let bytes = scan.as_bytes();
+    let key_byte = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-');
+    let mut shown = start;
+    // The first `\r`, `\n` or `;` at or after an authorization value's start.
+    let mut stop: Option<usize> = None;
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if !key_byte(bytes[cursor]) {
+            cursor += 1;
+            continue;
+        }
+        let key_start = cursor;
+        while cursor < bytes.len() && key_byte(bytes[cursor]) {
+            cursor += 1;
+        }
+        if source(key_start) >= shown {
+            break;
+        }
+        let key = &scan[key_start..cursor];
+        let compact = key
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if !SECRET_KEY_WORDS.iter().any(|word| compact.contains(word)) {
+            continue;
+        }
+        let mut value_start = cursor;
+        skip_assignment_whitespace(scan, &mut value_start);
+        let spaced = value_start > cursor;
+        if matches!(bytes.get(value_start), Some(b'"' | b'\'')) {
+            let mut after_quote = value_start + 1;
+            skip_assignment_whitespace(scan, &mut after_quote);
+            if matches!(bytes.get(after_quote), Some(b'=' | b':')) {
+                value_start = after_quote;
+            }
+        }
+        if matches!(bytes.get(value_start), Some(b'=' | b':')) {
+            value_start += 1;
+            skip_assignment_whitespace(scan, &mut value_start);
+        } else if !(spaced && key.contains("--")) {
+            continue;
+        }
+        let value_end = if ["auth", "authorization", "bearer"]
+            .iter()
+            .any(|word| compact.ends_with(word))
+        {
+            if stop.is_none_or(|stop| stop < value_start) {
+                stop = Some(
+                    scan[value_start..]
+                        .find(['\r', '\n', ';'])
+                        .map_or(scan.len(), |at| value_start + at),
+                );
+            }
+            stop
+        } else if bytes.get(value_start) == Some(&b'\\')
+            && matches!(bytes.get(value_start + 1), Some(b'"' | b'\''))
+        {
+            let quote = bytes[value_start + 1];
+            Some(
+                find_escaped_quote(scan, value_start + 2, quote)
+                    .map_or_else(|| line_end(scan, value_start), |at| at + 2),
+            )
+        } else if let Some(quote @ (b'"' | b'\'')) = bytes.get(value_start).copied() {
+            Some(
+                find_quote(scan, value_start + 1, quote)
+                    .map_or_else(|| line_end(scan, value_start), |at| at + 1),
+            )
+        } else {
+            None
+        };
+        if let Some(value_end) = value_end {
+            shown = shown.max(source(value_end));
+        }
+    }
+    if shown == start {
+        return Ok(start);
+    }
+    neutralize_leading_cut(text, shown, end, charge)
+}
+
 /// The offset in `region`, which starts at a leading cut, of the first
 /// fragment boundary past the leading guard.
 fn leading_guard<E>(
@@ -603,9 +742,11 @@ fn redact_region<E>(
 
 /// The hit's range in `whole` when `whole` starts with the separate
 /// redactions of the text before the hit and of the hit, joined as the region
-/// joins them, plus an anchor for placing the excerpt either way. Only those
-/// two pieces are redacted: the text after the hit is the larger part of a
-/// region, and redaction can reserve work quadratic in its input.
+/// joins them, plus an anchor for placing the excerpt either way. The text
+/// through the hit must redact to that same join, so a value opened before
+/// the hit that masks it never leaves a later copy of the hit located. Only
+/// text up to the hit is redacted: the text after the hit is the larger part
+/// of a region, and redaction can reserve work quadratic in its input.
 fn exact_highlight<E>(
     region: &str,
     hit: Range<usize>,
@@ -619,10 +760,13 @@ fn exact_highlight<E>(
         && (before.ends_with(char::is_whitespace) || at.starts_with(char::is_whitespace));
     let start = prefix.len() + usize::from(space);
     let located = start..start + piece.len();
+    let through = redact_region(&region[..hit.end], charge)?;
     let exact = !piece.is_empty()
-        && whole.starts_with(&prefix)
-        && (!space || whole.as_bytes().get(prefix.len()) == Some(&b' '))
-        && whole.get(located.clone()) == Some(piece.as_str());
+        && through.len() == located.end
+        && through.starts_with(&prefix)
+        && (!space || through.as_bytes().get(prefix.len()) == Some(&b' '))
+        && through.get(located.clone()) == Some(piece.as_str())
+        && whole.starts_with(&through);
     let anchor = located.start.min(whole.len())..located.end.min(whole.len());
     Ok((exact.then_some(located), anchor))
 }
@@ -1470,30 +1614,31 @@ fn skip_assignment_whitespace(text: &str, cursor: &mut usize) {
     }
 }
 
+const SECRET_KEY_WORDS: [&str; 15] = [
+    "apikey",
+    "accesstoken",
+    "accesskey",
+    "authorization",
+    "auth",
+    "bearer",
+    "clientsecret",
+    "credential",
+    "credentials",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "privatekey",
+    "key",
+];
+
 fn is_secret_key(key: &str) -> bool {
     let parts = secret_key_parts(key);
     let compact = parts.join("");
-    let known = [
-        "apikey",
-        "accesstoken",
-        "accesskey",
-        "authorization",
-        "auth",
-        "bearer",
-        "clientsecret",
-        "credential",
-        "credentials",
-        "password",
-        "passwd",
-        "secret",
-        "token",
-        "privatekey",
-        "key",
-    ];
-    known.contains(&compact.as_str())
+    SECRET_KEY_WORDS.contains(&compact.as_str())
         || parts
             .last()
-            .is_some_and(|part| known.contains(&part.as_str()))
+            .is_some_and(|part| SECRET_KEY_WORDS.contains(&part.as_str()))
 }
 
 fn secret_key_parts(key: &str) -> Vec<String> {
@@ -2785,6 +2930,92 @@ mod tests {
         assert!(!skipped.text.contains("ttPrivateKeyBodyMarkerLine"));
         assert!(skipped.text.contains("after after"));
         assert!(skipped.elided_before && skipped.elided_after);
+    }
+
+    #[test]
+    fn excerpt_never_shows_a_line_value_whose_label_precedes_a_leading_cut() {
+        // Each value runs from before the raw cut past the leading guard: an
+        // authorization value to its line end, quoted values to a closing
+        // quote the fragment rule does not see. Failures name the case only.
+        const MARKER: &str = "tt_line_value_marker_25";
+        let hit = "git reset --hard";
+        let value = format!(
+            "{}{MARKER} {hit}{}",
+            "part ".repeat(600),
+            " after".repeat(300)
+        );
+        let long = format!(
+            "{}{MARKER} {hit}{}",
+            "part ".repeat(4000),
+            " after".repeat(300)
+        );
+        let cases = [
+            ("authorization", format!("Authorization: {value}\nend")),
+            ("auth flag", format!("curl --auth {value}; end")),
+            (
+                "unicode quote",
+                format!("--password \\u0022{value}\\u0022 done"),
+            ),
+            ("hex quote", format!("password=\\x27{value}\\x27 done")),
+            (
+                "double escape",
+                format!("password=\\\\u0022{value}\\\\u0022 done"),
+            ),
+            ("escaped quote", format!("--token \\\"{value}\\\" done")),
+            (
+                "quoted key",
+                format!("{{\"Authorization\": \"Basic x\", {value}}}\nend"),
+            ),
+            (
+                "unscanned line start",
+                format!("Authorization: {long}\nend"),
+            ),
+        ];
+        for (case, text) in cases {
+            assert!(text.len() > MAX_INPUT_BYTES, "{case}");
+            let shown = excerpt(&text, Some(hit));
+            assert!(!shown.text.contains(MARKER), "{case}");
+            assert!(!shown.text.contains("part"), "{case}");
+            assert_eq!(shown.highlight, None, "{case}");
+            assert!(shown.elided_before, "{case}");
+        }
+
+        // A value that ends before the cut, and a long line with nothing in
+        // its unscanned start that could open one, keep the hit.
+        for (case, text) in [
+            (
+                "closed",
+                format!(
+                    "Authorization: Bearer x; {}{hit}{}",
+                    "word ".repeat(600),
+                    " after".repeat(300)
+                ),
+            ),
+            (
+                "long line",
+                format!("{}{hit}{}", "word ".repeat(4000), " after".repeat(300)),
+            ),
+        ] {
+            assert_eq!(highlighted(&excerpt(&text, Some(hit))), hit, "{case}");
+        }
+    }
+
+    #[test]
+    fn excerpt_highlight_is_null_when_a_value_before_the_hit_masks_it() {
+        // The first copy of the hit is inside the authorization value; the
+        // second copy must not be located in its place.
+        let text = "Authorization: Bearer hidden git reset --hard\ngit reset --hard";
+        let masked = excerpt(text, Some("git reset --hard"));
+        assert_eq!(masked.highlight, None);
+        assert_eq!(masked.text, redact_sensitive_text(text));
+        // The second copy, located directly, is exact.
+        let at = text.rfind("git reset --hard").unwrap();
+        let second =
+            PrivacySanitizer::try_sanitize_excerpt(text, Some(at..text.len()), &mut |_| {
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .unwrap();
+        assert_eq!(highlighted(&second), "git reset --hard");
     }
 
     #[test]

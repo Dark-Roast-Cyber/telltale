@@ -1150,14 +1150,16 @@ the rule catalog.
 Each action evidence entry SHALL show its field whole when the field's
 redaction fits the evidence bounds, and otherwise an excerpt cut from the
 redaction of a raw region around the hit that counted: the first match of the
-rule's counting matcher, the command stage that satisfied a native predicate,
-or the stage or pipeline of a download link. Both raw cuts SHALL drop the
-fragment that holds them, including a quoted value that spans them; a leading
-cut SHALL move past a private key block that starts before it, and text within
-the leading guard after a leading cut SHALL NOT be shown. `highlight` SHALL be
-the UTF-8 byte range of the hit in `redacted_value` only when redacting the
-text before, at and after the hit separately reproduces the redaction, and
-null otherwise. `elided_before` and `elided_after` SHALL say whether field text
+rule's counting matcher; for a native predicate that counts one command stage,
+path, key reference or credential token, the first match inside that
+occurrence; or the stage or pipeline of a download link. Both raw cuts SHALL
+drop the fragment that holds them, including a quoted value that spans them; a
+leading cut SHALL move past a private key block that starts before it and past
+an authorization or quoted value whose label is earlier on the cut's line, and
+text within the leading guard after a leading cut SHALL NOT be shown.
+`highlight` SHALL be the UTF-8 byte range of the hit in `redacted_value` only
+when redacting the text before, at and after the hit separately reproduces the
+redaction, and null otherwise. `elided_before` and `elided_after` SHALL say whether field text
 was cut on each side. Evidence SHALL NOT reread sources or rerun rules, and
 Event 3 evidence SHALL be unchanged.
 
@@ -1170,6 +1172,16 @@ Event 3 evidence SHALL be unchanged.
 
 - **WHEN** redaction joins the hit to its neighbors or a dropped fragment holds it
 - **THEN** the highlight is null and no part of the dropped fragment is shown
+
+#### Scenario: A rejected occurrence is not highlighted
+
+- **WHEN** a rule's matcher first matches a word its native predicate does not count, or a copy of the hit that a value before it masks
+- **THEN** the highlight is in the occurrence that counted, or null
+
+#### Scenario: A line value that a leading cut enters is not shown
+
+- **WHEN** an authorization value, or a value quoted with literal, escaped or encoded (`\u0022`) quotes, opens before a leading cut and runs past the leading guard
+- **THEN** no part of the value is shown
 
 ### Requirement: Action records give hosts their delivery key and event link
 
