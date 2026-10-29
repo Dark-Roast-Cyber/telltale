@@ -19,11 +19,20 @@ use super::native::{
 #[derive(Clone)]
 pub(crate) struct CodexCanonicalOptions {
     pub(crate) observed_at: ObservedAt,
+    pub(crate) scale: telltale_schema::observation::SourceScale,
 }
 
 impl CodexCanonicalOptions {
     pub(crate) fn new(observed_at: ObservedAt) -> Self {
-        Self { observed_at }
+        Self {
+            observed_at,
+            scale: telltale_schema::observation::SourceScale::FLOOR,
+        }
+    }
+
+    /// Scales the source-wide retention budget; each record keeps the floor.
+    pub(crate) fn with_scale(self, scale: telltale_schema::observation::SourceScale) -> Self {
+        Self { scale, ..self }
     }
 }
 
@@ -108,7 +117,7 @@ pub(crate) fn project_codex_native_records(
     records: &[CodexNativeRecord],
     options: &CodexCanonicalOptions,
 ) -> Result<CodexProjection, CodexCanonicalError> {
-    let mut observations = crate::acquisition::CanonicalCollector::default();
+    let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     let mut quarantined = Vec::new();
     let mut index = 0;
     while index < records.len() {

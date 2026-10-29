@@ -3,7 +3,7 @@ use std::io::Write;
 use telltale_schema::clients::SourceKind;
 
 const RECORD_BYTES: usize = 8 * 1024 * 1024;
-const SOURCE_BYTES: usize = 128 * 1024 * 1024;
+const SOURCE_BYTES: usize = 64 * 1024 * 1024;
 
 fn source(path: std::path::PathBuf) -> Source {
     Source {
@@ -89,9 +89,29 @@ fn production_jsonl_aggregate_inclusive_counts_all_blank_bytes() {
     assert!(read_jsonl_values(&source).unwrap().is_empty());
     file.write_all(b"\n").unwrap();
     assert!(
-        read_jsonl_values(&source).is_err(),
+        matches!(
+            read_jsonl_values(&source),
+            Err(SourceReadError::UnsupportedSize)
+        ),
         "aggregate blank bytes admitted"
     );
+}
+
+#[test]
+fn production_jsonl_native_units_scale_with_bytes_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = source(dir.path().join("synthetic.jsonl"));
+    // 150,000 sixteen-byte units read about 2.3 MiB: over the 100,000 floor,
+    // within 100,000 per MiB read.
+    let unit = b"{\"p\":\"padding\"}\n";
+    assert_eq!(unit.len(), 16);
+    fs::write(&source.path, unit.repeat(150_000)).unwrap();
+    let (values, bytes) =
+        read_jsonl_values_with_limits(&source, None).expect("scaled native units");
+    assert_eq!((values.len(), bytes), (150_000, 2_400_000));
+    // Denser units than 100,000 per MiB read still stop the read.
+    fs::write(&source.path, b"{}\n".repeat(524_288)).unwrap();
+    assert!(read_jsonl_values(&source).is_err(), "dense units admitted");
 }
 
 #[test]
@@ -271,6 +291,6 @@ fn production_jsonl_short_reads_interruption_and_utf8_boundary() {
     };
     assert_eq!(
         read_production_jsonl(reader).unwrap(),
-        vec![serde_json::json!("é中"), serde_json::json!({})]
+        (vec![serde_json::json!("é中"), serde_json::json!({})], 16)
     );
 }

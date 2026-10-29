@@ -936,7 +936,14 @@ completion, operational evaluation failure, and compatibility projection failure
 It MUST retain bounded evidence/projection context during the authoritative pass.
 The boundary SHALL allow at most 65,536 observations, 4,096 retained/projection
 items, 4,096 UTF-8 bytes per retained compatibility string, and 4 MiB aggregate
-retained compatibility text. Capacity MUST be consumed before retention.
+retained compatibility text. For a JSONL session source, every limit except the
+per-string limit SHALL be multiplied by the MiB read, never below 1 and at most
+64. Capacity MUST be consumed before retention.
+
+#### Scenario: Bounds scale with a large session source
+- **WHEN** a JSONL session source of more than 1 MiB and at most 64 MiB is evaluated
+- **THEN** each per-source limit is its floor times the source's MiB
+- **AND** an input that exceeds those scaled limits still fails atomically
 
 #### Scenario: Unsupported capability
 - **WHEN** a required capability is unsupported or unknown

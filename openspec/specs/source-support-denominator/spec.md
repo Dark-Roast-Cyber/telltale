@@ -184,8 +184,9 @@ Investigation read controls remain separate from production admission limits.
 ### Requirement: Production JSONL admission has inclusive physical limits
 
 Production JSONL acquisition MUST admit at most 8 MiB per physical record,
-128 MiB of total acquired source bytes, and 100,000 nonblank native units,
-with each boundary inclusive.
+64 MiB of total acquired source bytes, and 100,000 nonblank native units per
+MiB of bytes read so far, never fewer than 100,000, with each boundary
+inclusive. A source over 64 MiB MUST fail as `unsupported_source_size`.
 Physical and aggregate bytes MUST include LF/CRLF
 terminators, whitespace, and blank records.
 Blankness MUST retain Unicode

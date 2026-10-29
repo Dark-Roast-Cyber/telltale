@@ -532,7 +532,8 @@ pub fn project_event3(
     }
     let mut metadata_index = BTreeMap::new();
     let mut metadata_values = BTreeSet::new();
-    let mut budget = super::session::RetentionBudget::with_work(evaluation.work_bytes.clone());
+    let mut budget =
+        super::session::RetentionBudget::with_work(evaluation.work_bytes.clone(), evaluation.scale);
     for metadata in context.sessions {
         super::session::RetentionBudget::validate_text(metadata.session_id.value())?;
         for value in [metadata.agent, metadata.model, metadata.provider]

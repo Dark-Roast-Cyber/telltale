@@ -1828,3 +1828,131 @@ correlations: []
     }
     assert!(!serialized.contains(r#"C:\private\token.txt"#));
 }
+
+fn evaluate_scaled(
+    observations: &[CanonicalObservationV2],
+    source_bytes: usize,
+) -> (
+    Result<CanonicalSourceEvaluation, ProcessingError>,
+    EvaluationWorkBudget,
+) {
+    let instance = CorrelationId::source_reported("synthetic-source-instance").unwrap();
+    let work = EvaluationWorkBudget::for_source(SourceScale::for_source_bytes(source_bytes));
+    let result = evaluate_source_with_work_budget(
+        CanonicalSourceInput {
+            client: ClientId::Claude,
+            source_id: "claude.projects",
+            source_instance: Some(&instance),
+            observations,
+        },
+        &plan(0),
+        None,
+        &work,
+    );
+    (result, work)
+}
+
+#[test]
+fn source_bounds_are_floors_per_mib_read_up_to_the_ceiling() {
+    for bytes in [0, 1, 1024 * 1024] {
+        let bounds = SourceBounds::new(SourceScale::for_source_bytes(bytes));
+        assert_eq!(bounds.work, MAX_EVALUATION_BYTE_VISITS);
+        assert_eq!(bounds.observations, MAX_SOURCE_OBSERVATIONS);
+        assert_eq!(bounds.canonical_retained, MAX_CANONICAL_RETAINED_BYTES);
+        assert_eq!(bounds.projection_items, MAX_PROJECTION_ITEMS);
+        assert_eq!(bounds.compatibility_bytes, MAX_COMPATIBILITY_RETAINED_BYTES);
+    }
+    let half = SourceBounds::new(SourceScale::for_source_bytes(5 * 512 * 1024));
+    assert_eq!(half.work, MAX_EVALUATION_BYTE_VISITS * 5 / 2);
+    assert_eq!(half.observations, MAX_SOURCE_OBSERVATIONS * 5 / 2);
+    for bytes in [
+        MAX_SCALED_SOURCE_BYTES,
+        MAX_SCALED_SOURCE_BYTES + 1,
+        usize::MAX,
+    ] {
+        let ceiling = SourceBounds::new(SourceScale::for_source_bytes(bytes));
+        assert_eq!(ceiling.work, MAX_EVALUATION_BYTE_VISITS * 64);
+        assert_eq!(ceiling.observations, MAX_SOURCE_OBSERVATIONS * 64);
+        assert_eq!(
+            ceiling.canonical_retained,
+            MAX_CANONICAL_RETAINED_BYTES * 64
+        );
+        assert_eq!(ceiling.projection_items, MAX_PROJECTION_ITEMS * 64);
+        assert_eq!(
+            ceiling.compatibility_bytes,
+            MAX_COMPATIBILITY_RETAINED_BYTES * 64
+        );
+    }
+}
+
+#[test]
+fn scaled_retention_admits_a_larger_source_and_keeps_its_exact_limit() {
+    // Just over the 8 MiB floor of canonical retention, as in
+    // canonical_ingress_retention_cap_is_source_wide_and_exact.
+    let text = "x".repeat(65_528);
+    let observations = (0..129)
+        .map(|index| {
+            message(
+                &format!("n{index}"),
+                Some("session"),
+                &text,
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect::<Vec<_>>();
+    let retained = observations
+        .iter()
+        .map(CanonicalObservationV2::retained_byte_len)
+        .sum::<usize>();
+    assert!(retained > MAX_CANONICAL_RETAINED_BYTES);
+    assert!(matches!(
+        evaluate(&observations, &plan(0)),
+        Err(ProcessingError::Bounds)
+    ));
+    let mut retention = RetentionBudget::with_work(
+        std::sync::Arc::default(),
+        SourceScale::for_source_bytes(2 * 1024 * 1024),
+    );
+    retention
+        .consume(
+            MAX_PROJECTION_ITEMS * 2,
+            MAX_COMPATIBILITY_RETAINED_BYTES * 2,
+        )
+        .unwrap();
+    assert_eq!(retention.consume(1, 0), Err(ProcessingError::Bounds));
+    assert_eq!(retention.consume(0, 1), Err(ProcessingError::Bounds));
+    // Two MiB read allows 16 MiB of canonical retention.
+    let (scaled, work) = evaluate_scaled(&observations, 2 * 1024 * 1024);
+    scaled.expect("scaled retention");
+    assert!(!work.is_exhausted());
+}
+
+#[test]
+fn scaled_work_stays_proportional_for_costly_input() {
+    // The repeated punctuation URLs of
+    // repeated_punctuation_urls_exhaust_source_work_without_private_output:
+    // about 4 MiB that costs about 200 byte visits per byte.
+    let text = format!(
+        "https://example.invalid/{}?token=SYNTHETIC-PUNCT-SECRET&needle=1",
+        ":".repeat(4_000)
+    );
+    let observations = (0..1_024)
+        .map(|index| {
+            message(
+                &format!("url{index}"),
+                Some("session"),
+                &text,
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect::<Vec<_>>();
+    let bytes = text.len() * observations.len();
+    let (own, work) = evaluate_scaled(&observations, bytes);
+    own.expect("work within its own bytes' budget");
+    assert!(work.used_bytes() > MAX_EVALUATION_BYTE_VISITS * 3);
+    // The budget follows bytes read, not the work the input asks for: the
+    // same observations credited with a third of their bytes exhaust it.
+    let (short, work) = evaluate_scaled(&observations, bytes / 3);
+    assert_eq!(short.err(), Some(ProcessingError::Bounds));
+    assert!(work.is_exhausted(), "not a compatibility retention failure");
+}

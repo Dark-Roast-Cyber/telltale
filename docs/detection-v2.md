@@ -243,7 +243,9 @@ transcript cache, legacy record, or reevaluation snapshot:
 
 There are at most 65,536 observations per invocation, 4,096 retained/projection
 items, 4,096 UTF-8 bytes per retained compatibility string, and 4 MiB of aggregate
-retained compatibility text per source or projection pass. Capacity is consumed
+retained compatibility text per source or projection pass. For JSONL session
+sources, all but the per-string limit scale with the bytes read; see
+[source size](embedding.md#source-size). Capacity is consumed
 before retaining process variants, correlation steps, evidence, or Event3 material.
 Limits fail explicitly; they do not silently truncate required context. Text snippets use existing bounded redaction. New context containers do
 not implement Debug; processing errors carry only fixed codes. Process command

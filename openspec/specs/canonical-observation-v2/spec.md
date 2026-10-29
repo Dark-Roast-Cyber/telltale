@@ -581,20 +581,22 @@ conversion success SHALL NOT promise observation aggregate acceptance.
 Native adapters SHALL activate only narrow message string conversion.
 Acquisition
 SHALL reject a source before retaining the next observation when its canonical
-semantic/local retention exceeds 8 MiB; evaluation ingress SHALL enforce the same
-budget with nonallocating sizing.
+semantic/local retention exceeds 8 MiB, or for a JSONL session source 8 MiB per
+MiB read up to 64 MiB, never below 8 MiB; evaluation ingress SHALL enforce the
+same budget with nonallocating sizing.
 Inference-specific limits SHALL remain unchanged.
 This bound does not govern whole-file native-reader intermediate memory.
 
 #### Scenario: Canonical source retention is bounded before insertion
 
-- **WHEN** the next canonical observation exceeds 8 MiB retained source budget
+- **WHEN** the next canonical observation exceeds the source's retained budget
 - **THEN** acquisition rejects before retention and evaluation enforces the same budget
 
 ### Requirement: Evaluation byte visits are charged source-wide
 
-Evaluation and projection SHALL share one source-wide 256 MiB charged byte-visit
-budget.
+Evaluation and projection SHALL share one source-wide charged byte-visit
+budget: 256 MiB, or for a JSONL session source 256 MiB per MiB read up to 64
+MiB, never below 256 MiB.
 Reached clones, joins, comparisons, scans, exclusions, evidence resolution,
 hashing and sanitization SHALL charge before execution, including no matches,
 repeated predicates and empty operations.
@@ -604,7 +606,7 @@ reserve visits.
 #### Scenario: Evaluation byte visits are charged source-wide
 
 - **WHEN** evaluation or projection reaches clones, joins or scans
-- **THEN** execution is charged against one 256 MiB source-wide budget
+- **THEN** execution is charged against one source-wide budget scaled by bytes read
 
 ### Requirement: Evaluation budget exhaustion is atomic
 
