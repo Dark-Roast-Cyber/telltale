@@ -186,14 +186,16 @@ own canonical-bound rejection is quarantined as described above, not a successfu
 truncation and not necessarily a failure of the source acquisition. Other source
 failure policies are unchanged.
 
-One shared collector checks an 8 MiB canonical semantic/local retention budget
-before each next observation is retained, across all records and sessions in a
-source projection. Exceeding this source-wide budget remains atomic failure,
+One shared collector checks a canonical semantic/local retention budget before
+each next observation is retained, across all records and sessions in a source
+projection: 8 MiB, scaled for JSONL session sources by bytes read (see
+[source size](embedding.md#source-size)). Each record's own observations keep the 8 MiB bound. Exceeding this source-wide budget remains atomic failure,
 including for Claude; it is outside per-record quarantine. Evaluation ingress applies the same budget using a cached,
 nonallocating size. Whole-file native reader intermediate memory is not capped
 by this canonical-retention policy. Inference acquisition keeps its own limits.
 
-One source-scoped 256 MiB deterministic byte-visit budget spans selectors,
+One source-scoped deterministic byte-visit budget (256 MiB, scaled the same
+way) spans selectors,
 matching (including no matches, repeated predicates and reached exclusions),
 process matching, evidence re-resolution, hashing, sanitization and projection.
 Operations charge before execution, with a minimum one-byte visit and conservative

@@ -1,9 +1,7 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::source_read::{
-    SourceReadError, collect_string_values, nested_string_field, read_jsonl_values,
-};
+use crate::source_read::{SourceReadError, collect_string_values, nested_string_field};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -95,17 +93,14 @@ pub(crate) struct CodexNativeRecord {
 pub(crate) fn extract_codex_native_records(
     source: &Source,
 ) -> Result<Vec<CodexNativeRecord>, SourceReadError> {
-    extract_codex_native_records_with_limits(source, None)
+    extract_codex_native_records_with_limits(source, None).map(|(records, _)| records)
 }
 
 pub(crate) fn extract_codex_native_records_with_limits(
     source: &Source,
     limits: Option<crate::acquisition::DirectReadLimits>,
-) -> Result<Vec<CodexNativeRecord>, SourceReadError> {
-    let values = match limits {
-        Some(limits) => crate::source_read::read_jsonl_values_with_limits(source, Some(limits))?,
-        None => read_jsonl_values(source)?,
-    };
+) -> Result<(Vec<CodexNativeRecord>, usize), SourceReadError> {
+    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, limits)?;
     let ordinal_mode =
         validate_native_ordinals(&values).map_err(|detail| SourceReadError::SchemaDrift {
             client: source.client,
@@ -394,7 +389,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
         source_id: source.source_id.clone(),
         detail,
     })?;
-    Ok(records)
+    Ok((records, bytes))
 }
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, &'static str> {

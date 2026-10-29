@@ -11,7 +11,7 @@ fn clock() -> ObservedAt {
 }
 
 #[test]
-fn long_message_embedding_suffix_privacy_and_retention_failure_are_read_only() {
+fn long_message_embedding_suffix_privacy_and_source_failure_are_read_only() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join(".claude/projects/synthetic");
     std::fs::create_dir_all(&directory).unwrap();
@@ -38,8 +38,8 @@ fn long_message_embedding_suffix_privacy_and_retention_failure_are_read_only() {
         serde_json::to_string(&events.iter().map(|(_, event)| event).collect::<Vec<_>>()).unwrap();
     assert!(!json.contains("SYNTHETIC-EMBED-SECRET"));
     assert_eq!(before, tree_snapshot(root.path()));
-    let large = serde_json::json!({"type":"user", "sessionId":"synthetic-session", "message":{"role":"user", "content":"x".repeat(65_528)}}).to_string();
-    std::fs::write(&path, format!("{}\n", vec![large; 129].join("\n"))).unwrap();
+    // More native units than 1.5 MiB read admits fails the whole source.
+    std::fs::write(&path, "{}\n".repeat(1 << 19)).unwrap();
     let before = tree_snapshot(root.path());
     let events = pipeline.scan_root(root.path()).unwrap();
     assert_eq!(events.len(), 1);

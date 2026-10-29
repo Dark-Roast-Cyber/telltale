@@ -250,6 +250,10 @@ pub struct RuleV1ContentMatcher {
     matchers: Vec<CompiledMatcher>,
 }
 
+/// A matched field: its name, its text, and the byte range of the counted
+/// match in that text.
+pub type FieldMatch<'a> = (&'a str, &'a str, std::ops::Range<usize>);
+
 impl RuleV1ContentMatcher {
     pub fn matching_fields<'a>(&self, fields: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
         self.try_matching_fields(fields, &mut |_| Ok::<_, std::convert::Infallible>(()))
@@ -262,6 +266,22 @@ impl RuleV1ContentMatcher {
         fields: &'a [(&'a str, &'a str)],
         charge: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Vec<(&'a str, &'a str)>, E> {
+        Ok(self
+            .try_matching_spans(fields, charge)?
+            .into_iter()
+            .map(|(name, value, _)| (name, value))
+            .collect())
+    }
+
+    /// [`Self::try_matching_fields`] with the byte range of the counted match
+    /// in each field: the first match of the first matcher that counts.
+    /// Exclusions veto a whole field, so that match is the one that counted.
+    /// The scan is the one that decides the match; nothing is rerun.
+    pub fn try_matching_spans<'a, E>(
+        &self,
+        fields: &'a [(&'a str, &'a str)],
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<FieldMatch<'a>>, E> {
         let mut matches = Vec::new();
         for &(name, value) in fields {
             for matcher in &self.matchers {
@@ -270,16 +290,16 @@ impl RuleV1ContentMatcher {
                     continue;
                 }
                 charge(value.len())?;
-                if !matcher.regex.is_match(value) {
+                let Some(found) = matcher.regex.find(value) else {
                     continue;
-                }
+                };
                 if let Some(exclusion) = &matcher.exclusion_regex {
                     charge(value.len())?;
                     if exclusion.is_match(value) {
                         continue;
                     }
                 }
-                matches.push((name, value));
+                matches.push((name, value, found.range()));
                 break;
             }
         }

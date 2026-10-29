@@ -6,6 +6,18 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- A JSONL session source (Claude Code, Codex, OpenClaw, Qwen) of up to 64 MiB
+  is evaluated whole. Its per-source bounds (evaluation work, observations,
+  canonical retention, native units, retained and projection items, and
+  compatibility text) are their previous values per MiB read, never lower.
+  Before, a session file of more than a few MiB (about 3 MiB in synthetic
+  tests) failed on the evaluation work budget. Bounds stop growing at 64 MiB;
+  the 128 MiB read limit is unchanged. Peak RSS is about 15 times the source
+  size.
+- A session detection event whose evidence would exceed the 1 MiB Event 3
+  limit keeps every timeline anchor and its earliest evidence, and marks each
+  rule's omitted evidence with an `evidence_omitted` item carrying the count.
+  Before, the source failed at projection. Events that fit are unchanged.
 - Raise the embedding crates' minimum Rust version from the unpublished 1.85
   declaration to 1.88 so they can use patched `time` releases. Require
   `time >=0.3.47` and update the independent embedding consumer lock to 0.3.55
@@ -35,6 +47,35 @@
   `ProducerProvenanceOptions::from_environment`,
   `telltale_core::resolve_install_inventory_interval_seconds`, and
   `telltale_schema::event::load_operational_alert_config` are removed.
+- Keep Windows command evidence readable. Redacted text keeps a bare `/word`
+  of up to 16 plain characters as a command flag (`cmd.exe /c`,
+  `schtasks /create /tn`; this also keeps a bare `/etc`) and a mixed-case run
+  with fewer than two digits and no `+`, `/` or `=` as an identifier
+  (`New-ScheduledTaskTrigger`, a registry value name). Before, both became
+  `[sensitive-path]` or `[encoded-blob]`. Paths with more shape, drive and UNC
+  paths, secrets and encoded-looking runs are masked as before. The identifier
+  rule is a heuristic: mixed-case encoded data of that shape is kept.
+- Action record evidence shows the hit that counted. A field longer than the
+  evidence bounds is an excerpt around the hit, including a hit past the
+  sanitizer's 4 KiB input bound, instead of the field's first 512 bytes; both
+  cuts drop the fragment that holds them, so a secret that straddles a cut is
+  never partly shown. A leading cut also moves past an authorization or
+  quoted value whose label is earlier on its line, and text just after a
+  leading cut, whose masking label may lie before the cut, is redacted but not
+  shown. Evidence carries `highlight`, the exact byte range of the hit or null,
+  and `elided_before` and `elided_after`. Native predicates and download links
+  point at the command stage, path or token that satisfied them. Event 3
+  evidence is unchanged.
+- The rule catalog lists the bundled process-chain rules (kind
+  `process_chain`) when the process-chain pack is enabled, and every entry
+  carries `attack_techniques` (MITRE ATT&CK IDs, set for process-chain rules).
+  Process-chain correlations have `action_ordered` set, since their steps
+  match in sequence order.
+- `ActionRecordV1::delivery_aliases()` returns every key an action may have
+  been delivered under, so a host still recognizes an action whose replay
+  identity a later identical candidate withdrew.
+- Action record v1 and rule catalog v1 are amended in place before their first
+  tag; each is frozen from the first release tag that carries it.
 - Avoid reserving unrelated tool arguments for scalar control-field lookups,
   and skip encoded-URL candidate scanning when text contains no complete percent
   escape. Genuine input scanning and valid encoded URLs retain their existing

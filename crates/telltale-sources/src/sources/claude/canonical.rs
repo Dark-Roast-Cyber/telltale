@@ -18,11 +18,20 @@ use super::native::{
 #[derive(Clone)]
 pub(crate) struct ClaudeCanonicalOptions {
     pub(crate) observed_at: ObservedAt,
+    pub(crate) scale: telltale_schema::observation::SourceScale,
 }
 
 impl ClaudeCanonicalOptions {
     pub(crate) fn new(observed_at: ObservedAt) -> Self {
-        Self { observed_at }
+        Self {
+            observed_at,
+            scale: telltale_schema::observation::SourceScale::FLOOR,
+        }
+    }
+
+    /// Scales the source-wide retention budget; each record keeps the floor.
+    pub(crate) fn with_scale(self, scale: telltale_schema::observation::SourceScale) -> Self {
+        Self { scale, ..self }
     }
 }
 
@@ -105,7 +114,7 @@ pub(crate) fn project_claude_native_records(
     records: &[ClaudeNativeRecord],
     options: &ClaudeCanonicalOptions,
 ) -> Result<ClaudeProjection, ClaudeCanonicalError> {
-    let mut observations = crate::acquisition::CanonicalCollector::default();
+    let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     let mut quarantined = Vec::new();
     for record in records {
         let mut unit = crate::acquisition::CanonicalCollector::default();
