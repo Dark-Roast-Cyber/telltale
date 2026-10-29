@@ -1559,7 +1559,7 @@ pub(crate) fn evaluate(
         work_bytes = work_bytes
             .checked_add(extracted.fields.values().map(String::len).sum::<usize>())
             .ok_or(ProcessingError::Bounds)?;
-        if work_bytes > super::session::MAX_COMPATIBILITY_RETAINED_BYTES {
+        if work_bytes > budget.bounds.compatibility_bytes {
             return Err(ProcessingError::Bounds);
         }
         views.push(extracted);

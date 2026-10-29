@@ -6,6 +6,18 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- A JSONL session source (Claude Code, Codex, OpenClaw, Qwen) of up to 64 MiB
+  is evaluated whole. Its per-source bounds (evaluation work, observations,
+  canonical retention, native units, retained and projection items, and
+  compatibility text) are their previous values per MiB read, never lower.
+  Before, a session file of more than a few MiB (about 3 MiB in synthetic
+  tests) failed on the evaluation work budget. Bounds stop growing at 64 MiB;
+  the 128 MiB read limit is unchanged. Peak RSS is about 15 times the source
+  size.
+- A session detection event whose evidence would exceed the 1 MiB Event 3
+  limit keeps every timeline anchor and its earliest evidence, and marks each
+  rule's omitted evidence with an `evidence_omitted` item carrying the count.
+  Before, the source failed at projection. Events that fit are unchanged.
 - The embedding crates declare `rust-version = "1.85"` and are checked on Rust
   1.85.0 on Linux, macOS and Windows in every CI run; the previously qualified
   floor was 1.88, checked only on Linux before a tag. The CLI and Console build with

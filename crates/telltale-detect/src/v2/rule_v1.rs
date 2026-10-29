@@ -479,7 +479,7 @@ fn aggregate_detector_session(
             detector.detector().id() != "execution.shell" || aggregate.evaluated_match_count == 0;
         if result.evaluation_status() == EvaluationStatus::EvaluatedMatch && retain_projection {
             for path in result.matched_selector_paths() {
-                if aggregate.projection.len() >= super::session::MAX_PROJECTION_ITEMS {
+                if aggregate.projection.len() >= budget.bounds.projection_items {
                     return Err(RuleV1SessionError::Bounds);
                 }
                 let selector =

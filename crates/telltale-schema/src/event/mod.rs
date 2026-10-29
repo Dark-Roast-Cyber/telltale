@@ -1377,6 +1377,11 @@ pub struct ProcessContext {
     pub risk_adjustment: Option<String>,
 }
 
+/// The evidence field that marks evidence a detection event omitted to fit
+/// within `EVENT3_MAX_INPUT_BYTES`. Its value is the omitted item count for
+/// its `rule_id`, in decimal, and it carries no hash.
+pub const EVIDENCE_OMITTED_FIELD: &str = "evidence_omitted";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Evidence {
     pub field: String,
@@ -1897,6 +1902,16 @@ fn terminal_imported_evidence(canonical_event: bool, evidence: Evidence) -> Evid
     } else {
         terminal_evidence(evidence)
     }
+}
+
+// Shared with detection projection, which fits a detection event's evidence
+// within `EVENT3_MAX_INPUT_BYTES`, not a supported embedding API. The bytes
+// this item takes in a serialized event, without its separator.
+#[doc(hidden)]
+pub fn emitted_evidence_bytes(evidence: &Evidence) -> Option<usize> {
+    serde_json::to_vec(&terminal_evidence(evidence.clone()))
+        .ok()
+        .map(|bytes| bytes.len())
 }
 
 fn terminal_evidence(mut evidence: Evidence) -> Evidence {

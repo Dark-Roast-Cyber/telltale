@@ -9,7 +9,9 @@ use crate::source_read::SourceReadError;
 use std::fmt;
 
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::observation::{CanonicalBoundContext, CanonicalObservationV2, ObservedAt};
+use telltale_schema::observation::{
+    CanonicalBoundContext, CanonicalObservationV2, ObservedAt, SourceScale,
+};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -69,6 +71,9 @@ pub struct AcquisitionBatch {
     /// bytes. Re-reading from there lets a next window extend back past this
     /// window's high-water and still make progress.
     pub message_overlap_from: Option<i64>,
+    /// How far this source's bounds scale with the bytes read: a JSONL session
+    /// source's whole read, otherwise the floor.
+    pub source_scale: SourceScale,
 }
 
 /// Where a quarantined native unit is, and which bound it exceeded. It
@@ -90,24 +95,40 @@ pub struct QuarantinedUnit {
 
 /// One source projection owns this collector; capacity is checked before each
 /// canonical observation is retained, not after an adapter returns its batch.
-#[derive(Default)]
 pub(crate) struct CanonicalCollector {
     observations: Vec<CanonicalObservationV2>,
     retained_bytes: usize,
+    limit: usize,
+}
+
+impl Default for CanonicalCollector {
+    fn default() -> Self {
+        Self {
+            observations: Vec::new(),
+            retained_bytes: 0,
+            limit: telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES,
+        }
+    }
 }
 
 impl CanonicalCollector {
+    /// A source-wide collector whose retention budget scales with the source.
+    pub(crate) fn scaled(scale: telltale_schema::observation::SourceScale) -> Self {
+        Self {
+            limit: scale.apply(telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn push(
         &mut self,
         observation: CanonicalObservationV2,
     ) -> Result<(), telltale_schema::observation::ObservationError> {
-        use telltale_schema::observation::{
-            MAX_CANONICAL_RETAINED_BYTES, ObservationError, ValidationCode,
-        };
+        use telltale_schema::observation::{ObservationError, ValidationCode};
         let bytes = self
             .retained_bytes
             .checked_add(observation.retained_byte_len())
-            .filter(|bytes| *bytes <= MAX_CANONICAL_RETAINED_BYTES)
+            .filter(|bytes| *bytes <= self.limit)
             .ok_or_else(|| {
                 ObservationError::from_validation_code(ValidationCode::UnboundedValue)
             })?;
@@ -420,10 +441,12 @@ fn acquire_source_impl(
 
     let mut accounting = AccountingBuilder::default();
     let mut quarantined = Vec::new();
+    let mut source_scale = SourceScale::FLOOR;
     let observations = match source.client {
         ClientId::Claude => {
-            let records = extract_claude_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_claude_native_records_with_limits(source, limits)
                 .map_err(|error| map_source_read(error, limits))?;
+            source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
             // record is counted, and checked, before any is projected.
             for record in &records {
@@ -435,7 +458,7 @@ fn acquire_source_impl(
             }
             let projection = project_claude_native_records(
                 &records,
-                &ClaudeCanonicalOptions::new(options.observed_at),
+                &ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale),
             )
             .map_err(map_claude_error)?;
             let mut excluded = projection
@@ -507,8 +530,9 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::Codex => {
-            let records = extract_codex_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_codex_native_records_with_limits(source, limits)
                 .map_err(|error| map_source_read(error, limits))?;
+            source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
             // record is counted, and checked, before any is projected.
             for record in &records {
@@ -520,7 +544,7 @@ fn acquire_source_impl(
             }
             let projection = project_codex_native_records(
                 &records,
-                &CodexCanonicalOptions::new(options.observed_at),
+                &CodexCanonicalOptions::new(options.observed_at).with_scale(source_scale),
             )
             .map_err(map_codex_error)?;
             let mut excluded = projection
@@ -592,8 +616,9 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::OpenClaw => {
-            let records = extract_openclaw_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_openclaw_native_records_with_limits(source, limits)
                 .map_err(|error| map_source_read(error, limits))?;
+            source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -608,13 +633,14 @@ fn acquire_source_impl(
             }
             project_openclaw_native_records(
                 &records,
-                &OpenClawCanonicalOptions::new(options.observed_at),
+                &OpenClawCanonicalOptions::new(options.observed_at).with_scale(source_scale),
             )
             .map_err(map_openclaw_error)?
         }
         ClientId::Qwen => {
-            let records = extract_qwen_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_qwen_native_records_with_limits(source, limits)
                 .map_err(|error| map_source_read(error, limits))?;
+            source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -627,8 +653,11 @@ fn acquire_source_impl(
                     record.contribution_strings(),
                 )?;
             }
-            project_qwen_native_records(&records, &QwenCanonicalOptions::new(options.observed_at))
-                .map_err(map_qwen_error)?
+            project_qwen_native_records(
+                &records,
+                &QwenCanonicalOptions::new(options.observed_at).with_scale(source_scale),
+            )
+            .map_err(map_qwen_error)?
         }
         ClientId::Copilot => {
             let events = extract_copilot_native_events(source).map_err(|error| match error {
@@ -709,6 +738,7 @@ fn acquire_source_impl(
         }),
         quarantined,
         message_overlap_from: None,
+        source_scale,
     })
 }
 
@@ -976,6 +1006,8 @@ pub fn acquire_opencode_sqlite(
             progress,
             quarantined,
             message_overlap_from,
+            // OpenCode reads bounded windows; its bounds stay at the floor.
+            source_scale: SourceScale::FLOOR,
             // A coherent selected snapshot is still not whole-database
             // replacement coverage, even without a lower bound.
             accounting: accounting.finish(AccountingCoverage::PartialSource),

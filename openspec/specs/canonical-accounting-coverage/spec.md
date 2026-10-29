@@ -115,7 +115,7 @@ contributions MUST be omitted and coverage MUST remain partial.
 ### Requirement: Production file coverage retains atomic admission limits
 
 Production JSONL admission MUST enforce the inclusive 8 MiB physical-record,
-128 MiB acquired-source-byte, and 100,000 nonblank-unit limits defined by
+128 MiB acquired-source-byte, and scaled nonblank-unit limits defined by
 source-support-denominator.
 Exceeding admission MUST fail the whole acquisition,
 not return a truncated CompleteSource or successful PartialSource batch.
