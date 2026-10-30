@@ -58,11 +58,29 @@
     },
     "evidence": {
       "type": "object",
-      "required": ["field", "rule_id", "redacted_value"],
+      "required": [
+        "field", "rule_id", "redacted_value", "highlight", "elided_before", "elided_after"
+      ],
       "properties": {
         "field": { "$ref": "#/$defs/label" },
         "rule_id": { "$ref": "#/$defs/label" },
-        "redacted_value": { "type": "string", "maxLength": 512 }
+        "redacted_value": { "type": "string", "maxLength": 512 },
+        "highlight": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["start", "end"],
+              "properties": {
+                "start": { "type": "integer", "minimum": 0, "maximum": 511 },
+                "end": { "type": "integer", "minimum": 1, "maximum": 512 }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "elided_before": { "type": "boolean" },
+        "elided_after": { "type": "boolean" }
       },
       "additionalProperties": false
     },

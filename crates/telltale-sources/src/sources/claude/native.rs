@@ -1,9 +1,11 @@
+//! Crate-private Claude Code JSONL record and content-block structures, and
+//! their extraction. A known schema failure is terminal; there is no fallback
+//! parser.
+
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::source_read::{
-    SourceReadError, collect_string_values, nested_string_field, read_jsonl_values,
-};
+use crate::source_read::{SourceReadError, collect_string_values, nested_string_field};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -50,17 +52,14 @@ pub(crate) struct ClaudeNativeRecord {
 pub(crate) fn extract_claude_native_records(
     source: &Source,
 ) -> Result<Vec<ClaudeNativeRecord>, SourceReadError> {
-    extract_claude_native_records_with_limits(source, None)
+    extract_claude_native_records_with_limits(source, None).map(|(records, _)| records)
 }
 
 pub(crate) fn extract_claude_native_records_with_limits(
     source: &Source,
     limits: Option<crate::acquisition::DirectReadLimits>,
-) -> Result<Vec<ClaudeNativeRecord>, SourceReadError> {
-    let values = match limits {
-        Some(limits) => crate::source_read::read_jsonl_values_with_limits(source, Some(limits))?,
-        None => read_jsonl_values(source)?,
-    };
+) -> Result<(Vec<ClaudeNativeRecord>, usize), SourceReadError> {
+    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, limits)?;
     let mut records = Vec::with_capacity(values.len());
 
     for (source_sequence, value) in values.into_iter().enumerate() {
@@ -126,7 +125,7 @@ pub(crate) fn extract_claude_native_records_with_limits(
         records.push(native);
     }
 
-    Ok(records)
+    Ok((records, bytes))
 }
 
 impl ClaudeNativeRecord {
@@ -191,10 +190,10 @@ fn claude_envelopes(value: &Value) -> Vec<&Value> {
     if let Some(message) = value.get("message").filter(|v| v.is_object()) {
         envelopes.push(message);
     }
-    if value.get("type").and_then(Value::as_str) == Some("session_meta") {
-        if let Some(payload) = value.get("payload").filter(|v| v.is_object()) {
-            envelopes.push(payload);
-        }
+    if value.get("type").and_then(Value::as_str) == Some("session_meta")
+        && let Some(payload) = value.get("payload").filter(|v| v.is_object())
+    {
+        envelopes.push(payload);
     }
     envelopes
 }

@@ -117,7 +117,37 @@ pub struct ActionRecordContribution {
 pub struct ActionRecordEvidence {
     pub field: String,
     pub rule_id: String,
+    /// Redacted field text: whole when it fits the evidence bounds, otherwise
+    /// an excerpt around the hit that counted for the rule.
     pub redacted_value: String,
+    /// UTF-8 byte range of the hit in `redacted_value`; `None` unless the
+    /// position is exact. Never inferred from the text.
+    pub highlight: Option<ActionRecordHighlight>,
+    /// Field text was cut before `redacted_value`.
+    pub elided_before: bool,
+    /// Field text was cut after `redacted_value`.
+    pub elided_after: bool,
+}
+
+/// A half-open UTF-8 byte range in [`ActionRecordEvidence::redacted_value`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionRecordHighlight {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl ActionRecordHighlight {
+    /// The highlighted text, when the range is non-empty, in bounds and on
+    /// character boundaries of `text`.
+    pub fn slice<'a>(&self, text: &'a str) -> Option<&'a str> {
+        let start = usize::try_from(self.start).ok()?;
+        let end = usize::try_from(self.end).ok()?;
+        if start >= end {
+            return None;
+        }
+        text.get(start..end)
+    }
 }
 
 /// A native finding behind the action, with its own risk points.
@@ -201,8 +231,9 @@ impl ActionRecordV1 {
     /// Parse and validate one complete record from another process. Rejects
     /// oversized input, other versions, unknown fields, and values that the
     /// producer cannot emit, including text that redaction would still change.
-    /// Redaction only grows stricter, so a consumer newer than its producer
-    /// may reject text that the older redactor let through.
+    /// A consumer whose redactor differs from its producer's may therefore
+    /// reject valid output: a newer consumer when redaction grew stricter, an
+    /// older consumer when it kept more text.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ActionRecordError> {
         if bytes.len() > ACTION_RECORD_MAX_INPUT_BYTES {
             return Err(structure("input_too_large"));
@@ -236,11 +267,34 @@ impl ActionRecordV1 {
     /// rules change delivers again instead of matching results from the old
     /// rules.
     pub fn delivery_key(&self) -> String {
+        self.delivery_key_from(self.replay_identity.as_deref())
+    }
+
+    /// Every key this action may have been delivered under, starting with
+    /// [`Self::delivery_key`]. With `replay_identity` present, also the
+    /// source-bound key the action has without one: the source path hash,
+    /// `coordinate` and canonical finding IDs, as in `delivery_key`.
+    ///
+    /// Replay identity can come and go between scans of one store: a later
+    /// identical candidate makes an action ambiguous, which withdraws its
+    /// replay identity, and the reverse restores it. The source-bound alias
+    /// survives both transitions, and the replay alias matches copies of the
+    /// action in other sources. Treat an action as handled when any alias is
+    /// known, and remember all of them.
+    pub fn delivery_aliases(&self) -> Vec<String> {
+        let mut aliases = vec![self.delivery_key()];
+        if self.replay_identity.is_some() {
+            aliases.push(self.delivery_key_from(None));
+        }
+        aliases
+    }
+
+    fn delivery_key_from(&self, replay_identity: Option<&str>) -> String {
         let mut parts = vec![
             JsonValue::string("telltale:action-delivery-v1"),
             JsonValue::string(&self.semantic_identity),
         ];
-        match &self.replay_identity {
+        match replay_identity {
             Some(replay) => parts.extend([JsonValue::string("replay"), JsonValue::string(replay)]),
             None => {
                 let findings = self
@@ -346,6 +400,13 @@ impl ActionRecordV1 {
             .any(|entry| entry.redacted_value.len() > MAX_REDACTED_TEXT_BYTES)
         {
             return Err(semantic("evidence_too_large"));
+        }
+        if self.evidence.iter().any(|entry| {
+            entry
+                .highlight
+                .is_some_and(|highlight| highlight.slice(&entry.redacted_value).is_none())
+        }) {
+            return Err(semantic("invalid_highlight"));
         }
         let mut context_bytes = 0_usize;
         for entry in &self.context {

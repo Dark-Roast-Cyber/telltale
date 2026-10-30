@@ -1,3 +1,6 @@
+//! Minimal HTTP client for network sinks: endpoint validation, bounded retry
+//! with structured error classes, TLS options and batch chunking.
+
 use std::fs;
 use std::path::PathBuf;
 use std::thread;

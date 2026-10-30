@@ -7,89 +7,27 @@ format.
 
 ## Current Series
 
-The workspace and the embedding consumer's independently locked Telltale
-dependencies are prepared at `0.7.0-rc.3` for the prospective unused tag
-`v0.7.0-rc.3`. The Windows lifecycle
-implementation landed in [PR #96](https://github.com/Dark-Roast-Cyber/telltale/pull/96),
-merge `883bab7cc846c06e30c3976385cceb9c387125f1`. Normal CI checks the exact
-reviewed source SHA, prospective release preflight, supported embedding contracts,
-the embedding MSRV on Linux, macOS and Windows, and a fresh standalone Git consumer. A proposed
-freeze must be recorded separately in Issue #87 after this preparation is reviewed,
-merged and checked at its exact commit. No RC3 freeze is accepted by this text.
-Windows installation defaults to the official stable Release; `-ReleaseTag` selects one exact published
-candidate without fallback. Development-local receipts are not artifact qualification.
-Scripts remain outside the canonical nine-member archive. Publication, native
-artifact verification, candidate-specific clean-host qualification, canary and
-stable promotion stay separate under Issue #87.
-
-- `v0.1.0` is the first public binary release.
-- `0.2.0` is the prior maturity release.
-- `0.3.0` is the prior released line for the event and scoring contract.
-- `0.4.0` is an unpublished API-hardening line and will not be released
-  separately. Its completed work is folded into `0.5.0`.
-- `v0.5.0` is the previous stable GitHub Release. It completed the hard
-  Telltale technical migration, embedded-triage removal, schema/configuration
-  changes, and install-to-SIEM reliability proof.
-- `v0.6.0` is the current official stable GitHub Release, published from
-  `f8e00162a3f9ac1cf8d2f270e6db078d3917d186` after the rc.3 live Linux canary.
-- `v0.7.0-rc.1` is the published prerelease from
-  `e2386cb53454a8384449ea0729f0e3b71072006c` (Release ID `397543935`). Its
-  five-target publication workflow passed (run `36299868695`). Downloaded archive
-  digests match Release metadata and `SHA256SUMS`; extracted binary digests were
-  computed. Five-platform native qualification passed in run `36305581215` using
-  verifier tooling `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`; the historical
-  rc.3 verifier result is not 0.7 evidence. `v0.6.0` remains the latest stable. Event3 schema version stays
-  `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
-  `v0.7.0` will require separate qualification and a reviewed stable-version
-  promotion.
-- `v0.7.0-rc.2` is published as prerelease Release ID `409281155` from source
-  SHA `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native
-  verification passed in run `38098389234`. RC2 clean Windows without a
-  Redistributable passed as recorded in Issue #87; Task Scheduler smoke was not
-  run there. Clean Linux, canary and stable promotion remain pending.
-  RC1 evidence applies only to its immutable published
-  candidate. A further tagged candidate needs the next unused RC version.
-- The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
-  SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
-  static-CRT publication gate, five-platform native verification, and Issue #23
-  clean-Windows static-CRT and functional acceptance passed. The previous immutable
-  `v0.6.0-rc.2` prerelease at source SHA
-  `158b18ce78c6f503c38619e816790035f88b09db` passed publication/provenance,
-  G-SERVICE, and five-platform native verification. Its live Linux canary also
-  passed. Stable `v0.6.0` was subsequently deployed successfully. Issues #23
-  and #37 are complete. The
-  immutable published `v0.6.0-rc.1` candidate at reviewed commit
-  `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
-  failed G-SERVICE because systemd ignored its quoted current-user
-  `EnvironmentFile` path as non-absolute. It is historical failed-candidate
-  evidence and must not be retried or mutated. Package version identifies the
-  release line;
-  full Git SHA plus archive and binary SHA-256 identify an exact artifact.
-  Neither version output nor a package build proves official release provenance.
-  Crates.io publication remains a separate distribution action.
-- Historical 0.5.0 release validation: the immutable
-  `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
-  failed on canonical optional `EnvironmentFile` validation. The immutable rc.6
-  publication/provenance passed and repaired that defect, but G-SERVICE then
-  failed on user-manager `WorkingDirectory` normalization. Immutable `rc.7`
-  publication/provenance, G-SERVICE, and GitHub-hosted native gates passed.
-- `v0.5.0-rc.1` is retained as immutable history at reviewed tag commit
-  `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed, so it
-  has no GitHub Release or complete five-target asset/checksum/attestation set.
-  Never reuse that candidate.
-- `v0.5.0-rc.2` is immutable history at reviewed commit
-  `973ce825550941a824aa568a07f80036cd89f497`; do not mutate its tag, Release,
-  assets, or evidence. `v0.5.0-rc.3` is immutable history at reviewed commit
-  `a791ebf8894b3329030fad9e252e22d21e8b7e07` and has no GitHub Release. `rc.4`
-  is historical; `rc.5` remains immutable at `e023ea91529f0731200aae1682b8d357a7b5f58c`,
-  and `rc.6` is immutable at `88789d30ef34af720261e9e462e3cfd6274126e1`;
-  `rc.7` is the accepted immutable candidate at
-  `6696888cd5d559fa47b8252e3495524da9fbd1eb`.
+- `v0.6.0` is the current stable GitHub Release.
+- `0.7.0` is in release candidates. The latest published prerelease is
+  `v0.7.0-rc.2`; the workspace is prepared at `0.7.0-rc.3`, which is unpublished
+  source preparation. Each candidate's source SHA, artifacts and qualification
+  results are recorded on its [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases)
+  and the release qualification issue. Stable `v0.7.0` requires separate
+  qualification and a reviewed stable-version promotion.
+- Earlier lines: `v0.5.0` (previous stable), `0.4.0` (unpublished; folded into
+  `0.5.0`), `0.3.0`, `0.2.0`, and `v0.1.0` (first public binary release).
+- Published tags, Releases and assets are immutable, including failed or
+  superseded candidates. A further tagged candidate uses the next unused RC
+  version; a candidate is never reused or mutated.
+- Package version identifies the release line; the full Git SHA plus archive
+  and binary SHA-256 identify an exact artifact. Neither version output nor a
+  package build proves official release provenance.
+- Event3 schema version stays `3.0` and Rule v1 stays version 1; neither follows
+  the package version.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   `telltale-console` also inherits the workspace version but has `publish = false`
-  and is excluded from default/headless builds and release archives. Its version
-  alignment does not change Console behavior or packaging.
+  and is excluded from default/headless builds and release archives.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
@@ -98,8 +36,6 @@ stable promotion stay separate under Issue #87.
   `telltale-state.json`; runtime configuration uses `TELLTALE_*` names only.
   Unknown inherited non-canonical variables are ignored, while explicit state
   and historical-event migration commands preserve source data and file semantics.
-  The Linux installer, canonical user units, release archives, and release workflow use
-  the same Telltale-only identity.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
 
@@ -110,12 +46,13 @@ Telltale is built, tested and released with the toolchain pinned in
 version (MSRV); build them with that toolchain.
 
 The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-sources`,
-`telltale-detect` and `telltale-core`) declare `rust-version = "1.85"`, the first
-Rust with their 2024 edition. Every CI run checks the independently locked
-external consumer, in all eight feature combinations, on exactly Rust 1.85.0 on
-Linux, macOS and Windows (`make embedding-msrv-check`). That lock holds the newest
-dependency releases Rust 1.85 can build (`make embedding-lock-update`). A host
-on an older Rust than current stable should resolve with Cargo's
+`telltale-detect` and `telltale-core`) declare `rust-version = "1.88"` so their
+dependency graph can use patched `time` releases (`>=0.3.47`). Every CI run checks
+the independently locked external consumer, in all eight feature combinations,
+on exactly Rust 1.88.0 on Linux, macOS and Windows (`make embedding-msrv-check`).
+That lock holds the newest dependency releases Rust 1.88 can build
+(`make embedding-lock-update`). A host on an older Rust than current stable should
+resolve with Cargo's
 `incompatible-rust-versions = "fallback"` (the default with resolver 3) so that
 Cargo selects dependency releases its toolchain can build. Raising the embedding
 MSRV is a breaking change for the next planned minor line and is recorded in the
@@ -132,11 +69,6 @@ allowance for `0.y.z` versions:
 | Additive maturity work | Next planned minor line | New compatible capability or API that does not invalidate existing consumers |
 | Breaking change | Next planned minor line | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
-
-Historically, the unpublished `0.4.0` API-hardening work was incorporated into
-`0.5.0` rather than released separately. See [Current Series](#current-series)
-for release history and the [0.4.0 migration guide](migrations/0.4.0.md) for that
-historical API work. These completed milestones do not select the next version.
 
 ## Versioned Surfaces
 
@@ -156,9 +88,14 @@ The Cargo/package version is not the version of every data contract:
   normal scanning; use `telltale migrate state --from <OLD> --to <NEW>`.
   State migration is explicit and does not migrate historical events.
 - **Rule language and bundled rules:** Rule v1 content remains compatible in
-  the 0.7 candidate. Removing syntax, changing evaluation meaning incompatibly,
+  the 0.7 line. Removing syntax, changing evaluation meaning incompatibly,
   or invalidating existing rule documents requires a separately reviewed minor
   release rather than a routine patch batch.
+
+The 0.7 embedding facade changes are listed in the
+[migration guide](migrations/0.7.0.md#rust-embedding-changes-since-rc1); the
+[embedding contract](embedding.md#contract-at-a-glance) is not a stable API
+freeze or a promise for lower-level modules.
 
 ## Release Process
 
@@ -166,91 +103,64 @@ The Cargo/package version is not the version of every data contract:
 
 `make version-consistency-check` checks all Cargo workspace members, inherited
 versions, exact internal requirements (including optional, target, dev and build
-dependencies), and member lock entries. It also tests the gate's failure cases.
-`--pre-tag` validates a prospective candidate tag, including its required
-absence. The already-published `v0.6.0-rc.3`, `v0.6.0-rc.2`, and `v0.6.0-rc.1`
-tags are not prospective tags to recreate. Plain `--tag` is the release-workflow mode and
-permits its exact tag at HEAD; post-publication metadata checks use
-`--publication-order` without requiring an existing tag to be absent. An RC tag requires
-the **full matching RC package version**, not
-`0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation is
-separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`,
-`v0.6.0-rc.2`, and `v0.6.0-rc.3` candidates retain separate evidence; native
-qualification verifies existing artifacts and does not create or modify them.
-The native verifier selects a reviewed checked-in pin for the requested published
-tag; rc.3 remains historical evidence, and `v0.7.0-rc.1` has its own Release ID
-and checksums. RC1 five-platform native qualification passed in run `36305581215`
-using verifier tooling `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`.
+dependencies), and member lock entries, and tests the gate's own failure cases.
 
-Fetched immutable stable Git tags are the conservative published-version floor.
-No manually maintained latest-release constant or live GitHub Release lookup is
-needed. CI uses a full-history/tag checkout; before local release review, fetch
-trusted origin history and tags. Shallow history or no prior stable tags fails
-closed. Development must be newer than every stable tag, including a tag whose
-Release creation failed. After the published `v0.6.0` tag, subsequent development
-at `0.6.0` fails automatically until metadata advances. Development also rejects
-reuse of an already-tagged exact RC package version. Release validation may
-exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
-separately rejects any existing prospective tag. Offline checks cannot discover
-remote tags that have not been fetched.
+- `--pre-tag` validates a prospective candidate tag, including its required
+  absence.
+- Plain `--tag` is the release-workflow mode and permits its exact tag at HEAD.
+- `--publication-order` and `--check-publication-order` validate the Cargo graph
+  for post-publication metadata checks without requiring Git history or an
+  absent tag.
+- An RC tag requires the **full matching RC package version** (for example
+  `v0.7.0-rc.3` with package `0.7.0-rc.3`).
 
-The published `v0.7.0-rc.2` prerelease changes the Rust embedding facade (typed
-errors, detailed action scanning, typed accessors, and a surface
-classification) without changing Event3 or persisted state; see the
-[migration guide](migrations/0.7.0.md#rust-embedding-changes-since-rc1) before
-updating a Git pin. Unpublished development metadata neither qualifies a
-candidate nor authorizes publication, and the
-[embedding contract](embedding.md#contract-at-a-glance) is not a stable API
-freeze or a promise for lower-level modules.
+Fetched immutable stable Git tags are the published-version floor; no
+latest-release constant or live GitHub lookup is used. CI uses a full-history
+checkout; before local release review, fetch trusted origin history and tags.
+Shallow history or no prior stable tag fails closed. Development must be newer
+than every stable tag, including one whose Release creation failed, and must not
+reuse an already-tagged exact RC version. Offline checks cannot discover remote
+tags that have not been fetched.
 
 The same implementation runs in CI, `release-tag-review` (and therefore
-`release-preflight`), and the release workflow before builds/publication.
-Metadata-only `--publication-order` and `--check-publication-order` validate the
-actual Cargo graph without requiring Git history. Package verification validates
-its explicit sequence against that graph; Console is not in the publishable set.
+`release-preflight`), and the release workflow before builds and publication.
+The native verifier selects a reviewed checked-in pin for the requested
+published tag and verifies existing artifacts; it never creates or modifies
+them.
 
 ### Authorized release preparation
 
 1. Release only from a reviewed commit on `main`.
 2. Update the workspace package version and every internal workspace dependency
    version together. For stable promotion from an accepted RC, prepare that
-   reviewed reversible stable-version commit before final preflight; it is not itself
-   tagging or publication.
-3. For an RC, first prepare matching `0.7.0-rc.N` package metadata, then
-   use the exact matching `v0.7.0-rc.N` tag only after authorization. The tag, Release
+   reviewed reversible stable-version commit before final preflight; it is not
+   itself tagging or publication.
+3. For an RC, prepare matching `0.7.0-rc.N` package metadata, then use the exact
+   matching `v0.7.0-rc.N` tag only after authorization. The tag, Release
    metadata, archive names, checksums, attestations, and installer selection
    are immutable evidence; a validation-relevant change requires the next
-   reviewed RC rather than reusing a tag or asset.
+   reviewed RC.
 4. Update public release notes with capabilities, fixes, compatibility impact,
-   and operator impact. Internal planning history stays out of public notes.
+   and operator impact.
 5. Run `make release-preflight` against the exact reviewed version commit while
    the matching `v<version>` tag is still absent, and review the staged/public
    file boundary.
 6. Create the matching `v<version>` tag only after preflight, artifact-boundary,
-   and GitHub publication-prerequisite gates pass. Crates.io publication is not
-   part of this GitHub tagging step. Stable `v0.7.0` requires package
-   `0.7.0` only after all 0.7 release-readiness gates pass.
+   and GitHub publication-prerequisite gates pass.
 7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
-
-The older [0.4.0 migration guide](migrations/0.4.0.md) documents unpublished API
-hardening folded into 0.5.0. The [0.7.0 migration guide](migrations/0.7.0.md)
-records the next minor line's source/runtime compatibility boundary while
-preserving Event3.
 
 ## Crates.io Publication
 
 Crates.io publication is a separate later distribution action from stable
-GitHub tagging and GitHub binary Release. Deferring crates.io does not block
-a stable GitHub Release and does not weaken Cargo package-readiness gates.
-When crates.io publication is later attempted, the registry-specific safety
-requirements in this section remain mandatory.
+GitHub tagging and GitHub binary Release. Deferring it does not block a stable
+GitHub Release and does not weaken Cargo package-readiness gates. When it is
+attempted, these requirements are mandatory.
 
 Publish functional packages only after `cargo package --list`, package-boundary
-checks, and a workspace-independent consumer build pass. Recheck crates.io name
-availability immediately before publication. Obtain the authoritative graph-derived
-order with `python3 scripts/version-consistency-check --publication-order`.
-It currently is:
+checks, and a workspace-independent consumer build pass. Obtain the
+authoritative graph-derived order with
+`python3 scripts/version-consistency-check --publication-order`. It currently is:
 
 1. `telltale-schema`
 2. `telltale-rules`
@@ -259,35 +169,28 @@ It currently is:
 5. `telltale-core`
 6. `telltale-cli`
 
-If the crates have not previously been published, their first crates.io version
-must equal the current workspace version. A version already published on
-crates.io cannot be republished; increment the package version deliberately
-instead of reusing it.
-
-Before publication, recheck registry ownership and availability for every name.
-Follow the gate's order, waiting after each
-publish until that prerequisite resolves from the index without a local patch.
-After all six packages are available, remove every local `patch.crates-io`
-override and confirm the clean consumers and CLI installation using only pinned
+A first crates.io version must equal the current workspace version, and a
+published version cannot be republished. Recheck registry ownership and name
+availability immediately before publication, then publish in the gate's order,
+waiting after each until it resolves from the index without a local patch.
+After all six are available, remove every local `patch.crates-io` override and
+confirm the clean consumers and CLI installation using only pinned
 `=0.7.0-rc.3` registry dependencies while that remains the workspace package
-version. Advance that pin with each reviewed lockstep package version.
-Do not declare publication complete before those unpatched checks
-pass, and do not publish credentials or local release state.
+version. Advance that pin with each reviewed lockstep package version. Do not
+declare publication complete before those unpatched checks pass, and do not
+publish credentials or local release state.
 
 ## Pre-Releases
 
-The established supported candidate convention is `<minor>.0-rc.N` (a
-canonical nonnegative integer N without leading zeros), only when external
-validation is useful. The latest published prerelease is `v0.7.0-rc.2`;
-`v0.7.0-rc.3` is source preparation only. A
-pre-release tag and package version must still match exactly, and pre-releases
-do not carry stable compatibility guarantees. GitHub Release metadata must set
-`prerelease=true`; an RC must never be made the normal latest stable Release.
-The checked-in installer keeps no-argument selection on `releases/latest`, while
-`--release-tag v<minor>.0-rc.N` selects and validates one exact published candidate
-before any user install or schedule mutation. `--from-source` uses that same
-exact tag, validates its archive provenance, resolves its immutable commit, and
-builds that source revision. Binary
-GitHub Releases and later crates.io publication are separate operations;
-deferring crates.io does not block stable GitHub publication, and neither an RC
-workflow nor the stable GitHub Release workflow publishes crates.
+Candidates use `<minor>.0-rc.N` (a canonical nonnegative integer N without
+leading zeros), only when external validation is useful. A pre-release tag and
+package version must match exactly, and pre-releases carry no stable
+compatibility guarantees. GitHub Release metadata sets `prerelease=true`; an RC
+is never made the latest stable Release.
+
+The installer keeps no-argument selection on `releases/latest`, while
+`--release-tag v<minor>.0-rc.N` selects and validates one exact published
+candidate before any user install or schedule mutation. `--from-source` uses that
+same exact tag, validates its archive provenance, resolves its immutable commit,
+and builds that source revision. Neither an RC workflow nor the stable GitHub
+Release workflow publishes crates.

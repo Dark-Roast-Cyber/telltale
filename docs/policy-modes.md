@@ -9,8 +9,7 @@ session stores, parses transcripts, applies deterministic detection rules, and
 emits JSONL events for SIEM ingestion. It does not hook into agent processes,
 intercept tool calls, make outbound review requests, or terminate sessions.
 
-Per the adopted [development
-principles](development-principles.md), the long-term
+The long-term
 engine separates detection (produces signals) from policy (produces decisions
 such as allow, observe, warn, require approval, reprompt, block, and remediate)
 and capability-driven action adapters. This document's "modes" describe the

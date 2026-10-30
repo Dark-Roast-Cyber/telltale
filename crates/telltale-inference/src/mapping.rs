@@ -1,3 +1,7 @@
+//! OpenAI Chat Completions request and response mapping to Canonical
+//! Observation v2, plus the shared field accessors and batch builder the other
+//! profiles use.
+
 use crate::{Failure, Normalizer, ResponseFormat, json};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

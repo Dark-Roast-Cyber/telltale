@@ -1,4 +1,8 @@
-//! GitHub Copilot source adapter.
+//! GitHub Copilot source adapter: its source definitions and install signals.
+//!
+//! Native parsing lives in `native` and Canonical Observation v2 mapping in
+//! `canonical`; both are crate-private and reached only through the
+//! acquisition router. Shared reading belongs in `source_read`, not here.
 
 use crate::clients::{ClientSourceDef, PathRoot, SourcePattern};
 use telltale_schema::clients::SourceKind;

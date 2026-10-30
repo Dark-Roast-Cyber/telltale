@@ -1,3 +1,6 @@
+//! Crate-private OpenCode SQLite message and tool-state structures, and their
+//! bounded extraction.
+
 use super::session_message::{
     NativeSchema, OpenCodeSessionMessageExtraction, extract_session_messages, select_native_schema,
 };

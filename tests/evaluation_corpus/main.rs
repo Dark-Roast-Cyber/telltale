@@ -935,3 +935,57 @@ fn uc002_copilot_credential_publish_fixture_is_critical() {
         );
     }
 }
+
+/// The action-precision cases characterize the session view above. A host
+/// promotes action findings, so each fixture also pins the detailed facade's
+/// actions: only the requested downloads remain, and no precision class
+/// becomes an action.
+#[test]
+fn action_precision_cases_raise_only_the_expected_actions() {
+    use manifest::Input;
+    use telltale_core::{DetailedEvaluationOptions, Pipeline, Source};
+
+    const EXPECTED: &[(&str, &[&str])] = &[
+        ("BC-PREC-CURL-READ-FLAGS-001", &["network.download"]),
+        ("BC-PREC-PATH-NOT-ENCODED-001", &["network.download"]),
+    ];
+    let root = repo_root();
+    let manifest = load_manifest(&root.join(MANIFEST_PATH), &root).unwrap();
+    let pipeline = Pipeline::builder().build().unwrap();
+    let mut cases = 0;
+    for case in manifest
+        .cases
+        .iter()
+        .filter(|case| case.tags.iter().any(|tag| tag == "action_precision"))
+    {
+        let Input::SourceFixture {
+            fixture,
+            client,
+            source_id,
+            source_kind,
+        } = &case.input;
+        let source = Source {
+            client: client.client_id(),
+            source_id: source_id.clone(),
+            kind: source_kind.source_kind(),
+            path: manifest::fixture_path(&root, fixture),
+        };
+        let scan = pipeline
+            .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
+            .unwrap()
+            .remove(0);
+        assert!(scan.failure().is_none(), "{}", case.id);
+        let actions = scan
+            .action_findings
+            .iter()
+            .flat_map(|action| action.rule_ids().iter().map(String::as_str))
+            .collect::<Vec<_>>();
+        let expected = EXPECTED
+            .iter()
+            .find(|(id, _)| *id == case.id)
+            .map_or(&[][..], |(_, rules)| *rules);
+        assert_eq!(actions, expected, "{}", case.id);
+        cases += 1;
+    }
+    assert_eq!(cases, 15);
+}

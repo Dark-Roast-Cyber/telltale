@@ -221,7 +221,7 @@ public-push-review:
 	@staged="$$(git diff --cached --name-only)"; \
 	if [ -n "$$staged" ]; then printf '%s\n' "$$staged" | sed 's/^/  /'; else echo "  none"; fi
 	@echo ""
-	@echo "Before pushing public history, review docs/release-readiness.md and run make release-preflight."
+	@echo "Before pushing public history, run make release-preflight."
 
 ## Verify release context: clean tree, correct branch/remote, upstream alignment, staged paths
 release-context-check:

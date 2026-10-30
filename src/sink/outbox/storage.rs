@@ -1,3 +1,5 @@
+//! Private-path validation and SQLite opening for the outbox database.
+
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::fmt;
 use std::fs::{self, OpenOptions};

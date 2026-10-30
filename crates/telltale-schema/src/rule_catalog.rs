@@ -43,7 +43,8 @@ pub struct RuleCatalogV1 {
 #[serde(deny_unknown_fields)]
 pub struct RuleCatalogEntryV1 {
     pub id: String,
-    /// `rule` or `modifier`.
+    /// `rule`, `modifier`, or `process_chain` for a rule of the bundled
+    /// process-chain pack.
     pub kind: String,
     pub title: Option<String>,
     pub explanation: String,
@@ -56,6 +57,9 @@ pub struct RuleCatalogEntryV1 {
     pub action_within_seconds: Option<u64>,
     pub action_link: Option<String>,
     pub atlas_tags: Vec<String>,
+    /// MITRE ATT&CK technique IDs; process-chain rules carry them, Rule v1
+    /// rules and modifiers only `atlas_tags`.
+    pub attack_techniques: Vec<String>,
     pub signal_type: String,
     pub tags: Vec<String>,
     pub enabled: bool,
@@ -128,6 +132,7 @@ mod tests {
                 action_within_seconds: None,
                 action_link: None,
                 atlas_tags: Vec::new(),
+                attack_techniques: Vec::new(),
                 signal_type: "atomic".into(),
                 tags: Vec::new(),
                 enabled: true,
@@ -163,6 +168,30 @@ mod tests {
     }
 
     #[test]
+    fn process_chain_entries_carry_attack_technique_ids_only() {
+        let mut catalog = catalog();
+        let entry = &mut catalog.entries[0];
+        entry.kind = "process_chain".into();
+        entry.attack_techniques = vec!["T1105".into(), "T1003.001".into()];
+        let text = serde_json::to_vec(&catalog).unwrap();
+        assert_eq!(RuleCatalogV1::from_json(&text).unwrap(), catalog);
+        for invalid in ["attack:T1105", "T105", "T1003.1", "AML.T0051"] {
+            let mut value = serde_json::to_value(&catalog).unwrap();
+            value["entries"][0]["attack_techniques"] = serde_json::json!([invalid]);
+            assert_eq!(
+                RuleCatalogV1::from_json(&serde_json::to_vec(&value).unwrap())
+                    .unwrap_err()
+                    .code(),
+                "schema_mismatch",
+                "{invalid}"
+            );
+        }
+        let mut value = serde_json::to_value(&catalog).unwrap();
+        value["entries"][0]["kind"] = "detector".into();
+        assert!(RuleCatalogV1::from_json(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
     fn published_schema_matches_the_embedded_copy() {
         // The repository mirror is absent from the published crate.
         let published = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -177,8 +206,9 @@ mod tests {
 
     #[test]
     fn v1_schema_is_frozen() {
-        // A catalog version is frozen: a schema change is a new version and a
-        // new type, never an edit of v1.
+        // A catalog version is frozen from the first release tag that carries
+        // it: after that, a schema change is a new version and a new type,
+        // never an edit of v1.
         use sha2::{Digest, Sha256};
         let digest = Sha256::digest(RULE_CATALOG_V1_SCHEMA.as_bytes());
         let hex = digest
@@ -187,7 +217,7 @@ mod tests {
             .collect::<String>();
         assert_eq!(
             hex,
-            "54720c4e630020c81d9ff8ae323268b768db9683cf6a5751d49a2f1c0b35e478"
+            "347479fb462aa8169184d5d706384374dcd1080d8b47e8f68e6a772b1a5ad584"
         );
     }
 }

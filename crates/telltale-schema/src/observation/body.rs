@@ -1,3 +1,6 @@
+//! Closed, typed observation bodies, one per observation family, with their
+//! minimum required facts.
+
 use std::collections::BTreeMap;
 
 use super::value::non_empty;

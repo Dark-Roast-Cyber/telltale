@@ -9,9 +9,9 @@ use telltale_rules::process_chain::{
     CompiledCorrelationRule, ProcessChainDetection, ProcessObservation,
 };
 use telltale_schema::event::{
-    DetectionEventInput, Event, Evidence, ProcessChainEventInput, ProcessContext, TimelineAnchor,
-    canonicalize_timeline_anchors, detection_event, evidence_hash, is_canonical_sha256_hex,
-    process_chain_event, terminal_identifier,
+    DetectionEventInput, EVIDENCE_OMITTED_FIELD, Event, Evidence, ProcessChainEventInput,
+    ProcessContext, TimelineAnchor, canonicalize_timeline_anchors, detection_event, evidence_hash,
+    is_canonical_sha256_hex, process_chain_event, terminal_identifier,
 };
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, CorrelationOrigin, ObservationBody,
@@ -532,7 +532,8 @@ pub fn project_event3(
     }
     let mut metadata_index = BTreeMap::new();
     let mut metadata_values = BTreeSet::new();
-    let mut budget = super::session::RetentionBudget::with_work(evaluation.work_bytes.clone());
+    let mut budget =
+        super::session::RetentionBudget::with_work(evaluation.work_bytes.clone(), evaluation.scale);
     for metadata in context.sessions {
         super::session::RetentionBudget::validate_text(metadata.session_id.value())?;
         for value in [metadata.agent, metadata.model, metadata.provider]
@@ -674,6 +675,12 @@ pub fn project_event3(
                 event.timeline_anchors.push(anchor);
             }
             event.timeline_anchors = canonicalize_timeline_anchors(event.timeline_anchors);
+            let occurrences = session
+                .rules
+                .projection()
+                .map(|projection| projection.occurrence)
+                .collect::<Vec<_>>();
+            fit_detection_evidence(&mut event, &occurrences, &mut budget)?;
             ordinary_detection = Some(event);
         }
         if let Some(processes) = &session.processes {
@@ -936,6 +943,94 @@ pub fn project_event3(
         action_findings,
         completion: evaluation.completion(),
     })
+}
+
+fn json_len(value: &impl serde::Serialize) -> Result<usize, ProcessingError> {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .map_err(|_| ProcessingError::Projection)
+}
+
+/// An evidence item's serialized bytes in an event, plus its separator.
+fn item_len(item: &Evidence) -> Result<usize, ProcessingError> {
+    telltale_schema::event::emitted_evidence_bytes(item)
+        .map(|bytes| bytes + 1)
+        .ok_or(ProcessingError::Projection)
+}
+
+fn evidence_omitted(rule_id: Option<String>, count: usize) -> Evidence {
+    Evidence {
+        field: EVIDENCE_OMITTED_FIELD.to_owned(),
+        redacted_value: count.to_string(),
+        hash: None,
+        rule_id,
+    }
+}
+
+/// Fits a session detection event within `EVENT3_MAX_INPUT_BYTES`. An event
+/// that fits is not touched. Otherwise every timeline anchor stays, the
+/// evidence of the earliest occurrences that fits stays in its original order,
+/// and each rule that lost evidence gains one `evidence_omitted` item with the
+/// omitted item count. Rules, scores and anchors are unchanged. An event whose
+/// evidence-free form does not fit fails projection as before.
+/// `occurrences` holds each retained match's occurrence, in evidence order;
+/// each match carries two evidence items.
+pub(crate) fn fit_detection_evidence(
+    event: &mut Event,
+    occurrences: &[usize],
+    budget: &mut super::session::RetentionBudget,
+) -> Result<(), ProcessingError> {
+    let limit = telltale_schema::event::EVENT3_MAX_INPUT_BYTES;
+    let total = json_len(&*event)?;
+    if total <= limit {
+        return Ok(());
+    }
+    budget.charge(total)?;
+    if event.evidence.len() != occurrences.len() * 2 {
+        return Err(ProcessingError::Projection);
+    }
+    let evidence = std::mem::take(&mut event.evidence);
+    let base = json_len(&*event)?;
+    // Each item costs its emitted encoding and a separator; the last has none.
+    let pair_bytes = evidence
+        .chunks(2)
+        .map(|pair| Ok(item_len(&pair[0])? + item_len(&pair[1])?))
+        .collect::<Result<Vec<_>, ProcessingError>>()?;
+    budget.charge(base.saturating_add(pair_bytes.iter().sum()))?;
+    let mut order = (0..occurrences.len()).collect::<Vec<_>>();
+    order.sort_by_key(|&index| (occurrences[index], index));
+    let mut kept = order.len();
+    let mut item_bytes = pair_bytes.iter().sum::<usize>();
+    let mut omitted = BTreeMap::<Option<String>, usize>::new();
+    while base + item_bytes.saturating_sub(1) > limit {
+        kept = kept.checked_sub(1).ok_or(ProcessingError::Projection)?;
+        let index = order[kept];
+        item_bytes -= pair_bytes[index];
+        for item in &evidence[index * 2..index * 2 + 2] {
+            let count = omitted.entry(item.rule_id.clone()).or_default();
+            if *count > 0 {
+                item_bytes -= item_len(&evidence_omitted(item.rule_id.clone(), *count))?;
+            }
+            *count += 1;
+            item_bytes += item_len(&evidence_omitted(item.rule_id.clone(), *count))?;
+        }
+    }
+    let keep = order[..kept].iter().copied().collect::<BTreeSet<_>>();
+    event.evidence = evidence
+        .chunks(2)
+        .enumerate()
+        .filter(|(index, _)| keep.contains(index))
+        .flat_map(|(_, pair)| pair.iter().cloned())
+        .chain(
+            omitted
+                .into_iter()
+                .map(|(rule_id, count)| evidence_omitted(rule_id, count)),
+        )
+        .collect();
+    if json_len(&*event)? > limit {
+        return Err(ProcessingError::Projection);
+    }
+    Ok(())
 }
 
 fn correlation_key(id: &CorrelationId) -> (u8, &str) {

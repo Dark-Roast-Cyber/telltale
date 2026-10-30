@@ -1,3 +1,5 @@
+//! Console entry point: window setup and the poll/render loop.
+
 use clap::Parser;
 use std::time::{Duration, Instant};
 use telltale_console::{

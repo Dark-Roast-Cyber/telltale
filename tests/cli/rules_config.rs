@@ -3523,6 +3523,21 @@ const COMMUNITY_TRIGGERS: &[(&str, &str, &str)] = &[
         r"schtasks /create /tn SyntheticTask /tr C:\synthetic.exe /sc onlogon",
         "schtasks /query /tn SyntheticTask",
     ),
+    (
+        "tdx.persistence.windows_service_change",
+        r#"sc.exe create SyntheticHelperSvc binPath= "C:\Example\synthetic-helper.exe" start= auto"#,
+        "sc.exe config SyntheticSvc start= disabled",
+    ),
+    (
+        "tdx.persistence.powershell_profile_write",
+        r"Add-Content -Path $PROFILE -Value 'Start-Process C:\Example\synthetic-helper.exe'",
+        r"Copy-Item -Path $PROFILE -Destination C:\Example\Backup\profile.ps1",
+    ),
+    (
+        "tdx.persistence.wmi_event_subscription",
+        r"Set-WmiInstance -Namespace root\subscription -Class __EventFilter -Arguments @{Name='SyntheticFilter'}",
+        "Get-CimInstance -Namespace root/subscription -ClassName __EventFilter",
+    ),
 ];
 
 fn claude_bash_session(session: &str, commands: &[&str]) -> String {

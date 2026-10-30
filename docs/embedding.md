@@ -27,8 +27,8 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
-| Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
 
@@ -42,8 +42,7 @@ OpenCode v2 resume, cut-window tokens, and quarantine described here are
 later than RC2. Neither published RC1 nor RC2 qualifies this tree. RC2 is not a
 stable API freeze or a fully qualified release (clean-host gates are pending).
 A passing host test of a Git pin is integration evidence, not release
-qualification. Candidate gates live in
-[release readiness](release-readiness.md#post-rc1-embedding-qualification).
+qualification.
 
 ## Getting the crate
 
@@ -83,7 +82,7 @@ migration: `telltale = { package = "telltale-core", git = "…", rev = "<commit>
 
 Gates: `make embedding-contract-check` tests eight feature combinations and is
 part of `ci-local`. `make embedding-msrv-check` runs the same combinations on the
-embedding crates' declared `rust-version` (Rust 1.85.0), which CI checks on Linux,
+embedding crates' declared `rust-version` (Rust 1.88.0), which CI checks on Linux,
 macOS and Windows; it is not a CLI MSRV promise. External coverage lives in
 [`tests/embedding-consumer`](../tests/embedding-consumer/tests).
 
@@ -141,8 +140,7 @@ community release, or its own namespaced packages, without a Telltale upgrade.
 `Pipeline::rule_packages()` returns each compiled package's ID, version, content
 SHA-256, and whether it is the embedded snapshot, for inventory and provenance
 reporting. Package validation lives in `telltale_rules::package`
-(`RulePackage::parse`, `resolve_rule_packages`); see the
-[rule-packages specification](../openspec/specs/rule-packages/spec.md).
+(`RulePackage::parse`, `resolve_rule_packages`).
 
 What an embedder inherits:
 
@@ -230,6 +228,39 @@ second detector or an Event 3 conversion loop.
   quarantined units; other units in its selected window were evaluated. Claude
   quarantine does not add a progress or resume mechanism.
 
+### Source size
+
+A JSONL session source (Claude Code, Codex, OpenClaw, Qwen) of up to 64 MiB
+(`MAX_SCALED_SOURCE_BYTES`) is evaluated whole. Its per-source bounds scale with
+the bytes read: each is its floor per MiB, never below the floor, and stops
+growing at 64 MiB. The floors are 256 MiB of evaluation byte visits, 65,536 observations,
+8 MiB of canonical retention, 100,000 native units, 4,096 retained or projection
+items and 4 MiB of compatibility text. Limits on one value, such as a record's
+8 MiB or a retained string's 4,096 bytes, do not scale. OpenCode windows and
+Copilot process logs keep the floors.
+
+- A larger source keeps the 64 MiB bounds. It is evaluated whole when it fits
+  them and the reader's limits (128 MiB read, 8 MiB per record), and otherwise
+  fails with the same codes as any other source. Windowed evaluation of larger
+  sources is not built.
+- Cost grows linearly with size. On synthetic sessions it was about 80 byte
+  visits per input byte (about 100 with process-chain detections) and 5 MiB/s.
+  The whole source is re-evaluated on every scan, so throttle rescans of large,
+  growing sources.
+- Memory is not bounded by these limits. Peak RSS was about 15 times the source
+  size: 939 MiB for one 64 MiB source. Size the host for that per source
+  scanned at once, or scan large sources one at a time.
+- A session's Event 3 detection event must still serialize within 1 MiB
+  (`EVENT3_MAX_INPUT_BYTES`). It carries two evidence items per retained match.
+  When they do not fit, the event keeps every timeline anchor and the evidence
+  of the earliest occurrences that fits, and adds one item per rule that lost
+  evidence: `{"field": "evidence_omitted", "redacted_value": "<omitted item
+  count>", "rule_id": "<rule>"}` (`EVIDENCE_OMITTED_FIELD`), without a hash.
+  Rules, scores, risk and action records are unchanged, and an event that fits
+  is unchanged. If the anchors alone exceed 1 MiB (about 6,000 matched
+  occurrences in one session, at about 170 bytes per anchor), the source fails
+  at projection (`canonical_projection_failed`).
+
 ### Rule v1 URL target
 
 The Rule v1 `url` target (`compat.v1.url`) is the URL-keyed top-level string
@@ -284,8 +315,17 @@ Three scores exist and must stay distinct: native finding risk
 (`risk_points()`), the action `promotion_score()` (the sum of the action's
 `contributions()`), and the Event 3 session `risk_score`.
 
-- Category chains are ordered within a 15-minute source-time window
-  (`ACTION_CHAIN_WINDOW_SECONDS = 900`).
+- A chain with a declared link (`link: {calls: N}` in rule content) completes
+  only when its steps lie within N tool calls of each other, in declared order
+  unless the link says `order: any`. It has no time window unless the link sets
+  `minutes`, which applies when both steps carry a source time. The catalog
+  reports it as `action_link: "within_calls:N"` with `action_within_seconds`
+  null, or the link's `minutes` converted to seconds. Every bundled category
+  chain except `chain.download_then_execute` declares such a link.
+- A category chain without a declared link is ordered within a 15-minute
+  source-time window (`ACTION_CHAIN_WINDOW_SECONDS = 900`,
+  `action_within_seconds: 900`). A modifier that names only rule IDs and
+  declares no link is a same-action predicate: unordered, with no time window.
 - The bundled downloaded-artifact correlation links supported download and
   execution forms. A link needs a literal artifact match, temporal order, and
   source time; unknown or unsupported syntax establishes no link.
@@ -348,6 +388,47 @@ changes after `build()`, so replace it as a whole:
 Telltale does not fetch, sign, or schedule rule content. Obtaining and
 authenticating documents is the host's job.
 
+### Evidence
+
+`action.evidence()` holds one `ActionEvidence` per rule or modifier that
+counted for the action: `field()`, `rule_id()`, and `redacted_value()`, which
+crossed `redact_sensitive_text` and is at most 512 bytes and 80 tokens.
+
+- A field whose redaction fits is shown whole. A longer field is shown as an
+  excerpt of about 160 bytes before and 240 after the hit that counted:
+  the first match of the rule's counting matcher for a Rule v1 rule; for a
+  native predicate that counts one command stage, path, key reference or
+  credential token, the first match inside that occurrence, never an earlier
+  one the predicate rejected; or, for a download link, the stage that runs the
+  artifact or the piped pipeline. `elided_before()` and
+  `elided_after()` say whether field text was cut on each side. Evidence
+  without a single span (a whole-field predicate) starts at the field start.
+- A hit past the sanitizer's 4 KiB input bound is still shown: the excerpt is
+  cut from the redaction of a region around the hit. Both cuts of that region
+  drop the fragment that holds them, as the input bound does, including a
+  quoted value that spans the cut, so a secret that straddles a cut is never
+  partly shown. A leading cut inside a private key block moves past the
+  block's end. A leading cut also moves past the end of a value whose label is
+  earlier on the cut's line: an authorization value, which runs to the line end
+  or `;`, or a quoted value, including one whose quotes are escaped or encoded
+  (`\u0022`). Only the 16 KiB of the line before the cut are read for such
+  labels; a longer line whose earlier part holds a backslash or an
+  authorization word is skipped to its end. The first 256 bytes after a
+  leading cut, in whole fragments and at least three of them, are redacted but
+  never shown: a label that would mask them (`--password`, `key =`, `Bearer`,
+  the start of a path with spaces) may lie before the cut. Evidence can therefore be empty, with
+  `elided_before` set.
+- `highlight()` is the UTF-8 byte range of the hit in `redacted_value()`, set
+  only when the position is exact: redacting the text before, at and after the
+  hit separately gives the same text. It is `None` when redaction joins the hit
+  to its neighbors (a secret's label outside the hit, for example), when a
+  dropped fragment holds the hit, when the hit does not fit the bounds, or
+  when the matcher does not match inside the occurrence a native predicate
+  counted.
+  Never infer a position from the text.
+- Evidence is not reread from the source and rules are not rerun to place it.
+  Event 3 evidence is unchanged.
+
 ### Same-pass context
 
 `action.context()` is scan-time context from the same acquired observations; it
@@ -370,9 +451,17 @@ never reopens a source.
 `bundled_rule_catalog(&options)` returns immutable presentation metadata
 (`RuleCatalogEntry`: `id`, `kind`, `title`, `explanation`, `falsepositives`,
 `category`, `severity`, `session_score`, `action_score`, `action_ordered`,
-`action_within_seconds`, `action_link`, `package_id`) for core rules and the
-embedded community package; `package_id` is `None` for core rules and `enabled`
-describes the default pipeline. Session scores are frozen compatibility
+`action_within_seconds`, `action_link`, `atlas_tags`, `attack_techniques`,
+`package_id`) for core rules and the embedded community package; `package_id`
+is `None` for core rules and `enabled` describes the default pipeline. When
+`options.process_chain` is set, it also lists every rule of the bundled
+process-chain pack as `RuleCatalogKind::ProcessChain` (`"process_chain"` on the
+wire), with its title, reason as `explanation`, category false-positive
+guidance, score before environment false-positive controls, signal type
+(`chain`, `atomic` or `correlation`) and, for correlations, its window in
+`action_within_seconds` and `action_ordered` true, because their steps match in
+sequence order. Process-chain entries carry MITRE ATT&CK technique IDs
+in `attack_techniques`; Rule v1 rules and modifiers carry only `atlas_tags`. Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
 promotion totals. It exposes no detector internals, custom documents, policy
 overrides, or executable process AST. Like `ActionFinding`, catalog entries do
@@ -412,22 +501,34 @@ Event 3 object                                -- session events, unchanged
   It rejects oversized input, another record version, unknown fields, values
   outside the schema, inconsistent values, and text that redaction would
   still change, with closed error codes that contain no input text. A
-  consumer newer than its producer may reject text that an older redactor let
-  through. Do not turn an unknown field or version into a rejected but
-  acknowledged delivery.
+  consumer whose redactor differs from its producer's may reject valid output:
+  a newer consumer when redaction grew stricter, an older consumer when it
+  kept more text, so move producer and consumer pins together. Do not turn an unknown
+  field or version into a rejected but acknowledged delivery.
 - Delivery key: `record.delivery_key()`. It hashes the semantic identity with
   `replay_identity` when present, otherwise with `source_path_hash`,
   `coordinate` and the canonical finding IDs: equal coordinates distinguish
   neither stores nor the several process-chain actions one tool call can
   carry. A rules change gives new keys. Never derive a key from Event 3 IDs.
+- Delivery aliases: `record.delivery_aliases()` starts with `delivery_key()`
+  and, when `replay_identity` is present, adds the source-bound key the action
+  has without one. Replay identity can come and go between scans of one store:
+  a later identical candidate makes an earlier action ambiguous and withdraws
+  its replay identity, and a rewrite that removes the candidate restores it.
+  The source-bound alias survives both transitions; the replay alias matches a
+  copy of the action in another source. Treat an action as handled when any of
+  its aliases is known, and remember all of them.
 - Event link: `record.check_session_event(&event)` checks that a detection or
   process-chain `Event3Record` travelling with the record has the same client,
   source path hash and session and, when `session_event_id` is set, that it
   is that event, of the matching family, carrying every record rule. An
   unlinked record names no event; which event it travels with is the host's
   choice.
-- A record version is frozen. Adding, removing or redefining a field is a new
-  version and a new type; plan to accept both during a host upgrade.
+- A record or catalog version is frozen from the first release tag that
+  carries it. After that, adding, removing or redefining a field is a new
+  version and a new type; plan to accept both during a host upgrade. Before
+  that tag, a Git pin can see v1 amended in place; see the
+  [migration guide](migrations/0.7.0.md).
 - Keep terminal Event 3 separate from host extensions: `Event3Record` consumes
   one complete terminal Event 3 object (`Event` is the producer type, not a
   deserializer), and an augmented storage document is not a strict
@@ -606,8 +707,7 @@ through `bound_context()` (absence means no bound diagnostic, not success).
 keep their own codes. Event 3 adaptation stays the generic, source-atomic,
 content-free `canonical_acquisition_failed`. `AcquisitionError`,
 `BoundedReadError`, and `CanonicalBoundContext` are re-exported from core; adding
-variants breaks exhaustive matches, so keep a wildcard arm. Limits, check order,
-and NFC behavior are in [Canonical Observation v2](canonical-observation-v2.md).
+variants breaks exhaustive matches, so keep a wildcard arm.
 
 ## Inventory
 
@@ -617,10 +717,22 @@ emitted by scans or CLI watch.
 - API: install snapshots and signal types,
   `collect_install_inventory_with_context`, `collect_install_inventory_for_platform`,
   `collect_install_inventory_with_sources`, `snapshot_to_event`,
-  `discover_mcp_inventory(root)` (Event 3 inventory events), and
-  `discover_mcp_inventory_servers(root)` (the same discovery as structured
-  `McpServerInventory` values; their `path` is host-local, so hash it before it
-  leaves the host).
+  `collect_mcp_inventory`, and `discover_mcp_inventory(root)` (Event 3
+  inventory events).
+- MCP configuration: `collect_mcp_inventory` reads the files a host names
+  (`McpInventoryInput::Configs`) or the known fixed paths under one root
+  (`McpInventoryInput::FixedRoot`), without a workspace walk. It returns
+  sanitized `McpInventoryObservation` values with a config path hash. A named
+  config it cannot read, invalid JSON, and MCP TOML sections it recognizes but
+  cannot parse are reported as observations with a `reason`. Limits:
+  `FixedRoot` includes only paths whose metadata it can read, so a config
+  under an unreadable directory yields nothing; TOML forms the line scanner
+  does not recognize, such as inline tables or keys directly under a bare
+  `[mcp_servers]` table, also yield no observation.
+- Compatibility: `discover_mcp_inventory_servers(root)` also walks workspace
+  configurations and returns raw `McpServerInventory` values whose `path` is
+  host-local. A config it cannot read contributes no servers, so an empty list
+  does not mean no configuration. Prefer `collect_mcp_inventory`.
 - Prefer an explicit `InstallInventoryContext`; `current()` and
   `collect_install_inventory` read the process environment (home, PATH, extension
   roots), which may not describe the intended host roots.
@@ -656,8 +768,7 @@ detection/activity projection, equal to CLI output for equivalent source, rule,
 policy, and processing options. They keep `timeline_anchors` rather than
 per-action events and map source failures to `scanner_error`. Removed parser
 registration and source-backed flat-record projection are not compatibility
-paths. The runtime behind them is a private seam; see the
-[canonical runtime boundary](canonical-observation-v2.md#shared-canonical-source-runtime).
+paths. The runtime behind them is a private seam.
 
 ### Detection occurrences
 
@@ -738,13 +849,11 @@ replay-association requirements and limits.
 durable JSONL → a future vendor-neutral local collector transport. Event 3 is
 independent of transport: sink identity, transport, delivery policy, and
 persistence role are separate, a local IPC transport may be `BestEffort`, and a
-durable transport need not be HTTP. Issue #26 defines no collector protocol or
-plugin ABI and does not change Event 3; Issue #28 remains deferred, and JSONL-only
-is not its final architecture. `LocalEventFeed` supports bounded read-only polling
+durable transport need not be HTTP. There is no collector protocol or plugin
+ABI, and JSONL-only is not the final architecture. `LocalEventFeed` supports bounded read-only polling
 of local Event 3 JSONL; see
 [telemetry/output](telemetry-output.md#runtime-neutral-local-journal-polling).
-Analyzer extensions are a separate future protocol; see
-[development principles](development-principles.md#analyzer-extensions-direction-not-implemented).
+Analyzer extensions are a separate future protocol and are not implemented.
 
 ## Rust API evolution
 

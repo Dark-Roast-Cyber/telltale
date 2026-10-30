@@ -1,5 +1,18 @@
 //! Canonical Observation v2 domain types and validation.
 //!
+//! An observation is the unit of evidence, mapped directly from source-native
+//! facts; there is no flattened record type to convert to or from. Its rules:
+//!
+//! - Tool proposed, requested, started, completed and returned are separate
+//!   observations; a missing later stage is unknown, not failure.
+//! - Parsing a command, path or URL yields a parsed or derived fact, never
+//!   observed process, file or network activity.
+//! - Unsupported or unknown capability is never a clean, false or empty value.
+//!   Omit what a source cannot see; never fill it with empty strings, fallback
+//!   timestamps, path-derived sessions or placeholder IDs.
+//! - `occurred_at` is source time or absent; `observed_at` is caller-supplied
+//!   acceptance time. Neither substitutes for the other.
+//!
 //! Callers must not log these types. Nested types may retain `Debug`
 //! implementations that expose local or sensitive values when logged directly.
 
@@ -35,7 +48,36 @@ pub use value::{
 };
 
 pub const OTHER_REGISTRY_VERSION: &str = "other-v1";
+/// The canonical retention floor for one source; see [`SourceScale`].
 pub const MAX_CANONICAL_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+/// A per-source bound grows by its floor for each this many bytes read.
+pub const SOURCE_SCALE_UNIT_BYTES: usize = 1024 * 1024;
+/// The JSONL session source size at which per-source bounds stop growing. A
+/// larger source keeps these bounds and fails only if it exceeds them or the
+/// reader's own limits.
+pub const MAX_SCALED_SOURCE_BYTES: usize = 64 * 1024 * 1024;
+
+/// How far one source's bounds scale with the bytes read from it. Each bound
+/// is its floor per MiB read: never below the floor, and at most 64 times it.
+/// Sources without a whole-file read, such as OpenCode windows, use the floor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SourceScale(usize);
+
+impl SourceScale {
+    /// Today's bounds, for every source of at most one MiB.
+    pub const FLOOR: Self = Self(0);
+
+    pub fn for_source_bytes(bytes: usize) -> Self {
+        Self(bytes.min(MAX_SCALED_SOURCE_BYTES))
+    }
+
+    /// `floor` times the source's MiB, never below `floor`.
+    pub fn apply(self, floor: usize) -> usize {
+        let bytes = self.0.max(SOURCE_SCALE_UNIT_BYTES) as u128;
+        usize::try_from(floor as u128 * bytes / SOURCE_SCALE_UNIT_BYTES as u128)
+            .unwrap_or(usize::MAX)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObservationId(String);

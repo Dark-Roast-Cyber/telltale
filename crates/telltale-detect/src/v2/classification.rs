@@ -1,3 +1,5 @@
+//! Maps an Event3 detection class to a native finding kind.
+
 use super::{DetectionError, FindingKind};
 
 pub(super) fn finding_kind_for_detection_class(

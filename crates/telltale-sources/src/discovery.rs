@@ -1,3 +1,7 @@
+//! Session-store discovery: walks OS-aware roots and project-local paths for
+//! the registered source definitions and returns sorted, deduplicated `Source`
+//! values and watch roots. It finds files; it never parses them.
+
 use std::env;
 use std::fmt;
 use std::fs;
@@ -390,10 +394,10 @@ fn source_watch_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> 
 
     if environment_opencode(root, source_def) {
         let mut directories = opencode_data_directories_for_source(root, source_def);
-        if let Ok(Some(path)) = opencode_database_override(root) {
-            if let Some(parent) = path.parent() {
-                directories.push(parent.to_path_buf());
-            }
+        if let Ok(Some(path)) = opencode_database_override(root)
+            && let Some(parent) = path.parent()
+        {
+            directories.push(parent.to_path_buf());
         }
         return directories
             .into_iter()
@@ -883,10 +887,10 @@ fn bounded_opencode_paths(
         }
         bounded_paths(&directory, client, def, remaining, 1, true, sources)?;
     }
-    if let Some(path) = resolved_opencode_override(root)? {
-        if inspect_opencode_path(&path, remaining, false)? {
-            add_opencode_override(sources, client, def, path);
-        }
+    if let Some(path) = resolved_opencode_override(root)?
+        && inspect_opencode_path(&path, remaining, false)?
+    {
+        add_opencode_override(sources, client, def, path);
     }
     Ok(())
 }

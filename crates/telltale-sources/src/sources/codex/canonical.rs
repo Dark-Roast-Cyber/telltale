@@ -1,3 +1,6 @@
+//! Maps native Codex records to Canonical Observation v2. Reached only through
+//! the acquisition router.
+
 use std::fmt;
 
 use serde_json::Value;
@@ -19,11 +22,20 @@ use super::native::{
 #[derive(Clone)]
 pub(crate) struct CodexCanonicalOptions {
     pub(crate) observed_at: ObservedAt,
+    pub(crate) scale: telltale_schema::observation::SourceScale,
 }
 
 impl CodexCanonicalOptions {
     pub(crate) fn new(observed_at: ObservedAt) -> Self {
-        Self { observed_at }
+        Self {
+            observed_at,
+            scale: telltale_schema::observation::SourceScale::FLOOR,
+        }
+    }
+
+    /// Scales the source-wide retention budget; each record keeps the floor.
+    pub(crate) fn with_scale(self, scale: telltale_schema::observation::SourceScale) -> Self {
+        Self { scale, ..self }
     }
 }
 
@@ -108,7 +120,7 @@ pub(crate) fn project_codex_native_records(
     records: &[CodexNativeRecord],
     options: &CodexCanonicalOptions,
 ) -> Result<CodexProjection, CodexCanonicalError> {
-    let mut observations = crate::acquisition::CanonicalCollector::default();
+    let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     let mut quarantined = Vec::new();
     let mut index = 0;
     while index < records.len() {
@@ -434,13 +446,11 @@ fn content_part(block: &CodexContentBlock) -> Result<ContentPart, CodexCanonical
             if let Some(name) = name {
                 fields.push(("name".to_owned(), JsonValue::string(name)));
             }
-            if *input_present {
-                if let Some(input) = input {
-                    fields.push((
-                        "input".to_owned(),
-                        value_to_json(input, CanonicalFieldCategory::MessageContentParts)?,
-                    ));
-                }
+            if *input_present && let Some(input) = input {
+                fields.push((
+                    "input".to_owned(),
+                    value_to_json(input, CanonicalFieldCategory::MessageContentParts)?,
+                ));
             }
             Ok(ContentPart::new(
                 ContentPartKind::ToolUse,
@@ -464,13 +474,11 @@ fn content_part(block: &CodexContentBlock) -> Result<ContentPart, CodexCanonical
             if let Some(call_id) = call_id {
                 fields.push(("tool_use_id".to_owned(), JsonValue::string(call_id)));
             }
-            if *result_present {
-                if let Some(result) = result {
-                    fields.push((
-                        "content".to_owned(),
-                        value_to_json(result, CanonicalFieldCategory::MessageContentParts)?,
-                    ));
-                }
+            if *result_present && let Some(result) = result {
+                fields.push((
+                    "content".to_owned(),
+                    value_to_json(result, CanonicalFieldCategory::MessageContentParts)?,
+                ));
             }
             if let Some(is_error) = is_error {
                 fields.push(("is_error".to_owned(), JsonValue::Bool(*is_error)));
@@ -614,22 +622,20 @@ fn emit_tool(
             JsonValue::try_from_source_tool_arguments(fields.name.as_deref(), arguments).map_err(
                 |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
             )?;
-        if hosted_search {
-            if let Some(text) = web_search_searchable_arguments(&arguments) {
-                body = body.with_searchable_arguments(text)?;
-                paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
-            }
+        if hosted_search && let Some(text) = web_search_searchable_arguments(&arguments) {
+            body = body.with_searchable_arguments(text)?;
+            paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
         }
         body = body.with_arguments(arguments);
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
         let result = tool_result_json(result)?;
-        if fields.completed_file_change {
-            if let Some(text) = file_change_searchable_result(&result) {
-                body = body.with_searchable_result(text)?;
-                paths.push(("tool.searchable_result", FactProvenance::Parsed));
-            }
+        if fields.completed_file_change
+            && let Some(text) = file_change_searchable_result(&result)
+        {
+            body = body.with_searchable_result(text)?;
+            paths.push(("tool.searchable_result", FactProvenance::Parsed));
         }
         body = body.with_result(result);
         paths.push(("tool.result", FactProvenance::Reported));
@@ -711,15 +717,15 @@ fn emit_tool(
         }
     }
 
-    if fields.completed_file_change || hosted_search {
-        if let Some(status) = &fields.status {
-            builder = builder
-                .facet(
-                    "tool.source_status",
-                    SemanticFacet::new(JsonValue::string(status)),
-                )?
-                .fact_metadata("tool.source_status", normal_reported()?);
-        }
+    if (fields.completed_file_change || hosted_search)
+        && let Some(status) = &fields.status
+    {
+        builder = builder
+            .facet(
+                "tool.source_status",
+                SemanticFacet::new(JsonValue::string(status)),
+            )?
+            .fact_metadata("tool.source_status", normal_reported()?);
     }
 
     let argument_view = fields.arguments.as_ref().and_then(parsed_argument_view);
@@ -932,10 +938,10 @@ fn common_builder(
             correlation =
                 correlation.with_response_id(CorrelationId::source_reported(&coords.item_id)?);
         }
-    } else if record.discriminator.as_deref() == Some("web_search_call") {
-        if let Some(id) = &record.response_id {
-            correlation = correlation.with_response_id(CorrelationId::source_reported(id)?);
-        }
+    } else if record.discriminator.as_deref() == Some("web_search_call")
+        && let Some(id) = &record.response_id
+    {
+        correlation = correlation.with_response_id(CorrelationId::source_reported(id)?);
     }
     builder = builder.correlation(correlation);
     if let Some(root_id) = &record.root_session_id {
@@ -946,10 +952,10 @@ fn common_builder(
             )?
             .fact_metadata("session.root_id", normal_reported()?);
     }
-    if let Some(timestamp) = &record.timestamp {
-        if let Ok(timestamp) = SourceTimestamp::new(timestamp) {
-            builder = builder.occurred_at(timestamp);
-        }
+    if let Some(timestamp) = &record.timestamp
+        && let Ok(timestamp) = SourceTimestamp::new(timestamp)
+    {
+        builder = builder.occurred_at(timestamp);
     }
     builder = builder.child_ordinal(
         u32::try_from(child_ordinal)

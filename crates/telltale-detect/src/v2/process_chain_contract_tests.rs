@@ -262,10 +262,11 @@ fn matching_is_case_insensitive_and_paths_are_normalized() {
     let process = event.process.as_ref().expect("process context present");
     assert_eq!(process.source_process_name, "cmd");
     assert_eq!(process.target_process_name, "whoami");
-    // Canonical projection redacts path-bearing command text before retention.
+    // Canonical projection redacts path-bearing command text before retention;
+    // a bare command flag is not a path.
     assert_eq!(
         process.target_process_command_line.as_deref(),
-        Some("[sensitive-path] [sensitive-path]")
+        Some("[sensitive-path] /all")
     );
     assert!(!process.source_process_inferred);
 }

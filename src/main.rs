@@ -1,3 +1,6 @@
+//! The `telltale` binary. All behavior lives in the `telltale-cli` library;
+//! this only maps the result to an exit code and sanitizes the error text.
+
 use telltale_cli::run;
 use telltale_schema::event::{PrivacySanitizer, SanitizationContext};
 

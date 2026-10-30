@@ -1,3 +1,6 @@
+//! The local JSONL sink: the canonical first write, with append, tail repair
+//! and date-based rotation.
+
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};

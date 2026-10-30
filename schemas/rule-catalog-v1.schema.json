@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/rule-catalog-v1.schema.json",
   "title": "Telltale Rule Catalog v1",
-  "description": "Presentation metadata for bundled core rules and the embedded community package. Every key is always present; absent values are null.",
+  "description": "Presentation metadata for bundled core rules, the embedded community package and, when enabled, the bundled process-chain pack. Every key is always present; absent values are null.",
   "$defs": {
     "text": { "type": "string", "maxLength": 4096 },
     "label": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -14,12 +14,13 @@
       "required": [
         "id", "kind", "title", "explanation", "falsepositives", "category",
         "severity", "session_score", "action_score", "action_ordered",
-        "action_within_seconds", "action_link", "atlas_tags", "signal_type",
-        "tags", "enabled", "when_all_categories", "when_all_rule_ids", "package_id"
+        "action_within_seconds", "action_link", "atlas_tags", "attack_techniques",
+        "signal_type", "tags", "enabled", "when_all_categories", "when_all_rule_ids",
+        "package_id"
       ],
       "properties": {
         "id": { "$ref": "#/$defs/label" },
-        "kind": { "type": "string", "enum": ["rule", "modifier"] },
+        "kind": { "type": "string", "enum": ["rule", "modifier", "process_chain"] },
         "title": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
         "explanation": { "$ref": "#/$defs/text" },
         "falsepositives": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/text" } },
@@ -36,6 +37,11 @@
         "action_within_seconds": { "$ref": "#/$defs/optionalCount" },
         "action_link": { "$ref": "#/$defs/optionalLabel" },
         "atlas_tags": { "$ref": "#/$defs/labels" },
+        "attack_techniques": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^T[0-9]{4}(?:\\.[0-9]{3})?$" }
+        },
         "signal_type": { "$ref": "#/$defs/label" },
         "tags": { "$ref": "#/$defs/labels" },
         "enabled": { "type": "boolean" },

@@ -1,3 +1,7 @@
+//! The static source definition types (`ClientSourceDef`, `PathRoot`,
+//! `SourcePattern`) and the supported client list. Registry order is part of
+//! the public snapshot contract.
+
 use std::path::{Path, PathBuf};
 
 use telltale_schema::clients::{ClientId, SourceKind};

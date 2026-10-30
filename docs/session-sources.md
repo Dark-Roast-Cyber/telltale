@@ -62,7 +62,7 @@ than by exact private path or transcript content.
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. When `CLAUDE_CONFIG_DIR` is set in the scanner's environment, `$CLAUDE_CONFIG_DIR/projects` is searched as well; `~/.claude/projects` stays a root because a scanner service may not share the user's environment. An explicit `--root` ignores the variable. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
-| OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
+| OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Existing JSONL fixtures only; current default store not discovered | Telltale searches this root for older JSONL files, not the current default `agents/<agentId>/agent/openclaw-agent.sqlite` transcripts. Current-store acquisition and live qualification are deferred beyond 0.7; see the [compatibility boundary](source-validation-matrix.md#openclaw-compatibility-boundary). |
 | OpenCode | `opencode.sqlite` | XDG OpenCode data directory; exact `$OPENCODE_DB` when configured | XDG OpenCode data directory plus retained `~/Library/Application Support/opencode/opencode.db`; exact `$OPENCODE_DB` | XDG OpenCode data directory plus retained Windows platform data and `~/.local/share` candidates; exact `%OPENCODE_DB%` | Default paths have prior bounded validation; relocation/channel discovery is synthetic-conformance tested | Environment-resolved mode adds direct-child channel databases and one configured file; see the OpenCode root rules below. Prior Desktop validation does not qualify these new paths or every version. |
 | Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Existing process format only; current CLI home logs unqualified | **Project-local only** — discovered below configured project roots or applicable default project roots. Neither `~/.copilot/logs` nor `COPILOT_HOME/logs` is discovered; see the qualification gap below. |
 
@@ -240,7 +240,7 @@ Codex adapter notes:
   direct result with `exit_code` as `tool.exit_code`.
 - Completed `FileChange` maps to one reported Tool result with bounded structured
   patch evidence and a parsed, field-labeled searchable result, not a file-state
-  or execution claim. See the [canonical mapping and bounds](canonical-observation-v2.md).
+  or execution claim.
 - Completed `McpToolCall` and `Extension` items are not mapped yet and are
   quarantined by themselves (`unsupported_completed_item`). A
   parent rollout repeats its subagents' completed items under the subagent's

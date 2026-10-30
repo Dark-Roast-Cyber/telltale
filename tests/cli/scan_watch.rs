@@ -959,8 +959,8 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
     assert_eq!(scan()["detection_count"], 1);
     let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
     let offset = fs::metadata(&log).unwrap().len() as usize;
-    let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(65_528)}).to_string();
-    fs::write(&source, format!("{}\n", vec![record; 129].join("\n"))).unwrap();
+    // More native units than the bytes read admit fail the whole source.
+    fs::write(&source, "{}\n".repeat(1 << 19)).unwrap();
     let failed = scan();
     // CLI summary counts scanner errors in its detection stream.
     assert_eq!(failed["detection_count"], 1);
@@ -981,14 +981,14 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
         )
     );
     assert!(!late.contains("SYNTHETIC-CLI-LONG-SECRET"));
-    // Individually valid messages and a retained batch below 8 MiB still fail
-    // atomically when repeated no-match scans exhaust source-wide work.
+    // Individually valid messages still fail atomically when repeated no-match
+    // scans cost more source-wide work than the bytes read admit.
     let document = fs::read_to_string(&rules).unwrap();
     let header = document.split("rules:\n").next().unwrap();
-    let repeated = (0..40).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
+    let repeated = (0..512).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
     fs::write(&rules, format!("{header}rules:\n{repeated}modifiers: []\n")).unwrap();
     let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(60_000)}).to_string();
-    fs::write(&source, format!("{}\n", vec![record; 128].join("\n"))).unwrap();
+    fs::write(&source, format!("{}\n", vec![record; 16].join("\n"))).unwrap();
     let offset = fs::metadata(&log).unwrap().len() as usize;
     assert_eq!(scan()["activity_count"], 0);
     let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
@@ -1013,7 +1013,15 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
             .iter()
             .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
     );
-    fs::write(&rules, document).unwrap();
+    // The punctuation records alone cost about 200 byte visits per byte read,
+    // within the scaled budget; with the no-match rules they exceed it.
+    let original = document.split("rules:\n").nth(1).unwrap();
+    let original = original.trim_end_matches("modifiers: []\n");
+    fs::write(
+        &rules,
+        format!("{header}rules:\n{original}{repeated}modifiers: []\n"),
+    )
+    .unwrap();
     let record =
         serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":punctuation})
             .to_string();

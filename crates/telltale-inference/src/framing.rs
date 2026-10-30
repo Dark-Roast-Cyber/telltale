@@ -1,3 +1,5 @@
+//! Server-sent event framing for streamed responses, one frame at a time.
+
 use crate::{Failure, Normalizer, json, mapping::append};
 use serde_json::Value;
 

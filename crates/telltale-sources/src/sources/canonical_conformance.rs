@@ -1,3 +1,6 @@
+//! Cross-source conformance tests: equivalent native input from different
+//! adapters must produce the same canonical meaning and truthful capabilities.
+
 use std::fs;
 
 #[cfg(feature = "opencode-sqlite")]

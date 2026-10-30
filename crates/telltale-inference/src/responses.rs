@@ -1,3 +1,5 @@
+//! OpenAI Responses request and response mapping to Canonical Observation v2.
+
 use crate::{Failure, Normalizer, ResponseFormat, facts::token_usage, framing, json, mapping::*};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

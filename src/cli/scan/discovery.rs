@@ -1,3 +1,6 @@
+//! Source discovery for scans: project configuration, operational source
+//! selection and discovery accounting for health output.
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

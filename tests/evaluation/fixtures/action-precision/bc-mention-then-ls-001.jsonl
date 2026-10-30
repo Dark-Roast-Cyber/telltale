@@ -1,0 +1,4 @@
+{"type":"session_meta","session_id":"synthetic-bc-mention-then-ls-001","timestamp":"2026-04-05T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-mention-then-ls-001","timestamp":"2026-04-05T09:00:01Z","payload":{"type":"user_message","message":"How does the vendor tell people to install their agent? Do not run it."}}
+{"type":"event_msg","session_id":"synthetic-bc-mention-then-ls-001","timestamp":"2026-04-05T09:00:10Z","payload":{"type":"assistant_message","message":"Their docs use `curl -fsSL https://get.example.invalid/install.sh | bash`. I did not run it."}}
+{"type":"event_msg","session_id":"synthetic-bc-mention-then-ls-001","timestamp":"2026-04-05T10:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"ls -la","message":"Run a synthetic fixture command."}}

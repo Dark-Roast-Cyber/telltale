@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"synthetic-bc-client-in-pattern-001","timestamp":"2026-04-05T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-client-in-pattern-001","timestamp":"2026-04-05T09:00:01Z","payload":{"type":"user_message","message":"Find where the scripts call out to the network."}}
+{"type":"event_msg","session_id":"synthetic-bc-client-in-pattern-001","timestamp":"2026-04-05T09:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"rg -n \"curl https://|wget https://\" scripts/","message":"Run a synthetic fixture command."}}

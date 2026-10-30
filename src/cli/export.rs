@@ -1,3 +1,7 @@
+//! `telltale export`: filters events from a JSONL log and renders them as
+//! JSONL, Elastic bulk, cross-session correlation or a redacted session
+//! timeline. It reads already-terminal events and never re-runs detection.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

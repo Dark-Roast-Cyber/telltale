@@ -1,3 +1,6 @@
+//! Outputs configuration: sink specifications, endpoint and credential
+//! validation, retry and TLS options, and durable delivery capacity.
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
