@@ -1,3 +1,6 @@
+//! Source inventory evidence and the stable `path_hash` and `evidence_hash`
+//! functions. Their outputs are part of the event contract.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

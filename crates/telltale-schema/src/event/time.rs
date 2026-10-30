@@ -1,3 +1,7 @@
+//! Event 3.0 timestamp resolution and formatting, and the static response
+//! guidance attached to detections. Response guidance is advice, not an
+//! executed action.
+
 use ::time::OffsetDateTime;
 
 pub(crate) struct ResolvedEventTime {

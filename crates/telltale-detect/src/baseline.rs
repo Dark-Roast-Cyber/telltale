@@ -1,3 +1,7 @@
+//! Baseline deviation: per client, agent, model and provider activity
+//! baselines, their versioned snapshot state, and deviation assessment.
+//! Missing model or provider disables deviation scoring rather than guessing.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,6 @@
+//! `telltale rules coverage`: reports which effective rules match the sources
+//! discovered under a root, normally the synthetic fixtures.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

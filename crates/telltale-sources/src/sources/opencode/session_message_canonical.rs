@@ -252,11 +252,9 @@ impl Context<'_> {
                 body = body.with_arguments(arguments(Some(name), input)?);
                 metadata.push(("tool.arguments", FactProvenance::Reported));
             }
-            if outcome {
-                if let Some(result) = &tool.result {
-                    body = body.with_result(tool_result(result)?);
-                    metadata.push(("tool.result", FactProvenance::Reported));
-                }
+            if outcome && let Some(result) = &tool.result {
+                body = body.with_result(tool_result(result)?);
+                metadata.push(("tool.result", FactProvenance::Reported));
             }
             let settlement = tool.shell_settlement.as_ref().filter(|_| outcome);
             if let Some(exit) = settlement.and_then(|settlement| settlement.exit) {
@@ -286,12 +284,12 @@ impl Context<'_> {
                 builder = with_argument_facets(builder, tool.input.as_ref().expect("checked"))?;
                 // v2 file tools name the file `path`; other tools' `path` is a
                 // search root or working directory, not the resource acted on.
-                if V2_FILE_TOOLS.contains(&name) {
-                    if let Some(Value::String(path)) = input.get("path") {
-                        builder = builder
-                            .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
-                    }
+                if V2_FILE_TOOLS.contains(&name)
+                    && let Some(Value::String(path)) = input.get("path")
+                {
+                    builder = builder
+                        .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
+                        .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
                 }
             }
             if let Some(executed) = tool.executed {
@@ -457,10 +455,10 @@ impl Context<'_> {
                         .with_override(CapabilityId::ToolExecution, tool_execution),
                 )
                 .session_id(CorrelationId::source_reported(self.session)?);
-        if let Some(timestamp) = occurred_at {
-            if let Ok(timestamp) = SourceTimestamp::new(timestamp) {
-                builder = builder.occurred_at(timestamp);
-            }
+        if let Some(timestamp) = occurred_at
+            && let Ok(timestamp) = SourceTimestamp::new(timestamp)
+        {
+            builder = builder.occurred_at(timestamp);
         }
         Ok(builder.child_ordinal(child))
     }

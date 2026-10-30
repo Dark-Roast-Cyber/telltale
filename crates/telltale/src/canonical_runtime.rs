@@ -212,7 +212,7 @@ fn process_source_inner(
         });
         // The rows of this window, should even its smallest size not fit.
         let units = window.map(|_| window_units(&batch.observations));
-        let work = EvaluationWorkBudget::default();
+        let work = EvaluationWorkBudget::for_source(batch.source_scale);
         let capacity = std::cell::Cell::new(false);
         let result = finish_batch_with_work(
             source, &instance, batch, context, detailed, &work, &capacity,

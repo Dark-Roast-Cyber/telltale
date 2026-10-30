@@ -88,7 +88,7 @@ fn evaluate_tool_process_chain_matches(
                     budget,
                 )?,
             });
-            if matches.len() > super::session::MAX_PROJECTION_ITEMS {
+            if matches.len() > budget.bounds.projection_items {
                 return Err(DetectionError::InvalidBounds);
             }
         }
@@ -193,7 +193,7 @@ pub(crate) fn evaluate_tool_process_chain_views(
             observation_index,
             budget,
         )?);
-        if matches.len() > super::session::MAX_PROJECTION_ITEMS {
+        if matches.len() > budget.bounds.projection_items {
             return Err(DetectionError::InvalidBounds);
         }
     }
@@ -350,7 +350,7 @@ fn finish_process_matches(
             )?,
         );
         results.push(result);
-        if results.len() > super::session::MAX_PROJECTION_ITEMS {
+        if results.len() > budget.bounds.projection_items {
             return Err(DetectionError::InvalidBounds);
         }
     }

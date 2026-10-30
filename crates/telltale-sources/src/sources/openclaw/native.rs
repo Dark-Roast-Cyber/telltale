@@ -1,7 +1,10 @@
+//! Crate-private OpenClaw JSONL record structures and their extraction. A
+//! known schema failure is terminal; there is no fallback parser.
+
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::source_read::{SourceReadError, collect_string_values, read_jsonl_values};
+use crate::source_read::{SourceReadError, collect_string_values};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -61,17 +64,14 @@ pub(crate) struct OpenClawNativeRecord {
 pub(crate) fn extract_openclaw_native_records(
     source: &Source,
 ) -> Result<Vec<OpenClawNativeRecord>, SourceReadError> {
-    extract_openclaw_native_records_with_limits(source, None)
+    extract_openclaw_native_records_with_limits(source, None).map(|(records, _)| records)
 }
 
 pub(crate) fn extract_openclaw_native_records_with_limits(
     source: &Source,
     limits: Option<crate::acquisition::DirectReadLimits>,
-) -> Result<Vec<OpenClawNativeRecord>, SourceReadError> {
-    let values = match limits {
-        Some(limits) => crate::source_read::read_jsonl_values_with_limits(source, Some(limits))?,
-        None => read_jsonl_values(source)?,
-    };
+) -> Result<(Vec<OpenClawNativeRecord>, usize), SourceReadError> {
+    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, limits)?;
     let mut records = Vec::with_capacity(values.len());
 
     for (source_sequence, value) in values.into_iter().enumerate() {
@@ -135,7 +135,7 @@ pub(crate) fn extract_openclaw_native_records_with_limits(
         records.push(native);
     }
 
-    Ok(records)
+    Ok((records, bytes))
 }
 
 impl OpenClawNativeRecord {
@@ -223,13 +223,13 @@ fn openclaw_selected_envelope(value: &Value) -> Option<OpenClawSelectedEnvelope<
                 discriminator,
             });
         }
-        if let Some(nested_payload) = payload.get("payload") {
-            if let Some(discriminator) = nested_payload.get("type").and_then(Value::as_str) {
-                return Some(OpenClawSelectedEnvelope {
-                    value: nested_payload,
-                    discriminator,
-                });
-            }
+        if let Some(nested_payload) = payload.get("payload")
+            && let Some(discriminator) = nested_payload.get("type").and_then(Value::as_str)
+        {
+            return Some(OpenClawSelectedEnvelope {
+                value: nested_payload,
+                discriminator,
+            });
         }
     }
     if let Some(discriminator) = value.get("type").and_then(Value::as_str) {

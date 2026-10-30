@@ -696,10 +696,20 @@ fn canonical_collector_checks_source_wide_retention_before_each_push() {
     }
     assert_eq!(collector.retained_bytes, MAX_CANONICAL_RETAINED_BYTES);
     assert_eq!(
-        collector.push(observation).unwrap_err().code(),
+        collector.push(observation.clone()).unwrap_err().code(),
         "unbounded_value"
     );
     assert_eq!(collector.observations.len(), 128);
+
+    let mut collector = CanonicalCollector::scaled(SourceScale::for_source_bytes(2 << 20));
+    for _ in 0..256 {
+        collector.push(observation.clone()).unwrap();
+    }
+    assert_eq!(collector.retained_bytes, 2 * MAX_CANONICAL_RETAINED_BYTES);
+    assert_eq!(
+        collector.push(observation).unwrap_err().code(),
+        "unbounded_value"
+    );
 }
 
 #[test]
@@ -719,9 +729,35 @@ fn long_message_source_batch_retention_failure_is_atomic() {
             kind: SourceKind::Jsonl,
             path: path.clone(),
         };
-        let error = acquire_source(&source, options())
-            .err()
-            .expect("no batch/accounting/progress may escape, including Claude's source-wide retention failure");
+        // About 8.45 MiB read scales the retention budget past this source.
+        let batch = acquire_source(&source, options()).expect("scaled retention");
+        assert_eq!(batch.observations.len(), 129);
+        assert!(batch.quarantined.is_empty());
+        // At the floor, the source-wide failure is the whole projection's,
+        // not a quarantined unit, so no batch/accounting/progress escapes.
+        let error = match client {
+            ClientId::Claude => {
+                let (records, _) =
+                    extract_claude_native_records_with_limits(&source, None).unwrap();
+                map_claude_error(
+                    project_claude_native_records(
+                        &records,
+                        &ClaudeCanonicalOptions::new(options().observed_at),
+                    )
+                    .expect_err("Claude's source-wide retention failure"),
+                )
+            }
+            _ => {
+                let (records, _) = extract_codex_native_records_with_limits(&source, None).unwrap();
+                map_codex_error(
+                    project_codex_native_records(
+                        &records,
+                        &CodexCanonicalOptions::new(options().observed_at),
+                    )
+                    .expect_err("Codex's source-wide retention failure"),
+                )
+            }
+        };
         assert_eq!(error.code(), "unbounded_value");
         assert!(!format!("{error:?} {error}").contains("synthetic"));
     }

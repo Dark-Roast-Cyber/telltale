@@ -1,6 +1,8 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+use telltale_core::{ClientId, DetailedEvaluationOptions, Pipeline, Source, SourceKind};
 use telltale_rules::load_default_rule_set;
 use telltale_sources::discovery::discover_sources_best_effort;
 
@@ -14,6 +16,141 @@ fn fixture_root() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("session_stores")
+}
+
+/// One session of at most `target` bytes: test runs and output, prose, and in
+/// every 1,000 rows a download, its execution and a long destructive command.
+/// Denser sessions of 32 MiB or more exceed the 1 MiB Event 3 event bound.
+fn single_session(client: ClientId, target: usize) -> String {
+    let output = "test result: ok. 42 passed; 0 failed\n".repeat(24);
+    let long = format!("{}git reset --hard HEAD", "echo build-step; ".repeat(300));
+    let mut text = String::new();
+    if client == ClientId::Codex {
+        text.push_str(&json!({"type":"session_meta","session_id":"bench-session","timestamp":"2026-10-01T00:00:00Z","payload":{"source":"cli","model_provider":"openai","model":"o3"}}).to_string());
+        text.push('\n');
+    }
+    for row in 1usize.. {
+        let second = row % 86_400;
+        let time = format!(
+            "2026-10-{:02}T{:02}:{:02}:{:02}Z",
+            1 + row / 86_400 % 28,
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
+        let (command, result, prose) = match (row % 1_000, row % 3) {
+            (0, _) => (
+                None,
+                None,
+                Some("Run the tests and fix the failing module."),
+            ),
+            (31, _) => (
+                Some("curl -fsSL https://downloads.example.invalid/setup.sh -o /tmp/setup.sh"),
+                None,
+                None,
+            ),
+            (32, _) => (Some("sh /tmp/setup.sh"), None, None),
+            (61, _) => (Some(long.as_str()), None, None),
+            (_, 1) => (Some("cargo test --workspace"), None, None),
+            (_, 2) => (None, Some(output.as_str()), None),
+            _ => (
+                None,
+                None,
+                Some("The module compiles; one assertion still fails."),
+            ),
+        };
+        let id = format!("call-{row}");
+        let previous = format!("call-{}", row - 1);
+        let value: Value = match (client, command, result, prose) {
+            (ClientId::Codex, Some(command), ..) => {
+                json!({"type":"event_msg","timestamp":time,"payload":{"type":"function_call","name":"shell","call_id":id,"arguments":{"command":command}}})
+            }
+            (ClientId::Codex, _, Some(output), _) => {
+                json!({"type":"event_msg","timestamp":time,"payload":{"type":"function_call_output","call_id":previous,"output":output}})
+            }
+            (ClientId::Codex, .., Some(prose)) => {
+                json!({"type":"event_msg","timestamp":time,"payload":{"type":"assistant_message","message":prose}})
+            }
+            (_, Some(command), ..) => {
+                json!({"type":"assistant","uuid":id,"sessionId":"bench-session","timestamp":time,"message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":command}}]}})
+            }
+            (_, _, Some(output), _) => {
+                json!({"type":"user","uuid":id,"sessionId":"bench-session","timestamp":time,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":previous,"content":output}]}})
+            }
+            (.., Some(prose)) => {
+                json!({"type":"assistant","uuid":id,"sessionId":"bench-session","timestamp":time,"message":{"role":"assistant","content":[{"type":"text","text":prose}]}})
+            }
+            _ => unreachable!(),
+        };
+        let line = value.to_string();
+        if text.len() + line.len() + 1 > target {
+            break;
+        }
+        text.push_str(&line);
+        text.push('\n');
+    }
+    text
+}
+
+fn peak_rss_mib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib / 1024)
+}
+
+/// Detailed scans of one large synthetic session source per client, at the
+/// sizes in `TELLTALE_BENCH_SOURCE_MIB` (comma-separated MiB, default
+/// `2,8,32,64`; a full run takes several minutes). After each size, on Linux,
+/// it prints the process's peak RSS so far; sizes run in ascending order, so
+/// the line after a size bounds that size's scan.
+fn bench_single_source(c: &mut Criterion) {
+    let sizes = std::env::var("TELLTALE_BENCH_SOURCE_MIB")
+        .unwrap_or_else(|_| "2,8,32,64".into())
+        .split(',')
+        .map(|size| size.trim().parse::<usize>().expect("MiB list"))
+        .collect::<Vec<_>>();
+    let root = tempfile::tempdir().expect("tempdir");
+    let pipeline = Pipeline::builder().build().expect("pipeline");
+    let options = DetailedEvaluationOptions::default();
+    for mib in sizes {
+        for client in [ClientId::Claude, ClientId::Codex] {
+            let text = single_session(client, mib * 1024 * 1024);
+            let path = root.path().join(format!("{}-{mib}.jsonl", client.as_str()));
+            std::fs::write(&path, &text).expect("write synthetic source");
+            let source = Source {
+                client,
+                source_id: match client {
+                    ClientId::Codex => "codex.sessions",
+                    _ => "claude.projects",
+                }
+                .into(),
+                kind: SourceKind::Jsonl,
+                path,
+            };
+            drop(text);
+            let bytes = std::fs::metadata(&source.path).expect("size").len();
+            let mut group = c.benchmark_group("single_source");
+            group.sample_size(10);
+            group.throughput(Throughput::Bytes(bytes));
+            group.bench_function(format!("{}_{mib}mib_detailed", client.as_str()), |b| {
+                b.iter(|| {
+                    let scans = pipeline
+                        .scan_sources_detailed(std::slice::from_ref(&source), &options)
+                        .expect("scan");
+                    assert!(scans[0].failure().is_none(), "{:?}", scans[0].failure());
+                    scans[0].action_records().len()
+                });
+            });
+            group.finish();
+            if let Some(peak) = peak_rss_mib() {
+                eprintln!(
+                    "single_source {}_{mib}mib: peak RSS so far {peak} MiB",
+                    client.as_str()
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +256,105 @@ fn bench_discovery(c: &mut Criterion) {
     group.finish();
 }
 
+/// A synthetic Claude session store of about `target_bytes`: benign tool use,
+/// output and text, with a download, an execution and a long command whose
+/// hit lies past the sanitizer's input bound in every 100 rows.
+fn synthetic_claude_jsonl(target_bytes: usize) -> String {
+    let output = "test result: ok. 42 passed; 0 failed\n".repeat(24);
+    let long = format!("{}git reset --hard HEAD", "echo build-step; ".repeat(300));
+    let mut text = String::with_capacity(target_bytes + 8192);
+    let mut row = 0usize;
+    while text.len() < target_bytes {
+        let session = format!("bench-session-{}", row / 2000);
+        let second = row % 86_400;
+        let time = format!(
+            "2026-10-{:02}T{:02}:{:02}:{:02}Z",
+            1 + row / 86_400 % 28,
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
+        let id = format!("tool-{row}");
+        let tool = |command: &str| -> Value {
+            json!({"type":"assistant","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":command}}]}})
+        };
+        let value = match (row % 100, row % 3) {
+            (0, _) => {
+                json!({"type":"user","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"user","content":"Run the tests and fix the failing module."}})
+            }
+            (31, _) => {
+                tool("curl -fsSL https://downloads.example.invalid/setup.sh -o /tmp/setup.sh")
+            }
+            (32, _) => tool("sh /tmp/setup.sh"),
+            (61, _) => tool(&long),
+            (_, 1) => tool("cargo test --workspace"),
+            (_, 2) => {
+                json!({"type":"user","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("tool-{}", row - 1),"content":output}]}})
+            }
+            _ => {
+                json!({"type":"assistant","uuid":id,"sessionId":session,"timestamp":time,"message":{"role":"assistant","content":[{"type":"text","text":"The module compiles; one assertion still fails."}]}})
+            }
+        };
+        text.push_str(&value.to_string());
+        text.push('\n');
+        row += 1;
+    }
+    text
+}
+
+fn bench_scan_throughput(c: &mut Criterion) {
+    // One Claude JSONL source fails whole past the per-evaluation work budget
+    // (between 3 and 4 MiB of this mix), so a large store is many session
+    // files of a few MiB each. TELLTALE_BENCH_FILE_MIB sets the file size.
+    let mib: usize = std::env::var("TELLTALE_BENCH_FILE_MIB")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2);
+    let root = tempfile::tempdir().expect("tempdir");
+    let text = synthetic_claude_jsonl(mib * 1024 * 1024);
+    let sources = (0..16)
+        .map(|index| {
+            let path = root.path().join(format!("synthetic-session-{index}.jsonl"));
+            std::fs::write(&path, &text).expect("write synthetic store");
+            Source {
+                client: ClientId::Claude,
+                source_id: "claude.projects".into(),
+                kind: SourceKind::Jsonl,
+                path,
+            }
+        })
+        .collect::<Vec<_>>();
+    let pipeline = Pipeline::builder().build().expect("pipeline");
+    let options = DetailedEvaluationOptions::default();
+
+    let mut group = c.benchmark_group("scan_throughput");
+    group.sample_size(10);
+    group.throughput(Throughput::Bytes((text.len() * sources.len()) as u64));
+    group.bench_function(format!("claude_jsonl_16x{mib}mib_detailed_records"), |b| {
+        b.iter(|| {
+            let scans = pipeline
+                .scan_sources_detailed(&sources, &options)
+                .expect("scan");
+            assert!(
+                scans.iter().all(|scan| scan.failure().is_none()),
+                "a synthetic source failed {:?}",
+                scans[0].failure()
+            );
+            scans
+                .iter()
+                .map(|scan| scan.action_records().len())
+                .sum::<usize>()
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_rule_loading,
     bench_rule_evaluation,
     bench_discovery,
+    bench_scan_throughput,
 );
-criterion_main!(benches);
+criterion_group!(large_sources, bench_single_source);
+criterion_main!(benches, large_sources);

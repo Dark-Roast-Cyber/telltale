@@ -1,3 +1,6 @@
+//! Maps native OpenClaw records to Canonical Observation v2. Reached only
+//! through the acquisition router.
+
 use std::fmt;
 
 use telltale_schema::observation::{
@@ -15,11 +18,20 @@ use super::native::{
 #[derive(Clone)]
 pub(crate) struct OpenClawCanonicalOptions {
     pub(crate) observed_at: ObservedAt,
+    pub(crate) scale: telltale_schema::observation::SourceScale,
 }
 
 impl OpenClawCanonicalOptions {
     pub(crate) fn new(observed_at: ObservedAt) -> Self {
-        Self { observed_at }
+        Self {
+            observed_at,
+            scale: telltale_schema::observation::SourceScale::FLOOR,
+        }
+    }
+
+    /// Scales the source-wide retention budget; each record keeps the floor.
+    pub(crate) fn with_scale(self, scale: telltale_schema::observation::SourceScale) -> Self {
+        Self { scale, ..self }
     }
 }
 
@@ -83,7 +95,7 @@ pub(crate) fn project_openclaw_native_records(
     records: &[OpenClawNativeRecord],
     options: &OpenClawCanonicalOptions,
 ) -> Result<Vec<CanonicalObservationV2>, OpenClawCanonicalError> {
-    let mut observations = crate::acquisition::CanonicalCollector::default();
+    let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     for record in records {
         project_record(record, options, &mut observations)?;
     }
@@ -357,10 +369,8 @@ fn content_part(block: &OpenClawContentBlock) -> Result<ContentPart, OpenClawCan
             if let Some(name) = name {
                 fields.push(("name".to_owned(), JsonValue::string(name)));
             }
-            if *input_present {
-                if let Some(input) = input {
-                    fields.push(("input".to_owned(), value_to_json(input)?));
-                }
+            if *input_present && let Some(input) = input {
+                fields.push(("input".to_owned(), value_to_json(input)?));
             }
             Ok(ContentPart::new(
                 ContentPartKind::ToolUse,
@@ -384,10 +394,8 @@ fn content_part(block: &OpenClawContentBlock) -> Result<ContentPart, OpenClawCan
             if let Some(tool_use_id) = tool_use_id {
                 fields.push(("tool_use_id".to_owned(), JsonValue::string(tool_use_id)));
             }
-            if *result_present {
-                if let Some(result) = result {
-                    fields.push(("content".to_owned(), value_to_json(result)?));
-                }
+            if *result_present && let Some(result) = result {
+                fields.push(("content".to_owned(), value_to_json(result)?));
             }
             if let Some(is_error) = is_error {
                 fields.push(("is_error".to_owned(), JsonValue::Bool(*is_error)));
@@ -614,10 +622,10 @@ fn common_builder(
     if let Some(correlation) = correlation {
         builder = builder.correlation(correlation);
     }
-    if let Some(timestamp) = &record.source_timestamp {
-        if let Ok(timestamp) = SourceTimestamp::new(timestamp) {
-            builder = builder.occurred_at(timestamp);
-        }
+    if let Some(timestamp) = &record.source_timestamp
+        && let Ok(timestamp) = SourceTimestamp::new(timestamp)
+    {
+        builder = builder.occurred_at(timestamp);
     }
     Ok(builder.child_ordinal(
         u32::try_from(child_ordinal)

@@ -1,3 +1,10 @@
+//! Scan execution: selects new or changed sources from scanner state, runs each
+//! through the shared canonical source runtime, applies allowlists, health and
+//! summaries, writes events to the sinks, and then installs the new state.
+//!
+//! State is installed only after required durable output succeeds. Source
+//! processing semantics belong in `telltale-core::canonical_runtime`, not here.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::thread;

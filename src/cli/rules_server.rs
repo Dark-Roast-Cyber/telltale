@@ -1,3 +1,7 @@
+//! `telltale rules serve`: a loopback-only HTTP page and API for validating and
+//! previewing rule YAML against repository fixtures. It never binds a
+//! non-loopback address or reads paths outside the fixture checkout.
+
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};

@@ -468,6 +468,87 @@ pub fn load_default_process_chain_rules() -> Result<CompiledProcessChainRules, P
     load_process_chain_rules(bundled_process_chain_yaml())
 }
 
+/// Display metadata for one rule of a process-chain pack: what a catalog shows,
+/// not executable content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessChainRuleMetadata {
+    pub id: String,
+    pub title: String,
+    pub reason: String,
+    pub category: String,
+    pub severity: String,
+    /// Score before environment false-positive controls lower it.
+    pub score: u64,
+    /// `chain`, `atomic` or `correlation`, as the rule's detections report.
+    pub signal_type: &'static str,
+    /// MITRE ATT&CK technique IDs, such as `T1105`.
+    pub attack_techniques: Vec<String>,
+    /// False-positive guidance of the rule's category.
+    pub falsepositives: Vec<String>,
+    /// Correlation window; `None` for chain and standalone rules.
+    pub window_seconds: Option<u64>,
+    pub enabled: bool,
+}
+
+/// Display metadata for every rule of the embedded process-chain pack, in pack
+/// order. The pack is compiled first, so the metadata describes a valid pack.
+pub fn bundled_process_chain_metadata() -> Result<Vec<ProcessChainRuleMetadata>, ProcessChainError>
+{
+    load_default_process_chain_rules()?;
+    let pack: ProcessChainPack = serde_yaml::from_str(bundled_process_chain_yaml())
+        .map_err(|error| ProcessChainError::Parse(error.to_string()))?;
+    let falsepositives = |category: &str| {
+        pack.categories
+            .get(category)
+            .map(|metadata| metadata.falsepositives.clone())
+            .unwrap_or_default()
+    };
+    let enabled = |rule: Option<bool>| rule.unwrap_or(pack.defaults.enabled);
+    let chain = pack.rules.iter().map(|rule| ProcessChainRuleMetadata {
+        id: rule.id.clone(),
+        title: rule.title.clone(),
+        reason: rule.reason.clone(),
+        category: rule.category.clone(),
+        severity: rule.severity.clone(),
+        score: rule.score,
+        signal_type: "chain",
+        attack_techniques: rule.mitre.clone(),
+        falsepositives: falsepositives(&rule.category),
+        window_seconds: None,
+        enabled: enabled(rule.enabled),
+    });
+    let standalone = pack.standalone.iter().map(|rule| ProcessChainRuleMetadata {
+        id: rule.id.clone(),
+        title: rule.title.clone(),
+        reason: rule.reason.clone(),
+        category: rule.category.clone(),
+        severity: rule.severity.clone(),
+        score: rule.score,
+        signal_type: "atomic",
+        attack_techniques: rule.mitre.clone(),
+        falsepositives: falsepositives(&rule.category),
+        window_seconds: None,
+        enabled: enabled(rule.enabled),
+    });
+    let correlations = pack
+        .correlations
+        .iter()
+        .map(|rule| ProcessChainRuleMetadata {
+            id: rule.id.clone(),
+            title: rule.title.clone(),
+            reason: rule.reason.clone(),
+            category: rule.category.clone(),
+            severity: rule.severity.clone(),
+            score: rule.score,
+            signal_type: "correlation",
+            attack_techniques: rule.mitre.clone(),
+            falsepositives: falsepositives(&rule.category),
+            window_seconds: Some(rule.window_seconds),
+            enabled: enabled(rule.enabled),
+        });
+    Ok(chain.chain(standalone).chain(correlations).collect())
+}
+
 /// Parses and compiles a process-chain rule pack from YAML.
 pub fn load_process_chain_rules(
     document: &str,

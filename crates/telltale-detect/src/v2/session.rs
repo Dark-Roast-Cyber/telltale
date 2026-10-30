@@ -11,7 +11,7 @@ use telltale_rules::process_chain::CompiledProcessChainRules;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityId, CorrelationId, CorrelationOrigin,
-    ObservationBody,
+    MAX_CANONICAL_RETAINED_BYTES, ObservationBody, SourceScale,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -24,6 +24,8 @@ use super::rule_v1::{
 use crate::process_chain::ProcessChainConfig;
 use crate::process_chain_session::ProcessChainSessionConfig;
 
+// Per-source floors. Each scales with the bytes read from a JSONL session
+// source; see `SourceScale`.
 pub const MAX_SOURCE_OBSERVATIONS: usize = 65_536;
 pub const MAX_PROJECTION_ITEMS: usize = 4096;
 pub const MAX_COMPATIBILITY_STRING_BYTES: usize =
@@ -31,26 +33,64 @@ pub const MAX_COMPATIBILITY_STRING_BYTES: usize =
 pub const MAX_COMPATIBILITY_RETAINED_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_EVALUATION_BYTE_VISITS: usize = 256 * 1024 * 1024;
 
+/// One source's bounds: each per-source floor scaled by `SourceScale`.
+/// `MAX_COMPATIBILITY_STRING_BYTES` bounds one value and does not scale.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceBounds {
+    pub(crate) work: usize,
+    pub(crate) observations: usize,
+    pub(crate) canonical_retained: usize,
+    pub(crate) projection_items: usize,
+    pub(crate) compatibility_bytes: usize,
+}
+
+impl SourceBounds {
+    pub(crate) fn new(scale: SourceScale) -> Self {
+        Self {
+            work: scale.apply(MAX_EVALUATION_BYTE_VISITS),
+            observations: scale.apply(MAX_SOURCE_OBSERVATIONS),
+            canonical_retained: scale.apply(MAX_CANONICAL_RETAINED_BYTES),
+            projection_items: scale.apply(MAX_PROJECTION_ITEMS),
+            compatibility_bytes: scale.apply(MAX_COMPATIBILITY_RETAINED_BYTES),
+        }
+    }
+}
+
 /// A source-scoped work counter shared by authoritative evaluation, optional
 /// policy comparison, and projection. Reusing it never refunds charged work.
+/// The default holds every bound at its floor.
 #[derive(Default)]
-pub struct EvaluationWorkBudget(Arc<AtomicUsize>);
+pub struct EvaluationWorkBudget {
+    used: Arc<AtomicUsize>,
+    scale: SourceScale,
+}
 
 impl EvaluationWorkBudget {
+    /// A budget whose bounds scale with the bytes read from the source.
+    pub fn for_source(scale: SourceScale) -> Self {
+        Self {
+            used: Arc::default(),
+            scale,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_used_bytes(bytes: usize) -> Self {
-        Self(Arc::new(AtomicUsize::new(bytes)))
+        Self {
+            used: Arc::new(AtomicUsize::new(bytes)),
+            scale: SourceScale::FLOOR,
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn used_bytes(&self) -> usize {
-        self.0.load(Ordering::Relaxed)
+        self.used.load(Ordering::Relaxed)
     }
 
     /// Distinguishes work exhaustion from independent compatibility retention
     /// failures which also use ProcessingError::Bounds.
     pub fn is_exhausted(&self) -> bool {
-        self.0.load(Ordering::Relaxed) > MAX_EVALUATION_BYTE_VISITS
+        self.used.load(Ordering::Relaxed) > SourceBounds::new(self.scale).work
     }
 }
 
@@ -60,22 +100,20 @@ pub(crate) struct RetentionBudget {
     items: usize,
     bytes: usize,
     pub(crate) work_bytes: Arc<AtomicUsize>,
+    pub(crate) bounds: SourceBounds,
 }
 
 impl RetentionBudget {
     pub(crate) fn new() -> Self {
-        Self {
-            items: 0,
-            bytes: 0,
-            work_bytes: Arc::new(AtomicUsize::new(0)),
-        }
+        Self::with_work(Arc::default(), SourceScale::FLOOR)
     }
 
-    pub(crate) fn with_work(work_bytes: Arc<AtomicUsize>) -> Self {
+    pub(crate) fn with_work(work_bytes: Arc<AtomicUsize>, scale: SourceScale) -> Self {
         Self {
             items: 0,
             bytes: 0,
             work_bytes,
+            bounds: SourceBounds::new(scale),
         }
     }
 
@@ -86,12 +124,12 @@ impl RetentionBudget {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
                 total
                     .checked_add(bytes.max(1))
-                    .filter(|bytes| *bytes <= MAX_EVALUATION_BYTE_VISITS)
+                    .filter(|bytes| *bytes <= self.bounds.work)
             })
             .is_err()
         {
             self.work_bytes
-                .store(MAX_EVALUATION_BYTE_VISITS + 1, Ordering::Relaxed);
+                .store(self.bounds.work.saturating_add(1), Ordering::Relaxed);
             return Err(ProcessingError::Bounds);
         }
         Ok(())
@@ -107,7 +145,8 @@ impl RetentionBudget {
             .bytes
             .checked_add(bytes)
             .ok_or(ProcessingError::Bounds)?;
-        if next_items > MAX_PROJECTION_ITEMS || next_bytes > MAX_COMPATIBILITY_RETAINED_BYTES {
+        if next_items > self.bounds.projection_items || next_bytes > self.bounds.compatibility_bytes
+        {
             return Err(ProcessingError::Bounds);
         }
         self.items = next_items;
@@ -241,6 +280,7 @@ impl CanonicalSessionEvaluation {
 
 pub struct CanonicalSourceEvaluation {
     pub(crate) work_bytes: Arc<AtomicUsize>,
+    pub(crate) scale: SourceScale,
     pub(crate) client: ClientId,
     pub(crate) source_id: String,
     source_instance: Option<CorrelationId>,
@@ -323,7 +363,8 @@ fn evaluate_source_inner(
     detailed: Option<&super::DetailedEvaluationOptions>,
     work: &EvaluationWorkBudget,
 ) -> Result<CanonicalSourceEvaluation, ProcessingError> {
-    if input.observations.len() > MAX_SOURCE_OBSERVATIONS {
+    let bounds = SourceBounds::new(work.scale);
+    if input.observations.len() > bounds.observations {
         return Err(ProcessingError::Bounds);
     }
     let adapter_type = match (input.client, input.source_id) {
@@ -346,7 +387,7 @@ fn evaluate_source_inner(
     for observation in input.observations {
         retained_bytes = retained_bytes
             .checked_add(observation.retained_byte_len())
-            .filter(|bytes| *bytes <= telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES)
+            .filter(|bytes| *bytes <= bounds.canonical_retained)
             .ok_or(ProcessingError::Bounds)?;
         if observation.source().adapter_id() != input.source_id
             || observation.source().adapter_type() != adapter_type
@@ -361,7 +402,7 @@ fn evaluate_source_inner(
         }
     }
     let mut sessions = Vec::new();
-    let mut budget = RetentionBudget::with_work(work.0.clone());
+    let mut budget = RetentionBudget::with_work(work.used.clone(), work.scale);
     budget.retain_text(input.source_id)?;
     if let Some(instance) = input.source_instance {
         budget.retain_text(instance.value())?;
@@ -477,11 +518,11 @@ fn evaluate_source_inner(
                     observation.stage().as_str()
                 ))
                 .or_default() += 1;
-            if let ObservationBody::Tool(tool) = observation.body() {
-                if let Some(name) = tool.name() {
-                    RetentionBudget::validate_text(name)?;
-                    tools.insert(name);
-                }
+            if let ObservationBody::Tool(tool) = observation.body()
+                && let Some(name) = tool.name()
+            {
+                RetentionBudget::validate_text(name)?;
+                tools.insert(name);
             }
         }
         for name in tools {
@@ -530,6 +571,7 @@ fn evaluate_source_inner(
     }
     Ok(CanonicalSourceEvaluation {
         work_bytes: budget.work_bytes.clone(),
+        scale: work.scale,
         client: input.client,
         source_id: input.source_id.to_owned(),
         source_instance: input.source_instance.cloned(),

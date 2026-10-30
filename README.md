@@ -64,16 +64,18 @@ Qwen, and GitHub Copilot. Current client-level status is:
 
 - **Fixture-backed plus bounded live validation**: Codex, OpenCode, Claude Code,
   and GitHub Copilot.
-- **Fixture-backed only**: OpenClaw and Qwen CLI.
+- **Existing-format fixtures only**: OpenClaw and Qwen CLI. Telltale does not
+  discover current OpenClaw's default SQLite agent store; current Qwen Code
+  text/tool/system formats have known gaps. Neither is qualified for live use.
 
 These labels describe source-store validation, not broad live coverage.
 Release archives and CI smoke checks cover binary packaging and execution on
 Linux, macOS, and Windows; they do not establish broad live source-store
-validation. Fixture-backed-only clients remain preview/experimental for live use.
+validation. Existing-format-only clients remain preview/experimental for live use.
 
 Canonical Observation v2 acquisition and the Detection v2 runtime are now the
 authoritative path for CLI scan/watch and every `Pipeline` scan method across the
-eight supported source identities. Rule v1 remains the content-compatibility
+eight registered source identities. Rule v1 remains the content-compatibility
 format, and Event 3.0 remains the compatibility projection. Rust hosts embed
 `telltale-core` and use detailed scans for per-action findings with typed
 outcomes; see [embedding](docs/embedding.md) for the contract and surface
@@ -163,9 +165,10 @@ The separate [inference crate](crates/telltale-inference/README.md) is an
 experimental normalizer, not a gateway or additional production source. Its
 README defines the supported subsets.
 
-Exact-artifact qualification evidence lives in [Release readiness](docs/release-readiness.md),
-not in this overview. Qualification of a published artifact does not qualify
-later source changes.
+Exact-artifact qualification evidence is recorded with each
+[GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases) and in the
+release qualification issue, not in this overview. Qualification of a published
+artifact does not qualify later source changes.
 
 See [Versioning and releases](docs/versioning.md) for the package and `0.x`
 compatibility policy. Until crates.io publication begins, install or build from
@@ -193,7 +196,7 @@ Watch mode bounds its notification queues and reconciles overflow; watcher error
 stop the run. See the [watch implementation](src/cli/scan/watch.rs) for current
 limits. Those limits do not bound OS/backend buffers or total process memory.
 
-### Local rule configuration
+### Configuration
 
 Telltale ships bundled core rules and an embedded community rule package
 (`telltale.community`, rule IDs `tdx.*`) from the
@@ -201,59 +204,21 @@ Telltale ships bundled core rules and an embedded community rule package
 both are on by default. Use `--no-community-rules` (or
 `TELLTALE_COMMUNITY_RULES=0`) to run only the core rules.
 
-Telltale discovers local YAML config files under `/etc/telltale` and
-`$XDG_CONFIG_HOME/telltale` (or `$HOME/.config/telltale`) without requiring
-every path on the command line. Managed rule packs resolve in fixed tier order
-(bundled core → rule packages → `organization-rules.d` → `rules.d` →
-`ui-rules.d`); a higher tier fully replaces a same-ID definition in place, while
-unique IDs are additive. Rule packages in `rule-packages.d` are versioned,
-namespaced, additive files: install a newer community release or your own
-custom package there without a Telltale release. `overrides.d` tunes rules
-without editing source YAML, and `policies.d`/`allowlists.d` provide policy and
-suppression config.
+Local YAML configuration under `/etc/telltale` and `$XDG_CONFIG_HOME/telltale`
+is discovered automatically; `--config-dir` and `--no-local-config` control it.
+Run `telltale config validate` before scans with custom content, and
+`telltale config provenance` for a privacy-safe identity of the effective
+configuration. Copilot process logs are found in project roots (`~/github` and
+`~/projects` by default, or `--project-config`).
 
-Use `--config-dir <path>` for explicit config roots, or `--no-local-config` to
-disable discovery. Run `telltale config validate` as the local config preflight
-before scans with custom content, and `telltale rules export-default` to inspect
-or fork the bundled default rules.
-
-`telltale config provenance` prints a deterministic, privacy-safe manifest of the
-effective compiled rules, suppression semantics, thresholds, and audited producer
-switches. It is a content-integrity identity for configuration, not an Event 3.0
-field, scan identity, telemetry record, attestation, or proof that an event used
-that configuration. The command uses the same scan configuration and rule
-resolvers. The public Rust assembler accepts an already effective compiled rule
-set and resolved values; it does not resolve configuration paths or policy files.
-Source YAML formatting, paths, policy labels, and descriptive rule metadata are
-not part of the ruleset identity; hashes remain guessable for low-entropy inputs
-and are not encryption.
-
-See [Install](docs/install.md) for the full directory layout, rule-pack
-precedence, trust-boundary guidance, override YAML format, and flag behavior.
-
-### Project-local session stores
-
-Copilot process logs are discovered inside project directories. By default,
-Telltale scans `~/github` and `~/projects` if they exist. To customize, declare
-project roots in a YAML file and pass it with `--project-config` (or set
-`TELLTALE_PROJECT_CONFIG`). Project-local discovery is additive — home-relative
-sources are still discovered from `--root`.
-
-See [Install](docs/install.md) for the YAML format and `--project-config` usage.
-
-- Install and setup guide: [docs/install.md](docs/install.md)
-- Controlled development upgrade and rollback: [docs/controlled-deployment.md](docs/controlled-deployment.md)
-
-Tagged GitHub releases provide platform-specific archives when available. See
-the [Linux](docs/install.md#quick-install-linux),
-[macOS](docs/install.md#macos), and
-[Windows](docs/install.md#windows) installation and scheduling instructions.
-On Linux, run `./scripts/install-telltale` from a checkout; `--with-timer` opts
-into its user-level systemd timer.
-The guide also covers checksum and attestation verification, source builds, and
-platform caveats. Start with its fixture-safe verification before scanning real
-session stores; binary packaging support does not establish broad source-store
-validation.
+The [install guide](docs/install.md) covers rule-pack tiers and precedence,
+overrides, policies and allowlists, project roots, the
+[Linux](docs/install.md#quick-install-linux), [macOS](docs/install.md#macos)
+and [Windows](docs/install.md#windows) installers and scheduling, checksum and
+attestation verification, and source builds. On Linux, run
+`./scripts/install-telltale` from a checkout; `--with-timer` opts into its
+user-level systemd timer. For an exact unreleased build, see
+[Controlled development deployment](docs/controlled-deployment.md).
 
 Before pushing public history, run `make public-push-review` to review the
 current branch, public remote URLs, working-tree status, and staged path list.
@@ -297,15 +262,10 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 - [`config/rules/`](config/rules/) — bundled detection rules
 - [`config/allowlists.yaml`](config/allowlists.yaml) — suppression examples
 - [`docs/`](docs/) — public technical documentation
-- [`openspec/specs/`](openspec/specs/) — durable public behavioral requirements
-
-For project direction and planning ownership, see [ROADMAP.md](ROADMAP.md). Detailed active implementation planning and scratch context are intentionally kept out of the public release boundary.
 
 ## Further guidance
 
-Use the [documentation map](docs/README.md) for contracts and operational guides;
-proposed behavior is labeled separately from shipped behavior. Before tagging or
-publishing release artifacts, follow [Release readiness](docs/release-readiness.md).
+Use the [documentation map](docs/README.md) for contracts and operational guides.
 
 ## License
 

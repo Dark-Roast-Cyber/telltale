@@ -1,3 +1,5 @@
+//! The discovered `Source` value shared by discovery, acquisition and events.
+
 use std::path::PathBuf;
 
 use crate::clients::{ClientId, SourceKind};

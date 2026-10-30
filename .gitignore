@@ -11,8 +11,6 @@ release-downloads/
 runtime/
 tmp/
 tasks/
-openspec/changes/
-openspec/config.yaml
 *.log
 !tests/fixtures/**/tmp/
 !tests/fixtures/**/tmp/**
@@ -24,6 +22,20 @@ openspec/config.yaml
 !crates/*/tests/fixtures/**/tasks/**
 !tests/fixtures/**/*.log
 !crates/*/tests/fixtures/**/*.log
+
+# Local agent tooling, specifications, and internal notes.
+/AGENTS.md
+/CLAUDE.md
+/.agents/
+/.claude/
+/.codex/
+/.opencode/
+/opencode.json
+/opencode.jsonc
+/skills/
+/skills-lock.json
+/openspec/
+/docs/internal/
 
 # Language, build, operating-system, and editor artifacts.
 __pycache__/

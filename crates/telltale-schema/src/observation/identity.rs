@@ -1,3 +1,9 @@
+//! Observation identity and semantic comparison. `observation_id` is a
+//! domain-separated hash of the adapter, the source coordinate (native ID,
+//! source sequence or offset), and the observation family, stage and child
+//! ordinal; observation content never enters it. Semantic comparison is
+//! separate from identity.
+
 use std::collections::BTreeMap;
 use std::fmt;
 

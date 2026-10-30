@@ -2,8 +2,8 @@
 
 > **Website:** For an approachable overview of the detection model and threat taxonomy, see [AgentArchaeology.ai/telltale/detection-model](https://agentarchaeology.ai/telltale/detection-model/).
 
-Rule v1 content and Event3 scoring semantics are documented here. [Detection v2](detection-v2.md)
-documents the authoritative canonical source evaluator for scan/watch and embedding.
+Rule v1 content and Event3 scoring semantics are documented here. The canonical
+source evaluator used by scan/watch and embedding applies these rules.
 Advanced detector runtime and a Detection Content v2 loader are not implemented.
 
 ## Risk Flow
@@ -213,7 +213,7 @@ Events carry the same metadata for SIEM filtering:
 - `detection_classes`: `security_detection`, `policy_violation`, `threat_hunting`, `compliance_observation`, `operational_health`, or `baseline_deviation`.
 - `signal_types`: `atomic`, `chain`, `correlation`, or `baseline_deviation`.
 - `analytic_intents`: `alert`, `hunt`, `enrich`, `baseline`, or `audit`.
-- `atlas_tags`: optional MITRE ATLAS context tags. Coverage is tracked in [../MITRE_ATLAS_COVERAGE.md](../MITRE_ATLAS_COVERAGE.md).
+- `atlas_tags`: optional MITRE ATLAS context tags. Coverage is tracked in the [ATLAS coverage map](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
 
 ## Context Rules
 

@@ -515,10 +515,10 @@ fn evaluate_resolved_predicate(
     budget: &mut super::session::RetentionBudget,
 ) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
     budget.charge(1)?;
-    if let Some(capability) = predicate.require_capability {
-        if let Some(reason) = preflight_capability(capability, observation.capability_context()) {
-            return Ok((MatchState::NotEvaluated(reason), Vec::new()));
-        }
+    if let Some(capability) = predicate.require_capability
+        && let Some(reason) = preflight_capability(capability, observation.capability_context())
+    {
+        return Ok((MatchState::NotEvaluated(reason), Vec::new()));
     }
     if resolved.presence() == SelectorPresence::UnavailableVisibility {
         return Ok((
@@ -532,19 +532,19 @@ fn evaluate_resolved_predicate(
             Vec::new(),
         ));
     }
-    if let Some(required) = predicate.require_provenance {
-        if resolved.presence() != SelectorPresence::Absent {
-            // Provenance is an eligibility gate, not an operator input. This
-            // applies equally to positive, negative, and presence operators;
-            // absence is handled separately below and has no provenance to check.
-            match resolved.metadata() {
-                Some(metadata) if metadata.provenance() == required => {}
-                _ => {
-                    return Ok((
-                        MatchState::NotEvaluated(NonEvaluationReason::IneligibleInput),
-                        Vec::new(),
-                    ));
-                }
+    if let Some(required) = predicate.require_provenance
+        && resolved.presence() != SelectorPresence::Absent
+    {
+        // Provenance is an eligibility gate, not an operator input. This
+        // applies equally to positive, negative, and presence operators;
+        // absence is handled separately below and has no provenance to check.
+        match resolved.metadata() {
+            Some(metadata) if metadata.provenance() == required => {}
+            _ => {
+                return Ok((
+                    MatchState::NotEvaluated(NonEvaluationReason::IneligibleInput),
+                    Vec::new(),
+                ));
             }
         }
     }

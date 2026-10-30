@@ -1,3 +1,7 @@
+//! Discovery of local configuration files (system, user and explicit roots) and
+//! resolution of rule, policy and allowlist paths. Setting values and their
+//! precedence live in `settings`.
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

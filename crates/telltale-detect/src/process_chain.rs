@@ -285,48 +285,47 @@ fn statement_is_windows_shaped(statement: &str) -> bool {
 /// Splits a command line on statement and pipeline separators, ignoring
 /// separators inside quotes.
 pub(crate) fn split_statements(command_line: &str) -> Vec<String> {
-    let mut statements = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut chars = command_line.chars().peekable();
-
-    while let Some(character) = chars.next() {
-        match quote {
-            Some(open) => {
-                if character == open {
-                    quote = None;
-                } else {
-                    current.push(character);
-                    continue;
-                }
-                current.push(character);
-            }
-            None => match character {
-                '"' | '\'' => {
-                    quote = Some(character);
-                    current.push(character);
-                }
-                '\n' | '\r' | ';' | '|' => {
-                    // `&&`, `||`, and single `|` all end a statement.
-                    if character == '|' && chars.peek() == Some(&'|') {
-                        chars.next();
-                    }
-                    statements.push(std::mem::take(&mut current));
-                }
-                '&' => {
-                    if chars.peek() == Some(&'&') {
-                        chars.next();
-                    }
-                    statements.push(std::mem::take(&mut current));
-                }
-                _ => current.push(character),
-            },
-        }
-    }
-    statements.push(current);
-    statements
+    statement_spans(command_line)
         .into_iter()
-        .filter(|statement| !statement.trim().is_empty())
+        .map(|span| command_line[span].to_owned())
+        .collect()
+}
+
+/// Byte ranges of [`split_statements`] in `command_line`: each statement is
+/// the text between two separators.
+pub(crate) fn statement_spans(command_line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    let mut quote: Option<char> = None;
+    let mut chars = command_line.char_indices().peekable();
+
+    while let Some((offset, character)) = chars.next() {
+        if let Some(open) = quote {
+            if character == open {
+                quote = None;
+            }
+            continue;
+        }
+        let separator = match character {
+            '"' | '\'' => {
+                quote = Some(character);
+                continue;
+            }
+            // `&&`, `||`, and single `|` all end a statement.
+            '|' | '&' if chars.peek().map(|(_, next)| *next) == Some(character) => {
+                chars.next();
+                2
+            }
+            '\n' | '\r' | ';' | '|' | '&' => 1,
+            _ => continue,
+        };
+        spans.push(start..offset);
+        start = offset + separator;
+    }
+    spans.push(start..command_line.len());
+    spans
+        .into_iter()
+        .filter(|span| !command_line[span.clone()].trim().is_empty())
         .collect()
 }
 

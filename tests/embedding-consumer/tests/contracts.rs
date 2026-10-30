@@ -355,6 +355,91 @@ fn detailed_scanning_is_source_selected_session_scoped_and_source_atomic() {
 }
 
 #[test]
+fn explicit_roots_ignore_relocation_variables() {
+    // Discovery under an explicit root reads that root's default layout; the
+    // relocation variables only steer discovery of the environment's own
+    // stores. The child process sees only the variables set here.
+    const CHILD: &str = "TELLTALE_EMBEDDING_RELOCATION_CHILD";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let root = std::path::PathBuf::from(root);
+        let relocated = std::path::PathBuf::from(std::env::var_os("CLAUDE_CONFIG_DIR").unwrap());
+        let explicit = discover_sources(&root).unwrap();
+        assert!(explicit.iter().any(|s| s.path.starts_with(&root)));
+        assert!(!explicit.iter().any(|s| s.path.starts_with(&relocated)));
+        // The environment-resolved root does follow the relocation.
+        let environment = discover_sources(Path::new(".")).unwrap();
+        assert!(
+            environment
+                .iter()
+                .any(|s| s.path.starts_with(relocated.join("projects")))
+        );
+        println!("relocation-child-checked");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    // Discovery refuses symlinked path components, and macOS temporary
+    // directories sit under the `/var` symlink.
+    let base = if cfg!(unix) {
+        root.path().canonicalize().unwrap()
+    } else {
+        root.path().to_path_buf()
+    };
+    let explicit = base.join("explicit");
+    let relocated = base.join("relocated");
+    let rows = [call("one", "cat .env")];
+    for directory in [
+        explicit.join(".claude/projects/synthetic"),
+        relocated.join("projects/synthetic"),
+        relocated.join("codex/sessions/2026/10/20"),
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    source(
+        &explicit.join(".claude/projects/synthetic"),
+        "session.jsonl",
+        "explicit",
+        &rows,
+    );
+    source(
+        &relocated.join("projects/synthetic"),
+        "session.jsonl",
+        "relocated",
+        &rows,
+    );
+    source(
+        &relocated.join("codex/sessions/2026/10/20"),
+        "rollout-2026-10-20T12-00-00-synthetic.jsonl",
+        "codex",
+        &rows,
+    );
+    let home = relocated.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .env_clear()
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("CLAUDE_CONFIG_DIR", &relocated)
+        .env("CODEX_HOME", relocated.join("codex"))
+        .env("XDG_DATA_HOME", relocated.join("data"))
+        .env(CHILD, &explicit)
+        .args([
+            "--exact",
+            "explicit_roots_ignore_relocation_variables",
+            "--nocapture",
+        ]);
+    for key in ["PATH", "SystemRoot", "windir"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("relocation-child-checked"));
+}
+
+#[test]
 fn discovery_selected_sources_event3_and_occurrence_links_share_the_facade() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join(".claude/projects/synthetic");
@@ -966,8 +1051,9 @@ fn linked_and_process_correlations_preserve_supporting_action_coordinates() {
 fn bounded_context_is_opt_in_anchor_and_results_excluded_and_private() {
     let root = tempfile::tempdir().unwrap();
     let rows = [
-        json!({"type":"user","timestamp":TIME,"message":{"role":"user","content":format!("password={SECRET} inspect {PRIVATE_PATH}/.env")}}),
-        json!({"type":"assistant","timestamp":TIME,"message":{"role":"assistant","content":"I will inspect the requested file"}}),
+        // Native Claude turns carry record metadata beside the message.
+        json!({"type":"user","timestamp":TIME,"cwd":"/home/synthetic/project","gitBranch":"main","isSidechain":false,"userType":"external","version":"2.0.0","message":{"role":"user","content":format!("password={SECRET} inspect {PRIVATE_PATH}/.env")}}),
+        json!({"type":"assistant","timestamp":TIME,"cwd":"/home/synthetic/project","gitBranch":"main","isSidechain":false,"userType":"external","version":"2.0.0","message":{"role":"assistant","content":[{"type":"text","text":"I will inspect the requested file"}]}}),
         call("context", &format!("cat {PRIVATE_PATH}/.env")),
         json!({"type":"user","timestamp":TIME,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"context","content":"TT_RESULT_MUST_NOT_APPEAR"}]}}),
         json!({"type":"assistant","timestamp":TIME,"message":{"role":"assistant","content":"Inspection complete"}}),
@@ -1000,11 +1086,21 @@ fn bounded_context_is_opt_in_anchor_and_results_excluded_and_private() {
     let opted = pipeline
         .scan_sources_detailed(&[selected], &context)
         .unwrap();
-    assert!(
-        opted[0].action_findings[0]
-            .context()
-            .iter()
-            .any(|c| c.kind() == ActionContextKind::UserMessage)
+    // Each message entry is the turn's own words: none of the record metadata
+    // precedes them, so a bounded excerpt starts with what was said.
+    let entries = opted[0].action_findings[0].context();
+    let user = entries
+        .iter()
+        .find(|c| c.kind() == ActionContextKind::UserMessage)
+        .expect("user turn in context");
+    assert!(user.redacted_text().starts_with("password="));
+    let assistant = entries
+        .iter()
+        .find(|c| c.kind() == ActionContextKind::AssistantMessage)
+        .expect("assistant turn in context");
+    assert_eq!(
+        assistant.redacted_text(),
+        "I will inspect the requested file"
     );
     assert_eq!(
         action.replay_identity(),

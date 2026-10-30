@@ -28,6 +28,6 @@ not promised long-term support; include the exact tag or commit in a report.
 
 The repository-specific threats, trust assumptions, and residual risks are in
 the [Telltale threat model](docs/security/threat-model.md). The
-[privacy model](docs/privacy-model.md), [trust boundaries](docs/trust-boundaries.md),
-and [release-readiness checklist](docs/release-readiness.md) describe the
+[privacy model](docs/privacy-model.md) and
+[security and release operations](docs/security/operations.md) describe the
 related operating contracts.

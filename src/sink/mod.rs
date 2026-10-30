@@ -1,3 +1,8 @@
+//! Event delivery. A sink has an identity, a transport, a delivery policy
+//! (best effort or durable) and a persistence role. Sinks serialize already
+//! privacy-safe canonical Event 3.0 bytes; they never repair or reshape event
+//! content. Vendor envelopes wrap the canonical payload.
+
 pub mod config;
 mod elastic;
 pub mod http;

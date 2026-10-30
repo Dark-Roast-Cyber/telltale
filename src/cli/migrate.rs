@@ -1,3 +1,7 @@
+//! `telltale migrate`: converts legacy scanner state to the native format and
+//! relocates validated historical event files without rewriting their bytes.
+//! Every input and output is bounded and failures report fixed codes.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;

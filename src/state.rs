@@ -1,3 +1,7 @@
+//! Scanner state: per-source observations for change detection, OpenCode
+//! ingestion cursors, baseline contributions, and the versioned on-disk format
+//! with its validation and atomic save.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;

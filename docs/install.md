@@ -10,8 +10,8 @@ source-support claims and their evidence.
 
 For exact non-production canary identity and output-routing requirements, see
 [Controlled development deployment](controlled-deployment.md). Its tested
-compatibility record and pinned rollback recipe are historical Issue #37
-evidence against `v0.5.0`, not proof of rollback from the current stable release.
+compatibility record and pinned rollback recipe are historical evidence
+against `v0.5.0`, not proof of rollback from the current stable release.
 For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md).
 
 ## Prerequisites
@@ -74,15 +74,10 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable is `v0.6.0`. Published `v0.6.0-rc.1` is immutable failed
-candidate evidence and must not be retried. Published `v0.6.0-rc.2` is immutable
-and passed publication, G-SERVICE, and five-platform native verification, but it
-predates the selected static-CRT policy. Published `v0.6.0-rc.3` is Release ID
-`386482697` from source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`;
-publication/provenance, its static-CRT publication gate, five-platform native
-verification, and Issue #23 clean-Windows static-CRT and functional acceptance
-passed. The [versioning
-contract](versioning.md) requires RC package/tag equality and separate exact
+Official stable is `v0.6.0`. Published candidates are immutable; each
+candidate's identity and qualification results are on its
+[GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). The
+[versioning contract](versioning.md) requires RC package/tag equality and separate exact
 SHA/checksum identity for candidate artifacts.
 
 The no-argument installer selects the latest stable GitHub Release. For
@@ -288,8 +283,7 @@ To check a live host read-only, run
 `.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Root <source root> -Client codex,claude`.
 It performs one dry-run scan per client with temporary log and state paths and
 reports `passed`, `passed_with_limits`, `failed`, or `not_available`. It does not
-install, schedule, or change any source store. See
-[Windows host tooling](windows-host-compatibility-spec.md).
+install, schedule, or change any source store.
 
 ### Windows Scheduled Task example
 

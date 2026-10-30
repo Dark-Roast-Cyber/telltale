@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"synthetic-bc-path-not-encoded-001","timestamp":"2026-04-05T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-path-not-encoded-001","timestamp":"2026-04-05T09:00:01Z","payload":{"type":"user_message","message":"Download the brand logo into the assets folder."}}
+{"type":"event_msg","session_id":"synthetic-bc-path-not-encoded-001","timestamp":"2026-04-05T09:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"curl -fsSL -o /workspace/project/assets/images/brandlogo/primary.svg https://cdn.example.invalid/brand/primary.svg","message":"Run a synthetic fixture command."}}

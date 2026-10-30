@@ -1,7 +1,7 @@
 //! Projection of facade action findings into the versioned action record.
 use telltale_schema::action_record::{
     ACTION_RECORD_V1_ID, ActionRecordContext, ActionRecordContribution, ActionRecordEvidence,
-    ActionRecordFinding, ActionRecordV1,
+    ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
 };
 use telltale_schema::event::{TELLTALE_VERSION, path_hash};
 
@@ -73,6 +73,15 @@ impl SourceScan {
                     field: evidence.field().to_owned(),
                     rule_id: evidence.rule_id().to_owned(),
                     redacted_value: evidence.redacted_value().to_owned(),
+                    // Excerpt ranges stay within the 512-byte evidence bound.
+                    highlight: evidence.highlight().and_then(|range| {
+                        Some(ActionRecordHighlight {
+                            start: u32::try_from(range.start).ok()?,
+                            end: u32::try_from(range.end).ok()?,
+                        })
+                    }),
+                    elided_before: evidence.elided_before(),
+                    elided_after: evidence.elided_after(),
                 })
                 .collect(),
             supporting_observation_ids: action.supporting_observation_ids().to_vec(),

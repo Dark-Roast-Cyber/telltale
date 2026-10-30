@@ -9,6 +9,7 @@ use std::fs;
 use std::io::Read;
 
 use telltale_schema::clients::ClientId;
+use telltale_schema::observation::SourceScale;
 use telltale_schema::source::Source;
 
 /// Bounded failure while reading a supported source. Display and Debug stay
@@ -123,14 +124,16 @@ impl SourceReadError {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, SourceReadError> {
-    read_jsonl_values_with_limits(source, None)
+    read_jsonl_values_with_limits(source, None).map(|(values, _)| values)
 }
 
+/// The values and the number of bytes read, which scale the source's bounds.
 pub(crate) fn read_jsonl_values_with_limits(
     source: &Source,
     limits: Option<crate::acquisition::DirectReadLimits>,
-) -> Result<Vec<Value>, SourceReadError> {
+) -> Result<(Vec<Value>, usize), SourceReadError> {
     if let Some(limits) = limits {
         let bytes =
             bounded_file_bytes(&source.path, limits.bytes).map_err(SourceReadError::Bounded)?;
@@ -146,13 +149,14 @@ pub(crate) fn read_jsonl_values_with_limits(
             }
             values.push(serde_json::from_slice(line)?);
         }
-        return Ok(values);
+        return Ok((values, bytes.len()));
     }
     read_production_jsonl(fs::File::open(&source.path)?)
 }
 
 pub(crate) const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const PRODUCTION_SOURCE_BYTES: usize = 128 * 1024 * 1024;
+/// The native unit floor; JSONL session sources scale it by bytes read.
 pub(crate) const PRODUCTION_NATIVE_UNITS: usize = 100_000;
 
 fn production_limit_error() -> SourceReadError {
@@ -165,11 +169,13 @@ fn production_limit_error() -> SourceReadError {
 
 // Bound physical bytes before UTF-8/JSON decoding. Limits apply to actual reads,
 // including blank records and terminators, not a potentially stale file length.
+// The native unit limit scales with the bytes read so far.
 // Parsed values remain retained; this is not an allocator or process RSS budget.
-fn read_production_jsonl(mut reader: impl Read) -> Result<Vec<Value>, SourceReadError> {
+fn read_production_jsonl(mut reader: impl Read) -> Result<(Vec<Value>, usize), SourceReadError> {
     let mut chunk = [0u8; 8192];
     let mut record = Vec::new();
     let mut total = 0usize;
+    let mut units = PRODUCTION_NATIVE_UNITS;
     let mut values = Vec::new();
     loop {
         let read = match reader.read(&mut chunk) {
@@ -178,14 +184,15 @@ fn read_production_jsonl(mut reader: impl Read) -> Result<Vec<Value>, SourceRead
         };
         if read == 0 {
             if !record.is_empty() {
-                decode_production_record(&record, &mut values)?;
+                decode_production_record(&record, &mut values, units)?;
             }
-            return Ok(values);
+            return Ok((values, total));
         }
         total = total
             .checked_add(read)
             .filter(|bytes| *bytes <= PRODUCTION_SOURCE_BYTES)
             .ok_or_else(production_limit_error)?;
+        units = SourceScale::for_source_bytes(total).apply(PRODUCTION_NATIVE_UNITS);
         for part in chunk[..read].split_inclusive(|byte| *byte == b'\n') {
             record
                 .len()
@@ -194,21 +201,25 @@ fn read_production_jsonl(mut reader: impl Read) -> Result<Vec<Value>, SourceRead
                 .ok_or_else(production_limit_error)?;
             record.extend_from_slice(part);
             if part.last() == Some(&b'\n') {
-                decode_production_record(&record, &mut values)?;
+                decode_production_record(&record, &mut values, units)?;
                 record.clear();
             }
         }
     }
 }
 
-fn decode_production_record(record: &[u8], values: &mut Vec<Value>) -> Result<(), SourceReadError> {
+fn decode_production_record(
+    record: &[u8],
+    values: &mut Vec<Value>,
+    units: usize,
+) -> Result<(), SourceReadError> {
     let line = std::str::from_utf8(record)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid JSONL UTF-8"))?;
     if !line.trim().is_empty() {
         values
             .len()
             .checked_add(1)
-            .filter(|units| *units <= PRODUCTION_NATIVE_UNITS)
+            .filter(|count| *count <= units)
             .ok_or_else(production_limit_error)?;
         values.push(serde_json::from_str(line)?);
     }

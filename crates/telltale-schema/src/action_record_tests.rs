@@ -49,6 +49,9 @@ fn record() -> ActionRecordV1 {
             field: "command".into(),
             rule_id: "network.download".into(),
             redacted_value: "curl -fsSL https://downloads.example.invalid/setup.sh".into(),
+            highlight: Some(ActionRecordHighlight { start: 0, end: 4 }),
+            elided_before: false,
+            elided_after: false,
         }],
         supporting_observation_ids: vec![digest("obs:v2:sha256:", 'a')],
         canonical_findings: vec![
@@ -187,6 +190,49 @@ fn consumer_rejects_values_the_producer_cannot_emit() {
 }
 
 #[test]
+fn consumer_rejects_highlights_that_do_not_locate_text() {
+    let base = serde_json::to_value(record()).unwrap();
+    let mut none = base.clone();
+    none["evidence"][0]["highlight"] = Value::Null;
+    ActionRecordV1::from_json(&bytes(&none)).unwrap();
+
+    let mut multibyte = base.clone();
+    multibyte["evidence"][0]["redacted_value"] = json!("\u{2603} curl");
+    multibyte["evidence"][0]["highlight"] = json!({ "start": 4, "end": 8 });
+    let accepted = ActionRecordV1::from_json(&bytes(&multibyte)).unwrap();
+    let evidence = &accepted.evidence[0];
+    assert_eq!(
+        evidence.highlight.unwrap().slice(&evidence.redacted_value),
+        Some("curl")
+    );
+
+    let invalid = [
+        (json!({ "start": 4, "end": 4 }), "invalid_highlight"),
+        (json!({ "start": 5, "end": 4 }), "invalid_highlight"),
+        (json!({ "start": 0, "end": 99 }), "invalid_highlight"),
+        // Inside the three-byte snowman.
+        (json!({ "start": 1, "end": 8 }), "invalid_highlight"),
+        (json!({ "start": 0, "end": 2 }), "invalid_highlight"),
+        (json!({ "start": 0, "end": 513 }), "schema_mismatch"),
+        (
+            json!({ "start": 0, "end": 4, "text": "curl" }),
+            "schema_mismatch",
+        ),
+        (json!([0, 4]), "schema_mismatch"),
+    ];
+    for (highlight, code) in invalid {
+        let mut changed = multibyte.clone();
+        changed["evidence"][0]["highlight"] = highlight.clone();
+        assert_eq!(rejected(changed).code(), code, "{highlight}");
+    }
+    for key in ["highlight", "elided_before", "elided_after"] {
+        let mut missing = base.clone();
+        missing["evidence"][0].as_object_mut().unwrap().remove(key);
+        assert_eq!(rejected(missing).code(), "schema_mismatch", "{key}");
+    }
+}
+
+#[test]
 fn consumer_rejects_summaries_its_findings_do_not_support() {
     let base = serde_json::to_value(record()).unwrap();
     let cases: [(&str, Value); 9] = [
@@ -272,6 +318,34 @@ fn delivery_key_prefers_replay_identity_and_is_pinned() {
 }
 
 #[test]
+fn delivery_aliases_add_the_source_bound_key_and_are_pinned() {
+    let replayed = record();
+    assert_eq!(
+        replayed.delivery_aliases(),
+        [
+            "delivery:v1:sha256:b9da5ae4aa0ca5029b827f00a6a4ea911ec2fe9a8d94f2a54424f6d8bcf2d08a",
+            "delivery:v1:sha256:82f455395b36c551a69c908dd5ba74eec5c6e69cffc99465b276d03d459606db",
+        ]
+    );
+    let mut unreplayed = replayed.clone();
+    unreplayed.replay_identity = None;
+    assert_eq!(unreplayed.delivery_aliases(), [unreplayed.delivery_key()]);
+    // Withdrawal and its reverse share the source-bound alias.
+    assert!(
+        replayed
+            .delivery_aliases()
+            .contains(&unreplayed.delivery_key())
+    );
+    // A copy elsewhere shares only the replay alias.
+    let mut copy = replayed.clone();
+    copy.source_path_hash = digest("", '7');
+    copy.coordinate = digest("obs:v2:sha256:", '8');
+    let copy = copy.delivery_aliases();
+    assert_eq!(copy[0], replayed.delivery_key());
+    assert!(!replayed.delivery_aliases().contains(&copy[1]));
+}
+
+#[test]
 fn consumer_rejects_text_that_redaction_would_change() {
     let base = serde_json::to_value(record()).unwrap();
     // A synthetic AWS access key ID: high-confidence, so always redacted.
@@ -309,8 +383,9 @@ fn published_schema_matches_the_embedded_copy() {
 
 #[test]
 fn v1_schema_is_frozen() {
-    // A record version is frozen: a schema change is a new version and a new
-    // type, never an edit of v1.
+    // A record version is frozen from the first release tag that carries it:
+    // after that, a schema change is a new version and a new type, never an
+    // edit of v1.
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(ACTION_RECORD_V1_SCHEMA.as_bytes());
     let hex = digest
@@ -319,7 +394,7 @@ fn v1_schema_is_frozen() {
         .collect::<String>();
     assert_eq!(
         hex,
-        "4124821e09bab03b17dc11404b6694bc36b496dcc54bb98af1116ed4afa0289b"
+        "f5fb4146939b25b0d7b210d1ffb3d2c4080a638a2e222e7162aee5ed0b1bc48e"
     );
 }
 

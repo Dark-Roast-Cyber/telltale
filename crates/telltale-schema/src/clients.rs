@@ -1,3 +1,7 @@
+//! `ClientId` and `SourceKind`. A source's identity is the exact
+//! `(ClientId, source_id)` pair; `SourceKind` is container metadata and never
+//! selects how a source is parsed.
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 #[non_exhaustive]
 pub enum ClientId {

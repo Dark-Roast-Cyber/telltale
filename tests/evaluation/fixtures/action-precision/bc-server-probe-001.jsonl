@@ -1,0 +1,4 @@
+{"type":"session_meta","session_id":"synthetic-bc-server-probe-001","timestamp":"2026-04-05T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"synthetic-bc-server-probe-001","timestamp":"2026-04-05T09:00:01Z","payload":{"type":"user_message","message":"Why is the web pod restarting?"}}
+{"type":"event_msg","session_id":"synthetic-bc-server-probe-001","timestamp":"2026-04-05T09:00:10Z","payload":{"type":"tool_call","tool_name":"bash","command":"kubectl describe pod web-7c9d","message":"Run a synthetic fixture command."}}
+{"type":"event_msg","session_id":"synthetic-bc-server-probe-001","timestamp":"2026-04-05T09:00:11Z","payload":{"type":"tool_result","tool_name":"bash","message":"Warning  Unhealthy  Readiness probe failed for server container: HTTP probe failed with statuscode: 503"}}
