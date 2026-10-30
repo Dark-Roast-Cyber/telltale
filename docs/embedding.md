@@ -529,6 +529,11 @@ Event 3 object                                -- session events, unchanged
   version and a new type; plan to accept both during a host upgrade. Before
   that tag, a Git pin can see v1 amended in place; see the
   [migration guide](migrations/0.7.0.md).
+- Action record v1 is transitional. A later release plans Event 4.0 alert
+  records that carry the same findings and evidence and keep the v1 delivery
+  identity, with surrounding agent activity as separate records. v1 stays
+  frozen while it ships and remains available for at least one minor release
+  after those records ship. Rule catalog v1 is not affected.
 - Keep terminal Event 3 separate from host extensions: `Event3Record` consumes
   one complete terminal Event 3 object (`Event` is the producer type, not a
   deserializer), and an augmented storage document is not a strict
