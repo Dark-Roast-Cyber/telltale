@@ -4,6 +4,15 @@
 
 ---
 
+## Unreleased
+
+- Claude Code transcripts whose records carry an outer `session_id` that
+  differs from the transcript's `sessionId`, as current Claude Code writes after
+  a continuation, are now owned by `sessionId` instead of failing acquisition
+  for the whole transcript. Conflicting `sessionId` values still fail closed.
+
+---
+
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
 - The repository no longer tracks internal design, planning and release-process

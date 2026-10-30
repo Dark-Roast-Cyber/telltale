@@ -370,9 +370,14 @@ Claude Code adapter notes:
   exceed a canonical bound, is quarantined by itself and reported by session,
   record `uuid`, sequence and bound, never content; the rest of the
   transcript is still evaluated and coverage is reported as partial.
-- Conflicting session identity aliases remain an integrity failure for the
-  entire source, including when they occur in bookkeeping records. No alias
-  is silently preferred over another.
+- An outer `sessionId` names the transcript and owns the record. Current
+  Claude Code also writes an outer `session_id`, which can name a different
+  session that shares the transcript (for example after a continuation).
+  Beside an outer `sessionId` it is not an ownership claim and is not
+  retained. Conflicting `sessionId` values, or conflicting `session_id`,
+  `sessionID` and `sessionId` aliases on a record without an outer
+  `sessionId`, remain an integrity failure for the entire source, including
+  in bookkeeping records.
 - A full scan in which every selected Claude source fails processing, at
   acquisition, parsing, evaluation or any later stage, also emits a `warning` `operational_alert` with `alert_type=source_parse_outage`; see
   [telemetry-output.md](telemetry-output.md).
