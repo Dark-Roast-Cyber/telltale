@@ -313,8 +313,6 @@ otherwise ambiguous zero-detection result without exposing session content:
   selected-source coverage is partial. Exit zero still means the scan command
   completed, not complete detection coverage: inspect this warning, processing
   counts, failure groups, and discovery degradation before accepting a canary.
-  This diagnostic hardening does not qualify RC1 or close the live-source or
-  platform gates of Issue #66.
 
 The existing top-level `log_path` field remains raw for compatibility and is a
 local diagnostic caveat. Newly added path fields use hashes. These diagnostic
@@ -553,7 +551,7 @@ privileged/root/admin actors are outside the durable-storage threat model.
 Path, advisory-lock, and stable-identity checks are useful integrity defenses
 for cooperating writers, but they are not an atomic pathname-to-opened-SQLite
 object binding against those excluded actors. A stronger opened-object-aware
-SQLite/VFS design would be needed for that defense and is outside Issue #26.
+SQLite/VFS design would be needed for that defense and is not implemented.
 
 Three storage limits remain explicit:
 
@@ -565,7 +563,7 @@ Three storage limits remain explicit:
    unverified cursor.
 2. **Terminal payload retention:** SQLite retains canonical payload bytes for
    `Acked` and `Dead` history. Terminal rows are excluded from pending queue
-   limits, and Issue #26 provides no automatic purge or compaction guarantee, so
+   limits, and there is no automatic purge or compaction guarantee, so
    private outbox storage may grow beyond configured pending limits.
 3. **External writers:** verified rotation deletion coordinates only with writers
    that honor Telltale's JSONL sidecar lock. A non-cooperating local writer can
@@ -587,11 +585,10 @@ not be HTTP. Future transport work should reuse generic structured delivery
 classification and outbox dispatch rather than require a foundational sink
 refactor.
 
-The future local collector implementation and protocol are deferred. Issue #26
-defines no local collector protocol, introduces no public plugin ABI, and does
-not change Event 3.0. Adopter-specific integrations remain outside the core
-contract. Issue #28 remains deferred and unfrozen; JSONL-only is not its final
-adoption architecture.
+The future local collector implementation and protocol are deferred. There is
+no local collector protocol or public plugin ABI, and durable delivery does not
+change Event 3.0. Adopter-specific integrations remain outside the core
+contract; JSONL-only is not the final adoption architecture.
 
 ### Durable queue health
 

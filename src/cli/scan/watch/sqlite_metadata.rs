@@ -1,3 +1,7 @@
+//! Polls metadata of admitted OpenCode databases and their WAL for watch,
+//! because filesystem notifications (notably macOS FSEvents) can miss commits
+//! to an open WAL.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Bound::{Excluded, Unbounded};

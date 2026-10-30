@@ -1,3 +1,5 @@
+//! Tests pinning the bundled shell-execution rules.
+
 use super::load_default_rule_set;
 
 #[test]

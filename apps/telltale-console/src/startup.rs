@@ -1,3 +1,5 @@
+//! Console startup options and feed poll pacing.
+
 use clap::{Parser, ValueEnum};
 use std::{path::PathBuf, time::Duration};
 use telltale_core::{FeedBatch, LocalEventFeedConfig, PathProfile, StartupMode};

@@ -1,3 +1,6 @@
+//! Elasticsearch bulk sink. Indexes the canonical payload with `_id` set to
+//! `event_id` and validates per-item bulk results.
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 

@@ -1,3 +1,7 @@
+//! Durable delivery outbox: reconciles canonical JSONL into SQLite through a
+//! durable cursor, then delivers at least once per sink with persistent retry
+//! scheduling, bounded capacity and payload-independent health.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;

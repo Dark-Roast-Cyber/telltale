@@ -1,3 +1,5 @@
+//! Structural validation for the inactive Event4 contract.
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::LazyLock;

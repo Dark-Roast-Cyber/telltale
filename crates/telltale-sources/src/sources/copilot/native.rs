@@ -1,3 +1,6 @@
+//! Crate-private GitHub Copilot process-log event structures and their
+//! stateful extraction. State is rebuilt on every acquisition.
+
 use std::collections::BTreeMap;
 
 use crate::acquisition::{AcquisitionError, SessionMetadata};

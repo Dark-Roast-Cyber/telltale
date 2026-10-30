@@ -1,3 +1,5 @@
+//! Console screens: overview, detections and sensor health.
+
 use egui::{RichText, ScrollArea, Ui};
 use telltale_core::Event3Record;
 use telltale_schema::event::*;

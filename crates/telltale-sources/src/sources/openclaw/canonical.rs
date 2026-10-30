@@ -1,3 +1,6 @@
+//! Maps native OpenClaw records to Canonical Observation v2. Reached only
+//! through the acquisition router.
+
 use std::fmt;
 
 use telltale_schema::observation::{

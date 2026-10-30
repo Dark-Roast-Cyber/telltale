@@ -1,3 +1,7 @@
+//! Installed-agent inventory: bounded executable, package, extension and
+//! storage signals per agent, reported as hashed evidence. This is presence
+//! evidence, not session activity.
+
 use std::env;
 use std::path::{Path, PathBuf};
 

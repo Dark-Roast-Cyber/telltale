@@ -1,3 +1,7 @@
+//! Session-store discovery: walks OS-aware roots and project-local paths for
+//! the registered source definitions and returns sorted, deduplicated `Source`
+//! values and watch roots. It finds files; it never parses them.
+
 use std::env;
 use std::fmt;
 use std::fs;

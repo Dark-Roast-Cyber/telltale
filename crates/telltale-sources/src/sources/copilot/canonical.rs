@@ -1,3 +1,6 @@
+//! Maps native Copilot process-log events to Canonical Observation v2.
+//! Reached only through the acquisition router.
+
 use std::fmt;
 
 use serde_json::Value;

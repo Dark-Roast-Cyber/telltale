@@ -849,9 +849,8 @@ replay-association requirements and limits.
 durable JSONL → a future vendor-neutral local collector transport. Event 3 is
 independent of transport: sink identity, transport, delivery policy, and
 persistence role are separate, a local IPC transport may be `BestEffort`, and a
-durable transport need not be HTTP. Issue #26 defines no collector protocol or
-plugin ABI and does not change Event 3; Issue #28 remains deferred, and JSONL-only
-is not its final architecture. `LocalEventFeed` supports bounded read-only polling
+durable transport need not be HTTP. There is no collector protocol or plugin
+ABI, and JSONL-only is not the final architecture. `LocalEventFeed` supports bounded read-only polling
 of local Event 3 JSONL; see
 [telemetry/output](telemetry-output.md#runtime-neutral-local-journal-polling).
 Analyzer extensions are a separate future protocol and are not implemented.

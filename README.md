@@ -196,7 +196,7 @@ Watch mode bounds its notification queues and reconciles overflow; watcher error
 stop the run. See the [watch implementation](src/cli/scan/watch.rs) for current
 limits. Those limits do not bound OS/backend buffers or total process memory.
 
-### Local rule configuration
+### Configuration
 
 Telltale ships bundled core rules and an embedded community rule package
 (`telltale.community`, rule IDs `tdx.*`) from the
@@ -204,59 +204,21 @@ Telltale ships bundled core rules and an embedded community rule package
 both are on by default. Use `--no-community-rules` (or
 `TELLTALE_COMMUNITY_RULES=0`) to run only the core rules.
 
-Telltale discovers local YAML config files under `/etc/telltale` and
-`$XDG_CONFIG_HOME/telltale` (or `$HOME/.config/telltale`) without requiring
-every path on the command line. Managed rule packs resolve in fixed tier order
-(bundled core → rule packages → `organization-rules.d` → `rules.d` →
-`ui-rules.d`); a higher tier fully replaces a same-ID definition in place, while
-unique IDs are additive. Rule packages in `rule-packages.d` are versioned,
-namespaced, additive files: install a newer community release or your own
-custom package there without a Telltale release. `overrides.d` tunes rules
-without editing source YAML, and `policies.d`/`allowlists.d` provide policy and
-suppression config.
+Local YAML configuration under `/etc/telltale` and `$XDG_CONFIG_HOME/telltale`
+is discovered automatically; `--config-dir` and `--no-local-config` control it.
+Run `telltale config validate` before scans with custom content, and
+`telltale config provenance` for a privacy-safe identity of the effective
+configuration. Copilot process logs are found in project roots (`~/github` and
+`~/projects` by default, or `--project-config`).
 
-Use `--config-dir <path>` for explicit config roots, or `--no-local-config` to
-disable discovery. Run `telltale config validate` as the local config preflight
-before scans with custom content, and `telltale rules export-default` to inspect
-or fork the bundled default rules.
-
-`telltale config provenance` prints a deterministic, privacy-safe manifest of the
-effective compiled rules, suppression semantics, thresholds, and audited producer
-switches. It is a content-integrity identity for configuration, not an Event 3.0
-field, scan identity, telemetry record, attestation, or proof that an event used
-that configuration. The command uses the same scan configuration and rule
-resolvers. The public Rust assembler accepts an already effective compiled rule
-set and resolved values; it does not resolve configuration paths or policy files.
-Source YAML formatting, paths, policy labels, and descriptive rule metadata are
-not part of the ruleset identity; hashes remain guessable for low-entropy inputs
-and are not encryption.
-
-See [Install](docs/install.md) for the full directory layout, rule-pack
-precedence, trust-boundary guidance, override YAML format, and flag behavior.
-
-### Project-local session stores
-
-Copilot process logs are discovered inside project directories. By default,
-Telltale scans `~/github` and `~/projects` if they exist. To customize, declare
-project roots in a YAML file and pass it with `--project-config` (or set
-`TELLTALE_PROJECT_CONFIG`). Project-local discovery is additive — home-relative
-sources are still discovered from `--root`.
-
-See [Install](docs/install.md) for the YAML format and `--project-config` usage.
-
-- Install and setup guide: [docs/install.md](docs/install.md)
-- Controlled development upgrade and rollback: [docs/controlled-deployment.md](docs/controlled-deployment.md)
-
-Tagged GitHub releases provide platform-specific archives when available. See
-the [Linux](docs/install.md#quick-install-linux),
-[macOS](docs/install.md#macos), and
-[Windows](docs/install.md#windows) installation and scheduling instructions.
-On Linux, run `./scripts/install-telltale` from a checkout; `--with-timer` opts
-into its user-level systemd timer.
-The guide also covers checksum and attestation verification, source builds, and
-platform caveats. Start with its fixture-safe verification before scanning real
-session stores; binary packaging support does not establish broad source-store
-validation.
+The [install guide](docs/install.md) covers rule-pack tiers and precedence,
+overrides, policies and allowlists, project roots, the
+[Linux](docs/install.md#quick-install-linux), [macOS](docs/install.md#macos)
+and [Windows](docs/install.md#windows) installers and scheduling, checksum and
+attestation verification, and source builds. On Linux, run
+`./scripts/install-telltale` from a checkout; `--with-timer` opts into its
+user-level systemd timer. For an exact unreleased build, see
+[Controlled development deployment](docs/controlled-deployment.md).
 
 Before pushing public history, run `make public-push-review` to review the
 current branch, public remote URLs, working-tree status, and staged path list.

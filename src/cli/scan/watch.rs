@@ -1,3 +1,7 @@
+//! `telltale watch`: filesystem notifications, bounded change coalescing and
+//! scan scheduling on top of the one-shot scan path. Overflowing the pending
+//! set forces a full reconciliation rather than dropping changes.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

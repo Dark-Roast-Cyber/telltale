@@ -267,7 +267,7 @@ Scanner error events (`event_type: scanner_error`) retain the established diagno
 
 Canonical local JSONL is the durable first write. It serializes canonical `Event` bytes; the JSONL sink is not a repair layer. The privacy test writes a synthetic adversarial event through the production append path, compares persisted bytes to canonical serialization, and runs the reusable serialized-byte controlled-marker checker on those bytes.
 
-Issue #26 must reuse `check_serialized_event_markers()` for every durable outbox, retry, permanent-failure, and dead-letter payload. The checker rejects inputs larger than 1 MiB and over-nested JSON with safe error text, and stops at the first marker without rendering input bytes or marker values. Those stores must contain only canonical Event 3.0 bytes after this boundary, never raw transcript or source-native records.
+Durable delivery reuses `check_serialized_event_markers()` for every durable outbox, retry, permanent-failure, and dead-letter payload. The checker rejects inputs larger than 1 MiB and over-nested JSON with safe error text, and stops at the first marker without rendering input bytes or marker values. Those stores must contain only canonical Event 3.0 bytes after this boundary, never raw transcript or source-native records.
 
 ## Hashing Policy
 

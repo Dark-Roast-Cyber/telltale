@@ -1,5 +1,18 @@
 //! Canonical Observation v2 domain types and validation.
 //!
+//! An observation is the unit of evidence, mapped directly from source-native
+//! facts; there is no flattened record type to convert to or from. Its rules:
+//!
+//! - Tool proposed, requested, started, completed and returned are separate
+//!   observations; a missing later stage is unknown, not failure.
+//! - Parsing a command, path or URL yields a parsed or derived fact, never
+//!   observed process, file or network activity.
+//! - Unsupported or unknown capability is never a clean, false or empty value.
+//!   Omit what a source cannot see; never fill it with empty strings, fallback
+//!   timestamps, path-derived sessions or placeholder IDs.
+//! - `occurred_at` is source time or absent; `observed_at` is caller-supplied
+//!   acceptance time. Neither substitutes for the other.
+//!
 //! Callers must not log these types. Nested types may retain `Debug`
 //! implementations that expose local or sensitive values when logged directly.
 
