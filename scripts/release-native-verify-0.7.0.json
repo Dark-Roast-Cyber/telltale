@@ -1,0 +1,54 @@
+{
+  "release_tag": "v0.7.0",
+  "package_version": "0.7.0",
+  "source_sha": "4201dcf8c09d0d8f471262bcf9bcd4dad9a5d90d",
+  "version_prefix": "telltale 0.7.0 (4201dcf8c09d",
+  "release_id": 429599018,
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "archive": "telltale-v0.7.0-x86_64-pc-windows-msvc.zip",
+      "archive_sha256": "1ee960a2659c76e3b2c2645d88cd3d5e855ade5e316be5f44ce466bcf7945e22",
+      "binary": "telltale.exe",
+      "binary_sha256": "4d334b3ffb507842eb49f605b2a6777f63e37ad9abd01de5230fc5285240e4dd",
+      "runner": "windows-latest",
+      "expected_os": "Windows",
+      "expected_unames": ["AMD64", "x86_64"]
+    },
+    "x86_64-apple-darwin": {
+      "archive": "telltale-v0.7.0-x86_64-apple-darwin.tar.gz",
+      "archive_sha256": "ffac04606f78d241beefe0683723bf355fd4aa6ee257a53cca2b903dd5cc7f8b",
+      "binary": "telltale",
+      "binary_sha256": "16a1b0af30a97da5938bf0ebbdb38d3bd95e91bc797c36413011c4dd821ae889",
+      "runner": "macos-15-intel",
+      "expected_os": "macOS",
+      "expected_unames": ["x86_64"]
+    },
+    "aarch64-apple-darwin": {
+      "archive": "telltale-v0.7.0-aarch64-apple-darwin.tar.gz",
+      "archive_sha256": "ab0e14572c49197f65565f9d7af0aebfaf65446fb3931d209fe1519007a75f61",
+      "binary": "telltale",
+      "binary_sha256": "9c4e6a6f518c6740b430730326220ad624c5818d44696bdc683609f10025c650",
+      "runner": "macos-latest",
+      "expected_os": "macOS",
+      "expected_unames": ["arm64", "aarch64"]
+    },
+    "x86_64-unknown-linux-gnu": {
+      "archive": "telltale-v0.7.0-x86_64-unknown-linux-gnu.tar.gz",
+      "archive_sha256": "de804fb34b99081260c31d34e8080ea4cc6d4d0cb190475ef87e43a2e471c784",
+      "binary": "telltale",
+      "binary_sha256": "cfc9fc6de851951cc6a7b0c676f1b4d3a33ec32ac83efd66c41eaf85f40cacd3",
+      "runner": "ubuntu-latest",
+      "expected_os": "Linux",
+      "expected_unames": ["x86_64"]
+    },
+    "aarch64-unknown-linux-gnu": {
+      "archive": "telltale-v0.7.0-aarch64-unknown-linux-gnu.tar.gz",
+      "archive_sha256": "2b0f966c9626b86f76c196a1be2ba09e93259a92fe44e4357a1775dcd7ff2bc4",
+      "binary": "telltale",
+      "binary_sha256": "f79e801a749eedc784e099c18aa95becf9077d354030dd8a065f0b110f6a94d2",
+      "runner": "ubuntu-24.04-arm",
+      "expected_os": "Linux",
+      "expected_unames": ["aarch64", "arm64"]
+    }
+  }
+}
