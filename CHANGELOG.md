@@ -6,6 +6,10 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- The repository no longer tracks internal design, planning and release-process
+  notes, OpenSpec specifications, the roadmap, or agent tooling. Product,
+  operator and embedding docs remain under `docs/`. The MITRE ATLAS coverage map
+  moved to [telltale-detections](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
 - Embed the published `telltale.community` 0.1.1 release
   (`Dark-Roast-Cyber/telltale-detections` tag `v0.1.1`, source `90f735e`). It
   adds `tdx.persistence.windows_service_change`,

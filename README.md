@@ -165,9 +165,10 @@ The separate [inference crate](crates/telltale-inference/README.md) is an
 experimental normalizer, not a gateway or additional production source. Its
 README defines the supported subsets.
 
-Exact-artifact qualification evidence lives in [Release readiness](docs/release-readiness.md),
-not in this overview. Qualification of a published artifact does not qualify
-later source changes.
+Exact-artifact qualification evidence is recorded with each
+[GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases) and in the
+release qualification issue, not in this overview. Qualification of a published
+artifact does not qualify later source changes.
 
 See [Versioning and releases](docs/versioning.md) for the package and `0.x`
 compatibility policy. Until crates.io publication begins, install or build from
@@ -299,15 +300,10 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 - [`config/rules/`](config/rules/) — bundled detection rules
 - [`config/allowlists.yaml`](config/allowlists.yaml) — suppression examples
 - [`docs/`](docs/) — public technical documentation
-- [`openspec/specs/`](openspec/specs/) — durable public behavioral requirements
-
-For project direction and planning ownership, see [ROADMAP.md](ROADMAP.md). Detailed active implementation planning and scratch context are intentionally kept out of the public release boundary.
 
 ## Further guidance
 
-Use the [documentation map](docs/README.md) for contracts and operational guides;
-proposed behavior is labeled separately from shipped behavior. Before tagging or
-publishing release artifacts, follow [Release readiness](docs/release-readiness.md).
+Use the [documentation map](docs/README.md) for contracts and operational guides.
 
 ## License
 

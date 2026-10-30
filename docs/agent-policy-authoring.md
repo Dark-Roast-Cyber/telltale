@@ -12,8 +12,7 @@ This document defines the first deterministic workflow for turning human-written
 - Preserve the existing detection lifecycle: rules, fixtures, validation, coverage, documentation, and SIEM output.
 - Mark unobservable controls clearly instead of pretending logs can prove behavior they cannot expose.
 
-These controls feed today's detection pipeline. Under the adopted
-[development principles](development-principles.md), a
+These controls feed today's detection pipeline. A
 future policy layer will evaluate canonical facts and signals to produce
 provider-neutral decisions; this bundled-rules workflow remains the current
 implementation for expressing human policy as observable detection content until
@@ -81,7 +80,8 @@ analytic_intent: audit
 atlas_tags: []
 ```
 
-See `docs/detection-content-standard.md` and `MITRE_ATLAS_COVERAGE.md`.
+See the [detection content standard](detection-content-standard.md) and the
+[ATLAS coverage map](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
 
 ## Control Decisions
 

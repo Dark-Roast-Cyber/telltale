@@ -54,7 +54,7 @@ JSONL is the older migration source. Telltale discovers JSONL under
 remains `known_gap` (`selected_sources: 0`), not a passing support claim.
 
 Default SQLite-store acquisition and live-store qualification are deferred
-beyond 0.7 under the [release scope decision](release-readiness.md#07-stable-readiness-decisions).
+beyond 0.7 under the 0.7 release scope decision.
 The `openclaw.agents` adapter remains registered with its existing fixture
 checks. Current default-store and live OpenClaw use are unqualified; this
 deferral neither retires the identity nor changes other sources' gates.
@@ -69,7 +69,7 @@ and [system-record case](../tests/upstream_formats/cases/qwen/system-record.json
 reject acquisition. Those cases remain `known_gap`, not passing support claims.
 
 Current-format repair and live-store qualification are deferred beyond 0.7 under
-the [release scope decision](release-readiness.md#07-stable-readiness-decisions).
+the 0.7 release scope decision.
 The adapter remains registered and its existing conformance checks remain
 required. Qwen live-store use is unqualified/experimental; no current-format
 compatibility claim is made. This deferral does not retire the identity or change
@@ -134,10 +134,9 @@ bounded command shape is understood.
 
 ## New Source Checklist
 
-Follow [Adding an Agent Source](adding-agent-source.md) for registry wiring,
-exact-identity acquisition, portable fixtures, tests, and package/platform
-validation. Keep the source experimental until those artifacts and the coverage
-gates above exist in the same change.
+A new source needs registry wiring, exact-identity acquisition, portable
+fixtures, tests, and package/platform validation. Keep the source experimental
+until those artifacts and the coverage gates above exist in the same change.
 
 ## Use-Case Coverage Summary
 
@@ -169,8 +168,8 @@ Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
   On 2026-10-14 a Windows 11 audit found that Claude Code 2.1.x transcripts
   (CLI and desktop Code tab) no longer parsed: bookkeeping records, `thinking`
   blocks and nested or large tool inputs each failed the whole file. After the
-  fix, a bounded Windows `--client claude --dry-run` re-validation is recorded
-  in `docs/security/claude-code-windows-coverage-audit-2026-10-14.md`.
+  fix, a Windows `--client claude` re-validation parsed the session with
+  complete coverage and no scanner errors.
 
 Future live-validation notes should record the client filter and source cap
 used, for example `--client codex --max-sources 5 --dry-run`, rather than exact
@@ -178,9 +177,6 @@ local source paths or transcript identifiers.
 
 ## Related Documents
 
-- [Adding an Agent Source](adding-agent-source.md) — implementation checklist and native acquisition architecture
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source field availability and known gaps
-- [Canonical Observation v2](canonical-observation-v2.md) — current source observation contract
 - [Detection Content Standard](detection-content-standard.md) — rule metadata and fixture expectations
 - [Session Sources](session-sources.md) — path patterns and discovery notes
-- [Use Cases](use-cases.md) — UC-001, UC-002, UC-003 definitions

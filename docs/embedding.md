@@ -42,8 +42,7 @@ OpenCode v2 resume, cut-window tokens, and quarantine described here are
 later than RC2. Neither published RC1 nor RC2 qualifies this tree. RC2 is not a
 stable API freeze or a fully qualified release (clean-host gates are pending).
 A passing host test of a Git pin is integration evidence, not release
-qualification. Candidate gates live in
-[release readiness](release-readiness.md#post-rc1-embedding-qualification).
+qualification.
 
 ## Getting the crate
 
@@ -141,8 +140,7 @@ community release, or its own namespaced packages, without a Telltale upgrade.
 `Pipeline::rule_packages()` returns each compiled package's ID, version, content
 SHA-256, and whether it is the embedded snapshot, for inventory and provenance
 reporting. Package validation lives in `telltale_rules::package`
-(`RulePackage::parse`, `resolve_rule_packages`); see the
-[rule-packages specification](../openspec/specs/rule-packages/spec.md).
+(`RulePackage::parse`, `resolve_rule_packages`).
 
 What an embedder inherits:
 
@@ -709,8 +707,7 @@ through `bound_context()` (absence means no bound diagnostic, not success).
 keep their own codes. Event 3 adaptation stays the generic, source-atomic,
 content-free `canonical_acquisition_failed`. `AcquisitionError`,
 `BoundedReadError`, and `CanonicalBoundContext` are re-exported from core; adding
-variants breaks exhaustive matches, so keep a wildcard arm. Limits, check order,
-and NFC behavior are in [Canonical Observation v2](canonical-observation-v2.md).
+variants breaks exhaustive matches, so keep a wildcard arm.
 
 ## Inventory
 
@@ -771,8 +768,7 @@ detection/activity projection, equal to CLI output for equivalent source, rule,
 policy, and processing options. They keep `timeline_anchors` rather than
 per-action events and map source failures to `scanner_error`. Removed parser
 registration and source-backed flat-record projection are not compatibility
-paths. The runtime behind them is a private seam; see the
-[canonical runtime boundary](canonical-observation-v2.md#shared-canonical-source-runtime).
+paths. The runtime behind them is a private seam.
 
 ### Detection occurrences
 
@@ -858,8 +854,7 @@ plugin ABI and does not change Event 3; Issue #28 remains deferred, and JSONL-on
 is not its final architecture. `LocalEventFeed` supports bounded read-only polling
 of local Event 3 JSONL; see
 [telemetry/output](telemetry-output.md#runtime-neutral-local-journal-polling).
-Analyzer extensions are a separate future protocol; see
-[development principles](development-principles.md#analyzer-extensions-direction-not-implemented).
+Analyzer extensions are a separate future protocol and are not implemented.
 
 ## Rust API evolution
 

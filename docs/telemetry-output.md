@@ -10,8 +10,7 @@ specific sink without changing the event schema.
 Event 3.0 remains the current supported and frozen compatibility/output
 contract. Production Event4 output and CanonicalPayload are inactive. A
 non-production Event4 4.0 foundation exists in `telltale-schema`; sinks do not
-emit it. The accepted future boundary is documented in
-[Telemetry/output architecture](telemetry-output-architecture.md).
+emit it.
 
 ## Default JSONL Sink
 
@@ -315,7 +314,7 @@ otherwise ambiguous zero-detection result without exposing session content:
   completed, not complete detection coverage: inspect this warning, processing
   counts, failure groups, and discovery degradation before accepting a canary.
   This diagnostic hardening does not qualify RC1 or close the live-source or
-  platform gates in [release readiness, Issue #66](release-readiness.md#07-rc1-current-host-qualification).
+  platform gates of Issue #66.
 
 The existing top-level `log_path` field remains raw for compatibility and is a
 local diagnostic caveat. Newly added path fields use hashes. These diagnostic
@@ -707,10 +706,6 @@ event output, not live session stores, raw transcripts, local telemetry logs,
 scanner state, workstation paths, SIEM endpoint details, or credential-like
 values. Keep host-specific validation observations in local-only notes and
 recreate public examples with fixture-backed commands when evidence is needed.
-
-See [trust-boundaries.md](trust-boundaries.md) and
-[release-readiness.md](release-readiness.md) for the publication and artifact
-boundary checks.
 
 ## Forwarding To SIEMs
 

@@ -282,8 +282,7 @@ To check a live host read-only, run
 `.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Root <source root> -Client codex,claude`.
 It performs one dry-run scan per client with temporary log and state paths and
 reports `passed`, `passed_with_limits`, `failed`, or `not_available`. It does not
-install, schedule, or change any source store. See
-[Windows host tooling](windows-host-compatibility-spec.md).
+install, schedule, or change any source store.
 
 ### Windows Scheduled Task example
 

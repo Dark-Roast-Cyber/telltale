@@ -240,7 +240,7 @@ Codex adapter notes:
   direct result with `exit_code` as `tool.exit_code`.
 - Completed `FileChange` maps to one reported Tool result with bounded structured
   patch evidence and a parsed, field-labeled searchable result, not a file-state
-  or execution claim. See the [canonical mapping and bounds](canonical-observation-v2.md).
+  or execution claim.
 - Completed `McpToolCall` and `Extension` items are not mapped yet and are
   quarantined by themselves (`unsupported_completed_item`). A
   parent rollout repeats its subagents' completed items under the subagent's

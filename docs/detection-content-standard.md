@@ -73,7 +73,7 @@ Allowed `analytic_intent` values:
 
 Use `category` only for the observed behavior. Use the metadata fields above for rule purpose and analyst workflow. For example, `approval_bypass` is a behavior category; `policy_violation` is a detection class; `alert` is an analytic intent.
 
-ATLAS mappings live in rule `atlas_tags` and in [../MITRE_ATLAS_COVERAGE.md](../MITRE_ATLAS_COVERAGE.md). ATLAS must remain offline documentation context and must not be fetched during scans, tests, or validation.
+ATLAS mappings live in rule `atlas_tags` and in the [ATLAS coverage map](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md). ATLAS must remain offline documentation context and must not be fetched during scans, tests, or validation.
 
 ### ID Naming Convention
 
@@ -229,20 +229,14 @@ Do not invent unavailable fields merely to force cross-source equivalence.
 
 ## False-Positive Notes
 
-Each use case in [use-cases.md](use-cases.md) should document:
-
-- Known false-positive scenarios.
-- Expected false-positive rate on a developer workstation.
-- Mitigation strategies (e.g., suppressing `user_context` from targets, requiring chain modifiers before escalating).
-
 Bundled rules and chain modifiers should include a `falsepositives` list in rule YAML so `telltale rules coverage` can report whether analyst guidance exists. Keep notes concrete and operational: describe the benign workflow, what context makes it safe, and whether the signal should usually be interpreted alone or as part of a chain.
 
 ## Changelog Expectations
 
 Every new rule, rule change, or deprecation should be recorded in the relevant
-use-case or detection documentation:
+detection documentation:
 
-- **New rule**: list the rule ID, category, severity, and the use case or motivation.
+- **New rule**: list the rule ID, category, severity, and the motivation.
 - **Rule change**: describe what changed (score, targets, regex, severity) and why.
 - **Rule deprecation**: list the old ID, the replacement ID (if any), and the reason.
 
@@ -266,7 +260,7 @@ Follow this checklist:
 2. Choose a stable `id` following the naming convention.
 3. Set `severity`, `score`, `targets`, and `regex` (or `detection` block).
 4. Set `detection_class`, `signal_type`, and `analytic_intent` when overriding their documented defaults; otherwise they may be omitted.
-5. Add `atlas_tags` only when the mapping is specific and update `MITRE_ATLAS_COVERAGE.md`.
+5. Add `atlas_tags` only when the mapping is specific and update the ATLAS coverage map.
 6. Write a clear `explanation` answering: what happened, why it matters, what evidence is safe.
 7. Add one or more `tags` for filtering and documentation.
 8. Create a positive fixture under `tests/fixtures/`.
@@ -276,7 +270,6 @@ Follow this checklist:
 12. Run `telltale rules test --rules <path> <fixture>` to preview matches.
 13. Run `cargo test` to verify no regressions.
 14. Record the rule in the relevant detection documentation.
-15. If this rule is part of a use case, update [use-cases.md](use-cases.md).
 
 ## Quality Checklist
 

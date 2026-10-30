@@ -37,9 +37,7 @@ A bounded Detection v2 path now evaluates command-derived
 parent/child matcher context and standalone rules from command-bearing Canonical
 Observation v2 Tool evidence,
 and a caller-grouped session evaluator applies repeat suppression and the six
-specialized process-chain correlations;
-the exact evidence and lifecycle contract is documented in
-[Detection v2](detection-v2.md#tool-derived-process-chain-boundary). Command
+specialized process-chain correlations. Command
 parsing creates private matcher working state, not Canonical Process evidence.
 `CompiledProcessChainRules` remains the authoritative matcher, and matches use
 ordinary Detection v2 DetectorResults, Signals, and Findings.

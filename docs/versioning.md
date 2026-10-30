@@ -136,8 +136,7 @@ allowance for `0.y.z` versions:
 
 Historically, the unpublished `0.4.0` API-hardening work was incorporated into
 `0.5.0` rather than released separately. See [Current Series](#current-series)
-for release history and the [0.4.0 migration guide](migrations/0.4.0.md) for that
-historical API work. These completed milestones do not select the next version.
+for release history. These completed milestones do not select the next version.
 
 ## Versioned Surfaces
 
@@ -234,8 +233,7 @@ its explicit sequence against that graph; Console is not in the publishable set.
 7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
-The older [0.4.0 migration guide](migrations/0.4.0.md) documents unpublished API
-hardening folded into 0.5.0. The [0.7.0 migration guide](migrations/0.7.0.md)
+The [0.7.0 migration guide](migrations/0.7.0.md)
 records the next minor line's source/runtime compatibility boundary while
 preserving Event3.
 
