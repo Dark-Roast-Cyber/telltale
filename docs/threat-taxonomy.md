@@ -6,33 +6,7 @@
 
 ADR uses its own operational categories for deterministic detection, scoring, policy filters, and SIEM output. MITRE ATLAS is an offline reference for naming, tagging, and documentation only.
 
-ATLAS must not be fetched or parsed during `telltale scan`, `telltale rules validate`, tests, or normal runtime execution. Use it while authoring detection content, then commit the resulting ADR rule tags, explanations, fixtures, and docs.
-
-## Offline ATLAS Reference
-
-The optional local ATLAS copy should live at:
-
-```text
-references/atlas-data/dist/ATLAS.yaml
-```
-
-Create it with a local sparse clone:
-
-```sh
-mkdir -p references
-git clone --filter=blob:none --sparse https://github.com/mitre-atlas/atlas-data references/atlas-data
-git -C references/atlas-data sparse-checkout set dist
-```
-
-The helper reads only the local file:
-
-```sh
-scripts/atlas-lookup "prompt injection"
-scripts/atlas-lookup AML.T0051 --description
-TELLTALE_ATLAS_PATH=/path/to/ATLAS.yaml scripts/atlas-lookup exfiltration --json
-```
-
-If the local file is absent, the helper prints setup instructions and exits without network access.
+ATLAS must not be fetched or parsed during `telltale scan`, `telltale rules validate`, tests, or normal runtime execution. Use it while authoring detection content, then commit the resulting ADR rule tags, explanations, fixtures, and docs. Rule-to-ATLAS coverage is tracked in [telltale-detections](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
 
 ## Tagging Contract
 
@@ -51,10 +25,9 @@ Do not add an ATLAS tag just because a keyword matches. Prefer no ATLAS tag over
 When authoring or reviewing detection content:
 
 1. Assign exactly one ADR category to each rule.
-2. Use `scripts/atlas-lookup <term>` only against a local `ATLAS.yaml` file when ATLAS context is relevant.
-3. Add ATLAS tags only when a concrete tactic or technique explains the rule.
-4. Keep rule explanations in ADR terms: what happened, why it matters, and what evidence is safe for SIEM.
-5. Keep fixtures synthetic and validation offline.
+2. Add ATLAS tags only when a concrete tactic or technique explains the rule.
+3. Keep rule explanations in ADR terms: what happened, why it matters, and what evidence is safe for SIEM.
+4. Keep fixtures synthetic and validation offline.
 
 ## ADR Categories
 
@@ -105,16 +78,4 @@ ordered sequence within a time window and an entity boundary. See
 
 ## ATLAS Alignment Guidance
 
-Use ATLAS to improve analyst vocabulary, not to force complete coverage. Some ADR categories align naturally with ATLAS tactics or techniques; others are ADR-specific operational signals.
-
-Useful starting searches:
-
-| ADR Area | Suggested Lookup |
-| --- | --- |
-| MCP or web/tool prompt injection | `scripts/atlas-lookup "prompt injection"` |
-| Tool metadata or tool result poisoning | `scripts/atlas-lookup "tool poisoning"` |
-| Outbound transfer or encoded egress | `scripts/atlas-lookup exfiltration` |
-| Persistence through prompt or configuration changes | `scripts/atlas-lookup persistence` |
-| Agent command and control patterns | `scripts/atlas-lookup "command and control"` |
-
-Record the final mapping in rule tags only when the lookup result clearly describes the ADR behavior.
+Use ATLAS to improve analyst vocabulary, not to force complete coverage. Some ADR categories align naturally with ATLAS tactics or techniques; others are ADR-specific operational signals. Record a mapping in rule tags only when the ATLAS entry clearly describes the ADR behavior.

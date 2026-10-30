@@ -7,6 +7,9 @@ use std::os::unix::fs::symlink;
 
 const HOST_ONLY_REPO_PATHS: &[&str] = &[
     "AGENTS.md",
+    "CLAUDE.md",
+    ".agents/",
+    ".claude/",
     "PLAN.md",
     "VISION.md",
     "IDEAS.md",
@@ -27,14 +30,7 @@ const HOST_ONLY_REPO_PATHS: &[&str] = &[
     "scripts/inspiration/",
     "runtime/ralph/",
     "config/examples/splunk-",
-    "openspec/changes/",
-    "openspec/config.yaml",
-];
-
-const PUBLIC_OPENSPEC_CONTENT_MARKERS: &[&str] = &[
-    "local-only evidence",
-    "private evidence",
-    "redacted local-only evidence",
+    "openspec/",
 ];
 
 #[cfg(unix)]
@@ -278,7 +274,7 @@ fn public_push_review_summarizes_repo_and_staged_context() {
         "missing staged path summary: {stdout}"
     );
     assert!(
-        stdout.contains("docs/release-readiness.md") && stdout.contains("make release-preflight"),
+        stdout.contains("make release-preflight"),
         "missing public push reminder: {stdout}"
     );
 }
@@ -1898,17 +1894,6 @@ fn public_docs_distinguish_published_static_crt_policy_from_clean_host_proof() {
     );
     assert!(install_flat.contains("does not apply retroactively"));
 
-    let readiness = fs::read_to_string("docs/release-readiness.md").expect("readiness docs");
-    let readiness_flat = normalize_line_endings(readiness).replace('\n', " ");
-    assert!(readiness_flat.contains("-C target-feature=+crt-static"));
-    assert!(readiness_flat.contains("dumpbin /DEPENDENTS"));
-    assert!(readiness_flat.contains("exact staged `telltale.exe`"));
-    assert_doc_links_to("docs/release-readiness.md", &["docs/versioning.md"]);
-    // Historical artifact identities are pinned below; prose rewording is not
-    // evidence of native or clean-host execution.
-    assert!(readiness_flat.contains("clean-Windows"));
-    assert!(readiness_flat.contains("publication-time gate"));
-
     let release_readme = fs::read_to_string("release/README.md").expect("release README");
     let release_readme_flat = normalize_line_endings(release_readme).replace('\n', " ");
     for identity in ["`telltale.exe`", "`x86_64-pc-windows-msvc`"] {
@@ -3250,85 +3235,11 @@ fn release_public_docs_check_runs_focused_boundary_tests() {
 }
 
 #[test]
-fn release_readiness_documents_public_docs_check_commands() {
-    let docs =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/release-readiness.md"))
-            .expect("read release readiness docs");
-
-    assert!(
-        docs.contains("make release-public-docs-check"),
-        "release readiness guidance must name the focused public docs target"
-    );
-    assert!(
-        docs.contains("cargo test --quiet public_docs_"),
-        "release readiness guidance must document the consolidated public-docs test command"
-    );
-}
-
-#[test]
-fn public_docs_synthetic_service_qualification_uses_a_drop_in_override() {
-    let docs = normalize_line_endings(
-        fs::read_to_string("docs/release-readiness.md").expect("release readiness docs"),
-    );
-    let docs_flat = docs.replace('\n', " ");
-
-    let drop_in = markdown_code_blocks(&docs)
-        .find(|block| block.contains("[Service]") && block.contains("<qualification-root>"))
-        .expect("synthetic service drop-in example");
-    let values = |key: &str| {
-        drop_in
-            .lines()
-            .filter_map(|line| line.trim().split_once('='))
-            .filter(|(name, _)| *name == key)
-            .map(|(_, value)| value.trim())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(values("EnvironmentFile"), [""]);
-    assert_eq!(
-        values("Environment"),
-        [
-            "\"TELLTALE_SCAN_ROOT=<qualification-root>/sessions\"",
-            "\"TELLTALE_LOG_PATH=<qualification-root>/events.jsonl\"",
-            "\"TELLTALE_STATE_PATH=<qualification-root>/state.json\"",
-        ]
-    );
-    let starts = values("ExecStart");
-    assert_eq!(starts.len(), 2, "reset, then one isolated invocation");
-    assert_eq!(starts[0], "");
-    for option in [
-        "\"<installed-candidate>\"",
-        "scan --once",
-        "--root \"${TELLTALE_SCAN_ROOT}\"",
-        "--no-local-config",
-    ] {
-        assert!(
-            starts[1].contains(option),
-            "missing qualification input {option}"
-        );
-    }
-    assert_eq!(values("PrivateTmp"), ["true"]);
-
-    assert!(
-        docs.contains("Do not use `telltale.env` as the synthetic override channel")
-            && docs.contains("${XDG_RUNTIME_DIR}/telltale-qualification")
-            && docs.contains("PrivateTmp=yes")
-            && docs.contains("remote_sink_count = 0")
-            && docs.contains("--property=EnvironmentFiles --property=Environment")
-            && docs_flat.contains("remove the temporary qualification drop-in"),
-        "synthetic G-SERVICE guidance must preserve isolation, reset service inputs, and verify the effective policy"
-    );
-}
-
-#[test]
 fn public_docs_github_release_is_independent_of_crates_io_publication() {
     let versioning = fs::read_to_string("docs/versioning.md").expect("versioning docs");
     assert_doc_links_to(
         "docs/README.md",
-        &[
-            "docs/versioning.md",
-            "docs/license-and-packaging.md",
-            "docs/release-readiness.md",
-        ],
+        &["docs/versioning.md", "docs/license-and-packaging.md"],
     );
     assert!(
         versioning.contains(&format!("`={}`", env!("CARGO_PKG_VERSION"))),
@@ -3352,27 +3263,7 @@ fn public_docs_github_release_is_independent_of_crates_io_publication() {
 }
 
 #[test]
-fn public_docs_native_release_gate_guidance_is_complete() {
-    let docs = fs::read_to_string("docs/release-readiness.md").expect("release readiness docs");
-    for required in [
-        "GitHub-hosted native runners",
-        "final published Release artifact",
-        "cross-compilation",
-        "archive inspection",
-        "Linux source-unit tests",
-        "staged or rebuilt binaries",
-        "SKIPPED: EXTERNAL HEC ENVIRONMENT NOT AVAILABLE",
-        "JSONL-parity",
-        ".github/workflows/release-native-verify.yml",
-        "telltale-sbom.cdx.json",
-        "REQUIRE_SBOM=1 make release-artifact-manifest",
-        "security/operations.md#release-integrity-verification",
-    ] {
-        assert!(
-            docs.contains(required),
-            "release readiness docs are missing {required:?}"
-        );
-    }
+fn release_native_verify_workflow_covers_pinned_targets() {
     let workflow: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(".github/workflows/release-native-verify.yml").unwrap(),
     )
@@ -4582,21 +4473,13 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
     assert!(windows.contains("telltale-events.jsonl"));
     assert!(windows.contains("telltale-state.json"));
 
-    let readiness =
-        fs::read_to_string("docs/release-readiness.md").expect("read release readiness docs");
-    assert!(readiness.contains("make package-verify"));
-    assert!(readiness.contains("telltale --version"));
     assert_doc_links_to(
         "docs/install.md",
         &["docs/controlled-deployment.md", "docs/versioning.md"],
     );
     assert_doc_links_to(
         "docs/controlled-deployment.md",
-        &[
-            "docs/install.md",
-            "docs/release-readiness.md",
-            "docs/versioning.md",
-        ],
+        &["docs/install.md", "docs/versioning.md"],
     );
 }
 
@@ -4845,59 +4728,21 @@ fn public_docs_links_and_paths_are_safe() {
         tracked_host_only.is_empty(),
         "host-only release material must not be tracked: {tracked_host_only:?}"
     );
-
-    let tracked_public_specs = public_tip_tracked_repo_paths()
-        .into_iter()
-        .filter(|path| path.starts_with("openspec/specs/"))
-        .collect::<Vec<_>>();
-    assert!(
-        !tracked_public_specs.is_empty(),
-        "public OpenSpec product specifications must remain tracked"
-    );
-    let marker_matches = tracked_public_specs
-        .iter()
-        .flat_map(|path| {
-            let contents = fs::read_to_string(path)
-                .unwrap_or_else(|error| panic!("{path}: {error}"))
-                .to_lowercase();
-            PUBLIC_OPENSPEC_CONTENT_MARKERS
-                .iter()
-                .filter(move |marker| contents.contains(**marker))
-                .map(move |marker| format!("{path} contains {marker:?}"))
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        marker_matches.is_empty(),
-        "public OpenSpec specifications must not contain private evidence declarations: {marker_matches:?}"
-    );
 }
 
 #[test]
-fn public_docs_classify_openspec_planning_and_product_specs() {
+fn public_docs_classify_local_agent_and_planning_paths() {
     for path in [
+        "openspec/specs/rule-packages/spec.md",
         "openspec/changes/active/proposal.md",
-        "openspec/changes/archive/evidence.md",
         "openspec/config.yaml",
+        ".agents/skills/example/SKILL.md",
+        ".claude/settings.json",
+        "CLAUDE.md",
     ] {
         assert!(
             is_host_only_repo_path(Path::new(path)),
-            "OpenSpec planning path must be host-only: {path}"
-        );
-    }
-
-    for path in [
-        "openspec/specs/installer-service-archive/spec.md",
-        "openspec/specs/release-rc-provenance/spec.md",
-    ] {
-        assert!(
-            !is_host_only_repo_path(Path::new(path)),
-            "synced OpenSpec product specification must be public-safe: {path}"
-        );
-        assert!(
-            public_tip_tracked_repo_paths()
-                .iter()
-                .any(|tracked| tracked == path),
-            "public specification must be tracked: {path}"
+            "local agent and planning path must be host-only: {path}"
         );
     }
 }

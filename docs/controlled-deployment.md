@@ -8,9 +8,9 @@ to a live host.
 
 ## Current deployment guidance
 
-Use the [installation guide](install.md) for published releases and
-[release readiness](release-readiness.md) for qualification requirements and
-results. Use this procedure only for an exact unreleased development candidate
+Use the [installation guide](install.md) for published releases; qualification
+requirements and results are recorded with each
+[GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). Use this procedure only for an exact unreleased development candidate
 in a lab or on an explicitly approved canary target; it does not replace the
 normal release process.
 
@@ -34,7 +34,8 @@ SHA-256 of the exact candidate archive and extracted binary
 The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
 not replace the full SHA and checksums. Published release identities and
-qualification results are maintained in [release readiness](release-readiness.md)
+qualification results are maintained in the
+[GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases)
 and the [version history](versioning.md#current-series). For a given package line,
 version output alone cannot distinguish an untagged build from an official
 release artifact.
@@ -329,6 +330,6 @@ A successful development canary is evidence for release preparation, not
 production authorization. Production should use an official stable release
 that has passed its own applicable qualification and publication gates. A
 different candidate needs separate qualification; historical lab or platform
-evidence does not authorize deployment. Follow [release readiness](release-readiness.md)
-for the current gates and results, and obtain explicit operator authorization
+evidence does not authorize deployment. Check the candidate's release record
+for its gates and results, and obtain explicit operator authorization
 before any live deployment.

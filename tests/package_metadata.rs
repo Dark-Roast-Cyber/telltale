@@ -80,17 +80,16 @@ fn rc_package_and_lockfile_versions_are_exactly_lockstep() {
 #[test]
 fn registry_consumer_docs_follow_current_package_version() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for relative in ["docs/versioning.md", "docs/release-readiness.md"] {
-        let document = fs::read_to_string(root.join(relative)).expect("versioning document");
-        assert!(
-            document.contains(&format!("`={VERSION}`")),
-            "{relative} does not name the current registry pin"
-        );
-        assert!(
-            !document.contains("`=0.2.0`"),
-            "{relative} retains a stale registry pin"
-        );
-    }
+    let document =
+        fs::read_to_string(root.join("docs/versioning.md")).expect("versioning document");
+    assert!(
+        document.contains(&format!("`={VERSION}`")),
+        "docs/versioning.md does not name the current registry pin"
+    );
+    assert!(
+        !document.contains("`=0.2.0`"),
+        "docs/versioning.md retains a stale registry pin"
+    );
 }
 
 #[test]
