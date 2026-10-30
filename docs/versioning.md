@@ -7,15 +7,14 @@ format.
 
 ## Current Series
 
-- `v0.6.0` is the current stable GitHub Release.
-- `0.7.0` is in release candidates. The latest published prerelease is
-  `v0.7.0-rc.3`; the workspace is prepared at `0.7.0-rc.4`, which is unpublished
-  source preparation to supersede rc.3 with a Claude Code transcript ownership
-  fix. Each candidate's source SHA, artifacts and qualification
-  results are recorded on its [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases)
-  and the release qualification issue. Stable `v0.7.0` requires separate
-  qualification and a reviewed stable-version promotion.
-- Earlier lines: `v0.5.0` (previous stable), `0.4.0` (unpublished; folded into
+- `v0.7.0` is the current stable GitHub Release; `v0.6.0` is the previous stable.
+  See the [migration guide](migrations/0.7.0.md) before upgrading from 0.6.x.
+- The final prerelease is `v0.7.0-rc.4`. Each release's source SHA, artifacts
+  and qualification results are recorded on its
+  [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases)
+  and the release qualification issue. Candidate evidence does not replace
+  verification of the stable release's exact source and artifacts.
+- Earlier lines: `v0.5.0`, `0.4.0` (unpublished; folded into
   `0.5.0`), `0.3.0`, `0.2.0`, and `v0.1.0` (first public binary release).
 - Published tags, Releases and assets are immutable, including failed or
   superseded candidates. A further tagged candidate uses the next unused RC
@@ -176,7 +175,7 @@ availability immediately before publication, then publish in the gate's order,
 waiting after each until it resolves from the index without a local patch.
 After all six are available, remove every local `patch.crates-io` override and
 confirm the clean consumers and CLI installation using only pinned
-`=0.7.0-rc.4` registry dependencies while that remains the workspace package
+`=0.7.0` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version. Do not
 declare publication complete before those unpatched checks pass, and do not
 publish credentials or local release state.

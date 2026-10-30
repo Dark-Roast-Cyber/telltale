@@ -1,15 +1,85 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.4` is prepared source only, to supersede rc.3 with a Claude Code transcript ownership fix. `v0.7.0-rc.3` is published as prerelease ID `429369612` from `41a6c0d8dd3e69a89d898f83ee4d138b9388ecaf`; five-platform native verification passed in run `41112932727` using verifier tooling `6360e8b16cdde3221088a1ffdf440984f1642ee1`. Earlier 0.7.0 candidates' evidence is historical and does not qualify rc.4. Clean-host qualification, live-host validation, canary and stable promotion remain pending for rc.4. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0` is the current stable release and `v0.6.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## 0.7.0-rc.4 — prepared source (not tagged or published)
+## 0.7.0 — published stable (2026-10-30)
+
+### Capabilities and fixes since 0.6.0
+
+- CLI scan/watch and Rust embedding scans share source-native Canonical
+  Observation v2 acquisition and Detection v2 evaluation, with Rule v1 content
+  and process-chain detections. Typed embedding errors, detailed action findings,
+  resumable scans, a bounded local Event 3 feed and structured MCP inventory
+  support downstream consumers.
+- Read current Claude Code transcripts, Codex rollouts and OpenCode v2
+  `session_message` stores. Unsupported or oversized units are quarantined
+  individually with content-free diagnostics. Claude transcript ownership uses
+  `sessionId` when an outer `session_id` differs after continuation; conflicting
+  `sessionId` values still fail closed.
+- Evaluate larger JSONL sessions within size-scaled bounds, preserve timeline
+  anchors when Event 3 evidence needs omission, and retain hit-centered,
+  redacted action evidence. OpenCode supports bounded backlog draining,
+  explicit history scans and digest-bound operator cursor reset.
+- Enable the bundled `telltale.community` 0.1.1 rules by default and support
+  namespaced rule packages. Command-effect and linked-chain matching reduce
+  unrelated co-occurrence alerts; destructive-command rules add explicit
+  alerts. These rules cannot distinguish requested destructive actions from
+  unrequested ones. Detection results can change; review and rebaseline.
+- Configure operational settings through `settings.d/*.yaml` with effective
+  value provenance; invalid environment values fail rather than silently
+  selecting defaults. Libraries no longer read operational-settings variables.
+- Harden bounded input handling, rule-package validation and remote HTTP sink
+  admission. Windows installation adds verified artifacts, digest-bound
+  receipts, transaction recovery and reversible scheduling/PATH changes;
+  replacement tolerates shared-delete readers without accepting running or
+  non-replaceable executables. Release checks include SBOMs, checksums,
+  attestations and exact-source embedding consumers.
+
+### Compatibility and operator impact
+
+- **Event 3.0 is frozen and unchanged.** It remains the production output
+  contract; existing persisted Event 3 bytes remain supported. Event 4 is not
+  activated. Rule v1 remains the rule-content format.
+- Add action record v1 (`telltale.action.v1`) and rule catalog v1
+  (`telltale.rule_catalog.v1`) embedding wire forms. Action record v1 is
+  transitional and remains available for at least one minor release after its
+  planned Event 4 successor ships. Update Git-pinned producers and consumers
+  together; retired record-evaluation Rust APIs are removed.
+- Embedding crates require **Rust 1.88**. The CLI and Console use the pinned
+  toolchain without an MSRV promise. Eight exact source identities across six
+  agent families replace the legacy denominator; retired identities, including
+  `gemini.tmp`, are removed, not compatibility aliases.
+- **Before scanning with state from 0.6.x whose baseline schema is 1 or 2,
+  pause scanning, back up state and run `telltale migrate state --from <OLD>
+  --to <NEW>`.** Select the migrated destination for subsequent scans. Migration
+  promotes the baseline to schema 3 and clears incompatible baseline
+  contributions/snapshots while preserving fingerprints, cursors, observations
+  and other state families. Normal loading rejects the old baseline schema;
+  it never silently resets it.
+- OpenCode v2's first scan covers only the newest 5,000 messages, not the
+  entire store. Resume with preserved cursors; use explicit history scanning
+  when older coverage is needed. Resetting a cursor is intentionally lossy,
+  not history recovery or safe rollback.
+- Follow the [migration guide](docs/migrations/0.7.0.md) and
+  [installation instructions](docs/install.md). Crates.io publication remains
+  deferred.
+
+---
+
+## 0.7.0-rc.4 — published prerelease (five-platform native verified)
 
 - Claude Code transcripts whose records carry an outer `session_id` that
   differs from the transcript's `sessionId`, as current Claude Code writes after
   a continuation, are now owned by `sessionId` instead of failing acquisition
   for the whole transcript. Conflicting `sessionId` values still fail closed.
+- Event 3.0 and persisted state formats are unchanged from rc.3. Prerelease
+  ID `429513878` is from `d7f7ae340602c63a9cc0cfa030eaf9c5cec0e4ab`;
+  five-platform native verification passed in run `41135614747` using verifier
+  tooling `3f90ce653502632011309b31443bb5684f7399ce`. Clean-host Linux and
+  Windows gates were not rerun and remain unqualified. Superseded by stable
+  0.7.0; crates.io publication remains deferred.
 
 ---
 
