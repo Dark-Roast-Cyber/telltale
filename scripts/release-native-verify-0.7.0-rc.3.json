@@ -1,0 +1,54 @@
+{
+  "release_tag": "v0.7.0-rc.3",
+  "package_version": "0.7.0-rc.3",
+  "source_sha": "41a6c0d8dd3e69a89d898f83ee4d138b9388ecaf",
+  "version_prefix": "telltale 0.7.0-rc.3 (41a6c0d8dd3e",
+  "release_id": 429369612,
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "archive": "telltale-v0.7.0-rc.3-x86_64-pc-windows-msvc.zip",
+      "archive_sha256": "2b4507fa8cdd82c4c723af4a65d8ff6e38d7ea12fe046e185e516c53dd2183f1",
+      "binary": "telltale.exe",
+      "binary_sha256": "3a2094097a89b42c5305c9eacc953eff228737f689dcd44f97710bcc891e3b3c",
+      "runner": "windows-latest",
+      "expected_os": "Windows",
+      "expected_unames": ["AMD64", "x86_64"]
+    },
+    "x86_64-apple-darwin": {
+      "archive": "telltale-v0.7.0-rc.3-x86_64-apple-darwin.tar.gz",
+      "archive_sha256": "2edd15587567c6a097ae92ffaa859188b9e9fb02f981d24dcbfc1005113a7192",
+      "binary": "telltale",
+      "binary_sha256": "24722abaabf619806cb60d789b0fbd8923b54b29ad88fcb605a5c03cf11434a8",
+      "runner": "macos-15-intel",
+      "expected_os": "macOS",
+      "expected_unames": ["x86_64"]
+    },
+    "aarch64-apple-darwin": {
+      "archive": "telltale-v0.7.0-rc.3-aarch64-apple-darwin.tar.gz",
+      "archive_sha256": "e62c6a6924accd4ad6761bd6bd2a186dd46556ff1d5a2584423352204a38d16e",
+      "binary": "telltale",
+      "binary_sha256": "ae191f3494c60a51bfa6ee3f03bdf782053db0ab4e7c217bc72dfee0879250cc",
+      "runner": "macos-latest",
+      "expected_os": "macOS",
+      "expected_unames": ["arm64", "aarch64"]
+    },
+    "x86_64-unknown-linux-gnu": {
+      "archive": "telltale-v0.7.0-rc.3-x86_64-unknown-linux-gnu.tar.gz",
+      "archive_sha256": "f1c954cc0f25b2ba18d311eef7e270877a4389b57b14bba6fc447c83e39a6a15",
+      "binary": "telltale",
+      "binary_sha256": "bb320d0d8aa2e3714bdea8849dab09ff906c21d0dfcedcf43f2224b2997f2308",
+      "runner": "ubuntu-latest",
+      "expected_os": "Linux",
+      "expected_unames": ["x86_64"]
+    },
+    "aarch64-unknown-linux-gnu": {
+      "archive": "telltale-v0.7.0-rc.3-aarch64-unknown-linux-gnu.tar.gz",
+      "archive_sha256": "3a1f2ae843b3fa1d70eb91f5c87388c4712918aa7d3686880539a289adf8395d",
+      "binary": "telltale",
+      "binary_sha256": "410aad8c4b6a10eef5bb2890448299bb20aa652aa6c15020c9ea1f01490849d0",
+      "runner": "ubuntu-24.04-arm",
+      "expected_os": "Linux",
+      "expected_unames": ["aarch64", "arm64"]
+    }
+  }
+}
