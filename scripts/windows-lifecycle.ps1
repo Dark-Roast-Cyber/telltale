@@ -69,10 +69,51 @@ namespace TelltaleLifecycle {
         [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
         static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr parameter,
             string text, uint flags, uint timeout, out UIntPtr result);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security,
+            uint disposition, uint flags, IntPtr template);
         public static void SingleLink(FileStream stream) {
             Info info;
             if (!GetFileInformationByHandle(stream.SafeFileHandle, out info) || info.Links != 1)
                 throw new IOException("File must have exactly one link.");
+        }
+        static SafeFileHandle OpenForRename(string path, string role) {
+            // DELETE|SYNCHRONIZE|FILE_READ_ATTRIBUTES, share read/write/delete,
+            // OPEN_EXISTING, and the exact name rather than a reparse target.
+            SafeFileHandle handle = CreateFile(path, 0x00110080, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+            if (handle.IsInvalid) {
+                int result = Marshal.GetHRForLastWin32Error();
+                handle.Dispose();
+                throw new IOException(role + " cannot be renamed.", result);
+            }
+            return handle;
+        }
+        public static void AssertReplaceable(string path) {
+            // GENERIC_WRITE|DELETE|SYNCHRONIZE with full sharing: a running image or a
+            // user that forbids writing or deleting refuses it, a sharing reader cannot.
+            SafeFileHandle handle = CreateFile(path, 0x40110000, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+            if (handle.IsInvalid) {
+                int result = Marshal.GetHRForLastWin32Error();
+                handle.Dispose();
+                throw new IOException("Executable is running or held without write and delete sharing.", result);
+            }
+            handle.Dispose();
+        }
+        public static void ReplaceExecutable(string replacement, string replaced, string backup) {
+            // File.Replace opens the replacement with no sharing, so a reader that
+            // shares read, write and delete still refuses it. Perform the same two
+            // renames under shared DELETE handles: a user that forbids renaming fails
+            // here before any change, and later openers must also permit renaming.
+            using (OpenForRename(replacement, "Replacement executable"))
+            using (OpenForRename(replaced, "Installed executable")) {
+                File.Move(replaced, backup);
+                try { File.Move(replacement, replaced); }
+                catch {
+                    // The journal remains authoritative if this best-effort undo fails.
+                    try { File.Move(backup, replaced); } catch { }
+                    throw;
+                }
+            }
         }
         public static void EnvironmentChanged() {
             UIntPtr result;
@@ -174,6 +215,14 @@ function Assert-TTUnlocked([string]$Path) {
     # Windows prevents exclusive write access to loaded or locked executables.
     $stream = [IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
     $stream.Dispose()
+}
+
+function Assert-TTReplaceable([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Assert-TTFile $Path -Owned
+    # Managed executables need only be replaceable and removable: a running image
+    # still refuses, while a transient reader that shares everything does not.
+    [TelltaleLifecycle.Native]::AssertReplaceable($Path)
 }
 
 function Get-TTTask {
@@ -478,7 +527,7 @@ function Restore-TTTransaction([string]$Install, [string]$Data) {
     foreach ($path in @($binary, $stage, $backup)) {
         if (Test-Path -LiteralPath $path) {
             if ((Get-TTHash $path) -cnotin $allowed) { throw 'Transaction file changed; automatic recovery refused.' }
-            Assert-TTUnlocked $path
+            Assert-TTReplaceable $path
         }
     }
     $receiptPath = Join-Path $Install 'install-receipt.json'
@@ -513,8 +562,12 @@ function Restore-TTTransaction([string]$Install, [string]$Data) {
     if ($null -ne $journal.previous) {
         if (Test-Path -LiteralPath $backup) {
             if ((Get-TTHash $backup) -cne $journal.previous.binary_sha256) { throw 'Rollback backup does not match previous installation.' }
-            if (Test-Path -LiteralPath $binary) { [IO.File]::Replace($backup, $binary, [NullString]::Value) }
-            else { [IO.File]::Move($backup, $binary) }
+            if (Test-Path -LiteralPath $binary) {
+                # Set the replaced executable aside under the stage name, removed below,
+                # so a sharing reader cannot refuse the rollback as File.Replace would.
+                if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Force }
+                [TelltaleLifecycle.Native]::ReplaceExecutable($backup, $binary, $stage)
+            } else { [IO.File]::Move($backup, $binary) }
         } elseif (-not (Test-Path -LiteralPath $binary) -or (Get-TTHash $binary) -cne $journal.previous.binary_sha256) {
             throw 'Previous executable is unavailable; recovery refused.'
         }

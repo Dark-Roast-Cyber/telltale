@@ -365,6 +365,15 @@
 - Digest-bound receipts, staged replacement and transaction recovery. Default
   uninstall retains data; confirmed purge removes owned generated data, with
   configuration requiring separate explicit selection. Legacy installs are retained.
+- Windows install, reinstall, rollback and uninstall no longer fail with
+  `0x80070020` when another process briefly reads a managed executable while
+  sharing read, write and delete access (#147). `File.Replace` opened the new
+  executable with no sharing, and the lifecycle checks required exclusive access.
+  Executables now need only be replaceable: the journaled backup and rename run
+  under shared delete handles, and a running executable, or one held without
+  write and delete sharing, still blocks the operation before any change. Data
+  and configuration purge checks remain exclusive. Reinstallation no longer
+  carries permissions or alternate data streams added to the previous executable.
 - Synthetic Windows lifecycle regressions and disposable-runner scheduling
   validation. ZIP inventory and Event 3.0 are unchanged. OpenCode persisted
   cursor/token compatibility is covered by the current

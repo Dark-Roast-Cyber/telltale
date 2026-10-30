@@ -140,7 +140,7 @@ function Get-TestLockUsers([string]$Path, $Refusal = $null, [switch]$BeforeRollb
         $report.code = $result.Code
         $report.end_code = $result.EndCode
         $report.truncated = $result.Truncated
-        foreach ($user in $result.Processes) { $report.processes += @{ pid = $user.Pid; start_filetime = $user.StartFileTime } }
+        foreach ($user in $result.Processes) { $report.processes += @{ pid = $user.Pid; start_filetime = $user.StartFileTime; image = $user.Image } }
     } catch { $report.reason = 'native attribution unavailable'; $report.exceptions = @(Get-TestExceptionChain $_.Exception) }
     return $report
 }
@@ -161,6 +161,11 @@ function Get-TestFileDiagnostic([string]$Name) {
                     try { $entry.lock_users = Get-TestLockUsers $path $probeFailure }
                     catch { $entry.lock_users = @{ status = 'unknown'; reason = 'synthetic stage validation or attribution failed'; processes = @(); exceptions = @(Get-TestExceptionChain $_.Exception) } }
                 }
+            }
+            if ($Name -cin @('telltale.exe', 'staged.exe', 'previous.exe')) {
+                # Distinguishes a sharing reader from a running image or a user that blocks replacement.
+                try { [TelltaleLifecycle.Native]::AssertReplaceable($path); $entry.replace_probe = 'available' }
+                catch { $entry.replace_probe = 'refused'; $entry.replace_probe_error = @(Get-TestExceptionChain $_.Exception) }
             }
             if ($Name -cin @('install-receipt.json', 'transaction.json')) {
                 try {
@@ -214,7 +219,7 @@ function Write-TestFailure($Failure, $OriginalError = $null) {
             known_lock_worker = $script:lockWorker; files = @(); task = 'not inspected'; scheduler = $script:testScheduler
             target = if ($null -ne $script:testLayout) { $script:testLayout.InstallDirectory } else { 'not selected' }
         }
-        if ($null -ne $script:testLayout -and $script:testScenario -cin @('task-transition-True', 'distinct-process-locked-recovery')) {
+        if ($null -ne $script:testLayout -and $script:testScenario -cin @('task-transition-True', 'distinct-process-locked-recovery', 'first-install-recovery')) {
             try { $report.lock_users = Get-TestLockUsers ([IO.Path]::Combine($script:testLayout.InstallDirectory, 'telltale.exe')) }
             catch { $report.lock_users.reason = 'synthetic target validation or attribution failed'; $report.lock_users.exceptions = @(Get-TestExceptionChain $_.Exception) }
         }
@@ -273,7 +278,30 @@ namespace TelltaleLifecycleTests {
             [In, Out] ProcessInfo[] processes, out uint rebootReasons);
         [DllImport("rstrtmgr.dll")]
         static extern uint RmEndSession(uint session);
-        public class Identity { public uint Pid; public long StartFileTime; }
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr handle);
+        // Only a reported PID whose live creation time matches yields an image
+        // basename; exited, reused or inaccessible identities stay explicit unknowns.
+        static string ImageName(uint pid, long started) {
+            IntPtr process = OpenProcess(0x1000, false, pid);
+            if (process == IntPtr.Zero) return "unknown: not accessible";
+            try {
+                long created, exited, kernel, user;
+                if (!GetProcessTimes(process, out created, out exited, out kernel, out user)) return "unknown: start time unavailable";
+                if (created != started) return "unknown: identity changed";
+                var name = new StringBuilder(1024);
+                uint size = 1024;
+                if (!QueryFullProcessImageName(process, 0, name, ref size)) return "unknown: image unavailable";
+                return Path.GetFileName(name.ToString());
+            } finally { CloseHandle(process); }
+        }
+        public class Identity { public uint Pid; public long StartFileTime; public string Image; }
         public class Result {
             public string Status = "unknown", Stage = "start_session";
             public uint Code, EndCode;
@@ -299,10 +327,8 @@ namespace TelltaleLifecycleTests {
                 result.Processes = new Identity[retained];
                 for (int index = 0; index < retained; index++) {
                     var process = buffer[index].Process;
-                    result.Processes[index] = new Identity {
-                        Pid = process.Pid,
-                        StartFileTime = ((long)(uint)process.Started.dwHighDateTime << 32) | (uint)process.Started.dwLowDateTime
-                    };
+                    long started = ((long)(uint)process.Started.dwHighDateTime << 32) | (uint)process.Started.dwLowDateTime;
+                    result.Processes[index] = new Identity { Pid = process.Pid, StartFileTime = started, Image = ImageName(process.Pid, started) };
                 }
                 result.Stage = count == 0 ? "no_resource_users_reported" : "resource_users_reported";
                 if (count != 0) result.Status = "reported";
@@ -591,9 +617,9 @@ try {
         $users = Get-TestLockUsers $installed
         Assert-True ($users.status -cin @('reported', 'unknown') -and @($users.processes).Count -le 8) 'exact-file attribution has bounded explicit reported or unknown result'
         foreach ($user in @($users.processes)) {
-            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime') }).Count -eq 0) 'attribution exposes only resource-associated process identity'
+            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime', 'image') }).Count -eq 0 -and $user.image -cmatch '^(?:unknown: [a-z ]+|[^\\/:]{1,255})$') 'attribution exposes only process identity and an image basename or explicit unknown'
             if ($user.pid -eq $workerId) {
-                Assert-True ($user.start_filetime -eq $workerStart.ToFileTimeUtc()) 'reported controlled worker has the recorded start identity'
+                Assert-True ($user.start_filetime -eq $workerStart.ToFileTimeUtc() -and $user.image -ceq $engineName) 'reported controlled worker has the recorded start identity and engine image'
             }
         }
         foreach ($invalidTarget in @($binary, (Join-Path $temp 'telltale.exe'), (Join-Path $layout.InstallDirectory 'install-receipt.json'), (Join-Path $layout.InstallDirectory '..\Application With Spaces\telltale.exe'))) {
@@ -685,7 +711,7 @@ try {
         Assert-True ($stageDiagnostic.exclusive_probe -ceq 'refused' -and $stageDiagnostic.lock_users.status -cin @('reported', 'unknown')) 'refused exact stage has bounded attribution or explicit unknown'
         Assert-True (@($stageDiagnostic.lock_users.processes).Count -le 8) 'staged-file attribution is bounded'
         foreach ($user in @($stageDiagnostic.lock_users.processes)) {
-            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime') }).Count -eq 0) 'stage attribution exposes only PID and start identity'
+            Assert-True (@($user.Keys | Where-Object { $_ -cnotin @('pid', 'start_filetime', 'image') }).Count -eq 0 -and $user.image -cmatch '^(?:unknown: [a-z ]+|[^\\/:]{1,255})$') 'stage attribution exposes only process identity and an image basename or explicit unknown'
         }
         Assert-True ($stageStream.CanRead -and (Get-TreeDigest $layout.InstallDirectory) -ceq $beforeStageDiagnostic) 'stage diagnostics preserve open lock and all protected bytes'
         Assert-Fails { Assert-TTUnlocked $stage } 'stage diagnostics do not release or remediate the lock'
@@ -697,6 +723,170 @@ try {
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq $previous.binary_sha256 -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'controlled stage recovers only after explicit test release'
     & $uninstaller @layout -Confirm:$false
+
+    # File.Replace opens its replacement with no sharing: even an outside reader
+    # that shares read, write and delete produces the CI HRESULT 0x80070020.
+    $layout = New-TestLayout 'shared-stage-reader'
+    & $installer @layout -DevelopmentBinary $binary
+    $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
+    $stage = Join-Path $layout.InstallDirectory 'staged.exe'
+    $journalPath = Join-Path $layout.InstallDirectory 'transaction.json'
+    $backup = Join-Path $layout.InstallDirectory 'previous.exe'
+    $receiptPath = Join-Path $layout.InstallDirectory 'install-receipt.json'
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $replacement = Join-Path $temp 'shared-reader-replacement.exe'
+    $replaced = Join-Path $temp 'shared-reader-replaced.exe'
+    Copy-Item -LiteralPath $variant -Destination $replacement
+    Copy-Item -LiteralPath $binary -Destination $replaced
+    $sharedReader = [IO.File]::Open($replacement, 'Open', 'Read', 'ReadWrite, Delete')
+    try {
+        $refusal = $null
+        try { [IO.File]::Replace($replacement, $replaced, [NullString]::Value) } catch { $refusal = $_ }
+        Assert-True ($null -ne $refusal -and @(Get-TestExceptionChain $refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -gt 0) 'File.Replace refuses a replacement with a fully sharing reader'
+        Assert-True ((Get-FileHash -LiteralPath $replaced).Hash -ceq (Get-FileHash -LiteralPath $binary).Hash) 'refused File.Replace leaves the replaced file unchanged'
+    } finally { $sharedReader.Dispose() }
+    $staleBackup = Join-Path $temp 'shared-reader-backup.exe'
+    [IO.File]::WriteAllText($staleBackup, 'stale backup')
+    $refusal = $null
+    try { [TelltaleLifecycle.Native]::ReplaceExecutable($replacement, $replaced, $staleBackup) } catch { $refusal = $_ }
+    Assert-True ($null -ne $refusal -and @(Get-TestExceptionChain $refusal.Exception | Where-Object { $_.hresult -eq -2147024713 }).Count -gt 0) 'executable swap refuses a stale backup with ERROR_ALREADY_EXISTS'
+    Assert-True ((Get-FileHash -LiteralPath $replacement).Hash -ceq (Get-FileHash -LiteralPath $variant).Hash -and (Get-FileHash -LiteralPath $replaced).Hash -ceq (Get-FileHash -LiteralPath $binary).Hash -and [IO.File]::ReadAllText($staleBackup) -ceq 'stale backup') 'stale backup refusal renames and overwrites nothing'
+    Remove-Item -LiteralPath $staleBackup
+    # A backup name differing only by case turns the first rename into a case
+    # change, so the second rename deterministically collides and must be undone.
+    $caseBackup = Join-Path $temp 'SHARED-READER-REPLACED.EXE'
+    $refusal = $null
+    try { [TelltaleLifecycle.Native]::ReplaceExecutable($replacement, $replaced, $caseBackup) } catch { $refusal = $_ }
+    $names = @(Get-ChildItem -LiteralPath $temp -Force | Where-Object { $_.Name -like 'shared-reader-*' } | ForEach-Object { $_.Name })
+    Assert-True ($null -ne $refusal -and @(Get-TestExceptionChain $refusal.Exception | Where-Object { $_.hresult -eq -2147024713 }).Count -gt 0) 'failed second rename propagates its original error'
+    Assert-True ($names -ccontains 'shared-reader-replaced.exe' -and $names -cnotcontains 'SHARED-READER-REPLACED.EXE' -and (Get-FileHash -LiteralPath $replaced).Hash -ceq (Get-FileHash -LiteralPath $binary).Hash -and (Get-FileHash -LiteralPath $replacement).Hash -ceq (Get-FileHash -LiteralPath $variant).Hash) 'failed second rename undoes the first rename'
+    Remove-Item -LiteralPath $replacement, $replaced
+    $installerLines = [IO.File]::ReadAllLines($installer)
+    $swapLines = @()
+    for ($index = 0; $index -lt $installerLines.Length; $index++) {
+        if ($installerLines[$index].Contains('[TelltaleLifecycle.Native]::ReplaceExecutable($stage, $binary,')) { $swapLines += $index + 1 }
+    }
+    Assert-True ($swapLines.Count -eq 1) 'installer has exactly one executable swap'
+    # Inject the reader at the real installer swap. Breakpoint actions run in the
+    # installer's scope, so the context travels on the breakpoint, not $script:.
+    foreach ($share in @('ReadWrite, Delete', 'Read')) {
+        $reader = @{ Target = $stage; Share = $share; Stream = $null; Hits = 0; Errors = @() }
+        $breakpoint = Set-PSBreakpoint -Script $installer -Line $swapLines[0] -Action {
+            $reader = $_.TelltaleReader
+            $reader.Hits++
+            try {
+                if ($stage -cne $reader.Target) { throw 'Unexpected shared-reader target.' }
+                if ($null -eq $reader.Stream) { $reader.Stream = [IO.File]::Open($stage, 'Open', 'Read', $reader.Share) }
+            } catch { $reader.Errors = @(Get-TestExceptionChain $_.Exception) }
+        }
+        $breakpoint | Add-Member -NotePropertyName TelltaleReader -NotePropertyValue $reader
+        $installedBefore = Get-TTHash $installed
+        $receiptBefore = Get-TTHash $receiptPath
+        $userPathBefore = Get-TTUserPath
+        $candidate = if ($share -ceq 'Read') { $binary } else { $variant }
+        # Cargo output can be hard-linked, so digest the input without the installed-file guard.
+        $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+        $installErrors = @()
+        $installFailure = $null
+        try {
+            try { & $installer @layout -DevelopmentBinary $candidate -ErrorVariable installErrors | Out-Null }
+            catch { $installFailure = $_ }
+            finally { Remove-PSBreakpoint -Breakpoint $breakpoint }
+            Assert-True ($reader.Hits -eq 1 -and $reader.Errors.Count -eq 0 -and $null -ne $reader.Stream -and $reader.Stream.CanRead) "outside reader sharing [$share] held the exact stage at the swap"
+            Assert-True ((Get-TTUserPath) -ceq $userPathBefore -and $null -eq (Get-TTTask)) "swap with outside reader sharing [$share] leaves PATH and task untouched"
+            if ($share -ceq 'Read') {
+                Assert-True ($null -ne $installFailure) 'outside stage reader that forbids renaming still blocks the swap'
+                $swapRefusals = @($installErrors | Where-Object {
+                    $_ -is [System.Management.Automation.ErrorRecord] -and $_.InvocationInfo.ScriptLineNumber -eq $swapLines[0] -and
+                    [string]::Equals($_.InvocationInfo.ScriptName, $installer, [StringComparison]::OrdinalIgnoreCase) -and
+                    @(Get-TestExceptionChain $_.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -gt 0
+                })
+                Assert-True ($swapRefusals.Count -ge 1) 'refused swap retains its original native sharing error at the installer swap'
+                Assert-True ((Get-TTHash $installed) -ceq $installedBefore -and (Get-TTHash $receiptPath) -ceq $receiptBefore -and -not (Test-Path -LiteralPath $backup) -and (Test-Path -LiteralPath $journalPath) -and (Get-TTHash $stage) -ceq $candidateHash) 'refused swap renames nothing and keeps receipt and transaction evidence'
+                if ($null -ne $script:testPreRollbackContext) {
+                    # This deliberate refusal occupies the single first-refusal capture;
+                    # verify it, then re-arm the capture for unexpected refusals.
+                    $captured = $script:testPreRollbackContext.Report
+                    Assert-True ($null -ne $captured -and $captured.original_error.line -eq $swapLines[0]) 'deliberate swap refusal reaches the pre-rollback capture'
+                    $script:testPreRollbackContext.Report = $null
+                }
+            } else {
+                Assert-True ($null -eq $installFailure) 'swap tolerates an outside stage reader that permits renaming'
+                $swapped = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+                Assert-True ($swapped.id -ceq $previous.id -and $swapped.binary_sha256 -ceq $candidateHash -and (Get-TTHash $installed) -ceq $swapped.binary_sha256) 'shared-reader swap installs the verified digest'
+                Assert-True (-not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage) -and -not (Test-Path -LiteralPath $backup)) 'shared-reader swap commits and clears the transaction'
+            }
+        } finally { if ($null -ne $reader.Stream) { $reader.Stream.Dispose() } }
+    }
+    Assert-TTUnlocked $stage
+    & $installer @layout -DevelopmentBinary $binary
+    Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant() -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'refused swap recovers only after explicit reader release'
+    & $uninstaller @layout -Confirm:$false
+
+    # Managed executables require replaceability, not exclusivity: a transient reader
+    # that shares everything cannot block reinstall, rollback or removal, while a
+    # running image or a user that forbids deletion still can.
+    $layout = New-TestLayout 'shared-executable-reader'
+    & $installer @layout -DevelopmentBinary $binary
+    $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
+    $stage = Join-Path $layout.InstallDirectory 'staged.exe'
+    $backup = Join-Path $layout.InstallDirectory 'previous.exe'
+    $journalPath = Join-Path $layout.InstallDirectory 'transaction.json'
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $variantHash = Get-TTHash $variant
+    $readers = @()
+    try {
+        $readers += [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
+        Assert-Fails { Assert-TTUnlocked $installed } 'sharing reader still fails the exclusive probe kept for data and configuration'
+        & $installer @layout -DevelopmentBinary $variant
+        $current = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+        Assert-True ($current.id -ceq $previous.id -and $current.binary_sha256 -ceq $variantHash -and (Get-TTHash $installed) -ceq $variantHash -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $backup)) 'reinstall tolerates a sharing reader of the installed executable'
+    } finally { foreach ($reader in $readers) { $reader.Dispose() } }
+    # Emulate interruption after the swap and receipt write, before commit. Observe
+    # recovery itself: a later install of the same variant could conceal bad rollback.
+    $receiptPath = Join-Path $layout.InstallDirectory 'install-receipt.json'
+    $receiptBeforeRecovery = Get-TTHash $receiptPath
+    $next = ($current | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+    $next.binary_sha256 = $previous.binary_sha256
+    Write-TTJson $journalPath @{ previous = $current; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+    Copy-Item -LiteralPath $binary -Destination $stage
+    Set-TTCreatedOwner $stage
+    [TelltaleLifecycle.Native]::ReplaceExecutable($stage, $installed, $backup)
+    Write-TTJson $receiptPath $next
+    Assert-True ((Get-TTHash $installed) -ceq $next.binary_sha256 -and (Get-TTHash $backup) -ceq $current.binary_sha256 -and $next.binary_sha256 -cne $current.binary_sha256 -and (Get-TTHash $receiptPath) -cne $receiptBeforeRecovery) 'interrupted transaction has distinct next executable and receipt, plus the previous backup'
+    $readers = @()
+    try {
+        $readers += [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
+        $readers += [IO.File]::Open($backup, 'Open', 'Read', 'ReadWrite, Delete')
+        $mutex = Open-TTLifecycleMutex
+        $lock = $null
+        try {
+            $lock = Open-TTLock $layout.InstallDirectory
+            Restore-TTTransaction $layout.InstallDirectory $layout.DataDirectory | Out-Null
+            $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+            Assert-True ((Get-TTHash $installed) -ceq $current.binary_sha256) 'recovery alone restores the exact previous executable under sharing readers'
+            Assert-True ($recovered.id -ceq $current.id -and $recovered.binary_sha256 -ceq $current.binary_sha256 -and (Get-TTHash $receiptPath) -ceq $receiptBeforeRecovery) 'recovery alone restores the exact previous receipt and installation identity'
+            Assert-True (-not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage) -and -not (Test-Path -LiteralPath $backup)) 'recovery alone clears the transaction under sharing readers'
+            Assert-True (@($readers | Where-Object { -not $_.CanRead }).Count -eq 0) 'recovery alone leaves outside readers open'
+        } finally {
+            if ($null -ne $lock) { $lock.Dispose() }
+            Close-TTLifecycleMutex $mutex
+        }
+        & $installer @layout -DevelopmentBinary $binary
+        $reinstalled = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+        Assert-True ($reinstalled.id -ceq $current.id -and $reinstalled.binary_sha256 -ceq $next.binary_sha256 -and (Get-TTHash $installed) -ceq $next.binary_sha256) 'separate reinstall succeeds after the recovery assertions'
+    } finally { foreach ($reader in $readers) { $reader.Dispose() } }
+    $reader = [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite')
+    try {
+        $beforeBlocked = Get-TreeDigest $layout.InstallDirectory
+        Assert-Fails { & $uninstaller @layout -Confirm:$false } 'reader that forbids deletion still blocks uninstall'
+        Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeBlocked) 'blocked uninstall preserves executable and receipt'
+    } finally { $reader.Dispose() }
+    $reader = [IO.File]::Open($installed, 'Open', 'Read', 'ReadWrite, Delete')
+    try {
+        & $uninstaller @layout -Confirm:$false
+        Assert-True (-not (Test-Path -LiteralPath $installed) -and -not (Test-Path -LiteralPath $layout.InstallDirectory) -and $reader.CanRead) 'uninstall removes the executable and owned root despite a sharing reader'
+    } finally { $reader.Dispose() }
 
     $layout = New-TestLayout 'partial-rollback'
     Invoke-TestDiagnosticInstall $layout $binary
@@ -825,8 +1015,41 @@ try {
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).directory_created) 'recovery preserves fresh directory ownership'
     Assert-True (@(Get-ChildItem -LiteralPath $layout.InstallDirectory -Force | Where-Object { $_.Extension -cin @('.new', '.tmp') }).Count -eq 0) 'metadata staging remains outside installation'
-    & $uninstaller @layout -Confirm:$false
+    # CI once refused an Open of this freshly installed executable here; the
+    # uninstaller's string rethrow discarded which operation and HRESULT.
+    $uninstallErrors = @()
+    try { & $uninstaller @layout -Confirm:$false -ErrorVariable uninstallErrors }
+    catch {
+        $failure = $_
+        Write-TestFailure $failure (Get-TestSharingError $uninstallErrors)
+        throw
+    }
     Assert-True (-not (Test-Path -LiteralPath $layout.InstallDirectory)) 'recovered fresh installation removes owned empty root'
+
+    # The swap is two renames. Interruption between them, or a failed undo of the
+    # first, leaves the backup present and the installed executable absent.
+    $layout = New-TestLayout 'swap-interruption'
+    & $installer @layout -DevelopmentBinary $binary
+    $installed = Join-Path $layout.InstallDirectory 'telltale.exe'
+    $stage = Join-Path $layout.InstallDirectory 'staged.exe'
+    $backup = Join-Path $layout.InstallDirectory 'previous.exe'
+    $journalPath = Join-Path $layout.InstallDirectory 'transaction.json'
+    $receiptPath = Join-Path $layout.InstallDirectory 'install-receipt.json'
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $next = ($previous | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+    $next.binary_sha256 = Get-TTHash $variant
+    Write-TTJson $journalPath @{ previous = $previous; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+    Copy-Item -LiteralPath $variant -Destination $stage
+    Set-TTCreatedOwner $stage
+    [IO.File]::Move($installed, $backup)
+    $beforeRecovery = Get-TreeDigest $layout.InstallDirectory
+    Assert-Fails { & $uninstaller @layout -Confirm:$false } 'interrupted swap blocks cleanup'
+    Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeRecovery -and -not (Test-Path -LiteralPath $installed) -and (Get-TTHash $backup) -ceq $previous.binary_sha256) 'blocked cleanup preserves backup, stage, receipt and journal'
+    & $installer @layout -DevelopmentBinary $binary
+    $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    Assert-True ($recovered.id -ceq $previous.id -and $recovered.binary_sha256 -ceq $previous.binary_sha256 -and (Get-TTHash $installed) -ceq $previous.binary_sha256) 'interrupted swap recovers the previous executable and identity'
+    Assert-True (-not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage) -and -not (Test-Path -LiteralPath $backup)) 'interrupted swap recovery clears the transaction'
+    & $uninstaller @layout -Confirm:$false
 
     # Emulate process interruption after staging, then after executable replacement.
     foreach ($replace in @($false, $true)) {
@@ -839,7 +1062,7 @@ try {
         $stage = Join-Path $layout.InstallDirectory 'staged.exe'
         Copy-Item -LiteralPath $variant -Destination $stage
         Set-TTCreatedOwner $stage
-        if ($replace) { [IO.File]::Replace($stage, (Join-Path $layout.InstallDirectory 'telltale.exe'), (Join-Path $layout.InstallDirectory 'previous.exe')) }
+        if ($replace) { [TelltaleLifecycle.Native]::ReplaceExecutable($stage, (Join-Path $layout.InstallDirectory 'telltale.exe'), (Join-Path $layout.InstallDirectory 'previous.exe')) }
         if (-not $replace) { Invoke-TestDiagnosticInstall $layout $binary }
         else { & $installer @layout -DevelopmentBinary $binary }
         Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq $previous.binary_sha256) 'interrupted transaction recovered'

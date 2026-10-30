@@ -241,8 +241,14 @@ after opting into PATH. The scripts are repository tooling, not additional
 release ZIP members; there is no production checksum bypass.
 
 An exclusive current-user lifecycle mutex, file lock, journal, staged executable, digest-bound backup and
-atomic file replacement support rollback. A running or locked executable blocks
-replacement safely: close it and retry. Rerun the installer after interruption;
+journaled executable rename support rollback. A running executable, or a program
+holding it open without allowing writes and deletion, blocks replacement and removal
+safely: close it and retry. A reader that shares read, write and delete access, such
+as a brief scan of a new executable, does not block installation, rollback or
+uninstall. Each installed executable receives the permissions inherited at
+installation, as on a first install. Reinstallation does not carry permissions or
+alternate data streams (such as `Zone.Identifier`) added to the previous executable;
+apply custom permissions again after reinstalling. Rerun the installer after interruption;
 changed recovery files or task declarations fail closed for operator inspection.
 
 For isolated tests, `-InstallDirectory` and `-DataDirectory` accept separate,

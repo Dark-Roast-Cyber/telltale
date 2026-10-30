@@ -82,7 +82,7 @@ try {
             for ($attempt = 0; $attempt -lt 50 -and $task.State -eq 4; $attempt++) { Start-Sleep -Milliseconds 100 }
             if ($task.State -eq 4) { throw 'Managed Scheduled Task did not stop.' }
         }
-        Assert-TTUnlocked $binary
+        Assert-TTReplaceable $binary
         $receipt | Add-Member -NotePropertyName uninstalling -NotePropertyValue $true -Force
         Write-TTJson (Join-Path $install 'install-receipt.json') $receipt
         if ($null -ne $task) {
