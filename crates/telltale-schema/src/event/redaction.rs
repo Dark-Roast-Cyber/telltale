@@ -1,3 +1,8 @@
+//! The privacy sanitizer. Each `SanitizationContext` (evidence, summary,
+//! diagnostic, URL, path and others) has its own rules; URLs, including
+//! encoded and nested ones, are redacted with bounded decoding. Also owns the
+//! controlled-marker checks that privacy tests use as their oracle.
+
 use std::fmt;
 use std::ops::Range;
 use std::sync::LazyLock;

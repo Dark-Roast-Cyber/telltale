@@ -1,3 +1,6 @@
+//! Maps native OpenCode records to Canonical Observation v2. Reached only
+//! through the acquisition router.
+
 use std::collections::BTreeSet;
 use std::fmt;
 

@@ -1,6 +1,6 @@
 # Telltale threat model
 
-Status: reviewed security-program baseline for Issue #27. This is a model of
+Status: reviewed security-program baseline. This is a model of
 the current repository and release path, not a claim that all residual risks
 are eliminated.
 
@@ -107,9 +107,8 @@ reviewable release provenance. It does not promise perfect redaction,
 exactly-once delivery, production detection efficacy, prevention at an
 observation-only boundary, or protection from actors excluded above.
 
-Issue #23 completed rc.3 clean-host runtime/CRT validation. Issue #27 pins and
-verifies the release supply chain but does not itself establish Windows runtime
-qualification for future candidates.
+Pinning and verifying the release supply chain does not establish Windows
+runtime qualification for a candidate; each candidate is qualified separately.
 
 ## Related controls
 

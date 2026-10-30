@@ -1,3 +1,7 @@
+//! Crate-private Claude Code JSONL record and content-block structures, and
+//! their extraction. A known schema failure is terminal; there is no fallback
+//! parser.
+
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 

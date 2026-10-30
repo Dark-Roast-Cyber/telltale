@@ -10,15 +10,15 @@ to a live host.
 
 Use the [installation guide](install.md) for published releases; qualification
 requirements and results are recorded with each
-[GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). Use this procedure only for an exact unreleased development candidate
-in a lab or on an explicitly approved canary target; it does not replace the
-normal release process.
+[GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). Use
+this procedure only for an exact unreleased development candidate in a lab or
+on an explicitly approved canary target; it does not replace the normal release
+process.
 
-The compatibility record and pinned backup/rollback references below belong to
-the historical Issue #37 lab against `v0.5.0`. They do not establish rollback
-compatibility with the current stable release. A new canary needs its own
-approved baseline, backup inventory, and validated upgrade/rollback evidence;
-do not reuse the historical rollback commands for a different baseline.
+The compatibility record and rollback recipe below come from a historical lab
+against `v0.5.0`. They do not establish rollback compatibility with the current
+stable release. A new canary needs its own approved baseline, backup inventory,
+and validated upgrade/rollback evidence.
 
 ## Identity
 
@@ -33,16 +33,9 @@ SHA-256 of the exact candidate archive and extracted binary
 
 The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
-not replace the full SHA and checksums. Published release identities and
-qualification results are maintained in the
-[GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases)
-and the [version history](versioning.md#current-series). For a given package line,
+not replace the full SHA and checksums. For a given package line,
 version output alone cannot distinguish an untagged build from an official
-release artifact.
-The historical Issue #37 artifact from
-`dd3ef2dc2fa0c7ab256f43a62ce3e0b183957248` still reports `0.5.0` and
-retains its original archive/binary checksums. Never
-substitute a newer build into that evidence. See the [versioning contract](versioning.md).
+release artifact. See the [versioning contract](versioning.md#current-series).
 
 Use `telltale-dev-<40-character-sha>-<target>.tar.gz` for the archive name.
 Never give a development archive an official `telltale-v<version>-*` release
@@ -50,34 +43,23 @@ name, attach it to an existing GitHub Release, or call it stable.
 
 ## Historical Issue #37 compatibility record
 
-This matrix compares official tag `v0.5.0` at
-`2d37bd52bd004ddad4956f2fa4f6f3c791e7ee9e` with development `main` after
-Issue #29, as recorded for the Issue #37 lab. This is historical compatibility
-evidence, not a claim that every later build was exercised. Re-run the gates below
-only for an explicitly approved exact candidate.
+Historical evidence from comparing official `v0.5.0` with a later development
+candidate; not a claim that every later build was exercised. The lessons that
+still apply to any canary:
 
-| Surface | v0.5.0 release | Historical #37 development candidate | Classification and rollback effect |
-| --- | --- | --- | --- |
-| Binary identity | Tag, release archive/checksum, `0.5.0 (2d37bd52bd00)` | Full source SHA, archive/binary SHA-256, `0.5.0 (<short-sha>)` | Same reported version is ambiguous. Retain or recover the release archive and checksum. |
-| Event schema | Event 3.0 | Event 3.0, byte-identical schema | Backward and forward compatible. The non-production Event4 foundation is not active in this path. |
-| Rules fingerprint | No public producer-manifest surface | Rule v1 fingerprint and producer manifest; bundled rule content has advanced | Detection output may differ. Do not copy development bundled rules over release rules. |
-| Configuration format | Outputs version 1 | Outputs version 1 with additive delivery settings | Existing v0.5.0 config is backward-compatible. Development-only keys are not downgrade-compatible. |
-| Output configuration | JSONL, HEC, and Elastic sink entries | Same entries plus durable delivery policy/outbox | Existing files validate on both. `delivery:` is rejected by v0.5.0 and must be restored or removed on rollback. |
-| Event3 JSONL | Append-only durable first write | Same contract and rotation naming | May be left in place, but snapshot it with the state set before canary. `event_id` permits downstream deduplication but does not make HEC or UF exactly-once. |
-| Scanner state and cursors | State schema 1.0 | State schema 1.0; source file is byte-identical | Tested v0.5.0 → development → v0.5.0. May be reused, but backup is mandatory before canary. |
-| Durable outbox | Absent | Optional private SQLite state | v0.5.0 does not read it. Restore the pre-upgrade state/config set; quarantine development outbox state rather than merging it. |
-| Protected assignments | Absent | Optional foundation; no active Roo/Kilo projector | Irrelevant to the canonical scan. If explicitly used by a lab, back it up and do not present it to v0.5.0 as compatible state. |
-| Environment file | Optional canonical file | Same path and semantics; additive variables only | Existing file is compatible. Restore the backup if changed for the canary. |
-| Systemd service | Canonical service contract | Repository example unchanged; generated user unit remains canonical | Compatible. Preserve exact prior unit bytes and restore them if locally customized. |
-| Systemd timer | One-minute initial/five-minute recurring timer | Unchanged | Compatible. Record enabled/active state and restore it exactly. |
-| Installer | Release provenance and recoverable transaction | Adds explicit exact local development-archive mode; release mode unchanged | Candidate archive/version/SHA/checksum validation occurs before lock, unit, schedule, or binary mutation. Failed installer smoke restores the prior binary and units. |
-| Release package | Canonical nine-member archive | Same nine-member archive shape | Compatible shape. Development archive is local evidence, not a Release asset or attested release. |
+| Surface | Rollback effect |
+| --- | --- |
+| Binary identity | The same reported version is ambiguous. Retain or recover the release archive and checksum. |
+| Event schema | Event 3.0 is byte-identical across both, so JSONL may stay in place; snapshot it with the state set. `event_id` permits downstream deduplication but does not make HEC or UF exactly-once. |
+| Rules | Bundled rule content advances; detection output may differ. Do not copy development bundled rules over release rules. |
+| Configuration | Newer keys (such as `delivery:`) are rejected by the older release and must be restored or removed on rollback. |
+| Scanner state | State schema 1.0 round-tripped release → development → release with a synthetic fixture. Backup is still mandatory. |
+| Durable outbox and protected assignments | The older release does not read them. Quarantine them rather than merging. |
+| Environment file, service and timer | Compatible. Preserve exact prior bytes and enabled/active state, and restore them exactly. |
+| Installer and package | Development-archive validation runs before any lock, unit, schedule or binary mutation; failed smoke restores the prior binary and units. A development archive is local evidence, not a Release asset. |
 
-The scanner-state round trip was exercised with a synthetic fixture. The
-development-only durable output document was accepted by development and
-rejected by v0.5.0 at the unknown `delivery` field. That is why rollback backs
-up and restores configuration and state together even though scanner state 1.0
-itself is bidirectionally readable.
+Because configuration is not downgrade-compatible even though scanner state is,
+rollback restores configuration and state together.
 
 ## Output routing
 
@@ -211,9 +193,8 @@ find "$backup" -type f ! -name backup.manifest -print0 | sort -z | \
 sha256sum -c "$backup/backup.manifest"
 ```
 
-For the historical Issue #37 baseline, confirm the retained binary checksum
-against the published v0.5.0 archive record. A different baseline requires its
-own verified archive record. A backup failure stops the canary.
+Confirm the retained binary checksum against the baseline's verified archive
+record. A backup failure stops the canary.
 
 ## Install and canary
 
@@ -260,9 +241,9 @@ the unselected remote path is disabled before claiming no duplicate ingestion.
 
 ## Historical Issue #37 rollback recipe
 
-This recipe restores the historical `v0.5.0` baseline. It is not a current-release
-rollback instruction or evidence that later state/configuration is downgrade-safe.
-Rollback after a completed install is configuration-aware:
+This recipe restored the historical `v0.5.0` baseline. It is not a
+current-release rollback instruction or evidence that later state or
+configuration is downgrade-safe; adapt it to the approved baseline.
 
 1. Disable and stop the timer; stop the service.
 2. Quarantine the complete post-canary state/config directory for diagnosis.
@@ -318,11 +299,9 @@ make release-public-docs-check
 make CARGO_LOCKED=--locked release-fixture-smoke
 ```
 
-Also run canonical evaluation and require exactly 37 corpus cases, 29 scored,
-10 TP, 0 FP, 19 TN, and 0 FN. Verify repository and generated units with
-`systemd-analyze verify` where available. Issue #15's absent optional
-`EnvironmentFile` case, the present canonical case, noncanonical rejection, and
-pre-replacement ordering are covered by the installer regression suite.
+Also run canonical evaluation and require the counts recorded in
+[tests/evaluation](../tests/evaluation/README.md) to hold unchanged. Verify repository and generated units with
+`systemd-analyze verify` where available.
 
 ## Release recommendation
 

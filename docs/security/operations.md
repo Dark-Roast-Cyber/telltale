@@ -1,7 +1,7 @@
 # Security and release operations
 
-These commands are the repository-owned surfaces for Issue #27. Run them
-from the repository root. They do not publish, tag, or mutate GitHub.
+These commands are the repository-owned security and release surfaces. Run
+them from the repository root. They do not publish, tag, or mutate GitHub.
 
 ## Local security checks
 
@@ -128,7 +128,6 @@ SBOM fails closed.
 
 ## Windows release qualification
 
-Issue #23 closed after the exact rc.3 Windows artifact passed clean-host
-execution with its static MSVC CRT policy. Issue #27 does not implement or claim
-to solve that Windows runtime requirement; retain the native-verification and
-release-readiness procedures for future candidate qualification.
+Release artifacts link the MSVC CRT statically. These checks pin and verify the
+supply chain but do not qualify a Windows runtime; each candidate still needs
+native verification and clean-host qualification.

@@ -1,3 +1,8 @@
+//! Default JSONL log and scanner state paths per path profile and platform,
+//! with `TELLTALE_LOG_PATH` and `TELLTALE_STATE_PATH` overrides. Embedding
+//! hosts and the local event feed reuse this resolver instead of copying
+//! defaults.
+
 use std::env;
 use std::path::PathBuf;
 

@@ -1,3 +1,6 @@
+//! Maps native Claude Code records to Canonical Observation v2, including
+//! per-unit quarantine. Reached only through the acquisition router.
+
 use std::fmt;
 
 use telltale_schema::observation::{

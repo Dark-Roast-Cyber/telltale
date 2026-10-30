@@ -1,3 +1,12 @@
+//! The Event 3.0 model: the frozen external event contract, its native
+//! constructors and terminal serialization.
+//!
+//! Event construction is the privacy boundary: constructors sanitize, and
+//! sinks write the resulting bytes unchanged. Do not add fields, change
+//! constructors' output or backport new semantics; the current schema must stay
+//! byte-identical to `schemas/historical/event-3.0.schema.json`. Consumers
+//! parse events with `consumer::Event3Record`, never by deserializing `Event`.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Serialize, Serializer, ser::Error as _};

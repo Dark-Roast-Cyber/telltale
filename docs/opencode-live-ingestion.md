@@ -361,9 +361,9 @@ Observation timestamps can refresh; byte-identical state files are not promised.
 The earlier live validation emitted one additional detection and six activity
 events without a source append, then settled to zero. Its production-risk note
 remains relevant: consumers treating every aggregate as a new action can miscount
-activity or promote duplicate incidents. The isolated two-part store on starting
-commit `0fe85f062db5e7ebe818ebde83b6ac0aa693ac48` and the corrected build showed
-2/1/1 parsed records and 2/2/0 emitted aggregates. Current synthetic
+activity or promote duplicate incidents. The isolated two-part store on the
+starting commit and the corrected build showed 2/1/1 parsed records and 2/2/0
+emitted aggregates. Current synthetic
 characterization confirms those counts with unchanged database/WAL bytes and
 high-water; earlier fingerprints remain retained. Both whole-source baseline
 snapshots and source contributions stay empty because `PartialSource` cannot

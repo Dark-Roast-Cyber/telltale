@@ -1,3 +1,6 @@
+//! Bounded JSON parsing: nesting depth and excess input are rejected while
+//! parsing, before a value is built.
+
 use crate::{Failure, Limits};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};

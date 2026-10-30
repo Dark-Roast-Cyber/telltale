@@ -1,3 +1,6 @@
+//! Splunk HTTP Event Collector sink. Wraps each canonical payload in a HEC
+//! envelope whose `time` comes from the event `timestamp`.
+
 use std::time::Duration;
 
 use serde::Serialize;

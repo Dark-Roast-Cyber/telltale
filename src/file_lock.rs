@@ -1,3 +1,8 @@
+//! Safe file primitives for state, JSONL and outbox files: sidecar locks,
+//! no-follow pinned reads, stable file identity, atomic replacement and
+//! private permissions. Security-sensitive file handling belongs here, not in
+//! its callers.
+
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};

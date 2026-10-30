@@ -1,3 +1,6 @@
+//! Tests pinning what the bundled command-effect rules (persistence, cloud
+//! credentials, DNS encoding, destructive commands) match and ignore.
+
 use super::{CompiledRuleSet, load_default_rule_set};
 
 fn bundled() -> CompiledRuleSet {

@@ -1,3 +1,8 @@
+//! Allowlist suppression: loads suppression entries, matches them against
+//! projected detections, marks suppressed events, and fingerprints the
+//! effective suppressions for producer provenance. Allowlists run once, after
+//! detection and Event3 projection.
+
 use std::fs;
 use std::path::Path;
 

@@ -1,3 +1,6 @@
+//! Project configuration: the project roots searched for project-local
+//! session stores.
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 

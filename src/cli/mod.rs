@@ -1,3 +1,9 @@
+//! Command-line surface: argument parsing, subcommand dispatch, and resolution
+//! of flags, environment and local configuration into run settings.
+//!
+//! Each subcommand's work lives in its own module (`scan`, `export`, `migrate`,
+//! `cursor`, `coverage`, `rules_server`); keep this module to wiring.
+
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};

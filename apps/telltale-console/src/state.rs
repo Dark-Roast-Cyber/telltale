@@ -1,3 +1,6 @@
+//! Console view state: a bounded window of retained events, filters,
+//! summaries and feed status.
+
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use telltale_core::{Event3Record, FeedBatch, FeedNoticeCode};
 use telltale_schema::event::{Event3Family, Event3Health, Event3Severity};

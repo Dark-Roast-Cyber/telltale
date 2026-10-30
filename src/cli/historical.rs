@@ -1,3 +1,7 @@
+//! Reading and schema validation of historical Event 1.0, 2.0 and 3.0 JSONL
+//! records, shared by export and migration. Historical bytes are validated,
+//! not rewritten.
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;

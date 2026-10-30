@@ -1,3 +1,7 @@
+//! Event 3.0 risk accounting: risk contributions, their checked sum, and the
+//! severity thresholds. This is Event3 compatibility scoring; Detection v2 has
+//! no aggregate risk model.
+
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 

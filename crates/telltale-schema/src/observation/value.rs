@@ -1,3 +1,6 @@
+//! Bounded structured values and text for observations, and the limits they are
+//! validated against.
+
 use std::collections::BTreeMap;
 
 use unicode_normalization::UnicodeNormalization;

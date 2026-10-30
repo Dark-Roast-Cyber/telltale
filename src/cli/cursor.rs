@@ -1,3 +1,7 @@
+//! `telltale cursor`: lists stored OpenCode ingestion cursors or discards one
+//! exactly, guarded by its digest. It never reads session stores or touches
+//! history and baseline state.
+
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
