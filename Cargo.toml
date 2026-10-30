@@ -19,7 +19,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.7.0-rc.4"
+version = "0.7.0"
 edition = "2024"
 # Embedding crates only; the CLI and console build with rust-toolchain.toml.
 rust-version = "1.88"
@@ -44,12 +44,12 @@ hex = "0.4.3"
 time = { version = "0.3.47", features = ["formatting", "macros", "parsing"] }
 unicode-normalization = "0.1"
 uuid = { version = "1.11", features = ["v4"] }
-telltale-schema = { path = "crates/telltale-schema", version = "=0.7.0-rc.4" }
-telltale-inference = { path = "crates/telltale-inference", version = "=0.7.0-rc.4" }
-telltale-rules = { path = "crates/telltale-rules", version = "=0.7.0-rc.4" }
-telltale-sources = { path = "crates/telltale-sources", version = "=0.7.0-rc.4" }
-telltale-detect = { path = "crates/telltale-detect", version = "=0.7.0-rc.4" }
-telltale-core = { path = "crates/telltale", version = "=0.7.0-rc.4" }
+telltale-schema = { path = "crates/telltale-schema", version = "=0.7.0" }
+telltale-inference = { path = "crates/telltale-inference", version = "=0.7.0" }
+telltale-rules = { path = "crates/telltale-rules", version = "=0.7.0" }
+telltale-sources = { path = "crates/telltale-sources", version = "=0.7.0" }
+telltale-detect = { path = "crates/telltale-detect", version = "=0.7.0" }
+telltale-core = { path = "crates/telltale", version = "=0.7.0" }
 
 [package]
 name = "telltale-cli"
