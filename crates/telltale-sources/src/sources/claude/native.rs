@@ -71,12 +71,23 @@ pub(crate) fn extract_claude_native_records_with_limits(
             });
         }
 
-        let ownership =
-            session_identity(claude_envelopes(&value).into_iter().flat_map(|envelope| {
-                ["session_id", "sessionID", "sessionId"]
-                    .into_iter()
-                    .filter_map(move |key| envelope.get(key))
-            }));
+        // Claude names a transcript by an outer `sessionId`. Current Claude Code
+        // also writes an outer `session_id`, which can name a different session
+        // that shares the transcript, so beside an outer `sessionId` only
+        // `sessionId` claims ownership.
+        let keys: &[&str] = if value
+            .get("sessionId")
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+        {
+            &["sessionId"]
+        } else {
+            &["session_id", "sessionID", "sessionId"]
+        };
+        let ownership = session_identity(
+            claude_envelopes(&value)
+                .into_iter()
+                .flat_map(|envelope| keys.iter().filter_map(move |key| envelope.get(*key))),
+        );
         let session_id = ownership.as_ref().ok().cloned().flatten();
         let discriminator = claude_discriminator(&value);
         let conversational = discriminator.is_none_or(is_known_claude_discriminator);

@@ -1,10 +1,19 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.3` is prepared source only. `v0.7.0-rc.2` is published as prerelease ID `409281155` from `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native verification passed in run `38098389234` using verifier tooling `8bc745fac485ffede1c4b06dbbc4ae6862ec5349`. RC2 clean Windows without a Redistributable passed (Issue #87); clean Linux, canary and stable promotion remain pending. `v0.7.0-rc.1` (prerelease ID `397543935`) is superseded. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.4` is prepared source only, to supersede rc.3 with a Claude Code transcript ownership fix. `v0.7.0-rc.3` is published as prerelease ID `429369612` from `41a6c0d8dd3e69a89d898f83ee4d138b9388ecaf`; five-platform native verification passed in run `41112932727` using verifier tooling `6360e8b16cdde3221088a1ffdf440984f1642ee1`. Earlier 0.7.0 candidates' evidence is historical and does not qualify rc.4. Clean-host qualification, live-host validation, canary and stable promotion remain pending for rc.4. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## 0.7.0-rc.3 — prepared source (not tagged or published)
+## 0.7.0-rc.4 — prepared source (not tagged or published)
+
+- Claude Code transcripts whose records carry an outer `session_id` that
+  differs from the transcript's `sessionId`, as current Claude Code writes after
+  a continuation, are now owned by `sessionId` instead of failing acquisition
+  for the whole transcript. Conflicting `sessionId` values still fail closed.
+
+---
+
+## 0.7.0-rc.3 — published prerelease (five-platform native verified)
 
 - The repository no longer tracks internal design, planning and release-process
   notes, OpenSpec specifications, the roadmap, or agent tooling. Product,
@@ -378,7 +387,7 @@
   validation. ZIP inventory and Event 3.0 are unchanged. OpenCode persisted
   cursor/token compatibility is covered by the current
   [migration guide](docs/migrations/0.7.0.md#opencode-v2-changes-after-rc2).
-  RC3 tagging/publication and qualification remain separate gates.
+  Publication, native verification and clean-host qualification are separate gates.
 - Bound untrusted rule-server requests, source admission, MCP inventory,
   historical export and durable sink delivery. Failed MCP reads restore their
   byte reservation; one unreadable configuration cannot starve later inputs.
@@ -391,6 +400,10 @@
   accepted-socket mode explicit in the macOS/Linux backlog regression.
 - Coordinate all workspace versions, internal requirements and both lockfiles;
   add exact-source prospective preflight and embedding/Git-consumer CI evidence.
+- Event 3.0 and persisted state formats are unchanged. Five-platform native
+  verification passed in run `41112932727`; clean-host gates remain unqualified.
+  Superseded by rc.4 preparation after live-host validation found a Claude Code
+  transcript ownership regression. Crates.io publication remains deferred.
 
 ---
 
@@ -409,12 +422,18 @@
 - Encoded tool arguments are decoded member by member, so one oversized member
   cannot hide URL facts or put replaced text into command text.
 - Event 3.0 and persisted state formats are unchanged. Five-platform native
-  verification passed in run `38098389234`; clean-host gates are pending.
-  Crates.io publication remains deferred.
+  verification passed in run `38098389234` using verifier tooling
+  `8bc745fac485ffede1c4b06dbbc4ae6862ec5349`. Prerelease ID `409281155` is
+  from `c3132f22f0758912fbcbc7451f5fefee514c5bdb`. RC2 clean Windows without
+  a Redistributable passed (Issue #87); clean Linux, canary and stable promotion
+  remained pending. Crates.io publication remains deferred.
 
 ---
 
 ## 0.7.0-rc.1 — published prerelease (five-platform native qualified)
+
+- Prerelease ID `397543935` is superseded. Historical `v0.6.0-rc.3`
+  qualification does not qualify the 0.7.0 candidates.
 
 - Eight exact built-in source identities across six agent families replace the
   broader legacy denominator. Retired identities are removed, not registered as

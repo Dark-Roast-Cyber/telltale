@@ -9,8 +9,9 @@ format.
 
 - `v0.6.0` is the current stable GitHub Release.
 - `0.7.0` is in release candidates. The latest published prerelease is
-  `v0.7.0-rc.2`; the workspace is prepared at `0.7.0-rc.3`, which is unpublished
-  source preparation. Each candidate's source SHA, artifacts and qualification
+  `v0.7.0-rc.3`; the workspace is prepared at `0.7.0-rc.4`, which is unpublished
+  source preparation to supersede rc.3 with a Claude Code transcript ownership
+  fix. Each candidate's source SHA, artifacts and qualification
   results are recorded on its [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases)
   and the release qualification issue. Stable `v0.7.0` requires separate
   qualification and a reviewed stable-version promotion.
@@ -112,7 +113,7 @@ dependencies), and member lock entries, and tests the gate's own failure cases.
   for post-publication metadata checks without requiring Git history or an
   absent tag.
 - An RC tag requires the **full matching RC package version** (for example
-  `v0.7.0-rc.3` with package `0.7.0-rc.3`).
+  `v0.7.0-rc.4` with package `0.7.0-rc.4`).
 
 Fetched immutable stable Git tags are the published-version floor; no
 latest-release constant or live GitHub lookup is used. CI uses a full-history
@@ -175,7 +176,7 @@ availability immediately before publication, then publish in the gate's order,
 waiting after each until it resolves from the index without a local patch.
 After all six are available, remove every local `patch.crates-io` override and
 confirm the clean consumers and CLI installation using only pinned
-`=0.7.0-rc.3` registry dependencies while that remains the workspace package
+`=0.7.0-rc.4` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version. Do not
 declare publication complete before those unpatched checks pass, and do not
 publish credentials or local release state.
