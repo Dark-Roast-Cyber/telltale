@@ -259,9 +259,9 @@ def validate_release_metadata(metadata_path: Path, pin: dict, archive_name: str,
         or metadata.get("id") != pin["release_id"]
         or metadata.get("tag_name") != pin["release_tag"]
         or metadata.get("draft") is not False
-        or metadata.get("prerelease") is not True
+        or metadata.get("prerelease") is not ("-rc." in pin["release_tag"])
     ):
-        fail("GitHub Release metadata does not match the immutable pinned candidate")
+        fail("GitHub Release metadata does not match the immutable pinned release")
 
     assets = metadata.get("assets")
     if not isinstance(assets, list):

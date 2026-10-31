@@ -125,10 +125,10 @@ jobs:
           if (
               release.get("id") != pin["release_id"]
               or release.get("tag_name") != pin["release_tag"]
-              or release.get("prerelease") is not True
+              or release.get("prerelease") is not ("-rc." in tag)
               or release.get("draft") is not False
           ):
-              raise SystemExit("GitHub Release metadata is not the immutable prerelease")
+              raise SystemExit("GitHub Release metadata does not match the immutable pinned release")
           assets = release.get("assets")
           if not isinstance(assets, list):
               raise SystemExit("GitHub Release metadata has no usable assets list")

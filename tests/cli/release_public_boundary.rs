@@ -3376,7 +3376,7 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "release.get(\"id\") != pin[\"release_id\"]",
         "release.get(\"tag_name\") != pin[\"release_tag\"]",
         "release.get(\"draft\") is not False",
-        "release.get(\"prerelease\") is not True",
+        "release.get(\"prerelease\") is not (\"-rc.\" in tag)",
         "\"sha256:\" + target[\"archive_sha256\"]",
         "test \"$(git rev-parse HEAD^{commit})\" = \"${GITHUB_SHA}\"",
         "fetch-depth: 0",
@@ -3726,7 +3726,7 @@ fn release_native_verify_rc3_pin_remains_exact_and_workflow_is_candidate_bound()
     assert!(workflow.contains("tag != \"v\" + str(pin.get(\"package_version\", \"\"))"));
     assert!(workflow.contains("release.get(\"id\") != pin[\"release_id\"]"));
     assert!(workflow.contains("release.get(\"tag_name\") != pin[\"release_tag\"]"));
-    assert!(workflow.contains("release.get(\"prerelease\") is not True"));
+    assert!(workflow.contains("release.get(\"prerelease\") is not (\"-rc.\" in tag)"));
     assert!(workflow.contains("release.get(\"draft\") is not False"));
     assert!(workflow.contains("target.get(\"archive\") != archive_name"));
     assert!(workflow.contains("test \"${GITHUB_REF}\" = \"refs/heads/main\""));
@@ -4096,6 +4096,69 @@ fn release_native_verify_select_pin_fails_closed() {
     let output = select_native_pin(dir, "v0.6.0-rc.3", target);
     assert!(!output.status.success());
     assert!(native_output(&output).contains("not a regular file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn release_native_verify_requires_matching_stable_and_rc_metadata() {
+    let temp = tempdir().expect("metadata probe tempdir");
+    let pin_path = temp.path().join("pin.json");
+    let metadata_path = temp.path().join("release.json");
+    let mut pin: Value =
+        serde_json::from_slice(&fs::read("scripts/release-native-verify-0.7.0-rc.4.json").unwrap())
+            .unwrap();
+    let target_name = "x86_64-unknown-linux-gnu";
+    let probe = |pin: &Value, prerelease: bool| {
+        fs::write(&pin_path, serde_json::to_vec(pin).unwrap()).unwrap();
+        fs::write(
+            &metadata_path,
+            serde_json::json!({
+                "id": pin["release_id"], "tag_name": pin["release_tag"],
+                "draft": false, "prerelease": prerelease,
+                "assets": [{
+                    "name": pin["targets"][target_name]["archive"],
+                    "digest": format!("sha256:{}", pin["targets"][target_name]["archive_sha256"].as_str().unwrap())
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        Command::new("python3")
+            .args([
+                "-c",
+                "import json, runpy, sys; from pathlib import Path; verifier = runpy.run_path('scripts/release-native-verify'); pin = verifier['validate_pin'](json.loads(Path(sys.argv[1]).read_text())); target = pin['targets'][sys.argv[3]]; verifier['validate_release_metadata'](Path(sys.argv[2]), pin, target['archive'], target['archive_sha256'])",
+            ])
+            .arg(&pin_path)
+            .arg(&metadata_path)
+            .arg(target_name)
+            .output()
+            .expect("native release metadata probe")
+    };
+    let output = probe(&pin, true);
+    assert!(output.status.success(), "{}", native_output(&output));
+    let output = probe(&pin, false);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("metadata does not match"));
+
+    pin["release_tag"] = Value::String("v0.7.0".into());
+    pin["package_version"] = Value::String("0.7.0".into());
+    pin["version_prefix"] = Value::String(format!(
+        "telltale 0.7.0 ({}",
+        &pin["source_sha"].as_str().unwrap()[..12]
+    ));
+    for target in pin["targets"].as_object_mut().unwrap().values_mut() {
+        target["archive"] = Value::String(
+            target["archive"]
+                .as_str()
+                .unwrap()
+                .replace("v0.7.0-rc.4", "v0.7.0"),
+        );
+    }
+    let output = probe(&pin, false);
+    assert!(output.status.success(), "{}", native_output(&output));
+    let output = probe(&pin, true);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("metadata does not match"));
 }
 
 #[cfg(unix)]
