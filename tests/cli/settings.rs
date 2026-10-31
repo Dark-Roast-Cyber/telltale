@@ -274,3 +274,102 @@ fn config_show_explains_files_environment_and_defaults() {
     );
     assert_eq!(without_files["settings"]["rules.community"]["value"], true);
 }
+
+#[test]
+fn unordered_risk_thresholds_fail_every_consumer_before_output() {
+    let temp = tempdir().expect("tempdir");
+    let stores = temp.path().join("session_stores");
+    codex_store(&stores);
+    let config_root = temp.path().join("config");
+    let unordered = "version: 1\nrisk_thresholds: {low: 90, medium: 50, high: 10, critical: 5}\n";
+    settings_file(&config_root, "50-unordered.yaml", unordered);
+    // `export --correlate` reads only the default roots.
+    settings_file(
+        &temp.path().join(".config/telltale"),
+        "50-unordered.yaml",
+        unordered,
+    );
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let config_dir = config_root.to_string_lossy().into_owned();
+    let root = stores.to_string_lossy().into_owned();
+    let log = log_path.to_string_lossy().into_owned();
+    let state = state_path.to_string_lossy().into_owned();
+    let runtime = [
+        "--allow-fixtures",
+        "--config-dir",
+        &config_dir,
+        "--root",
+        &root,
+        "--log-path",
+        &log,
+        "--state-path",
+        &state,
+    ];
+
+    let mut commands: Vec<Vec<&str>> = vec![
+        vec!["config", "validate", "--config-dir", &config_dir],
+        vec!["config", "show", "--config-dir", &config_dir],
+        vec!["config", "provenance", "--config-dir", &config_dir],
+        vec!["rules", "validate", "--config-dir", &config_dir],
+        vec!["export", "--correlate", "--log-path", &log],
+    ];
+    commands.push([&["scan", "--once"][..], &runtime].concat());
+    commands.push([&["watch", "--iterations", "1"][..], &runtime].concat());
+    for args in commands {
+        let output = telltale(temp.path())
+            .args(&args)
+            .output()
+            .expect("run telltale");
+        assert!(
+            !output.status.success(),
+            "{args:?} accepted unordered thresholds"
+        );
+        assert!(output.stdout.is_empty(), "{args:?} wrote stdout");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Provenance keeps file-derived errors private.
+        if args[1] != "provenance" {
+            assert_eq!(
+                stderr.trim_end(),
+                "invalid risk thresholds: low=90 (settings file 50-unordered.yaml) is above \
+                 medium=50 (settings file 50-unordered.yaml); expected low <= medium <= high <= critical",
+                "{args:?}"
+            );
+        }
+        assert!(!log_path.exists() && !state_path.exists(), "{args:?}");
+    }
+
+    // A valid file inverted by the environment fails the same way, and the
+    // same environment still applies with --no-local-config.
+    let ordered_root = temp.path().join("ordered");
+    settings_file(
+        &ordered_root,
+        "10-ordered.yaml",
+        "version: 1\nrisk_thresholds: {low: 10, medium: 20, high: 30, critical: 40}\n",
+    );
+    let ordered_dir = ordered_root.to_string_lossy().into_owned();
+    for local in [
+        vec!["--config-dir", ordered_dir.as_str()],
+        vec!["--no-local-config"],
+    ] {
+        let output = telltale(temp.path())
+            .env("TELLTALE_RISK_THRESHOLD_HIGH", "60")
+            .env("TELLTALE_RISK_THRESHOLD_CRITICAL", "55")
+            .args(["scan", "--once", "--allow-fixtures"])
+            .args(&local)
+            .args(["--root", &root, "--log-path", &log, "--state-path", &state])
+            .output()
+            .expect("run telltale scan");
+        assert!(!output.status.success(), "{local:?}");
+        assert!(output.stdout.is_empty(), "{local:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "high=60 (TELLTALE_RISK_THRESHOLD_HIGH) is above \
+                 critical=55 (TELLTALE_RISK_THRESHOLD_CRITICAL)"
+            ),
+            "{local:?}: {stderr}"
+        );
+        assert!(!log_path.exists() && !state_path.exists());
+    }
+}

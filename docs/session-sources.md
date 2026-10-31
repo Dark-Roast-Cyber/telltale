@@ -107,7 +107,9 @@ escaping rules.
 ## Host Root Rules
 
 - `Home` sources resolve from `HOME` on Linux/macOS and `HOME` or `USERPROFILE` on Windows.
-- `CodexHome` resolves from `CODEX_HOME` when set, otherwise `~/.codex`.
+- `CodexHome` resolves from `CODEX_HOME` when set, otherwise `~/.codex`. Only
+  the default `--root .` reads `CODEX_HOME`. Any other root is searched as a
+  home directory, so Codex stores resolve to `<root>/.codex`.
 - `DataHome` resolves to `XDG_DATA_HOME` or `~/.local/share` on Linux, `~/Library/Application Support` on macOS, and `LOCALAPPDATA`, then `APPDATA`, then `%USERPROFILE%\AppData\Local` on Windows.
 - OpenCode environment-resolved host discovery (the default `--root .`) uses
   nonempty `XDG_DATA_HOME/opencode`, otherwise `~/.local/share/opencode`, on
@@ -182,6 +184,10 @@ escaping rules.
   must be available to the **scanner process**; the checked-in system service
   uses a non-`.` root, so merely adding the variable to its environment does not
   enable relocation. No service configuration or live validation is implied.
+  When a non-`.` root leaves `CODEX_HOME`, or an `OPENCODE_DB` other than
+  `:memory:`, unused for a selected client, the scan summary reports the
+  stdout-only `session_store_environment_ignored` diagnostic warning. It never
+  includes the value.
 
 ## Linux Operational Notes
 

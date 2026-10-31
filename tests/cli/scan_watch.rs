@@ -5369,6 +5369,25 @@ fn watch_command_is_available_for_realtime_scans() {
     assert!(stdout.contains("--min-scan-interval-ms"));
     assert!(stdout.contains("--iterations"));
     assert!(stdout.contains("--client"));
+    let flat = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("--initial-scan"));
+    assert!(flat.contains("not counted by --iterations"), "{flat}");
+    assert!(flat.contains("restart watch to apply"), "{flat}");
+    assert!(flat.contains("CODEX_HOME"), "{flat}");
+    assert!(flat.contains("still apply"), "{flat}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--help"])
+        .output()
+        .expect("run telltale scan help");
+    let flat = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(flat.contains("--fail-on-source-errors"), "{flat}");
+    assert!(flat.contains("Exit with status 3"), "{flat}");
+    assert!(flat.contains("--dry-run writes nothing"), "{flat}");
+    assert!(flat.contains("never scan state"), "{flat}");
 }
 
 fn seed_relocated_opencode(path: &Path) -> rusqlite::Connection {
@@ -8543,6 +8562,8 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
+        .env("TELLTALE_RISK_THRESHOLD_LOW", "1")
+        .env("TELLTALE_RISK_THRESHOLD_MEDIUM", "1")
         .env("TELLTALE_RISK_THRESHOLD_HIGH", "1")
         .current_dir(temp.path())
         .output()
@@ -8721,6 +8742,8 @@ fn scan_once_uses_canonical_threshold_without_network() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
+        .env("TELLTALE_RISK_THRESHOLD_LOW", "1")
+        .env("TELLTALE_RISK_THRESHOLD_MEDIUM", "1")
         .env("TELLTALE_RISK_THRESHOLD_HIGH", "1")
         .env_remove("LITELLM_API_BASE")
         .env_remove("LITELLM_API_KEY")
@@ -9004,4 +9027,546 @@ fn scanner_error_events_dedup_on_subsequent_scans() {
         1,
         "an unchanged outage alerts once, with its first scanner_error"
     );
+}
+
+fn source_failure_scan(root: &Path, log_path: &Path, state_path: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .env_remove("CODEX_HOME")
+        .env_remove("OPENCODE_DB")
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(root)
+        .arg("--log-path")
+        .arg(log_path)
+        .arg("--state-path")
+        .arg(state_path);
+    command
+}
+
+fn scan_status(log_path: &Path, state_path: &Path) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .arg("status")
+        .arg("--log-path")
+        .arg(log_path)
+        .arg("--state-path")
+        .arg(state_path)
+        .output()
+        .expect("run telltale status");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("status json")
+}
+
+fn warning_codes(summary: &Value) -> Vec<String> {
+    summary["diagnostic_warnings"]
+        .as_array()
+        .expect("diagnostic warnings")
+        .iter()
+        .map(|warning| warning["code"].as_str().expect("code").to_string())
+        .collect()
+}
+
+#[test]
+fn fail_on_source_errors_exits_three_after_partial_success_is_durable() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let sessions = root.join("codex/sessions/2026/04");
+    fs::create_dir_all(&sessions).expect("codex sessions dir");
+    fs::write(
+        sessions.join("uc001-positive.jsonl"),
+        include_str!(
+            "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+        ),
+    )
+    .expect("positive fixture");
+    fs::write(
+        sessions.join("malformed-source.jsonl"),
+        include_str!("../../tests/fixtures/rule_samples/malformed-source.jsonl"),
+    )
+    .expect("malformed fixture");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+
+    // The default stays best-effort: a completed scan exits zero.
+    let default_log = temp.path().join("default-events.jsonl");
+    let default_state = temp.path().join("default-state.json");
+    let output = source_failure_scan(&root, &default_log, &default_state)
+        .output()
+        .expect("run default scan");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = source_failure_scan(&root, &log_path, &state_path)
+        .arg("--fail-on-source-errors")
+        .output()
+        .expect("run strict scan");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert!(warning_codes(&summary).contains(&"source_parse_error_observed".to_string()));
+    assert_eq!(summary["detection_flow"]["emitted_detection_count"], 1);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("scan completed with source failures: source_parse_error_observed"),
+        "{stderr}"
+    );
+    let events = fs::read_to_string(&log_path).expect("event log");
+    assert!(events.contains("\"event_type\":\"detection\""));
+    assert!(events.contains("\"event_type\":\"scanner_error\""));
+
+    // Successful-source progress was installed before the failing exit.
+    let output = source_failure_scan(&root, &log_path, &state_path)
+        .arg("--fail-on-source-errors")
+        .output()
+        .expect("rerun strict scan");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["detection_flow"]["emitted_detection_count"], 0);
+    assert_eq!(
+        summary["detection_flow"]["state_deduplicated_detection_count"],
+        1
+    );
+
+    // One source still parsed, so there is no client outage alert.
+    let status = scan_status(&log_path, &state_path);
+    assert_eq!(status["status"], "ok");
+    assert_eq!(status["health_check_status"], "ok");
+    assert_eq!(status["scanner_error_count"], 1);
+    assert_eq!(status["attention_required"], true);
+    assert_eq!(
+        status["attention_reasons"],
+        serde_json::json!(["scanner_errors"])
+    );
+}
+
+#[test]
+fn fail_on_source_errors_covers_discovery_failures_not_empty_roots() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+
+    let output = source_failure_scan(&temp.path().join("missing-root"), &log_path, &state_path)
+        .arg("--fail-on-source-errors")
+        .output()
+        .expect("scan missing root");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert!(warning_codes(&summary).contains(&"source_discovery_degraded".to_string()));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("source_discovery_degraded"),
+        "{output:?}"
+    );
+
+    // No sources is suspicious, not a failure.
+    let empty = temp.path().join("empty-root");
+    fs::create_dir_all(&empty).expect("empty root");
+    let output = source_failure_scan(&empty, &log_path, &state_path)
+        .arg("--fail-on-source-errors")
+        .output()
+        .expect("scan empty root");
+    assert!(output.status.success(), "{output:?}");
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert!(warning_codes(&summary).contains(&"no_sources_selected".to_string()));
+
+    // Strict mode never adds persistence: a dry run writes nothing, and a
+    // forensic history pass never reads or writes scan state.
+    let dry_log = temp.path().join("dry.jsonl");
+    let dry_state = temp.path().join("dry-state.json");
+    let output = source_failure_scan(&temp.path().join("missing-root"), &dry_log, &dry_state)
+        .args(["--fail-on-source-errors", "--dry-run"])
+        .output()
+        .expect("strict dry run");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(!dry_log.exists() && !dry_state.exists());
+    let history_log = temp.path().join("history.jsonl");
+    let history_state = temp.path().join("history-state.json");
+    let output = source_failure_scan(
+        &temp.path().join("missing-root"),
+        &history_log,
+        &history_state,
+    )
+    .args(["--fail-on-source-errors", "--history", "all"])
+    .output()
+    .expect("strict history pass");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(!history_state.exists());
+
+    // Periodic scans keep running; the strict exit applies to one scan.
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--interval-seconds",
+            "60",
+            "--fail-on-source-errors",
+        ])
+        .output()
+        .expect("run interval scan");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+}
+
+#[test]
+fn status_reports_attention_for_source_outages_and_clears_for_clean_journals() {
+    let temp = tempdir().expect("tempdir");
+    let failing = temp.path().join("failing");
+    fs::create_dir_all(failing.join("codex/sessions")).expect("codex sessions dir");
+    fs::write(
+        failing.join("codex/sessions/malformed-source.jsonl"),
+        include_str!("../../tests/fixtures/rule_samples/malformed-source.jsonl"),
+    )
+    .expect("malformed fixture");
+    let log_path = temp.path().join("failing-events.jsonl");
+    let state_path = temp.path().join("failing-state.json");
+    let output = source_failure_scan(&failing, &log_path, &state_path)
+        .output()
+        .expect("scan failing root");
+    assert!(output.status.success(), "{output:?}");
+    let status = scan_status(&log_path, &state_path);
+    assert_eq!(status["status"], "ok");
+    assert_eq!(status["health_check_status"], "ok");
+    assert_eq!(status["attention_required"], true);
+    assert_eq!(
+        status["attention_reasons"],
+        serde_json::json!(["scanner_errors", "source_parse_outage"])
+    );
+
+    let clean = temp.path().join("clean");
+    fs::create_dir_all(clean.join("codex/sessions/2026/04")).expect("codex sessions dir");
+    fs::write(
+        clean.join("codex/sessions/2026/04/uc001-positive.jsonl"),
+        include_str!(
+            "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+        ),
+    )
+    .expect("positive fixture");
+    let log_path = temp.path().join("clean-events.jsonl");
+    let state_path = temp.path().join("clean-state.json");
+    // A first scan records the inventory baseline in its health event.
+    let output = source_failure_scan(&clean, &log_path, &state_path)
+        .arg("--fail-on-source-errors")
+        .output()
+        .expect("scan clean root");
+    assert!(output.status.success(), "{output:?}");
+    let status = scan_status(&log_path, &state_path);
+    assert_eq!(status["attention_required"], false);
+    assert_eq!(status["attention_reasons"], serde_json::json!([]));
+}
+
+#[test]
+fn status_attention_counts_every_accepted_scanner_error_count() {
+    let temp = tempdir().expect("tempdir");
+    let clean = temp.path().join("clean");
+    fs::create_dir_all(clean.join("codex/sessions/2026/04")).expect("codex sessions dir");
+    fs::write(
+        clean.join("codex/sessions/2026/04/uc001-positive.jsonl"),
+        include_str!(
+            "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+        ),
+    )
+    .expect("positive fixture");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let output = source_failure_scan(&clean, &log_path, &state_path)
+        .output()
+        .expect("scan clean root");
+    assert!(output.status.success(), "{output:?}");
+    // A real emitted health record; only its count changes below.
+    let health = fs::read_to_string(&log_path)
+        .expect("event log")
+        .lines()
+        .find(|line| line.contains("\"event_type\":\"health\""))
+        .expect("health record")
+        .to_string();
+    assert!(health.contains("\"scanner_error_count\":0"), "{health}");
+
+    let journal = temp.path().join("count.jsonl");
+    let status_for = |count: &str| {
+        fs::write(
+            &journal,
+            health.replace(
+                "\"scanner_error_count\":0",
+                &format!("\"scanner_error_count\":{count}"),
+            ) + "\n",
+        )
+        .expect("write journal");
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .arg("status")
+            .arg("--log-path")
+            .arg(&journal)
+            .arg("--state-path")
+            .arg(&state_path)
+            .output()
+            .expect("run telltale status")
+    };
+    for (count, required, reasons) in [
+        ("0", false, serde_json::json!([])),
+        ("7", true, serde_json::json!(["scanner_errors"])),
+        // Above u64::MAX the schema still accepts the count.
+        (
+            "18446744073709551616",
+            true,
+            serde_json::json!(["scanner_errors"]),
+        ),
+    ] {
+        let output = status_for(count);
+        assert!(output.status.success(), "{count}: {output:?}");
+        let status: Value = serde_json::from_slice(&output.stdout).expect("status json");
+        assert_eq!(status["status"], "ok", "{count}");
+        assert_eq!(status["attention_required"], required, "{count}");
+        assert_eq!(status["attention_reasons"], reasons, "{count}");
+    }
+    // A negative count is rejected by the strict journal reader.
+    let output = status_for("-1");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn explicit_root_reports_unused_session_store_environment() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    fs::create_dir_all(&root).expect("root");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let scan = |configure: &dyn Fn(&mut Command)| -> Vec<String> {
+        let mut command = source_failure_scan(&root, &log_path, &state_path);
+        command.arg("--dry-run");
+        configure(&mut command);
+        let output = command.output().expect("run scan");
+        assert!(output.status.success(), "{output:?}");
+        warning_codes(&serde_json::from_slice(&output.stdout).expect("summary json"))
+    };
+    let code = "session_store_environment_ignored".to_string();
+    assert!(!scan(&|_| {}).contains(&code));
+    assert!(
+        !scan(&|command| {
+            command.env("OPENCODE_DB", ":memory:").env("CODEX_HOME", "");
+        })
+        .contains(&code)
+    );
+    assert!(
+        scan(&|command| {
+            command.env("CODEX_HOME", temp.path().join("codex-home"));
+        })
+        .contains(&code)
+    );
+    assert!(
+        scan(&|command| {
+            command.env("OPENCODE_DB", "relocated.db");
+        })
+        .contains(&code)
+    );
+}
+
+#[test]
+fn watch_initial_scan_reports_readiness_and_does_not_consume_iterations() {
+    let _watch_guard = watch_process_guard();
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    let sessions = root.join("codex/sessions/2026/04");
+    fs::create_dir_all(&sessions).expect("codex sessions dir");
+    fs::write(
+        sessions.join("uc001-positive.jsonl"),
+        include_str!(
+            "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+        ),
+    )
+    .expect("existing session");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_remove("CODEX_HOME")
+        .env_remove("OPENCODE_DB")
+        .args([
+            "watch",
+            "--initial-scan",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--iterations",
+            "1",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(&state_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn telltale watch");
+    let mut stdout = child.stdout.take().expect("watch stdout");
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr = BufReader::new(child.stderr.take().expect("watch stderr"));
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let stderr_reader = thread::spawn(move || {
+        let mut lines = Vec::new();
+        for line in stderr.lines() {
+            let line = line.expect("watch stderr line");
+            if line.starts_with("telltale watch: ready") {
+                let _ = ready_tx.send(line.clone());
+            }
+            lines.push(line);
+        }
+        lines
+    });
+    let ready = match ready_rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(line) => line,
+        Err(_) => fail_watch(&mut child, "watch did not report readiness"),
+    };
+    assert!(ready.contains("initial scan complete"), "{ready}");
+    assert!(!ready.contains(root.to_string_lossy().as_ref()), "{ready}");
+
+    // The initial scan processed the existing session and left the single
+    // iteration for this triggered scan.
+    fs::write(
+        sessions.join("arrived.jsonl"),
+        include_str!(
+            "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+        )
+        .replace("uc001", "arrived-after-ready"),
+    )
+    .expect("arriving session");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while child.try_wait().expect("poll watch").is_none() {
+        if Instant::now() > deadline {
+            fail_watch(&mut child, "watch did not exit after one triggered scan");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let status = child.wait().expect("watch status");
+    let stderr = stderr_reader.join().expect("join stderr reader");
+    assert!(status.success(), "stderr: {stderr:?}");
+    let stdout = stdout_reader
+        .join()
+        .expect("join stdout reader")
+        .expect("read stdout");
+    let summaries = String::from_utf8_lossy(&stdout)
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .map(|line| serde_json::from_str::<Value>(line).expect("summary json"))
+        .collect::<Vec<_>>();
+    assert_eq!(summaries.len(), 2, "{summaries:?}");
+    assert_eq!(
+        summaries[0]["source_discovery"]["basis"],
+        "current_full_scan"
+    );
+    assert_eq!(summaries[0]["detection_flow"]["emitted_detection_count"], 1);
+    assert_eq!(summaries[1]["detection_flow"]["emitted_detection_count"], 1);
+}
+
+#[test]
+fn zero_iterations_are_rejected_before_any_output() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    fs::create_dir_all(root.join("codex/sessions")).expect("codex sessions dir");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    for args in [
+        vec!["watch", "--iterations", "0"],
+        vec!["watch", "--initial-scan", "--iterations", "0"],
+        vec!["scan", "--interval-seconds", "1", "--iterations", "0"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(&args)
+            .args(["--allow-fixtures", "--no-local-config", "--root"])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--state-path")
+            .arg(&state_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn telltale")
+            .wait_with_output_timeout(Duration::from_secs(30));
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--iterations"),
+            "{args:?}: {output:?}"
+        );
+        assert!(!log_path.exists() && !state_path.exists(), "{args:?}");
+    }
+}
+
+trait WaitWithOutputTimeout {
+    fn wait_with_output_timeout(self, timeout: Duration) -> std::process::Output;
+}
+
+impl WaitWithOutputTimeout for std::process::Child {
+    /// A pre-fix binary waits for a change instead of exiting; never hang.
+    fn wait_with_output_timeout(mut self, timeout: Duration) -> std::process::Output {
+        let deadline = Instant::now() + timeout;
+        while self.try_wait().expect("poll telltale").is_none() {
+            if Instant::now() > deadline {
+                fail_watch(&mut self, "telltale did not exit for an invalid value");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.wait_with_output().expect("collect output")
+    }
+}
+
+#[test]
+fn watch_without_initial_scan_says_existing_sessions_wait_for_changes() {
+    let _watch_guard = watch_process_guard();
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    fs::create_dir_all(root.join("codex/sessions")).expect("codex sessions dir");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_remove("CODEX_HOME")
+        .env_remove("OPENCODE_DB")
+        .args([
+            "watch",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--iterations",
+            "1",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--log-path")
+        .arg(temp.path().join("events.jsonl"))
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn telltale watch");
+    let mut stderr = BufReader::new(child.stderr.take().expect("watch stderr"));
+    let (line_tx, line_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut line = String::new();
+        let _ = stderr.read_line(&mut line);
+        let _ = line_tx.send(line);
+    });
+    let line = match line_rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(line) => line,
+        Err(_) => fail_watch(&mut child, "watch did not report readiness"),
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(line.starts_with("telltale watch: ready"), "{line}");
+    assert!(line.contains("--initial-scan"), "{line}");
 }

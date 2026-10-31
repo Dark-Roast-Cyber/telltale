@@ -4,6 +4,32 @@
 
 ---
 
+## Unreleased
+
+- **Risk thresholds must not decrease.** Settings fail before any output when
+  the merged `low`, `medium`, `high` and `critical` values decrease. Equal
+  values are still allowed. Setting only `TELLTALE_RISK_THRESHOLD_HIGH` below
+  the default `medium` (50) is now rejected; set the lower thresholds too.
+- `scan --once --fail-on-source-errors` exits with status 3 when a source fails
+  to parse, discovery degrades (for example, a missing `--root`) or a project
+  config fails. The scan first completes as usual: it writes what it would
+  have written anyway, so `--dry-run` writes nothing and `--history` never
+  touches scan state. The default exit status is unchanged.
+- `scan --iterations 0` and `watch --iterations 0` are rejected as usage errors
+  (exit 2) before any output. They previously waited for a scan and then
+  panicked or wrapped the counter.
+- `status` adds `attention_required` and `attention_reasons`, derived from the
+  latest health event's scanner errors and the operational alerts recorded after
+  it. Existing fields are unchanged.
+- `watch --initial-scan` scans existing sessions once at startup, after the
+  watches are registered; `--iterations` does not count it. Watch prints one
+  `telltale watch: ready` line to stderr.
+- A non-`.` `--root` with `CODEX_HOME` or `OPENCODE_DB` set reports the
+  stdout-only `session_store_environment_ignored` diagnostic warning.
+- The docs and help now describe how environment variables apply,
+  `--no-local-config` and the meaning of `detection_count`, and the install
+  guide names `v0.7.0` as the current stable release.
+
 ## 0.7.0 — published stable (2026-10-30)
 
 ### Capabilities and fixes since 0.6.0

@@ -1,6 +1,8 @@
 //! `telltale watch`: filesystem notifications, bounded change coalescing and
 //! scan scheduling on top of the one-shot scan path. Overflowing the pending
-//! set forces a full reconciliation rather than dropping changes.
+//! set forces a full reconciliation rather than dropping changes. Watch starts
+//! idle unless `--initial-scan` asks for one uncounted full scan after every
+//! watch is registered; either way it reports readiness once on stderr.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -23,7 +25,10 @@ use super::discovery::{
     ProjectConfigurationAccounting, SourceDiscoveryAccounting, discover_operational_sources,
     load_project_configuration,
 };
-use super::{ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, run_scan};
+use super::{
+    ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, iteration_budget_exhausted,
+    run_scan,
+};
 
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod sqlite_metadata;
@@ -32,6 +37,8 @@ mod sqlite_metadata;
 #[derive(Clone, Copy)]
 pub(crate) struct WatchTriggerConfig {
     pub(crate) iterations: Option<u32>,
+    /// Run one uncounted full scan once every watch is registered.
+    pub(crate) initial_scan: bool,
     pub(crate) debounce: Duration,
     pub(crate) min_scan_interval: Duration,
 }
@@ -339,10 +346,19 @@ pub(crate) fn run_watch(
         );
     }
     let mut last_delivery_completed = Instant::now();
+    // Watches are registered before this scan reads anything, so a write
+    // during it stays queued and triggers a later scan.
+    let mut initial_scan = config.trigger.initial_scan;
+    if !initial_scan {
+        report_watch_ready(watch_roots.len(), false);
+    }
 
     'watch: loop {
         // Delivery wakeups do not scan sources, save scanner state, or consume iterations.
         let mut pending = PendingWatchChanges::default();
+        if initial_scan {
+            pending.require_full_scan();
+        }
         while pending.is_empty() {
             inbox.take_signals(&mut pending)?;
             if shutdown.load(Ordering::SeqCst) {
@@ -376,7 +392,9 @@ pub(crate) fn run_watch(
         }
 
         // Debounce window: coalesce rapid writes into one scan.
-        collect_watch_events_for(&inbox, &mut pending, config.trigger.debounce, &shutdown)?;
+        if !initial_scan {
+            collect_watch_events_for(&inbox, &mut pending, config.trigger.debounce, &shutdown)?;
+        }
         // Rate limit: keep coalescing until the minimum scan interval has passed.
         if let Some(completed) = last_scan_completed {
             let elapsed = completed.elapsed();
@@ -419,15 +437,30 @@ pub(crate) fn run_watch(
             sqlite_metadata.reconcile(&source_index);
         }
         last_scan_completed = Some(Instant::now());
+        if initial_scan {
+            initial_scan = false;
+            report_watch_ready(watch_roots.len(), true);
+            continue;
+        }
 
-        if let Some(value) = remaining.as_mut() {
-            if *value == 1 {
-                break;
-            }
-            *value -= 1;
+        if iteration_budget_exhausted(&mut remaining) {
+            break;
         }
     }
     Ok(())
+}
+
+/// One constant stderr line, without paths: every later change will be seen.
+fn report_watch_ready(roots: usize, initial_scan: bool) {
+    if initial_scan {
+        eprintln!(
+            "telltale watch: ready, initial scan complete; watching {roots} session-store root(s); changes trigger scans"
+        );
+    } else {
+        eprintln!(
+            "telltale watch: ready; watching {roots} session-store root(s); existing sessions are scanned only after they change (use --initial-scan to scan them at startup)"
+        );
+    }
 }
 
 fn report_idle_delivery_failures(failures: Vec<crate::sink::SinkFailure>) {

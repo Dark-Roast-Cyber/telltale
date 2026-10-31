@@ -1,7 +1,7 @@
 //! The `telltale` binary. All behavior lives in the `telltale-cli` library;
 //! this only maps the result to an exit code and sanitizes the error text.
 
-use telltale_cli::run;
+use telltale_cli::{exit_status, run};
 use telltale_schema::event::{PrivacySanitizer, SanitizationContext};
 
 fn main() -> std::process::ExitCode {
@@ -13,7 +13,7 @@ fn main() -> std::process::ExitCode {
                 "{}",
                 PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
             );
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(exit_status(error.as_ref()))
         }
     }
 }
