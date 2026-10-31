@@ -118,6 +118,264 @@ fn forked_thread_ordinals_continue_from_the_parent_history_base() {
     });
 }
 
+/// A paginated subagent rollout whose ordinals 1..start copy the parent's
+/// model context, as the pinned harness writes a copied fork: its own
+/// metadata first, then the inherited prefix, then its own history.
+fn subagent_rollout(start: Value, inherited: Vec<Value>, own: Vec<Value>) -> Vec<Value> {
+    let child_meta = json!({"type":"session_meta","payload":{
+        "id":"thread-child","session_id":"thread-root","parent_thread_id":"thread-root",
+        "history_mode":"paginated","source":{"subagent":{"other":"synthetic-role"}},
+        "multi_agent_version":"disabled","subagent_history_start_ordinal":start}});
+    let mut values = vec![child_meta];
+    values.extend(inherited);
+    values.extend(own);
+    numbered(0, values)
+}
+
+fn parent_context() -> Vec<Value> {
+    vec![
+        // The parent's own metadata, messages, calls and completed items are
+        // copied verbatim; none of them belongs to the child.
+        json!({"type":"session_meta","payload":{"id":"thread-root","session_id":"thread-root","history_mode":"paginated","model_provider":"PRIVATE-provider"}}),
+        user("PRIVATE parent prompt"),
+        json!({"type":"response_item","payload":{"type":"function_call","call_id":"call-parent","name":"shell","arguments":"{\"command\":[\"PRIVATE-parent-command\"]}"}}),
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-parent","output":"PRIVATE parent output"}}),
+        completed(
+            "thread-root",
+            json!({"type":"CommandExecution","id":"cmd-parent","command":["PRIVATE"],"status":"completed","aggregated_output":"PRIVATE"}),
+        ),
+        json!({"type":"response_item","payload":{"type":"compaction","id":"cmp-parent","encrypted_content":"PRIVATE-opaque"}}),
+        json!({"type":"future_record","payload":{"thread_id":"PRIVATE-other","anything":"PRIVATE"}}),
+    ]
+}
+
+fn child_history() -> Vec<Value> {
+    vec![
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-child"}}),
+        user("synthetic child prompt"),
+        json!({"type":"response_item","payload":{"type":"function_call","call_id":"call-child","name":"shell","arguments":"{\"command\":[\"synthetic-child-command\"]}"}}),
+        json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-child","output":"synthetic child output"}}),
+        completed(
+            "thread-child",
+            json!({"type":"CommandExecution","id":"cmd-child","command":["synthetic-child-argv"],"status":"completed","exit_code":0,"aggregated_output":"synthetic"}),
+        ),
+    ]
+}
+
+#[test]
+fn subagent_inherited_parent_context_is_quarantined_and_only_child_history_is_attributed() {
+    each(|source| {
+        let inherited = parent_context();
+        let start = 1 + inherited.len() as u64;
+        let values = subagent_rollout(json!(start), inherited.clone(), child_history());
+        let batch = acquire(source, &values).expect("copied subagent rollout must parse");
+
+        // Every observation is the child's own and keeps its native ordinal.
+        assert!(!batch.observations.is_empty());
+        for o in &batch.observations {
+            assert_eq!(o.session_id().unwrap().value(), "thread-child");
+            assert!(o.sequence().unwrap() >= start, "{:?}", o.sequence());
+        }
+        let only_child = acquire(
+            source,
+            &subagent_rollout(json!(1), Vec::new(), child_history()),
+        )
+        .unwrap();
+        assert_eq!(batch.observations.len(), only_child.observations.len());
+
+        // Each inherited unit stays visible by itself, content-free, under the
+        // file's owner at its native ordinal; nothing is silently dropped.
+        assert_eq!(
+            batch
+                .quarantined
+                .iter()
+                .map(|unit| (
+                    unit.code,
+                    unit.session_id.as_deref(),
+                    unit.native_id.as_str(),
+                    unit.source_sequence
+                ))
+                .collect::<Vec<_>>(),
+            (1..start)
+                .map(|sequence| ("foreign_thread_item", Some("thread-child"), "", sequence))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+
+        // The copied parent metadata never opens a second session, and the
+        // parent's calls are never counted as the child's activity.
+        assert_eq!(batch.accounting.sessions.len(), 1);
+        let session = &batch.accounting.sessions[0];
+        assert_eq!(session.session_id.value(), "thread-child");
+        assert_eq!(session.counts.native_units, values.len() as u64);
+        assert_eq!(session.counts.record_counts.session_meta, 1);
+        assert_eq!(
+            session.counts.contributions,
+            only_child.accounting.sessions[0].counts.contributions
+        );
+        assert!(!private(&batch));
+        assert!(!format!("{:?}", batch.accounting).contains("PRIVATE"));
+
+        // Child identities derive from child coordinates only: replay and
+        // different inherited content with the same boundary keep them.
+        let replay = acquire(source, &values).unwrap();
+        let mut other = parent_context();
+        other[1] = user("different parent prompt");
+        other[6] = json!({"type":"another_future","payload":{}});
+        let changed = acquire(
+            source,
+            &subagent_rollout(json!(start), other, child_history()),
+        )
+        .unwrap();
+        for run in [&replay, &changed] {
+            assert_eq!(
+                batch
+                    .observations
+                    .iter()
+                    .map(|o| (o.observation_id(), o.sequence()))
+                    .collect::<Vec<_>>(),
+                run.observations
+                    .iter()
+                    .map(|o| (o.observation_id(), o.sequence()))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // An empty inherited prefix is complete and quarantines nothing.
+        assert!(only_child.quarantined.is_empty());
+        assert_eq!(
+            only_child.accounting.coverage,
+            AccountingCoverage::CompleteSource
+        );
+
+        // A child-owned item under another thread is still foreign, and an
+        // inherited parent message never stands in for a child mirror.
+        let mut own = child_history();
+        own.push(completed(
+            "thread-root",
+            json!({"type":"Reasoning","id":"reason-root","summary_text":["PRIVATE"]}),
+        ));
+        let batch = acquire(
+            source,
+            &subagent_rollout(json!(start), parent_context(), own),
+        )
+        .unwrap();
+        let last = batch.quarantined.last().unwrap();
+        assert_eq!(
+            (last.code, last.native_id.as_str()),
+            ("foreign_thread_item", "reason-root")
+        );
+    });
+}
+
+#[test]
+fn subagent_history_boundary_is_end_exclusive_at_the_files_last_ordinal() {
+    each(|source| {
+        // Metadata only, boundary 1: an empty prefix and no child history yet.
+        let batch = acquire(source, &subagent_rollout(json!(1), Vec::new(), Vec::new())).unwrap();
+        assert!(batch.observations.is_empty() && batch.quarantined.is_empty());
+        assert_eq!(batch.accounting.sessions.len(), 1);
+        assert_eq!(
+            batch.accounting.coverage,
+            AccountingCoverage::CompleteSource
+        );
+
+        // The file ends exactly at its last copied record: the boundary is one
+        // past the final ordinal and the child has no own records yet.
+        let inherited = parent_context();
+        let start = 1 + inherited.len() as u64;
+        let values = subagent_rollout(json!(start), inherited.clone(), Vec::new());
+        assert_eq!(values.last().unwrap()["ordinal"], json!(start - 1));
+        let batch = acquire(source, &values).unwrap();
+        assert!(batch.observations.is_empty());
+        assert_eq!(
+            batch
+                .quarantined
+                .iter()
+                .map(|unit| (unit.code, unit.source_sequence))
+                .collect::<Vec<_>>(),
+            (1..start)
+                .map(|sequence| ("foreign_thread_item", sequence))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+
+        // One further past the final ordinal is an incomplete copied prefix.
+        for values in [
+            subagent_rollout(json!(start + 1), inherited, Vec::new()),
+            subagent_rollout(json!(2), Vec::new(), Vec::new()),
+        ] {
+            assert!(acquire(source, &values).is_err());
+        }
+    });
+}
+
+#[test]
+fn malformed_or_unsupported_subagent_history_boundaries_fail_the_source() {
+    each(|source| {
+        let inherited = parent_context();
+        let start = 1 + inherited.len() as u64;
+        let mut invalid = Vec::new();
+        // The boundary is a u64 past the child's own metadata.
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("3"),
+            json!({"end_ordinal_exclusive":3}),
+        ] {
+            invalid.push(subagent_rollout(bad, inherited.clone(), child_history()));
+        }
+        // An incomplete copied prefix: the boundary lies past the last record.
+        invalid.push(subagent_rollout(
+            json!(start + 10),
+            inherited.clone(),
+            Vec::new(),
+        ));
+        invalid.push(subagent_rollout(
+            json!(start),
+            inherited[..2].to_vec(),
+            Vec::new(),
+        ));
+        // A copied prefix and a referenced history base are never combined.
+        let mut both = subagent_rollout(json!(start), inherited.clone(), child_history());
+        both[0]["payload"]["history_base"] =
+            json!({"thread_id":"thread-root","end_ordinal_exclusive":0,"end_byte_offset":0});
+        invalid.push(both);
+        // Unpaginated rollouts have no ordinal boundary to honor.
+        let mut legacy = subagent_rollout(json!(start), inherited.clone(), child_history());
+        for value in &mut legacy {
+            value.as_object_mut().unwrap().remove("ordinal");
+        }
+        invalid.push(legacy.clone());
+        legacy[0]["payload"]["history_mode"] = json!("legacy");
+        invalid.push(legacy);
+        // Only the child's first metadata may carry the boundary.
+        let mut own = child_history();
+        own.push(json!({"type":"session_meta","payload":{"id":"thread-child","subagent_history_start_ordinal":1}}));
+        invalid.push(subagent_rollout(json!(start), inherited.clone(), own));
+        // An inherited unit is still a typed rollout record.
+        for bad in [json!({}), json!({"type":7})] {
+            let mut prefix = inherited.clone();
+            prefix[2] = bad;
+            invalid.push(subagent_rollout(json!(start), prefix, child_history()));
+        }
+        // Child-owned coordinates keep their checks after the boundary.
+        let mut own = child_history();
+        own[1]["payload"]["thread_id"] = json!("thread-root");
+        invalid.push(subagent_rollout(json!(start), inherited.clone(), own));
+        let mut gap = subagent_rollout(json!(start), inherited, child_history());
+        gap.last_mut().unwrap()["ordinal"] = json!(99);
+        invalid.push(gap);
+        for values in invalid {
+            let error = acquire(source, &values)
+                .err()
+                .unwrap_or_else(|| panic!("must fail: {}", values[0]["payload"]));
+            assert!(!format!("{error:?} {error}").contains("PRIVATE"));
+        }
+    });
+}
+
 #[test]
 fn current_bookkeeping_records_are_recognized_and_not_projected() {
     each(|source| {

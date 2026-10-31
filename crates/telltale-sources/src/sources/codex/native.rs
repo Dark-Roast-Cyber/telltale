@@ -4,6 +4,7 @@
 
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
+use std::ops::Range;
 
 use crate::source_read::{SourceReadError, collect_string_values, nested_string_field};
 use telltale_schema::record::RecordKind;
@@ -105,12 +106,14 @@ pub(crate) fn extract_codex_native_records_with_limits(
     limits: Option<crate::acquisition::DirectReadLimits>,
 ) -> Result<(Vec<CodexNativeRecord>, usize), SourceReadError> {
     let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, limits)?;
-    let ordinal_mode =
+    let ordinals =
         validate_native_ordinals(&values).map_err(|detail| SourceReadError::SchemaDrift {
             client: source.client,
             source_id: source.source_id.clone(),
             detail,
         })?;
+    let ordinal_mode = ordinals.is_some();
+    let inherited = ordinals.unwrap_or_default();
     let mut records = Vec::with_capacity(values.len());
     let mut inherited_session_id = None;
     let mut import_turns = std::collections::BTreeMap::new();
@@ -140,6 +143,27 @@ pub(crate) fn extract_codex_native_records_with_limits(
             source_id: source.source_id.clone(),
             detail,
         };
+        if inherited.contains(&source_sequence) {
+            // Copied parent model context, never this thread's evidence: it
+            // is not interpreted, changes no ownership state, and each unit is
+            // quarantined by itself under the file's owner. The parent's own
+            // rollout is the one evaluated.
+            if !value.get("type").is_some_and(Value::is_string) {
+                return Err(drift(
+                    "Codex inherited history record requires a typed envelope",
+                ));
+            }
+            records.push(foreign_record(
+                source,
+                source_sequence,
+                inherited_session_id.clone(),
+                inherited_root_id.clone(),
+                paginated,
+                None,
+                None,
+            ));
+            continue;
+        }
         let auxiliary = is_codex_auxiliary(&value).map_err(drift)?;
         if !auxiliary && codex_discriminator(&value) == Some("item_completed") {
             records.push(
@@ -206,14 +230,14 @@ pub(crate) fn extract_codex_native_records_with_limits(
             .flatten()
             .filter(|p| p.is_object());
         let public_meta = metadata_payload.filter(|p| p.get("id").is_some());
-        // A forked thread's file starts after its parent's history, which
-        // stays in the parent's own file; only the first record of an ordinal
-        // source may say so, and validate_native_ordinals checked it.
+        // A forked thread's history base or a subagent's inherited-prefix
+        // boundary is only valid on the first record of an ordinal source,
+        // where validate_native_ordinals checked it.
         if metadata_payload.is_some_and(|p| {
-            p.get("subagent_history_start_ordinal")
-                .is_some_and(|v| !v.is_null())
-                || (p.get("history_base").is_some_and(|v| !v.is_null())
-                    && !(ordinal_mode && position == 0))
+            ["history_base", "subagent_history_start_ordinal"]
+                .into_iter()
+                .any(|key| p.get(key).is_some_and(|v| !v.is_null()))
+                && !(ordinal_mode && position == 0)
         }) {
             return Err(drift("Codex inherited history coordinates are unsupported"));
         }
@@ -464,9 +488,11 @@ fn web_search_fields(
     Ok((tool, None))
 }
 
-fn validate_native_ordinals(values: &[Value]) -> Result<bool, &'static str> {
+/// `None` without native ordinals; otherwise the ordinals of an inherited
+/// subagent prefix, empty when there is none.
+fn validate_native_ordinals(values: &[Value]) -> Result<Option<Range<u64>>, &'static str> {
     if !values.iter().any(|value| value.get("ordinal").is_some()) {
-        return Ok(false);
+        return Ok(None);
     }
     let first = values.first().expect("ordinal mode has a record");
     let metadata = first
@@ -481,12 +507,7 @@ fn validate_native_ordinals(values: &[Value]) -> Result<bool, &'static str> {
         return Err("Codex native ordinal mode requires exact paginated session metadata first");
     }
     required_string(metadata, "id")?;
-    if metadata
-        .get("subagent_history_start_ordinal")
-        .is_some_and(|v| !v.is_null())
-    {
-        return Err("Codex referenced or inherited ordinal history is unsupported");
-    }
+    let inherited = subagent_inherited_ordinals(metadata)?;
     let mut expected = Some(history_base_end(metadata)?);
     for value in values {
         let ordinal = value
@@ -500,7 +521,29 @@ fn validate_native_ordinals(values: &[Value]) -> Result<bool, &'static str> {
         }
         expected = ordinal.checked_add(1);
     }
-    Ok(true)
+    // The harness writes the whole copied prefix before any child record; a
+    // file that ends inside it is an incomplete initialization.
+    if expected.is_some_and(|next| next < inherited.end) {
+        return Err("Codex subagent inherited history is incomplete");
+    }
+    Ok(Some(inherited))
+}
+
+/// A copied-fork subagent's rollout holds its own metadata at ordinal 0, then
+/// copies of its parent's model context, then its own history from
+/// `subagent_history_start_ordinal`. Such a rollout never has a history base.
+fn subagent_inherited_ordinals(metadata: &Value) -> Result<Range<u64>, &'static str> {
+    let invalid = "Codex subagent history boundary is invalid";
+    match metadata.get("subagent_history_start_ordinal") {
+        None | Some(Value::Null) => Ok(0..0),
+        Some(start) => {
+            let start = start.as_u64().filter(|start| *start >= 1).ok_or(invalid)?;
+            if metadata.get("history_base").is_some_and(|v| !v.is_null()) {
+                return Err(invalid);
+            }
+            Ok(1..start)
+        }
+    }
 }
 
 /// Where a forked thread's own ordinals start. Its `history_base` names the
@@ -548,6 +591,47 @@ fn raw_message_turn_id(value: &Value, payload: &Value) -> Result<Option<String>,
     Ok(turn.map(ToOwned::to_owned))
 }
 
+/// A unit that is another thread's, not this file owner's. It is quarantined
+/// by itself under the file's owner and never attributed or projected here.
+fn foreign_record(
+    source: &Source,
+    sequence: u64,
+    file_owner: Option<String>,
+    root_session_id: Option<String>,
+    paginated: bool,
+    discriminator: Option<&str>,
+    native_id: Option<String>,
+) -> CodexNativeRecord {
+    CodexNativeRecord {
+        attestation: Ok(SessionMetadata::default()),
+        source_sequence: sequence,
+        adapter_id: source.source_id.clone(),
+        effective_session_id: file_owner,
+        timestamp: None,
+        discriminator: discriminator.map(ToOwned::to_owned),
+        envelope: CodexEnvelope::EventMessage,
+        message_phase: None,
+        session_metadata: false,
+        auxiliary: false,
+        external_import: false,
+        role: None,
+        message_content: None,
+        blocks: None,
+        tool: CodexToolFields {
+            call_id: native_id,
+            ..CodexToolFields::default()
+        },
+        contribution_strings: Vec::new(),
+        completed: None,
+        root_session_id,
+        response_id: None,
+        response_turn_id: None,
+        paginated,
+        mirrored: false,
+        quarantine: Some("foreign_thread_item"),
+    }
+}
+
 fn completed_record(
     value: &Value,
     source: &Source,
@@ -589,36 +673,15 @@ fn completed_record(
     }
     if let Some(file_owner) = inherited_owner.filter(|id| *id != owner) {
         // A parent thread's rollout repeats its subagents' completed items.
-        // The item is not this thread's: it is quarantined by itself under
-        // the file's owner, never attributed or projected here.
-        return Ok(CodexNativeRecord {
-            attestation: Ok(SessionMetadata::default()),
-            source_sequence: sequence,
-            adapter_id: source.source_id.clone(),
-            effective_session_id: Some(file_owner.to_owned()),
-            timestamp: None,
-            discriminator: Some("item_completed".to_owned()),
-            envelope: CodexEnvelope::EventMessage,
-            message_phase: None,
-            session_metadata: false,
-            auxiliary: false,
-            external_import: false,
-            role: None,
-            message_content: None,
-            blocks: None,
-            tool: CodexToolFields {
-                call_id: Some(item_id),
-                ..CodexToolFields::default()
-            },
-            contribution_strings: Vec::new(),
-            completed: None,
+        return Ok(foreign_record(
+            source,
+            sequence,
+            Some(file_owner.to_owned()),
             root_session_id,
-            response_id: None,
-            response_turn_id: None,
             paginated,
-            mirrored: false,
-            quarantine: Some("foreign_thread_item"),
-        });
+            Some("item_completed"),
+            Some(item_id),
+        ));
     }
     let mut tool = CodexToolFields::default();
     let mut blocks = None;

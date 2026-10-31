@@ -1,0 +1,31 @@
+{
+  "description": "A paginated copied-fork subagent rollout: its own session_meta at ordinal 0 with subagent_history_start_ordinal, verbatim copies of parent rollout items (including the parent's session_meta and a parent tool call) at ordinals 1..start, then the subagent's own history from that ordinal.",
+  "harness": "codex",
+  "upstream": [
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/protocol/src/protocol.rs#L3309-L3314",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/thread-store/src/live_thread.rs#L151-L178",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/thread-store/src/local/thread_history_materialization.rs#L238-L244",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rollout/src/ordinal.rs#L86-L96",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/session.rs#L1069-L1103",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rollout/src/policy.rs#L41-L48"
+  ],
+  "status": "known_gap",
+  "note": "Partial-source characterization, not a whole-source parse failure: the subagent's own history from subagent_history_start_ordinal is read and attributed to the subagent, while each copied parent record before it is deliberately not interpreted or attributed and is quarantined by itself (foreign_thread_item); the parent's own rollout is the one evaluated. It stays known_gap only because supported cases must quarantine nothing. Promotion would need a decision to stop reporting copied parent context as quarantined units, not a parser change.",
+  "acquire": {
+    "source_id": "codex.sessions",
+    "jsonl": [
+      {"timestamp": "2026-10-13T00:00:00.000Z", "ordinal": 0, "type": "session_meta", "payload": {"id": "00000000-0000-4000-8000-0000000000c2", "session_id": "00000000-0000-4000-8000-0000000000c1", "parent_thread_id": "00000000-0000-4000-8000-0000000000c1", "timestamp": "2026-10-13T00:00:00.000Z", "cwd": "/synthetic/work", "originator": "codex_cli_rs", "cli_version": "0.162.1", "source": {"subagent": {"other": "synthetic"}}, "model_provider": "synthetic-provider", "history_mode": "paginated", "multi_agent_version": "disabled", "subagent_history_start_ordinal": 4}},
+      {"timestamp": "2026-10-13T00:00:00.100Z", "ordinal": 1, "type": "session_meta", "payload": {"id": "00000000-0000-4000-8000-0000000000c1", "session_id": "00000000-0000-4000-8000-0000000000c1", "timestamp": "2026-10-12T23:59:00.000Z", "cwd": "/synthetic/work", "originator": "codex_cli_rs", "cli_version": "0.162.1", "source": "cli", "model_provider": "synthetic-provider", "history_mode": "paginated"}},
+      {"timestamp": "2026-10-13T00:00:00.200Z", "ordinal": 2, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Parent prompt copied as model context."}]}},
+      {"timestamp": "2026-10-13T00:00:00.300Z", "ordinal": 3, "type": "response_item", "payload": {"type": "function_call", "call_id": "call-parent", "name": "shell", "arguments": "{\"command\":[\"ls\"]}"}},
+      {"timestamp": "2026-10-13T00:00:01.000Z", "ordinal": 4, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Review the synthetic change."}]}},
+      {"timestamp": "2026-10-13T00:00:02.000Z", "ordinal": 5, "type": "response_item", "payload": {"type": "function_call", "call_id": "call-child", "name": "shell", "arguments": "{\"command\":[\"git\",\"diff\"]}"}},
+      {"timestamp": "2026-10-13T00:00:03.000Z", "ordinal": 6, "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call-child", "output": "synthetic diff"}},
+      {"timestamp": "2026-10-13T00:00:04.000Z", "ordinal": 7, "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Looks fine."}]}}
+    ]
+  },
+  "expect": {
+    "observations": 4,
+    "quarantine_codes": ["foreign_thread_item"]
+  }
+}
