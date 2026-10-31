@@ -38,9 +38,11 @@ would not preserve the canonical `u64` contract.
 The CLI sets these thresholds from the `risk_thresholds` operational setting
 (`settings.d`, or `TELLTALE_RISK_THRESHOLD_LOW`, `TELLTALE_RISK_THRESHOLD_MEDIUM`,
 `TELLTALE_RISK_THRESHOLD_HIGH`, and `TELLTALE_RISK_THRESHOLD_CRITICAL`; see
-[operational settings](install.md#operational-settings)). Unknown inherited
-variables do not affect threshold resolution, and Telltale libraries never read
-them.
+[operational settings](install.md#operational-settings)). The merged values
+must satisfy `low <= medium <= high <= critical`, or the command fails before
+it scans. Unknown inherited variables do not affect threshold resolution, and
+Telltale libraries never read them. An embedding host that calls
+`configure_thresholds` owns that check.
 
 ## Rule Categories
 

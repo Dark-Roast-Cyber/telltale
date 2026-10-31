@@ -4547,6 +4547,30 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
 }
 
 #[test]
+fn install_guide_names_the_current_stable_release_from_versioning() {
+    let versioning = fs::read_to_string("docs/versioning.md").expect("read versioning");
+    let stable = versioning
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("- `")?
+                .split_once("` is the current stable GitHub Release")
+                .map(|(tag, _)| tag)
+        })
+        .expect("versioning names the current stable release");
+    let install =
+        normalize_line_endings(fs::read_to_string("docs/install.md").expect("read install guide"))
+            .replace('\n', " ");
+    assert!(
+        install.contains(&format!("Official stable is `{stable}`.")),
+        "install guide must name {stable} as official stable"
+    );
+    assert!(
+        install.contains(&format!("(`{stable}` currently)")),
+        "Windows install guidance must name {stable} as current"
+    );
+}
+
+#[test]
 fn controlled_deployment_docs_require_exact_identity_and_one_remote_route() {
     let procedure = fs::read_to_string("docs/controlled-deployment.md")
         .expect("read controlled deployment procedure");

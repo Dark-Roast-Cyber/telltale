@@ -6,6 +6,8 @@
 //! config-root order (sorted within a root, so a later file wins per key),
 //! `TELLTALE_*` environment variables, then explicit CLI flags. Settings are
 //! resolved once when a command starts; a service restart applies changes.
+//! Values that constrain each other, such as the risk threshold order, are
+//! checked after the merge and before anything is activated.
 
 use std::fs;
 use std::io::Read;
@@ -327,6 +329,7 @@ fn resolve(
     }
     settings.apply_environment(env)?;
     settings.apply_cli(cli);
+    settings.check_risk_threshold_order()?;
     Ok(settings)
 }
 
@@ -437,6 +440,51 @@ impl Settings {
         );
     }
 
+    /// Severity bands are checked from critical down, so a lower threshold
+    /// above a higher one silently relabels scores. The check runs on the
+    /// merged values: each source can be valid alone and still invert them.
+    /// Equal thresholds are allowed; they only empty a band.
+    ///
+    /// The error names the first inverted pair and where each value came
+    /// from. It stays short because the binary bounds diagnostics, and it
+    /// names a file by its escaped basename because full paths are redacted
+    /// there.
+    fn check_risk_threshold_order(&self) -> Result<(), String> {
+        let thresholds = [
+            ("low", &self.risk_low),
+            ("medium", &self.risk_medium),
+            ("high", &self.risk_high),
+            ("critical", &self.risk_critical),
+        ];
+        let Some(pair) = thresholds
+            .windows(2)
+            .find(|pair| pair[0].1.value > pair[1].1.value)
+        else {
+            return Ok(());
+        };
+        let describe = |(name, setting): (&str, &Setting<u32>)| {
+            let origin = match &setting.origin {
+                Origin::Default => "default".to_string(),
+                // A writable config root can choose any name; escape it so
+                // it cannot carry terminal control or bidirectional text.
+                Origin::File(path) => format!(
+                    "settings file {}",
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .escape_default()
+                ),
+                Origin::Environment(name) | Origin::Cli(name) => name.to_string(),
+            };
+            format!("{name}={} ({origin})", setting.value)
+        };
+        Err(format!(
+            "invalid risk thresholds: {} is above {}; expected low <= medium <= high <= critical",
+            describe(pair[0]),
+            describe(pair[1]),
+        ))
+    }
+
     pub(crate) fn files(&self) -> &[PathBuf] {
         &self.files
     }
@@ -518,7 +566,7 @@ mod tests {
     use telltale_schema::event::path_hash;
     use tempfile::tempdir;
 
-    use super::{CliSettings, MAX_SETTINGS_FILE_BYTES, Settings, resolve};
+    use super::{CliSettings, MAX_SETTINGS_FILE_BYTES, Origin, Settings, resolve};
 
     fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
         let path = dir.join(name);
@@ -703,6 +751,132 @@ mod tests {
             );
             assert!(!error.contains("SECRET"), "{error}");
         }
+    }
+
+    #[test]
+    fn integer_environment_values_accept_a_leading_plus_like_yaml() {
+        let settings = resolve(
+            &[],
+            &env(&[("TELLTALE_LOG_ROTATE_KEEP", "+5")]),
+            &CliSettings::default(),
+        )
+        .expect("resolve");
+        assert_eq!(settings.rotation().keep, 5);
+    }
+
+    #[test]
+    fn risk_thresholds_are_checked_after_files_and_environment_merge() {
+        let temp = tempdir().expect("tempdir");
+        let unordered = write(
+            temp.path(),
+            "50-unordered.yaml",
+            "version: 1\nrisk_thresholds: {low: 90, medium: 50, high: 10, critical: 5}\n",
+        );
+        let error = resolve(
+            std::slice::from_ref(&unordered),
+            &env(&[]),
+            &CliSettings::default(),
+        )
+        .expect_err("unordered thresholds")
+        .to_string();
+        assert_eq!(
+            error,
+            "invalid risk thresholds: low=90 (settings file 50-unordered.yaml) is above \
+             medium=50 (settings file 50-unordered.yaml); expected low <= medium <= high <= critical"
+        );
+        assert!(!error.contains(&*temp.path().to_string_lossy()), "{error}");
+
+        // Each file is valid alone; the environment inverts the merged result.
+        let ordered = write(
+            temp.path(),
+            "10-ordered.yaml",
+            "version: 1\nrisk_thresholds: {low: 10, medium: 20, high: 30, critical: 40}\n",
+        );
+        let error = resolve(
+            std::slice::from_ref(&ordered),
+            &env(&[("TELLTALE_RISK_THRESHOLD_CRITICAL", "25")]),
+            &CliSettings::default(),
+        )
+        .expect_err("environment inverts a valid file")
+        .to_string();
+        assert!(
+            error.contains(
+                "high=30 (settings file 10-ordered.yaml) is above \
+                 critical=25 (TELLTALE_RISK_THRESHOLD_CRITICAL)"
+            ),
+            "{error}"
+        );
+
+        // A lone high override below the default medium is inverted too.
+        let error = resolve(
+            &[],
+            &env(&[("TELLTALE_RISK_THRESHOLD_HIGH", "1")]),
+            &CliSettings::default(),
+        )
+        .expect_err("high below default medium")
+        .to_string();
+        assert!(
+            error.contains("medium=50 (default) is above high=1 (TELLTALE_RISK_THRESHOLD_HIGH)"),
+            "{error}"
+        );
+
+        // An invalid file can be repaired by a later source.
+        let partial = write(
+            temp.path(),
+            "60-partial.yaml",
+            "version: 1\nrisk_thresholds: {high: 10, critical: 10}\n",
+        );
+        let settings = resolve(
+            &[partial],
+            &env(&[
+                ("TELLTALE_RISK_THRESHOLD_LOW", "1"),
+                ("TELLTALE_RISK_THRESHOLD_MEDIUM", "5"),
+            ]),
+            &CliSettings::default(),
+        )
+        .expect("merged thresholds are ordered");
+        assert_eq!(
+            settings.risk_thresholds(),
+            telltale_schema::scoring::RiskThresholds {
+                low: 1,
+                medium: 5,
+                high: 10,
+                critical: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn risk_threshold_errors_escape_settings_file_names() {
+        // Rendering only: Windows cannot create this name, so the origin is
+        // built in memory instead of read from a real file.
+        let mut settings = Settings::default();
+        settings.risk_low.set(
+            Some(90),
+            Origin::File(PathBuf::from("synthetic-root/x\u{1b}[31mRED\u{202e}.yaml")),
+        );
+        let error = settings
+            .check_risk_threshold_order()
+            .expect_err("unordered thresholds");
+        assert!(
+            !error.contains('\u{1b}') && !error.contains('\u{202e}'),
+            "{error:?}"
+        );
+        assert!(
+            error.contains("low=90 (settings file x\\u{1b}[31mRED\\u{202e}.yaml)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn equal_risk_thresholds_remain_valid() {
+        let temp = tempdir().expect("tempdir");
+        let file = write(
+            temp.path(),
+            "settings.yaml",
+            "version: 1\nrisk_thresholds: {low: 1, medium: 1, high: 1, critical: 1}\n",
+        );
+        resolve(&[file], &env(&[]), &CliSettings::default()).expect("equal thresholds");
     }
 
     #[test]

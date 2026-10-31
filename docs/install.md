@@ -74,7 +74,7 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable is `v0.6.0`. Published candidates are immutable; each
+Official stable is `v0.7.0`. Published candidates are immutable; each
 candidate's identity and qualification results are on its
 [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). The
 [versioning contract](versioning.md) requires RC package/tag equality and separate exact
@@ -215,7 +215,7 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 Use the reviewed repository scripts from this checkout with Windows PowerShell
 5.1 or PowerShell 7 and a current authenticated GitHub CLI (`gh`). Installation
-selects the latest official stable Release (`v0.6.0` currently) and verifies the
+selects the latest official stable Release (`v0.7.0` currently) and verifies the
 exact release/tag/commit, GitHub asset digests, `SHA256SUMS`, source/ref/digest-bound
 GitHub attestation, canonical nine-member ZIP and executable version before
 changing the installation:
@@ -613,10 +613,29 @@ explicit flags. The `events` flags can only turn their setting on. A
 vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can share one
 directory. Unknown keys, an unsupported `version`, files over 64 KiB,
 and environment values that do not parse fail the command before it scans or
-writes anything; an empty variable counts as unset. Integer variables must be
-plain digits, so a padded value such as `" 5 "` fails. Booleans ignore
+writes anything; an empty variable counts as unset. Integer variables are
+unsigned decimal numbers with no surrounding whitespace, so a padded value such
+as `" 5 "` fails; a leading `+` is accepted, as in YAML. Booleans ignore
 surrounding whitespace and accept `0`/`1`, `false`/`true`, `off`/`on`, and
-`no`/`yes` in any case.
+`no`/`yes` in any case. Unrecognized variable names, including misspelled
+`TELLTALE_*` names, are ignored, so confirm a value's origin with
+`telltale config show`. `--no-local-config` skips every settings file but still
+applies `TELLTALE_*` variables and flags.
+
+Risk thresholds must not decrease: `low <= medium <= high <= critical`. Equal
+values are allowed and leave a band empty. Telltale checks the merged values
+after files, variables and flags apply, because each source can be valid on
+its own and still invert the result: for example, `TELLTALE_RISK_THRESHOLD_HIGH=10`
+with the default `medium: 50`. An inverted set fails every command that reads
+settings before it writes anything. The error names the first inverted pair
+with each value's origin.
+
+Path variables, such as `TELLTALE_LOG_PATH`, `TELLTALE_STATE_PATH`,
+`TELLTALE_PROJECT_CONFIG`, `CODEX_HOME` and `OPENCODE_DB`, are used literally.
+`~` is never expanded, so let your shell or service manager expand it. Only
+`path:` entries inside a project config file expand a leading `~/`.
+Session-store variables apply only to the default `--root .`; see
+[session sources](session-sources.md#host-root-rules).
 
 `telltale config show` prints each setting's effective value, default, origin
 (`default`, `settings_file`, `environment`, or `cli`), and `source` without
@@ -670,6 +689,22 @@ selected supported clients:
 cargo run --bin telltale -- watch --client codex --client opencode --root "$HOME"
 ```
 
+Watch starts idle: by default it does not scan sessions that already exist, and
+it scans a source only after that source changes. Add `--initial-scan` to run
+one full scan of every existing session after the filesystem watches are
+registered. A write during that scan is still queued and scanned afterward.
+`--iterations` counts only change-triggered scans, never the initial scan, and
+must be at least 1.
+Once later changes will be seen, watch prints one line to stderr that starts
+with `telltale watch: ready`. It reports the number of watched roots and
+whether the initial scan ran, and it never includes paths. Each scan still
+prints its summary on stdout.
+
+Watch reads settings, environment variables and the set of discovered config
+files once, when it starts. Restart it to apply an edit to `settings.d`; a new
+process picks up the change. Rule and allowlist files that were already
+discovered are reread on each scan.
+
 ## Check Scanner Status
 
 After a scan writes JSONL telemetry, use `telltale status` to review the latest local
@@ -683,6 +718,31 @@ The command keeps its top-level `status` field for the status lookup result. The
 latest scanner health check is reported separately as `health_component`,
 `health_check_name`, and `health_check_status`, matching the health event fields
 that SIEM dashboards can group by as `component`, `check_name`, and `status`.
+Neither field is a monitoring verdict. The lookup succeeds whenever native
+health exists, and the Event 3.0 health status is always `ok`.
+
+Use `attention_required` and `attention_reasons` instead. Reasons are closed
+codes: `scanner_errors` when the latest health event counted scanner errors,
+plus one code for each kind of operational alert recorded after it
+(`source_parse_outage`, `scanner_error_threshold_exceeded`,
+`scan_duration_threshold_exceeded`, `sink_delivery_failure`, or
+`operational_alert` for any other type). `attention_required` is `null` when
+the journal holds only historical events or is unavailable. It is also `null`
+when no alert was recorded and the latest health event's `scanner_error_count`
+cannot be read as a number. Any positive count counts as scanner errors,
+including counts above the 64-bit range.
+
+These fields describe the scan that wrote the latest health event
+(`last_scan_time`). A scan writes a health event only when it sees scanner
+errors, raises an alert or detects a source inventory change. After you repair
+a source, attention can therefore stay reported until a later health event.
+For a current pass or fail result, run
+`telltale scan --once --fail-on-source-errors`. The scan first completes as
+usual and writes only what it would have written anyway. `--dry-run` writes
+nothing, and `--history` writes events but never reads or writes scan state.
+It then exits with status 3 if any source failed: a parse error, degraded
+discovery such as a missing `--root`, or a failed project config.
+Without the flag, exit 0 means only that the scan completed.
 
 ## Managed Service Setup (Advanced)
 

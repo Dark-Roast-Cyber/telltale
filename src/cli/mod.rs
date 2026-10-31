@@ -51,6 +51,11 @@ enum Command {
     Scan(ScanCommandArgs),
 
     /// Watch local session stores and scan when files change.
+    ///
+    /// Watch prints one "telltale watch: ready" line to stderr once changes
+    /// will be seen, then one scan summary per scan on stdout. Settings and
+    /// discovered config files are read at startup; restart watch to apply
+    /// changes.
     Watch(WatchCommandArgs),
 
     /// Inspect and validate Telltale detection rules.
@@ -165,9 +170,18 @@ struct ScanCommandArgs {
     #[arg(long)]
     interval_seconds: Option<u64>,
 
-    /// Cap periodic scans after this many iterations.
-    #[arg(long)]
+    /// Cap periodic scans after this many iterations (at least 1).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     iterations: Option<u32>,
+
+    /// Exit with status 3 when a source failed: a parse error, degraded
+    /// discovery such as a missing --root, or a failed project config. The
+    /// scan first completes as usual, so it persists only what it would have
+    /// anyway: --dry-run writes nothing, and --history writes events but never
+    /// scan state. Without this flag, exit 0 means the scan completed; check
+    /// diagnostic_warnings for failures.
+    #[arg(long, requires = "once")]
+    fail_on_source_errors: bool,
 
     /// Optional Splunk HEC collector URL. Requires --splunk-hec-token.
     #[arg(long)]
@@ -215,9 +229,15 @@ struct WatchCommandArgs {
     #[command(flatten)]
     execution: ScanExecutionArgs,
 
-    /// Cap watch-triggered scans after this many iterations.
-    #[arg(long)]
+    /// Cap watch-triggered scans after this many iterations (at least 1).
+    /// The --initial-scan is not counted by --iterations.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     iterations: Option<u32>,
+
+    /// Scan every existing session once after the watches are registered.
+    /// Without it, watch starts idle and scans only sources that change.
+    #[arg(long)]
+    initial_scan: bool,
 
     /// Milliseconds to wait after a filesystem event before scanning.
     /// Overrides watch.debounce_ms (settings.d; default 500).
@@ -233,7 +253,10 @@ struct WatchCommandArgs {
 
 #[derive(ClapArgs)]
 struct ScanExecutionArgs {
-    /// Root containing supported local session stores.
+    /// Root containing supported local session stores. The default "."
+    /// resolves stores from HOME, CODEX_HOME, XDG_DATA_HOME and OPENCODE_DB.
+    /// Any other root is searched as a home directory and ignores those
+    /// variables.
     #[arg(long, default_value = ".")]
     root: PathBuf,
 
@@ -571,6 +594,7 @@ struct LocalConfigCliArgs {
 
     /// Disable local config discovery from organization-rules.d, rules.d, ui-rules.d,
     /// rule-packages.d, overrides.d, policies.d, allowlists.d, outputs.d, and settings.d.
+    /// TELLTALE_* environment settings and flags still apply.
     #[arg(long)]
     no_local_config: bool,
 }
@@ -1497,6 +1521,16 @@ fn run_rules_export_default(
     Ok(())
 }
 
+/// Exit status for an error from [`run`]: 3 when a completed scan reported
+/// source failures under `--fail-on-source-errors`, otherwise 1.
+pub(crate) fn exit_status(error: &(dyn std::error::Error + 'static)) -> u8 {
+    if error.is::<scan::SourceFailures>() {
+        3
+    } else {
+        1
+    }
+}
+
 fn parse_nonzero_usize(value: &str) -> Result<usize, String> {
     let parsed = value
         .parse::<usize>()
@@ -1527,6 +1561,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             once,
             interval_seconds,
             iterations,
+            fail_on_source_errors,
             splunk_hec_endpoint,
             splunk_hec_token,
             backfill,
@@ -1553,7 +1588,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 max_sources,
             };
             if once {
-                scan::run_scan_once(scan_config)?;
+                let failures = scan::run_scan_once(scan_config)?;
+                if fail_on_source_errors && !failures.is_empty() {
+                    return Err(Box::new(scan::SourceFailures(failures)));
+                }
             } else {
                 let interval =
                     interval_seconds.ok_or("scan requires --once or --interval-seconds")?;
@@ -1765,6 +1803,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Watch(WatchCommandArgs {
             execution,
             iterations,
+            initial_scan,
             debounce_ms,
             min_scan_interval_ms,
         }) => {
@@ -1782,6 +1821,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 execution: prepared.config(&runtime.value),
                 trigger: scan::watch::WatchTriggerConfig {
                     iterations,
+                    initial_scan,
                     debounce: std::time::Duration::from_millis(
                         prepared.settings.watch_debounce_ms.value,
                     ),

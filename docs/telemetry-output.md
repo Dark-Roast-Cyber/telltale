@@ -305,7 +305,17 @@ otherwise ambiguous zero-detection result without exposing session content:
   empty sources do not imply parse failure when another source is productive,
   and repeated state-deduplicated positives do not imply zero candidates.
   These are observations only: they are not health verdicts, security alerts,
-  Event 3.0 fields, sink payloads, persisted state, or exit-status changes.
+  Event 3.0 fields, sink payloads or persisted state, and they do not change
+  the default exit status. `scan --once --fail-on-source-errors` exits with
+  status 3 when any warning has `classification=observed_failure`. It exits
+  only after the scan has persisted what it would without the flag: nothing for
+  `--dry-run`, and no scan state for `--history`. Exit 1 still means the
+  command failed.
+  `session_store_environment_ignored` (`classification=coverage_limitation`,
+  `basis=source_discovery`) reports that a non-`.` `--root` was given while
+  `CODEX_HOME`, or an `OPENCODE_DB` other than `:memory:`, is set for a
+  selected client. That root does not read those variables, so a relocated
+  store is not scanned.
   Discovery and project-load diagnostics never include roots, paths, source IDs,
   loader errors, or operating-system error text.
   Post-RC1 development builds also emit `source_coverage_partial` with
@@ -321,7 +331,10 @@ JSONL or HEC.
 
 Allowlisting marks a detection informational and does not necessarily prevent
 emission. Scanner-error events remain visible through the existing scan totals
-but do not inflate the detection-only flow. With an active rule policy, the
+but do not inflate the detection-only flow. The top-level `detection_count`
+is one of those totals: it counts every non-activity candidate, scanner errors
+included, so a scan whose only source failed reports `detection_count: 1`.
+Use `detection_flow.emitted_detection_count` for emitted detections. With an active rule policy, the
 stdout-only summary reports `policy_match_accounting` with `status=available`,
 the source/session-scoped pre-policy candidate count, fully filtered candidate
 count, and filtered matched rule-ID reference count. These counts are computed
@@ -640,7 +653,10 @@ still prints the valid queue health and exits successfully. The top-level
 and an additive `journal_status` object reports `availability: unavailable`
 with the bounded reason `no_native_health` or `journal_read_failed`. No raw
 reader diagnostic is included; queue availability does not imply scanner health.
-Native-health and historical-only output shapes are unchanged. Without a valid
+`attention_required` is null and `attention_reasons` is empty there, as for
+historical-only journals; only native health is assessed (see
+[Check Scanner Status](install.md#check-scanner-status)). The native-health and
+historical-only shapes otherwise remain unchanged. Without a valid
 outbox lookup, journal failures retain their existing error/exit behavior.
 Status inspection does not create storage or parents, reconcile, prune, or
 change delivery state.

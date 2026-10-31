@@ -23,3 +23,8 @@ use telltale_sources::{discovery, install_inventory, paths, projects};
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     cli::run()
 }
+
+/// The process exit status for an error returned by [`run`].
+pub fn exit_status(error: &(dyn std::error::Error + 'static)) -> u8 {
+    cli::exit_status(error)
+}

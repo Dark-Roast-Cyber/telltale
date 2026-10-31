@@ -114,15 +114,26 @@ pub(crate) fn run_scan_loop(
     let mut remaining = iterations;
     loop {
         run_scan_once(config)?;
-        if let Some(value) = remaining.as_mut() {
-            if *value == 1 {
-                break;
-            }
-            *value -= 1;
+        if iteration_budget_exhausted(&mut remaining) {
+            break;
         }
         thread::sleep(interval);
     }
     Ok(())
+}
+
+/// Counts one completed scan against an optional `--iterations` budget and
+/// reports whether the budget is now spent. The CLI rejects zero, and a zero
+/// budget still counts as spent here, so the counter can never wrap.
+pub(super) fn iteration_budget_exhausted(remaining: &mut Option<u32>) -> bool {
+    match remaining {
+        None => false,
+        Some(value) if *value <= 1 => true,
+        Some(value) => {
+            *value -= 1;
+            false
+        }
+    }
 }
 
 /// Which sources a scan should parse and detect against.
@@ -196,9 +207,31 @@ pub(super) fn validate_scan_execution(
     Ok(())
 }
 
-pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    run_scan(config, ScanTargets::Full, StateSavePolicy::Always).map(|_| ())
+/// Runs one full scan and returns the codes of its `observed_failure`
+/// diagnostic warnings, which `--fail-on-source-errors` turns into an exit
+/// status after output and state are written.
+pub(crate) fn run_scan_once(
+    config: ScanConfig<'_>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    run_scan(config, ScanTargets::Full, StateSavePolicy::Always)
+        .map(|result| result.source_failures)
 }
+
+/// A completed scan saw source failures and the operator asked to fail on them.
+#[derive(Debug)]
+pub(crate) struct SourceFailures(pub(crate) Vec<String>);
+
+impl std::fmt::Display for SourceFailures {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "scan completed with source failures: {}",
+            self.0.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for SourceFailures {}
 
 fn run_scan(
     config: ScanConfig<'_>,
@@ -603,6 +636,26 @@ fn run_scan_for_platform(
         }
     }
 
+    let mut warnings = diagnostic_warnings(
+        &source_discovery,
+        &source_processing,
+        &detection_flow,
+        rule_count,
+    );
+    if session_store_environment_ignored(config.execution.root, config.execution.clients, &|name| {
+        std::env::var_os(name)
+    }) {
+        warnings.push(diagnostic_warning(
+            "session_store_environment_ignored",
+            "coverage_limitation",
+            "source_discovery",
+        ));
+    }
+    let source_failures = warnings
+        .iter()
+        .filter(|warning| warning["classification"] == "observed_failure")
+        .filter_map(|warning| warning["code"].as_str().map(str::to_string))
+        .collect();
     let summary = scan_summary_json(ScanSummaryInput {
         health_event: &health,
         emitted_count,
@@ -619,12 +672,7 @@ fn run_scan_for_platform(
         source_processing: &source_processing,
         detection_flow: &detection_flow,
         source_discovery: &source_discovery,
-        diagnostic_warnings: &diagnostic_warnings(
-            &source_discovery,
-            &source_processing,
-            &detection_flow,
-            rule_count,
-        ),
+        diagnostic_warnings: &warnings,
         targeted,
         runtime: config.execution.runtime,
         effective_configuration: &effective_configuration,
@@ -637,7 +685,27 @@ fn run_scan_for_platform(
     println!("{}", serde_json::to_string(&summary)?);
     Ok(ScanRunResult {
         full_scan_discovery,
+        source_failures,
     })
+}
+
+/// Session-store variables that only the default `--root .` reads. Another
+/// root is searched as a home directory, so a variable that names a relocated
+/// store leaves that store unscanned. Values are never inspected beyond the
+/// ones discovery itself treats as unset.
+fn session_store_environment_ignored(
+    root: &Path,
+    clients: &[ClientId],
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> bool {
+    if root == Path::new(".") {
+        return false;
+    }
+    let selected = |client| clients.is_empty() || clients.contains(&client);
+    let set = |name| env(name).filter(|value| !value.is_empty());
+    (selected(ClientId::Codex) && set("CODEX_HOME").is_some())
+        || (selected(ClientId::OpenCode)
+            && set("OPENCODE_DB").is_some_and(|value| value != ":memory:"))
 }
 
 fn scanner_health_alerts(
@@ -1239,6 +1307,7 @@ fn journal_status_json(
     let mut native_health = None;
     let mut historical_health = None;
     let mut native_detections = 0;
+    let mut native_alert_reasons = BTreeSet::new();
     let mut historical_detections = 0;
     visit_jsonl_records(log_path, |record, _| {
         match record.kind {
@@ -1247,8 +1316,11 @@ fn journal_status_json(
                 if event_record_has_type(&record, "health") {
                     native_health = Some(record.value);
                     native_detections = 0;
+                    native_alert_reasons.clear();
                 } else if event_record_has_type(&record, "detection") {
                     native_detections += 1;
+                } else if event_record_has_type(&record, "operational_alert") {
+                    native_alert_reasons.insert(operational_alert_reason(&record.value));
                 }
             }
             EventRecordKind::Historical => {
@@ -1264,14 +1336,27 @@ fn journal_status_json(
     })
     .map_err(|error| ("journal_read_failed", error))?;
     let status = if let Some(health) = native_health {
-        status_json(
+        let mut status = status_json(
             "ok",
             Some(&health),
             native_detections,
             log_path,
             state_path,
             durable_health,
-        )
+        );
+        let scanner_errors = scanner_errors_recorded(&health);
+        if scanner_errors == Some(true) {
+            native_alert_reasons.insert("scanner_errors");
+        }
+        status["attention_required"] = if !native_alert_reasons.is_empty() {
+            true.into()
+        } else if scanner_errors.is_none() {
+            serde_json::Value::Null
+        } else {
+            false.into()
+        };
+        status["attention_reasons"] = native_alert_reasons.into_iter().collect();
+        status
     } else if historical_seen && !native_seen {
         status_json(
             "historical_only",
@@ -1285,6 +1370,41 @@ fn journal_status_json(
         return Err(("no_native_health", "no_native_health".into()));
     };
     Ok(status)
+}
+
+/// Whether a health record counted any scanner errors, or `None` when the
+/// count cannot be read. The schema accepts any non-negative integer, and a
+/// count above `u64::MAX` reaches serde as a float, so positivity is checked on
+/// whichever representation it has instead of treating it as zero.
+fn scanner_errors_recorded(health: &serde_json::Value) -> Option<bool> {
+    let count = health.get("scanner_error_count")?;
+    count
+        .as_u64()
+        .map(|count| count > 0)
+        .or_else(|| count.as_i64().map(|count| count > 0))
+        .or_else(|| count.as_f64().map(|count| count > 0.0))
+}
+
+/// The closed status reason for one operational alert. The journal is local
+/// input, so an unrecognized alert type is reported generically, never echoed.
+fn operational_alert_reason(alert: &serde_json::Value) -> &'static str {
+    let alert_type = alert
+        .get("evidence")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|evidence| {
+            evidence.iter().find(|item| {
+                item.get("field").and_then(serde_json::Value::as_str) == Some("alert_type")
+            })
+        })
+        .and_then(|item| item.get("redacted_value"))
+        .and_then(serde_json::Value::as_str);
+    match alert_type {
+        Some("scanner_error_threshold_exceeded") => "scanner_error_threshold_exceeded",
+        Some("scan_duration_threshold_exceeded") => "scan_duration_threshold_exceeded",
+        Some("source_parse_outage") => "source_parse_outage",
+        Some("sink_delivery_failure") => "sink_delivery_failure",
+        _ => "operational_alert",
+    }
 }
 
 fn event_record_has_type(record: &JsonlEventRecord, expected: &str) -> bool {
@@ -1320,6 +1440,7 @@ struct ScanSummaryInput<'a> {
 
 struct ScanRunResult {
     full_scan_discovery: Option<(Vec<Source>, SourceDiscoveryAccounting)>,
+    source_failures: Vec<String>,
 }
 
 struct DetectionFlowAccounting {
@@ -1698,6 +1819,9 @@ fn status_json(
         "suppressed_count": health_fields.remove("suppressed_count"),
         "scanner_error_count": health_fields.remove("scanner_error_count"),
         "durable_queue_health": durable_health,
+        // Only native health can be assessed; anything else is unknown.
+        "attention_required": serde_json::Value::Null,
+        "attention_reasons": [],
     })
 }
 
@@ -2576,5 +2700,101 @@ mod tests {
             status["durable_queue_health"],
             serde_json::json!({"mode": "not_configured", "sinks": {}})
         );
+        assert_eq!(status["attention_required"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn scanner_error_counts_are_positive_in_every_numeric_form() {
+        let health = |count: &str| {
+            serde_json::from_str::<serde_json::Value>(&format!(
+                r#"{{"scanner_error_count":{count}}}"#
+            ))
+            .expect("health json")
+        };
+        assert_eq!(scanner_errors_recorded(&health("0")), Some(false));
+        assert_eq!(scanner_errors_recorded(&health("3")), Some(true));
+        assert_eq!(
+            scanner_errors_recorded(&health("18446744073709551616")),
+            Some(true)
+        );
+        assert_eq!(scanner_errors_recorded(&health("2.0e19")), Some(true));
+        assert_eq!(scanner_errors_recorded(&health("\"1\"")), None);
+        assert_eq!(scanner_errors_recorded(&health("null")), None);
+        assert_eq!(scanner_errors_recorded(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn iteration_budget_counts_down_without_wrapping() {
+        let mut unlimited = None;
+        assert!(!iteration_budget_exhausted(&mut unlimited));
+        let mut two = Some(2);
+        assert!(!iteration_budget_exhausted(&mut two));
+        assert!(iteration_budget_exhausted(&mut two));
+        assert!(iteration_budget_exhausted(&mut Some(1)));
+        // The CLI rejects zero; the counter still never wraps.
+        let mut zero = Some(0);
+        assert!(iteration_budget_exhausted(&mut zero));
+        assert_eq!(zero, Some(0));
+    }
+
+    #[test]
+    fn operational_alert_reasons_are_closed_codes() {
+        let alert = |alert_type: &str| {
+            serde_json::json!({
+                "event_type": "operational_alert",
+                "evidence": [{"field": "alert_type", "redacted_value": alert_type}],
+            })
+        };
+        assert_eq!(
+            operational_alert_reason(&alert("source_parse_outage")),
+            "source_parse_outage"
+        );
+        assert_eq!(
+            operational_alert_reason(&alert("sk-abcdefgh")),
+            "operational_alert"
+        );
+        assert_eq!(
+            operational_alert_reason(&serde_json::json!({"evidence": "sk-abcdefgh"})),
+            "operational_alert"
+        );
+    }
+
+    #[test]
+    fn explicit_roots_report_unused_session_store_variables_for_selected_clients() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| std::ffi::OsString::from(value))
+            }
+        };
+        let codex = env(&[("CODEX_HOME", "/synthetic/codex")]);
+        let opencode = env(&[("OPENCODE_DB", "relocated.db")]);
+        let unset = env(&[("CODEX_HOME", ""), ("OPENCODE_DB", ":memory:")]);
+        let root = Path::new("/synthetic/root");
+        assert!(!session_store_environment_ignored(
+            Path::new("."),
+            &[],
+            &codex
+        ));
+        assert!(!session_store_environment_ignored(
+            Path::new("./"),
+            &[],
+            &opencode
+        ));
+        assert!(session_store_environment_ignored(root, &[], &codex));
+        assert!(session_store_environment_ignored(root, &[], &opencode));
+        assert!(!session_store_environment_ignored(root, &[], &unset));
+        assert!(!session_store_environment_ignored(
+            root,
+            &[ClientId::Claude],
+            &codex
+        ));
+        assert!(session_store_environment_ignored(
+            root,
+            &[ClientId::OpenCode],
+            &opencode
+        ));
     }
 }
