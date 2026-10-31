@@ -234,7 +234,18 @@ Codex adapter notes:
 - A forked thread's rollout starts with `history_base` (`thread_id`,
   `end_ordinal_exclusive`, `end_byte_offset`) and its ordinals continue from
   `end_ordinal_exclusive`. The parent history stays in the parent's rollout
-  and is not read again. `subagent_history_start_ordinal` is still rejected.
+  and is not read again.
+- A paginated subagent rollout that copies its parent's model context has
+  its own `session_meta` at ordinal 0, the copied parent records next, and
+  its own history from `subagent_history_start_ordinal`. The copied records
+  are not interpreted or attributed to the subagent; each is quarantined
+  (`foreign_thread_item`), and the parent's rollout is the one evaluated. The
+  boundary is end-exclusive: it must be at least 1 and at most one past the
+  file's final ordinal. A file may end exactly at its last copied record, and
+  a boundary of 1 is an empty prefix, valid even when the file holds only its
+  `session_meta`. A larger boundary means the copied prefix was not fully
+  written, and the whole source fails, as it does when the boundary appears on
+  any later record or together with `history_base`.
 - Bookkeeping records are skipped: `token_usage_record`, `compacted`,
   `turn_context`, `world_state`, lifecycle and reasoning `event_msg` payloads
   (including `thread_settings_applied` and `turn_aborted`), and completed

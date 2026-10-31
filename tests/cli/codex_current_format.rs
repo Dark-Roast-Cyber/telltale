@@ -10,6 +10,7 @@ use super::*;
 const PARENT: &str = "01a10000-0000-7000-8000-00000000000a";
 const FORK: &str = "01a10000-0000-7000-8000-00000000000b";
 const SUBAGENT: &str = "01a10000-0000-7000-8000-00000000000c";
+const CHILD: &str = "01a10000-0000-7000-8000-00000000000d";
 const SECRET: &str = "SYNTHETIC-CODEX-OUTPUT-SECRET";
 const RULES: &str = r#"
 version: 1
@@ -37,6 +38,17 @@ rules:
     detection:
       selection:
         tool_result: 'synthetic-codex-command-output-marker'
+      condition: selection
+    explanation: Synthetic test.
+  - id: synthetic.codex.child_result
+    title: Synthetic Codex subagent result marker
+    tags: [synthetic]
+    category: synthetic
+    severity: high
+    score: 50
+    detection:
+      selection:
+        tool_result: 'synthetic-codex-child-result-marker'
       condition: selection
     explanation: Synthetic test.
 "#;
@@ -263,6 +275,157 @@ fn current_codex_rollouts_are_parsed_and_detected() {
     assert!(
         !events.iter().any(|event| event["session_id"] == SUBAGENT),
         "a parent's copy of a subagent item is never attributed"
+    );
+    for bytes in [
+        fs::read(&log).unwrap(),
+        serde_json::to_vec(&summary).unwrap(),
+    ] {
+        assert!(!String::from_utf8_lossy(&bytes).contains(SECRET));
+    }
+}
+
+/// A copied-fork subagent rollout: its own metadata, then verbatim copies of
+/// the parent's first records (its metadata and an exec call whose output
+/// matches a rule), then the subagent's own history from the boundary.
+fn copied_subagent() -> String {
+    let inherited = parent()
+        .lines()
+        .take(6)
+        .map(|line| {
+            let mut record: Value = serde_json::from_str(line).unwrap();
+            record.as_object_mut().unwrap().remove("ordinal");
+            record
+        })
+        .collect::<Vec<_>>();
+    let start = 1 + inherited.len() as u64;
+    let mut records = vec![serde_json::json!({"type": "session_meta", "payload": {
+        "id": CHILD, "session_id": PARENT, "parent_thread_id": PARENT,
+        "history_mode": "paginated", "source": {"subagent": {"other": "synthetic"}},
+        "multi_agent_version": "disabled", "subagent_history_start_ordinal": start}})];
+    records.extend(inherited);
+    records.extend([
+        event(serde_json::json!({"type": "task_started", "turn_id": "turn-child"})),
+        response(serde_json::json!({"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "Review the synthetic change."}]})),
+        response(
+            serde_json::json!({"type": "custom_tool_call", "call_id": "call-child",
+            "name": "exec", "input": "await tools.shell({command: 'git diff'})",
+            "status": "completed"}),
+        ),
+        response(
+            serde_json::json!({"type": "custom_tool_call_output", "call_id": "call-child",
+            "output": [{"type": "input_text",
+                        "text": "synthetic-codex-child-result-marker"}]}),
+        ),
+    ]);
+    rollout(0, records)
+}
+
+#[test]
+fn copied_subagent_rollouts_attribute_only_their_own_history() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let day = root.join("codex/sessions/2026/10/14");
+    fs::create_dir_all(&day).unwrap();
+    fs::write(day.join(format!("rollout-parent-{PARENT}.jsonl")), parent()).unwrap();
+    fs::write(
+        day.join(format!("rollout-child-{CHILD}.jsonl")),
+        copied_subagent(),
+    )
+    .unwrap();
+    let rules = temp.path().join("rules.yaml");
+    fs::write(&rules, RULES).unwrap();
+    let log = temp.path().join("events.jsonl");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("config"))
+        .env("XDG_STATE_HOME", temp.path().join("state-home"))
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--client",
+            "codex",
+            "--no-local-config",
+            "--emit-activity",
+            "--install-inventory-disabled",
+            "--no-default-rules",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--rules")
+        .arg(&rules)
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let processing = &summary["source_processing"];
+    assert_eq!(processing["parse_success_source_count"], 2, "{summary}");
+    assert_eq!(processing["parse_error_source_count"], 0, "{summary}");
+    assert_eq!(processing["failures"], serde_json::json!([]), "{summary}");
+    let child_units = processing["quarantined_units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|unit| unit["session_id"] == CHILD)
+        .map(|unit| {
+            (
+                unit["native_id"].as_str().unwrap(),
+                unit["source_sequence"].as_u64().unwrap(),
+                unit["code"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_units,
+        (1..=6)
+            .map(|sequence| ("", sequence, "foreign_thread_item"))
+            .collect::<Vec<_>>(),
+        "{summary}"
+    );
+
+    let events = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for event in &events {
+        assert!(event_schema_validator().is_valid(event), "{event}");
+    }
+    let detections = |rule: &str| {
+        events
+            .iter()
+            .filter(|event| {
+                event["event_type"] == "detection"
+                    && event["evidence"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|evidence| evidence["rule_id"] == rule)
+            })
+            .map(|event| event["session_id"].as_str().unwrap())
+            .collect::<Vec<_>>()
+    };
+    // The subagent's own command is detected under the subagent; the copied
+    // parent exec output is detected once, under the parent only.
+    assert_eq!(detections("synthetic.codex.child_result"), [CHILD]);
+    assert_eq!(detections("synthetic.codex.exec_result"), [PARENT]);
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "activity" && event["session_id"] == CHILD),
+        "the subagent reports its own activity"
     );
     for bytes in [
         fs::read(&log).unwrap(),
