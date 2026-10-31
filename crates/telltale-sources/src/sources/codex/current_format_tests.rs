@@ -174,7 +174,10 @@ fn subagent_inherited_parent_context_is_quarantined_and_only_child_history_is_at
         assert!(!batch.observations.is_empty());
         for o in &batch.observations {
             assert_eq!(o.session_id().unwrap().value(), "thread-child");
-            assert!(o.sequence().unwrap() >= start, "{:?}", o.sequence());
+            assert!(
+                o.sequence().unwrap() >= start,
+                "child observation precedes its own history boundary"
+            );
         }
         let only_child = acquire(
             source,
