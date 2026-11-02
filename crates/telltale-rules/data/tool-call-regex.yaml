@@ -95,9 +95,9 @@ rules:
         arguments: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
         url: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
       exclude:
-        command: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
-        arguments: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
-        url: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
+        command: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&]|&[^;&|\n])*(?:(?-i:(?:^|[ \t])-X)[ \t]*(?:POST|PUT)|--request[ \t]+(?:POST|PUT)|--method(?:[ \t]+|=)POST|(?-i:(?:^|[ \t])-F(?:[ \t]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?-i:(?:^|[ \t])-d(?:[ \t]|[=@A-Za-z0-9]))|(?-i:(?:^|[ \t])-T)[ \t])'
+        arguments: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&]|&[^;&|\n])*(?:(?-i:(?:^|[ \t])-X)[ \t]*(?:POST|PUT)|--request[ \t]+(?:POST|PUT)|--method(?:[ \t]+|=)POST|(?-i:(?:^|[ \t])-F(?:[ \t]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?-i:(?:^|[ \t])-d(?:[ \t]|[=@A-Za-z0-9]))|(?-i:(?:^|[ \t])-T)[ \t])'
+        url: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&]|&[^;&|\n])*(?:(?-i:(?:^|[ \t])-X)[ \t]*(?:POST|PUT)|--request[ \t]+(?:POST|PUT)|--method(?:[ \t]+|=)POST|(?-i:(?:^|[ \t])-F(?:[ \t]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?-i:(?:^|[ \t])-d(?:[ \t]|[=@A-Za-z0-9]))|(?-i:(?:^|[ \t])-T)[ \t])'
       condition: selection
     tags: [network, download]
     explanation: HTTP or FTP retrieval by a download client, not outbound upload.
@@ -126,7 +126,7 @@ rules:
     severity: high
     score: 60
     targets: [command, arguments, url]
-    regex: '(curl|wget).*(-X\s*(POST|PUT)|--request\s+(POST|PUT)|--method(?:\s+|=)POST|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?:^|[\s])-d(?:[\s=@A-Za-z0-9])|-T\s|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    regex: '(?:^|\b)(?:curl|wget)\b(?:[^;|\n&]|&[^;&|\n])*(?:(?-i:(?:^|[ \t])-X)[ \t]*(?:POST|PUT)|--request[ \t]+(?:POST|PUT)|--method(?:[ \t]+|=)POST|(?-i:(?:^|[ \t])-F(?:[ \t]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?-i:(?:^|[ \t])-d(?:[ \t]|[=@A-Za-z0-9]))|(?-i:(?:^|[ \t])-T)[ \t])|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
     tags: [network, exfiltration]
     explanation: Outbound upload or object-storage copy in a tool call.
     falsepositives:
