@@ -15,7 +15,7 @@ use crate::baseline::BaselineKey;
 use crate::baseline::{
     BASELINE_STATE_VERSION, BaselineSnapshotStore, BaselineSummary, baseline_snapshot_id,
 };
-use crate::event::Event;
+use crate::event::{Event, Evidence};
 use crate::file_lock::{
     FileInfo, SidecarLock, TempFile, atomic_no_replace, atomic_replace, read_snapshot,
     safe_path_info, validate_target,
@@ -212,23 +212,31 @@ impl ScanState {
         parse_native_state_mode_with_count(bytes, true)
     }
 
-    pub fn should_emit(&mut self, source: &Source, event: &Event) -> bool {
+    pub fn should_emit(
+        &mut self,
+        source: &Source,
+        event: &Event,
+        medium_or_higher_rules: &BTreeSet<String>,
+    ) -> bool {
         // Summaries must not re-emit when only evidence or event time changed.
-        // Detections and activities still hash through `detection_fingerprint`.
+        // Activities and other non-detection events still hash every evidence
+        // item through `detection_fingerprint`. Detections use a posture
+        // fingerprint plus evidence the caller marks medium or higher, or
+        // `network.download`.
         if event.event_type == "session_risk_summary" {
             return self.should_emit_session_risk_summary(source, event);
         }
         let source_fingerprint = source_fingerprint(source);
-        let detection_fingerprint = detection_fingerprint(event, &source_fingerprint);
-        if self
-            .seen_detection_fingerprints
-            .contains(&detection_fingerprint)
-        {
+        let fingerprint = if event.event_type == "detection" {
+            detection_emission_fingerprint(event, &source_fingerprint, medium_or_higher_rules)
+        } else {
+            detection_fingerprint(event, &source_fingerprint)
+        };
+        if self.seen_detection_fingerprints.contains(&fingerprint) {
             return false;
         }
         self.seen_source_fingerprints.insert(source_fingerprint);
-        self.seen_detection_fingerprints
-            .insert(detection_fingerprint);
+        self.seen_detection_fingerprints.insert(fingerprint);
         true
     }
 
@@ -1212,6 +1220,34 @@ fn scanner_error_threshold_fingerprint() -> String {
 
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {
     let mut hasher = Sha256::new();
+    hash_event_posture(&mut hasher, event, source_fingerprint);
+    for evidence in &event.evidence {
+        hash_evidence_item(&mut hasher, evidence);
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// Dedup identity for `detection` emission only. Posture is always included:
+/// identity, tool name, severity, score, rule ids, categories, and tags.
+/// An evidence item is included only when its rule id is `network.download` or
+/// the caller reports that id as medium, high, or critical. A missing rule id
+/// is omitted. Activities keep [`detection_fingerprint`].
+fn detection_emission_fingerprint(
+    event: &Event,
+    source_fingerprint: &str,
+    medium_or_higher_rules: &BTreeSet<String>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hash_event_posture(&mut hasher, event, source_fingerprint);
+    for evidence in &event.evidence {
+        if detection_evidence_reemits(evidence, medium_or_higher_rules) {
+            hash_evidence_item(&mut hasher, evidence);
+        }
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn hash_event_posture(hasher: &mut Sha256, event: &Event, source_fingerprint: &str) {
     hasher.update(event.client.as_bytes());
     if let Some(source_path_hash) = &event.source_path_hash {
         hasher.update(source_path_hash.as_bytes());
@@ -1248,14 +1284,24 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
     for tag in &event.tags {
         hasher.update(tag.as_bytes());
     }
-    for evidence in &event.evidence {
-        hasher.update(evidence.field.as_bytes());
-        hasher.update(evidence.redacted_value.as_bytes());
-        if let Some(hash) = &evidence.hash {
-            hasher.update(hash.as_bytes());
-        }
+}
+
+fn hash_evidence_item(hasher: &mut Sha256, evidence: &Evidence) {
+    hasher.update(evidence.field.as_bytes());
+    hasher.update(evidence.redacted_value.as_bytes());
+    if let Some(hash) = &evidence.hash {
+        hasher.update(hash.as_bytes());
     }
-    hex::encode(hasher.finalize())
+}
+
+fn detection_evidence_reemits(
+    evidence: &Evidence,
+    medium_or_higher_rules: &BTreeSet<String>,
+) -> bool {
+    let Some(rule_id) = evidence.rule_id.as_deref() else {
+        return false;
+    };
+    rule_id == "network.download" || medium_or_higher_rules.contains(rule_id)
 }
 
 /// Dedup identity for `session_risk_summary` only. Evidence, including event
@@ -1330,6 +1376,7 @@ mod tests {
             .unwrap();
         assert_eq!(super::source_fingerprint(&source), path_hash);
     }
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     use serde_json::Value;
@@ -1385,8 +1432,9 @@ mod tests {
         .expect("build detection event");
 
         let mut state = ScanState::default();
-        assert!(state.should_emit(&source, &event));
-        assert!(!state.should_emit(&source, &event));
+        let no_medium_rules = BTreeSet::new();
+        assert!(state.should_emit(&source, &event, &no_medium_rules));
+        assert!(!state.should_emit(&source, &event, &no_medium_rules));
         assert_eq!(state.seen_source_fingerprints.len(), 1);
         assert_eq!(state.seen_detection_fingerprints.len(), 1);
         assert_eq!(

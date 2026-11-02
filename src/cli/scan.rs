@@ -28,7 +28,7 @@ use crate::install_inventory::{
 };
 use crate::process_chain::ProcessChainConfig;
 use crate::rules::{
-    RuleLoadMode, RulePackPaths,
+    CompiledRuleSet, RuleLoadMode, RulePackPaths,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::scoring::load_thresholds;
@@ -526,12 +526,14 @@ fn run_scan_for_platform(
             state.install_inventory = Some(snapshot);
         }
     }
+    let medium_or_higher_rules = medium_or_higher_rule_ids(&rule_set);
     let selected = select_source_events(
         &mut state,
         config.backfill,
         activities,
         detections,
         session_risk_summaries,
+        &medium_or_higher_rules,
     );
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
@@ -822,6 +824,17 @@ struct SelectedSourceEvents {
     scanner_error_emitted: bool,
 }
 
+/// Rule ids whose loaded rule-pack severity is medium, high, or critical.
+/// Detection emission asks this set; it does not load the catalog itself.
+fn medium_or_higher_rule_ids(rule_set: &CompiledRuleSet) -> BTreeSet<String> {
+    rule_set
+        .summaries()
+        .into_iter()
+        .filter(|rule| matches!(rule.severity.as_str(), "medium" | "high" | "critical"))
+        .map(|rule| rule.id)
+        .collect()
+}
+
 /// Select in emission order, recording fingerprints only in the in-memory state.
 /// Backfill bypasses both deduplication and fingerprint recording.
 fn select_source_events(
@@ -830,6 +843,7 @@ fn select_source_events(
     activities: Vec<(Source, Event)>,
     detections: Vec<(Source, Event)>,
     session_risk_summaries: Vec<(Source, Event)>,
+    medium_or_higher_rules: &BTreeSet<String>,
 ) -> SelectedSourceEvents {
     let mut selected = SelectedSourceEvents {
         events: Vec::with_capacity(
@@ -840,13 +854,14 @@ fn select_source_events(
         scanner_error_emitted: false,
     };
     for (source, activity) in activities {
-        if backfill || state.should_emit(&source, &activity) {
+        if backfill || state.should_emit(&source, &activity, medium_or_higher_rules) {
             selected.events.push(activity);
         }
     }
     for (source, detection) in detections {
         let is_detection = detection.event_type == "detection";
-        let should_emit = backfill || state.should_emit(&source, &detection);
+        let should_emit =
+            backfill || state.should_emit(&source, &detection, medium_or_higher_rules);
         if is_detection {
             if should_emit {
                 selected.emitted_detection_count += 1;
@@ -2013,6 +2028,7 @@ mod tests {
             activities.clone(),
             detections.clone(),
             summaries.clone(),
+            &BTreeSet::new(),
         );
         assert_eq!(
             first
@@ -2038,6 +2054,7 @@ mod tests {
             activities.clone(),
             detections.clone(),
             summaries.clone(),
+            &BTreeSet::new(),
         );
         assert!(repeated.events.is_empty());
         assert_eq!(repeated.emitted_detection_count, 0);
@@ -2053,6 +2070,7 @@ mod tests {
                 activities.clone(),
                 detections.clone(),
                 summaries.clone(),
+                &BTreeSet::new(),
             );
             assert_eq!(backfill.events.len(), 6);
             assert_eq!(backfill.emitted_detection_count, 2);
@@ -2060,6 +2078,110 @@ mod tests {
             assert!(backfill.scanner_error_emitted);
             assert_eq!(state.canonical_bytes().unwrap(), before);
         }
+    }
+
+    #[test]
+    fn second_shell_occurrence_does_not_reemit_until_download_or_api_key_evidence() {
+        use crate::event::{DetectionEventInput, detection_event};
+
+        let rule_set = crate::rules::load_default_rule_set().expect("default rules");
+        let medium_or_higher = medium_or_higher_rule_ids(&rule_set);
+        assert!(medium_or_higher.contains("credential.api_key.pattern"));
+        assert!(!medium_or_higher.contains("execution.shell"));
+        assert!(!medium_or_higher.contains("network.download"));
+
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "synthetic-session".to_string(),
+            path: PathBuf::from("synthetic-session.jsonl"),
+        };
+        let evidence = |rule_id: &str, marker: &str| Evidence {
+            field: "command".to_string(),
+            redacted_value: marker.to_string(),
+            hash: Some(format!("hash-{marker}")),
+            rule_id: Some(rule_id.to_string()),
+        };
+        let detection = |items: Vec<Evidence>, event_time: &str| {
+            detection_event(DetectionEventInput {
+                client: ClientId::Codex,
+                agent: None,
+                model: None,
+                provider: None,
+                session_id: "synthetic-session".to_string(),
+                source_path_hash: "synthetic-path".to_string(),
+                tool_name: Some("shell".to_string()),
+                rule_ids: vec!["execution.shell".to_string()],
+                categories: vec!["execution".to_string()],
+                detection_classes: vec!["security_detection".to_string()],
+                signal_types: vec!["atomic".to_string()],
+                analytic_intents: vec!["alert".to_string()],
+                atlas_tags: Vec::new(),
+                tags: vec!["synthetic".to_string()],
+                evidence: items,
+                risk_contributions: Vec::new(),
+                event_time: Some(event_time.to_string()),
+            })
+            .expect("detection")
+        };
+        let selected = |state: &mut ScanState, event: Event| {
+            select_source_events(
+                state,
+                false,
+                Vec::new(),
+                vec![(source.clone(), event)],
+                Vec::new(),
+                &medium_or_higher,
+            )
+        };
+
+        let mut state = ScanState::default();
+        let first = selected(
+            &mut state,
+            detection(
+                vec![evidence("execution.shell", "shell-1")],
+                "2026-05-01T00:00:00.000Z",
+            ),
+        );
+        assert_eq!(first.emitted_detection_count, 1);
+        assert_eq!(first.events.len(), 1);
+
+        let second = selected(
+            &mut state,
+            detection(
+                vec![evidence("execution.shell", "shell-2")],
+                "2026-05-01T00:01:00.000Z",
+            ),
+        );
+        assert!(second.events.is_empty());
+        assert_eq!(second.emitted_detection_count, 0);
+        assert_eq!(second.deduplicated_detection_count, 1);
+
+        let download = selected(
+            &mut state,
+            detection(
+                vec![
+                    evidence("execution.shell", "shell-2"),
+                    evidence("network.download", "synthetic-download"),
+                ],
+                "2026-05-01T00:02:00.000Z",
+            ),
+        );
+        assert_eq!(download.emitted_detection_count, 1);
+        assert_eq!(download.events.len(), 1);
+
+        let api_key = selected(
+            &mut state,
+            detection(
+                vec![
+                    evidence("execution.shell", "shell-2"),
+                    evidence("credential.api_key.pattern", "synthetic-token"),
+                ],
+                "2026-05-01T00:03:00.000Z",
+            ),
+        );
+        assert_eq!(api_key.emitted_detection_count, 1);
+        assert_eq!(api_key.events.len(), 1);
     }
 
     #[test]
@@ -2842,11 +2964,18 @@ mod tests {
         ) -> Vec<Event> {
             let summaries =
                 session_risk_summaries_for_scan(emit, &activities, &detections).expect("summaries");
-            select_source_events(state, false, activities, detections, summaries)
-                .events
-                .into_iter()
-                .filter(|event| event.event_type == "session_risk_summary")
-                .collect()
+            select_source_events(
+                state,
+                false,
+                activities,
+                detections,
+                summaries,
+                &BTreeSet::new(),
+            )
+            .events
+            .into_iter()
+            .filter(|event| event.event_type == "session_risk_summary")
+            .collect()
         }
         fn built_summary(activities: &[(Source, Event)], detections: &[(Source, Event)]) -> Event {
             let mut summaries =
