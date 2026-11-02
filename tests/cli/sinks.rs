@@ -2150,13 +2150,16 @@ fn accepted_hec_response() -> String {
 }
 
 #[cfg(not(windows))]
-fn start_switchable_status_server() -> (
-    String,
-    std::sync::Arc<std::sync::Mutex<String>>,
-    std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    mpsc::Sender<()>,
-    thread::JoinHandle<()>,
-) {
+struct SwitchableStatusServer {
+    endpoint: String,
+    response: std::sync::Arc<std::sync::Mutex<String>>,
+    requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    shutdown: mpsc::Sender<()>,
+    handle: thread::JoinHandle<()>,
+}
+
+#[cfg(not(windows))]
+fn start_switchable_status_server() -> SwitchableStatusServer {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind synthetic sink");
     listener
         .set_nonblocking(true)
@@ -2216,13 +2219,13 @@ fn start_switchable_status_server() -> (
             }
         }
     });
-    (
-        format!("http://{addr}/services/collector"),
+    SwitchableStatusServer {
+        endpoint: format!("http://{addr}/services/collector"),
         response,
         requests,
-        shutdown_tx,
+        shutdown: shutdown_tx,
         handle,
-    )
+    }
 }
 
 #[cfg(not(windows))]
@@ -2332,6 +2335,11 @@ fn delivery_rows(outbox_path: &std::path::Path) -> Vec<(String, i64, Option<Stri
 
 #[cfg(not(windows))]
 fn episode_latched(state_path: &std::path::Path) -> bool {
+    use sha2::{Digest, Sha256};
+    let expected = format!(
+        "telltale:sink_failure_episode_v2:{}:authentication_blocked:401@",
+        hex::encode(Sha256::digest(b"synthetic-remote"))
+    );
     let state: Value =
         serde_json::from_str(&fs::read_to_string(state_path).expect("state")).expect("state json");
     state["seen_detection_fingerprints"]
@@ -2339,9 +2347,123 @@ fn episode_latched(state_path: &std::path::Path) -> bool {
         .expect("fingerprints")
         .iter()
         .any(|fingerprint| {
-            fingerprint.as_str()
-                == Some("telltale:sink_failure_episode:synthetic-remote:authentication_blocked:401")
+            fingerprint
+                .as_str()
+                .is_some_and(|value| value.starts_with(&expected))
         })
+}
+
+#[cfg(not(windows))]
+fn write_episode_outputs(
+    config_dir: &std::path::Path,
+    outbox_path: &std::path::Path,
+    log_path: &std::path::Path,
+    endpoint: &str,
+    max_pending_events: u64,
+) {
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).unwrap();
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\n  max_pending_events: {max_pending_events}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n  - name: synthetic-remote\n    type: splunk_hec\n    endpoint: {endpoint}\n    token: synthetic-token\n    timeout_ms: 2000\n",
+            yaml_quote(outbox_path), yaml_quote(log_path),
+        ),
+    ).unwrap();
+}
+
+#[cfg(not(windows))]
+#[test]
+fn sink_failure_episode_capacity_denial_does_not_latch_an_unstored_alert() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).unwrap();
+    let config_dir = temp.path().join("config");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let outbox_path = temp.path().join("private-outbox/outbox.sqlite");
+    let server = start_switchable_status_server();
+    write_episode_outputs(&config_dir, &outbox_path, &log_path, &server.endpoint, 1);
+
+    let denied = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert!(
+        !denied.status.success(),
+        "failed required alert persistence must fail the command"
+    );
+    assert!(
+        !summary_json(&denied)["sink_failures"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("local JSONL retains"));
+    assert_eq!(sink_delivery_alert_count(&log_path), 0);
+    assert!(!episode_latched(&state_path));
+    let rows = delivery_rows(&outbox_path);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "blocked");
+    assert_eq!(rows[0].1, 1);
+    assert_eq!(server.requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    write_episode_outputs(&config_dir, &outbox_path, &log_path, &server.endpoint, 100);
+    write_synthetic_session(&root, "after-capacity.jsonl", "synthetic-after-capacity");
+    let retried_alert = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert_authentication_failure_summary(&retried_alert);
+    assert_eq!(sink_delivery_alert_count(&log_path), 1);
+    assert!(episode_latched(&state_path));
+    assert!(
+        delivery_rows(&outbox_path).iter().all(|row| row.1 == 1),
+        "blocked 401 rows were retried"
+    );
+    server.shutdown.send(()).unwrap();
+    server.handle.join().unwrap();
+}
+
+#[cfg(not(windows))]
+#[test]
+fn sink_failure_episode_status_round_trip_alerts_without_retrying_blocked_rows() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir_all(&root).unwrap();
+    let config_dir = temp.path().join("config");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let outbox_path = temp.path().join("private-outbox/outbox.sqlite");
+    let server = start_switchable_status_server();
+    write_episode_outputs(&config_dir, &outbox_path, &log_path, &server.endpoint, 100);
+    for (index, status) in [401, 403, 401].into_iter().enumerate() {
+        *server.response.lock().unwrap() =
+            format!("HTTP/1.1 {status} Blocked\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        write_synthetic_session(
+            &root,
+            &format!("status-{index}.jsonl"),
+            &format!("synthetic-status-{index}"),
+        );
+        let output = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+        assert_authentication_failure_summary(&output);
+        assert_eq!(sink_delivery_alert_count(&log_path), index + 1);
+        let rows = delivery_rows(&outbox_path);
+        assert!(rows.iter().all(|row| row.0 == "blocked" && row.1 == 1));
+        assert!(rows.iter().any(|row| row.3 == Some(status)));
+        assert_eq!(
+            server.requests.load(std::sync::atomic::Ordering::SeqCst),
+            rows.len()
+        );
+    }
+    assert!(episode_latched(&state_path));
+    server.shutdown.send(()).unwrap();
+    server.handle.join().unwrap();
+}
+
+#[cfg(not(windows))]
+struct EpisodeWatchChild(std::process::Child);
+
+#[cfg(not(windows))]
+impl Drop for EpisodeWatchChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[cfg(not(windows))]
@@ -2371,21 +2493,17 @@ fn sink_failure_episode_alerts_once_until_release_or_ack() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let config_dir = temp.path().join("config");
-    let outputs_dir = config_dir.join("outputs.d");
-    fs::create_dir_all(&outputs_dir).expect("outputs directory");
     let log_path = temp.path().join("events.jsonl");
     let state_path = temp.path().join("state.json");
     let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
-    let (endpoint, response, requests, shutdown, handle) = start_switchable_status_server();
-    fs::write(
-        outputs_dir.join("outputs.yaml"),
-        format!(
-            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n  - name: synthetic-remote\n    type: splunk_hec\n    endpoint: {endpoint}\n    token: synthetic-token\n    timeout_ms: 2000\n",
-            yaml_quote(&outbox_path),
-            yaml_quote(&log_path),
-        ),
-    )
-    .expect("write durable outputs");
+    let SwitchableStatusServer {
+        endpoint,
+        response,
+        requests,
+        shutdown,
+        handle,
+    } = start_switchable_status_server();
+    write_episode_outputs(&config_dir, &outbox_path, &log_path, &endpoint, 100);
 
     let first = run_episode_scan(&root, &config_dir, &log_path, &state_path);
     assert_authentication_failure_summary(&first);
@@ -2512,6 +2630,72 @@ fn sink_failure_episode_alerts_once_until_release_or_ack() {
             && row.3 == Some(401)
     }));
     assert!(final_rows.iter().any(|row| row.0 == "acked"));
+
+    // Watch dispatches released rows while idle, before its next source scan.
+    // Success must re-arm the episode even across those scan boundaries.
+    *response.lock().unwrap() = accepted_hec_response();
+    release_synthetic_remote(&outbox_path);
+    let mut child = EpisodeWatchChild(
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "watch",
+                "--iterations",
+                "1",
+                "--debounce-ms",
+                "20",
+                "--min-scan-interval-ms",
+                "0",
+                "--allow-fixtures",
+                "--install-inventory-disabled",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--config-dir")
+            .arg(&config_dir)
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--state-path")
+            .arg(&state_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while delivery_rows(&outbox_path)
+        .iter()
+        .any(|row| row.0 != "acked")
+    {
+        assert!(child.0.try_wait().unwrap().is_none(), "idle watch exited");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "idle watch did not ack"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        episode_latched(&state_path),
+        "idle delivery unexpectedly wrote scanner state"
+    );
+    *response.lock().unwrap() = unauthorized_response();
+    write_synthetic_session(&root, "synthetic-c.jsonl", "synthetic-episode-c");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let exit = loop {
+        if let Some(exit) = child.0.try_wait().unwrap() {
+            break exit;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "watch did not scan the new source"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(exit.success());
+    assert_eq!(
+        sink_delivery_alert_count(&log_path),
+        4,
+        "401 after idle watch success did not alert"
+    );
 
     shutdown.send(()).expect("stop synthetic sink");
     handle.join().expect("synthetic sink thread");
