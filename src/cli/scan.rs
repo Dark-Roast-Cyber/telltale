@@ -526,14 +526,14 @@ fn run_scan_for_platform(
             state.install_inventory = Some(snapshot);
         }
     }
-    let medium_or_higher_rules = medium_or_higher_rule_ids(&rule_set);
+    let routine_evidence_rules = routine_evidence_rule_ids(&rule_set);
     let selected = select_source_events(
         &mut state,
         config.backfill,
         activities,
         detections,
         session_risk_summaries,
-        &medium_or_higher_rules,
+        &routine_evidence_rules,
     );
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
@@ -584,6 +584,7 @@ fn run_scan_for_platform(
     }
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
+    let mut alert_persistence_error = None;
     let delivery_posture = config.execution.sinks.delivery_posture();
     let should_save = if config.execution.dry_run || config.history {
         false
@@ -603,11 +604,6 @@ fn run_scan_for_platform(
     // failed save cannot hide the failure, skip the attempt, or move the
     // JSONL-before-first-state-commit order.
     let persist_episode_latch = !config.execution.dry_run && !config.history;
-    let success_before = if persist_episode_latch {
-        snapshot_durable_sink_success(config.execution.sinks.durable_outbox_path())
-    } else {
-        Ok(BTreeMap::new())
-    };
     if !config.execution.dry_run {
         let verify_lock = || match &state_lock {
             Some(lock) => lock.verify(),
@@ -644,12 +640,12 @@ fn run_scan_for_platform(
                 config.execution.sinks,
                 &sink_failures,
                 !emitted_events.is_empty(),
-                success_before,
             )
         } else {
             EpisodeObservation {
                 honor_open_episode: false,
                 cleared: false,
+                durable_success: BTreeMap::new(),
             }
         };
         if !sink_failures.is_empty() {
@@ -665,32 +661,49 @@ fn run_scan_for_platform(
         }
         let selection =
             select_sink_failure_alerts(&state, &sink_failures, observation.honor_open_episode);
+        let mut alerts_accepted = selection.alerts.is_empty();
         if !selection.alerts.is_empty() {
             let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
-            if config.execution.sinks.has_persistent_replay()
-                && let Err(error) = config
+            let delivered = (|| {
+                if config.execution.sinks.has_persistent_replay() {
+                    config
+                        .execution
+                        .sinks
+                        .persist_for_durable_replay(&selection.alerts)?;
+                }
+                config
                     .execution
                     .sinks
-                    .persist_for_durable_replay(&selection.alerts)
-            {
-                let rendered = format!(
-                    "warning: could not persist sink-delivery alert for durable replay: {error}"
-                );
-                let rendered =
-                    PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
-                eprintln!("{}", rendered.chars().take(200).collect::<String>());
+                    .deliver_alerts(&selection.alerts, &failed_names)
+            })();
+            match delivered {
+                Ok(accepted) => alerts_accepted = accepted,
+                Err(error) => {
+                    let rendered =
+                        format!("warning: could not persist sink-delivery alert: {error}");
+                    let rendered =
+                        PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
+                    eprintln!("{}", rendered.chars().take(200).collect::<String>());
+                    // Retain the original failure in stdout, then fail the
+                    // command for the required canonical write.
+                    alert_persistence_error = Some(error);
+                }
             }
-            config
-                .execution
-                .sinks
-                .deliver_alerts(&selection.alerts, &failed_names);
         }
         if persist_episode_latch {
             let mut latch_changed = observation.cleared;
             for (sink, identity) in &selection.episode_keys {
-                latch_changed |= state
-                    .seen_detection_fingerprints
-                    .insert(sink_failure_episode_latch(sink, identity));
+                let identity = if alerts_accepted {
+                    identity.as_deref()
+                } else {
+                    None
+                };
+                latch_changed |= record_sink_failure_episode(
+                    &mut state,
+                    sink,
+                    identity,
+                    observation.durable_success.get(sink).copied().flatten(),
+                );
             }
             if latch_changed {
                 save_sink_failure_episode_latch(
@@ -749,6 +762,9 @@ fn run_scan_for_platform(
         summary["history"] = "all".into();
     }
     println!("{}", serde_json::to_string(&summary)?);
+    if let Some(error) = alert_persistence_error {
+        return Err(error);
+    }
     Ok(ScanRunResult {
         full_scan_discovery,
         source_failures,
@@ -869,13 +885,16 @@ struct SelectedSourceEvents {
     scanner_error_emitted: bool,
 }
 
-/// Rule ids whose loaded rule-pack severity is medium, high, or critical.
-/// Detection emission asks this set; it does not load the catalog itself.
-fn medium_or_higher_rule_ids(rule_set: &CompiledRuleSet) -> BTreeSet<String> {
+/// Suppress evidence growth only for rules with a known routine severity.
+/// Unknown/native rules are not assumed low-risk. Download evidence always emits.
+fn routine_evidence_rule_ids(rule_set: &CompiledRuleSet) -> BTreeSet<String> {
     rule_set
         .summaries()
         .into_iter()
-        .filter(|rule| matches!(rule.severity.as_str(), "medium" | "high" | "critical"))
+        .filter(|rule| {
+            matches!(rule.severity.as_str(), "informational" | "low")
+                && rule.id != "network.download"
+        })
         .map(|rule| rule.id)
         .collect()
 }
@@ -888,7 +907,7 @@ fn select_source_events(
     activities: Vec<(Source, Event)>,
     detections: Vec<(Source, Event)>,
     session_risk_summaries: Vec<(Source, Event)>,
-    medium_or_higher_rules: &BTreeSet<String>,
+    routine_evidence_rules: &BTreeSet<String>,
 ) -> SelectedSourceEvents {
     let mut selected = SelectedSourceEvents {
         events: Vec::with_capacity(
@@ -899,14 +918,14 @@ fn select_source_events(
         scanner_error_emitted: false,
     };
     for (source, activity) in activities {
-        if backfill || state.should_emit(&source, &activity, medium_or_higher_rules) {
+        if backfill || state.should_emit(&source, &activity, routine_evidence_rules) {
             selected.events.push(activity);
         }
     }
     for (source, detection) in detections {
         let is_detection = detection.event_type == "detection";
         let should_emit =
-            backfill || state.should_emit(&source, &detection, medium_or_higher_rules);
+            backfill || state.should_emit(&source, &detection, routine_evidence_rules);
         if is_detection {
             if should_emit {
                 selected.emitted_detection_count += 1;
@@ -945,12 +964,19 @@ fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
 
 struct SinkFailureAlertSelection {
     alerts: Vec<Event>,
-    episode_keys: Vec<(String, String)>,
+    episode_keys: BTreeMap<String, Option<String>>,
 }
 
 struct EpisodeObservation {
     honor_open_episode: bool,
     cleared: bool,
+    durable_success: BTreeMap<String, Option<i64>>,
+}
+
+#[derive(Default)]
+struct DurableSuccessSnapshot {
+    success: BTreeMap<String, Option<i64>>,
+    unordered: BTreeSet<String>,
 }
 
 /// Identity is `authentication_blocked` plus status, or `sink_response_blocked`
@@ -975,24 +1001,55 @@ fn is_sink_failure_episode_identity(identity: &str) -> bool {
 }
 
 fn sink_failure_episode_latch(sink: &str, identity: &str) -> String {
-    format!("telltale:sink_failure_episode:{sink}:{identity}")
+    format!(
+        "telltale:sink_failure_episode_v2:{}:{identity}",
+        evidence_hash(sink)
+    )
 }
 
 fn sink_failure_episode_open(state: &ScanState, sink: &str, identity: &str) -> bool {
+    let prefix = format!("{}@", sink_failure_episode_latch(sink, identity));
     state
         .seen_detection_fingerprints
-        .contains(&sink_failure_episode_latch(sink, identity))
+        .range(prefix.clone()..)
+        .next()
+        .is_some_and(|key| key.starts_with(&prefix))
 }
 
 fn clear_sink_failure_episodes(state: &mut ScanState, sink: &str) -> bool {
-    let prefix = format!("telltale:sink_failure_episode:{sink}:");
+    record_sink_failure_episode(state, sink, None, None)
+}
+
+fn record_sink_failure_episode(
+    state: &mut ScanState,
+    sink: &str,
+    identity: Option<&str>,
+    last_success: Option<i64>,
+) -> bool {
+    let prefix = format!("telltale:sink_failure_episode_v2:{}:", evidence_hash(sink));
+    // Remove the pre-hashed markers too, without interpreting delimiters in an
+    // operator-supplied name as part of another sink's identity.
+    let legacy_prefix = format!("telltale:sink_failure_episode:{sink}:");
+    let current = identity.map(|identity| {
+        format!(
+            "{}@{}",
+            sink_failure_episode_latch(sink, identity),
+            success_reference(last_success)
+        )
+    });
     let before = state.seen_detection_fingerprints.len();
     state.seen_detection_fingerprints.retain(|fingerprint| {
-        fingerprint
-            .strip_prefix(&prefix)
-            .is_none_or(|identity| !is_sink_failure_episode_identity(identity))
+        current.as_ref() == Some(fingerprint)
+            || ![&prefix, &legacy_prefix].into_iter().any(|prefix| {
+                fingerprint
+                    .strip_prefix(prefix.as_str())
+                    .is_some_and(|suffix| {
+                        is_sink_failure_episode_identity(suffix.split('@').next().unwrap_or(suffix))
+                    })
+            })
     });
-    state.seen_detection_fingerprints.len() != before
+    let removed = state.seen_detection_fingerprints.len() != before;
+    removed | current.is_some_and(|key| state.seen_detection_fingerprints.insert(key))
 }
 
 /// A blocked row released by `release_blocked_for_sink` keeps its attempt count
@@ -1015,10 +1072,15 @@ fn select_sink_failure_alerts(
     honor_open_episode: bool,
 ) -> SinkFailureAlertSelection {
     let mut alerts = Vec::new();
-    let mut episode_keys = Vec::new();
+    let mut episode_keys = BTreeMap::new();
     let mut seen_episodes = BTreeSet::new();
     for failure in failures {
         if let Some(identity) = sink_failure_episode_identity(failure.class) {
+            let already_open = episode_keys.get(&failure.name).map_or_else(
+                || honor_open_episode && sink_failure_episode_open(state, &failure.name, &identity),
+                |current: &Option<String>| current.as_deref() == Some(identity.as_str()),
+            );
+            episode_keys.insert(failure.name.clone(), Some(identity.clone()));
             if !seen_episodes.insert((failure.name.clone(), identity.clone())) {
                 continue;
             }
@@ -1028,13 +1090,11 @@ fn select_sink_failure_alerts(
                         == Some(identity.as_str())
                     && released_blocked_row_failed_again(other)
             });
-            if honor_open_episode
-                && !released
-                && sink_failure_episode_open(state, &failure.name, &identity)
-            {
+            if !released && already_open {
                 continue;
             }
-            episode_keys.push((failure.name.clone(), identity));
+        } else {
+            episode_keys.insert(failure.name.clone(), None);
         }
         alerts.push(sink_failure_alert_event(failure));
     }
@@ -1044,40 +1104,57 @@ fn select_sink_failure_alerts(
     }
 }
 
-fn snapshot_durable_sink_success(path: Option<&Path>) -> Result<BTreeMap<String, Option<i64>>, ()> {
+fn snapshot_durable_sink_success(path: Option<&Path>) -> Result<DurableSuccessSnapshot, ()> {
     let Some(path) = path else {
-        return Ok(BTreeMap::new());
+        return Ok(DurableSuccessSnapshot::default());
     };
-    if !path.is_file() {
-        return Ok(BTreeMap::new());
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DurableSuccessSnapshot::default());
+        }
+        Err(_) => return Err(()),
+        Ok(_) => {}
     }
     let outbox = crate::sink::outbox::Outbox::open_read_only(path).map_err(|_| ())?;
     let health = outbox
         .health(&[], crate::sink::outbox::unix_seconds())
         .map_err(|_| ())?;
-    Ok(health
-        .sinks
-        .into_iter()
-        .map(|sink| (sink.sink_id, sink.last_success_at))
-        .collect())
+    let mut snapshot = DurableSuccessSnapshot::default();
+    for sink in health.sinks {
+        // Equal millisecond timestamps cannot establish success/error order.
+        // Fail open for this sink only rather than missing a rapid recovery.
+        if sink.last_success_at.is_some() && sink.last_success_at == sink.last_error_at {
+            snapshot.unordered.insert(sink.sink_id.clone());
+        }
+        snapshot.success.insert(sink.sink_id, sink.last_success_at);
+    }
+    Ok(snapshot)
 }
 
 fn clear_sinks_with_new_success(
     state: &mut ScanState,
-    before: &BTreeMap<String, Option<i64>>,
     after: &BTreeMap<String, Option<i64>>,
 ) -> bool {
     let mut changed = false;
     for (sink, after_success) in after {
-        if after_success.is_none() {
-            continue;
-        }
-        let before_success = before.get(sink).copied().flatten();
-        if before_success != *after_success {
+        // Watch may ack while idle. Compare with the success known when the
+        // episode was latched, not merely with the beginning of this scan.
+        let prefix = format!("telltale:sink_failure_episode_v2:{}:", evidence_hash(sink));
+        let expected = format!("@{}", success_reference(*after_success));
+        let stale = state
+            .seen_detection_fingerprints
+            .range(prefix.clone()..)
+            .take_while(|key| key.starts_with(&prefix))
+            .any(|key| !key.ends_with(&expected));
+        if stale {
             changed |= clear_sink_failure_episodes(state, sink);
         }
     }
     changed
+}
+
+fn success_reference(success: Option<i64>) -> String {
+    success.map_or_else(|| "none".to_string(), |value| value.to_string())
 }
 
 fn clear_successful_best_effort_episodes(
@@ -1113,23 +1190,24 @@ fn observe_sink_failure_episode_success(
     sinks: &SinkSet,
     failures: &[SinkFailure],
     attempted_events: bool,
-    success_before: Result<BTreeMap<String, Option<i64>>, ()>,
 ) -> EpisodeObservation {
     let mut cleared = false;
-    let honor_open_episode = match (
-        success_before,
-        snapshot_durable_sink_success(sinks.durable_outbox_path()),
-    ) {
-        (Ok(before), Ok(after)) => {
-            cleared |= clear_sinks_with_new_success(state, &before, &after);
-            true
-        }
-        _ => false,
-    };
+    let (honor_open_episode, durable_success) =
+        match snapshot_durable_sink_success(sinks.durable_outbox_path()) {
+            Ok(after) => {
+                cleared |= clear_sinks_with_new_success(state, &after.success);
+                for sink in after.unordered {
+                    cleared |= clear_sink_failure_episodes(state, &sink);
+                }
+                (true, after.success)
+            }
+            Err(()) => (false, BTreeMap::new()),
+        };
     cleared |= clear_successful_best_effort_episodes(state, sinks, failures, attempted_events);
     EpisodeObservation {
         honor_open_episode,
         cleared,
+        durable_success,
     }
 }
 
@@ -2336,10 +2414,10 @@ mod tests {
         use crate::event::{DetectionEventInput, detection_event};
 
         let rule_set = crate::rules::load_default_rule_set().expect("default rules");
-        let medium_or_higher = medium_or_higher_rule_ids(&rule_set);
-        assert!(medium_or_higher.contains("credential.api_key.pattern"));
-        assert!(!medium_or_higher.contains("execution.shell"));
-        assert!(!medium_or_higher.contains("network.download"));
+        let routine_rules = routine_evidence_rule_ids(&rule_set);
+        assert!(!routine_rules.contains("credential.api_key.pattern"));
+        assert!(routine_rules.contains("execution.shell"));
+        assert!(!routine_rules.contains("network.download"));
 
         let source = Source {
             client: ClientId::Codex,
@@ -2382,7 +2460,7 @@ mod tests {
                 Vec::new(),
                 vec![(source.clone(), event)],
                 Vec::new(),
-                &medium_or_higher,
+                &routine_rules,
             )
         };
 
