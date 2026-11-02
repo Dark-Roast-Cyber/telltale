@@ -213,6 +213,11 @@ impl ScanState {
     }
 
     pub fn should_emit(&mut self, source: &Source, event: &Event) -> bool {
+        // Summaries must not re-emit when only evidence or event time changed.
+        // Detections and activities still hash through `detection_fingerprint`.
+        if event.event_type == "session_risk_summary" {
+            return self.should_emit_session_risk_summary(source, event);
+        }
         let source_fingerprint = source_fingerprint(source);
         let detection_fingerprint = detection_fingerprint(event, &source_fingerprint);
         if self
@@ -224,6 +229,21 @@ impl ScanState {
         self.seen_source_fingerprints.insert(source_fingerprint);
         self.seen_detection_fingerprints
             .insert(detection_fingerprint);
+        true
+    }
+
+    /// Records a `session_risk_summary` fingerprint that ignores evidence and
+    /// event time. Backfill callers must skip this, as they do for
+    /// [`Self::should_emit`].
+    pub fn should_emit_session_risk_summary(&mut self, source: &Source, event: &Event) -> bool {
+        debug_assert_eq!(event.event_type, "session_risk_summary");
+        let source_fingerprint = source_fingerprint(source);
+        let fingerprint = session_risk_summary_fingerprint(event, &source_fingerprint);
+        if self.seen_detection_fingerprints.contains(&fingerprint) {
+            return false;
+        }
+        self.seen_source_fingerprints.insert(source_fingerprint);
+        self.seen_detection_fingerprints.insert(fingerprint);
         true
     }
 
@@ -1234,6 +1254,50 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
         if let Some(hash) = &evidence.hash {
             hasher.update(hash.as_bytes());
         }
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// Dedup identity for `session_risk_summary` only. Evidence, including event
+/// and tool-call counts, and event time are omitted so a growing session does
+/// not re-emit while severity, score, and rule ids stay the same. Kept among
+/// the detection fingerprints; the prefix keeps it apart from
+/// [`detection_fingerprint`] and from latch markers.
+fn session_risk_summary_fingerprint(event: &Event, source_fingerprint: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"telltale:session_risk_summary\0");
+    hasher.update(event.client.as_bytes());
+    if let Some(source_path_hash) = &event.source_path_hash {
+        hasher.update(source_path_hash.as_bytes());
+    } else {
+        hasher.update(source_fingerprint.as_bytes());
+    }
+    hasher.update(event.session_id.as_bytes());
+    hasher.update(event.event_type.as_bytes());
+    hasher.update(event.severity.as_bytes());
+    if let Ok(score) = u32::try_from(event.risk_score) {
+        hasher.update(score.to_le_bytes());
+    } else {
+        hasher.update(b"risk_score:u64:");
+        hasher.update(event.risk_score.to_le_bytes());
+    }
+    if let Some(agent) = &event.agent {
+        hasher.update(agent.as_bytes());
+    }
+    if let Some(model) = &event.model {
+        hasher.update(model.as_bytes());
+    }
+    if let Some(provider) = &event.provider {
+        hasher.update(provider.as_bytes());
+    }
+    for rule_id in &event.rule_ids {
+        hasher.update(rule_id.as_bytes());
+    }
+    for category in &event.categories {
+        hasher.update(category.as_bytes());
+    }
+    for tag in &event.tags {
+        hasher.update(tag.as_bytes());
     }
     hex::encode(hasher.finalize())
 }
