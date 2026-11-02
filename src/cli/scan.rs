@@ -1073,7 +1073,7 @@ fn select_sink_failure_alerts(
 ) -> SinkFailureAlertSelection {
     let mut alerts = Vec::new();
     let mut episode_keys = BTreeMap::new();
-    let mut seen_episodes = BTreeSet::new();
+    let mut selected_episodes = BTreeSet::new();
     for failure in failures {
         if let Some(identity) = sink_failure_episode_identity(failure.class) {
             let already_open = episode_keys.get(&failure.name).map_or_else(
@@ -1081,9 +1081,6 @@ fn select_sink_failure_alerts(
                 |current: &Option<String>| current.as_deref() == Some(identity.as_str()),
             );
             episode_keys.insert(failure.name.clone(), Some(identity.clone()));
-            if !seen_episodes.insert((failure.name.clone(), identity.clone())) {
-                continue;
-            }
             let released = failures.iter().any(|other| {
                 other.name == failure.name
                     && sink_failure_episode_identity(other.class).as_deref()
@@ -1091,6 +1088,9 @@ fn select_sink_failure_alerts(
                     && released_blocked_row_failed_again(other)
             });
             if !released && already_open {
+                continue;
+            }
+            if !selected_episodes.insert((failure.name.clone(), identity)) {
                 continue;
             }
         } else {

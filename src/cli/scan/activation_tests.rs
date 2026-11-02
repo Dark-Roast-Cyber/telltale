@@ -96,6 +96,17 @@ fn sink_failure_episode_collapses_each_identity_but_remembers_last_failure() {
         "synthetic",
         "authentication_blocked:403"
     ));
+    let mixed = select_sink_failure_alerts(&state, &failures, true);
+    assert_eq!(
+        mixed.alerts.len(),
+        2,
+        "with 401 already open, select both the 403 transition and the renewed 401"
+    );
+    assert_eq!(
+        mixed.episode_keys.get("synthetic"),
+        Some(&Some("authentication_blocked:401".to_string())),
+        "the last failure identity must remain current"
+    );
     assert!(
         select_sink_failure_alerts(&state, &failures[..1], true)
             .alerts
