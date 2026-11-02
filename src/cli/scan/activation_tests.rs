@@ -315,3 +315,286 @@ fn late_canonical_failure_has_no_success_output_or_progress_for_that_source() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["event_type"], "scanner_error");
 }
+
+struct ThresholdHarness {
+    dir: tempfile::TempDir,
+    log: PathBuf,
+    state: PathBuf,
+    packs: RulePackPaths,
+    runtime: serde_json::Value,
+    clients: Vec<ClientId>,
+    sources: Vec<Source>,
+}
+
+impl ThresholdHarness {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let malformed = dir.path().join(".codex/sessions/malformed-source.jsonl");
+        fs::create_dir_all(malformed.parent().expect("sessions parent")).expect("sessions dir");
+        fs::write(
+            &malformed,
+            include_str!("../../../tests/fixtures/rule_samples/malformed-source.jsonl"),
+        )
+        .expect("malformed fixture");
+        let clients = vec![ClientId::Codex];
+        let (sources, _) = discover_operational_sources(
+            dir.path(),
+            &clients,
+            None,
+            &[],
+            &discovery::ProjectConfigurationAccounting::none(),
+        );
+        assert_eq!(
+            sources.len(),
+            1,
+            "synthetic malformed fixture should be the only source"
+        );
+        assert_eq!(sources[0].path, malformed);
+        Self {
+            log: dir.path().join("events.jsonl"),
+            state: dir.path().join("state.json"),
+            packs: RulePackPaths::default(),
+            runtime: serde_json::json!({}),
+            clients,
+            sources,
+            dir,
+        }
+    }
+
+    fn scan(&self, max_scanner_errors: u32, targeted: bool, backfill: bool) {
+        let mut sinks = SinkSet::new();
+        sinks.add_canonical_first_write(
+            "jsonl",
+            Box::new(LocalJsonlSink::with_rotation(
+                &self.log,
+                crate::sink::RotationConfig::disabled(),
+            )),
+        );
+        let config = ScanConfig {
+            history: false,
+            execution: ScanExecutionConfig {
+                root: self.dir.path(),
+                log_path: &self.log,
+                sinks: &sinks,
+                state_path: &self.state,
+                dry_run: false,
+                emit_activity: false,
+                emit_session_risk_summary: false,
+                allow_fixtures: true,
+                rule_pack_paths: &self.packs,
+                rule_paths: &[],
+                override_paths: &[],
+                rule_load_mode: RuleLoadMode::IncludeDefault,
+                policy_path: None,
+                allowlist_path: None,
+                baseline_deviation_scoring: false,
+                clients: &self.clients,
+                project_config_paths: &[],
+                install_inventory_interval_seconds: None,
+                process_chain: false,
+                operational_alerts: OperationalAlertConfig {
+                    max_scanner_errors,
+                    max_scan_duration_ms: u64::MAX,
+                },
+                runtime: &self.runtime,
+                effective_configuration: &self.runtime,
+            },
+            backfill,
+            rebuild_baselines: false,
+            max_sources: None,
+        };
+        let result = if targeted {
+            run_scan(
+                config,
+                ScanTargets::Targeted {
+                    sources: self.sources.clone(),
+                    discovery: SourceDiscoveryAccounting {
+                        checked_status: "complete",
+                        first_error_category: None,
+                        best_effort_fallback_used: false,
+                        returned_source_count: self.sources.len(),
+                        operational_source_count: self.sources.len(),
+                        project_configuration: discovery::ProjectConfigurationAccounting::none(),
+                    },
+                },
+                StateSavePolicy::OnChange,
+            )
+        } else {
+            run_scan(config, ScanTargets::Full, StateSavePolicy::Always)
+        };
+        result.unwrap_or_else(|error| panic!("scan failed: {error}"));
+    }
+
+    fn take_events(&self) -> Vec<serde_json::Value> {
+        let events = fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).expect("event json"))
+            .collect();
+        if self.log.exists() {
+            fs::write(&self.log, "").expect("truncate log");
+        }
+        events
+    }
+
+    fn latched(&self) -> bool {
+        ScanState::load(&self.state)
+            .expect("load state")
+            .scanner_error_threshold_latched()
+    }
+}
+
+fn threshold_alerts(events: &[serde_json::Value]) -> usize {
+    events
+        .iter()
+        .filter(|event| event["check_name"] == "scanner_error_threshold")
+        .count()
+}
+
+fn health_events(events: &[serde_json::Value]) -> usize {
+    events
+        .iter()
+        .filter(|event| event["event_type"] == "health")
+        .count()
+}
+
+#[test]
+fn scanner_error_threshold_alerts_on_the_first_full_scan_crossing_only() {
+    let harness = ThresholdHarness::new();
+    let above = 0;
+
+    harness.scan(above, false, false);
+    let first = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&first),
+        1,
+        "first full scan above the threshold alerts once: {first:?}"
+    );
+    assert_eq!(
+        health_events(&first),
+        1,
+        "first full scan writes one health event"
+    );
+    assert!(
+        first
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error"),
+        "new scanner_error documents still emit"
+    );
+    let scanner_error_count = first
+        .iter()
+        .find(|event| event["event_type"] == "health")
+        .expect("health")["scanner_error_count"]
+        .as_u64()
+        .expect("scanner_error_count");
+    assert!(
+        scanner_error_count > above.into(),
+        "pre-dedup count is above"
+    );
+    assert!(harness.latched(), "first crossing sets the latch");
+
+    harness.scan(above, false, false);
+    let second = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&first) + threshold_alerts(&second),
+        1,
+        "two full scans over the same above-threshold set emit one threshold alert"
+    );
+    assert_eq!(
+        health_events(&first) + health_events(&second),
+        1,
+        "those scans emit one health event"
+    );
+    assert_eq!(
+        threshold_alerts(&second),
+        0,
+        "the second scan does not re-alert: {second:?}"
+    );
+    assert_eq!(
+        health_events(&second),
+        0,
+        "a suppressed repeat does not force a health event"
+    );
+    assert!(
+        !second
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error"),
+        "unchanged scanner_error documents still dedup"
+    );
+    assert!(harness.latched(), "a later full scan above keeps the latch");
+
+    let at_threshold = u32::try_from(scanner_error_count).expect("count fits u32");
+    harness.scan(at_threshold, false, false);
+    let recovered = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&recovered),
+        0,
+        "a full scan at the threshold does not alert"
+    );
+    assert!(
+        !harness.latched(),
+        "a full scan at or below the threshold clears the latch"
+    );
+
+    harness.scan(above, false, false);
+    let again = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&again),
+        1,
+        "the next full scan above alerts again: {again:?}"
+    );
+    assert_eq!(
+        health_events(&again),
+        1,
+        "a threshold alert that fires writes a health event"
+    );
+    assert!(harness.latched(), "the new crossing sets the latch again");
+
+    harness.scan(above, true, false);
+    let targeted = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&targeted),
+        0,
+        "a targeted scan does not emit the threshold alert: {targeted:?}"
+    );
+    assert!(
+        harness.latched(),
+        "a targeted scan does not clear a latch set by a full scan"
+    );
+
+    harness.scan(above, false, false);
+    let after_targeted = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&after_targeted),
+        0,
+        "targeted scan must not clear the latch: {after_targeted:?}"
+    );
+    assert_eq!(
+        health_events(&after_targeted),
+        0,
+        "a suppressed repeat after a targeted scan does not force health"
+    );
+
+    harness.scan(above, false, true);
+    let backfill = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&backfill),
+        1,
+        "backfill while above repeats the alert once: {backfill:?}"
+    );
+    assert!(harness.latched(), "backfill does not clear the latch");
+
+    harness.scan(above, false, false);
+    let after_backfill = harness.take_events();
+    assert_eq!(
+        threshold_alerts(&after_backfill),
+        0,
+        "backfill must not clear the latch: {after_backfill:?}"
+    );
+    assert_eq!(
+        health_events(&after_backfill),
+        0,
+        "a suppressed repeat after backfill does not force health"
+    );
+}

@@ -734,8 +734,11 @@ including counts above the 64-bit range.
 
 These fields describe the scan that wrote the latest health event
 (`last_scan_time`). A scan writes a health event only when it sees scanner
-errors, raises an alert or detects a source inventory change. After you repair
-a source, attention can therefore stay reported until a later health event.
+errors, raises an alert or detects a source inventory change. A standing
+scanner-error count alerts when a full scan first crosses the threshold, not
+on every later scan, and a suppressed repeat does not by itself write another
+health event. After you repair a source, attention can therefore stay reported
+until a later health event.
 For a current pass or fail result, run
 `telltale scan --once --fail-on-source-errors`. The scan first completes as
 usual and writes only what it would have written anyway. `--dry-run` writes

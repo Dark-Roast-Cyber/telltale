@@ -241,6 +241,26 @@ impl ScanState {
             .remove(&source_outage_fingerprint(client));
     }
 
+    /// Records that a durable full scan saw the pre-dedup `scanner_error` count
+    /// above the threshold. True when that crossing is new: it stays recorded,
+    /// and quiet, until a durable full scan is at or below the threshold, so a
+    /// later rise while still above does not alert again.
+    pub fn enter_scanner_error_threshold(&mut self) -> bool {
+        self.seen_detection_fingerprints
+            .insert(scanner_error_threshold_fingerprint())
+    }
+
+    pub fn clear_scanner_error_threshold(&mut self) {
+        self.seen_detection_fingerprints
+            .remove(&scanner_error_threshold_fingerprint());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scanner_error_threshold_latched(&self) -> bool {
+        self.seen_detection_fingerprints
+            .contains(&scanner_error_threshold_fingerprint())
+    }
+
     #[cfg(test)]
     fn replace_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
         self.baseline_snapshots = BaselineSnapshotStore {
@@ -1161,6 +1181,13 @@ fn source_outage_fingerprint(client: &str) -> String {
     hex::encode(Sha256::digest(
         format!("telltale:source_parse_outage:{client}").as_bytes(),
     ))
+}
+
+/// Kept among the detection fingerprints, so threshold suppression needs no
+/// state schema change; the prefix keeps it apart from event fingerprints and
+/// from `source_parse_outage`.
+fn scanner_error_threshold_fingerprint() -> String {
+    hex::encode(Sha256::digest(b"telltale:scanner_error_threshold_exceeded"))
 }
 
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {

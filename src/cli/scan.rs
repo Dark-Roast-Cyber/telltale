@@ -482,8 +482,24 @@ fn run_scan_for_platform(
         .iter()
         .filter(|(_, event)| event.event_type == "scanner_error")
         .count() as u64;
-    let operational_alerts =
-        scanner_health_alerts(&op_config, scanner_error_count, scan_duration_ms);
+    // Durable full scans alert only on the first crossing and stay quiet while
+    // the pre-dedup count remains above, including when it rises. History,
+    // dry-run, and backfill do not record that suppression; targeted scans
+    // neither alert nor touch the latch. Their count is a slice, not the inventory.
+    let emit_scanner_error_threshold = scanner_error_threshold_should_alert(
+        &mut state,
+        scanner_error_count,
+        op_config.max_scanner_errors,
+        targeted,
+        !config.history && !config.execution.dry_run && !config.backfill,
+    );
+    let operational_alerts = scanner_health_alerts(
+        &op_config,
+        scanner_error_count,
+        scan_duration_ms,
+        emit_scanner_error_threshold,
+    );
+    // A suppressed threshold repeat is omitted, so it does not force health.
     let has_operational_alerts = !operational_alerts.is_empty();
 
     detection_flow.policy_match_accounting = policy_accounting;
@@ -534,6 +550,9 @@ fn run_scan_for_platform(
     emitted_events.extend(outage_alerts);
     emitted_events.extend(selected.events);
 
+    // Dry-run, backfill, inventory change, a newly emitted scanner_error, an
+    // outage that fires, a duration alert, and this threshold alert when it
+    // fires. A suppressed threshold repeat is not among those triggers.
     let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
@@ -708,13 +727,43 @@ fn session_store_environment_ignored(
             && set("OPENCODE_DB").is_some_and(|value| value != ":memory:"))
 }
 
+/// Whether this scan should emit `scanner_error_threshold_exceeded`.
+///
+/// A durable full scan emits only when the pre-dedup count first goes above
+/// the threshold, and clears that latch only when a later full scan is at or
+/// below it. Targeted scans see a slice, so they neither emit nor touch the
+/// latch. History, dry-run, and backfill do not persist suppression: history
+/// and dry-run still emit when above, and backfill repeats while above.
+fn scanner_error_threshold_should_alert(
+    state: &mut ScanState,
+    scanner_error_count: u64,
+    max_scanner_errors: u32,
+    targeted: bool,
+    persist_latch: bool,
+) -> bool {
+    if targeted {
+        return false;
+    }
+    let above = scanner_error_count > u64::from(max_scanner_errors);
+    if !persist_latch {
+        return above;
+    }
+    if above {
+        state.enter_scanner_error_threshold()
+    } else {
+        state.clear_scanner_error_threshold();
+        false
+    }
+}
+
 fn scanner_health_alerts(
     config: &OperationalAlertConfig,
     scanner_error_count: u64,
     scan_duration_ms: u64,
+    emit_scanner_error_threshold: bool,
 ) -> Vec<Event> {
     let mut alerts = Vec::new();
-    if scanner_error_count > u64::from(config.max_scanner_errors) {
+    if emit_scanner_error_threshold && scanner_error_count > u64::from(config.max_scanner_errors) {
         alerts.push(operational_alert_event(OperationalAlertInput {
             alert_type: "scanner_error_threshold_exceeded".to_string(),
             threshold: format!("max_scanner_errors={}", config.max_scanner_errors),
@@ -1859,7 +1908,8 @@ mod tests {
                 vec!["scanner_error_threshold", "scan_duration_threshold"],
             ),
         ] {
-            let alerts = scanner_health_alerts(&config, errors, duration);
+            // The scan path applies the latch. This locks the strict comparison.
+            let alerts = scanner_health_alerts(&config, errors, duration, true);
             assert_eq!(
                 alerts
                     .iter()
