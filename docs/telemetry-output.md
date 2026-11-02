@@ -440,10 +440,17 @@ Remote delivery uses bounded in-memory retries where applicable; on failure the 
 and emits an `operational_alert` event with `alert_type=sink_delivery_failure`
 (check name `sink_delivery`) to the remaining healthy sinks. The failed sink
 never receives its own failure alert, so delivery problems cannot cascade.
-These alerts bypass duplicate suppression and are not counted in the health
-event's `emitted_count`; the scan's stdout summary also lists failures under
-`sink_failures`. A failure writing the local JSONL sink itself still aborts
-the scan, because that file is the durable record. Local JSONL serializes the
+A standing `authentication_blocked` identity, including its HTTP status, or a
+`sink_response_blocked` identity alerts once per episode. The episode continues
+while that identity is unchanged and the sink has had no successful delivery
+since the alert. The next failure alerts immediately, including on the same UTC
+day, after a successful delivery, a class-identity change, or a previously
+blocked row failing again after an explicit blocked-delivery release. Other
+delivery failure classes still alert. Every attempt still runs, and stderr, the
+full `sink_failures` summary, and outbox status are recorded on every failure.
+These alerts are not counted in the health event's `emitted_count`. A failure
+writing the local JSONL sink itself still aborts the scan, because that file
+is the durable record. Local JSONL serializes the
 complete batch before opening the file, holds a permanent sidecar lock across
 rotation and append, flushes and synchronizes the file before returning, and
 therefore before scanner state commit. Empty batches return before lock,

@@ -2138,3 +2138,381 @@ fn windows_retry_blocked_rejects_before_outbox_creation() {
     assert!(!outbox_path.parent().expect("outbox parent").exists());
     assert!(!outbox_path.exists());
 }
+
+#[cfg(not(windows))]
+fn unauthorized_response() -> String {
+    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+}
+
+#[cfg(not(windows))]
+fn accepted_hec_response() -> String {
+    "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}".to_string()
+}
+
+#[cfg(not(windows))]
+fn start_switchable_status_server() -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<String>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    mpsc::Sender<()>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind synthetic sink");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking synthetic sink");
+    let addr = listener.local_addr().expect("synthetic sink address");
+    let response = std::sync::Arc::new(std::sync::Mutex::new(unauthorized_response()));
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let response_thread = std::sync::Arc::clone(&response);
+    let requests_thread = std::sync::Arc::clone(&requests);
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        loop {
+            match shutdown_rx.try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking stream");
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("read timeout");
+                    let mut request = Vec::new();
+                    let mut buf = vec![0_u8; 1024];
+                    while let Ok(read) = stream.read(&mut buf) {
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buf[..read]);
+                        if let Some(header_end) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .filter_map(|line| line.split_once(':'))
+                                .find_map(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-length").then_some(value)
+                                })
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            if request.len() - header_end - 4 >= content_length {
+                                break;
+                            }
+                        }
+                    }
+                    requests_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let body = response_thread.lock().expect("synthetic response").clone();
+                    stream
+                        .write_all(body.as_bytes())
+                        .expect("write synthetic response");
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (
+        format!("http://{addr}/services/collector"),
+        response,
+        requests,
+        shutdown_tx,
+        handle,
+    )
+}
+
+#[cfg(not(windows))]
+fn yaml_quote(path: &std::path::Path) -> String {
+    serde_yaml::to_string(&path.to_string_lossy().to_string())
+        .expect("serialize YAML path")
+        .trim()
+        .to_string()
+}
+
+#[cfg(not(windows))]
+fn write_synthetic_session(root: &std::path::Path, name: &str, session_id: &str) {
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).expect("synthetic sessions");
+    fs::write(
+        sessions.join(name),
+        format!(
+            "{{\"type\":\"session_meta\",\"session_id\":\"{session_id}\",\"timestamp\":\"2026-04-01T00:00:00Z\",\"payload\":{{\"source\":\"cli\"}}}}\n"
+        ),
+    )
+    .expect("synthetic session");
+}
+
+#[cfg(not(windows))]
+fn run_episode_scan(
+    root: &std::path::Path,
+    config_dir: &std::path::Path,
+    log_path: &std::path::Path,
+    state_path: &std::path::Path,
+) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(root)
+        .args(["--config-dir"])
+        .arg(config_dir)
+        .args(["--log-path"])
+        .arg(log_path)
+        .args(["--state-path"])
+        .arg(state_path)
+        .output()
+        .expect("run synthetic scan")
+}
+
+#[cfg(not(windows))]
+fn summary_json(output: &std::process::Output) -> Value {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(stdout.lines().last().expect("summary line")).expect("summary json")
+}
+
+#[cfg(not(windows))]
+fn assert_authentication_failure_summary(output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary = summary_json(output);
+    let failures = summary["sink_failures"].as_array().expect("sink_failures");
+    assert!(!failures.is_empty(), "summary omitted sink failures");
+    assert!(failures.iter().all(|failure| {
+        failure["name"] == "synthetic-remote"
+            && failure["type"] == "splunk_hec"
+            && failure["class"] == "authentication_blocked"
+    }));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local JSONL retains"),
+        "stderr dropped the delivery warning: {stderr}"
+    );
+}
+
+#[cfg(not(windows))]
+fn sink_delivery_alert_count(log_path: &std::path::Path) -> usize {
+    fs::read_to_string(log_path)
+        .expect("jsonl")
+        .lines()
+        .filter(|line| {
+            let event: Value = serde_json::from_str(line).expect("jsonl event");
+            event["event_type"] == "operational_alert" && event["check_name"] == "sink_delivery"
+        })
+        .count()
+}
+
+#[cfg(not(windows))]
+fn delivery_rows(outbox_path: &std::path::Path) -> Vec<(String, i64, Option<String>, Option<i64>)> {
+    let connection = Connection::open(outbox_path).expect("open outbox");
+    let mut statement = connection
+        .prepare(
+            "SELECT state, attempt_count, last_error_class, last_error_status
+             FROM deliveries ORDER BY event_id",
+        )
+        .expect("prepare deliveries");
+    statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .expect("query deliveries")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("delivery rows")
+}
+
+#[cfg(not(windows))]
+fn episode_latched(state_path: &std::path::Path) -> bool {
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(state_path).expect("state")).expect("state json");
+    state["seen_detection_fingerprints"]
+        .as_array()
+        .expect("fingerprints")
+        .iter()
+        .any(|fingerprint| {
+            fingerprint.as_str()
+                == Some("telltale:sink_failure_episode:synthetic-remote:authentication_blocked:401")
+        })
+}
+
+#[cfg(not(windows))]
+fn release_synthetic_remote(outbox_path: &std::path::Path) {
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(outbox_path)
+        .args(["--sink", "synthetic-remote"])
+        .output()
+        .expect("release blocked deliveries");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("released_blocked=") && stdout.trim() != "released_blocked=0",
+        "release did not move blocked rows: {stdout}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn sink_failure_episode_alerts_once_until_release_or_ack() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let config_dir = temp.path().join("config");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs directory");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    let (endpoint, response, requests, shutdown, handle) = start_switchable_status_server();
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n  - name: synthetic-remote\n    type: splunk_hec\n    endpoint: {endpoint}\n    token: synthetic-token\n    timeout_ms: 2000\n",
+            yaml_quote(&outbox_path),
+            yaml_quote(&log_path),
+        ),
+    )
+    .expect("write durable outputs");
+
+    let first = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert_authentication_failure_summary(&first);
+    let first_rows = delivery_rows(&outbox_path);
+    assert!(
+        !first_rows.is_empty(),
+        "first scan admitted no delivery rows"
+    );
+    assert!(
+        first_rows.iter().all(|row| {
+            row.0 == "blocked"
+                && row.1 == 1
+                && row.2.as_deref() == Some("authentication_blocked")
+                && row.3 == Some(401)
+        }),
+        "first scan rows: {first_rows:?}"
+    );
+    assert_eq!(sink_delivery_alert_count(&log_path), 1);
+    assert!(episode_latched(&state_path));
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        first_rows.len(),
+        "401 was retried"
+    );
+
+    write_synthetic_session(&root, "synthetic-a.jsonl", "synthetic-episode-a");
+    let second = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert_authentication_failure_summary(&second);
+    let second_rows = delivery_rows(&outbox_path);
+    assert!(
+        second_rows.len() > first_rows.len(),
+        "second scan did not admit a new row: {second_rows:?}"
+    );
+    assert!(
+        second_rows.iter().all(|row| {
+            row.0 == "blocked"
+                && row.1 == 1
+                && row.2.as_deref() == Some("authentication_blocked")
+                && row.3 == Some(401)
+        }),
+        "second scan rows: {second_rows:?}"
+    );
+    assert_eq!(
+        sink_delivery_alert_count(&log_path),
+        1,
+        "an open authentication episode alerted again"
+    );
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        second_rows.len(),
+        "a later 401 was retried or skipped"
+    );
+    let latched = fs::read(&state_path).expect("state before release");
+
+    release_synthetic_remote(&outbox_path);
+    assert_eq!(
+        fs::read(&state_path).expect("state after release"),
+        latched,
+        "release_blocked_for_sink edited scan state"
+    );
+    let released = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert_authentication_failure_summary(&released);
+    let released_rows = delivery_rows(&outbox_path);
+    assert_eq!(released_rows.len(), second_rows.len());
+    assert!(
+        released_rows.iter().all(|row| {
+            row.0 == "blocked"
+                && row.1 == 2
+                && row.2.as_deref() == Some("authentication_blocked")
+                && row.3 == Some(401)
+        }),
+        "released rows: {released_rows:?}"
+    );
+    assert_eq!(
+        sink_delivery_alert_count(&log_path),
+        2,
+        "a released blocked row failing again the same day did not alert"
+    );
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        second_rows.len() + released_rows.len()
+    );
+
+    *response.lock().expect("switch response") = accepted_hec_response();
+    release_synthetic_remote(&outbox_path);
+    let acked = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert!(
+        acked.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&acked.stderr)
+    );
+    assert!(
+        summary_json(&acked)["sink_failures"]
+            .as_array()
+            .expect("ack summary")
+            .is_empty()
+    );
+    let acked_rows = delivery_rows(&outbox_path);
+    assert!(
+        acked_rows.iter().all(|row| row.0 == "acked"),
+        "ack rows: {acked_rows:?}"
+    );
+    assert_eq!(sink_delivery_alert_count(&log_path), 2);
+    assert!(
+        !episode_latched(&state_path),
+        "a successful delivery left the episode open"
+    );
+
+    *response.lock().expect("switch response") = unauthorized_response();
+    write_synthetic_session(&root, "synthetic-b.jsonl", "synthetic-episode-b");
+    let after_ack = run_episode_scan(&root, &config_dir, &log_path, &state_path);
+    assert_authentication_failure_summary(&after_ack);
+    assert_eq!(
+        sink_delivery_alert_count(&log_path),
+        3,
+        "401 after an ack did not open a new episode"
+    );
+    assert!(episode_latched(&state_path));
+    let final_rows = delivery_rows(&outbox_path);
+    assert!(final_rows.iter().any(|row| {
+        row.0 == "blocked"
+            && row.1 == 1
+            && row.2.as_deref() == Some("authentication_blocked")
+            && row.3 == Some(401)
+    }));
+    assert!(final_rows.iter().any(|row| row.0 == "acked"));
+
+    shutdown.send(()).expect("stop synthetic sink");
+    handle.join().expect("synthetic sink thread");
+}
