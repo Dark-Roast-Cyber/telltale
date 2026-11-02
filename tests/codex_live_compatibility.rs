@@ -18,7 +18,7 @@ defaults: {enabled: true, case_insensitive: false}
 rules:
   - id: synthetic.result
     category: synthetic
-    severity: low
+    severity: medium
     score: 3
     targets: [tool_result]
     regex: compatible-result-marker
@@ -242,6 +242,8 @@ fn suffix_and_quarantine_survive_acquisition_embedding_cli_and_replay() {
         appended.push(new);
         write(&source.path, &appended);
     }
+    // Medium-severity evidence must re-emit even when the session's risk
+    // posture is unchanged; routine low-severity growth is deduplicated.
     assert!(
         cli()["detection_flow"]["emitted_detection_count"]
             .as_u64()
