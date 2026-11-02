@@ -1,7 +1,7 @@
 //! Tests pinning what the bundled command-effect rules (persistence, cloud
 //! credentials, DNS encoding, destructive commands) match and ignore.
 
-use super::{CompiledRuleSet, load_default_rule_set};
+use super::{load_default_rule_set, CompiledRuleSet};
 
 fn bundled() -> CompiledRuleSet {
     load_default_rule_set().expect("bundled rules")
@@ -349,5 +349,19 @@ fn api_key_pattern_requires_a_left_token_boundary() {
             "SK-synthetic-token1",
             "akiaSYNTHETIC0123456",
         ],
+    );
+}
+
+#[test]
+fn private_key_read_excludes_public_key_suffix() {
+    assert_matches(
+        "secret.private_key.read",
+        "command",
+        &[
+            "id_rsa",
+            "id_ed25519",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+        ],
+        &["id_rsa.pub", "id_ed25519.pub"],
     );
 }

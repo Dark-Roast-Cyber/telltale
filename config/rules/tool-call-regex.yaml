@@ -33,7 +33,7 @@ rules:
     severity: high
     score: 55
     targets: [command, arguments, file_path, tool_result]
-    regex: '(id_rsa|id_ed25519|\.pem|\.p12|BEGIN\s+(RSA|OPENSSH|EC|DSA)?\s*PRIVATE\s+KEY)'
+    regex: '((?:id_rsa|id_ed25519)(?:$|[^.]|\.(?:$|[^p]|p(?:$|[^u]|u(?:$|[^b]))))|\.pem|\.p12|BEGIN\s+(?:RSA|OPENSSH|EC|DSA)?\s*PRIVATE\s+KEY)'
     tags: [credentials, private-key]
     explanation: Private key access is high risk and should match explicit user intent.
     falsepositives:
