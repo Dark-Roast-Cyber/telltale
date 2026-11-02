@@ -1,7 +1,7 @@
 //! Tests pinning HTTP direction in the bundled rules: downloads, uploads and
 //! encoded transfers each match only their own direction.
 
-use super::{load_default_rule_set, CompiledRuleSet, MatchResult};
+use super::{CompiledRuleSet, MatchResult, load_default_rule_set};
 
 const BENIGN_ENCODED_API: &str = "curl --data AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA https://api.example.invalid/test";
 const MALICIOUS_ENCODED_HOST: &str =
