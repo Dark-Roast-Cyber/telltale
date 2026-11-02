@@ -378,6 +378,15 @@ Common event types include:
 - `process_chain`: process-relationship detections with risk attribution and a
   terminally sanitized `process` context.
 
+Scanner state deduplicates session-risk summaries by risk posture, not growing
+event or tool-call counts. Detections still re-emit for changed posture or new
+evidence, except evidence from rules explicitly classified as informational or
+low severity; `network.download` always retains new evidence. Unknown rules and
+unattributed evidence are not treated as routine. `--backfill` bypasses this
+deduplication. Existing exact event fingerprints are learned on upgrade; a
+downgrade can re-emit events whose newer fingerprints the older scanner does not
+recognize. Receiver-side deduplication remains necessary.
+
 The terminal Event boundary preserves established lowercase-hex
 `source_path_hash` values and canonical ATT&CK IDs (`T1234` or `T1234.001`).
 Native output always carries the trusted compile-time Telltale package version;
@@ -449,6 +458,9 @@ blocked row failing again after an explicit blocked-delivery release. Other
 delivery failure classes bypass duplicate suppression and alert on every
 failure. Every delivery attempt still runs, and stderr, the
 full `sink_failures` summary, and outbox status are recorded on every failure.
+Suppression starts only after the alert is stored or delivered. A required
+alert-storage failure leaves the episode unlatched and fails the command after
+printing the original delivery-failure summary.
 These alerts are not counted in the health event's `emitted_count`. A failure
 writing the local JSONL sink itself still aborts the scan, because that file
 is the durable record. Local JSONL serializes the complete batch before opening
