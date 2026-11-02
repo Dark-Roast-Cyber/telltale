@@ -33,7 +33,7 @@ use crate::rules::{
 };
 use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
-use crate::sink::{SinkFailure, SinkSet};
+use crate::sink::{DeliveryErrorClass, SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
 use telltale_core::inventory::discover_mcp_scan;
 use telltale_detect::v2::PolicyMatchAccounting;
@@ -598,6 +598,16 @@ fn run_scan_for_platform(
     } else {
         None
     };
+    // Episode suppression is decided after delivery. Dry-run and history do not
+    // write or clear the durable latch. The latch save follows the alert so a
+    // failed save cannot hide the failure, skip the attempt, or move the
+    // JSONL-before-first-state-commit order.
+    let persist_episode_latch = !config.execution.dry_run && !config.history;
+    let success_before = if persist_episode_latch {
+        snapshot_durable_sink_success(config.execution.sinks.durable_outbox_path())
+    } else {
+        Ok(BTreeMap::new())
+    };
     if !config.execution.dry_run {
         let verify_lock = || match &state_lock {
             Some(lock) => lock.verify(),
@@ -628,6 +638,20 @@ fn run_scan_for_platform(
                 prepared_state.install_replace(config.execution.state_path)?;
             }
         }
+        let observation = if persist_episode_latch {
+            observe_sink_failure_episode_success(
+                &mut state,
+                config.execution.sinks,
+                &sink_failures,
+                !emitted_events.is_empty(),
+                success_before,
+            )
+        } else {
+            EpisodeObservation {
+                honor_open_episode: false,
+                cleared: false,
+            }
+        };
         if !sink_failures.is_empty() {
             if config.execution.sinks.has_canonical_first_write() {
                 eprintln!(
@@ -638,10 +662,16 @@ fn run_scan_for_platform(
                     "warning: remote-only delivery failed (retries exhausted or not applicable); the failed batch is not persisted and is not recoverable for replay"
                 );
             }
-            let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
+        }
+        let selection =
+            select_sink_failure_alerts(&state, &sink_failures, observation.honor_open_episode);
+        if !selection.alerts.is_empty() {
             let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
             if config.execution.sinks.has_persistent_replay()
-                && let Err(error) = config.execution.sinks.persist_for_durable_replay(&alerts)
+                && let Err(error) = config
+                    .execution
+                    .sinks
+                    .persist_for_durable_replay(&selection.alerts)
             {
                 let rendered = format!(
                     "warning: could not persist sink-delivery alert for durable replay: {error}"
@@ -653,7 +683,22 @@ fn run_scan_for_platform(
             config
                 .execution
                 .sinks
-                .deliver_alerts(&alerts, &failed_names);
+                .deliver_alerts(&selection.alerts, &failed_names);
+        }
+        if persist_episode_latch {
+            let mut latch_changed = observation.cleared;
+            for (sink, identity) in &selection.episode_keys {
+                latch_changed |= state
+                    .seen_detection_fingerprints
+                    .insert(sink_failure_episode_latch(sink, identity));
+            }
+            if latch_changed {
+                save_sink_failure_episode_latch(
+                    &state,
+                    config.execution.state_path,
+                    state_lock.as_ref(),
+                );
+            }
         }
     }
 
@@ -896,6 +941,212 @@ fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
         scan_duration_ms: None,
         scanner_error_count: None,
     })
+}
+
+struct SinkFailureAlertSelection {
+    alerts: Vec<Event>,
+    episode_keys: Vec<(String, String)>,
+}
+
+struct EpisodeObservation {
+    honor_open_episode: bool,
+    cleared: bool,
+}
+
+/// Identity is `authentication_blocked` plus status, or `sink_response_blocked`
+/// with no status. Other classes are not episode-suppressed.
+fn sink_failure_episode_identity(class: DeliveryErrorClass) -> Option<String> {
+    match class {
+        DeliveryErrorClass::AuthenticationBlocked { status } => {
+            Some(format!("authentication_blocked:{status}"))
+        }
+        DeliveryErrorClass::SinkResponseBlocked => Some("sink_response_blocked".to_string()),
+        _ => None,
+    }
+}
+
+fn is_sink_failure_episode_identity(identity: &str) -> bool {
+    identity == "sink_response_blocked"
+        || identity
+            .strip_prefix("authentication_blocked:")
+            .is_some_and(|status| {
+                !status.is_empty() && status.bytes().all(|byte| byte.is_ascii_digit())
+            })
+}
+
+fn sink_failure_episode_latch(sink: &str, identity: &str) -> String {
+    format!("telltale:sink_failure_episode:{sink}:{identity}")
+}
+
+fn sink_failure_episode_open(state: &ScanState, sink: &str, identity: &str) -> bool {
+    state
+        .seen_detection_fingerprints
+        .contains(&sink_failure_episode_latch(sink, identity))
+}
+
+fn clear_sink_failure_episodes(state: &mut ScanState, sink: &str) -> bool {
+    let prefix = format!("telltale:sink_failure_episode:{sink}:");
+    let before = state.seen_detection_fingerprints.len();
+    state.seen_detection_fingerprints.retain(|fingerprint| {
+        fingerprint
+            .strip_prefix(&prefix)
+            .is_none_or(|identity| !is_sink_failure_episode_identity(identity))
+    });
+    state.seen_detection_fingerprints.len() != before
+}
+
+/// A blocked row released by `release_blocked_for_sink` keeps its attempt count
+/// and last structured error, then fails again. That is not a new row in an
+/// open episode.
+fn released_blocked_row_failed_again(failure: &SinkFailure) -> bool {
+    failure.prior_attempts > 0
+        && matches!(
+            failure.prior_error_class,
+            Some(
+                DeliveryErrorClass::AuthenticationBlocked { .. }
+                    | DeliveryErrorClass::SinkResponseBlocked
+            )
+        )
+}
+
+fn select_sink_failure_alerts(
+    state: &ScanState,
+    failures: &[SinkFailure],
+    honor_open_episode: bool,
+) -> SinkFailureAlertSelection {
+    let mut alerts = Vec::new();
+    let mut episode_keys = Vec::new();
+    let mut seen_episodes = BTreeSet::new();
+    for failure in failures {
+        if let Some(identity) = sink_failure_episode_identity(failure.class) {
+            if !seen_episodes.insert((failure.name.clone(), identity.clone())) {
+                continue;
+            }
+            let released = failures.iter().any(|other| {
+                other.name == failure.name
+                    && sink_failure_episode_identity(other.class).as_deref()
+                        == Some(identity.as_str())
+                    && released_blocked_row_failed_again(other)
+            });
+            if honor_open_episode
+                && !released
+                && sink_failure_episode_open(state, &failure.name, &identity)
+            {
+                continue;
+            }
+            episode_keys.push((failure.name.clone(), identity));
+        }
+        alerts.push(sink_failure_alert_event(failure));
+    }
+    SinkFailureAlertSelection {
+        alerts,
+        episode_keys,
+    }
+}
+
+fn snapshot_durable_sink_success(path: Option<&Path>) -> Result<BTreeMap<String, Option<i64>>, ()> {
+    let Some(path) = path else {
+        return Ok(BTreeMap::new());
+    };
+    if !path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+    let outbox = crate::sink::outbox::Outbox::open_read_only(path).map_err(|_| ())?;
+    let health = outbox
+        .health(&[], crate::sink::outbox::unix_seconds())
+        .map_err(|_| ())?;
+    Ok(health
+        .sinks
+        .into_iter()
+        .map(|sink| (sink.sink_id, sink.last_success_at))
+        .collect())
+}
+
+fn clear_sinks_with_new_success(
+    state: &mut ScanState,
+    before: &BTreeMap<String, Option<i64>>,
+    after: &BTreeMap<String, Option<i64>>,
+) -> bool {
+    let mut changed = false;
+    for (sink, after_success) in after {
+        if after_success.is_none() {
+            continue;
+        }
+        let before_success = before.get(sink).copied().flatten();
+        if before_success != *after_success {
+            changed |= clear_sink_failure_episodes(state, sink);
+        }
+    }
+    changed
+}
+
+fn clear_successful_best_effort_episodes(
+    state: &mut ScanState,
+    sinks: &SinkSet,
+    failures: &[SinkFailure],
+    attempted: bool,
+) -> bool {
+    if !attempted {
+        return false;
+    }
+    let failed = failures
+        .iter()
+        .map(|failure| failure.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let durable = sinks
+        .durable_sink_ids()
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut changed = false;
+    for name in sinks.delivery_sink_ids() {
+        let best_effort = !sinks.has_persistent_replay() || !durable.contains(name.as_str());
+        if best_effort && !failed.contains(name.as_str()) {
+            changed |= clear_sink_failure_episodes(state, &name);
+        }
+    }
+    changed
+}
+
+fn observe_sink_failure_episode_success(
+    state: &mut ScanState,
+    sinks: &SinkSet,
+    failures: &[SinkFailure],
+    attempted_events: bool,
+    success_before: Result<BTreeMap<String, Option<i64>>, ()>,
+) -> EpisodeObservation {
+    let mut cleared = false;
+    let honor_open_episode = match (
+        success_before,
+        snapshot_durable_sink_success(sinks.durable_outbox_path()),
+    ) {
+        (Ok(before), Ok(after)) => {
+            cleared |= clear_sinks_with_new_success(state, &before, &after);
+            true
+        }
+        _ => false,
+    };
+    cleared |= clear_successful_best_effort_episodes(state, sinks, failures, attempted_events);
+    EpisodeObservation {
+        honor_open_episode,
+        cleared,
+    }
+}
+
+fn save_sink_failure_episode_latch(state: &ScanState, path: &Path, state_lock: Option<&StateLock>) {
+    let saved = (|| {
+        let Some(lock) = state_lock else {
+            return Err("state lock missing before sink-failure episode latch save".into());
+        };
+        lock.verify_lock()?;
+        state.prepare_atomic_save(path)?.install_replace(path)
+    })();
+    if let Err(error) = saved {
+        let rendered =
+            format!("warning: could not persist sink-failure alert episode latch: {error}");
+        let rendered = PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
+        eprintln!("{}", rendered.chars().take(200).collect::<String>());
+    }
 }
 
 /// Snapshot of the durable parts of scanner state, captured before a scan
@@ -3036,6 +3287,8 @@ mod tests {
             class: crate::sink::DeliveryErrorClass::UnknownInternal,
             attempts: 1,
             error: "connection refused".to_string(),
+            prior_attempts: 0,
+            prior_error_class: None,
         });
         let alert_bytes = serde_json::to_vec(&alert).expect("serialize sink alert");
         assert!(

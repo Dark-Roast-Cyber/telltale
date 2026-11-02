@@ -154,6 +154,12 @@ pub(crate) struct SinkFailure {
     pub class: DeliveryErrorClass,
     pub attempts: u32,
     pub error: String,
+    /// Attempts already stored on a durable row before this attempt.
+    /// `release_blocked_for_sink` preserves that count. Best-effort failures
+    /// have no preserved outbox history.
+    pub prior_attempts: u32,
+    /// Structured error already stored on a durable row before this attempt.
+    pub prior_error_class: Option<DeliveryErrorClass>,
 }
 
 /// Structured error type sinks return from `emit`. The message is only a
@@ -330,6 +336,10 @@ impl SinkSet {
             .filter(|entry| entry.persistence_role != PersistenceRole::CanonicalFirstWrite)
             .map(|entry| entry.sink.name().to_string())
             .collect()
+    }
+
+    pub(crate) fn durable_sink_ids(&self) -> &[String] {
+        &self.durable_sink_ids
     }
 
     fn add_with_roles(
@@ -698,6 +708,8 @@ impl SinkSet {
                             SanitizationContext::Diagnostic,
                             &err.to_string(),
                         ),
+                        prior_attempts: 0,
+                        prior_error_class: None,
                     });
                 }
             }
@@ -877,6 +889,8 @@ impl SinkSet {
                                 ),
                                 message
                             ),
+                            prior_attempts: ready.row.attempts,
+                            prior_error_class: ready.row.last_error_class,
                         });
                     }
                 }
