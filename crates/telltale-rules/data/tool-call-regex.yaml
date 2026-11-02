@@ -49,7 +49,7 @@ rules:
     severity: medium
     score: 30
     targets: [command, arguments, tool_result, assistant_context]
-    regex: '(sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|Bearer\s+[A-Za-z0-9._~+\/=\-]{20,})'
+    regex: '((?:^|[^A-Za-z0-9_\-])(?-i:sk-)[A-Za-z0-9_\-]{16,}|(?:^|[^A-Za-z0-9_\-])(?-i:gh[pousr]_)[A-Za-z0-9_]{20,}|(?:^|[^A-Za-z0-9_\-])(?-i:xox[baprs]-)[A-Za-z0-9\-]{20,}|(?:^|[^A-Za-z0-9_\-])(?-i:AKIA)[0-9A-Z]{16}|(?:^|[^A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|(?:^|[^A-Za-z0-9_\-])Bearer\s+[A-Za-z0-9._~+\/=\-]{20,})'
     tags: [credentials, token-pattern]
     explanation: Credential-like token appeared in tool context.
     falsepositives:

@@ -331,3 +331,23 @@ fn destructive_commands_score_as_alerts() {
         assert_eq!(result.score, 55, "{command}");
     }
 }
+
+#[test]
+fn api_key_pattern_requires_a_left_token_boundary() {
+    assert_matches(
+        "credential.api_key.pattern",
+        "tool_result",
+        &[
+            // sk- plus 16 token characters, the current minimum.
+            "sk-synthetic-token1",
+            "bearer synthetic-token-value1",
+            "eyJsynthetic1.synthetic2.synthetic3",
+        ],
+        &[
+            // Mid-identifier prefix. Long enough that length is not the rejection.
+            "task-sk-not-a-token-xxxx",
+            "SK-synthetic-token1",
+            "akiaSYNTHETIC0123456",
+        ],
+    );
+}
