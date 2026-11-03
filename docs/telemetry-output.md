@@ -383,9 +383,12 @@ event or tool-call counts. Detections still re-emit for changed posture or new
 evidence, except evidence from rules explicitly classified as informational or
 low severity; `network.download` always retains new evidence. Unknown rules and
 unattributed evidence are not treated as routine. `--backfill` bypasses this
-deduplication. Existing exact event fingerprints are learned on upgrade; a
-downgrade can re-emit events whose newer fingerprints the older scanner does not
-recognize. Receiver-side deduplication remains necessary.
+deduplication. On upgrade, an event whose full content matches what the older
+scanner last emitted is learned without re-emission. A detection whose content
+changes under the corrected rules, and a summary whose counts grew since its
+last emission, re-emit once on the first scan. A downgrade can re-emit events
+whose newer fingerprints the older scanner does not recognize. Receiver-side
+deduplication remains necessary.
 
 The terminal Event boundary preserves established lowercase-hex
 `source_path_hash` values and canonical ATT&CK IDs (`T1234` or `T1234.001`).

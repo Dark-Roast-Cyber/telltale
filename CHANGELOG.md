@@ -6,6 +6,31 @@
 
 ## Unreleased
 
+- **Standing scanner warnings alert once.** `scanner_error_threshold_exceeded`
+  fires when an ordinary full scan first crosses `max_scanner_errors`, not on
+  every later scan above it. A blocked sink (`authentication_blocked` with its
+  status, or `sink_response_blocked`) alerts once per episode, and again after
+  a successful delivery, an identity change, or a released row failing again.
+  Delivery attempts, stderr, the `sink_failures` summary and outbox status are
+  unchanged, and 401/403 are still not retried. A suppressed repeat no longer
+  forces a health event, so a quiet host with a standing scanner-error count
+  now writes no events between changes. Monitoring that treated the repeated
+  alert or health event as a heartbeat will see gaps.
+- **Fewer repeated detections.** Session-risk summaries deduplicate by risk
+  posture, not growing counts. Detections re-emit for changed posture or new
+  evidence, except new evidence from informational or low rules. On the first
+  scan after upgrade, detections whose content changes under the corrected
+  rules and summaries whose counts grew re-emit once.
+- **Bundled rule precision.** HTTP upload and download flags count only in the
+  client's own command segment, with quotes respected; `-x` is a proxy flag and
+  there is no bare `PUT` match. Literal loopback-only URLs are not downloads
+  (uploads to them still are; `localhost` still matches).
+  `credential.api_key.pattern` needs a left token boundary and case-sensitive
+  prefixes, and `id_rsa.pub`/`id_ed25519.pub` are not private-key reads.
+- Native action profile 5 reads HTTP direction from the command invocation.
+  Semantic identities change from profile 4; replay identities do not. See
+  [embedding](docs/embedding.md).
+
 - **Risk thresholds must not decrease.** Settings fail before any output when
   the merged `low`, `medium`, `high` and `critical` values decrease. Equal
   values are still allowed. Setting only `TELLTALE_RISK_THRESHOLD_HIGH` below
