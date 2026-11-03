@@ -20,7 +20,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 2;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 4;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 5;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1109,61 +1109,30 @@ fn shell_comment(command: &str) -> bool {
     }
     false
 }
+/// The client invocation in a command stage that downloads, if any.
+fn download_command<'a>(
+    tokens: &'a [String],
+    budget: &mut RetentionBudget,
+) -> Result<Option<&'a [String]>, ProcessingError> {
+    // One pass locates the invocation after any wrapper; one parses it.
+    charge_tokens(tokens, budget)?;
+    charge_tokens(tokens, budget)?;
+    Ok(super::http::download_candidate(tokens))
+}
 fn is_download(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
-    budget.charge(tokens.first().map_or(0, String::len))?;
-    if !matches!(
-        command_word(tokens).to_ascii_lowercase().as_str(),
-        "curl" | "wget" | "aria2c" | "invoke-webrequest" | "iwr" | "fetch"
-    ) {
-        return Ok(false);
-    }
-    for token in tokens {
-        budget.charge(token.len())?;
-        if token.starts_with("http://")
-            || token.starts_with("https://")
-            || token.starts_with("ftp://")
-        {
-            return Ok(!is_upload(tokens, budget)?);
-        }
-    }
-    Ok(false)
+    Ok(download_command(tokens, budget)?.is_some())
 }
 fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
-    budget.charge(tokens.first().map_or(0, String::len))?;
+    charge_tokens(tokens, budget)?;
+    if super::http::is_upload(tokens) {
+        return Ok(true);
+    }
     let client = command_word(tokens).to_ascii_lowercase();
-    if !matches!(
-        client.as_str(),
-        "curl" | "wget" | "aws" | "gsutil" | "rclone" | "az"
-    ) {
+    if !matches!(client.as_str(), "aws" | "gsutil" | "rclone" | "az") {
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;
     Ok(match client.as_str() {
-        "curl" => {
-            !tokens.iter().any(|s| s == "-G" || s == "--get")
-                && tokens.iter().any(|s| {
-                    matches!(
-                        s.as_str(),
-                        "-d" | "-F"
-                            | "-T"
-                            | "--data"
-                            | "--data-binary"
-                            | "--data-raw"
-                            | "--data-urlencode"
-                            | "--upload-file"
-                            | "--form"
-                    ) || s.starts_with("--data=")
-                        || (s.starts_with("-d") && s.len() > 2)
-                        || (s.starts_with("-F") && s.len() > 2)
-                })
-                || tokens.windows(2).any(|w| {
-                    matches!(w[0].as_str(), "-X" | "--request")
-                        && matches!(w[1].as_str(), "POST" | "PUT")
-                })
-        }
-        "wget" => tokens
-            .iter()
-            .any(|s| s.starts_with("--post-data") || s.starts_with("--post-file")),
         "aws" | "gsutil" | "rclone" => tokens
             .iter()
             .position(|s| matches!(s.as_str(), "cp" | "copy"))
@@ -2284,12 +2253,13 @@ fn downloaded_artifacts(
 ) -> Result<Vec<(String, usize)>, ProcessingError> {
     let mut artifacts = Vec::new();
     for (index, t) in commands.iter().enumerate() {
-        if !is_download(t, budget)? {
+        // Bindings are read from the downloading invocation, after any wrapper.
+        let Some(t) = download_command(t, budget)? else {
             continue;
-        }
+        };
         charge_tokens(t, budget)?;
         let artifact = (|| {
-            let client = command_word(t).to_ascii_lowercase();
+            let client = super::http::client_name(&t[0]);
             let bindings = t
                 .iter()
                 .filter(|token| {
@@ -2515,12 +2485,14 @@ fn download_stdout(
     tokens: &[String],
     budget: &mut RetentionBudget,
 ) -> Result<bool, ProcessingError> {
-    charge_tokens(tokens, budget)?;
+    let Some(tokens) = download_command(tokens, budget)? else {
+        return Ok(false);
+    };
     let artifacts = downloaded_artifacts(&[tokens.to_vec()], budget)?;
     if artifacts.iter().any(|(path, _)| path == "-") {
         return Ok(true);
     }
-    if command_word(tokens) != "curl" {
+    if super::http::client_name(&tokens[0]) != "curl" {
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;
