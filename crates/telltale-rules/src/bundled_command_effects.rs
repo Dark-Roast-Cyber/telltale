@@ -340,6 +340,7 @@ fn api_key_pattern_requires_a_left_token_boundary() {
         &[
             // sk- plus 16 token characters, the current minimum.
             "sk-synthetic-token1",
+            "AKIA2E0A8F3B244C9986",
             "bearer synthetic-token-value1",
             "eyJsynthetic1.synthetic2.synthetic3",
         ],
@@ -347,7 +348,11 @@ fn api_key_pattern_requires_a_left_token_boundary() {
             // Mid-identifier prefix. Long enough that length is not the rejection.
             "task-sk-not-a-token-xxxx",
             "SK-synthetic-token1",
+            // Lowercase prefix: rejected by case sensitivity.
             "akiaSYNTHETIC0123456",
+            // Uppercase prefix inside an identifier: rejected by the boundary.
+            "prefixAKIA2E0A8F3B244C9986",
+            "XAKIASYNTHETIC0123456",
         ],
     );
 }
