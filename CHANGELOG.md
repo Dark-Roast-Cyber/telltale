@@ -18,7 +18,8 @@
   alert or health event as a heartbeat will see gaps.
 - **Fewer repeated detections.** Session-risk summaries deduplicate by risk
   posture, not growing counts. Detections re-emit for changed posture or new
-  evidence, except new evidence from informational or low rules. On the first
+  evidence, except new evidence from informational or low rules other than
+  `network.download`. On the first
   scan after upgrade, detections whose content changes under the corrected
   rules and summaries whose counts grew re-emit once.
 - **Bundled rule precision.** HTTP upload and download flags count only in the
