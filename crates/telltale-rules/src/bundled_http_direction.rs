@@ -148,10 +148,15 @@ fn ordinary_curl_post_matches_upload_not_download() {
 
 #[test]
 fn object_store_copy_matches_upload_independently() {
-    let result = evaluate(&[("arguments", OBJECT_STORE_UPLOAD)]).expect("match");
-    assert_eq!(ids(&result), vec!["exfil.outbound_upload".to_string()]);
-    assert_eq!(result.score, 60);
-    assert_eq!(result.score, contribution_total(&result));
+    for command in [
+        OBJECT_STORE_UPLOAD,
+        "AWS s3 cp dist/app.tar.gz s3://example-invalid/artifacts/",
+    ] {
+        let result = evaluate(&[("arguments", command)]).expect("match");
+        assert_eq!(ids(&result), vec!["exfil.outbound_upload".to_string()]);
+        assert_eq!(result.score, 60);
+        assert_eq!(result.score, contribution_total(&result));
+    }
 }
 
 #[test]
@@ -376,6 +381,315 @@ fn http_flags_match_only_in_the_client_segment() {
         );
         assert_eq!(result.score, 60, "{command}");
     }
+}
+
+/// The session HTTP-direction contract: `(command, upload, download)`.
+const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
+    // A quoted `;`, `|` or `&&` stays inside its command segment.
+    (
+        "curl -H 'Content-Type: application/json; charset=utf-8' --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H \"X-Synthetic: a|b\" --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H 'X-Synthetic: a&&b' --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H 'X-Synthetic: a;b' https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -H 'X-Synthetic: a|b' https://example.invalid/file; other --data @f",
+        false,
+        true,
+    ),
+    (
+        "curl -H 'X-Synthetic: --data @f' https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file && other --data @f",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file\nother --data @f",
+        false,
+        true,
+    ),
+    // Short flags are case-sensitive and may be clustered.
+    ("curl -sX POST https://example.invalid/upload", true, false),
+    ("curl -sXPUT https://example.invalid/upload", true, false),
+    ("curl -X 'POST' https://example.invalid/upload", true, false),
+    (
+        "curl --request=PUT https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -sF payload=@f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    ("curl -sT f https://example.invalid/upload", true, false),
+    ("curl --json @f https://example.invalid/upload", true, false),
+    (
+        "curl --data-ascii @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    ("curl -sf https://example.invalid/file", false, true),
+    ("curl -sD headers https://example.invalid/file", false, true),
+    (
+        "curl -t terminal=synthetic https://example.invalid/file",
+        false,
+        true,
+    ),
+    // A flag value is not a clustered short flag, and a closing quote right
+    // after a flag is a quoted pattern, not a request.
+    ("curl -odata.bin https://example.invalid/file", false, true),
+    ("rg -n \"curl -d\" src/", false, false),
+    ("rg -n 'curl -F' src/", false, false),
+    (
+        "curl -d'{\"synthetic\":1}' https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -d\"$SYNTHETIC\" https://example.invalid/upload",
+        true,
+        false,
+    ),
+    // Session rules do not adopt curl -G query semantics.
+    (
+        "curl -G --data-urlencode q=x https://example.invalid/search",
+        true,
+        false,
+    ),
+    (
+        "curl --data @f --get https://example.invalid/search",
+        true,
+        false,
+    ),
+    ("curl -sGd q=x https://example.invalid/search", true, false),
+    // curl's short upload flags do not apply to wget.
+    ("wget -d https://example.invalid/file", false, true),
+    ("wget -T 10 https://example.invalid/file", false, true),
+    ("wget -x https://example.invalid/file", false, true),
+    (
+        "wget --post-file=f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "wget --method=PUT --body-file=f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    // wget accepts unambiguous long-option abbreviations.
+    (
+        "wget --post-f=f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "aria2c -d downloads https://example.invalid/file",
+        false,
+        true,
+    ),
+    // Wrapped and prefixed clients keep their direction.
+    (
+        "sudo curl --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "env SYNTHETIC=1 curl -sX POST https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "env NOTE=curl- curl -d @f https://203.0.113.10/",
+        true,
+        false,
+    ),
+    (
+        "bash -c \"curl --data @f https://example.invalid/upload\"",
+        true,
+        false,
+    ),
+    // Only literal loopback IPs are exempt; the session rules exempt the
+    // compressed IPv6 forms and fail toward a match for the others.
+    ("curl http://127.42.7.9/a", false, false),
+    ("curl 'http://[::1]/a'", false, false),
+    ("curl 'http://[::ffff:127.0.0.1]/a'", false, false),
+    ("curl http://user:synthetic@127.0.0.1:8080/a", false, false),
+    ("curl --url=http://127.0.0.1/a", false, false),
+    ("X=$(curl -s http://127.0.0.1)", false, false),
+    ("X=`curl -s http://127.0.0.1`", false, false),
+    ("X=$(curl -s http://203.0.113.10)", false, true),
+    ("curl 'http://[0:0:0:0:0:0:0:1]/a'", false, true),
+    ("curl 'http://[::0001]/a'", false, true),
+    ("curl http://127.0.0.1.example.invalid/a", false, true),
+    ("curl http://127.example.invalid/a", false, true),
+    ("curl http://localhost/a", false, true),
+    ("curl 'http://[2001:db8::1]/a'", false, true),
+    ("curl 'http://[::2]/a'", false, true),
+    ("curl ftp://203.0.113.10/a", false, true),
+    ("curl https://$SYNTHETIC_HOST/a", false, true),
+    ("curl --url https://example.invalid/a", false, true),
+    ("curl HTTP://example.invalid/a", false, true),
+    ("curl http://127.0.0.1/a http://203.0.113.10/b", false, true),
+    ("curl http://203.0.113.10/b http://127.0.0.1/a", false, true),
+    // A proxy or reroute flag counts only together with a URL.
+    (
+        "curl --proxy socks5://proxy.example.invalid:1080 http://127.0.0.1/a",
+        false,
+        true,
+    ),
+    (
+        "curl http://127.0.0.1/a --resolve 127.0.0.1:80:203.0.113.10",
+        false,
+        true,
+    ),
+    (
+        "curl --connect-to 127.0.0.1:80:example.invalid:80 http://127.0.0.1/a",
+        false,
+        true,
+    ),
+    (
+        "curl --preproxy socks5://proxy.example.invalid:1080 http://127.0.0.1/a",
+        false,
+        true,
+    ),
+    (
+        "curl -sx proxy.example.invalid:1080 http://127.0.0.1/a",
+        false,
+        true,
+    ),
+    ("curl -x proxy.example.invalid:1080", false, false),
+    (
+        "curl --proxy socks5://proxy.example.invalid:1080",
+        false,
+        false,
+    ),
+    (
+        "curl --resolve example.invalid:80:203.0.113.10",
+        false,
+        false,
+    ),
+    (
+        "curl http://127.0.0.1/a; other --proxy http://proxy.example.invalid:8080",
+        false,
+        false,
+    ),
+    // Without lookaround, a session regex cannot tell a proxy's own URL
+    // argument from a target URL, so a non-loopback proxy URL still counts.
+    // Native actions parse the argument and do not count it.
+    ("curl -x http://203.0.113.10:8080", false, true),
+    (
+        "curl --proxy=http://proxy.example.invalid:8080",
+        false,
+        true,
+    ),
+    // Known session limits that fail toward a match; native actions are
+    // exact. A single-quoted wrapper shifts which quotes the regex sees as
+    // open, and `-x` is read as a reroute for every client.
+    (
+        "sh -c 'curl -sS https://example.invalid/x' && echo 'x -d y'",
+        true,
+        false,
+    ),
+    ("wget -x http://127.0.0.1/a", false, true),
+    // Text that only mentions a client is not a request.
+    (
+        "rg -n \"curl https://|wget https://\" scripts/",
+        false,
+        false,
+    ),
+];
+
+/// Bundled rules with the two HTTP rules renamed, to prove no rule ID selects
+/// hidden semantics.
+fn forked() -> CompiledRuleSet {
+    let document = super::DEFAULT_RULE_YAML
+        .replace("network.download", "fork.network.download")
+        .replace("exfil.outbound_upload", "fork.exfil.outbound_upload");
+    super::load_rule_set_from_documents(&[&document], None).expect("forked rules")
+}
+
+fn direction(
+    rules: &CompiledRuleSet,
+    prefix: &str,
+    field: &str,
+    command: &str,
+) -> (bool, bool, u64) {
+    let result = rules.evaluate(&[(field, command)]).expect("evaluate");
+    let matched = |id: &str| {
+        result
+            .as_ref()
+            .is_some_and(|result| has_rule(result, &format!("{prefix}{id}")))
+    };
+    if let Some(result) = &result {
+        assert_eq!(
+            result.score,
+            contribution_total(result),
+            "{field}: {command}"
+        );
+    }
+    (
+        matched("exfil.outbound_upload"),
+        matched("network.download"),
+        result.map_or(0, |result| result.score),
+    )
+}
+
+#[test]
+fn session_http_direction_follows_the_segment_contract() {
+    let rules = bundled();
+    for &(command, upload, download) in DIRECTION_TABLE {
+        for field in ["command", "arguments", "url"] {
+            let (got_upload, got_download, _) = direction(&rules, "", field, command);
+            assert_eq!(got_upload, upload, "upload {field}: {command}");
+            assert_eq!(got_download, download, "download {field}: {command}");
+        }
+    }
+}
+
+#[test]
+fn renamed_http_rules_match_exactly_like_the_bundled_rules() {
+    let (rules, fork) = (bundled(), forked());
+    for &(command, _, _) in DIRECTION_TABLE {
+        for field in ["command", "arguments", "url"] {
+            assert_eq!(
+                direction(&fork, "fork.", field, command),
+                direction(&rules, "", field, command),
+                "{field}: {command}"
+            );
+        }
+    }
+}
+
+#[test]
+fn upload_flags_veto_a_download_in_the_same_field() {
+    // Download exclusion is field-level, as before: a curl upload segment in
+    // the same field removes the download, but not the reverse.
+    let result = evaluate(&[(
+        "command",
+        "curl --data @f https://example.invalid/upload; curl https://example.invalid/file",
+    )])
+    .expect("match");
+    assert_eq!(ids(&result), vec!["exfil.outbound_upload".to_string()]);
+    assert_eq!(result.score, 60);
 }
 
 #[test]
