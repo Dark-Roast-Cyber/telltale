@@ -379,9 +379,11 @@ Common event types include:
   terminally sanitized `process` context.
 
 Scanner state deduplicates session-risk summaries by risk posture, not growing
-event or tool-call counts. Detections still re-emit for changed posture or new
-evidence, except evidence from rules explicitly classified as informational or
-low severity; `network.download` always retains new evidence. Unknown rules and
+event or tool-call counts. Changed classification (`detection_classes`,
+`signal_types`, `analytic_intents`, `atlas_tags`) re-emits both detections and
+summaries. Detections also re-emit for changed posture or new evidence, except
+evidence from rules explicitly classified as informational or low severity;
+`network.download` always retains new evidence. Unknown rules and
 unattributed evidence are not treated as routine. `--backfill` bypasses this
 deduplication. On upgrade, an event whose full content matches what the older
 scanner last emitted is learned without re-emission. A detection whose content

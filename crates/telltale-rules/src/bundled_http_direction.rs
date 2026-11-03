@@ -681,8 +681,10 @@ fn renamed_http_rules_match_exactly_like_the_bundled_rules() {
 
 #[test]
 fn upload_flags_veto_a_download_in_the_same_field() {
-    // Download exclusion is field-level, as before: a curl upload segment in
-    // the same field removes the download, but not the reverse.
+    // Rule v1 exclusions are field-scoped, so an upload anywhere in the field
+    // removes the download. A segment-bounded exclude needs a new predicate,
+    // which is out of scope; native actions decide per segment. This pins that
+    // accepted session contract, including the separate-segment miss.
     let result = evaluate(&[(
         "command",
         "curl --data @f https://example.invalid/upload; curl https://example.invalid/file",
