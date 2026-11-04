@@ -3,6 +3,10 @@
 //! set forces a full reconciliation rather than dropping changes. Watch starts
 //! idle unless `--initial-scan` asks for one uncounted full scan after every
 //! watch is registered; either way it reports readiness once on stderr.
+//!
+//! With the opt-in liveness heartbeat, a due heartbeat makes the next scan a
+//! full scan, idle or not. That scan emits health and saves state through the
+//! ordinary scan path; idle delivery wakeups still never scan or save state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -26,9 +30,10 @@ use super::discovery::{
     load_project_configuration,
 };
 use super::{
-    ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, iteration_budget_exhausted,
-    run_scan,
+    ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, health_heartbeat_wait,
+    iteration_budget_exhausted, run_scan, unix_ms_now,
 };
+use crate::state::ScanState;
 
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod sqlite_metadata;
@@ -346,6 +351,19 @@ pub(crate) fn run_watch(
         );
     }
     let mut last_delivery_completed = Instant::now();
+    // A read-only look at the recorded heartbeat sets the first deadline.
+    let heartbeat_interval = config.execution.health_heartbeat_interval_seconds;
+    // An interval too long to schedule simply never comes due.
+    let mut heartbeat_deadline = match heartbeat_interval {
+        Some(interval) => {
+            let last = ScanState::load_snapshot(config.execution.state_path)?
+                .last_health_heartbeat_unix_ms();
+            Instant::now().checked_add(health_heartbeat_wait(last, unix_ms_now(), interval))
+        }
+        None => None,
+    };
+    let heartbeat_due =
+        |deadline: Option<Instant>| deadline.is_some_and(|deadline| Instant::now() >= deadline);
     // Watches are registered before this scan reads anything, so a write
     // during it stays queued and triggers a later scan.
     let mut initial_scan = config.trigger.initial_scan;
@@ -373,6 +391,10 @@ pub(crate) fn run_watch(
                 if !pending.is_empty() {
                     break;
                 }
+            }
+            if heartbeat_due(heartbeat_deadline) {
+                pending.require_full_scan();
+                break;
             }
             if idle_delivery && last_delivery_completed.elapsed() >= WATCH_DELIVERY_INTERVAL {
                 report_idle_delivery_failures(config.execution.sinks.deliver_durable()?);
@@ -411,6 +433,11 @@ pub(crate) fn run_watch(
             break;
         }
         inbox.take_signals(&mut pending)?;
+        // A due heartbeat widens a targeted scan, so a busy host reports too.
+        let heartbeat_scan = heartbeat_due(heartbeat_deadline);
+        if heartbeat_scan {
+            pending.require_full_scan();
+        }
 
         let targets = match pending.scan_action(&source_index) {
             WatchScanAction::Skip => continue,
@@ -431,6 +458,16 @@ pub(crate) fn run_watch(
         let result = run_scan(scan_config, targets, StateSavePolicy::OnChange)?;
         inbox.check_error()?;
         last_delivery_completed = Instant::now();
+        if let Some(interval) = heartbeat_interval {
+            let wait = health_heartbeat_wait(result.last_health_unix_ms, unix_ms_now(), interval);
+            // A heartbeat scan that emitted no health must not rescan at once.
+            let wait = if heartbeat_scan && wait.is_zero() {
+                Duration::from_secs(interval)
+            } else {
+                wait
+            };
+            heartbeat_deadline = Instant::now().checked_add(wait);
+        }
         if let Some((sources, discovery)) = result.full_scan_discovery {
             (source_index, watch_discovery) = watch_index_from_sources(sources, discovery);
             #[cfg(target_os = "macos")]

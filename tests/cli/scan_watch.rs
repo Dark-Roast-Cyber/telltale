@@ -9570,3 +9570,457 @@ fn watch_without_initial_scan_says_existing_sessions_wait_for_changes() {
     assert!(line.starts_with("telltale watch: ready"), "{line}");
     assert!(line.contains("--initial-scan"), "{line}");
 }
+
+const HEALTH_HEARTBEAT_MARKER: &str = "telltale:health_heartbeat_v1@";
+
+/// Synthetic store for the opt-in liveness heartbeat. With `durable`, events
+/// go through a durable outbox, so an idle watch also wakes for delivery.
+struct HeartbeatStore {
+    temp: tempfile::TempDir,
+    root: std::path::PathBuf,
+    sessions: std::path::PathBuf,
+    log: std::path::PathBuf,
+    state: std::path::PathBuf,
+    config: Option<std::path::PathBuf>,
+}
+
+impl HeartbeatStore {
+    fn new(durable: bool) -> Self {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("stores");
+        let sessions = root.join("codex/sessions/2026/04");
+        fs::create_dir_all(&sessions).expect("codex sessions dir");
+        fs::write(
+            sessions.join("uc001-positive.jsonl"),
+            include_str!(
+                "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+            ),
+        )
+        .expect("session fixture");
+        let runtime = temp.path().join("runtime");
+        fs::create_dir_all(&runtime).expect("runtime dir");
+        let log = runtime.join("events.jsonl");
+        let config = durable.then(|| {
+            let config = temp.path().join("config");
+            fs::create_dir_all(config.join("outputs.d")).expect("outputs dir");
+            let yaml = |path: &Path| {
+                serde_yaml::to_string(&path.to_string_lossy())
+                    .expect("yaml path")
+                    .trim()
+                    .to_owned()
+            };
+            fs::write(
+                config.join("outputs.d/outputs.yaml"),
+                format!(
+                    "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+                    // Telltale creates this owner-only parent itself.
+                    yaml(&runtime.join("private/outbox.sqlite")),
+                    yaml(&log)
+                ),
+            )
+            .expect("outputs config");
+            config
+        });
+        Self {
+            state: runtime.join("state.json"),
+            log,
+            root,
+            sessions,
+            config,
+            temp,
+        }
+    }
+
+    /// `log` replaces the routine JSONL path (a `--history` pass needs its own).
+    fn command_with_log(&self, args: &[&str], log: &Path) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", self.temp.path())
+            .args(args)
+            .args(["--allow-fixtures", "--install-inventory-disabled", "--root"])
+            .arg(&self.root)
+            .arg("--state-path")
+            .arg(&self.state);
+        match &self.config {
+            Some(config) => command.arg("--config-dir").arg(config),
+            None => command.arg("--no-local-config").arg("--log-path").arg(log),
+        };
+        command
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        self.command_with_log(args, &self.log)
+    }
+
+    fn run(mut command: Command) -> Value {
+        let output = command.output().expect("run telltale scan");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("scan summary")
+    }
+
+    fn scan(&self, args: &[&str]) -> Value {
+        Self::run(self.command(&[&["scan", "--once"][..], args].concat()))
+    }
+
+    fn events_in(log: &Path) -> Vec<Value> {
+        fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("event json"))
+            .collect()
+    }
+
+    fn events(&self) -> Vec<Value> {
+        Self::events_in(&self.log)
+    }
+
+    /// Events appended to the routine log by `run`.
+    fn appended(&self, run: impl FnOnce()) -> Vec<Value> {
+        let before = self.events().len();
+        run();
+        self.events().split_off(before)
+    }
+
+    fn scan_appended(&self, args: &[&str]) -> Vec<Value> {
+        self.appended(|| {
+            self.scan(args);
+        })
+    }
+
+    fn heartbeat(&self) -> Option<u64> {
+        let state = fs::read_to_string(&self.state).ok()?;
+        let at = state.split(HEALTH_HEARTBEAT_MARKER).nth(1)?;
+        at.split('"').next()?.parse().ok()
+    }
+
+    /// Moves the recorded heartbeat to `unix_ms`, as if it was emitted then.
+    fn set_heartbeat(&self, unix_ms: u64) {
+        let current = format!(
+            "{HEALTH_HEARTBEAT_MARKER}{}",
+            self.heartbeat().expect("recorded heartbeat")
+        );
+        let state = fs::read_to_string(&self.state).expect("state");
+        fs::write(
+            &self.state,
+            state.replace(&current, &format!("{HEALTH_HEARTBEAT_MARKER}{unix_ms}")),
+        )
+        .expect("rewrite state");
+    }
+}
+
+fn unix_ms() -> u64 {
+    u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
+        .expect("unix ms")
+}
+
+fn assert_single_heartbeat(events: &[Value], context: &str) {
+    assert_eq!(events.len(), 1, "{context}: {events:?}");
+    let health = &events[0];
+    assert_eq!(health["event_type"], "health", "{context}");
+    assert_eq!(health["check_name"], "source_discovery", "{context}");
+    assert_eq!(health["emitted_count"], 0, "{context}");
+    assert!(
+        event_schema_validator().is_valid(health),
+        "{context}: heartbeat failed Event 3.0 schema validation"
+    );
+}
+
+#[test]
+fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval() {
+    let store = HeartbeatStore::new(false);
+    let first = store.scan_appended(&[]);
+    assert!(first.iter().any(|event| event["event_type"] == "health"));
+
+    // Off by default: a quiet rescan appends nothing and records no heartbeat.
+    let log_before = fs::read(&store.log).expect("log");
+    let summary = store.scan(&[]);
+    assert_eq!(fs::read(&store.log).expect("log"), log_before);
+    assert_eq!(store.heartbeat(), None);
+    assert_eq!(
+        summary["effective_configuration"]["settings"]["events.health_heartbeat_interval_seconds"],
+        serde_json::json!({"value": 0, "default": 0, "origin": "default", "source": null})
+    );
+
+    // Enabling it with nothing recorded is due at once.
+    let interval = ["--health-heartbeat-interval-seconds", "3600"];
+    let before = unix_ms();
+    let enabled = store.scan_appended(&interval);
+    assert_single_heartbeat(&enabled, "first heartbeat");
+    let recorded = store
+        .heartbeat()
+        .expect("heartbeat recorded in the state file");
+    assert!(recorded >= before, "{recorded} < {before}");
+
+    // None sooner than the interval, from the flag or the environment.
+    assert!(store.scan_appended(&interval).is_empty());
+    let mut from_environment = store.command(&["scan", "--once"]);
+    from_environment.env("TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS", "3600");
+    assert!(
+        store
+            .appended(|| {
+                HeartbeatStore::run(from_environment);
+            })
+            .is_empty()
+    );
+    assert_eq!(store.heartbeat(), Some(recorded));
+
+    // Exactly one heartbeat once the interval has elapsed, then none again.
+    store.set_heartbeat(recorded - 3_600_000);
+    let elapsed = store.scan_appended(&interval);
+    assert_single_heartbeat(&elapsed, "elapsed interval");
+    assert!(store.scan_appended(&interval).is_empty());
+
+    // A real one-second interval, checked only from below.
+    thread::sleep(Duration::from_millis(1_100));
+    let real = store.scan_appended(&["--health-heartbeat-interval-seconds", "1"]);
+    assert_single_heartbeat(&real, "one-second interval");
+
+    // An explicit 0 turns it off over the environment and leaves the marker.
+    store.set_heartbeat(0);
+    let mut off = store.command(&["scan", "--once", "--health-heartbeat-interval-seconds", "0"]);
+    off.env("TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS", "1");
+    assert!(
+        store
+            .appended(|| {
+                HeartbeatStore::run(off);
+            })
+            .is_empty()
+    );
+    assert_eq!(store.heartbeat(), Some(0));
+}
+
+#[test]
+fn scan_health_from_a_status_change_resets_the_heartbeat_interval() {
+    let store = HeartbeatStore::new(false);
+    let hour = ["--health-heartbeat-interval-seconds", "3600"];
+    let minute = ["--health-heartbeat-interval-seconds", "60"];
+    store.scan(&hour);
+    // The last heartbeat is 100 seconds old: not due hourly, due per minute.
+    store.set_heartbeat(unix_ms() - 100_000);
+
+    // A new source emits health for the inventory change, not a heartbeat.
+    fs::write(store.sessions.join("added.jsonl"), b"").expect("new source");
+    let changed = store.scan_appended(&hour);
+    let health = changed
+        .iter()
+        .filter(|event| event["event_type"] == "health")
+        .count();
+    assert_eq!(health, 1, "{changed:?}");
+    assert!(
+        !changed
+            .iter()
+            .any(|event| event["event_type"] == "operational_alert")
+    );
+
+    // That health restarted the interval: per minute is no longer due.
+    assert!(store.scan_appended(&minute).is_empty());
+    // Both health triggers at once still emit a single event.
+    store.set_heartbeat(unix_ms() - 7_200_000);
+    fs::remove_file(store.sessions.join("added.jsonl")).expect("remove source");
+    let both = store.scan_appended(&hour);
+    assert_single_heartbeat(&both, "inventory change and due heartbeat");
+}
+
+#[test]
+fn scan_dry_run_and_history_never_persist_heartbeat_state() {
+    let store = HeartbeatStore::new(false);
+    store.scan(&[]);
+    let state_before = fs::read(&store.state).expect("state");
+    let log_before = fs::read(&store.log).expect("log");
+    let interval = ["--health-heartbeat-interval-seconds", "1"];
+
+    let summary = store.scan(&[&["--dry-run"][..], &interval].concat());
+    assert_eq!(summary["event_type"], "health");
+    let history_log = store.temp.path().join("history.jsonl");
+    HeartbeatStore::run(store.command_with_log(
+        &[&["scan", "--once", "--history", "all"][..], &interval].concat(),
+        &history_log,
+    ));
+    assert_eq!(fs::read(&store.state).expect("state"), state_before);
+    assert_eq!(fs::read(&store.log).expect("log"), log_before);
+    let history = HeartbeatStore::events_in(&history_log);
+    assert!(!history.is_empty());
+    assert!(
+        !history.iter().any(|event| event["event_type"] == "health"),
+        "a forensic history pass is not scanner liveness"
+    );
+
+    // Neither recorded a heartbeat, so the first routine scan is due.
+    let routine = store.scan_appended(&interval);
+    assert_single_heartbeat(&routine, "after dry-run and history");
+}
+
+#[test]
+fn scan_heartbeat_is_recorded_only_after_its_required_jsonl_write() {
+    let store = HeartbeatStore::new(false);
+    let interval = ["--health-heartbeat-interval-seconds", "3600"];
+    store.scan(&interval);
+    let overdue = unix_ms() - 7_200_000;
+    store.set_heartbeat(overdue);
+    // A trailing partial record makes the canonical append fail closed.
+    let mut log = fs::read(&store.log).expect("log");
+    let complete = log.len();
+    log.extend_from_slice(b"{\"partial\":");
+    fs::write(&store.log, &log).expect("partial record");
+    let output = store
+        .command(&[&["scan", "--once"][..], &interval].concat())
+        .output()
+        .expect("run telltale scan");
+    assert!(!output.status.success());
+    assert_eq!(store.heartbeat(), Some(overdue), "no heartbeat was written");
+
+    // After repair the heartbeat is still due and is emitted once.
+    log.truncate(complete);
+    fs::write(&store.log, &log).expect("repair log");
+    let repaired = store.scan_appended(&interval);
+    assert_single_heartbeat(&repaired, "after the failed write");
+}
+
+struct HeartbeatWatch {
+    child: std::process::Child,
+    stdout: thread::JoinHandle<Vec<u8>>,
+    stderr: thread::JoinHandle<Vec<String>>,
+}
+
+impl HeartbeatWatch {
+    fn spawn(mut command: Command) -> Self {
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn telltale watch");
+        let mut stdout = child.stdout.take().expect("watch stdout");
+        let stdout = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).expect("read watch stdout");
+            bytes
+        });
+        let stderr = BufReader::new(child.stderr.take().expect("watch stderr"));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let stderr = thread::spawn(move || {
+            let mut lines = Vec::new();
+            for line in stderr.lines() {
+                let line = line.expect("watch stderr line");
+                if line.starts_with("telltale watch: ready") {
+                    let _ = ready_tx.send(());
+                }
+                lines.push(line);
+            }
+            lines
+        });
+        let mut watch = Self {
+            child,
+            stdout,
+            stderr,
+        };
+        if ready_rx.recv_timeout(Duration::from_secs(60)).is_err() {
+            fail_watch(&mut watch.child, "watch did not report readiness");
+        }
+        watch
+    }
+
+    fn wait_for_exit(mut self, timeout: Duration) -> Vec<Value> {
+        let deadline = Instant::now() + timeout;
+        while self.child.try_wait().expect("poll watch").is_none() {
+            if Instant::now() > deadline {
+                fail_watch(&mut self.child, "watch did not exit after its iterations");
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let status = self.child.wait().expect("watch status");
+        let stderr = self.stderr.join().expect("join stderr");
+        assert!(status.success(), "stderr: {stderr:?}");
+        Self::summaries(self.stdout)
+    }
+
+    fn kill(mut self) -> Vec<Value> {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = self.stderr.join();
+        Self::summaries(self.stdout)
+    }
+
+    fn summaries(stdout: thread::JoinHandle<Vec<u8>>) -> Vec<Value> {
+        String::from_utf8_lossy(&stdout.join().expect("join stdout"))
+            .lines()
+            .filter(|line| line.starts_with('{'))
+            .map(|line| serde_json::from_str(line).expect("summary json"))
+            .collect()
+    }
+}
+
+#[test]
+fn idle_watch_heartbeat_runs_one_full_scan_when_due_and_writes_nothing_before() {
+    let _watch_guard = watch_process_guard();
+    // Durable delivery adds the one-second idle delivery wakeups. Windows has
+    // no durable storage, so there it covers the plain JSONL path.
+    let store = HeartbeatStore::new(!cfg!(windows));
+    let interval = ["--health-heartbeat-interval-seconds", "3600"];
+    store.scan(&interval);
+    let watch = |extra: &[&str]| {
+        store.command(
+            &[
+                &[
+                    "watch",
+                    "--debounce-ms",
+                    "100",
+                    "--min-scan-interval-ms",
+                    "0",
+                ][..],
+                extra,
+            ]
+            .concat(),
+        )
+    };
+
+    // Not due: idle watch neither scans nor writes state across its wakeups.
+    let state_before = fs::read(&store.state).expect("state");
+    let log_before = fs::read(&store.log).expect("log");
+    let once = [&["--iterations", "1"][..], &interval].concat();
+    let quiet = HeartbeatWatch::spawn(watch(&once));
+    thread::sleep(Duration::from_millis(2_500));
+    assert!(quiet.kill().is_empty());
+    assert_eq!(fs::read(&store.state).expect("state"), state_before);
+    assert_eq!(fs::read(&store.log).expect("log"), log_before);
+
+    // Due two seconds after startup: the idle loop wakes for one full scan,
+    // which emits the heartbeat and spends the single iteration.
+    let aged = unix_ms() - 3_600_000 + 2_000;
+    store.set_heartbeat(aged);
+    let started = Instant::now();
+    let heartbeat = store.appended(|| {
+        let summaries = HeartbeatWatch::spawn(watch(&once)).wait_for_exit(Duration::from_secs(60));
+        assert_eq!(summaries.len(), 1, "{summaries:?}");
+        assert_eq!(
+            summaries[0]["source_discovery"]["basis"],
+            "current_full_scan"
+        );
+    });
+    assert!(started.elapsed() >= Duration::from_millis(1_500));
+    assert_single_heartbeat(&heartbeat, "idle watch heartbeat");
+    assert!(store.heartbeat().expect("heartbeat") > aged);
+
+    // Dry-run: due at startup, then a full interval between heartbeat scans,
+    // and nothing persists.
+    store.set_heartbeat(0);
+    let state_before = fs::read(&store.state).expect("state");
+    let log_before = fs::read(&store.log).expect("log");
+    let started = Instant::now();
+    let summaries = HeartbeatWatch::spawn(watch(&[
+        "--dry-run",
+        "--iterations",
+        "2",
+        "--health-heartbeat-interval-seconds",
+        "1",
+    ]))
+    .wait_for_exit(Duration::from_secs(60));
+    assert_eq!(summaries.len(), 2, "{summaries:?}");
+    assert!(started.elapsed() >= Duration::from_secs(1), "no tight loop");
+    assert_eq!(fs::read(&store.state).expect("state"), state_before);
+    assert_eq!(fs::read(&store.log).expect("log"), log_before);
+}

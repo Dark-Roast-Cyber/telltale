@@ -88,6 +88,8 @@ pub(crate) struct ScanExecutionConfig<'a> {
     pub(crate) clients: &'a [ClientId],
     pub(crate) project_config_paths: &'a [PathBuf],
     pub(crate) install_inventory_interval_seconds: Option<u64>,
+    /// Opt-in liveness heartbeat; `None` is off.
+    pub(crate) health_heartbeat_interval_seconds: Option<u64>,
     pub(crate) process_chain: bool,
     pub(crate) operational_alerts: OperationalAlertConfig,
     pub(crate) runtime: &'a serde_json::Value,
@@ -319,8 +321,7 @@ fn run_scan_for_platform(
         StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),
     };
     let install_inventory_interval_seconds = config.execution.install_inventory_interval_seconds;
-    let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
-    let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
+    let observed_at_unix_ms = unix_ms_now();
     let mut install_inventory_event = None;
     if config.execution.clients.is_empty()
         && !config.history
@@ -552,15 +553,30 @@ fn run_scan_for_platform(
     emitted_events.extend(outage_alerts);
     emitted_events.extend(selected.events);
 
+    // The opt-in liveness heartbeat: a full scan emits health when none was
+    // emitted for the interval. A history pass has no routine state, and a
+    // targeted scan sees only a slice of the inventory.
+    let heartbeat_interval_seconds = config
+        .execution
+        .health_heartbeat_interval_seconds
+        .filter(|_| !config.history);
+    let last_health_heartbeat =
+        heartbeat_interval_seconds.and_then(|_| state.last_health_heartbeat_unix_ms());
+    let heartbeat_due = !targeted
+        && heartbeat_interval_seconds.is_some_and(|interval| {
+            health_heartbeat_wait(last_health_heartbeat, observed_at_unix_ms, interval).is_zero()
+        });
     // Dry-run, backfill, inventory change, a newly emitted scanner_error, an
-    // outage that fires, a duration alert, and this threshold alert when it
-    // fires. A suppressed threshold repeat is not among those triggers.
+    // outage that fires, a duration alert, this threshold alert when it fires,
+    // and a due heartbeat. A suppressed threshold repeat is not among those
+    // triggers.
     let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
         || selected.scanner_error_emitted
         || outage_alert_emitted
-        || has_operational_alerts;
+        || has_operational_alerts
+        || heartbeat_due;
     let emitted_count = emitted_events.len() as u64;
     let health = health_event_with_metadata(HealthEventInput {
         sources: &sources,
@@ -575,6 +591,11 @@ fn run_scan_for_platform(
     });
     if health_emitted {
         emitted_events.insert(0, health.clone());
+        // Any health event restarts the interval. The marker is saved with the
+        // rest of the state, after the event's required durable write.
+        if heartbeat_interval_seconds.is_some() && !config.execution.dry_run {
+            state.record_health_heartbeat(observed_at_unix_ms);
+        }
     }
 
     if targeted {
@@ -768,7 +789,35 @@ fn run_scan_for_platform(
     Ok(ScanRunResult {
         full_scan_discovery,
         source_failures,
+        last_health_unix_ms: if health_emitted {
+            Some(observed_at_unix_ms)
+        } else {
+            last_health_heartbeat
+        },
     })
+}
+
+pub(super) fn unix_ms_now() -> u64 {
+    u64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).unwrap_or_default()
+}
+
+/// How long until the liveness heartbeat is due; zero when it is due now.
+/// It is due when no health time is recorded, when the interval has elapsed,
+/// or when the recorded time is in the future (the clock moved back), so a
+/// clock change emits early rather than going silent until it catches up.
+pub(super) fn health_heartbeat_wait(
+    last_health_unix_ms: Option<u64>,
+    now_unix_ms: u64,
+    interval_seconds: u64,
+) -> Duration {
+    match last_health_unix_ms {
+        Some(last) if last <= now_unix_ms => Duration::from_millis(
+            interval_seconds
+                .saturating_mul(1000)
+                .saturating_sub(now_unix_ms - last),
+        ),
+        _ => Duration::ZERO,
+    }
 }
 
 /// Session-store variables that only the default `--root .` reads. Another
@@ -1846,6 +1895,9 @@ struct ScanSummaryInput<'a> {
 struct ScanRunResult {
     full_scan_discovery: Option<(Vec<Source>, SourceDiscoveryAccounting)>,
     source_failures: Vec<String>,
+    /// This scan's time when it emitted health, else the recorded heartbeat
+    /// time (none while the heartbeat is off). Watch schedules from it.
+    last_health_unix_ms: Option<u64>,
 }
 
 struct DetectionFlowAccounting {
@@ -2693,6 +2745,7 @@ mod tests {
                 clients: &clients,
                 project_config_paths: &project_config_paths,
                 install_inventory_interval_seconds: None,
+                health_heartbeat_interval_seconds: None,
                 process_chain: true,
                 operational_alerts: Default::default(),
                 runtime: &runtime,
@@ -3440,6 +3493,23 @@ mod tests {
         let mut zero = Some(0);
         assert!(iteration_budget_exhausted(&mut zero));
         assert_eq!(zero, Some(0));
+    }
+
+    #[test]
+    fn health_heartbeat_is_due_once_the_interval_elapses_and_never_waits_on_a_clock_rollback() {
+        let wait = health_heartbeat_wait;
+        // Nothing recorded yet.
+        assert_eq!(wait(None, 10_000, 60), Duration::ZERO);
+        // Sooner than the interval: wait out the remainder.
+        assert_eq!(wait(Some(10_000), 10_000, 60), Duration::from_secs(60));
+        assert_eq!(wait(Some(10_000), 69_999, 60), Duration::from_millis(1));
+        // Exactly one interval, and later, are due.
+        assert_eq!(wait(Some(10_000), 70_000, 60), Duration::ZERO);
+        assert_eq!(wait(Some(10_000), 10_000_000, 60), Duration::ZERO);
+        // A recorded time ahead of the clock is due rather than silent.
+        assert_eq!(wait(Some(10_001), 10_000, 60), Duration::ZERO);
+        // Huge intervals saturate instead of overflowing.
+        assert_eq!(wait(Some(0), 0, u64::MAX), Duration::from_millis(u64::MAX));
     }
 
     #[test]

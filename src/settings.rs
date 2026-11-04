@@ -134,6 +134,7 @@ pub(crate) struct CliSettings {
     pub(crate) log_rotate_disabled: bool,
     pub(crate) install_inventory_interval_seconds: Option<u64>,
     pub(crate) install_inventory_disabled: bool,
+    pub(crate) health_heartbeat_interval_seconds: Option<u64>,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
     pub(crate) baseline_deviation_scoring: bool,
@@ -156,6 +157,7 @@ pub(crate) struct Settings {
     log_rotate_keep: Setting<usize>,
     install_inventory: Setting<bool>,
     install_inventory_interval_seconds: Setting<u64>,
+    health_heartbeat_interval_seconds: Setting<u64>,
     pub(crate) emit_activity: Setting<bool>,
     pub(crate) emit_session_risk_summary: Setting<bool>,
     pub(crate) baseline_deviation_scoring: Setting<bool>,
@@ -184,6 +186,7 @@ impl Default for Settings {
             install_inventory_interval_seconds: Setting::new(
                 telltale_core::DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS,
             ),
+            health_heartbeat_interval_seconds: Setting::new(0),
             emit_activity: Setting::new(false),
             emit_session_risk_summary: Setting::new(false),
             baseline_deviation_scoring: Setting::new(false),
@@ -264,6 +267,7 @@ struct EventsSection {
     emit_activity: Option<bool>,
     emit_session_risk_summary: Option<bool>,
     baseline_deviation_scoring: Option<bool>,
+    health_heartbeat_interval_seconds: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -363,6 +367,8 @@ impl Settings {
             .set(document.events.emit_session_risk_summary, origin());
         self.baseline_deviation_scoring
             .set(document.events.baseline_deviation_scoring, origin());
+        self.health_heartbeat_interval_seconds
+            .set(document.events.health_heartbeat_interval_seconds, origin());
         self.watch_debounce_ms
             .set(document.watch.debounce_ms, origin());
         self.watch_min_scan_interval_ms
@@ -393,7 +399,9 @@ impl Settings {
         self.log_rotate_keep
             .set_env(env, "TELLTALE_LOG_ROTATE_KEEP")?;
         self.install_inventory_interval_seconds
-            .set_env(env, "TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")
+            .set_env(env, "TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")?;
+        self.health_heartbeat_interval_seconds
+            .set_env(env, "TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS")
     }
 
     fn apply_cli(&mut self, cli: &CliSettings) {
@@ -418,6 +426,10 @@ impl Settings {
         self.install_inventory.set(
             cli.install_inventory_disabled.then_some(false),
             Origin::Cli("--install-inventory-disabled"),
+        );
+        self.health_heartbeat_interval_seconds.set(
+            cli.health_heartbeat_interval_seconds,
+            Origin::Cli("--health-heartbeat-interval-seconds"),
         );
         // These flags can only turn their settings on.
         self.emit_activity.set(
@@ -518,6 +530,12 @@ impl Settings {
             .then_some(self.install_inventory_interval_seconds.value)
     }
 
+    /// Seconds between liveness `health` events, or `None` when off (0).
+    pub(crate) fn health_heartbeat_interval_seconds(&self) -> Option<u64> {
+        let seconds = self.health_heartbeat_interval_seconds.value;
+        (seconds > 0).then_some(seconds)
+    }
+
     /// Each effective value with its default and origin, keyed by its
     /// `settings.d` path. A winning file appears only as its path hash.
     pub(crate) fn to_json(&self) -> serde_json::Value {
@@ -551,6 +569,7 @@ impl Settings {
             "events.emit_activity": entry(&self.emit_activity),
             "events.emit_session_risk_summary": entry(&self.emit_session_risk_summary),
             "events.baseline_deviation_scoring": entry(&self.baseline_deviation_scoring),
+            "events.health_heartbeat_interval_seconds": entry(&self.health_heartbeat_interval_seconds),
             "watch.debounce_ms": entry(&self.watch_debounce_ms),
             "watch.min_scan_interval_ms": entry(&self.watch_min_scan_interval_ms),
         })
@@ -606,6 +625,7 @@ mod tests {
             settings.install_inventory_interval_seconds(),
             Some(telltale_core::DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS)
         );
+        assert_eq!(settings.health_heartbeat_interval_seconds(), None);
         assert!(settings.community_rules.value && settings.process_chain.value);
         let json = settings.to_json();
         for (key, entry) in json.as_object().expect("object") {
@@ -710,6 +730,57 @@ mod tests {
     }
 
     #[test]
+    fn health_heartbeat_interval_follows_file_environment_flag_precedence() {
+        let temp = tempdir().expect("tempdir");
+        let file = write(
+            temp.path(),
+            "settings.yaml",
+            "version: 1\nevents: {health_heartbeat_interval_seconds: 900}\n",
+        );
+        let resolved = |env_value: Option<&str>, flag: Option<u64>| {
+            let pairs = env_value
+                .map(|value| vec![("TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS", value)])
+                .unwrap_or_default();
+            resolve(
+                std::slice::from_ref(&file),
+                &env(&pairs),
+                &CliSettings {
+                    health_heartbeat_interval_seconds: flag,
+                    ..CliSettings::default()
+                },
+            )
+            .expect("resolve")
+        };
+        let key = "events.health_heartbeat_interval_seconds";
+
+        let settings = resolved(None, None);
+        assert_eq!(settings.health_heartbeat_interval_seconds(), Some(900));
+        assert_eq!(
+            origin(&settings, key),
+            ("settings_file".into(), path_hash(&file).into())
+        );
+
+        let settings = resolved(Some("300"), None);
+        assert_eq!(settings.health_heartbeat_interval_seconds(), Some(300));
+        assert_eq!(
+            origin(&settings, key),
+            (
+                "environment".into(),
+                "TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS".into()
+            )
+        );
+
+        // An explicit 0 turns the heartbeat off over a configured interval.
+        let settings = resolved(Some("300"), Some(0));
+        assert_eq!(settings.health_heartbeat_interval_seconds(), None);
+        assert_eq!(settings.to_json()[key]["value"], 0);
+        assert_eq!(
+            origin(&settings, key),
+            ("cli".into(), "--health-heartbeat-interval-seconds".into())
+        );
+    }
+
+    #[test]
     fn boolean_environment_values_are_case_insensitive() {
         for (raw, expected) in [
             ("0", false),
@@ -741,6 +812,7 @@ mod tests {
             ("TELLTALE_LOG_ROTATE_KEEP", " 0 "),
             ("TELLTALE_RISK_THRESHOLD_CRITICAL", "95\r"),
             ("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS", "1.5"),
+            ("TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS", "1h-SECRET"),
         ] {
             let error = resolve(&[], &env(&[(name, raw)]), &CliSettings::default())
                 .expect_err("invalid environment value")

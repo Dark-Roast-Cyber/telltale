@@ -230,7 +230,8 @@ struct WatchCommandArgs {
     execution: ScanExecutionArgs,
 
     /// Cap watch-triggered scans after this many iterations (at least 1).
-    /// The --initial-scan is not counted by --iterations.
+    /// The --initial-scan is not counted by --iterations; a liveness
+    /// heartbeat scan is.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     iterations: Option<u32>,
 
@@ -353,6 +354,13 @@ struct ScanExecutionArgs {
     /// Disable installed-agent inventory observations.
     #[arg(long)]
     install_inventory_disabled: bool,
+
+    /// Emit a liveness health event when a full scan finds that none was
+    /// emitted for this many seconds, even if nothing changed. Overrides
+    /// events.health_heartbeat_interval_seconds (settings.d,
+    /// TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS; default 0). 0 turns it off.
+    #[arg(long)]
+    health_heartbeat_interval_seconds: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -670,6 +678,7 @@ impl ScanExecutionArgs {
                 log_rotate_disabled: self.log_rotate_disabled,
                 install_inventory_interval_seconds: self.install_inventory_interval_seconds,
                 install_inventory_disabled: self.install_inventory_disabled,
+                health_heartbeat_interval_seconds: self.health_heartbeat_interval_seconds,
                 emit_activity: self.emit_activity,
                 emit_session_risk_summary: self.emit_session_risk_summary,
                 baseline_deviation_scoring: self.baseline_deviation_scoring,
@@ -779,6 +788,7 @@ impl PreparedScanExecution {
             clients: &self.clients,
             project_config_paths: &self.project_config_paths,
             install_inventory_interval_seconds: self.settings.install_inventory_interval_seconds(),
+            health_heartbeat_interval_seconds: self.settings.health_heartbeat_interval_seconds(),
             process_chain: self.settings.process_chain.value,
             operational_alerts: self.settings.operational_alerts(),
             runtime,
