@@ -358,7 +358,9 @@ Common event types include:
 - `detection`: rule matches, risk scores, categories, and response guidance.
 - `session_risk_summary`: optional per-session rollups from already-redacted
   activity and detection events.
-- `health`: source-discovery and scanner health status.
+- `health`: source-discovery and scanner health status. A scan writes it when
+  something changed, and optionally on an interval as a
+  [liveness heartbeat](#liveness-heartbeat).
 - `scanner_error`: source-acquisition or scan errors that should be visible to operators.
 - `operational_alert`: operator-facing threshold and delivery alerts, including
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
@@ -404,6 +406,54 @@ corrections intentionally change emitted bytes for noncanonical public inputs,
 including mutated native version metadata, but not canonical constructor output,
 event identity, or delivery mechanisms. Historical JSONL/Elastic export keeps
 safe historical version metadata.
+
+### Liveness heartbeat
+
+Without it, a scan writes `health` only when something changed: a source
+inventory change, a new `scanner_error` or an alert (and on every `--backfill`
+scan). Standing warnings alert once per episode, so a quiet, healthy host
+writes no events, and a stopped timer, crashed service or removed binary looks
+the same.
+
+The heartbeat is off by default. Set `events.health_heartbeat_interval_seconds`
+in `settings.d`, `TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS`, or
+`--health-heartbeat-interval-seconds` on `scan` and `watch` (`0` is off; see
+[operational settings](install.md#operational-settings)). A full scan then
+writes the ordinary `health` event (`check_name=source_discovery`) when no
+health event was written in that many seconds, even if nothing changed.
+
+- It is the existing Event 3.0 `health` event with no new field. It is
+  delivered and replayed like any other event. Operational alerts are not
+  repeated.
+- Any `health` event, for whatever reason, restarts the interval. Scanner
+  state records when the last one was written, so a timer-driven
+  `scan --once` decides across runs. The time is saved with scanner state,
+  after the event's required local JSONL or durable outbox write; if that
+  write fails, the heartbeat stays due. A failed best-effort remote delivery
+  is reported like any other event's.
+- `--dry-run` writes nothing, as before. A `--history` pass never writes or
+  records a heartbeat. `--backfill` writes `health` on every scan, as before,
+  which restarts the interval.
+- The check runs only when a full scan runs. `scan --once` from a timer, or
+  `scan --interval-seconds`, writes the heartbeat on the first scan after the
+  interval has passed. `watch` runs one full scan when the heartbeat comes
+  due, idle or not; that scan saves state like any watch scan that writes
+  events, and counts as one `--iterations` scan. Idle delivery wakeups still
+  do not scan or save state. Watch reads the recorded time at startup, so an
+  overdue heartbeat runs right away. Targeted watch scans never write a
+  heartbeat on their own.
+- A recorded time later than the current clock (the clock moved back) counts
+  as due.
+
+To alert on a silent scanner, use `health` events, not detections or
+activity, which depend on agent activity. Event 3.0 has no host field, so
+group by the host or device identity your collector attaches. Alert when the
+newest `event_type=health` event from a host that should run Telltale is
+older than N. Choose N above the interval plus the scan cadence (the timer
+period, or `watch.min_scan_interval_ms` plus scan time) plus delivery delay.
+Twice the interval is a reasonable start when the interval is at least the
+scan cadence. A host that never sent `health` produces no rows, so compare
+against your list of expected hosts.
 
 ### Event 3.0 timing
 

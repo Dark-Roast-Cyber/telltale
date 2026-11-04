@@ -602,6 +602,7 @@ events:
   emit_activity: false               # --emit-activity
   emit_session_risk_summary: false   # --emit-session-risk-summary
   baseline_deviation_scoring: false  # --baseline-deviation-scoring; needs emit_activity
+  health_heartbeat_interval_seconds: 0 # TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS, --health-heartbeat-interval-seconds; 0 is off
 watch:
   debounce_ms: 500                   # watch --debounce-ms
   min_scan_interval_ms: 10000        # watch --min-scan-interval-ms
@@ -609,7 +610,8 @@ watch:
 
 Precedence, lowest to highest: defaults, settings files (roots in order, files
 sorted within a root, so a later file wins per key), environment variables, then
-explicit flags. The `events` flags can only turn their setting on. A
+explicit flags. The `events` on/off flags can only turn their setting on;
+`--health-heartbeat-interval-seconds 0` turns the heartbeat off. A
 vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can share one
 directory. Unknown keys, an unsupported `version`, files over 64 KiB,
 and environment values that do not parse fail the command before it scans or
@@ -734,8 +736,12 @@ including counts above the 64-bit range.
 
 These fields describe the scan that wrote the latest health event
 (`last_scan_time`). A scan writes a health event only when it sees scanner
-errors, raises an alert or detects a source inventory change. A standing
-scanner-error count alerts when an ordinary full scan first crosses the
+errors, raises an alert or detects a source inventory change, or, with
+`events.health_heartbeat_interval_seconds` set, when none was written for that
+interval (the [liveness heartbeat](telemetry-output.md#liveness-heartbeat)).
+A heartbeat is an ordinary health event: alerts recorded before it no longer
+count toward `attention_reasons`, while its `scanner_error_count` is current.
+A standing scanner-error count alerts when an ordinary full scan first crosses the
 threshold, not on every later full scan above it. `--history`, `--dry-run`, and
 `--backfill` do not retain that suppression; full scans in those modes alert
 whenever the count is above the threshold. Targeted scans do not evaluate this
