@@ -25,10 +25,11 @@
   from a timer decides across runs. Off-mode health leaves the marker unchanged;
   enabling without a marker is due immediately. `watch` runs one full scan when
   the heartbeat comes due; idle delivery wakeups still do not scan or save state.
-  `--dry-run` and `--history` record nothing. There is no new event type or
-  field, and events are unchanged while it is off; scan summaries and
-  `config show` list the new setting. To detect a silent scanner, alert when a
-  host's newest `health` event is older than about twice the interval; see
+  `--dry-run` persists neither events nor scanner state. `--history` writes
+  forensic events but never scanner state or a heartbeat marker. There is no
+  new event type or field, and events are unchanged while it is off; scan
+  summaries and `config show` list the new setting. For silent-scanner alert
+  thresholds that account for scan cadence and delivery delay, see
   [telemetry output](docs/telemetry-output.md#liveness-heartbeat).
 - **Fewer repeated detections.** Session-risk summaries deduplicate by risk
   posture, not growing counts. Detections re-emit for changed posture or new

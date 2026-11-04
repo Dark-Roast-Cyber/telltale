@@ -738,13 +738,15 @@ cannot be read as a number. Any positive count counts as scanner errors,
 including counts above the 64-bit range.
 
 These fields describe the scan that wrote the latest health event
-(`last_scan_time`). A scan writes a health event only when it sees scanner
-errors, raises an alert or detects a source inventory change, or when an
-ordinary full scan finds the configured
+(`last_scan_time`). Scans write health for a newly emitted scanner error, an
+alert, or a source inventory change. Every full `--backfill` scan writes health
+regardless of those triggers. An ordinary full scan also writes an opt-in
+heartbeat when the configured
 `events.health_heartbeat_interval_seconds` has elapsed since the recorded
-enabled-mode health event, or no marker exists (the
+enabled-mode health event, no marker timestamp can be parsed from otherwise
+readable state, or the selected timestamp lies in the future (the
 [liveness heartbeat](telemetry-output.md#liveness-heartbeat)). Health events
-written while the heartbeat is off do not create or update that marker.
+written while the heartbeat is off do not create or update the marker.
 Targeted scans do not add a heartbeat, `--history` never adds one, and
 `--dry-run` persists neither events nor state.
 A heartbeat is an ordinary health event: alerts recorded before it no longer

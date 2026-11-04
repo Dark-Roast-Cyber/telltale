@@ -449,19 +449,20 @@ immediately, even if health was recently written while the heartbeat was off.
   still do not scan or save state. Watch reads the recorded time at startup, so an
   overdue heartbeat runs right away. Targeted watch scans never write a
   heartbeat on their own.
-- A recorded time later than the current clock (the clock moved back) counts
-  as due. Watch rechecks its remembered time against the wall clock on wakeups
-  and after coalescing changes, so clock jumps do not leave a stale deadline.
+- If no heartbeat marker timestamp can be parsed from otherwise readable
+  scanner state, the heartbeat is due. A selected timestamp later than the
+  current clock (the clock moved back) also counts as due. Watch rechecks its
+  remembered time against the wall clock on wakeups and after coalescing
+  changes, so clock jumps do not leave a stale deadline.
 
 To alert on a silent scanner, use `health` events, not detections or
 activity, which depend on agent activity. Event 3.0 has no host field, so
 group by the host or device identity your collector attaches. Alert when the
 newest `event_type=health` event from a host that should run Telltale is
 older than N. Choose N above the interval plus the scan cadence (the timer
-period, or `watch.min_scan_interval_ms` plus scan time) plus delivery delay.
-Twice the interval is a reasonable start when the interval is at least the
-scan cadence. A host that never sent `health` produces no rows, so compare
-against your list of expected hosts.
+period, or watch's debounce/rate-limit delay), scan time, and delivery delay.
+A host that never sent `health` produces no rows, so compare against your list
+of expected hosts.
 
 ### Event 3.0 timing
 

@@ -9831,10 +9831,15 @@ fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval(
     assert_single_heartbeat(&elapsed, "elapsed interval");
     assert!(store.scan_appended(&interval).is_empty());
 
-    // A real one-second interval, checked only from below.
-    thread::sleep(Duration::from_millis(1_100));
-    let real = store.scan_appended(&["--health-heartbeat-interval-seconds", "1"]);
-    assert_single_heartbeat(&real, "one-second interval");
+    // Exercise the one-second setting with an overdue synthetic marker, not a
+    // wall-clock sleep. The emitted health then restarts the interval.
+    let second = ["--health-heartbeat-interval-seconds", "1"];
+    store.set_heartbeat(0);
+    let elapsed = store.scan_appended(&second);
+    assert_single_heartbeat(&elapsed, "one-second interval");
+    // Verify the reset with the long interval, without requiring another
+    // process to start and finish within one second on a loaded runner.
+    assert!(store.scan_appended(&interval).is_empty());
 
     // An explicit 0 turns it off over the environment and leaves the marker.
     store.set_heartbeat(0);
@@ -10147,13 +10152,11 @@ fn watch_targeted_change_before_heartbeat_deadline_widens_after_rate_limit() {
     let store = HeartbeatStore::new(false);
     fs::write(store.sessions.join("unchanged.jsonl"), b"").expect("second known source");
     store.scan(&["--health-heartbeat-interval-seconds", "3600"]);
-    // One fixed wall-clock deadline, checked against readiness and both scans.
-    // The first change finishes its six-second debounce before the deadline.
-    // The second spends six seconds debouncing, then waits for the twelve-second
-    // rate limit; that wait crosses the heartbeat deadline.
-    let recorded = unix_ms();
-    store.set_heartbeat(recorded);
-    let due = recorded + 16_000;
+    // Keep the startup marker an hour from due, independent of launch latency.
+    // After readiness, age the idle fixture's marker so the first targeted scan
+    // returns a deadline 55 seconds from that edit through the normal scan path.
+    // Its 20-second debounce finishes before due; the next change's 40-second
+    // rate limit then crosses due. No production clock or scheduling seam.
     let log_before = fs::read(&store.log).expect("log");
     let before = store.events().len();
     let mut watch = HeartbeatWatch::spawn(store.command(&[
@@ -10161,25 +10164,25 @@ fn watch_targeted_change_before_heartbeat_deadline_widens_after_rate_limit() {
         "--iterations",
         "2",
         "--health-heartbeat-interval-seconds",
-        "16",
+        "3600",
         "--debounce-ms",
-        "6000",
+        "20000",
         "--min-scan-interval-ms",
-        "12000",
+        "40000",
     ]));
     assert!(
         watch.ready.contains("liveness heartbeats"),
         "{}",
         watch.ready
     );
-    assert!(
-        unix_ms() + 14_000 < due,
-        "readiness must leave debounce headroom"
-    );
+    let due = unix_ms() + 55_000;
+    let recorded = due - 3_600_000;
+    store.set_heartbeat(recorded);
+    let first_changed = Instant::now();
     store.append_message("synthetic targeted change before heartbeat deadline");
-    let targeted = watch.next_summary(Duration::from_secs(10));
+    let targeted = watch.next_summary(Duration::from_secs(40));
     assert!(
-        unix_ms() + 7_000 < due,
+        unix_ms() + 25_000 < due,
         "first scan must finish well before due"
     );
     assert_eq!(
@@ -10194,18 +10197,19 @@ fn watch_targeted_change_before_heartbeat_deadline_widens_after_rate_limit() {
     );
     assert_eq!(store.heartbeat(), Some(recorded));
 
-    let first_completed = Instant::now();
     store.append_message("synthetic pending change before heartbeat deadline");
-    assert!(unix_ms() + 7_000 < due, "second change must precede due");
-    let widened = watch.next_summary(Duration::from_secs(16));
+    assert!(unix_ms() + 25_000 < due, "second change must precede due");
+    let widened = watch.next_summary(Duration::from_secs(60));
     let completed = unix_ms();
-    assert!(first_completed.elapsed() >= Duration::from_millis(11_800));
+    // Anchor at the write, not receipt of stdout: reader scheduling cannot
+    // shorten the observed 20-second debounce plus 40-second rate limit.
+    assert!(first_changed.elapsed() >= Duration::from_secs(60));
     assert!(completed >= due, "rate limit must cross the deadline");
-    // An idle heartbeat could not finish until due + the six-second debounce.
+    // An idle heartbeat could not finish until due + the 20-second debounce.
     // Finishing earlier proves a change started coalescing before the deadline,
     // rather than merely hoping the filesystem notification arrived in time.
     assert!(
-        completed < due + 6_000,
+        completed < due + 20_000,
         "change was not admitted before the deadline"
     );
     assert_eq!(widened["source_discovery"]["basis"], "current_full_scan");
