@@ -411,9 +411,9 @@ safe historical version metadata.
 
 Without it, a scan writes `health` only when something changed: a source
 inventory change, a new `scanner_error` or an alert (and on every `--backfill`
-scan). Standing warnings alert once per episode, so a quiet, healthy host
-writes no events, and a stopped timer, crashed service or removed binary looks
-the same.
+scan). Ordinary full scans suppress unchanged standing warnings, so a quiet,
+healthy host writes no events, and a stopped timer, crashed service or removed
+binary looks the same. Full backfill scans repeat those alerts.
 
 The heartbeat is off by default. Set `events.health_heartbeat_interval_seconds`
 in `settings.d`, `TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS`, or

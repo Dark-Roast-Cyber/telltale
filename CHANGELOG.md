@@ -24,7 +24,9 @@
   restarts the interval, and scanner state records its time, so `scan --once`
   from a timer decides across runs. Off-mode health leaves the marker unchanged;
   enabling without a marker is due immediately. `watch` runs one full scan when
-  the heartbeat comes due; idle delivery wakeups still do not scan or save state.
+  the heartbeat comes due; it counts toward `--iterations`, while
+  `--initial-scan` remains uncounted even when it handles a due heartbeat.
+  Idle delivery wakeups still do not scan or save state.
   `--dry-run` persists neither events nor scanner state. `--history` writes
   forensic events but never scanner state or a heartbeat marker. There is no
   new event type or field, and events are unchanged while it is off; scan

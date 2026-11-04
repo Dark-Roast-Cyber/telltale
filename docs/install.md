@@ -700,6 +700,8 @@ during that scan is still queued and scanned afterward. `--iterations` counts
 change-triggered and heartbeat-triggered scans and must be at least 1. The
 initial scan is always uncounted, even when it also handles a due heartbeat;
 `--initial-scan --iterations 1` still waits for one later triggered scan.
+Heartbeat scans use normal persistence; with `--dry-run`, neither events nor
+scanner state are persisted.
 Once later changes will be seen, watch prints one line to stderr that starts
 with `telltale watch: ready`. It reports the number of watched roots and
 whether the initial scan ran, and it never includes paths. Each scan still
