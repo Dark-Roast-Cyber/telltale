@@ -73,13 +73,26 @@ fn segment_scope_changes_the_fingerprint() {
     // declared: without the line, the core fingerprint is the base one.
     const CORE_BEFORE_SCOPE: &str =
         "sha256:a5caa2e79eeafe6d55fa59e53a03cc76032998b8751ac2efa198b54b40452882";
-    assert_eq!(
-        DEFAULT_RULE_YAML.matches("      scope: segment\n").count(),
-        1
-    );
-    let without = DEFAULT_RULE_YAML.replace("      scope: segment\n", "");
-    assert_eq!(fingerprint(&without), CORE_BEFORE_SCOPE);
-    assert_ne!(fingerprint(DEFAULT_RULE_YAML), CORE_BEFORE_SCOPE);
+    let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
+    let segment_fingerprint = fingerprint(&bundled);
+    assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);
+    for newline in ["\n", "\r\n"] {
+        let bundled = bundled.replace('\n', newline);
+        let normalized = bundled.replace("\r\n", "\n");
+        assert_eq!(normalized.matches("      scope: segment\n").count(), 1);
+        let without = normalized.replace("      scope: segment\n", "");
+        assert!(!without.contains("      scope: segment"));
+        let explicit_field = normalized.replace("      scope: segment\n", "      scope: field\n");
+        assert_eq!(
+            fingerprint(&without.replace('\n', newline)),
+            CORE_BEFORE_SCOPE
+        );
+        assert_eq!(
+            fingerprint(&explicit_field.replace('\n', newline)),
+            CORE_BEFORE_SCOPE
+        );
+        assert_eq!(fingerprint(&bundled), segment_fingerprint);
+    }
 }
 
 #[test]
@@ -309,12 +322,9 @@ fn case_insensitive_defaults_apply_to_segment_scope() {
 
 #[test]
 fn documented_segment_scope_example_behaves_as_described() {
-    // The `detection` block from docs/detection-model.md, verbatim.
+    // The `detection` block from docs/detection-model.md, verbatim. The root
+    // catalog tests check doc consistency outside the crate package boundary.
     let rule = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules:\n  - id: rule.synthetic\n    category: download\n    severity: low\n    score: 20\n    detection:\n      selection:\n        command: '\\bcurl\\b[^;|\\n]*https?://'\n      exclude:\n        command: '\\bcurl\\b[^;|\\n]*--data'\n      scope: segment\n      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n";
-    let docs = include_str!("../../../docs/detection-model.md");
-    assert!(docs.contains(
-        "    command: '\\bcurl\\b[^;|\\n]*https?://'\n  exclude:\n    command: '\\bcurl\\b[^;|\\n]*--data'\n  scope: segment\n"
-    ));
     let matcher = content(rule);
     assert!(
         !matcher

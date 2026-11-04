@@ -3,7 +3,8 @@
 //! `docs/catalog/*.json` is generated from the built-in source registry and the
 //! Rule v1 validator. These tests fail when the committed files drift from the
 //! code, or when the source tables in the owning docs name a different set of
-//! source identities than the registry. Regenerate with
+//! source identities than the registry. Rule examples are checked against the
+//! owning docs here, outside the crate package boundaries. Regenerate with
 //! `TELLTALE_UPDATE_CATALOG=1 cargo test --locked --test catalog`.
 
 use std::collections::BTreeSet;
@@ -163,6 +164,19 @@ fn rule_vocabulary_catalog_matches_validator() {
         "docs/catalog/rule-vocabulary.json",
         &rule_vocabulary_catalog(),
     );
+}
+
+#[test]
+fn detection_model_documents_the_tested_segment_scope_example() {
+    let docs = fs::read_to_string(repo_path("docs/detection-model.md"))
+        .expect("detection model doc")
+        .replace("\r\n", "\n");
+    for newline in ["\n", "\r\n"] {
+        let docs = docs.replace('\n', newline).replace("\r\n", "\n");
+        assert!(docs.contains(
+            "detection:\n  selection:\n    command: '\\bcurl\\b[^;|\\n]*https?://'\n  exclude:\n    command: '\\bcurl\\b[^;|\\n]*--data'\n  scope: segment\n  condition: selection\n"
+        ));
+    }
 }
 
 /// Second-column headers that mark a table of source identities.
