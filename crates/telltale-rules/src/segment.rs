@@ -7,6 +7,8 @@
 //! An unclosed quote runs to the end of the text, which yields one larger
 //! segment rather than an error. A single `&` is not a separator, so `2>&1`,
 //! `&>` and unquoted query strings stay in their segment.
+//! This also leaves background commands (`a & b`) in one segment: an upload
+//! after a single `&` can still exclude a download before it.
 //!
 //! This is a lexical split, not a shell parser: subshells, command
 //! substitution, heredocs and comments are not interpreted. It makes one pass

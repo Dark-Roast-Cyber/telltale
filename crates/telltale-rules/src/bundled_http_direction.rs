@@ -458,6 +458,13 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         true,
         false,
     ),
+    // A single `&` stays in one lexical segment, including when it is a shell
+    // background operator. The later upload still excludes this download.
+    (
+        "curl -o out https://example.invalid/file & curl -T file https://example.invalid/upload",
+        true,
+        false,
+    ),
     // Short flags are case-sensitive and may be clustered.
     ("curl -sX POST https://example.invalid/upload", true, false),
     ("curl -sXPUT https://example.invalid/upload", true, false),

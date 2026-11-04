@@ -196,7 +196,9 @@ surrounding whitespace; `^` and `$` anchor to the segment, and a pattern cannot
 span segments. Single quotes are literal, a backslash escapes the next
 character (`\;` does not split), and a single `&` is not a separator, so `2>&1`
 and unquoted query strings stay in their segment. An unclosed quote runs to the
-end of the target. The split is lexical, not a shell parse: subshells, command
+end of the target. Background commands (`a & b`) also stay in one segment, so
+an upload after a single `&` can still exclude a download before it. This is a
+known limit of the lexical split, not a claim of shell parsing. Subshells, command
 substitution, heredocs and comments are not interpreted, and a command inside a
 JSON string in `arguments` stays one segment. Segment scope applies to every
 selection target of the rule and accepts only the command-text targets
