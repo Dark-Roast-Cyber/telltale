@@ -9954,7 +9954,7 @@ fn scan_heartbeat_is_recorded_only_after_its_required_outbox_write() {
     store.set_heartbeat(overdue);
     let state_before = fs::read(&store.state).expect("state");
     let outbox = store.log.parent().unwrap().join("private/outbox.sqlite");
-    let connection = Connection::open(&outbox).expect("synthetic outbox");
+    let connection = rusqlite::Connection::open(&outbox).expect("synthetic outbox");
     let position = || {
         connection
             .query_row(
