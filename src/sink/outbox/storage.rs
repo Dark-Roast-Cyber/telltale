@@ -94,7 +94,9 @@ pub(crate) fn validate_outbox_jsonl_paths(
 
     for (sqlite_path, sqlite_name) in &sqlite_candidates {
         for (jsonl_path, jsonl_name) in &jsonl_candidates {
-            if paths_identity_equivalent(sqlite_path, jsonl_path)? {
+            if paths_identity_equivalent(sqlite_path, jsonl_path)
+                .map_err(|error| storage_error("validate JSONL/outbox paths", error))?
+            {
                 return Err(storage_message(format!(
                     "{sqlite_name} collides with {jsonl_name}"
                 )));

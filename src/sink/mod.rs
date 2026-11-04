@@ -2040,6 +2040,125 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn persistent_replay_classifies_unresolvable_rollback_journal_without_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().expect("temporary directory");
+        let log_path = directory.path().join("TT_OUTBOX_PATH_PRIVATE_175.jsonl");
+        let outbox_path = directory.path().join("private-outbox/outbox.sqlite");
+        let first = make_health_event();
+        let second = make_health_event();
+        let (remote, calls) = ScriptedDurableSink::new("remote", [ScriptedOutcome::Success]);
+        let mut sinks = SinkSet::new();
+        sinks.add_canonical_first_write_path_with_rotation(
+            "jsonl",
+            Box::new(LocalJsonlSink::with_rotation(
+                &log_path,
+                RotationConfig::disabled(),
+            )),
+            log_path.clone(),
+            None,
+        );
+        sinks.add_best_effort_with_retry("synthetic", Box::new(remote), retry_config(3, 1));
+        sinks.enable_persistent_replay_with_capacity(
+            outbox_path.clone(),
+            vec!["remote".to_string()],
+            CapacityLimits::default(),
+        );
+        sinks
+            .persist_for_durable_replay(std::slice::from_ref(&first))
+            .expect("admit first event");
+        let outbox = Outbox::open_read_only(&outbox_path).expect("read admitted outbox");
+        let cursor_before = outbox.ingest_cursor().expect("admitted cursor");
+        assert!(cursor_before.is_some());
+        let delivery_before = outbox
+            .get_delivery(&first.event_id, "remote")
+            .expect("admitted delivery")
+            .expect("pending delivery");
+        assert_eq!(delivery_before.state, DeliveryState::Pending);
+        drop(outbox);
+        let snapshots = [
+            log_path.clone(),
+            outbox_path.clone(),
+            log_path.with_file_name("TT_OUTBOX_PATH_PRIVATE_175.jsonl.lock"),
+            outbox_path.with_file_name("outbox.sqlite.lock"),
+        ]
+        .map(|path| {
+            let bytes = fs::read(&path).expect("persistence snapshot");
+            (path, bytes)
+        });
+
+        // A dangling journal reaches canonicalization's ENOENT deterministically
+        // after symlink_metadata finds it, without racing a SQLite transaction.
+        let journal_path = outbox_path.with_file_name("outbox.sqlite-journal");
+        let missing_target = directory.path().join("TT_OUTBOX_PATH_PRIVATE_175-missing");
+        symlink(&missing_target, &journal_path).expect("dangling rollback journal");
+        assert!(
+            fs::symlink_metadata(&journal_path)
+                .expect("journal symlink exists")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::canonicalize(&journal_path)
+                .expect_err("journal target is missing")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+
+        let error = sinks
+            .persist_for_durable_replay(std::slice::from_ref(&second))
+            .expect_err("unresolvable rollback journal must fail closed");
+        assert!(calls.lock().expect("calls lock").is_empty());
+        for (path, before) in snapshots {
+            assert_eq!(fs::read(path).expect("unchanged persistence bytes"), before);
+        }
+        assert_eq!(
+            fs::read_link(&journal_path).expect("unchanged rollback journal symlink"),
+            missing_target
+        );
+        assert!(!missing_target.exists());
+        fs::remove_file(&journal_path).expect("remove synthetic dangling journal");
+        let outbox = Outbox::open_read_only(&outbox_path).expect("read unchanged outbox");
+        assert_eq!(
+            outbox.ingest_cursor().expect("unchanged cursor"),
+            cursor_before
+        );
+        assert_eq!(
+            outbox
+                .get_delivery(&first.event_id, "remote")
+                .expect("unchanged delivery"),
+            Some(delivery_before)
+        );
+        assert!(
+            outbox
+                .get_event(&second.event_id)
+                .expect("rejected event lookup")
+                .is_none()
+        );
+
+        let delivery = error
+            .downcast_ref::<DeliveryError>()
+            .unwrap_or_else(|| panic!("expected structured path-validation error, got {error:?}"));
+        assert_eq!(delivery.class, DeliveryErrorClass::DurableStorage);
+        assert_eq!(delivery.attempts, 0);
+        assert!(
+            delivery
+                .message
+                .starts_with("outbox validate JSONL/outbox paths:")
+        );
+        assert!(delivery.message.len() <= 200);
+        assert!(!delivery.message.contains("TT_OUTBOX_PATH_PRIVATE_175"));
+        assert!(
+            !delivery
+                .message
+                .contains(directory.path().to_str().expect("temp path"))
+        );
+        assert!(!delivery.message.chars().any(char::is_control));
+    }
+
     #[test]
     fn persistent_replay_rejects_before_append_when_pending_capacity_is_full() {
         let directory = tempdir().expect("temporary directory");
