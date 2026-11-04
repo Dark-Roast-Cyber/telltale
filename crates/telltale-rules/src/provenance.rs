@@ -4,7 +4,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    RuleV1CompatibilityExport, RuleV1CompatibilityMatcher, RuleV1CompatibilityModifier,
+    MatchScope, RuleV1CompatibilityExport, RuleV1CompatibilityMatcher, RuleV1CompatibilityModifier,
     RuleV1CompatibilityRule,
 };
 
@@ -38,11 +38,13 @@ fn canonical_rule(rule: &RuleV1CompatibilityRule) -> CanonicalRule<'_> {
             .cmp(right.target)
             .then_with(|| left.regex.cmp(right.regex))
             .then_with(|| left.exclusion_regex.cmp(&right.exclusion_regex))
+            .then_with(|| left.scope.cmp(&right.scope))
     });
     matchers.dedup_by(|left, right| {
         left.target == right.target
             && left.regex == right.regex
             && left.exclusion_regex == right.exclusion_regex
+            && left.scope == right.scope
     });
     CanonicalRule {
         id: &rule.id,
@@ -64,6 +66,7 @@ fn canonical_matcher(matcher: &RuleV1CompatibilityMatcher) -> CanonicalMatcher<'
         target: &matcher.target,
         regex: &matcher.regex,
         exclusion_regex: matcher.exclusion_regex.as_deref(),
+        scope: (matcher.scope != MatchScope::Field).then(|| matcher.scope.as_str()),
     }
 }
 
@@ -119,6 +122,10 @@ struct CanonicalMatcher<'a> {
     target: &'a str,
     regex: &'a str,
     exclusion_regex: Option<&'a str>,
+    // Absent for the default field scope, so field-scoped rules keep their
+    // fingerprints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -310,6 +317,7 @@ mod tests {
             ]),
             exclude: BTreeMap::from([("command".to_string(), "benign".to_string())]),
             condition: "selection".to_string(),
+            scope: crate::MatchScope::Field,
         });
         assert_ne!(
             base,
@@ -527,6 +535,7 @@ modifiers: []
             selection,
             exclude: BTreeMap::new(),
             condition: "selection".to_string(),
+            scope: crate::MatchScope::Field,
         });
         let first = RuleSet {
             version: 1,

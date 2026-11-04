@@ -492,12 +492,19 @@ pub(crate) fn compile(
                             a.target == b.target
                                 && a.regex == b.regex
                                 && a.exclusion_regex == b.exclusion_regex
+                                && a.scope == b.scope
                         })
                 });
             let mut content = rule.clone();
             if native {
                 // Precision is compiled content, not a bypass of the effective
                 // content owner. Target-local exclusions remain unchanged.
+                // Native fields are already the profile's own units (one
+                // command stage for the HTTP rules), so each exclusion applies
+                // to its native field whatever the session scope.
+                for matcher in &mut content.matchers {
+                    matcher.scope = telltale_rules::MatchScope::Field;
+                }
                 let selection = match rule.id.as_str() {
                     "network.download" | "exfil.outbound_upload" | "exfil.encoded_http" | "mcp.server_enumeration" => Some(r"(?s:.+)"),
                     "approval.bypass.context" => Some(r"(?i:without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(?:ly)?\s+run|no\s+confirm|--dangerously-skip-permissions|--no-approval)"),

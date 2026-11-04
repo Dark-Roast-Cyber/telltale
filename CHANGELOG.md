@@ -31,6 +31,23 @@
 - Native action profile 5 reads HTTP direction from the command invocation.
   Semantic identities change from profile 4; replay identities do not. See
   [embedding](docs/embedding.md).
+- **Segment-scoped Rule v1 detections.** `detection.scope: segment` evaluates
+  each selection and its exclusion per shell command segment (split outside
+  quotes on `;`, `|`, `||`, `&&` and newlines) instead of the whole target. It
+  accepts only the `command`, `arguments` and `url` targets; other targets and
+  unknown values fail at load. The default stays `scope: field`, so existing
+  rules, packages and their fingerprints are unchanged. The scope is part of
+  the rule fingerprint and producer provenance. See
+  [detection model](docs/detection-model.md#configurable-rules-and-policies).
+- **Downloads beside uploads.** The bundled `network.download` rule uses
+  segment scope, so an upload in one command segment no longer hides a
+  download in another: `curl --data @f <url>; curl <url>` now matches
+  `network.download` (20) as well as `exfil.outbound_upload` (60) in the
+  session. An upload in the same segment still excludes the download. The core
+  rule fingerprint and semantic identity change; native action findings, the
+  native profile and replay identities do not. No evaluation-corpus case
+  changes. Rust: `DetectionDefinition` and `RuleV1CompatibilityMatcher` gain a
+  public `scope` field.
 
 - **Risk thresholds must not decrease.** Settings fail before any output when
   the merged `low`, `medium`, `high` and `critical` values decrease. Equal

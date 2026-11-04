@@ -33,7 +33,8 @@ audited producer switches. Rule policy names are represented separately from
 the Rule v1 fingerprint. Rule titles, descriptions, and rule/modifier
 false-positive guidance are descriptive metadata and are excluded from that
 fingerprint. The current Rule v1 fingerprint canonicalization includes compiled
-target exclusions; historical v1-canonicalization manifests remain readable.
+target exclusions and segment scope; historical v1-canonicalization manifests
+remain readable.
 The CLI resolves configuration paths and tiers; the Rust assembler accepts an
 already effective `CompiledRuleSet` and resolved values and does not resolve
 paths or policy files. It never serializes rule YAML, regexes, paths,

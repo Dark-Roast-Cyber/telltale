@@ -142,10 +142,12 @@ Three independent version labels apply to Rule v1 provenance:
   `telltale:producer-rule-v1-fingerprint:v2`.
 
 The current Rule v1 identity is derived from compiled output semantics,
-including target exclusions. Policy names, source YAML formatting, line
-endings, paths, and descriptive rule title/description or rule/modifier
-false-positive guidance do not affect it. Rule and modifier order remain
-identity-bearing because evaluation emits ordered rule IDs and evidence.
+including target exclusions and a declared segment scope (the default field
+scope adds nothing, so field-scoped rules keep their fingerprints). Policy
+names, source YAML formatting, line endings, paths, and descriptive rule
+title/description or rule/modifier false-positive guidance do not affect it.
+Rule and modifier order remain identity-bearing because evaluation emits
+ordered rule IDs and evidence.
 Suppression provenance declares
 canonicalization `suppression-v1-effective-v1`; suppression criteria are
 included only in the domain-separated digest preimage. The manifest exposes

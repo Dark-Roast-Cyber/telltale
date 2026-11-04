@@ -9,6 +9,7 @@
 pub mod package;
 pub mod process_chain;
 pub mod provenance;
+mod segment;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -44,6 +45,15 @@ pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
 // Shared with the published vocabulary catalog, not a supported embedding API.
 #[doc(hidden)]
 pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
+
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &["field", "segment"];
+
+/// Targets that carry command-line text, the only ones segment scope accepts.
+// Shared with the published vocabulary catalog, not a supported embedding API.
+#[doc(hidden)]
+pub const SEGMENT_SCOPE_TARGETS: &[&str] = &["arguments", "command", "url"];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleSet {
@@ -109,6 +119,32 @@ pub struct DetectionDefinition {
     pub exclude: BTreeMap<String, String>,
     #[serde(default = "default_condition")]
     pub condition: String,
+    /// What each selection and its exclusion evaluate: the whole target text
+    /// (the default) or each shell command segment of it.
+    #[serde(default)]
+    pub scope: MatchScope,
+}
+
+/// The text a `detection` selection and its exclusion evaluate together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchScope {
+    /// The whole target text: an exclusion match anywhere vetoes the target.
+    #[default]
+    Field,
+    /// Each command segment of the target text, split outside quotes on `;`,
+    /// `|`, `||`, `&&` and newlines. A target matches when one segment matches
+    /// the selection and that same segment does not match the exclusion.
+    Segment,
+}
+
+impl MatchScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Field => "field",
+            Self::Segment => "segment",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -213,6 +249,7 @@ pub struct RuleV1CompatibilityMatcher {
     pub target: String,
     pub regex: String,
     pub exclusion_regex: Option<String>,
+    pub scope: MatchScope,
 }
 
 #[derive(Debug, Clone)]
@@ -274,9 +311,10 @@ impl RuleV1ContentMatcher {
     }
 
     /// [`Self::try_matching_fields`] with the byte range of the counted match
-    /// in each field: the first match of the first matcher that counts.
-    /// Exclusions veto a whole field, so that match is the one that counted.
-    /// The scan is the one that decides the match; nothing is rerun.
+    /// in each field: the first match of the first matcher that counts. In
+    /// field scope an exclusion vetoes the whole field; in segment scope the
+    /// range is the first match in the first segment that counts, relative to
+    /// the field. The scan is the one that decides the match; nothing is rerun.
     pub fn try_matching_spans<'a, E>(
         &self,
         fields: &'a [(&'a str, &'a str)],
@@ -289,17 +327,10 @@ impl RuleV1ContentMatcher {
                 if matcher.target != name {
                     continue;
                 }
-                charge(value.len())?;
-                let Some(found) = matcher.regex.find(value) else {
+                let Some(found) = matcher.find(value, charge)? else {
                     continue;
                 };
-                if let Some(exclusion) = &matcher.exclusion_regex {
-                    charge(value.len())?;
-                    if exclusion.is_match(value) {
-                        continue;
-                    }
-                }
-                matches.push((name, value, found.range()));
+                matches.push((name, value, found));
                 break;
             }
         }
@@ -322,6 +353,7 @@ impl RuleV1CompatibilityRule {
                             .as_deref()
                             .map(Regex::new)
                             .transpose()?,
+                        scope: matcher.scope,
                     })
                 })
                 .collect::<Result<Vec<_>, regex::Error>>()?,
@@ -340,16 +372,59 @@ struct CompiledMatcher {
     target: String,
     regex: Regex,
     exclusion_regex: Option<Regex>,
+    scope: MatchScope,
 }
 
 impl CompiledMatcher {
     fn matches(&self, name: &str, value: &str) -> bool {
         self.target == name
-            && self.regex.is_match(value)
-            && !self
-                .exclusion_regex
-                .as_ref()
-                .is_some_and(|regex| regex.is_match(value))
+            && matches!(
+                self.find(value, &mut |_| Ok::<_, std::convert::Infallible>(())),
+                Ok(Some(_))
+            )
+    }
+
+    /// The byte range in `value` of the match that counts, charging each scan
+    /// before it runs. An exclusion is scanned only after its selection
+    /// matches, over the same text: the field, or the segment in segment scope.
+    fn find<E>(
+        &self,
+        value: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        match self.scope {
+            MatchScope::Field => self.find_in(value, 0, charge),
+            MatchScope::Segment => {
+                charge(value.len())?;
+                for segment in segment::segments(value) {
+                    let start = segment.start;
+                    // One more byte per segment bounds the per-scan overhead.
+                    if let Some(found) = self.find_in(&value[segment], 1, charge)? {
+                        return Ok(Some(start + found.start..start + found.end));
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    fn find_in<E>(
+        &self,
+        text: &str,
+        overhead: usize,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        charge(text.len() + overhead)?;
+        let Some(found) = self.regex.find(text) else {
+            return Ok(None);
+        };
+        if let Some(exclusion) = &self.exclusion_regex {
+            charge(text.len() + overhead)?;
+            if exclusion.is_match(text) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(found.range()))
     }
 }
 
@@ -809,6 +884,7 @@ fn build_export(
                             .exclusion_regex
                             .as_ref()
                             .map(|regex| regex.as_str().to_owned()),
+                        scope: matcher.scope,
                     })
                     .collect(),
             })
@@ -1033,6 +1109,7 @@ fn compile_matchers(
                 target: target.clone(),
                 regex: compile_regex(regex, case_insensitive, &definition.id)?,
                 exclusion_regex: None,
+                scope: MatchScope::Field,
             });
         }
     }
@@ -1046,6 +1123,17 @@ fn compile_matchers(
         }
         for (target, regex) in &detection.selection {
             validate_target(&definition.id, target)?;
+            if detection.scope == MatchScope::Segment
+                && !SEGMENT_SCOPE_TARGETS.contains(&target.as_str())
+            {
+                return Err(format!(
+                    "rule {} uses scope 'segment' with target '{}'; segment scope supports only command-text targets: {}",
+                    definition.id,
+                    target,
+                    SEGMENT_SCOPE_TARGETS.join(", ")
+                )
+                .into());
+            }
             matchers.push(CompiledMatcher {
                 target: target.clone(),
                 regex: compile_regex(regex, case_insensitive, &definition.id)?,
@@ -1054,6 +1142,7 @@ fn compile_matchers(
                     .get(target)
                     .map(|regex| compile_regex(regex, case_insensitive, &definition.id))
                     .transpose()?,
+                scope: detection.scope,
             });
         }
         for target in detection.exclude.keys() {
@@ -1223,6 +1312,9 @@ mod modifier_link_tests;
 
 #[cfg(test)]
 mod bundled_shell_execution;
+
+#[cfg(test)]
+mod segment_scope_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1498,6 +1590,7 @@ modifiers:
                 ("tool_result".to_string(), "policy".to_string()),
             ]),
             condition: "selection".to_string(),
+            scope: crate::MatchScope::Field,
         });
         skipped.tags.push("skipped-only".to_string());
         skipped.atlas_tags.push("atlas:AML.T0000".to_string());
@@ -1713,6 +1806,7 @@ modifiers:
             selection,
             exclude: BTreeMap::new(),
             condition: "selection".to_string(),
+            scope: crate::MatchScope::Field,
         });
         let rule_set = single_rule_set(definition);
 

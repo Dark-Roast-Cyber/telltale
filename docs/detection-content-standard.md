@@ -29,6 +29,7 @@ Optional fields:
 | `title` | Human-readable name. Defaults to `id` if absent. |
 | `enabled` | Defaults to `true`. Set `false` to disable without removing. |
 | `detection.exclude` | At most one exclusion regex per selected target. The key must also exist in `detection.selection`; exclusions are not valid with `targets` + `regex`. |
+| `detection.scope` | `field` (default) or `segment`. Segment scope evaluates each selection and its exclusion per shell command segment and accepts only the `command`, `arguments` and `url` targets; see [detection-model.md](detection-model.md#configurable-rules-and-policies). |
 
 Shared Rule v1 compilation, including `rules validate`, rejects effective rules
 whose `severity` is outside the five detection severities in the table above

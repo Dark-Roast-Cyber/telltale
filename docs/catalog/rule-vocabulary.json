@@ -21,8 +21,21 @@
   "detection_fields": [
     "selection",
     "exclude",
-    "condition"
+    "condition",
+    "scope"
   ],
+  "detection_scopes": {
+    "default": "field",
+    "segment_targets": [
+      "arguments",
+      "command",
+      "url"
+    ],
+    "values": [
+      "field",
+      "segment"
+    ]
+  },
   "generated_by": "tests/catalog.rs",
   "rule_fields": [
     "id",

@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use telltale_rules::{
-    DetectionDefinition, RuleDefinition, SUPPORTED_DETECTION_CONDITIONS, SUPPORTED_RULE_TARGETS,
+    DetectionDefinition, RuleDefinition, SEGMENT_SCOPE_TARGETS, SUPPORTED_DETECTION_CONDITIONS,
+    SUPPORTED_DETECTION_SCOPES, SUPPORTED_RULE_TARGETS,
 };
 use telltale_schema::event::{
     VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_DETECTION_SEVERITIES, VALID_SEVERITIES,
@@ -133,6 +134,11 @@ fn rule_vocabulary_catalog() -> Value {
         "rule_fields": accepted_fields::<RuleDefinition>(),
         "detection_fields": accepted_fields::<DetectionDefinition>(),
         "detection_conditions": SUPPORTED_DETECTION_CONDITIONS,
+        "detection_scopes": {
+            "values": SUPPORTED_DETECTION_SCOPES,
+            "default": SUPPORTED_DETECTION_SCOPES[0],
+            "segment_targets": SEGMENT_SCOPE_TARGETS,
+        },
         "targets": SUPPORTED_RULE_TARGETS,
         "detection_classes": VALID_DETECTION_CLASSES,
         "signal_types": VALID_SIGNAL_TYPES,
