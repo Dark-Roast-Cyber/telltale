@@ -741,8 +741,10 @@ These fields describe the scan that wrote the latest health event
 (`last_scan_time`). A scan writes a health event only when it sees scanner
 errors, raises an alert or detects a source inventory change, or when an
 ordinary full scan finds the configured
-`events.health_heartbeat_interval_seconds` has elapsed since the last health
-event (the [liveness heartbeat](telemetry-output.md#liveness-heartbeat)).
+`events.health_heartbeat_interval_seconds` has elapsed since the recorded
+enabled-mode health event, or no marker exists (the
+[liveness heartbeat](telemetry-output.md#liveness-heartbeat)). Health events
+written while the heartbeat is off do not create or update that marker.
 Targeted scans do not add a heartbeat, `--history` never adds one, and
 `--dry-run` persists neither events nor state.
 A heartbeat is an ordinary health event: alerts recorded before it no longer

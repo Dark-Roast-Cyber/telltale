@@ -9782,6 +9782,7 @@ fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval(
     let store = HeartbeatStore::new(false);
     let first = store.scan_appended(&[]);
     assert!(first.iter().any(|event| event["event_type"] == "health"));
+    assert_eq!(store.heartbeat(), None, "off-mode health creates no marker");
 
     // Off by default: a quiet rescan appends nothing and records no heartbeat.
     let log_before = fs::read(&store.log).expect("log");
@@ -9887,6 +9888,22 @@ fn scan_health_from_a_status_change_resets_the_heartbeat_interval() {
     fs::remove_file(store.sessions.join("added.jsonl")).expect("remove source");
     let both = store.scan_appended(&hour);
     assert_single_heartbeat(&both, "inventory change and due heartbeat");
+
+    // Health still emits for inventory changes while disabled, but does not
+    // refresh a marker retained from an earlier enabled run.
+    store.set_heartbeat(0);
+    fs::write(store.sessions.join("added.jsonl"), b"").expect("new source while disabled");
+    let disabled = store.scan_appended(&[]);
+    assert_single_heartbeat(&disabled, "inventory health while heartbeat is off");
+    assert_eq!(
+        store.heartbeat(),
+        Some(0),
+        "off-mode health leaves old marker"
+    );
+    assert_single_heartbeat(
+        &store.scan_appended(&hour),
+        "old marker remains due on reenable",
+    );
 }
 
 #[test]

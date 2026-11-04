@@ -356,10 +356,11 @@ struct ScanExecutionArgs {
     #[arg(long)]
     install_inventory_disabled: bool,
 
-    /// Emit a liveness health event when a full scan finds that none was
-    /// emitted for this many seconds, even if nothing changed. Overrides
+    /// Emit a liveness health event when a full scan finds that the recorded
+    /// enabled-mode health is this many seconds old, or no marker exists. Overrides
     /// events.health_heartbeat_interval_seconds (settings.d,
-    /// TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS; default 0). 0 turns it off.
+    /// TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS; default 0).
+    /// 0 turns it off without creating or updating the heartbeat marker.
     #[arg(long)]
     health_heartbeat_interval_seconds: Option<u64>,
 }

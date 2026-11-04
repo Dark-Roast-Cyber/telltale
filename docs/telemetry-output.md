@@ -419,21 +419,26 @@ The heartbeat is off by default. Set `events.health_heartbeat_interval_seconds`
 in `settings.d`, `TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS`, or
 `--health-heartbeat-interval-seconds` on `scan` and `watch` (`0` is off; see
 [operational settings](install.md#operational-settings)). A full scan then
-writes the ordinary `health` event (`check_name=source_discovery`) when no
-health event was written in that many seconds, even if nothing changed.
+writes the ordinary `health` event (`check_name=source_discovery`) when that
+many seconds have passed since the recorded enabled-mode health event, even
+if nothing changed. Enabling it without a recorded marker makes it due
+immediately, even if health was recently written while the heartbeat was off.
 
 - It is the existing Event 3.0 `health` event with no new field. It is
   delivered and replayed like any other event. Operational alerts are not
   repeated.
-- Any `health` event, for whatever reason, restarts the interval. Scanner
-  state records when the last one was written, so a timer-driven
+- While the heartbeat is enabled, any `health` event, for whatever reason,
+  restarts the interval. Scanner state records that time, so a timer-driven
   `scan --once` decides across runs. The time is saved with scanner state,
   after the event's required local JSONL or durable outbox write; if that
   write fails, the heartbeat stays due. A failed best-effort remote delivery
   is reported like any other event's.
+- While disabled, health events neither create nor update the heartbeat marker.
+  A marker from an earlier enabled run remains unchanged and is reused when
+  the heartbeat is enabled again.
 - `--dry-run` writes nothing, as before. A `--history` pass never writes or
   records a heartbeat. `--backfill` writes `health` on every scan, as before,
-  which restarts the interval.
+  which restarts the interval while the heartbeat is enabled.
 - The check runs only when a full scan runs. `scan --once` from a timer, or
   `scan --interval-seconds`, writes the heartbeat on the first scan after the
   interval has passed. `watch` runs one full scan when the heartbeat comes
@@ -445,7 +450,8 @@ health event was written in that many seconds, even if nothing changed.
   overdue heartbeat runs right away. Targeted watch scans never write a
   heartbeat on their own.
 - A recorded time later than the current clock (the clock moved back) counts
-  as due.
+  as due. Watch rechecks its remembered time against the wall clock on wakeups
+  and after coalescing changes, so clock jumps do not leave a stale deadline.
 
 To alert on a silent scanner, use `health` events, not detections or
 activity, which depend on agent activity. Event 3.0 has no host field, so

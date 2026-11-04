@@ -19,15 +19,16 @@
 - **Optional liveness heartbeat.** `events.health_heartbeat_interval_seconds`
   (`TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS`,
   `--health-heartbeat-interval-seconds`; default `0`, off) makes a full scan
-  write the existing `health` event when none was written within the
-  interval, even if nothing changed. Any health event restarts the interval,
-  and scanner state records the last one, so `scan --once` from a timer
-  decides across runs. `watch` runs one full scan when the heartbeat comes
-  due; idle delivery wakeups still do not scan or save state. `--dry-run` and
-  `--history` record nothing. There is no new event type or field, and events
-  are unchanged while it is off; scan summaries and `config show` list the
-  new setting. To detect a silent scanner, alert when a host's newest `health`
-  event is older than about twice the interval; see
+  write the existing `health` event when the recorded enabled-mode health is
+  at least that old, even if nothing changed. While enabled, any health event
+  restarts the interval, and scanner state records its time, so `scan --once`
+  from a timer decides across runs. Off-mode health leaves the marker unchanged;
+  enabling without a marker is due immediately. `watch` runs one full scan when
+  the heartbeat comes due; idle delivery wakeups still do not scan or save state.
+  `--dry-run` and `--history` record nothing. There is no new event type or
+  field, and events are unchanged while it is off; scan summaries and
+  `config show` list the new setting. To detect a silent scanner, alert when a
+  host's newest `health` event is older than about twice the interval; see
   [telemetry output](docs/telemetry-output.md#liveness-heartbeat).
 - **Fewer repeated detections.** Session-risk summaries deduplicate by risk
   posture, not growing counts. Detections re-emit for changed posture or new

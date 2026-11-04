@@ -591,8 +591,8 @@ fn run_scan_for_platform(
     });
     if health_emitted {
         emitted_events.insert(0, health.clone());
-        // Any health event restarts the interval. The marker is saved with the
-        // rest of the state, after the event's required durable write.
+        // While enabled, any health event restarts the interval. The marker is
+        // saved with the state after the event's required durable write.
         if heartbeat_interval_seconds.is_some() && !config.execution.dry_run {
             state.record_health_heartbeat(observed_at_unix_ms);
         }
