@@ -28,12 +28,12 @@ use crate::install_inventory::{
 };
 use crate::process_chain::ProcessChainConfig;
 use crate::rules::{
-    RuleLoadMode, RulePackPaths,
+    CompiledRuleSet, RuleLoadMode, RulePackPaths,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
-use crate::sink::{SinkFailure, SinkSet};
+use crate::sink::{DeliveryErrorClass, SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
 use telltale_core::inventory::discover_mcp_scan;
 use telltale_detect::v2::PolicyMatchAccounting;
@@ -460,11 +460,11 @@ fn run_scan_for_platform(
     }
     let activity_count = activities.len();
     let detection_count = detections.len();
-    let session_risk_summaries = if config.execution.emit_session_risk_summary {
-        summarize_session_risk_events(&activities, &detections)?
-    } else {
-        Vec::new()
-    };
+    let session_risk_summaries = session_risk_summaries_for_scan(
+        config.execution.emit_session_risk_summary,
+        &activities,
+        &detections,
+    )?;
     let session_risk_summary_count = session_risk_summaries.len();
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     // Targeted scans see only a slice of the source inventory; comparing that
@@ -482,8 +482,24 @@ fn run_scan_for_platform(
         .iter()
         .filter(|(_, event)| event.event_type == "scanner_error")
         .count() as u64;
-    let operational_alerts =
-        scanner_health_alerts(&op_config, scanner_error_count, scan_duration_ms);
+    // Durable full scans alert only on the first crossing and stay quiet while
+    // the pre-dedup count remains above, including when it rises. History,
+    // dry-run, and backfill do not record that suppression; targeted scans
+    // neither alert nor touch the latch. Their count is a slice, not the inventory.
+    let emit_scanner_error_threshold = scanner_error_threshold_should_alert(
+        &mut state,
+        scanner_error_count,
+        op_config.max_scanner_errors,
+        targeted,
+        !config.history && !config.execution.dry_run && !config.backfill,
+    );
+    let operational_alerts = scanner_health_alerts(
+        &op_config,
+        scanner_error_count,
+        scan_duration_ms,
+        emit_scanner_error_threshold,
+    );
+    // A suppressed threshold repeat is omitted, so it does not force health.
     let has_operational_alerts = !operational_alerts.is_empty();
 
     detection_flow.policy_match_accounting = policy_accounting;
@@ -510,12 +526,14 @@ fn run_scan_for_platform(
             state.install_inventory = Some(snapshot);
         }
     }
+    let routine_evidence_rules = routine_evidence_rule_ids(&rule_set);
     let selected = select_source_events(
         &mut state,
         config.backfill,
         activities,
         detections,
         session_risk_summaries,
+        &routine_evidence_rules,
     );
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
@@ -534,6 +552,9 @@ fn run_scan_for_platform(
     emitted_events.extend(outage_alerts);
     emitted_events.extend(selected.events);
 
+    // Dry-run, backfill, inventory change, a newly emitted scanner_error, an
+    // outage that fires, a duration alert, and this threshold alert when it
+    // fires. A suppressed threshold repeat is not among those triggers.
     let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
@@ -563,6 +584,7 @@ fn run_scan_for_platform(
     }
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
+    let mut alert_persistence_error = None;
     let delivery_posture = config.execution.sinks.delivery_posture();
     let should_save = if config.execution.dry_run || config.history {
         false
@@ -577,6 +599,11 @@ fn run_scan_for_platform(
     } else {
         None
     };
+    // Episode suppression is decided after delivery. Dry-run and history do not
+    // write or clear the durable latch. The latch save follows the alert so a
+    // failed save cannot hide the failure, skip the attempt, or move the
+    // JSONL-before-first-state-commit order.
+    let persist_episode_latch = !config.execution.dry_run && !config.history;
     if !config.execution.dry_run {
         let verify_lock = || match &state_lock {
             Some(lock) => lock.verify(),
@@ -607,6 +634,20 @@ fn run_scan_for_platform(
                 prepared_state.install_replace(config.execution.state_path)?;
             }
         }
+        let observation = if persist_episode_latch {
+            observe_sink_failure_episode_success(
+                &mut state,
+                config.execution.sinks,
+                &sink_failures,
+                !emitted_events.is_empty(),
+            )
+        } else {
+            EpisodeObservation {
+                honor_open_episode: false,
+                cleared: false,
+                durable_success: BTreeMap::new(),
+            }
+        };
         if !sink_failures.is_empty() {
             if config.execution.sinks.has_canonical_first_write() {
                 eprintln!(
@@ -617,22 +658,60 @@ fn run_scan_for_platform(
                     "warning: remote-only delivery failed (retries exhausted or not applicable); the failed batch is not persisted and is not recoverable for replay"
                 );
             }
-            let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
+        }
+        let selection =
+            select_sink_failure_alerts(&state, &sink_failures, observation.honor_open_episode);
+        let mut alerts_accepted = selection.alerts.is_empty();
+        if !selection.alerts.is_empty() {
             let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
-            if config.execution.sinks.has_persistent_replay()
-                && let Err(error) = config.execution.sinks.persist_for_durable_replay(&alerts)
-            {
-                let rendered = format!(
-                    "warning: could not persist sink-delivery alert for durable replay: {error}"
-                );
-                let rendered =
-                    PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
-                eprintln!("{}", rendered.chars().take(200).collect::<String>());
+            let delivered = (|| {
+                if config.execution.sinks.has_persistent_replay() {
+                    config
+                        .execution
+                        .sinks
+                        .persist_for_durable_replay(&selection.alerts)?;
+                }
+                config
+                    .execution
+                    .sinks
+                    .deliver_alerts(&selection.alerts, &failed_names)
+            })();
+            match delivered {
+                Ok(accepted) => alerts_accepted = accepted,
+                Err(error) => {
+                    let rendered =
+                        format!("warning: could not persist sink-delivery alert: {error}");
+                    let rendered =
+                        PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
+                    eprintln!("{}", rendered.chars().take(200).collect::<String>());
+                    // Retain the original failure in stdout, then fail the
+                    // command for the required canonical write.
+                    alert_persistence_error = Some(error);
+                }
             }
-            config
-                .execution
-                .sinks
-                .deliver_alerts(&alerts, &failed_names);
+        }
+        if persist_episode_latch {
+            let mut latch_changed = observation.cleared;
+            for (sink, identity) in &selection.episode_keys {
+                let identity = if alerts_accepted {
+                    identity.as_deref()
+                } else {
+                    None
+                };
+                latch_changed |= record_sink_failure_episode(
+                    &mut state,
+                    sink,
+                    identity,
+                    observation.durable_success.get(sink).copied().flatten(),
+                );
+            }
+            if latch_changed {
+                save_sink_failure_episode_latch(
+                    &state,
+                    config.execution.state_path,
+                    state_lock.as_ref(),
+                );
+            }
         }
     }
 
@@ -683,6 +762,9 @@ fn run_scan_for_platform(
         summary["history"] = "all".into();
     }
     println!("{}", serde_json::to_string(&summary)?);
+    if let Some(error) = alert_persistence_error {
+        return Err(error);
+    }
     Ok(ScanRunResult {
         full_scan_discovery,
         source_failures,
@@ -708,13 +790,43 @@ fn session_store_environment_ignored(
             && set("OPENCODE_DB").is_some_and(|value| value != ":memory:"))
 }
 
+/// Whether this scan should emit `scanner_error_threshold_exceeded`.
+///
+/// A durable full scan emits only when the pre-dedup count first goes above
+/// the threshold, and clears that latch only when a later full scan is at or
+/// below it. Targeted scans see a slice, so they neither emit nor touch the
+/// latch. History, dry-run, and backfill do not persist suppression: history
+/// and dry-run still emit when above, and backfill repeats while above.
+fn scanner_error_threshold_should_alert(
+    state: &mut ScanState,
+    scanner_error_count: u64,
+    max_scanner_errors: u32,
+    targeted: bool,
+    persist_latch: bool,
+) -> bool {
+    if targeted {
+        return false;
+    }
+    let above = scanner_error_count > u64::from(max_scanner_errors);
+    if !persist_latch {
+        return above;
+    }
+    if above {
+        state.enter_scanner_error_threshold()
+    } else {
+        state.clear_scanner_error_threshold();
+        false
+    }
+}
+
 fn scanner_health_alerts(
     config: &OperationalAlertConfig,
     scanner_error_count: u64,
     scan_duration_ms: u64,
+    emit_scanner_error_threshold: bool,
 ) -> Vec<Event> {
     let mut alerts = Vec::new();
-    if scanner_error_count > u64::from(config.max_scanner_errors) {
+    if emit_scanner_error_threshold && scanner_error_count > u64::from(config.max_scanner_errors) {
         alerts.push(operational_alert_event(OperationalAlertInput {
             alert_type: "scanner_error_threshold_exceeded".to_string(),
             threshold: format!("max_scanner_errors={}", config.max_scanner_errors),
@@ -773,6 +885,20 @@ struct SelectedSourceEvents {
     scanner_error_emitted: bool,
 }
 
+/// Suppress evidence growth only for rules with a known routine severity.
+/// Unknown/native rules are not assumed low-risk. Download evidence always emits.
+fn routine_evidence_rule_ids(rule_set: &CompiledRuleSet) -> BTreeSet<String> {
+    rule_set
+        .summaries()
+        .into_iter()
+        .filter(|rule| {
+            matches!(rule.severity.as_str(), "informational" | "low")
+                && rule.id != "network.download"
+        })
+        .map(|rule| rule.id)
+        .collect()
+}
+
 /// Select in emission order, recording fingerprints only in the in-memory state.
 /// Backfill bypasses both deduplication and fingerprint recording.
 fn select_source_events(
@@ -781,6 +907,7 @@ fn select_source_events(
     activities: Vec<(Source, Event)>,
     detections: Vec<(Source, Event)>,
     session_risk_summaries: Vec<(Source, Event)>,
+    routine_evidence_rules: &BTreeSet<String>,
 ) -> SelectedSourceEvents {
     let mut selected = SelectedSourceEvents {
         events: Vec::with_capacity(
@@ -791,13 +918,14 @@ fn select_source_events(
         scanner_error_emitted: false,
     };
     for (source, activity) in activities {
-        if backfill || state.should_emit(&source, &activity) {
+        if backfill || state.should_emit(&source, &activity, routine_evidence_rules) {
             selected.events.push(activity);
         }
     }
     for (source, detection) in detections {
         let is_detection = detection.event_type == "detection";
-        let should_emit = backfill || state.should_emit(&source, &detection);
+        let should_emit =
+            backfill || state.should_emit(&source, &detection, routine_evidence_rules);
         if is_detection {
             if should_emit {
                 selected.emitted_detection_count += 1;
@@ -811,7 +939,7 @@ fn select_source_events(
         }
     }
     for (source, summary) in session_risk_summaries {
-        if backfill || state.should_emit(&source, &summary) {
+        if backfill || state.should_emit_session_risk_summary(&source, &summary) {
             selected.events.push(summary);
         }
     }
@@ -832,6 +960,271 @@ fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
         scan_duration_ms: None,
         scanner_error_count: None,
     })
+}
+
+struct SinkFailureAlertSelection {
+    alerts: Vec<Event>,
+    episode_keys: BTreeMap<String, Option<String>>,
+}
+
+struct EpisodeObservation {
+    honor_open_episode: bool,
+    cleared: bool,
+    durable_success: BTreeMap<String, Option<i64>>,
+}
+
+#[derive(Default)]
+struct DurableSuccessSnapshot {
+    success: BTreeMap<String, Option<i64>>,
+    unordered: BTreeSet<String>,
+}
+
+/// Identity is `authentication_blocked` plus status, or `sink_response_blocked`
+/// with no status. Other classes are not episode-suppressed.
+fn sink_failure_episode_identity(class: DeliveryErrorClass) -> Option<String> {
+    match class {
+        DeliveryErrorClass::AuthenticationBlocked { status } => {
+            Some(format!("authentication_blocked:{status}"))
+        }
+        DeliveryErrorClass::SinkResponseBlocked => Some("sink_response_blocked".to_string()),
+        _ => None,
+    }
+}
+
+fn is_sink_failure_episode_identity(identity: &str) -> bool {
+    identity == "sink_response_blocked"
+        || identity
+            .strip_prefix("authentication_blocked:")
+            .is_some_and(|status| {
+                !status.is_empty() && status.bytes().all(|byte| byte.is_ascii_digit())
+            })
+}
+
+fn sink_failure_episode_latch(sink: &str, identity: &str) -> String {
+    format!(
+        "telltale:sink_failure_episode_v2:{}:{identity}",
+        evidence_hash(sink)
+    )
+}
+
+fn sink_failure_episode_open(state: &ScanState, sink: &str, identity: &str) -> bool {
+    let prefix = format!("{}@", sink_failure_episode_latch(sink, identity));
+    state
+        .seen_detection_fingerprints
+        .range(prefix.clone()..)
+        .next()
+        .is_some_and(|key| key.starts_with(&prefix))
+}
+
+fn clear_sink_failure_episodes(state: &mut ScanState, sink: &str) -> bool {
+    record_sink_failure_episode(state, sink, None, None)
+}
+
+fn record_sink_failure_episode(
+    state: &mut ScanState,
+    sink: &str,
+    identity: Option<&str>,
+    last_success: Option<i64>,
+) -> bool {
+    let prefix = format!("telltale:sink_failure_episode_v2:{}:", evidence_hash(sink));
+    // Remove the pre-hashed markers too, without interpreting delimiters in an
+    // operator-supplied name as part of another sink's identity.
+    let legacy_prefix = format!("telltale:sink_failure_episode:{sink}:");
+    let current = identity.map(|identity| {
+        format!(
+            "{}@{}",
+            sink_failure_episode_latch(sink, identity),
+            success_reference(last_success)
+        )
+    });
+    let before = state.seen_detection_fingerprints.len();
+    state.seen_detection_fingerprints.retain(|fingerprint| {
+        current.as_ref() == Some(fingerprint)
+            || ![&prefix, &legacy_prefix].into_iter().any(|prefix| {
+                fingerprint
+                    .strip_prefix(prefix.as_str())
+                    .is_some_and(|suffix| {
+                        is_sink_failure_episode_identity(suffix.split('@').next().unwrap_or(suffix))
+                    })
+            })
+    });
+    let removed = state.seen_detection_fingerprints.len() != before;
+    removed | current.is_some_and(|key| state.seen_detection_fingerprints.insert(key))
+}
+
+/// A blocked row released by `release_blocked_for_sink` keeps its attempt count
+/// and last structured error, then fails again. That is not a new row in an
+/// open episode.
+fn released_blocked_row_failed_again(failure: &SinkFailure) -> bool {
+    failure.prior_attempts > 0
+        && matches!(
+            failure.prior_error_class,
+            Some(
+                DeliveryErrorClass::AuthenticationBlocked { .. }
+                    | DeliveryErrorClass::SinkResponseBlocked
+            )
+        )
+}
+
+fn select_sink_failure_alerts(
+    state: &ScanState,
+    failures: &[SinkFailure],
+    honor_open_episode: bool,
+) -> SinkFailureAlertSelection {
+    let mut alerts = Vec::new();
+    let mut episode_keys = BTreeMap::new();
+    let mut selected_episodes = BTreeSet::new();
+    for failure in failures {
+        if let Some(identity) = sink_failure_episode_identity(failure.class) {
+            let already_open = episode_keys.get(&failure.name).map_or_else(
+                || honor_open_episode && sink_failure_episode_open(state, &failure.name, &identity),
+                |current: &Option<String>| current.as_deref() == Some(identity.as_str()),
+            );
+            episode_keys.insert(failure.name.clone(), Some(identity.clone()));
+            let released = failures.iter().any(|other| {
+                other.name == failure.name
+                    && sink_failure_episode_identity(other.class).as_deref()
+                        == Some(identity.as_str())
+                    && released_blocked_row_failed_again(other)
+            });
+            if !released && already_open {
+                continue;
+            }
+            if !selected_episodes.insert((failure.name.clone(), identity)) {
+                continue;
+            }
+        } else {
+            episode_keys.insert(failure.name.clone(), None);
+        }
+        alerts.push(sink_failure_alert_event(failure));
+    }
+    SinkFailureAlertSelection {
+        alerts,
+        episode_keys,
+    }
+}
+
+fn snapshot_durable_sink_success(path: Option<&Path>) -> Result<DurableSuccessSnapshot, ()> {
+    let Some(path) = path else {
+        return Ok(DurableSuccessSnapshot::default());
+    };
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DurableSuccessSnapshot::default());
+        }
+        Err(_) => return Err(()),
+        Ok(_) => {}
+    }
+    let outbox = crate::sink::outbox::Outbox::open_read_only(path).map_err(|_| ())?;
+    let health = outbox
+        .health(&[], crate::sink::outbox::unix_seconds())
+        .map_err(|_| ())?;
+    let mut snapshot = DurableSuccessSnapshot::default();
+    for sink in health.sinks {
+        // Equal millisecond timestamps cannot establish success/error order.
+        // Fail open for this sink only rather than missing a rapid recovery.
+        if sink.last_success_at.is_some() && sink.last_success_at == sink.last_error_at {
+            snapshot.unordered.insert(sink.sink_id.clone());
+        }
+        snapshot.success.insert(sink.sink_id, sink.last_success_at);
+    }
+    Ok(snapshot)
+}
+
+fn clear_sinks_with_new_success(
+    state: &mut ScanState,
+    after: &BTreeMap<String, Option<i64>>,
+) -> bool {
+    let mut changed = false;
+    for (sink, after_success) in after {
+        // Watch may ack while idle. Compare with the success known when the
+        // episode was latched, not merely with the beginning of this scan.
+        let prefix = format!("telltale:sink_failure_episode_v2:{}:", evidence_hash(sink));
+        let expected = format!("@{}", success_reference(*after_success));
+        let stale = state
+            .seen_detection_fingerprints
+            .range(prefix.clone()..)
+            .take_while(|key| key.starts_with(&prefix))
+            .any(|key| !key.ends_with(&expected));
+        if stale {
+            changed |= clear_sink_failure_episodes(state, sink);
+        }
+    }
+    changed
+}
+
+fn success_reference(success: Option<i64>) -> String {
+    success.map_or_else(|| "none".to_string(), |value| value.to_string())
+}
+
+fn clear_successful_best_effort_episodes(
+    state: &mut ScanState,
+    sinks: &SinkSet,
+    failures: &[SinkFailure],
+    attempted: bool,
+) -> bool {
+    if !attempted {
+        return false;
+    }
+    let failed = failures
+        .iter()
+        .map(|failure| failure.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let durable = sinks
+        .durable_sink_ids()
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut changed = false;
+    for name in sinks.delivery_sink_ids() {
+        let best_effort = !sinks.has_persistent_replay() || !durable.contains(name.as_str());
+        if best_effort && !failed.contains(name.as_str()) {
+            changed |= clear_sink_failure_episodes(state, &name);
+        }
+    }
+    changed
+}
+
+fn observe_sink_failure_episode_success(
+    state: &mut ScanState,
+    sinks: &SinkSet,
+    failures: &[SinkFailure],
+    attempted_events: bool,
+) -> EpisodeObservation {
+    let mut cleared = false;
+    let (honor_open_episode, durable_success) =
+        match snapshot_durable_sink_success(sinks.durable_outbox_path()) {
+            Ok(after) => {
+                cleared |= clear_sinks_with_new_success(state, &after.success);
+                for sink in after.unordered {
+                    cleared |= clear_sink_failure_episodes(state, &sink);
+                }
+                (true, after.success)
+            }
+            Err(()) => (false, BTreeMap::new()),
+        };
+    cleared |= clear_successful_best_effort_episodes(state, sinks, failures, attempted_events);
+    EpisodeObservation {
+        honor_open_episode,
+        cleared,
+        durable_success,
+    }
+}
+
+fn save_sink_failure_episode_latch(state: &ScanState, path: &Path, state_lock: Option<&StateLock>) {
+    let saved = (|| {
+        let Some(lock) = state_lock else {
+            return Err("state lock missing before sink-failure episode latch save".into());
+        };
+        lock.verify_lock()?;
+        state.prepare_atomic_save(path)?.install_replace(path)
+    })();
+    if let Err(error) = saved {
+        let rendered =
+            format!("warning: could not persist sink-failure alert episode latch: {error}");
+        let rendered = PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
+        eprintln!("{}", rendered.chars().take(200).collect::<String>());
+    }
 }
 
 /// Snapshot of the durable parts of scanner state, captured before a scan
@@ -1098,6 +1491,18 @@ struct SessionRiskSummaryAccumulator<'a> {
     signal_types: BTreeSet<String>,
     analytic_intents: BTreeSet<String>,
     atlas_tags: BTreeSet<String>,
+}
+
+fn session_risk_summaries_for_scan(
+    emit_session_risk_summary: bool,
+    activities: &[(Source, Event)],
+    detections: &[(Source, Event)],
+) -> Result<Vec<(Source, Event)>, RiskAccountingError> {
+    if emit_session_risk_summary {
+        summarize_session_risk_events(activities, detections)
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 fn summarize_session_risk_events(
@@ -1859,7 +2264,8 @@ mod tests {
                 vec!["scanner_error_threshold", "scan_duration_threshold"],
             ),
         ] {
-            let alerts = scanner_health_alerts(&config, errors, duration);
+            // The scan path applies the latch. This locks the strict comparison.
+            let alerts = scanner_health_alerts(&config, errors, duration, true);
             assert_eq!(
                 alerts
                     .iter()
@@ -1951,6 +2357,7 @@ mod tests {
             activities.clone(),
             detections.clone(),
             summaries.clone(),
+            &BTreeSet::new(),
         );
         assert_eq!(
             first
@@ -1976,6 +2383,7 @@ mod tests {
             activities.clone(),
             detections.clone(),
             summaries.clone(),
+            &BTreeSet::new(),
         );
         assert!(repeated.events.is_empty());
         assert_eq!(repeated.emitted_detection_count, 0);
@@ -1991,6 +2399,7 @@ mod tests {
                 activities.clone(),
                 detections.clone(),
                 summaries.clone(),
+                &BTreeSet::new(),
             );
             assert_eq!(backfill.events.len(), 6);
             assert_eq!(backfill.emitted_detection_count, 2);
@@ -1998,6 +2407,110 @@ mod tests {
             assert!(backfill.scanner_error_emitted);
             assert_eq!(state.canonical_bytes().unwrap(), before);
         }
+    }
+
+    #[test]
+    fn second_shell_occurrence_does_not_reemit_until_download_or_api_key_evidence() {
+        use crate::event::{DetectionEventInput, detection_event};
+
+        let rule_set = crate::rules::load_default_rule_set().expect("default rules");
+        let routine_rules = routine_evidence_rule_ids(&rule_set);
+        assert!(!routine_rules.contains("credential.api_key.pattern"));
+        assert!(routine_rules.contains("execution.shell"));
+        assert!(!routine_rules.contains("network.download"));
+
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "synthetic-session".to_string(),
+            path: PathBuf::from("synthetic-session.jsonl"),
+        };
+        let evidence = |rule_id: &str, marker: &str| Evidence {
+            field: "command".to_string(),
+            redacted_value: marker.to_string(),
+            hash: Some(format!("hash-{marker}")),
+            rule_id: Some(rule_id.to_string()),
+        };
+        let detection = |items: Vec<Evidence>, event_time: &str| {
+            detection_event(DetectionEventInput {
+                client: ClientId::Codex,
+                agent: None,
+                model: None,
+                provider: None,
+                session_id: "synthetic-session".to_string(),
+                source_path_hash: "synthetic-path".to_string(),
+                tool_name: Some("shell".to_string()),
+                rule_ids: vec!["execution.shell".to_string()],
+                categories: vec!["execution".to_string()],
+                detection_classes: vec!["security_detection".to_string()],
+                signal_types: vec!["atomic".to_string()],
+                analytic_intents: vec!["alert".to_string()],
+                atlas_tags: Vec::new(),
+                tags: vec!["synthetic".to_string()],
+                evidence: items,
+                risk_contributions: Vec::new(),
+                event_time: Some(event_time.to_string()),
+            })
+            .expect("detection")
+        };
+        let selected = |state: &mut ScanState, event: Event| {
+            select_source_events(
+                state,
+                false,
+                Vec::new(),
+                vec![(source.clone(), event)],
+                Vec::new(),
+                &routine_rules,
+            )
+        };
+
+        let mut state = ScanState::default();
+        let first = selected(
+            &mut state,
+            detection(
+                vec![evidence("execution.shell", "shell-1")],
+                "2026-05-01T00:00:00.000Z",
+            ),
+        );
+        assert_eq!(first.emitted_detection_count, 1);
+        assert_eq!(first.events.len(), 1);
+
+        let second = selected(
+            &mut state,
+            detection(
+                vec![evidence("execution.shell", "shell-2")],
+                "2026-05-01T00:01:00.000Z",
+            ),
+        );
+        assert!(second.events.is_empty());
+        assert_eq!(second.emitted_detection_count, 0);
+        assert_eq!(second.deduplicated_detection_count, 1);
+
+        let download = selected(
+            &mut state,
+            detection(
+                vec![
+                    evidence("execution.shell", "shell-2"),
+                    evidence("network.download", "synthetic-download"),
+                ],
+                "2026-05-01T00:02:00.000Z",
+            ),
+        );
+        assert_eq!(download.emitted_detection_count, 1);
+        assert_eq!(download.events.len(), 1);
+
+        let api_key = selected(
+            &mut state,
+            detection(
+                vec![
+                    evidence("execution.shell", "shell-2"),
+                    evidence("credential.api_key.pattern", "synthetic-token"),
+                ],
+                "2026-05-01T00:03:00.000Z",
+            ),
+        );
+        assert_eq!(api_key.emitted_detection_count, 1);
+        assert_eq!(api_key.events.len(), 1);
     }
 
     #[test]
@@ -2654,6 +3167,196 @@ mod tests {
     }
 
     #[test]
+    fn session_risk_summary_default_is_off_and_growth_dedups_until_a_rule_id_is_added() {
+        use crate::event::{
+            ActivityEventInput, DetectionEventInput, activity_event, detection_event,
+        };
+        use crate::scoring::{RiskContribution, RiskContributionType};
+
+        let emit_session_risk_summary = crate::settings::Settings::default()
+            .emit_session_risk_summary
+            .value;
+        assert!(!emit_session_risk_summary);
+
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "synthetic-session".to_string(),
+            path: PathBuf::from("synthetic-session.jsonl"),
+        };
+        let contribution = RiskContribution::new(
+            "rule.synthetic",
+            RiskContributionType::DeterministicRule,
+            30,
+            "synthetic rule match",
+        )
+        .expect("contribution");
+        let activity = |tool_calls: u64, event_time: &str| {
+            (
+                source.clone(),
+                activity_event(ActivityEventInput {
+                    client: ClientId::Codex,
+                    agent: Some("synthetic-agent".to_string()),
+                    model: Some("synthetic-model".to_string()),
+                    provider: Some("synthetic-provider".to_string()),
+                    session_id: "synthetic-session".to_string(),
+                    source_path_hash: "synthetic-path".to_string(),
+                    tool_name: Some("shell".to_string()),
+                    tags: vec!["activity".to_string()],
+                    evidence: vec![Evidence {
+                        field: "record_counts".to_string(),
+                        redacted_value: format!(r#"{{"tool_call":{tool_calls}}}"#),
+                        hash: None,
+                        rule_id: None,
+                    }],
+                    risk_contributions: Vec::new(),
+                    event_time: Some(event_time.to_string()),
+                })
+                .expect("activity"),
+            )
+        };
+        let detection = |rule_id: &str,
+                         contributions: Vec<RiskContribution>,
+                         event_time: &str,
+                         marker: &str| {
+            (
+                source.clone(),
+                detection_event(DetectionEventInput {
+                    client: ClientId::Codex,
+                    agent: Some("synthetic-agent".to_string()),
+                    model: Some("synthetic-model".to_string()),
+                    provider: Some("synthetic-provider".to_string()),
+                    session_id: "synthetic-session".to_string(),
+                    source_path_hash: "synthetic-path".to_string(),
+                    tool_name: Some("shell".to_string()),
+                    rule_ids: vec![rule_id.to_string()],
+                    categories: vec!["execution".to_string()],
+                    detection_classes: vec!["security_detection".to_string()],
+                    signal_types: vec!["atomic".to_string()],
+                    analytic_intents: vec!["alert".to_string()],
+                    atlas_tags: Vec::new(),
+                    tags: vec!["synthetic".to_string()],
+                    evidence: vec![Evidence {
+                        field: "match".to_string(),
+                        redacted_value: marker.to_string(),
+                        hash: None,
+                        rule_id: None,
+                    }],
+                    risk_contributions: contributions,
+                    event_time: Some(event_time.to_string()),
+                })
+                .expect("detection"),
+            )
+        };
+        let initial = (
+            vec![activity(1, "2026-05-01T00:00:00Z")],
+            vec![detection(
+                "rule.synthetic",
+                vec![contribution.clone()],
+                "2026-05-01T00:00:01Z",
+                "one",
+            )],
+        );
+        let grown = (
+            vec![activity(4, "2026-05-02T00:00:00Z")],
+            vec![
+                detection(
+                    "rule.synthetic",
+                    vec![contribution.clone()],
+                    "2026-05-01T00:00:01Z",
+                    "one",
+                ),
+                detection(
+                    "rule.synthetic",
+                    vec![contribution],
+                    "2026-05-02T00:00:01Z",
+                    "two",
+                ),
+            ],
+        );
+        let added_rule = (grown.0.clone(), {
+            let mut detections = grown.1.clone();
+            detections.push(detection(
+                "rule.added",
+                Vec::new(),
+                "2026-05-03T00:00:00Z",
+                "three",
+            ));
+            detections
+        });
+
+        fn emitted_summaries(
+            state: &mut ScanState,
+            emit: bool,
+            activities: Vec<(Source, Event)>,
+            detections: Vec<(Source, Event)>,
+        ) -> Vec<Event> {
+            let summaries =
+                session_risk_summaries_for_scan(emit, &activities, &detections).expect("summaries");
+            select_source_events(
+                state,
+                false,
+                activities,
+                detections,
+                summaries,
+                &BTreeSet::new(),
+            )
+            .events
+            .into_iter()
+            .filter(|event| event.event_type == "session_risk_summary")
+            .collect()
+        }
+        fn built_summary(activities: &[(Source, Event)], detections: &[(Source, Event)]) -> Event {
+            let mut summaries =
+                summarize_session_risk_events(activities, detections).expect("summary");
+            assert_eq!(summaries.len(), 1);
+            summaries.pop().expect("summary").1
+        }
+
+        let mut state = ScanState::default();
+        assert!(
+            emitted_summaries(
+                &mut state,
+                emit_session_risk_summary,
+                initial.0.clone(),
+                initial.1.clone(),
+            )
+            .is_empty()
+        );
+
+        let first = emitted_summaries(&mut state, true, initial.0.clone(), initial.1.clone());
+        assert_eq!(first.len(), 1);
+        let built = built_summary(&initial.0, &initial.1);
+        let evidence = |event: &Event| serde_json::to_value(&event.evidence).expect("evidence");
+        assert_eq!(evidence(&first[0]), evidence(&built));
+        assert_eq!(first[0].event_time, built.event_time);
+        assert!(first[0].event_time.is_some());
+        assert!(first[0].evidence.iter().any(|item| {
+            matches!(
+                item.field.as_str(),
+                "event_counts" | "risky_action_count" | "tool_call_count"
+            )
+        }));
+
+        let grown_summary = built_summary(&grown.0, &grown.1);
+        assert_eq!(grown_summary.severity, first[0].severity);
+        assert_eq!(grown_summary.risk_score, first[0].risk_score);
+        assert_eq!(grown_summary.rule_ids, first[0].rule_ids);
+        assert_ne!(evidence(&grown_summary), evidence(&first[0]));
+        assert_ne!(grown_summary.event_time, first[0].event_time);
+        assert!(emitted_summaries(&mut state, true, grown.0, grown.1).is_empty());
+
+        let second = emitted_summaries(&mut state, true, added_rule.0, added_rule.1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].severity, first[0].severity);
+        assert_eq!(second[0].risk_score, first[0].risk_score);
+        assert_eq!(
+            second[0].rule_ids,
+            vec!["rule.added".to_string(), "rule.synthetic".to_string()]
+        );
+    }
+
+    #[test]
     fn operational_json_omits_hostile_sink_names() {
         let sink_name = "https://sink-owner.example.invalid/private";
         let alert = sink_failure_alert_event(&SinkFailure {
@@ -2662,6 +3365,8 @@ mod tests {
             class: crate::sink::DeliveryErrorClass::UnknownInternal,
             attempts: 1,
             error: "connection refused".to_string(),
+            prior_attempts: 0,
+            prior_error_class: None,
         });
         let alert_bytes = serde_json::to_vec(&alert).expect("serialize sink alert");
         assert!(

@@ -15,7 +15,7 @@ use crate::baseline::BaselineKey;
 use crate::baseline::{
     BASELINE_STATE_VERSION, BaselineSnapshotStore, BaselineSummary, baseline_snapshot_id,
 };
-use crate::event::Event;
+use crate::event::{Event, Evidence};
 use crate::file_lock::{
     FileInfo, SidecarLock, TempFile, atomic_no_replace, atomic_replace, read_snapshot,
     safe_path_info, validate_target,
@@ -212,19 +212,79 @@ impl ScanState {
         parse_native_state_mode_with_count(bytes, true)
     }
 
-    pub fn should_emit(&mut self, source: &Source, event: &Event) -> bool {
+    pub fn should_emit(
+        &mut self,
+        source: &Source,
+        event: &Event,
+        routine_evidence_rules: &BTreeSet<String>,
+    ) -> bool {
+        // Summaries must not re-emit when only evidence or event time changed.
+        // Activities and other non-detection events still hash every evidence
+        // item through `detection_fingerprint`. Detections use a posture
+        // fingerprint plus evidence not known to be routine low-severity activity.
+        if event.event_type == "session_risk_summary" {
+            return self.should_emit_session_risk_summary(source, event);
+        }
         let source_fingerprint = source_fingerprint(source);
-        let detection_fingerprint = detection_fingerprint(event, &source_fingerprint);
-        if self
-            .seen_detection_fingerprints
-            .contains(&detection_fingerprint)
-        {
+        if event.event_type == "detection" {
+            let posture =
+                detection_emission_fingerprint(event, &source_fingerprint, routine_evidence_rules);
+            return self.should_emit_posture(
+                source_fingerprint,
+                event,
+                "detection_emission",
+                &posture,
+            );
+        }
+        let fingerprint = detection_fingerprint(event, &source_fingerprint);
+        if self.seen_detection_fingerprints.contains(&fingerprint) {
             return false;
         }
         self.seen_source_fingerprints.insert(source_fingerprint);
-        self.seen_detection_fingerprints
-            .insert(detection_fingerprint);
+        self.seen_detection_fingerprints.insert(fingerprint);
         true
+    }
+
+    /// Records a `session_risk_summary` fingerprint that ignores evidence and
+    /// event time. Backfill callers must skip this, as they do for
+    /// [`Self::should_emit`].
+    pub fn should_emit_session_risk_summary(&mut self, source: &Source, event: &Event) -> bool {
+        debug_assert_eq!(event.event_type, "session_risk_summary");
+        let source_fingerprint = source_fingerprint(source);
+        let posture = session_risk_summary_fingerprint(event, &source_fingerprint);
+        self.should_emit_posture(source_fingerprint, event, "session_risk_summary", &posture)
+    }
+
+    fn should_emit_posture(
+        &mut self,
+        source_fingerprint: String,
+        event: &Event,
+        kind: &str,
+        posture: &str,
+    ) -> bool {
+        // Legacy keys omitted classification. Learn exact historical events
+        // only while all learned classifications for this posture agree. Once
+        // classification changes, legacy evidence can never hide that change.
+        let mut hasher = Sha256::new();
+        hash_event_posture(&mut hasher, event, &source_fingerprint);
+        let prefix = format!("telltale:{kind}:{}:", hex::encode(hasher.finalize()));
+        let classified = format!("{prefix}{}:", classification_fingerprint(event));
+        let fingerprint = format!("{classified}{posture}");
+        if self.seen_detection_fingerprints.contains(&fingerprint) {
+            return false;
+        }
+        let classification_changed = self
+            .seen_detection_fingerprints
+            .range(prefix.clone()..)
+            .take_while(|key| key.starts_with(&prefix))
+            .any(|key| !key.starts_with(&classified));
+        let legacy_seen = !classification_changed
+            && self
+                .seen_detection_fingerprints
+                .contains(&detection_fingerprint(event, &source_fingerprint));
+        self.seen_source_fingerprints.insert(source_fingerprint);
+        self.seen_detection_fingerprints.insert(fingerprint);
+        !legacy_seen
     }
 
     /// Records that a full scan saw `client` lose every source. True when the
@@ -239,6 +299,26 @@ impl ScanState {
     pub fn clear_source_outage(&mut self, client: &str) {
         self.seen_detection_fingerprints
             .remove(&source_outage_fingerprint(client));
+    }
+
+    /// Records that a durable full scan saw the pre-dedup `scanner_error` count
+    /// above the threshold. True when that crossing is new: it stays recorded,
+    /// and quiet, until a durable full scan is at or below the threshold, so a
+    /// later rise while still above does not alert again.
+    pub fn enter_scanner_error_threshold(&mut self) -> bool {
+        self.seen_detection_fingerprints
+            .insert(scanner_error_threshold_fingerprint())
+    }
+
+    pub fn clear_scanner_error_threshold(&mut self) {
+        self.seen_detection_fingerprints
+            .remove(&scanner_error_threshold_fingerprint());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scanner_error_threshold_latched(&self) -> bool {
+        self.seen_detection_fingerprints
+            .contains(&scanner_error_threshold_fingerprint())
     }
 
     #[cfg(test)]
@@ -1163,8 +1243,43 @@ fn source_outage_fingerprint(client: &str) -> String {
     ))
 }
 
+/// Kept among the detection fingerprints, so threshold suppression needs no
+/// state schema change; the prefix keeps it apart from event fingerprints and
+/// from `source_parse_outage`.
+fn scanner_error_threshold_fingerprint() -> String {
+    hex::encode(Sha256::digest(b"telltale:scanner_error_threshold_exceeded"))
+}
+
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {
     let mut hasher = Sha256::new();
+    hash_event_posture(&mut hasher, event, source_fingerprint);
+    for evidence in &event.evidence {
+        hash_evidence_item(&mut hasher, evidence);
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// Dedup identity for `detection` emission only. Posture is always included:
+/// identity, tool name, severity, score, rule ids, categories, and tags.
+/// Only evidence explicitly classified as routine low-severity activity is
+/// omitted. Unknown rules and unattributed evidence stay visible rather than
+/// inheriting an aggregate event severity. Activities keep [`detection_fingerprint`].
+fn detection_emission_fingerprint(
+    event: &Event,
+    source_fingerprint: &str,
+    routine_evidence_rules: &BTreeSet<String>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hash_event_posture(&mut hasher, event, source_fingerprint);
+    for evidence in &event.evidence {
+        if detection_evidence_reemits(evidence, routine_evidence_rules) {
+            hash_evidence_item(&mut hasher, evidence);
+        }
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn hash_event_posture(hasher: &mut Sha256, event: &Event, source_fingerprint: &str) {
     hasher.update(event.client.as_bytes());
     if let Some(source_path_hash) = &event.source_path_hash {
         hasher.update(source_path_hash.as_bytes());
@@ -1201,12 +1316,82 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
     for tag in &event.tags {
         hasher.update(tag.as_bytes());
     }
-    for evidence in &event.evidence {
-        hasher.update(evidence.field.as_bytes());
-        hasher.update(evidence.redacted_value.as_bytes());
-        if let Some(hash) = &evidence.hash {
-            hasher.update(hash.as_bytes());
+}
+
+fn hash_evidence_item(hasher: &mut Sha256, evidence: &Evidence) {
+    hasher.update(evidence.field.as_bytes());
+    hasher.update(evidence.redacted_value.as_bytes());
+    if let Some(hash) = &evidence.hash {
+        hasher.update(hash.as_bytes());
+    }
+}
+
+fn detection_evidence_reemits(
+    evidence: &Evidence,
+    routine_evidence_rules: &BTreeSet<String>,
+) -> bool {
+    evidence.rule_id.as_deref().is_none_or(|rule_id| {
+        rule_id == "network.download" || !routine_evidence_rules.contains(rule_id)
+    })
+}
+
+fn classification_fingerprint(event: &Event) -> String {
+    let mut hasher = Sha256::new();
+    for values in [
+        &event.detection_classes,
+        &event.signal_types,
+        &event.analytic_intents,
+        &event.atlas_tags,
+    ] {
+        hasher.update((values.len() as u64).to_le_bytes());
+        for value in values {
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value.as_bytes());
         }
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// Dedup identity for `session_risk_summary` only. Evidence, including event
+/// and tool-call counts, and event time are omitted so a growing session does
+/// not re-emit while severity, score, and rule ids stay the same. Kept among
+/// the detection fingerprints; the prefix keeps it apart from
+/// [`detection_fingerprint`] and from latch markers.
+fn session_risk_summary_fingerprint(event: &Event, source_fingerprint: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"telltale:session_risk_summary\0");
+    hasher.update(event.client.as_bytes());
+    if let Some(source_path_hash) = &event.source_path_hash {
+        hasher.update(source_path_hash.as_bytes());
+    } else {
+        hasher.update(source_fingerprint.as_bytes());
+    }
+    hasher.update(event.session_id.as_bytes());
+    hasher.update(event.event_type.as_bytes());
+    hasher.update(event.severity.as_bytes());
+    if let Ok(score) = u32::try_from(event.risk_score) {
+        hasher.update(score.to_le_bytes());
+    } else {
+        hasher.update(b"risk_score:u64:");
+        hasher.update(event.risk_score.to_le_bytes());
+    }
+    if let Some(agent) = &event.agent {
+        hasher.update(agent.as_bytes());
+    }
+    if let Some(model) = &event.model {
+        hasher.update(model.as_bytes());
+    }
+    if let Some(provider) = &event.provider {
+        hasher.update(provider.as_bytes());
+    }
+    for rule_id in &event.rule_ids {
+        hasher.update(rule_id.as_bytes());
+    }
+    for category in &event.categories {
+        hasher.update(category.as_bytes());
+    }
+    for tag in &event.tags {
+        hasher.update(tag.as_bytes());
     }
     hex::encode(hasher.finalize())
 }
@@ -1239,6 +1424,7 @@ mod tests {
             .unwrap();
         assert_eq!(super::source_fingerprint(&source), path_hash);
     }
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     use serde_json::Value;
@@ -1255,6 +1441,96 @@ mod tests {
         BASELINE_STATE_VERSION, STATE_SCHEMA_VERSION, ScanState, baseline_snapshot_id,
         detection_fingerprint, source_fingerprint,
     };
+
+    #[test]
+    fn emission_fingerprints_preserve_classification_changes_and_migrate_exact_legacy_events() {
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".into(),
+            path: "synthetic-fingerprint.jsonl".into(),
+        };
+        let mut event = detection_event(DetectionEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "synthetic-fingerprint".into(),
+            source_path_hash: "synthetic-path".into(),
+            tool_name: Some("shell".into()),
+            rule_ids: vec!["synthetic.medium".into()],
+            categories: vec!["execution".into()],
+            detection_classes: vec!["security_detection".into()],
+            signal_types: vec!["atomic".into()],
+            analytic_intents: vec!["alert".into()],
+            atlas_tags: Vec::new(),
+            tags: Vec::new(),
+            evidence: vec![Evidence {
+                field: "command".into(),
+                redacted_value: "synthetic-one".into(),
+                hash: None,
+                rule_id: Some("synthetic.medium".into()),
+            }],
+            risk_contributions: Vec::new(),
+            event_time: None,
+        })
+        .unwrap();
+        for kind in ["detection", "session_risk_summary"] {
+            event.event_type = kind.into();
+            let mut state = ScanState::default();
+            state
+                .seen_detection_fingerprints
+                .insert(detection_fingerprint(&event, &source_fingerprint(&source)));
+            let mut historical_evidence = event.clone();
+            historical_evidence.evidence[0].redacted_value = "synthetic-previously-seen".into();
+            state
+                .seen_detection_fingerprints
+                .insert(detection_fingerprint(
+                    &historical_evidence,
+                    &source_fingerprint(&source),
+                ));
+            assert!(
+                !state.should_emit(&source, &event, &BTreeSet::new()),
+                "{kind}: legacy replay"
+            );
+            // Reloaded state has learned the new key, not just a transient suppression.
+            let mut state =
+                ScanState::validate_native_bytes(&state.canonical_bytes().unwrap()).unwrap();
+            assert!(!state.should_emit(&source, &event, &BTreeSet::new()));
+            let mut still_unchanged =
+                ScanState::validate_native_bytes(&state.canonical_bytes().unwrap()).unwrap();
+            assert!(!still_unchanged.should_emit(&source, &historical_evidence, &BTreeSet::new()));
+            for field in [
+                "detection_classes",
+                "signal_types",
+                "analytic_intents",
+                "atlas_tags",
+            ] {
+                let mut changed = event.clone();
+                changed.evidence = historical_evidence.evidence.clone();
+                match field {
+                    "detection_classes" => {
+                        changed.detection_classes.push("policy_violation".into())
+                    }
+                    "signal_types" => changed.signal_types.push("correlation".into()),
+                    "analytic_intents" => changed.analytic_intents.push("audit".into()),
+                    _ => changed.atlas_tags.push("atlas:AML.T0000".into()),
+                }
+                assert!(
+                    state.should_emit(&source, &changed, &BTreeSet::new()),
+                    "{kind}: {field}"
+                );
+                assert!(!state.should_emit(&source, &changed, &BTreeSet::new()));
+            }
+            let mut changed = event.clone();
+            changed.evidence[0].redacted_value = "synthetic-two".into();
+            changed.timestamp = "2026-05-02T00:00:00Z".into();
+            assert_eq!(
+                state.should_emit(&source, &changed, &BTreeSet::new()),
+                kind == "detection"
+            );
+        }
+    }
 
     #[test]
     fn suppresses_duplicate_detections_for_same_source_content() {
@@ -1294,8 +1570,9 @@ mod tests {
         .expect("build detection event");
 
         let mut state = ScanState::default();
-        assert!(state.should_emit(&source, &event));
-        assert!(!state.should_emit(&source, &event));
+        let no_medium_rules = BTreeSet::new();
+        assert!(state.should_emit(&source, &event, &no_medium_rules));
+        assert!(!state.should_emit(&source, &event, &no_medium_rules));
         assert_eq!(state.seen_source_fingerprints.len(), 1);
         assert_eq!(state.seen_detection_fingerprints.len(), 1);
         assert_eq!(

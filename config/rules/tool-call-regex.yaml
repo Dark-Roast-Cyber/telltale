@@ -33,7 +33,7 @@ rules:
     severity: high
     score: 55
     targets: [command, arguments, file_path, tool_result]
-    regex: '(id_rsa|id_ed25519|\.pem|\.p12|BEGIN\s+(RSA|OPENSSH|EC|DSA)?\s*PRIVATE\s+KEY)'
+    regex: '((?:id_rsa|id_ed25519)(?:$|[^.]|\.(?:$|[^p]|p(?:$|[^u]|u(?:$|[^b]))))|\.pem|\.p12|BEGIN\s+(?:RSA|OPENSSH|EC|DSA)?\s*PRIVATE\s+KEY)'
     tags: [credentials, private-key]
     explanation: Private key access is high risk and should match explicit user intent.
     falsepositives:
@@ -49,7 +49,7 @@ rules:
     severity: medium
     score: 30
     targets: [command, arguments, tool_result, assistant_context]
-    regex: '(sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|Bearer\s+[A-Za-z0-9._~+\/=\-]{20,})'
+    regex: '((?:^|[^A-Za-z0-9_\-])(?-i:sk-)[A-Za-z0-9_\-]{16,}|(?:^|[^A-Za-z0-9_\-])(?-i:gh[pousr]_)[A-Za-z0-9_]{20,}|(?:^|[^A-Za-z0-9_\-])(?-i:xox[baprs]-)[A-Za-z0-9\-]{20,}|(?:^|[^A-Za-z0-9_\-])(?-i:AKIA)[0-9A-Z]{16}|(?:^|[^A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|(?:^|[^A-Za-z0-9_\-])Bearer\s+[A-Za-z0-9._~+\/=\-]{20,})'
     tags: [credentials, token-pattern]
     explanation: Credential-like token appeared in tool context.
     falsepositives:
@@ -91,19 +91,20 @@ rules:
     score: 20
     detection:
       selection:
-        command: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
-        arguments: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
-        url: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
+        command: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+        arguments: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+        url: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
       exclude:
-        command: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
-        arguments: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
-        url: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
+        command: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+        arguments: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+        url: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
       condition: selection
     tags: [network, download]
-    explanation: HTTP or FTP retrieval by a download client, not outbound upload.
+    explanation: HTTP or FTP retrieval by a download client, not an outbound upload or a literal loopback-only URL.
     falsepositives:
       - Installing tools, fetching release artifacts, or following documented setup steps can require expected downloads.
       - Outbound POST, PUT, form, or --data transfers are scored by exfil.outbound_upload rather than this rule.
+      - Literal loopback-only URLs are excluded unless the same command segment also has a non-loopback URL, or a URL together with a proxy or reroute flag.
 
   - id: install.package_manager
     category: install
@@ -126,7 +127,7 @@ rules:
     severity: high
     score: 60
     targets: [command, arguments, url]
-    regex: '(curl|wget).*(-X\s*(POST|PUT)|--request\s+(POST|PUT)|--method(?:\s+|=)POST|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?:^|[\s])-d(?:[\s=@A-Za-z0-9])|-T\s|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    regex: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27]|"[^"\n]*"|\x27[^\x27\n]*\x27|&[^;&|\n])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
     tags: [network, exfiltration]
     explanation: Outbound upload or object-storage copy in a tool call.
     falsepositives:

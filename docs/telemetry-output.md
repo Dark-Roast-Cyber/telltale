@@ -378,6 +378,20 @@ Common event types include:
 - `process_chain`: process-relationship detections with risk attribution and a
   terminally sanitized `process` context.
 
+Scanner state deduplicates session-risk summaries by risk posture, not growing
+event or tool-call counts. Changed classification (`detection_classes`,
+`signal_types`, `analytic_intents`, `atlas_tags`) re-emits both detections and
+summaries. Detections also re-emit for changed posture or new evidence, except
+evidence from rules explicitly classified as informational or low severity;
+`network.download` always retains new evidence. Unknown rules and
+unattributed evidence are not treated as routine. `--backfill` bypasses this
+deduplication. On upgrade, an event whose full content matches what the older
+scanner last emitted is learned without re-emission. A detection whose content
+changes under the corrected rules, and a summary whose counts grew since its
+last emission, re-emit once on the first scan. A downgrade can re-emit events
+whose newer fingerprints the older scanner does not recognize. Receiver-side
+deduplication remains necessary.
+
 The terminal Event boundary preserves established lowercase-hex
 `source_path_hash` values and canonical ATT&CK IDs (`T1234` or `T1234.001`).
 Native output always carries the trusted compile-time Telltale package version;
@@ -440,11 +454,22 @@ Remote delivery uses bounded in-memory retries where applicable; on failure the 
 and emits an `operational_alert` event with `alert_type=sink_delivery_failure`
 (check name `sink_delivery`) to the remaining healthy sinks. The failed sink
 never receives its own failure alert, so delivery problems cannot cascade.
-These alerts bypass duplicate suppression and are not counted in the health
-event's `emitted_count`; the scan's stdout summary also lists failures under
-`sink_failures`. A failure writing the local JSONL sink itself still aborts
-the scan, because that file is the durable record. Local JSONL serializes the
-complete batch before opening the file, holds a permanent sidecar lock across
+A standing `authentication_blocked` identity, including its HTTP status, or a
+`sink_response_blocked` identity alerts once per episode. The episode continues
+while that identity is unchanged and the sink has had no successful delivery
+since the alert. The next failure alerts immediately after a successful
+delivery, a class-identity change, or a previously
+blocked row failing again after an explicit blocked-delivery release. Other
+delivery failure classes bypass duplicate suppression and alert on every
+failure. Every delivery attempt still runs, and stderr, the
+full `sink_failures` summary, and outbox status are recorded on every failure.
+Suppression starts only after the alert is stored or delivered. A required
+alert-storage failure leaves the episode unlatched and fails the command after
+printing the original delivery-failure summary.
+These alerts are not counted in the health event's `emitted_count`. A failure
+writing the local JSONL sink itself still aborts the scan, because that file
+is the durable record. Local JSONL serializes the complete batch before opening
+the file, holds a permanent sidecar lock across
 rotation and append, flushes and synchronizes the file before returning, and
 therefore before scanner state commit. Empty batches return before lock,
 rotation, or file creation. A trailing partial record is refused

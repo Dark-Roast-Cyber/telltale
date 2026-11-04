@@ -16,9 +16,17 @@ const RULES: &str = r#"version: 1
 description: Synthetic compatibility gate.
 defaults: {enabled: true, case_insensitive: false}
 rules:
-  - id: synthetic.result
+  - id: synthetic.routine
     category: synthetic
     severity: low
+    score: 1
+    targets: [tool_result]
+    regex: routine-result-marker
+    tags: [synthetic]
+    explanation: Synthetic.
+  - id: synthetic.result
+    category: synthetic
+    severity: medium
     score: 3
     targets: [tool_result]
     regex: compatible-result-marker
@@ -45,7 +53,10 @@ fn transcript(suffix: bool) -> Vec<Value> {
         json!({"type":"response_item","payload":{"type":"function_call","call_id":"call-a","name":"exec","arguments":"synthetic"}}),
         command(
             "call-a",
-            format!("{} compatible-result-marker", "x".repeat(5_120)),
+            format!(
+                "{} compatible-result-marker routine-result-marker",
+                "x".repeat(5_120)
+            ),
         ),
         json!({"type":"compacted","payload":{"message":PRIVATE,"replacement_history":[{"type":"user","content":PRIVATE}],"retained_context":{"path":PRIVATE}}}),
     ];
@@ -237,11 +248,26 @@ fn suffix_and_quarantine_survive_acquisition_embedding_cli_and_replay() {
     assert_eq!(cli()["detection_flow"]["emitted_detection_count"], 0);
     for source in &sources {
         let mut appended = transcript(true);
+        let mut routine = command("routine-call", "new routine-result-marker".into());
+        routine["ordinal"] = json!(40 + appended.len() as u64);
+        appended.push(routine);
+        write(&source.path, &appended);
+    }
+    // The same low-severity rule already matched. Further evidence from it
+    // must not re-emit while posture is unchanged.
+    assert_eq!(cli()["detection_flow"]["emitted_detection_count"], 0);
+    for source in &sources {
+        let mut appended = transcript(true);
+        let mut routine = command("routine-call", "new routine-result-marker".into());
+        routine["ordinal"] = json!(40 + appended.len() as u64);
+        appended.push(routine);
         let mut new = command("new-call", "new compatible-result-marker".into());
         new["ordinal"] = json!(40 + appended.len() as u64);
         appended.push(new);
         write(&source.path, &appended);
     }
+    // Medium-severity evidence must re-emit even when the session's risk
+    // posture is unchanged.
     assert!(
         cli()["detection_flow"]["emitted_detection_count"]
             .as_u64()

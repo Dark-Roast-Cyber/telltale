@@ -353,7 +353,7 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (4),
+  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (5),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
@@ -367,6 +367,19 @@ Three scores exist and must stay distinct: native finding risk
   stops counting a shell parameter as a cloud credential read unless the command
   reads paths, and applies declared modifier links; semantic identities change
   from profile 3, and replay identities are unchanged.
+  Native profile 5 reads HTTP direction per quote-aware command segment, from
+  its command word after leading assignments and wrappers such as `sudo`, `env`,
+  `xargs` or `timeout`; a client named as an argument (`git fetch`, `echo curl`)
+  is not an invocation. Short flags
+  are case-sensitive and may be clustered (`-sX POST`), and curl's short flags
+  apply only to curl. `-x` and the SOCKS options are proxies, not methods, and
+  their arguments are not target URLs; there is no bare `PUT`. A literal
+  loopback-only URL (127.0.0.0/8, `::1` in any textual form, IPv4-mapped
+  127.0.0.0/8) is not a download and does not seed download-then-execute links
+  unless the segment also has a non-loopback URL or a proxy or reroute flag;
+  `localhost` is a name, not a literal IP. `-G` data is a query unless it is read
+  from a file. Semantic identities change from profile 4; replay identities are
+  unchanged.
   `ActionModifierSemantics::within_calls` reports a declared link's call bound.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not

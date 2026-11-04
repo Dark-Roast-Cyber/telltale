@@ -154,6 +154,12 @@ pub(crate) struct SinkFailure {
     pub class: DeliveryErrorClass,
     pub attempts: u32,
     pub error: String,
+    /// Attempts already stored on a durable row before this attempt.
+    /// `release_blocked_for_sink` preserves that count. Best-effort failures
+    /// have no preserved outbox history.
+    pub prior_attempts: u32,
+    /// Structured error already stored on a durable row before this attempt.
+    pub prior_error_class: Option<DeliveryErrorClass>,
 }
 
 /// Structured error type sinks return from `emit`. The message is only a
@@ -330,6 +336,10 @@ impl SinkSet {
             .filter(|entry| entry.persistence_role != PersistenceRole::CanonicalFirstWrite)
             .map(|entry| entry.sink.name().to_string())
             .collect()
+    }
+
+    pub(crate) fn durable_sink_ids(&self) -> &[String] {
+        &self.durable_sink_ids
     }
 
     fn add_with_roles(
@@ -698,6 +708,8 @@ impl SinkSet {
                             SanitizationContext::Diagnostic,
                             &err.to_string(),
                         ),
+                        prior_attempts: 0,
+                        prior_error_class: None,
                     });
                 }
             }
@@ -877,6 +889,8 @@ impl SinkSet {
                                 ),
                                 message
                             ),
+                            prior_attempts: ready.row.attempts,
+                            prior_error_class: ready.row.last_error_class,
                         });
                     }
                 }
@@ -886,12 +900,22 @@ impl SinkSet {
     }
 
     /// Deliver follow-up delivery-failure alert events, skipping the named
-    /// (just-failed) sinks. Errors here are logged to stderr and never
+    /// (just-failed) sinks. Remote errors are logged to stderr and never
     /// generate further events, so a failing sink cannot alert about itself
     /// recursively. A successfully admitted alert is delivered once directly
     /// to healthy durable sinks; it is not added to their replay queue.
-    pub(crate) fn deliver_alerts(&self, events: &[Event], skip: &[&str]) {
+    /// Returns whether the batch was persisted or delivered anywhere. A
+    /// required canonical write failure propagates instead of acknowledging it.
+    pub(crate) fn deliver_alerts(
+        &self,
+        events: &[Event],
+        skip: &[&str],
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         let durable_alert_admitted = self.durable_alerts_admitted(events);
+        if !durable_alert_admitted {
+            return Ok(false);
+        }
+        let mut accepted = self.has_persistent_replay();
         for entry in self.entries.iter().filter(|entry| {
             entry.persistence_role == PersistenceRole::CanonicalFirstWrite
                 && !self.has_persistent_replay()
@@ -899,17 +923,8 @@ impl SinkSet {
             if skip.contains(&entry.sink.name()) {
                 continue;
             }
-            if let Err(err) = entry.sink.emit(events) {
-                let rendered = format!(
-                    "warning: could not deliver sink-failure alert to sink {}: {err}",
-                    entry.sink.name()
-                );
-                eprintln!(
-                    "{}",
-                    PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
-                );
-                return;
-            }
+            entry.sink.emit(events)?;
+            accepted = true;
         }
         for entry in self.entries.iter().filter(|entry| {
             entry.persistence_role != PersistenceRole::CanonicalFirstWrite
@@ -928,6 +943,8 @@ impl SinkSet {
                     "{}",
                     PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
                 );
+            } else {
+                accepted = true;
             }
         }
         for entry in self.entries.iter().filter(|entry| {
@@ -946,8 +963,11 @@ impl SinkSet {
                     "{}",
                     PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
                 );
+            } else {
+                accepted = true;
             }
         }
+        Ok(accepted)
     }
 
     fn durable_alerts_admitted(&self, events: &[Event]) -> bool {
@@ -1794,7 +1814,7 @@ mod tests {
         assert_eq!(failures.len(), 1);
 
         let failed_names: Vec<&str> = failures.iter().map(|f| f.name.as_str()).collect();
-        sinks.deliver_alerts(&events, &failed_names);
+        assert!(sinks.deliver_alerts(&events, &failed_names).unwrap());
 
         // The failed sink was skipped: exactly one emit call (the original delivery).
         assert_eq!(*emit_calls.lock().expect("lock"), 1);
@@ -1810,7 +1830,7 @@ mod tests {
 
         // No skip: the failing sink receives the alert, fails, and the error
         // is swallowed (stderr only) instead of propagating or recursing.
-        sinks.deliver_alerts(&[make_health_event()], &[]);
+        assert!(!sinks.deliver_alerts(&[make_health_event()], &[]).unwrap());
     }
 
     #[test]
@@ -1834,7 +1854,7 @@ mod tests {
             Box::new(OrderedSink::new("local-2", Arc::clone(&order))),
         );
 
-        sinks.deliver_alerts(&[make_health_event()], &[]);
+        assert!(sinks.deliver_alerts(&[make_health_event()], &[]).unwrap());
 
         assert_eq!(
             *order.lock().expect("lock"),
@@ -1850,7 +1870,7 @@ mod tests {
         sinks.add_best_effort("splunk_hec", Box::new(remote));
         sinks.add_canonical_first_write("jsonl", Box::new(durable));
 
-        sinks.deliver_alerts(&[make_health_event()], &[]);
+        assert!(sinks.deliver_alerts(&[make_health_event()], &[]).is_err());
 
         assert!(
             batches.lock().expect("lock").is_empty(),
@@ -2826,7 +2846,11 @@ mod tests {
             .iter()
             .map(|failure| failure.name.as_str())
             .collect::<Vec<_>>();
-        sinks.deliver_alerts(std::slice::from_ref(&alert), &failed_names);
+        assert!(
+            !sinks
+                .deliver_alerts(std::slice::from_ref(&alert), &failed_names)
+                .unwrap()
+        );
         assert_eq!(failed_calls.lock().expect("failed calls").len(), 1);
         assert_eq!(healthy_calls.lock().expect("healthy calls").len(), 1);
         assert_eq!(*healthy_alert_calls.lock().expect("healthy alert calls"), 0);
@@ -2905,7 +2929,11 @@ mod tests {
         sinks
             .persist_for_durable_replay(std::slice::from_ref(&alert))
             .expect("admit operational alert once");
-        sinks.deliver_alerts(std::slice::from_ref(&alert), &[failures[0].name.as_str()]);
+        assert!(
+            sinks
+                .deliver_alerts(std::slice::from_ref(&alert), &[failures[0].name.as_str()])
+                .unwrap()
+        );
         assert_eq!(
             *healthy_alert_calls.lock().expect("healthy alert calls"),
             1,
