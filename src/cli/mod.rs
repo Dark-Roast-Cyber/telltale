@@ -230,13 +230,14 @@ struct WatchCommandArgs {
     execution: ScanExecutionArgs,
 
     /// Cap watch-triggered scans after this many iterations (at least 1).
-    /// The --initial-scan is not counted by --iterations; a liveness
-    /// heartbeat scan is.
+    /// The --initial-scan is not counted by --iterations, even when it handles
+    /// a due heartbeat. Change-triggered and liveness heartbeat scans count.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     iterations: Option<u32>,
 
     /// Scan every existing session once after the watches are registered.
-    /// Without it, watch starts idle and scans only sources that change.
+    /// Without it, watch starts idle until a source changes or an opt-in
+    /// liveness heartbeat is due.
     #[arg(long)]
     initial_scan: bool,
 

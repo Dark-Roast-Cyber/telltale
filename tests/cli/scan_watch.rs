@@ -5372,6 +5372,11 @@ fn watch_command_is_available_for_realtime_scans() {
     let flat = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(flat.contains("--initial-scan"));
     assert!(flat.contains("not counted by --iterations"), "{flat}");
+    assert!(
+        flat.contains("even when it handles a due heartbeat"),
+        "{flat}"
+    );
+    assert!(flat.contains("liveness heartbeat scans count"), "{flat}");
     assert!(flat.contains("restart watch to apply"), "{flat}");
     assert!(flat.contains("CODEX_HOME"), "{flat}");
     assert!(flat.contains("still apply"), "{flat}");
@@ -9667,6 +9672,23 @@ impl HeartbeatStore {
         Self::run(self.command(&[&["scan", "--once"][..], args].concat()))
     }
 
+    fn append_message(&self, message: &str) {
+        let mut session = fs::OpenOptions::new()
+            .append(true)
+            .open(self.sessions.join("uc001-positive.jsonl"))
+            .expect("session fixture");
+        writeln!(
+            session,
+            "{}",
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": "2026-04-03T00:00:03Z",
+                "payload": {"type": "user_message", "message": message}
+            })
+        )
+        .expect("append synthetic message");
+    }
+
     fn events_in(log: &Path) -> Vec<Value> {
         fs::read_to_string(log)
             .unwrap_or_default()
@@ -9730,6 +9752,31 @@ fn assert_single_heartbeat(events: &[Value], context: &str) {
     );
 }
 
+fn assert_only_observation_times_refreshed(before: &[u8], after: &[u8], started: u64, ended: u64) {
+    let before: Value = serde_json::from_slice(before).expect("state before scan");
+    let mut after: Value = serde_json::from_slice(after).expect("state after scan");
+    let observations = after["source_observations"]
+        .as_object_mut()
+        .expect("source observations");
+    assert!(
+        !observations.is_empty(),
+        "exercise the ordinary timestamp refresh"
+    );
+    for (key, observation) in observations {
+        let previous = &before["source_observations"][key]["last_seen_unix_ms"];
+        let refreshed = observation["last_seen_unix_ms"]
+            .as_u64()
+            .expect("timestamp");
+        assert!(refreshed >= previous.as_u64().expect("previous timestamp"));
+        assert!((started..=ended).contains(&refreshed));
+        observation["last_seen_unix_ms"] = previous.clone();
+    }
+    assert_eq!(
+        after, before,
+        "only baseline observation timestamps may change"
+    );
+}
+
 #[test]
 fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval() {
     let store = HeartbeatStore::new(false);
@@ -9738,8 +9785,16 @@ fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval(
 
     // Off by default: a quiet rescan appends nothing and records no heartbeat.
     let log_before = fs::read(&store.log).expect("log");
+    let state_before = fs::read(&store.state).expect("state");
+    let started = unix_ms();
     let summary = store.scan(&[]);
     assert_eq!(fs::read(&store.log).expect("log"), log_before);
+    assert_only_observation_times_refreshed(
+        &state_before,
+        &fs::read(&store.state).expect("state"),
+        started,
+        unix_ms(),
+    );
     assert_eq!(store.heartbeat(), None);
     assert_eq!(
         summary["effective_configuration"]["settings"]["events.health_heartbeat_interval_seconds"],
@@ -9782,6 +9837,8 @@ fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval(
 
     // An explicit 0 turns it off over the environment and leaves the marker.
     store.set_heartbeat(0);
+    let state_before = fs::read(&store.state).expect("state");
+    let started = unix_ms();
     let mut off = store.command(&["scan", "--once", "--health-heartbeat-interval-seconds", "0"]);
     off.env("TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS", "1");
     assert!(
@@ -9792,6 +9849,12 @@ fn scan_health_heartbeat_is_off_by_default_then_emits_once_per_elapsed_interval(
             .is_empty()
     );
     assert_eq!(store.heartbeat(), Some(0));
+    assert_only_observation_times_refreshed(
+        &state_before,
+        &fs::read(&store.state).expect("state"),
+        started,
+        unix_ms(),
+    );
 }
 
 #[test]
@@ -9881,10 +9944,94 @@ fn scan_heartbeat_is_recorded_only_after_its_required_jsonl_write() {
     assert_single_heartbeat(&repaired, "after the failed write");
 }
 
+#[cfg(not(windows))]
+#[test]
+fn scan_heartbeat_is_recorded_only_after_its_required_outbox_write() {
+    let store = HeartbeatStore::new(true);
+    let interval = ["--health-heartbeat-interval-seconds", "3600"];
+    store.scan(&interval);
+    let overdue = unix_ms() - 7_200_000;
+    store.set_heartbeat(overdue);
+    let state_before = fs::read(&store.state).expect("state");
+    let outbox = store.log.parent().unwrap().join("private/outbox.sqlite");
+    let connection = Connection::open(&outbox).expect("synthetic outbox");
+    let position = || {
+        connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM events), byte_offset FROM ingest_cursor WHERE id = 1",
+                [],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .expect("outbox count and cursor")
+    };
+    let before = position();
+    // Fail the actual outbox insert, after canonical JSONL has been fsynced.
+    // No production injection seam or invalid configuration is involved.
+    connection
+        .execute_batch(
+            "CREATE TRIGGER synthetic_reject_heartbeat BEFORE INSERT ON events
+             BEGIN SELECT RAISE(ABORT, 'synthetic heartbeat outbox write failure'); END;",
+        )
+        .expect("install synthetic write fault");
+    let mut output = None;
+    let retained = store.appended(|| {
+        output = Some(
+            store
+                .command(&[&["scan", "--once"][..], &interval].concat())
+                .output()
+                .expect("run failing scan"),
+        );
+    });
+    let output = output.unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("insert event"),
+        "{output:?}"
+    );
+    assert_single_heartbeat(&retained, "JSONL accepted before outbox failure");
+    assert_eq!(
+        position(),
+        before,
+        "failed insertion must not advance the cursor"
+    );
+    assert_eq!(fs::read(&store.state).expect("state"), state_before);
+    assert_eq!(store.heartbeat(), Some(overdue));
+
+    connection
+        .execute_batch("DROP TRIGGER synthetic_reject_heartbeat")
+        .expect("repair outbox");
+    let repaired = store.scan_appended(&interval);
+    assert_single_heartbeat(&repaired, "heartbeat remains due after outbox repair");
+    assert!(store.heartbeat().expect("heartbeat") > overdue);
+    let (count, offset) = position();
+    assert_eq!(
+        count,
+        before.0 + 2,
+        "recover the crash gap and admit the new health"
+    );
+    assert_eq!(
+        offset,
+        fs::metadata(&store.log).expect("log metadata").len()
+    );
+    for health in retained.iter().chain(&repaired) {
+        let payload: Vec<u8> = connection
+            .query_row(
+                "SELECT payload FROM events WHERE event_id = ?1",
+                [health["event_id"].as_str().expect("event id")],
+                |row| row.get(0),
+            )
+            .expect("health admitted to outbox");
+        assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap(), *health);
+    }
+    assert!(store.scan_appended(&interval).is_empty());
+}
+
 struct HeartbeatWatch {
     child: std::process::Child,
-    stdout: thread::JoinHandle<Vec<u8>>,
-    stderr: thread::JoinHandle<Vec<String>>,
+    stdout: Option<thread::JoinHandle<Vec<Value>>>,
+    stderr: Option<thread::JoinHandle<Vec<String>>>,
+    summaries: mpsc::Receiver<Value>,
+    ready: String,
 }
 
 impl HeartbeatWatch {
@@ -9894,11 +10041,19 @@ impl HeartbeatWatch {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn telltale watch");
-        let mut stdout = child.stdout.take().expect("watch stdout");
+        let stdout = BufReader::new(child.stdout.take().expect("watch stdout"));
+        let (summary_tx, summaries) = mpsc::channel();
         let stdout = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes).expect("read watch stdout");
-            bytes
+            let mut summaries = Vec::new();
+            for line in stdout.lines() {
+                let line = line.expect("watch stdout line");
+                if line.starts_with('{') {
+                    let summary: Value = serde_json::from_str(&line).expect("summary json");
+                    let _ = summary_tx.send(summary.clone());
+                    summaries.push(summary);
+                }
+            }
+            summaries
         });
         let stderr = BufReader::new(child.stderr.take().expect("watch stderr"));
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -9907,7 +10062,7 @@ impl HeartbeatWatch {
             for line in stderr.lines() {
                 let line = line.expect("watch stderr line");
                 if line.starts_with("telltale watch: ready") {
-                    let _ = ready_tx.send(());
+                    let _ = ready_tx.send(line.clone());
                 }
                 lines.push(line);
             }
@@ -9915,13 +10070,23 @@ impl HeartbeatWatch {
         });
         let mut watch = Self {
             child,
-            stdout,
-            stderr,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            summaries,
+            ready: String::new(),
         };
-        if ready_rx.recv_timeout(Duration::from_secs(60)).is_err() {
-            fail_watch(&mut watch.child, "watch did not report readiness");
-        }
+        watch.ready = match ready_rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(line) => line,
+            Err(_) => fail_watch(&mut watch.child, "watch did not report readiness"),
+        };
         watch
+    }
+
+    fn next_summary(&mut self, timeout: Duration) -> Value {
+        match self.summaries.recv_timeout(timeout) {
+            Ok(summary) => summary,
+            Err(_) => fail_watch(&mut self.child, "watch did not report a scan summary"),
+        }
     }
 
     fn wait_for_exit(mut self, timeout: Duration) -> Vec<Value> {
@@ -9933,25 +10098,165 @@ impl HeartbeatWatch {
             thread::sleep(Duration::from_millis(50));
         }
         let status = self.child.wait().expect("watch status");
-        let stderr = self.stderr.join().expect("join stderr");
+        let stderr = self.stderr.take().unwrap().join().expect("join stderr");
         assert!(status.success(), "stderr: {stderr:?}");
-        Self::summaries(self.stdout)
+        self.stdout.take().unwrap().join().expect("join stdout")
     }
 
     fn kill(mut self) -> Vec<Value> {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = self.stderr.join();
-        Self::summaries(self.stdout)
+        let _ = self.stderr.take().unwrap().join();
+        self.stdout.take().unwrap().join().expect("join stdout")
     }
+}
 
-    fn summaries(stdout: thread::JoinHandle<Vec<u8>>) -> Vec<Value> {
-        String::from_utf8_lossy(&stdout.join().expect("join stdout"))
-            .lines()
-            .filter(|line| line.starts_with('{'))
-            .map(|line| serde_json::from_str(line).expect("summary json"))
-            .collect()
+impl Drop for HeartbeatWatch {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(stderr) = self.stderr.take() {
+            let _ = stderr.join();
+        }
+        if let Some(stdout) = self.stdout.take() {
+            let _ = stdout.join();
+        }
     }
+}
+
+#[test]
+fn watch_targeted_change_before_heartbeat_deadline_widens_after_rate_limit() {
+    let _watch_guard = watch_process_guard();
+    let store = HeartbeatStore::new(false);
+    fs::write(store.sessions.join("unchanged.jsonl"), b"").expect("second known source");
+    store.scan(&["--health-heartbeat-interval-seconds", "3600"]);
+    // One fixed wall-clock deadline, checked against readiness and both scans.
+    // The first change finishes its six-second debounce before the deadline.
+    // The second spends six seconds debouncing, then waits for the twelve-second
+    // rate limit; that wait crosses the heartbeat deadline.
+    let recorded = unix_ms();
+    store.set_heartbeat(recorded);
+    let due = recorded + 16_000;
+    let log_before = fs::read(&store.log).expect("log");
+    let before = store.events().len();
+    let mut watch = HeartbeatWatch::spawn(store.command(&[
+        "watch",
+        "--iterations",
+        "2",
+        "--health-heartbeat-interval-seconds",
+        "16",
+        "--debounce-ms",
+        "6000",
+        "--min-scan-interval-ms",
+        "12000",
+    ]));
+    assert!(
+        watch.ready.contains("liveness heartbeats"),
+        "{}",
+        watch.ready
+    );
+    assert!(
+        unix_ms() + 14_000 < due,
+        "readiness must leave debounce headroom"
+    );
+    store.append_message("synthetic targeted change before heartbeat deadline");
+    let targeted = watch.next_summary(Duration::from_secs(10));
+    assert!(
+        unix_ms() + 7_000 < due,
+        "first scan must finish well before due"
+    );
+    assert_eq!(
+        targeted["source_discovery"]["basis"],
+        "watch_source_index_snapshot"
+    );
+    assert_eq!(targeted["source_processing"]["selected_source_count"], 1);
+    assert_eq!(
+        fs::read(&store.log).expect("log"),
+        log_before,
+        "no early heartbeat"
+    );
+    assert_eq!(store.heartbeat(), Some(recorded));
+
+    let first_completed = Instant::now();
+    store.append_message("synthetic pending change before heartbeat deadline");
+    assert!(unix_ms() + 7_000 < due, "second change must precede due");
+    let widened = watch.next_summary(Duration::from_secs(16));
+    let completed = unix_ms();
+    assert!(first_completed.elapsed() >= Duration::from_millis(11_800));
+    assert!(completed >= due, "rate limit must cross the deadline");
+    // An idle heartbeat could not finish until due + the six-second debounce.
+    // Finishing earlier proves a change started coalescing before the deadline,
+    // rather than merely hoping the filesystem notification arrived in time.
+    assert!(
+        completed < due + 6_000,
+        "change was not admitted before the deadline"
+    );
+    assert_eq!(widened["source_discovery"]["basis"], "current_full_scan");
+    assert_eq!(widened["source_processing"]["selected_source_count"], 2);
+    assert!(
+        widened["source_processing"]["parsed_record_count"].as_u64()
+            > targeted["source_processing"]["parsed_record_count"].as_u64()
+    );
+    let summaries = watch.wait_for_exit(Duration::from_secs(5));
+    assert_eq!(summaries, vec![targeted, widened]);
+    assert_single_heartbeat(&store.events()[before..], "widened pending change");
+    assert!(store.heartbeat().expect("heartbeat") >= due);
+}
+
+#[test]
+fn watch_initial_scan_with_due_heartbeat_stays_uncounted_until_a_later_trigger() {
+    let _watch_guard = watch_process_guard();
+    let store = HeartbeatStore::new(false);
+    store.scan(&["--health-heartbeat-interval-seconds", "3600"]);
+    store.set_heartbeat(0);
+    let before = store.events().len();
+    let mut watch = HeartbeatWatch::spawn(store.command(&[
+        "watch",
+        "--initial-scan",
+        "--iterations",
+        "1",
+        "--health-heartbeat-interval-seconds",
+        "3600",
+        "--debounce-ms",
+        "100",
+        "--min-scan-interval-ms",
+        "0",
+    ]));
+    assert!(
+        watch.ready.contains("initial scan complete"),
+        "{}",
+        watch.ready
+    );
+    assert!(
+        watch.ready.contains("liveness heartbeats"),
+        "{}",
+        watch.ready
+    );
+    let initial = watch.next_summary(Duration::from_secs(5));
+    assert_eq!(initial["source_discovery"]["basis"], "current_full_scan");
+    assert_single_heartbeat(
+        &store.events()[before..],
+        "initial scan coalesces heartbeat",
+    );
+    assert!(store.heartbeat().expect("heartbeat") > 0);
+    assert!(matches!(
+        watch.summaries.recv_timeout(Duration::from_millis(250)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert!(
+        watch.child.try_wait().expect("poll watch").is_none(),
+        "initial scan consumed the iteration"
+    );
+
+    store.append_message("synthetic change after initial heartbeat readiness");
+    let summaries = watch.wait_for_exit(Duration::from_secs(10));
+    assert_eq!(summaries.len(), 2, "{summaries:?}");
+    assert_eq!(summaries[0], initial);
+    assert_eq!(
+        summaries[1]["source_discovery"]["basis"],
+        "watch_source_index_snapshot"
+    );
+    assert_single_heartbeat(&store.events()[before..], "no second heartbeat before due");
 }
 
 #[test]

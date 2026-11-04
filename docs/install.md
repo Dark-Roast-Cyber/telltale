@@ -691,12 +691,15 @@ selected supported clients:
 cargo run --bin telltale -- watch --client codex --client opencode --root "$HOME"
 ```
 
-Watch starts idle: by default it does not scan sessions that already exist, and
-it scans a source only after that source changes. Add `--initial-scan` to run
-one full scan of every existing session after the filesystem watches are
-registered. A write during that scan is still queued and scanned afterward.
-`--iterations` counts only change-triggered scans, never the initial scan, and
-must be at least 1.
+Watch starts idle: by default it scans a source only after that source changes.
+With the opt-in [liveness heartbeat](telemetry-output.md#liveness-heartbeat), a
+due heartbeat triggers a full scan, even without changes, or widens a pending
+change-triggered scan to a full scan. Add `--initial-scan` to run one full scan
+of every existing session after the filesystem watches are registered. A write
+during that scan is still queued and scanned afterward. `--iterations` counts
+change-triggered and heartbeat-triggered scans and must be at least 1. The
+initial scan is always uncounted, even when it also handles a due heartbeat;
+`--initial-scan --iterations 1` still waits for one later triggered scan.
 Once later changes will be seen, watch prints one line to stderr that starts
 with `telltale watch: ready`. It reports the number of watched roots and
 whether the initial scan ran, and it never includes paths. Each scan still
@@ -736,9 +739,12 @@ including counts above the 64-bit range.
 
 These fields describe the scan that wrote the latest health event
 (`last_scan_time`). A scan writes a health event only when it sees scanner
-errors, raises an alert or detects a source inventory change, or, with
-`events.health_heartbeat_interval_seconds` set, when none was written for that
-interval (the [liveness heartbeat](telemetry-output.md#liveness-heartbeat)).
+errors, raises an alert or detects a source inventory change, or when an
+ordinary full scan finds the configured
+`events.health_heartbeat_interval_seconds` has elapsed since the last health
+event (the [liveness heartbeat](telemetry-output.md#liveness-heartbeat)).
+Targeted scans do not add a heartbeat, `--history` never adds one, and
+`--dry-run` persists neither events nor state.
 A heartbeat is an ordinary health event: alerts recorded before it no longer
 count toward `attention_reasons`, while its `scanner_error_count` is current.
 A standing scanner-error count alerts when an ordinary full scan first crosses the

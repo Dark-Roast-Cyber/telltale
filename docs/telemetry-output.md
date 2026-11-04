@@ -437,9 +437,11 @@ health event was written in that many seconds, even if nothing changed.
 - The check runs only when a full scan runs. `scan --once` from a timer, or
   `scan --interval-seconds`, writes the heartbeat on the first scan after the
   interval has passed. `watch` runs one full scan when the heartbeat comes
-  due, idle or not; that scan saves state like any watch scan that writes
-  events, and counts as one `--iterations` scan. Idle delivery wakeups still
-  do not scan or save state. Watch reads the recorded time at startup, so an
+  due, idle or not; except in `--dry-run`, that scan saves state like any watch
+  scan that writes events, and counts as one `--iterations` scan. An
+  `--initial-scan` remains uncounted even when it handles a due heartbeat;
+  `--iterations 1` still requires one later triggered scan. Idle delivery wakeups
+  still do not scan or save state. Watch reads the recorded time at startup, so an
   overdue heartbeat runs right away. Targeted watch scans never write a
   heartbeat on their own.
 - A recorded time later than the current clock (the clock moved back) counts

@@ -5,8 +5,9 @@
 //! watch is registered; either way it reports readiness once on stderr.
 //!
 //! With the opt-in liveness heartbeat, a due heartbeat makes the next scan a
-//! full scan, idle or not. That scan emits health and saves state through the
-//! ordinary scan path; idle delivery wakeups still never scan or save state.
+//! full scan, idle or not. That scan emits health and, except in dry-run, saves
+//! state through the ordinary scan path; idle delivery wakeups still never scan
+//! or save state. The initial scan stays uncounted even if a heartbeat is due.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -368,7 +369,7 @@ pub(crate) fn run_watch(
     // during it stays queued and triggers a later scan.
     let mut initial_scan = config.trigger.initial_scan;
     if !initial_scan {
-        report_watch_ready(watch_roots.len(), false);
+        report_watch_ready(watch_roots.len(), false, heartbeat_interval.is_some());
     }
 
     'watch: loop {
@@ -476,7 +477,7 @@ pub(crate) fn run_watch(
         last_scan_completed = Some(Instant::now());
         if initial_scan {
             initial_scan = false;
-            report_watch_ready(watch_roots.len(), true);
+            report_watch_ready(watch_roots.len(), true, heartbeat_interval.is_some());
             continue;
         }
 
@@ -488,8 +489,17 @@ pub(crate) fn run_watch(
 }
 
 /// One constant stderr line, without paths: every later change will be seen.
-fn report_watch_ready(roots: usize, initial_scan: bool) {
-    if initial_scan {
+fn report_watch_ready(roots: usize, initial_scan: bool, heartbeat: bool) {
+    if heartbeat {
+        let initial = if initial_scan {
+            ", initial scan complete"
+        } else {
+            ""
+        };
+        eprintln!(
+            "telltale watch: ready{initial}; watching {roots} session-store root(s); changes and liveness heartbeats trigger scans"
+        );
+    } else if initial_scan {
         eprintln!(
             "telltale watch: ready, initial scan complete; watching {roots} session-store root(s); changes trigger scans"
         );
