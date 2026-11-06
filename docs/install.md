@@ -602,6 +602,7 @@ events:
   emit_activity: false               # --emit-activity
   emit_session_risk_summary: false   # --emit-session-risk-summary
   baseline_deviation_scoring: false  # --baseline-deviation-scoring; needs emit_activity
+  health_heartbeat_interval_seconds: 0 # TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS, --health-heartbeat-interval-seconds; 0 is off
 watch:
   debounce_ms: 500                   # watch --debounce-ms
   min_scan_interval_ms: 10000        # watch --min-scan-interval-ms
@@ -609,7 +610,8 @@ watch:
 
 Precedence, lowest to highest: defaults, settings files (roots in order, files
 sorted within a root, so a later file wins per key), environment variables, then
-explicit flags. The `events` flags can only turn their setting on. A
+explicit flags. The `events` on/off flags can only turn their setting on;
+`--health-heartbeat-interval-seconds 0` turns the heartbeat off. A
 vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can share one
 directory. Unknown keys, an unsupported `version`, files over 64 KiB,
 and environment values that do not parse fail the command before it scans or
@@ -689,12 +691,17 @@ selected supported clients:
 cargo run --bin telltale -- watch --client codex --client opencode --root "$HOME"
 ```
 
-Watch starts idle: by default it does not scan sessions that already exist, and
-it scans a source only after that source changes. Add `--initial-scan` to run
-one full scan of every existing session after the filesystem watches are
-registered. A write during that scan is still queued and scanned afterward.
-`--iterations` counts only change-triggered scans, never the initial scan, and
-must be at least 1.
+Watch starts idle: by default it scans a source only after that source changes.
+With the opt-in [liveness heartbeat](telemetry-output.md#liveness-heartbeat), a
+due heartbeat triggers a full scan, even without changes, or widens a pending
+change-triggered scan to a full scan. Add `--initial-scan` to run one full scan
+of every existing session after the filesystem watches are registered. A write
+during that scan is still queued and scanned afterward. `--iterations` counts
+change-triggered and heartbeat-triggered scans and must be at least 1. The
+initial scan is always uncounted, even when it also handles a due heartbeat;
+`--initial-scan --iterations 1` still waits for one later triggered scan.
+Heartbeat scans use normal persistence; with `--dry-run`, neither events nor
+scanner state are persisted.
 Once later changes will be seen, watch prints one line to stderr that starts
 with `telltale watch: ready`. It reports the number of watched roots and
 whether the initial scan ran, and it never includes paths. Each scan still
@@ -733,9 +740,20 @@ cannot be read as a number. Any positive count counts as scanner errors,
 including counts above the 64-bit range.
 
 These fields describe the scan that wrote the latest health event
-(`last_scan_time`). A scan writes a health event only when it sees scanner
-errors, raises an alert or detects a source inventory change. A standing
-scanner-error count alerts when an ordinary full scan first crosses the
+(`last_scan_time`). Scans write health for a newly emitted scanner error, an
+alert, or a source inventory change. Every full `--backfill` scan writes health
+regardless of those triggers. An ordinary full scan also writes an opt-in
+heartbeat when the configured
+`events.health_heartbeat_interval_seconds` has elapsed since the recorded
+enabled-mode health event, no marker timestamp can be parsed from otherwise
+readable state, or the selected timestamp lies in the future (the
+[liveness heartbeat](telemetry-output.md#liveness-heartbeat)). Health events
+written while the heartbeat is off do not create or update the marker.
+Targeted scans do not add a heartbeat, `--history` never adds one, and
+`--dry-run` persists neither events nor state.
+A heartbeat is an ordinary health event: alerts recorded before it no longer
+count toward `attention_reasons`, while its `scanner_error_count` is current.
+A standing scanner-error count alerts when an ordinary full scan first crosses the
 threshold, not on every later full scan above it. `--history`, `--dry-run`, and
 `--backfill` do not retain that suppression; full scans in those modes alert
 whenever the count is above the threshold. Targeted scans do not evaluate this

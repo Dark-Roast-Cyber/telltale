@@ -3,6 +3,11 @@
 //! set forces a full reconciliation rather than dropping changes. Watch starts
 //! idle unless `--initial-scan` asks for one uncounted full scan after every
 //! watch is registered; either way it reports readiness once on stderr.
+//!
+//! With the opt-in liveness heartbeat, a due heartbeat makes the next scan a
+//! full scan, idle or not. That scan emits health and, except in dry-run, saves
+//! state through the ordinary scan path; idle delivery wakeups still never scan
+//! or save state. The initial scan stays uncounted even if a heartbeat is due.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -26,9 +31,10 @@ use super::discovery::{
     load_project_configuration,
 };
 use super::{
-    ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, iteration_budget_exhausted,
-    run_scan,
+    ScanConfig, ScanExecutionConfig, ScanTargets, StateSavePolicy, health_heartbeat_wait,
+    iteration_budget_exhausted, run_scan, unix_ms_now,
 };
+use crate::state::ScanState;
 
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod sqlite_metadata;
@@ -55,6 +61,41 @@ const WATCH_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_NOTIFICATION_CAPACITY: usize = 256;
 const WATCH_EVENT_PATH_CAPACITY: usize = 64;
 const WATCH_PENDING_PATH_CAPACITY: usize = 4096;
+
+/// The startup snapshot and subsequent scan results, never reread on idle wakeups.
+struct WatchHeartbeat {
+    interval_seconds: u64,
+    last_health_unix_ms: Option<u64>,
+    retry_started: Option<Instant>,
+}
+
+impl WatchHeartbeat {
+    fn is_due(&self, now_unix_ms: u64, now: Instant) -> bool {
+        // Only the anti-loop delay is monotonic. Recheck wall time so forward
+        // jumps and a marker now in the future both schedule a full scan.
+        self.retry_started.is_none_or(|started| {
+            now.saturating_duration_since(started) >= Duration::from_secs(self.interval_seconds)
+        }) && health_heartbeat_wait(self.last_health_unix_ms, now_unix_ms, self.interval_seconds)
+            .is_zero()
+    }
+
+    fn after_scan(
+        &mut self,
+        last_health_unix_ms: Option<u64>,
+        heartbeat_scan: bool,
+        now_unix_ms: u64,
+        now: Instant,
+    ) {
+        self.last_health_unix_ms = last_health_unix_ms;
+        // A scan that leaves the heartbeat due must not cause a tight loop,
+        // even if the wall clock changes again. Elapsed time avoids overflow
+        // when the configured interval cannot fit in an Instant deadline.
+        self.retry_started = (heartbeat_scan
+            && health_heartbeat_wait(last_health_unix_ms, now_unix_ms, self.interval_seconds)
+                .is_zero())
+        .then_some(now);
+    }
+}
 
 #[derive(Clone, Default)]
 struct WatchPathFilter {
@@ -346,11 +387,22 @@ pub(crate) fn run_watch(
         );
     }
     let mut last_delivery_completed = Instant::now();
+    // Read the recorded heartbeat once; later checks use this scan-owned cache.
+    let heartbeat_interval = config.execution.health_heartbeat_interval_seconds;
+    let mut heartbeat = match heartbeat_interval {
+        Some(interval_seconds) => Some(WatchHeartbeat {
+            interval_seconds,
+            last_health_unix_ms: ScanState::load_snapshot(config.execution.state_path)?
+                .last_health_heartbeat_unix_ms(),
+            retry_started: None,
+        }),
+        None => None,
+    };
     // Watches are registered before this scan reads anything, so a write
     // during it stays queued and triggers a later scan.
     let mut initial_scan = config.trigger.initial_scan;
     if !initial_scan {
-        report_watch_ready(watch_roots.len(), false);
+        report_watch_ready(watch_roots.len(), false, heartbeat_interval.is_some());
     }
 
     'watch: loop {
@@ -373,6 +425,13 @@ pub(crate) fn run_watch(
                 if !pending.is_empty() {
                     break;
                 }
+            }
+            if heartbeat
+                .as_ref()
+                .is_some_and(|heartbeat| heartbeat.is_due(unix_ms_now(), Instant::now()))
+            {
+                pending.require_full_scan();
+                break;
             }
             if idle_delivery && last_delivery_completed.elapsed() >= WATCH_DELIVERY_INTERVAL {
                 report_idle_delivery_failures(config.execution.sinks.deliver_durable()?);
@@ -411,6 +470,13 @@ pub(crate) fn run_watch(
             break;
         }
         inbox.take_signals(&mut pending)?;
+        // A due heartbeat widens a targeted scan, so a busy host reports too.
+        let heartbeat_scan = heartbeat
+            .as_ref()
+            .is_some_and(|heartbeat| heartbeat.is_due(unix_ms_now(), Instant::now()));
+        if heartbeat_scan {
+            pending.require_full_scan();
+        }
 
         let targets = match pending.scan_action(&source_index) {
             WatchScanAction::Skip => continue,
@@ -431,6 +497,14 @@ pub(crate) fn run_watch(
         let result = run_scan(scan_config, targets, StateSavePolicy::OnChange)?;
         inbox.check_error()?;
         last_delivery_completed = Instant::now();
+        if let Some(heartbeat) = &mut heartbeat {
+            heartbeat.after_scan(
+                result.last_health_unix_ms,
+                heartbeat_scan,
+                unix_ms_now(),
+                Instant::now(),
+            );
+        }
         if let Some((sources, discovery)) = result.full_scan_discovery {
             (source_index, watch_discovery) = watch_index_from_sources(sources, discovery);
             #[cfg(target_os = "macos")]
@@ -439,7 +513,7 @@ pub(crate) fn run_watch(
         last_scan_completed = Some(Instant::now());
         if initial_scan {
             initial_scan = false;
-            report_watch_ready(watch_roots.len(), true);
+            report_watch_ready(watch_roots.len(), true, heartbeat_interval.is_some());
             continue;
         }
 
@@ -451,8 +525,17 @@ pub(crate) fn run_watch(
 }
 
 /// One constant stderr line, without paths: every later change will be seen.
-fn report_watch_ready(roots: usize, initial_scan: bool) {
-    if initial_scan {
+fn report_watch_ready(roots: usize, initial_scan: bool, heartbeat: bool) {
+    if heartbeat {
+        let initial = if initial_scan {
+            ", initial scan complete"
+        } else {
+            ""
+        };
+        eprintln!(
+            "telltale watch: ready{initial}; watching {roots} session-store root(s); changes and liveness heartbeats trigger scans"
+        );
+    } else if initial_scan {
         eprintln!(
             "telltale watch: ready, initial scan complete; watching {roots} session-store root(s); changes trigger scans"
         );
@@ -719,6 +802,99 @@ mod tests {
 
     fn change(path: PathBuf) -> NotifyEvent {
         NotifyEvent::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(path)
+    }
+
+    #[test]
+    fn watch_heartbeat_forward_clock_jump_is_due_before_the_startup_deadline() {
+        let started = Instant::now();
+        let last = 100_000;
+        let heartbeat = WatchHeartbeat {
+            interval_seconds: 60,
+            last_health_unix_ms: Some(last),
+            retry_started: None,
+        };
+        let old_deadline = started + health_heartbeat_wait(Some(last), last, 60);
+        assert!(!heartbeat.is_due(last, started));
+        let next_wakeup = started + WATCH_SHUTDOWN_POLL;
+        assert!(next_wakeup < old_deadline);
+        assert!(!heartbeat.is_due(last + 200, next_wakeup));
+        assert!(heartbeat.is_due(last + 60_000, next_wakeup));
+    }
+
+    #[test]
+    fn watch_heartbeat_backward_clock_jump_is_due_before_the_startup_deadline() {
+        let started = Instant::now();
+        let last = 100_000;
+        let heartbeat = WatchHeartbeat {
+            interval_seconds: 60,
+            last_health_unix_ms: Some(last),
+            retry_started: None,
+        };
+        let old_deadline = started + health_heartbeat_wait(Some(last), last, 60);
+        assert!(!heartbeat.is_due(last, started));
+        let next_wakeup = started + WATCH_SHUTDOWN_POLL;
+        assert!(next_wakeup < old_deadline);
+        assert!(heartbeat.is_due(last - 1, next_wakeup));
+    }
+
+    #[test]
+    fn watch_heartbeat_scan_result_restarts_the_in_memory_interval_including_dry_run() {
+        let started = Instant::now();
+        let mut heartbeat = WatchHeartbeat {
+            interval_seconds: 60,
+            last_health_unix_ms: None,
+            retry_started: None,
+        };
+        assert!(heartbeat.is_due(100_000, started));
+        // Dry-run returns this time without persisting a marker. Watch must use
+        // the result, not reread the absent marker and immediately scan again.
+        heartbeat.after_scan(Some(100_000), true, 100_000, started);
+        assert!(!heartbeat.is_due(100_000, started));
+        assert!(!heartbeat.is_due(159_999, started + Duration::from_millis(59_999)));
+        assert!(heartbeat.is_due(160_000, started + Duration::from_secs(60)));
+        // A later scan that emitted health for another reason also resets it.
+        heartbeat.after_scan(
+            Some(160_000),
+            false,
+            160_000,
+            started + Duration::from_secs(60),
+        );
+        assert!(!heartbeat.is_due(219_999, started + Duration::from_secs(61)));
+        assert!(heartbeat.is_due(159_999, started + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn watch_heartbeat_still_due_after_scan_waits_a_monotonic_interval_before_retry() {
+        let completed = Instant::now();
+        for last in [None, Some(1)] {
+            let mut heartbeat = WatchHeartbeat {
+                interval_seconds: 60,
+                last_health_unix_ms: last,
+                retry_started: None,
+            };
+            assert!(heartbeat.is_due(100_000, completed));
+            heartbeat.after_scan(last, true, 100_000, completed);
+            for wall_time in [0, 100_000, 1_000_000] {
+                assert!(!heartbeat.is_due(wall_time, completed + Duration::from_secs(59)));
+                assert!(heartbeat.is_due(wall_time, completed + Duration::from_secs(60)));
+            }
+        }
+    }
+
+    #[test]
+    fn watch_heartbeat_huge_interval_never_requires_an_instant_deadline() {
+        let now = Instant::now();
+        let mut heartbeat = WatchHeartbeat {
+            interval_seconds: u64::MAX,
+            last_health_unix_ms: Some(0),
+            retry_started: None,
+        };
+        assert!(!heartbeat.is_due(0, now));
+        assert!(!heartbeat.is_due(1_000, now + Duration::from_secs(1)));
+        heartbeat.last_health_unix_ms = None;
+        assert!(heartbeat.is_due(1_000, now));
+        heartbeat.after_scan(None, true, 1_000, now);
+        assert!(!heartbeat.is_due(u64::MAX, now + Duration::from_secs(1)));
     }
 
     #[test]
