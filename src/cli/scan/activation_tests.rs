@@ -406,6 +406,7 @@ impl Fixture {
                 clients: &[ClientId::Codex, ClientId::OpenCode],
                 project_config_paths: &[],
                 install_inventory_interval_seconds: None,
+                health_heartbeat_interval_seconds: None,
                 process_chain: true,
                 operational_alerts: Default::default(),
                 runtime: &value,
@@ -762,6 +763,7 @@ impl ThresholdHarness {
                 clients: &self.clients,
                 project_config_paths: &[],
                 install_inventory_interval_seconds: None,
+                health_heartbeat_interval_seconds: None,
                 process_chain: false,
                 operational_alerts: OperationalAlertConfig {
                     max_scanner_errors,

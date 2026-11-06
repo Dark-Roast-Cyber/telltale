@@ -321,6 +321,25 @@ impl ScanState {
             .contains(&scanner_error_threshold_fingerprint())
     }
 
+    /// When a scan with the liveness heartbeat enabled last emitted a health
+    /// event, in Unix milliseconds. A marker that does not parse reads as none,
+    /// so a damaged value makes the heartbeat due rather than silent.
+    pub(crate) fn last_health_heartbeat_unix_ms(&self) -> Option<u64> {
+        self.seen_detection_fingerprints
+            .range(HEALTH_HEARTBEAT_PREFIX.to_string()..)
+            .take_while(|key| key.starts_with(HEALTH_HEARTBEAT_PREFIX))
+            .filter_map(|key| key.strip_prefix(HEALTH_HEARTBEAT_PREFIX)?.parse().ok())
+            .max()
+    }
+
+    /// Replaces the heartbeat marker with `unix_ms`.
+    pub(crate) fn record_health_heartbeat(&mut self, unix_ms: u64) {
+        self.seen_detection_fingerprints
+            .retain(|key| !key.starts_with(HEALTH_HEARTBEAT_PREFIX));
+        self.seen_detection_fingerprints
+            .insert(format!("{HEALTH_HEARTBEAT_PREFIX}{unix_ms}"));
+    }
+
     #[cfg(test)]
     fn replace_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
         self.baseline_snapshots = BaselineSnapshotStore {
@@ -1243,6 +1262,11 @@ fn source_outage_fingerprint(client: &str) -> String {
     ))
 }
 
+/// Kept among the detection fingerprints, like the alert latches, so the
+/// heartbeat needs no state schema change and older readers accept it. Event
+/// fingerprints are hex digests and `telltale:<kind>:` keys, never this prefix.
+const HEALTH_HEARTBEAT_PREFIX: &str = "telltale:health_heartbeat_v1@";
+
 /// Kept among the detection fingerprints, so threshold suppression needs no
 /// state schema change; the prefix keeps it apart from event fingerprints and
 /// from `source_parse_outage`.
@@ -1439,7 +1463,7 @@ mod tests {
 
     use super::{
         BASELINE_STATE_VERSION, STATE_SCHEMA_VERSION, ScanState, baseline_snapshot_id,
-        detection_fingerprint, source_fingerprint,
+        detection_fingerprint, source_fingerprint, state_field_names,
     };
 
     #[test]
@@ -2280,6 +2304,44 @@ mod tests {
 
         let duplicate = br#"{"seen_source_fingerprints":[],"seen_source_fingerprints":[]}"#;
         assert!(ScanState::validate_legacy_bytes(duplicate).is_err());
+    }
+
+    #[test]
+    fn health_heartbeat_marker_round_trips_and_replaces_without_a_schema_change() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("state.json");
+        let mut state = ScanState::default();
+        assert_eq!(state.last_health_heartbeat_unix_ms(), None);
+        state
+            .seen_detection_fingerprints
+            .insert("telltale:health_heartbeat_v1@not-a-time".to_string());
+        // A damaged marker reads as none, so the heartbeat is due.
+        assert_eq!(state.last_health_heartbeat_unix_ms(), None);
+
+        state.record_health_heartbeat(1_000);
+        state.record_health_heartbeat(2_000);
+        assert_eq!(state.last_health_heartbeat_unix_ms(), Some(2_000));
+        assert_eq!(state.seen_detection_fingerprints.len(), 1);
+
+        state.save(&path).expect("save state");
+        let bytes = std::fs::read(&path).expect("state bytes");
+        let reloaded = ScanState::validate_native_bytes(&bytes).expect("native state");
+        assert_eq!(reloaded.last_health_heartbeat_unix_ms(), Some(2_000));
+        let value: Value = serde_json::from_slice(&bytes).expect("state json");
+        let mut fields = value
+            .as_object()
+            .expect("state object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        fields.sort();
+        let mut expected = state_field_names()
+            .iter()
+            .map(|field| field.to_string())
+            .chain(["state_schema_version".to_string()])
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(fields, expected, "the heartbeat must not add a state field");
     }
 
     #[test]

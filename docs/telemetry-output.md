@@ -358,7 +358,9 @@ Common event types include:
 - `detection`: rule matches, risk scores, categories, and response guidance.
 - `session_risk_summary`: optional per-session rollups from already-redacted
   activity and detection events.
-- `health`: source-discovery and scanner health status.
+- `health`: source-discovery and scanner health status. A scan writes it when
+  something changed, and optionally on an interval as a
+  [liveness heartbeat](#liveness-heartbeat).
 - `scanner_error`: source-acquisition or scan errors that should be visible to operators.
 - `operational_alert`: operator-facing threshold and delivery alerts, including
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
@@ -404,6 +406,63 @@ corrections intentionally change emitted bytes for noncanonical public inputs,
 including mutated native version metadata, but not canonical constructor output,
 event identity, or delivery mechanisms. Historical JSONL/Elastic export keeps
 safe historical version metadata.
+
+### Liveness heartbeat
+
+Without it, a scan writes `health` only when something changed: a source
+inventory change, a new `scanner_error` or an alert (and on every `--backfill`
+scan). Ordinary full scans suppress unchanged standing warnings, so a quiet,
+healthy host writes no events, and a stopped timer, crashed service or removed
+binary looks the same. Full backfill scans repeat those alerts.
+
+The heartbeat is off by default. Set `events.health_heartbeat_interval_seconds`
+in `settings.d`, `TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS`, or
+`--health-heartbeat-interval-seconds` on `scan` and `watch` (`0` is off; see
+[operational settings](install.md#operational-settings)). A full scan then
+writes the ordinary `health` event (`check_name=source_discovery`) when that
+many seconds have passed since the recorded enabled-mode health event, even
+if nothing changed. Enabling it without a recorded marker makes it due
+immediately, even if health was recently written while the heartbeat was off.
+
+- It is the existing Event 3.0 `health` event with no new field. It is
+  delivered and replayed like any other event. Operational alerts are not
+  repeated.
+- While the heartbeat is enabled, any `health` event, for whatever reason,
+  restarts the interval. Scanner state records that time, so a timer-driven
+  `scan --once` decides across runs. The time is saved with scanner state,
+  after the event's required local JSONL or durable outbox write; if that
+  write fails, the heartbeat stays due. A failed best-effort remote delivery
+  is reported like any other event's.
+- While disabled, health events neither create nor update the heartbeat marker.
+  A marker from an earlier enabled run remains unchanged and is reused when
+  the heartbeat is enabled again.
+- `--dry-run` writes nothing, as before. A `--history` pass never writes or
+  records a heartbeat. `--backfill` writes `health` on every scan, as before,
+  which restarts the interval while the heartbeat is enabled.
+- The check runs only when a full scan runs. `scan --once` from a timer, or
+  `scan --interval-seconds`, writes the heartbeat on the first scan after the
+  interval has passed. `watch` runs one full scan when the heartbeat comes
+  due, idle or not; except in `--dry-run`, that scan saves state like any watch
+  scan that writes events, and counts as one `--iterations` scan. An
+  `--initial-scan` remains uncounted even when it handles a due heartbeat;
+  `--iterations 1` still requires one later triggered scan. Idle delivery wakeups
+  still do not scan or save state. Watch reads the recorded time at startup, so an
+  overdue heartbeat runs right away. Targeted watch scans never write a
+  heartbeat on their own.
+- If no heartbeat marker timestamp can be parsed from otherwise readable
+  scanner state, the heartbeat is due. A selected timestamp later than the
+  current clock (the clock moved back) also counts as due. Watch rechecks its
+  remembered time against the wall clock on wakeups and after coalescing
+  changes, so clock jumps do not leave a stale deadline.
+
+To alert on a silent scanner, use `health` events, not detections or
+activity, which depend on agent activity. Event 3.0 has no host field, so
+group by the host or device identity your collector attaches. Alert when the
+newest `event_type=health` event from a host that should run Telltale is
+older than N. Choose N above the interval plus the scan cadence (the timer
+period, or watch's debounce/rate-limit delay), scan time, and delivery delay.
+A host that never sent `health` produces no rows, so compare against your list
+of expected hosts.
 
 ### Event 3.0 timing
 
