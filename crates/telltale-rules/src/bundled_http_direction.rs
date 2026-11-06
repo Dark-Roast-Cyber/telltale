@@ -387,6 +387,16 @@ fn http_flags_match_only_in_the_client_segment() {
 const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
     // A quoted `;`, `|` or `&&` stays inside its command segment.
     (
+        "curl https://example.invalid/upload -H 'X-Synthetic: a;b' --data @f",
+        true,
+        false,
+    ),
+    (
+        "curl https://example.invalid/upload -H \"X-Synthetic: a|b\" -d @f",
+        true,
+        false,
+    ),
+    (
         "curl -H 'Content-Type: application/json; charset=utf-8' --data @f https://example.invalid/upload",
         true,
         false,
@@ -425,6 +435,35 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         "curl https://example.invalid/file\nother --data @f",
         false,
         true,
+    ),
+    // `network.download` is segment-scoped: an upload in another segment does
+    // not hide a download, and an upload in the same segment still excludes it.
+    (
+        "curl --data @f https://example.invalid/upload; curl https://example.invalid/file",
+        true,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file | curl --data @- https://example.invalid/upload",
+        true,
+        true,
+    ),
+    (
+        "curl -sX POST https://example.invalid/upload && wget https://example.invalid/file",
+        true,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o f 2>&1 --data @f",
+        true,
+        false,
+    ),
+    // A single `&` stays in one lexical segment, including when it is a shell
+    // background operator. The later upload still excludes this download.
+    (
+        "curl -o out https://example.invalid/file & curl -T file https://example.invalid/upload",
+        true,
+        false,
     ),
     // Short flags are case-sensitive and may be clustered.
     ("curl -sX POST https://example.invalid/upload", true, false),
@@ -602,12 +641,13 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         true,
     ),
     // Known session limits that fail toward a match; native actions are
-    // exact. A single-quoted wrapper shifts which quotes the regex sees as
-    // open, and `-x` is read as a reroute for every client.
+    // exact. A single-quoted wrapper shifts which quotes the upload regex sees
+    // as open, and `-x` is read as a reroute for every client. The download
+    // is decided in its own segment, so it still counts.
     (
         "sh -c 'curl -sS https://example.invalid/x' && echo 'x -d y'",
         true,
-        false,
+        true,
     ),
     ("wget -x http://127.0.0.1/a", false, true),
     // Text that only mentions a client is not a request.
@@ -680,18 +720,47 @@ fn renamed_http_rules_match_exactly_like_the_bundled_rules() {
 }
 
 #[test]
-fn upload_flags_veto_a_download_in_the_same_field() {
-    // Rule v1 exclusions are field-scoped, so an upload anywhere in the field
-    // removes the download. A segment-bounded exclude needs a new predicate,
-    // which is out of scope; native actions decide per segment. This pins that
-    // accepted session contract, including the separate-segment miss.
-    let result = evaluate(&[(
+fn upload_flags_veto_a_download_only_in_their_own_segment() {
+    // `network.download` declares `scope: segment`, so its upload exclusion
+    // applies to the segment the download selection matched, not the field.
+    let separate = evaluate(&[(
         "command",
         "curl --data @f https://example.invalid/upload; curl https://example.invalid/file",
     )])
     .expect("match");
-    assert_eq!(ids(&result), vec!["exfil.outbound_upload".to_string()]);
-    assert_eq!(result.score, 60);
+    assert_eq!(
+        ids(&separate),
+        ["network.download", "exfil.outbound_upload"]
+    );
+    assert_eq!(separate.score, 80);
+    assert_eq!(separate.score, contribution_total(&separate));
+
+    let same = evaluate(&[(
+        "command",
+        "curl --data @f https://example.invalid/upload https://example.invalid/file",
+    )])
+    .expect("match");
+    assert_eq!(ids(&same), ["exfil.outbound_upload"]);
+    assert_eq!(same.score, 60);
+
+    // Without the declared scope the same predicates veto the whole field.
+    let bundled = super::DEFAULT_RULE_YAML.replace("\r\n", "\n");
+    for newline in ["\n", "\r\n"] {
+        let document = bundled.replace('\n', newline).replace("\r\n", "\n");
+        assert_eq!(document.matches("      scope: segment\n").count(), 1);
+        let document = document.replace("      scope: segment\n", "");
+        assert!(!document.contains("      scope: segment"));
+        let document = document.replace('\n', newline);
+        let field = super::load_rule_set_from_documents(&[&document], None)
+            .expect("field-scoped rules")
+            .evaluate(&[(
+                "command",
+                "curl --data @f https://example.invalid/upload; curl https://example.invalid/file",
+            )])
+            .expect("evaluate")
+            .expect("match");
+        assert_eq!(ids(&field), ["exfil.outbound_upload"]);
+    }
 }
 
 #[test]

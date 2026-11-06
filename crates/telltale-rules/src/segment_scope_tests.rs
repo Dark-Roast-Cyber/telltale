@@ -1,0 +1,339 @@
+//! Tests pinning `detection.scope`: loading, matching, budget, spans and
+//! fingerprints.
+
+use super::{
+    DEFAULT_RULE_YAML, MatchScope, SEGMENT_SCOPE_TARGETS, SUPPORTED_DETECTION_SCOPES,
+    load_rule_set_from_documents, provenance::rule_v1_fingerprint,
+};
+
+const ISSUE_EXAMPLE: &str =
+    "curl --data @f https://example.invalid/upload; curl https://example.invalid/file";
+
+/// A one-rule document. `scope` is the literal `scope:` line, or empty.
+fn document(scope: &str, selection: &str, exclusion: &str) -> String {
+    format!(
+        "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: high\n    score: 60\n    detection:\n      selection:\n        command: '{selection}'\n        tool_result: synthetic\n      exclude:\n        command: '{exclusion}'\n{scope}      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n"
+    )
+}
+
+fn command_rule(scope: &str, selection: &str, exclusion: &str) -> String {
+    document(scope, selection, exclusion).replace("        tool_result: synthetic\n", "")
+}
+
+fn fingerprint(document: &str) -> String {
+    rule_v1_fingerprint(
+        &load_rule_set_from_documents(&[document], None)
+            .expect("rules")
+            .compatibility_export(),
+    )
+}
+
+fn error(document: &str) -> String {
+    load_rule_set_from_documents(&[document], None)
+        .expect_err("rejected")
+        .to_string()
+}
+
+fn content(document: &str) -> super::RuleV1ContentMatcher {
+    load_rule_set_from_documents(&[document], None)
+        .expect("rules")
+        .compatibility_export()
+        .rules()[0]
+        .compile_content_matcher()
+        .expect("content matcher")
+}
+
+#[test]
+fn field_scope_is_the_default_and_keeps_its_fingerprint() {
+    // Captured from the base binary before `scope` existed, for this exact
+    // document without a scope line.
+    const BEFORE_SCOPE: &str =
+        "sha256:9399d3fa8892002e81886efffab30e626cf62fb7bad28a4c7a916ef7cb429b0d";
+    let omitted = document("", "synthetic", "benign");
+    let explicit = document("      scope: field\n", "synthetic", "benign");
+    assert_eq!(fingerprint(&omitted), BEFORE_SCOPE);
+    assert_eq!(fingerprint(&explicit), BEFORE_SCOPE);
+    let export = load_rule_set_from_documents(&[&omitted], None)
+        .unwrap()
+        .compatibility_export();
+    assert!(
+        export.rules()[0]
+            .matchers
+            .iter()
+            .all(|matcher| matcher.scope == MatchScope::Field)
+    );
+}
+
+#[test]
+fn segment_scope_changes_the_fingerprint() {
+    let field = command_rule("", "synthetic", "benign");
+    let segment = command_rule("      scope: segment\n", "synthetic", "benign");
+    assert_ne!(fingerprint(&field), fingerprint(&segment));
+    // Only the scope of the bundled download rule differs from before it was
+    // declared: without the line, the core fingerprint is the base one.
+    const CORE_BEFORE_SCOPE: &str =
+        "sha256:a5caa2e79eeafe6d55fa59e53a03cc76032998b8751ac2efa198b54b40452882";
+    let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
+    let segment_fingerprint = fingerprint(&bundled);
+    assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);
+    for newline in ["\n", "\r\n"] {
+        let bundled = bundled.replace('\n', newline);
+        let normalized = bundled.replace("\r\n", "\n");
+        assert_eq!(normalized.matches("      scope: segment\n").count(), 1);
+        let without = normalized.replace("      scope: segment\n", "");
+        assert!(!without.contains("      scope: segment"));
+        let explicit_field = normalized.replace("      scope: segment\n", "      scope: field\n");
+        assert_eq!(
+            fingerprint(&without.replace('\n', newline)),
+            CORE_BEFORE_SCOPE
+        );
+        assert_eq!(
+            fingerprint(&explicit_field.replace('\n', newline)),
+            CORE_BEFORE_SCOPE
+        );
+        assert_eq!(fingerprint(&bundled), segment_fingerprint);
+    }
+}
+
+#[test]
+fn a_legacy_and_a_segment_matcher_with_the_same_pattern_both_stay_identified() {
+    let base = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: high\n    score: 60\n    targets: [command]\n    regex: synthetic\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n";
+    let both = base.replace(
+        "    regex: synthetic\n",
+        "    regex: synthetic\n    detection:\n      selection: {command: synthetic}\n      scope: segment\n",
+    );
+    let export = load_rule_set_from_documents(&[&both], None)
+        .unwrap()
+        .compatibility_export();
+    assert_eq!(
+        export.rules()[0]
+            .matchers
+            .iter()
+            .map(|matcher| matcher.scope)
+            .collect::<Vec<_>>(),
+        [MatchScope::Field, MatchScope::Segment]
+    );
+    assert_ne!(fingerprint(base), fingerprint(&both));
+}
+
+#[test]
+fn invalid_scopes_fail_at_load_with_a_clear_error() {
+    let unknown = error(&command_rule("      scope: line\n", "x", "y"));
+    assert!(
+        unknown.contains("unknown variant `line`, expected `field` or `segment`"),
+        "{unknown}"
+    );
+    let prose = error(&document("      scope: segment\n", "x", "y"));
+    assert_eq!(
+        prose,
+        "rule rule.synthetic uses scope 'segment' with target 'tool_result'; segment scope supports only command-text targets: arguments, command, url"
+    );
+    let rule_level = error(
+        &command_rule("", "x", "y")
+            .replace("    tags: [a]\n", "    scope: segment\n    tags: [a]\n"),
+    );
+    assert!(rule_level.contains("unknown field `scope`"), "{rule_level}");
+    for target in super::SUPPORTED_RULE_TARGETS {
+        let rule = command_rule("      scope: segment\n", "x", "y")
+            .replace("        command: 'x'", &format!("        {target}: 'x'"))
+            .replace("        command: 'y'", &format!("        {target}: 'y'"));
+        assert_eq!(
+            load_rule_set_from_documents(&[&rule], None).is_ok(),
+            SEGMENT_SCOPE_TARGETS.contains(target),
+            "{target}"
+        );
+    }
+    // The published vocabulary names exactly the deserializable scopes,
+    // default first.
+    assert_eq!(
+        MatchScope::default().as_str(),
+        SUPPORTED_DETECTION_SCOPES[0]
+    );
+    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 2);
+    for (value, scope) in SUPPORTED_DETECTION_SCOPES
+        .iter()
+        .zip([MatchScope::Field, MatchScope::Segment])
+    {
+        assert_eq!(scope.as_str(), *value);
+        assert!(
+            load_rule_set_from_documents(
+                &[&command_rule(&format!("      scope: {value}\n"), "x", "y")],
+                None
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
+fn segment_scope_applies_selection_and_exclusion_to_the_same_segment() {
+    // The exclusion is not quote-aware itself, so only the segmenter keeps a
+    // quoted or escaped separator from hiding it.
+    let upload = "--data";
+    let field = content(&command_rule("", r"curl\b[^;|]*https://", upload));
+    let segment = content(&command_rule(
+        "      scope: segment\n",
+        r"curl\b[^;|]*https://",
+        upload,
+    ));
+    let cases = [
+        (ISSUE_EXAMPLE, false, true),
+        (
+            "curl --data @f https://example.invalid/upload https://example.invalid/file",
+            false,
+            false,
+        ),
+        // Quoted separators do not split a segment.
+        (
+            "curl https://example.invalid/upload -H 'X: a;b' --data @f",
+            false,
+            false,
+        ),
+        (
+            "curl https://example.invalid/upload -H \"X: a|b\" --data @f",
+            false,
+            false,
+        ),
+        // An escaped separator does not split either.
+        (
+            "curl https://example.invalid/upload -H X:a\\;b --data @f",
+            false,
+            false,
+        ),
+        (
+            "curl https://example.invalid/upload && echo --data",
+            false,
+            true,
+        ),
+        ("echo none", false, false),
+    ];
+    for (command, field_match, segment_match) in cases {
+        let fields = [("command", command)];
+        assert_eq!(
+            !field.matching_fields(&fields).is_empty(),
+            field_match,
+            "field: {command}"
+        );
+        assert_eq!(
+            !segment.matching_fields(&fields).is_empty(),
+            segment_match,
+            "segment: {command}"
+        );
+    }
+}
+
+#[test]
+fn compiled_rule_sets_evaluate_segment_scope_like_the_content_matcher() {
+    let rules = load_rule_set_from_documents(
+        &[&command_rule(
+            "      scope: segment\n",
+            r"curl\b[^;|]*https://",
+            r"curl\b[^;|]*--data",
+        )],
+        None,
+    )
+    .unwrap();
+    let matched = rules
+        .evaluate(&[("command", ISSUE_EXAMPLE)])
+        .unwrap()
+        .expect("match");
+    assert_eq!(matched.rule_ids, ["rule.synthetic"]);
+    // Evidence is the whole field, not the segment.
+    assert_eq!(matched.evidence[0].field, "command");
+    assert_eq!(matched.evidence[0].redacted_value, ISSUE_EXAMPLE);
+    assert!(
+        rules
+            .evaluate(&[("command", "curl --data @f https://example.invalid/x")])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn anchors_apply_per_segment_and_spans_stay_field_relative() {
+    let anchored = content(&command_rule("      scope: segment\n", "^rm -rf$", "^$"));
+    let text = "cd /tmp &&   rm -rf  ;  ls";
+    let fields = [("command", text)];
+    let spans = anchored
+        .try_matching_spans(&fields, &mut |_| Ok::<_, std::convert::Infallible>(()))
+        .unwrap();
+    assert_eq!(spans.len(), 1);
+    let (_, value, range) = &spans[0];
+    assert_eq!(&value[range.clone()], "rm -rf");
+    assert_eq!(range.start, text.find("rm").unwrap());
+    let unanchored = content(&command_rule("", "^rm -rf$", "^$"));
+    assert!(unanchored.matching_fields(&[("command", text)]).is_empty());
+    // A pattern cannot span segments.
+    let spanning = content(&command_rule("      scope: segment\n", "a.*b", "^$"));
+    assert!(spanning.matching_fields(&[("command", "a; b")]).is_empty());
+    assert!(!spanning.matching_fields(&[("command", "a b")]).is_empty());
+}
+
+#[test]
+fn segment_scope_charges_each_scan_before_it_runs() {
+    let matcher = content(&command_rule("      scope: segment\n", "needle", "quoted"));
+    let mut visits = Vec::new();
+    let fields = [
+        ("command", "x; needle quoted ; needle"),
+        ("command", "none"),
+    ];
+    let matched = matcher
+        .try_matching_fields(&fields, &mut |bytes| {
+            visits.push(bytes);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert_eq!(matched, [("command", "x; needle quoted ; needle")]);
+    // Name, the segmentation pass, then each segment plus one byte: `x` misses,
+    // `needle quoted` matches and is excluded, `needle` counts. The second
+    // field is segmented and its only segment misses.
+    assert_eq!(visits, [7, 25, 2, 14, 14, 7, 7, 7, 4, 5]);
+    assert_eq!(
+        matcher.try_matching_fields(&fields, &mut |_| Err("exhausted")),
+        Err("exhausted")
+    );
+    // The segmentation pass is charged before any segment is scanned.
+    let mut budget: usize = 31;
+    assert_eq!(
+        matcher.try_matching_fields(&fields, &mut |bytes| {
+            budget = budget.checked_sub(bytes).ok_or("exhausted")?;
+            Ok(())
+        }),
+        Err("exhausted")
+    );
+}
+
+#[test]
+fn case_insensitive_defaults_apply_to_segment_scope() {
+    let rule = command_rule("      scope: segment\n", "needle", "quoted")
+        .replace("case_insensitive: false", "case_insensitive: true");
+    let matcher = content(&rule);
+    assert!(
+        matcher
+            .matching_fields(&[("command", "NEEDLE QUOTED")])
+            .is_empty()
+    );
+    assert!(
+        !matcher
+            .matching_fields(&[("command", "NEEDLE QUOTED; NEEDLE")])
+            .is_empty()
+    );
+}
+
+#[test]
+fn documented_segment_scope_example_behaves_as_described() {
+    // The `detection` block from docs/detection-model.md, verbatim. The root
+    // catalog tests check doc consistency outside the crate package boundary.
+    let rule = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules:\n  - id: rule.synthetic\n    category: download\n    severity: low\n    score: 20\n    detection:\n      selection:\n        command: '\\bcurl\\b[^;|\\n]*https?://'\n      exclude:\n        command: '\\bcurl\\b[^;|\\n]*--data'\n      scope: segment\n      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n";
+    let matcher = content(rule);
+    assert!(
+        !matcher
+            .matching_fields(&[("command", ISSUE_EXAMPLE)])
+            .is_empty()
+    );
+    assert!(
+        matcher
+            .matching_fields(&[("command", "curl --data @f https://example.invalid/upload")])
+            .is_empty()
+    );
+}

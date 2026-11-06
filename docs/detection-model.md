@@ -172,6 +172,47 @@ available on the simple `targets` + `regex` form. Rule defaults apply
 case-insensitive compilation to both expressions. Rule v1 remains the supported
 production content format; there is no separate filter engine.
 
+By default an exclusion match anywhere in the target vetoes the whole target
+(`scope: field`). With `scope: segment`, each selection and its exclusion
+evaluate each shell command segment of the target instead:
+
+```yaml
+detection:
+  selection:
+    command: '\bcurl\b[^;|\n]*https?://'
+  exclude:
+    command: '\bcurl\b[^;|\n]*--data'
+  scope: segment
+  condition: selection
+```
+
+The target matches when one segment matches the selection and that same
+segment does not match the exclusion, so
+`curl --data @f https://example.invalid/upload; curl https://example.invalid/file`
+matches this rule through its second segment, and a single
+`curl --data @f https://example.invalid/upload` does not. Segments split
+outside quotes on `;`, `|`, `||`, `&&` and newlines and are trimmed of
+surrounding whitespace; `^` and `$` anchor to the segment, and a pattern cannot
+span segments. Single quotes are literal, a backslash escapes the next
+character (`\;` does not split), and a single `&` is not a separator, so `2>&1`
+and unquoted query strings stay in their segment. An unclosed quote runs to the
+end of the target. Background commands (`a & b`) also stay in one segment, so
+an upload after a single `&` can still exclude a download before it. This is a
+known limit of the lexical split, not a claim of shell parsing. Subshells, command
+substitution, heredocs and comments are not interpreted, and a command inside a
+JSON string in `arguments` stays one segment. Segment scope applies to every
+selection target of the rule and accepts only the command-text targets
+`command`, `arguments` and `url`; any other target, or another value, fails when
+the rule loads. The generated vocabulary lists both scopes and those targets.
+The scope is part of the rule fingerprint, so changing it changes producer
+provenance; field-scoped rules keep their fingerprints whether or not they write
+`scope: field`.
+
+The bundled `network.download` rule uses segment scope: an upload in one
+segment no longer hides a download in another, while an upload in the same
+segment still excludes it. Native action findings read HTTP direction per
+command stage on their own and are unchanged by the session scope.
+
 The bundled `execution.shell` session rule uses this selection form to match
 exact shell-tool names (`shell`, `exec_command`, `shell_command`, and shell
 executable names) as well as shell/interpreter patterns in command and argument
