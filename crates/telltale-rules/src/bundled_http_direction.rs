@@ -953,13 +953,50 @@ fn imds_exclusion_leaves_other_bodyless_methods_as_uploads() {
 }
 
 #[test]
-fn imds_token_inside_raw_json_arguments_fails_toward_a_match() {
-    // Some sources expose unparsed JSON as `arguments`, which the anchored
-    // exclusion cannot read, so this stays today's match rather than a new miss.
-    let raw = format!(
-        "{{\"command\":\"curl -X PUT -H {IMDS_TTL} {IMDS_TOKEN_URL}\",\"description\":\"token\"}}"
-    );
-    assert!(uploads(&[("arguments", raw.as_str())]), "{raw}");
+fn raw_json_arguments_are_judged_on_their_decoded_commands() {
+    let (url, ttl) = (IMDS_TOKEN_URL, IMDS_TTL);
+    let other = OTHER_UPLOAD_URL;
+    let raw =
+        |command: &str| serde_json::json!({"cmd": command, "workdir": "/synthetic"}).to_string();
+    let token = format!("TOKEN=$(curl -s -X PUT -H {ttl} {url})");
+
+    let request = raw(&format!("curl -X PUT -H {ttl} {url}"));
+    assert!(!uploads(&[("arguments", request.as_str())]), "{request}");
+    assert!(!downloads(&[("arguments", request.as_str())]), "{request}");
+    let argv = serde_json::json!({"command": ["bash", "-lc", token]}).to_string();
+    assert!(!uploads(&[("arguments", argv.as_str())]), "{argv}");
+
+    // `network.download` keeps segment scope, which reads the raw call as one
+    // segment; sources that also store the decoded `command` give it there.
+    let lookup = raw(&format!("{token}; {IMDS_LOOKUP}"));
+    assert!(!uploads(&[("arguments", lookup.as_str())]), "{lookup}");
+
+    for command in [
+        format!("curl -X PUT -d @report.txt -H {ttl} {url}"),
+        format!("curl -X PUT -H {ttl} {url} {other}"),
+        format!("{token}; curl --data @report.txt {other}"),
+        format!("{token}\ncurl --data @report.txt {other}"),
+    ] {
+        let raw = raw(&command);
+        assert!(uploads(&[("arguments", raw.as_str())]), "{raw}");
+    }
+    // A request in any other shape keeps the raw verdict.
+    for raw in [
+        format!("{{\"cmd\":\"{token}\",\"stdin\":\"curl -d @report.txt {other}\"}}"),
+        format!("{{\"steps\":[{{\"run\":\"curl -d @report.txt {other}\"}}]}}"),
+    ] {
+        assert!(uploads(&[("arguments", raw.as_str())]), "{raw}");
+    }
+    // Text that is not one whole JSON value stays raw and fails toward a match.
+    for raw in [
+        format!("{{\"cmd\":\"curl -X PUT -H {ttl} {url}\""),
+        format!("{{\"cmd\":\"curl -X PUT -H {ttl} {url}\"}} trailing"),
+        format!("{{ curl -X PUT -H {ttl} {url}; }}"),
+    ] {
+        assert!(uploads(&[("arguments", raw.as_str())]), "{raw}");
+    }
+    // Only `arguments` is decoded: command text that looks like JSON is not.
+    assert!(uploads(&[("command", request.as_str())]), "{request}");
 }
 
 #[test]
@@ -974,11 +1011,6 @@ fn json_arguments_without_a_decoded_request_keep_the_raw_verdict() {
         ),
         (
             serde_json::json!({"command": ["wget", "-q", other]}),
-            false,
-            true,
-        ),
-        (
-            serde_json::json!({"command": ["curl", "-d", "@report.txt", other]}),
             false,
             true,
         ),
@@ -1007,5 +1039,42 @@ fn imds_flags_count_only_for_the_client_that_reads_them_that_way() {
         format!("curl -X PUT -qO- {url}"),
     ] {
         assert!(uploads(&[("command", command.as_str())]), "{command}");
+    }
+}
+
+#[test]
+fn a_decoy_token_request_cannot_speak_for_a_json_call() {
+    let (url, ttl) = (IMDS_TOKEN_URL, IMDS_TTL);
+    let other = OTHER_UPLOAD_URL;
+    let token = format!("curl -X PUT -H {ttl} {url}");
+    let json = |value: serde_json::Value| value.to_string();
+    for raw in [
+        json(
+            serde_json::json!({"command": ["curl", "-d", "@report.txt", other], "justification": token}),
+        ),
+        json(serde_json::json!({"command": ["curl", "-sS", other], "justification": token})),
+        json(serde_json::json!({"command": ["curl", "-d", "@report.txt", other, token]})),
+        json(serde_json::json!({"cmd": token, "args": ["-d", "@report.txt", other]})),
+        json(serde_json::json!({"cmd": token, "args": format!(" -d @report.txt {other}")})),
+        json(
+            serde_json::json!({"cmd": token, "justification": format!("curl -d @report.txt {other}")}),
+        ),
+        json(serde_json::json!({"cmd": token, "command": format!("curl -d @report.txt {other}")})),
+        json(serde_json::json!({"cmd": token, "stdin": "report"})),
+        json(serde_json::json!({"command": ["python", "-c", token]})),
+        json(serde_json::json!({"command": ["bash", "-c", token, "arg0"]})),
+        format!(
+            "{{\"program\":\"curl\",\"args\":\"-s --data @report.txt {other}\",\"note\":\"{token}\"}}"
+        ),
+    ] {
+        assert!(uploads(&[("arguments", raw.as_str())]), "{raw}");
+    }
+    // An unknown member fails toward a match; the known ones read as metadata.
+    for raw in [
+        json(serde_json::json!({"cmd": token, "workdir": "/w", "yield_time_ms": 1000})),
+        json(serde_json::json!({"command": token, "description": "Fetch a token", "mode": "sync"})),
+        json(serde_json::json!({"command": ["/bin/bash", "-lc", token], "timeout_ms": 1000})),
+    ] {
+        assert!(!uploads(&[("arguments", raw.as_str())]), "{raw}");
     }
 }
