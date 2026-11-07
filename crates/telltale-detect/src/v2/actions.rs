@@ -573,6 +573,8 @@ struct ActionView {
     /// Byte ranges of the command stages in the `command` field.
     stage_spans: Vec<Range<usize>>,
     reads_paths: bool,
+    /// Whether command text was joined from an argv array.
+    argv: bool,
 }
 impl ActionView {
     fn put(&mut self, field: &'static str, text: String) {
@@ -957,6 +959,7 @@ fn structured_input(
                     command.push('\n');
                 }
                 if let JsonValue::Array(items) = value {
+                    out.argv = true;
                     for v in items.iter().filter_map(string) {
                         command.push_str(v);
                         command.push(' ');
@@ -1169,6 +1172,25 @@ fn remote(value: &str) -> bool {
 /// counted, if it counts one.
 type NativeField<'a> = (&'a str, &'a str, usize, Option<Range<usize>>);
 
+/// The command that holds stage `index`, from the stage's start to where the
+/// command ends. A stage can end before its command does.
+fn command_extent(view: &ActionView, index: usize) -> Range<usize> {
+    let command = view.text("command");
+    let start = view.stage_spans[index].start;
+    if view.argv {
+        return start..command.len();
+    }
+    let mut end = view.stage_spans[index].end;
+    for span in &view.stage_spans[index..] {
+        end = span.end;
+        let rest = &command[span.end..];
+        if !rest.starts_with('\r') || rest.starts_with("\r\n") {
+            break;
+        }
+    }
+    start..end
+}
+
 /// Fields a native predicate selects: a command stage, or a whole field at 0.
 /// A predicate over one command stage, path token or key reference of a
 /// whole field also returns that occurrence, so the hit can be placed there.
@@ -1182,7 +1204,7 @@ fn native_fields<'a>(
         id,
         "network.download" | "exfil.outbound_upload" | "exfil.encoded_http"
     ) {
-        for (span, tokens) in view.stage_spans.iter().zip(&view.commands) {
+        for (index, (span, tokens)) in view.stage_spans.iter().zip(&view.commands).enumerate() {
             let stage = &view.text("command")[span.clone()];
             let matches = match id {
                 "network.download" => is_download(tokens, budget)?,
@@ -1202,7 +1224,18 @@ fn native_fields<'a>(
                 }
             };
             if matches {
-                selected.push(("command", stage, span.start, None));
+                // The upload exclusion judges a whole command, never part of one.
+                let read = if id == "exfil.outbound_upload" {
+                    command_extent(view, index)
+                } else {
+                    span.clone()
+                };
+                selected.push((
+                    "command",
+                    &view.text("command")[read.clone()],
+                    read.start,
+                    None,
+                ));
             }
         }
         return Ok(selected);

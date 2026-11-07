@@ -72,7 +72,7 @@ fn segment_scope_changes_the_fingerprint() {
     // Only the scope of the bundled download rule differs from before it was
     // declared: without the line, the core fingerprint is the base one.
     const CORE_BEFORE_SCOPE: &str =
-        "sha256:a5caa2e79eeafe6d55fa59e53a03cc76032998b8751ac2efa198b54b40452882";
+        "sha256:e67a359521c89f06399334c49c6587a9e6df4c9cbeb055392e24ae248602df25";
     let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
     let segment_fingerprint = fingerprint(&bundled);
     assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);
@@ -120,7 +120,9 @@ fn a_legacy_and_a_segment_matcher_with_the_same_pattern_both_stay_identified() {
 fn invalid_scopes_fail_at_load_with_a_clear_error() {
     let unknown = error(&command_rule("      scope: line\n", "x", "y"));
     assert!(
-        unknown.contains("unknown variant `line`, expected `field` or `segment`"),
+        unknown.contains(
+            "unknown variant `line`, expected one of `field`, `segment`, `exclusion_segment`"
+        ),
         "{unknown}"
     );
     let prose = error(&document("      scope: segment\n", "x", "y"));
@@ -149,11 +151,12 @@ fn invalid_scopes_fail_at_load_with_a_clear_error() {
         MatchScope::default().as_str(),
         SUPPORTED_DETECTION_SCOPES[0]
     );
-    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 2);
-    for (value, scope) in SUPPORTED_DETECTION_SCOPES
-        .iter()
-        .zip([MatchScope::Field, MatchScope::Segment])
-    {
+    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 3);
+    for (value, scope) in SUPPORTED_DETECTION_SCOPES.iter().zip([
+        MatchScope::Field,
+        MatchScope::Segment,
+        MatchScope::ExclusionSegment,
+    ]) {
         assert_eq!(scope.as_str(), *value);
         assert!(
             load_rule_set_from_documents(
@@ -267,6 +270,60 @@ fn anchors_apply_per_segment_and_spans_stay_field_relative() {
     let spanning = content(&command_rule("      scope: segment\n", "a.*b", "^$"));
     assert!(spanning.matching_fields(&[("command", "a; b")]).is_empty());
     assert!(!spanning.matching_fields(&[("command", "a b")]).is_empty());
+}
+
+const EXCLUSION_SCOPE: &str = "      scope: exclusion_segment\n";
+
+#[test]
+fn exclusion_segment_drops_only_matches_inside_an_excluded_segment() {
+    let rule = content(&command_rule(EXCLUSION_SCOPE, "curl", "secret"));
+    let matched = |value: &str| !rule.matching_fields(&[("command", value)]).is_empty();
+    assert!(!matched("curl secret"));
+    assert!(!matched("curl secret; echo ok"));
+    assert!(!matched("none"));
+    assert!(matched("curl secret; curl ok"));
+    assert!(matched("curl ok; curl secret"));
+    assert!(matched("echo secret; curl ok"));
+
+    // The selection reads the field: `^` anchors to it, and a match that crosses
+    // segments counts even though a segment holds the exclusion.
+    let anchored = content(&command_rule(EXCLUSION_SCOPE, "^curl", "secret"));
+    assert!(
+        anchored
+            .matching_fields(&[("command", "echo; curl ok")])
+            .is_empty()
+    );
+    let crossing = content(&command_rule(EXCLUSION_SCOPE, "a; b", "a"));
+    assert!(!crossing.matching_fields(&[("command", "a; b")]).is_empty());
+
+    // A continuation before a separator is not part of the excluded statement,
+    // but one that continues the command keeps its text in the segment.
+    let exact = content(&command_rule(EXCLUSION_SCOPE, "curl", "^curl x$"));
+    let exact_match = |value: &str| !exact.matching_fields(&[("command", value)]).is_empty();
+    assert!(!exact_match("curl x \\\n&& echo ok"));
+    assert!(exact_match("curl x \\\n  -d y"));
+    assert!(exact_match("curl x \\\\"));
+}
+
+#[test]
+fn exclusion_segment_charges_each_scan_before_it_runs() {
+    let visits = |matcher: &super::RuleV1ContentMatcher, name: &str, value: &str| {
+        let mut visits = Vec::new();
+        matcher
+            .try_matching_fields(&[(name, value)], &mut |bytes| {
+                visits.push(bytes);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        visits
+    };
+    // Name, the selection scan, the segmentation pass, then one byte over each
+    // holding segment that an exclusion scan reads.
+    let command = content(&command_rule(EXCLUSION_SCOPE, "curl", "secret"));
+    assert_eq!(
+        visits(&command, "command", "curl secret; curl ok"),
+        [7, 20, 20, 12, 8]
+    );
 }
 
 #[test]

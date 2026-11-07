@@ -46,6 +46,12 @@ impl Iterator for Segments<'_> {
     }
 }
 
+/// `segment` without the line continuation left before a separator that follows
+/// it, as in `a \\` + newline + `&& b`.
+pub(crate) fn without_continuation(segment: &str) -> &str {
+    segment.strip_suffix('\\').map_or(segment, str::trim_end)
+}
+
 /// Where the segment starting at `start` ends, and where the next one starts.
 fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
     let mut quote = None;
@@ -90,7 +96,7 @@ fn trim(bytes: &[u8], mut range: Range<usize>) -> Range<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::segments;
+    use super::{segments, without_continuation};
 
     fn split(text: &str) -> Vec<&str> {
         segments(text).map(|range| &text[range]).collect()
@@ -122,6 +128,13 @@ mod tests {
         );
         assert_eq!(split("grep a\\|b f | c"), ["grep a\\|b f", "c"]);
         assert_eq!(split("a 'x\ny'; c"), ["a 'x\ny'", "c"]);
+    }
+
+    #[test]
+    fn only_one_trailing_continuation_is_removed() {
+        assert_eq!(without_continuation("a \\"), "a");
+        assert_eq!(without_continuation("a"), "a");
+        assert_eq!(without_continuation("a \\\\"), "a \\");
     }
 
     #[test]

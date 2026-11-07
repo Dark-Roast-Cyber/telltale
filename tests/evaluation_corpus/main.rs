@@ -947,7 +947,9 @@ fn action_precision_cases_raise_only_the_expected_actions() {
 
     const EXPECTED: &[(&str, &[&str])] = &[
         ("BC-PREC-CURL-READ-FLAGS-001", &["network.download"]),
+        ("BC-PREC-IMDS-TOKEN-001", &["network.download"]),
         ("BC-PREC-PATH-NOT-ENCODED-001", &["network.download"]),
+        ("RX-IMDS-TOKEN-UPLOAD-001", &["exfil.outbound_upload"]),
     ];
     let root = repo_root();
     let manifest = load_manifest(&root.join(MANIFEST_PATH), &root).unwrap();
@@ -987,5 +989,5 @@ fn action_precision_cases_raise_only_the_expected_actions() {
         assert_eq!(actions, expected, "{}", case.id);
         cases += 1;
     }
-    assert_eq!(cases, 15);
+    assert_eq!(cases, 17);
 }
