@@ -66,7 +66,7 @@ const WRAPPER_VALUE_OPTIONS: [&str; 19] = [
 ];
 
 /// A leading `NAME=value` shell assignment.
-fn assignment(token: &str) -> bool {
+pub(crate) fn assignment(token: &str) -> bool {
     token.split_once('=').is_some_and(|(name, _)| {
         name.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic())
             && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())

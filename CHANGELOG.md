@@ -6,6 +6,17 @@
 
 ## Unreleased
 
+- **Security: action findings read shell text by its grammar.** Comments and
+  here-documents could remove commands a shell would run from action evaluation,
+  so a deny-level command returned no finding. Native action profile 6 reads
+  stages by shell grammar, including substitutions and `-c` scripts, and a body
+  leaves evaluation only when every command it can reach is a known data reader.
+  Expect new action findings, and some on bodies handed to programs Telltale does
+  not know as data readers. Session events and offline scans still match the
+  recorded text. Semantic identities change from profile 5. Replay identities
+  change only for a call that holds a comment or a here-document, which this
+  profile can record differently. A host that re-reads old sessions sees those
+  calls as new. See [embedding](docs/embedding.md).
 - **Standing scanner warnings alert once.** `scanner_error_threshold_exceeded`
   fires when an ordinary full scan first crosses `max_scanner_errors`, not on
   every later scan above it. A blocked sink (`authentication_blocked` with its

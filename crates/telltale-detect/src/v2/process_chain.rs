@@ -379,10 +379,33 @@ fn finish_process_matches(
 fn command_derived_process_matcher_inputs(
     observation: &CanonicalObservationV2,
 ) -> Vec<ProcessObservation> {
-    command_candidates(observation)
-        .into_iter()
-        .flat_map(crate::process_chain::observations_from_command_line)
-        .collect()
+    use crate::process_chain::observations_from_command_line;
+    // A statement is the same one with or without the comment after it.
+    fn statement(line: &str) -> &str {
+        line.split(" #").next().unwrap_or(line).trim()
+    }
+    let mut inputs = Vec::new();
+    for command in command_candidates(observation) {
+        let mut found = observations_from_command_line(command);
+        // That split takes a quote in a comment or a here-document for a real
+        // one and hides what follows it. The shell reader's stages do not.
+        let mut seen = found
+            .iter()
+            .filter_map(|input| input.child.command_line.as_deref())
+            .map(|line| statement(line).to_owned())
+            .collect::<BTreeSet<_>>();
+        let shell = super::shell_text::read(command);
+        for stage in shell.stages.iter().chain(&shell.inner_commands) {
+            for input in observations_from_command_line(&shell.code[stage.clone()]) {
+                let line = input.child.command_line.as_deref().unwrap_or_default();
+                if seen.insert(statement(line).to_owned()) {
+                    found.push(input);
+                }
+            }
+        }
+        inputs.append(&mut found);
+    }
+    inputs
 }
 
 fn command_candidates(observation: &CanonicalObservationV2) -> Vec<&str> {
