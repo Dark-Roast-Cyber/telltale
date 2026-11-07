@@ -72,17 +72,17 @@
   `exfil.outbound_upload` when every other token in its command segment is a flag
   listed for that client or the TTL header. It matches neither that rule nor
   `network.download`, so a token request with a metadata lookup scores at most 35
-  instead of 95. Sessions from sources that keep the call as raw JSON `arguments`
-  (Codex rollouts, Copilot) still match through that target. A body, another URL,
-  header, path or host, or an unlisted flag or wrapper such as `sudo` still matches
-  at 60, as does a bodyless
+  instead of 95. A body, another URL, header, path or host, or an
+  unlisted flag or wrapper such as `sudo` still matches at 60, as does a bodyless
   `PUT` or `POST` anywhere else. Native action findings apply the same exclusion
   per command stage, but still report a request continued with a trailing `\`. The
   core rule fingerprint and semantic identity change; the native profile does not.
 - **`detection.scope: exclusion_segment`.** The selection reads the whole target,
   as in field scope, and a match is dropped only when the command segment holding
-  it matches the exclusion. `field` and `segment` rules and their fingerprints are
-  unchanged. Rust:
+  it matches the exclusion. For `arguments` holding exactly one raw JSON shell call,
+  as Codex rollouts and Copilot store one, the decoded command can also drop a match;
+  any other shape stays raw text. `field` and `segment` rules and their fingerprints
+  are unchanged. Rust:
   `MatchScope` gains a `ExclusionSegment` variant. See
   [detection model](docs/detection-model.md#configurable-rules-and-policies).
 

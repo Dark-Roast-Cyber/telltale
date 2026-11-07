@@ -139,6 +139,8 @@ pub enum MatchScope {
     /// The whole target text for the selection, as in field scope. A selection
     /// match is dropped only when the command segment holding it matches the
     /// exclusion; any other match counts, including one that crosses segments.
+    /// `arguments` holding exactly one raw JSON shell call are also judged on its
+    /// decoded command, which can only drop a match.
     ExclusionSegment,
 }
 
@@ -410,22 +412,81 @@ impl CompiledMatcher {
                 }
                 Ok(None)
             }
-            MatchScope::ExclusionSegment => self.first_unexcluded_match(value, charge),
+            MatchScope::ExclusionSegment => self.find_outside_excluded_segments(value, charge),
         }
     }
 
-    /// The first selection match that no excluded segment holds. Matches and
-    /// segments both run in text order, so the scans stay linear apart from one
-    /// exclusion scan per match.
+    /// The raw text decides, as in field scope. One exact shape can only drop a
+    /// match: a raw JSON shell call whose command holds a selection match, where
+    /// every such match is excluded, the rest of the command does not match the
+    /// selection when read as one line, and no other member matches the selection.
+    fn find_outside_excluded_segments<E>(
+        &self,
+        value: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        if self.target == "arguments" && segment::may_be_json(value) {
+            charge(value.len())?;
+            if let Some(call) = segment::json_shell_call(value)
+                && let (true, None) = self.first_unexcluded_match(&call.command, charge)?
+                && !self.remainder_matches(&call.command, charge)?
+            {
+                let mut other_match = false;
+                for text in &call.other_strings {
+                    charge(text.len())?;
+                    other_match |= self.regex.is_match(text);
+                }
+                if !other_match {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(self.first_unexcluded_match(value, charge)?.1)
+    }
+
+    /// Whether the selection matches `text` without its excluded segments, read as
+    /// one line. Raw JSON spells a line break as an escape, which a selection can
+    /// cross, so a request that decoded text splits across lines still counts.
+    fn remainder_matches<E>(
+        &self,
+        text: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        charge(text.len())?;
+        let mut remainder = String::with_capacity(text.len());
+        let mut copied = 0;
+        for range in segment::segments(text) {
+            let holding = segment::without_continuation(&text[range.clone()]);
+            charge(holding.len() + 1)?;
+            if self
+                .exclusion_regex
+                .as_ref()
+                .is_some_and(|exclusion| exclusion.is_match(holding))
+            {
+                remainder.push_str(&text[copied..range.start]);
+                copied = range.end;
+            }
+        }
+        remainder.push_str(&text[copied..]);
+        let one_line = remainder.replace("\\\n", " ").replace('\n', " ");
+        charge(one_line.len())?;
+        Ok(self.regex.is_match(&one_line))
+    }
+
+    /// Whether the selection matches `text` at all, and its first match that no
+    /// excluded segment holds. Matches and segments both run in text order, so
+    /// the scans stay linear apart from one exclusion scan per match.
     fn first_unexcluded_match<E>(
         &self,
         text: &str,
         charge: &mut impl FnMut(usize) -> Result<(), E>,
-    ) -> Result<Option<std::ops::Range<usize>>, E> {
+    ) -> Result<(bool, Option<std::ops::Range<usize>>), E> {
         charge(text.len())?;
         charge(text.len())?;
+        let mut selected = false;
         let mut segments = segment::segments(text).peekable();
         for found in self.regex.find_iter(text) {
+            selected = true;
             while segments
                 .peek()
                 .is_some_and(|segment| segment.end <= found.start())
@@ -444,10 +505,10 @@ impl CompiledMatcher {
                 _ => false,
             };
             if !excluded {
-                return Ok(Some(found.range()));
+                return Ok((true, Some(found.range())));
             }
         }
-        Ok(None)
+        Ok((selected, None))
     }
 
     fn find_in<E>(

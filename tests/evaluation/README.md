@@ -158,6 +158,9 @@ lookup score 35 (`execution.shell` 15 + `network.download` 20) and need no revie
 The same token request followed by a local file posted to an external host scores
 75 and requires review. They increase the scored corpus from 71 to 73; no existing
 label, expectation, score, rule set or contribution changed.
+`imds_token_verdict_is_the_same_on_every_source_shape` runs the same commands
+through the Claude, Codex `exec_command`, Codex argv and Copilot shapes, because
+the latter three also store the raw JSON call as `arguments`.
 
 ## Native source inputs only
 

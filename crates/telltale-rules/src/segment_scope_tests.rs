@@ -20,6 +20,10 @@ fn command_rule(scope: &str, selection: &str, exclusion: &str) -> String {
     document(scope, selection, exclusion).replace("        tool_result: synthetic\n", "")
 }
 
+fn arguments_rule(scope: &str, selection: &str, exclusion: &str) -> String {
+    command_rule(scope, selection, exclusion).replace("command: ", "arguments: ")
+}
+
 fn fingerprint(document: &str) -> String {
     rule_v1_fingerprint(
         &load_rule_set_from_documents(&[document], None)
@@ -306,6 +310,55 @@ fn exclusion_segment_drops_only_matches_inside_an_excluded_segment() {
 }
 
 #[test]
+fn exclusion_segment_reads_one_exact_json_shape_and_only_to_drop_a_match() {
+    let exclusion = "^curl secret$";
+    let rule = content(&arguments_rule(EXCLUSION_SCOPE, "curl", exclusion));
+    let matched = |value: &str| !rule.matching_fields(&[("arguments", value)]).is_empty();
+
+    // Every selection match in the command is excluded: the match is dropped.
+    assert!(!matched(r#"{"cmd":"curl secret"}"#));
+    assert!(!matched(r#"{"cmd":"curl secret; echo ok","workdir":"/w"}"#));
+    assert!(!matched(r#"{"command":["bash","-lc","curl secret"]}"#));
+    // The raw text decides everything else.
+    assert!(matched(r#"{"cmd":"curl secret; curl ok"}"#));
+    assert!(matched(r#"{"cmd":"curl secret","description":"curl ok"}"#));
+    assert!(matched(r#"{"cmd":"curl secret","args":"x"}"#));
+    assert!(matched(r#"{"note":"curl secret"}"#));
+    assert!(matched(r#"{"cmd":"curl secret""#));
+    // A command without a selection match leaves the raw text to decide.
+    let raw_only = content(&arguments_rule(EXCLUSION_SCOPE, "curl.,.x", exclusion));
+    assert!(
+        !raw_only
+            .matching_fields(&[("arguments", r#"{"cmd":"curl","x":1}"#)])
+            .is_empty()
+    );
+
+    // The rest of the command is read as one line, as raw JSON lets a selection
+    // cross its escaped line breaks. The excluded segment is not part of it.
+    let crossing = content(&arguments_rule(
+        EXCLUSION_SCOPE,
+        "curl(?:.*ok| secret)",
+        exclusion,
+    ));
+    let crosses = |value: &str| !crossing.matching_fields(&[("arguments", value)]).is_empty();
+    assert!(crosses(r#"{"cmd":"curl secret; curl \nok"}"#));
+    assert!(!crosses(r#"{"cmd":"curl secret; echo \nok"}"#));
+
+    // The reader only drops: text the raw field does not match stays unmatched.
+    let escaped = format!("{{\"cmd\":\"{}u0063url ok\"}}", char::from(92));
+    assert!(!matched(&escaped));
+
+    // Other targets and scopes never read it.
+    let shaped = r#"{"cmd":"curl secret"}"#;
+    let command = content(&command_rule(EXCLUSION_SCOPE, "curl", exclusion));
+    assert!(!command.matching_fields(&[("command", shaped)]).is_empty());
+    let segment = content(&arguments_rule("      scope: segment\n", "curl", exclusion));
+    assert!(!segment.matching_fields(&[("arguments", shaped)]).is_empty());
+    let field = content(&arguments_rule("", "curl", exclusion));
+    assert!(!field.matching_fields(&[("arguments", shaped)]).is_empty());
+}
+
+#[test]
 fn exclusion_segment_charges_each_scan_before_it_runs() {
     let visits = |matcher: &super::RuleV1ContentMatcher, name: &str, value: &str| {
         let mut visits = Vec::new();
@@ -323,6 +376,21 @@ fn exclusion_segment_charges_each_scan_before_it_runs() {
     assert_eq!(
         visits(&command, "command", "curl secret; curl ok"),
         [7, 20, 20, 12, 8]
+    );
+
+    let arguments = content(&arguments_rule(EXCLUSION_SCOPE, "curl", "secret"));
+    // The parse, the command's scans and exclusion, the remainder's pass, exclusion
+    // and scan, then each other string.
+    let (dropped, text) = (r#"{"cmd":"curl secret","workdir":"/w"}"#, "plain");
+    assert_eq!(
+        visits(&arguments, "arguments", dropped),
+        [9, 36, 11, 11, 12, 11, 12, 0, 2]
+    );
+    // No parse is charged for text that cannot be JSON.
+    assert_eq!(visits(&arguments, "arguments", text), [9, 5, 5]);
+    assert_eq!(
+        arguments.try_matching_fields(&[("arguments", dropped)], &mut |_| Err("exhausted")),
+        Err("exhausted")
     );
 }
 
