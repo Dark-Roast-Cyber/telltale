@@ -150,6 +150,15 @@ response escalation, and credential-shaped fixture redaction for the two
 positive signals. Native conformance is limited to Codex; the canonical
 rule-session tests exercise the source-neutral matching behavior.
 
+## IMDSv2 token cases
+
+`BC-PREC-IMDS-TOKEN-001` and `RX-IMDS-TOKEN-UPLOAD-001` are a pair labeled from
+the scenario, not from engine output. A requested token request and region
+lookup score 35 (`execution.shell` 15 + `network.download` 20) and need no review.
+The same token request followed by a local file posted to an external host scores
+75 and requires review. They increase the scored corpus from 71 to 73; no existing
+label, expectation, score, rule set or contribution changed.
+
 ## Native source inputs only
 
 Every case is a native source fixture evaluated on the production canonical path.

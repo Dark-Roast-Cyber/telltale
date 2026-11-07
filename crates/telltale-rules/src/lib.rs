@@ -48,7 +48,7 @@ pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
 
 // Shared with the published vocabulary catalog, not a supported embedding API.
 #[doc(hidden)]
-pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &["field", "segment"];
+pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &["field", "segment", "exclusion_segment"];
 
 /// Targets that carry command-line text, the only ones segment scope accepts.
 // Shared with the published vocabulary catalog, not a supported embedding API.
@@ -136,6 +136,10 @@ pub enum MatchScope {
     /// `|`, `||`, `&&` and newlines. A target matches when one segment matches
     /// the selection and that same segment does not match the exclusion.
     Segment,
+    /// The whole target text for the selection, as in field scope. A selection
+    /// match is dropped only when the command segment holding it matches the
+    /// exclusion; any other match counts, including one that crosses segments.
+    ExclusionSegment,
 }
 
 impl MatchScope {
@@ -143,6 +147,7 @@ impl MatchScope {
         match self {
             Self::Field => "field",
             Self::Segment => "segment",
+            Self::ExclusionSegment => "exclusion_segment",
         }
     }
 }
@@ -405,7 +410,44 @@ impl CompiledMatcher {
                 }
                 Ok(None)
             }
+            MatchScope::ExclusionSegment => self.first_unexcluded_match(value, charge),
         }
+    }
+
+    /// The first selection match that no excluded segment holds. Matches and
+    /// segments both run in text order, so the scans stay linear apart from one
+    /// exclusion scan per match.
+    fn first_unexcluded_match<E>(
+        &self,
+        text: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        charge(text.len())?;
+        charge(text.len())?;
+        let mut segments = segment::segments(text).peekable();
+        for found in self.regex.find_iter(text) {
+            while segments
+                .peek()
+                .is_some_and(|segment| segment.end <= found.start())
+            {
+                segments.next();
+            }
+            let holding = segments
+                .peek()
+                .filter(|segment| segment.start <= found.start() && found.end() <= segment.end);
+            let excluded = match (holding, &self.exclusion_regex) {
+                (Some(holding), Some(exclusion)) => {
+                    let holding = segment::without_continuation(&text[holding.clone()]);
+                    charge(holding.len() + 1)?;
+                    exclusion.is_match(holding)
+                }
+                _ => false,
+            };
+            if !excluded {
+                return Ok(Some(found.range()));
+            }
+        }
+        Ok(None)
     }
 
     fn find_in<E>(
@@ -1123,12 +1165,13 @@ fn compile_matchers(
         }
         for (target, regex) in &detection.selection {
             validate_target(&definition.id, target)?;
-            if detection.scope == MatchScope::Segment
+            if detection.scope != MatchScope::Field
                 && !SEGMENT_SCOPE_TARGETS.contains(&target.as_str())
             {
                 return Err(format!(
-                    "rule {} uses scope 'segment' with target '{}'; segment scope supports only command-text targets: {}",
+                    "rule {} uses scope '{}' with target '{}'; segment scope supports only command-text targets: {}",
                     definition.id,
+                    detection.scope.as_str(),
                     target,
                     SEGMENT_SCOPE_TARGETS.join(", ")
                 )
