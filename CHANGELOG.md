@@ -60,11 +60,31 @@
   segment scope, so an upload in one command segment no longer hides a
   download in another: `curl --data @f <url>; curl <url>` now matches
   `network.download` (20) as well as `exfil.outbound_upload` (60) in the
-  session. An upload in the same segment still excludes the download. The core
-  rule fingerprint and semantic identity change; native action findings, the
-  native profile and replay identities do not. No evaluation-corpus case
-  changes. Rust: `DetectionDefinition` and `RuleV1CompatibilityMatcher` gain a
-  public `scope` field.
+  session. An upload in the same segment still excludes the download. Such a
+  command now scores 95 (critical) instead of 75 (high), the same as those two
+  requests made as separate tool calls. The core rule fingerprint and semantic
+  identity change; native action findings, the native profile and replay
+  identities do not. No evaluation-corpus case changes. Rust:
+  `DetectionDefinition` and `RuleV1CompatibilityMatcher` gain a public `scope`
+  field.
+- **IMDSv2 token requests are not uploads.** A bodyless `PUT` to the literal
+  IMDSv2 token endpoint (`169.254.169.254` or `fd00:ec2::254`) no longer matches
+  `exfil.outbound_upload` when every other token in its command segment is a flag
+  listed for that client or the TTL header. It matches neither that rule nor
+  `network.download`, so a token request with a metadata lookup scores at most 35
+  instead of 95. A body, another URL, header, path or host, or an
+  unlisted flag or wrapper such as `sudo` still matches at 60, as does a bodyless
+  `PUT` or `POST` anywhere else. Native action findings apply the same exclusion
+  per command stage, but still report a request continued with a trailing `\`. The
+  core rule fingerprint and semantic identity change; the native profile does not.
+- **`detection.scope: exclusion_segment`.** The selection reads the whole target,
+  as in field scope, and a match is dropped only when the command segment holding
+  it matches the exclusion. For `arguments` holding exactly one raw JSON shell call,
+  as Codex rollouts and Copilot store one, the decoded command can also drop a match;
+  any other shape stays raw text. `field` and `segment` rules and their fingerprints
+  are unchanged. Rust:
+  `MatchScope` gains a `ExclusionSegment` variant. See
+  [detection model](docs/detection-model.md#configurable-rules-and-policies).
 
 - **Risk thresholds must not decrease.** Settings fail before any output when
   the merged `low`, `medium`, `high` and `critical` values decrease. Equal

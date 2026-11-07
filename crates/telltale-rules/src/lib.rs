@@ -48,7 +48,7 @@ pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
 
 // Shared with the published vocabulary catalog, not a supported embedding API.
 #[doc(hidden)]
-pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &["field", "segment"];
+pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &["field", "segment", "exclusion_segment"];
 
 /// Targets that carry command-line text, the only ones segment scope accepts.
 // Shared with the published vocabulary catalog, not a supported embedding API.
@@ -136,6 +136,12 @@ pub enum MatchScope {
     /// `|`, `||`, `&&` and newlines. A target matches when one segment matches
     /// the selection and that same segment does not match the exclusion.
     Segment,
+    /// The whole target text for the selection, as in field scope. A selection
+    /// match is dropped only when the command segment holding it matches the
+    /// exclusion; any other match counts, including one that crosses segments.
+    /// `arguments` holding exactly one raw JSON shell call are also judged on its
+    /// decoded command, which can only drop a match.
+    ExclusionSegment,
 }
 
 impl MatchScope {
@@ -143,6 +149,7 @@ impl MatchScope {
         match self {
             Self::Field => "field",
             Self::Segment => "segment",
+            Self::ExclusionSegment => "exclusion_segment",
         }
     }
 }
@@ -405,7 +412,103 @@ impl CompiledMatcher {
                 }
                 Ok(None)
             }
+            MatchScope::ExclusionSegment => self.find_outside_excluded_segments(value, charge),
         }
+    }
+
+    /// The raw text decides, as in field scope. One exact shape can only drop a
+    /// match: a raw JSON shell call whose command holds a selection match, where
+    /// every such match is excluded, the rest of the command does not match the
+    /// selection when read as one line, and no other member matches the selection.
+    fn find_outside_excluded_segments<E>(
+        &self,
+        value: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        if self.target == "arguments" && segment::may_be_json(value) {
+            charge(value.len())?;
+            if let Some(call) = segment::json_shell_call(value)
+                && let (true, None) = self.first_unexcluded_match(&call.command, charge)?
+                && !self.remainder_matches(&call.command, charge)?
+            {
+                let mut other_match = false;
+                for text in &call.other_strings {
+                    charge(text.len())?;
+                    other_match |= self.regex.is_match(text);
+                }
+                if !other_match {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(self.first_unexcluded_match(value, charge)?.1)
+    }
+
+    /// Whether the selection matches `text` without its excluded segments, read as
+    /// one line. Raw JSON spells a line break as an escape, which a selection can
+    /// cross, so a request that decoded text splits across lines still counts.
+    fn remainder_matches<E>(
+        &self,
+        text: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        charge(text.len())?;
+        let mut remainder = String::with_capacity(text.len());
+        let mut copied = 0;
+        for range in segment::segments(text) {
+            let holding = segment::without_continuation(&text[range.clone()]);
+            charge(holding.len() + 1)?;
+            if self
+                .exclusion_regex
+                .as_ref()
+                .is_some_and(|exclusion| exclusion.is_match(holding))
+            {
+                remainder.push_str(&text[copied..range.start]);
+                copied = range.end;
+            }
+        }
+        remainder.push_str(&text[copied..]);
+        let one_line = remainder.replace("\\\n", " ").replace('\n', " ");
+        charge(one_line.len())?;
+        Ok(self.regex.is_match(&one_line))
+    }
+
+    /// Whether the selection matches `text` at all, and its first match that no
+    /// excluded segment holds. Matches and segments both run in text order, so
+    /// the scans stay linear apart from one exclusion scan per match.
+    fn first_unexcluded_match<E>(
+        &self,
+        text: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(bool, Option<std::ops::Range<usize>>), E> {
+        charge(text.len())?;
+        charge(text.len())?;
+        let mut selected = false;
+        let mut segments = segment::segments(text).peekable();
+        for found in self.regex.find_iter(text) {
+            selected = true;
+            while segments
+                .peek()
+                .is_some_and(|segment| segment.end <= found.start())
+            {
+                segments.next();
+            }
+            let holding = segments
+                .peek()
+                .filter(|segment| segment.start <= found.start() && found.end() <= segment.end);
+            let excluded = match (holding, &self.exclusion_regex) {
+                (Some(holding), Some(exclusion)) => {
+                    let holding = segment::without_continuation(&text[holding.clone()]);
+                    charge(holding.len() + 1)?;
+                    exclusion.is_match(holding)
+                }
+                _ => false,
+            };
+            if !excluded {
+                return Ok((true, Some(found.range())));
+            }
+        }
+        Ok((selected, None))
     }
 
     fn find_in<E>(
@@ -1123,12 +1226,13 @@ fn compile_matchers(
         }
         for (target, regex) in &detection.selection {
             validate_target(&definition.id, target)?;
-            if detection.scope == MatchScope::Segment
+            if detection.scope != MatchScope::Field
                 && !SEGMENT_SCOPE_TARGETS.contains(&target.as_str())
             {
                 return Err(format!(
-                    "rule {} uses scope 'segment' with target '{}'; segment scope supports only command-text targets: {}",
+                    "rule {} uses scope '{}' with target '{}'; segment scope supports only command-text targets: {}",
                     definition.id,
+                    detection.scope.as_str(),
                     target,
                     SEGMENT_SCOPE_TARGETS.join(", ")
                 )
