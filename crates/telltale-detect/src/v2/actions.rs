@@ -804,6 +804,21 @@ fn view(
                         }
                     }
                 }
+                // A shell also takes a quote's own escapes, so `"a\"b"` is one word.
+                if plain.is_some() {
+                    budget.charge(2 * stage.len())?;
+                    let tokens = super::shell_text::words(stage);
+                    if !out.commands.ends_with(std::slice::from_ref(&tokens)) {
+                        opened.extend(input_files(stage, &tokens));
+                        let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        out.stage_spans.push(start..end);
+                        out.commands.push(tokens);
+                        if let Some(script) = script {
+                            out.stage_spans.push(start..end);
+                            out.commands.push(script);
+                        }
+                    }
+                }
             }
             charge_commands(&out.commands, budget)?;
             // A tool that reads by name reads every path it is given, and so

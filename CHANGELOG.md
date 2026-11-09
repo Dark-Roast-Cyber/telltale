@@ -25,9 +25,11 @@
 - **Security: action findings read shell text by its grammar
   ([GHSA-mwwh-jhj3-5c4c](https://github.com/Dark-Roast-Cyber/telltale/security/advisories/GHSA-mwwh-jhj3-5c4c)).** Comments and
   here-documents could remove commands a shell would run from action evaluation,
-  so a deny-level command returned no finding. Native action profile 6 reads
-  stages by shell grammar, including substitutions and `-c` scripts, and a body
-  leaves evaluation only when every command it can reach is a known data reader.
+  so a deny-level command returned no finding, and an escaped quote inside an
+  argument could hide the flags after it. Native action profile 6 reads stages
+  by shell grammar, including substitutions, `-c` scripts and the escapes a
+  quote takes, and a body leaves evaluation only when every command it can reach
+  is a known data reader.
   Expect new action findings, and some on bodies handed to programs Telltale does
   not know as data readers. Session events and offline scans still match the
   recorded text. Semantic identities change from profile 5. Replay identities

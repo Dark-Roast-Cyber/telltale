@@ -1668,6 +1668,60 @@ pub(super) fn unescaped(text: &str) -> String {
     joined(text).replace('\\', "")
 }
 
+/// The words a POSIX shell passes on from one command, its quotes and escapes taken:
+/// `"a\"b"` and `$'a\'b'` are one word each, and a continued line ends none. A
+/// Windows path loses its backslashes here, so this is a further reading of the
+/// command and never the only one.
+pub(super) fn words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote = None;
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        match (quote, character) {
+            (Some('\''), '\'') | (Some('$'), '\'') | (Some('"'), '"') => quote = None,
+            (Some('$'), '\\') => word.extend(chars.next()),
+            (Some('"'), '\\') if chars.peek() == Some(&'\n') => {
+                chars.next();
+            }
+            (Some('"'), '\\') if matches!(chars.peek(), Some('$' | '`' | '"' | '\\')) => {
+                word.extend(chars.next());
+            }
+            (Some(_), _) => word.push(character),
+            (None, '\\') => {
+                if let Some(next) = chars.next().filter(|next| *next != '\n') {
+                    word.push(next);
+                    started = true;
+                }
+            }
+            (None, '$') if chars.peek() == Some(&'\'') => {
+                chars.next();
+                quote = Some('$');
+                started = true;
+            }
+            (None, '\'' | '"') => {
+                quote = Some(character);
+                started = true;
+            }
+            (None, blank) if blank.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, _) => {
+                word.push(character);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
 /// `text` with the quotes around its words gone, for matching what a word spells.
 /// What a double quote holds stays as written, so an escaped quote in a message
 /// keeps its marks. A line whose quote does not close may hold text no shell reads
