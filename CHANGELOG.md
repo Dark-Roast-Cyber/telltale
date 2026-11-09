@@ -1,12 +1,29 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0` is the current stable release and `v0.6.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.1` is the current stable release and `v0.7.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## Unreleased
+## 0.7.1 — published stable (2026-11-08)
 
-- **Security: action findings read shell text by its grammar.** Comments and
+### Compatibility and operator impact
+
+- **Settings whose risk thresholds decrease now fail to load.** The scanner
+  stops before any output, so a service or timer using such settings fails at
+  startup. A 0.7.0 setup that set only `TELLTALE_RISK_THRESHOLD_HIGH` below 50
+  is one of these. Check the merged `low`, `medium`, `high` and `critical`
+  values with `telltale config show` before upgrading.
+- **Detection results change.** Expect new action findings from the shell
+  reading fix and from segment-scoped `network.download`. Semantic identities
+  change, and detections whose content changes re-emit once after upgrade.
+  Review and rebaseline.
+- The new settings, flags and the Rule v1 `detection.scope` field are optional
+  and off or unchanged by default. Event 3.0 is unchanged.
+
+### Changes since 0.7.0
+
+- **Security: action findings read shell text by its grammar
+  ([GHSA-mwwh-jhj3-5c4c](https://github.com/Dark-Roast-Cyber/telltale/security/advisories/GHSA-mwwh-jhj3-5c4c)).** Comments and
   here-documents could remove commands a shell would run from action evaluation,
   so a deny-level command returned no finding. Native action profile 6 reads
   stages by shell grammar, including substitutions and `-c` scripts, and a body
@@ -76,7 +93,6 @@
   native profile and replay identities do not. No evaluation-corpus case
   changes. Rust: `DetectionDefinition` and `RuleV1CompatibilityMatcher` gain a
   public `scope` field.
-
 - **Risk thresholds must not decrease.** Settings fail before any output when
   the merged `low`, `medium`, `high` and `critical` values decrease. Equal
   values are still allowed. Setting only `TELLTALE_RISK_THRESHOLD_HIGH` below
@@ -99,7 +115,7 @@
   stdout-only `session_store_environment_ignored` diagnostic warning.
 - The docs and help now describe how environment variables apply,
   `--no-local-config` and the meaning of `detection_count`, and the install
-  guide names `v0.7.0` as the current stable release.
+  guide names the current stable release.
 
 ## 0.7.0 — published stable (2026-10-30)
 

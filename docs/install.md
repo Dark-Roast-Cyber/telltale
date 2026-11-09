@@ -74,7 +74,7 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable is `v0.7.0`. Published candidates are immutable; each
+Official stable is `v0.7.1`. Published candidates are immutable; each
 candidate's identity and qualification results are on its
 [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). The
 [versioning contract](versioning.md) requires RC package/tag equality and separate exact
@@ -215,7 +215,7 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 Use the reviewed repository scripts from this checkout with Windows PowerShell
 5.1 or PowerShell 7 and a current authenticated GitHub CLI (`gh`). Installation
-selects the latest official stable Release (`v0.7.0` currently) and verifies the
+selects the latest official stable Release (`v0.7.1` currently) and verifies the
 exact release/tag/commit, GitHub asset digests, `SHA256SUMS`, source/ref/digest-bound
 GitHub attestation, canonical nine-member ZIP and executable version before
 changing the installation:
