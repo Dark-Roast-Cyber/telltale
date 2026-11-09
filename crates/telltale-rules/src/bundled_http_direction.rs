@@ -401,6 +401,53 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         true,
         false,
     ),
+    // An escaped quote, `$'...'` quoting or a continued line keeps the command
+    // whole, and a backslash a Windows shell keeps as text still closes a quote.
+    (
+        "curl -H \"X-Synthetic: a\\\"b\" --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H \"X-Synthetic: a\\\";b\" --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H $'X-Synthetic: a\\';b' --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H 'X-Synthetic: a' \\\n  --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H \"X-Synthetic: a\\\"b\" -o out https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -H \"X-Synthetic: a\\\";b\" -o out https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -H $'X-Synthetic: a\\';b' -o out https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -sS \\\n  https://example.invalid/file -o out",
+        false,
+        true,
+    ),
+    (
+        "iwr -OutFile \"C:\\tmp\\\" https://example.invalid/file",
+        false,
+        true,
+    ),
     (
         "curl -H \"X-Synthetic: a|b\" --data @f https://example.invalid/upload",
         true,

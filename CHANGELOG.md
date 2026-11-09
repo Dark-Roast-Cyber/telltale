@@ -68,7 +68,9 @@
   scan after upgrade, detections whose content changes under the corrected
   rules and summaries whose counts grew re-emit once.
 - **Bundled rule precision.** HTTP upload and download flags count only in the
-  client's own command segment, with quotes respected; `-x` is a proxy flag and
+  client's own command segment, with quotes respected. A backslash escape,
+  `$'...'` quoting or a continued line keeps the command in one segment, and a
+  quote that a Windows shell closes still closes. `-x` is a proxy flag and
   there is no bare `PUT` match. Literal loopback-only URLs are not downloads
   (uploads to them still are; `localhost` still matches).
   `credential.api_key.pattern` needs a left token boundary and case-sensitive
