@@ -804,11 +804,14 @@ fn view(
                         }
                     }
                 }
-                // A shell also takes a quote's own escapes, so `"a\"b"` is one word.
+                // A POSIX shell also takes a quote's own escapes, so `"a\"b"` is
+                // one word. A Windows client's shell keeps its backslashes as text.
                 if plain.is_some() {
-                    budget.charge(2 * stage.len())?;
+                    budget.charge(3 * stage.len())?;
                     let tokens = super::shell_text::words(stage);
-                    if !out.commands.ends_with(std::slice::from_ref(&tokens)) {
+                    if !super::http::windows_client(&tokenize(stage))
+                        && !out.commands.ends_with(std::slice::from_ref(&tokens))
+                    {
                         opened.extend(input_files(stage, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
                         out.stage_spans.push(start..end);

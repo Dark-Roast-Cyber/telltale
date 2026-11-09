@@ -140,6 +140,18 @@ pub(crate) fn download_candidate(tokens: &[String]) -> Option<&[String]> {
     })
 }
 
+/// Whether the segment's client is a Windows program (`curl.exe`) or a
+/// PowerShell cmdlet, whose shell keeps a backslash as text.
+pub(crate) fn windows_client(tokens: &[String]) -> bool {
+    invocation(tokens, &DOWNLOAD_CLIENTS).is_some_and(|command| {
+        command[0].to_ascii_lowercase().ends_with(".exe")
+            || matches!(
+                client_name(&command[0]).as_str(),
+                "invoke-webrequest" | "iwr"
+            )
+    })
+}
+
 /// Whether the segment's curl or wget invocation uploads.
 pub(crate) fn is_upload(tokens: &[String]) -> bool {
     invocation(tokens, &["curl", "wget"]).is_some_and(|command| request(command).upload)

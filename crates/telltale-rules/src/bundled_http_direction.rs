@@ -443,6 +443,62 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         false,
         true,
     ),
+    // Each reading is whole, so no flag is found by closing a quote one way and
+    // escaping the next one the other.
+    (
+        "curl https://example.invalid/file -o out -H \"X-Synthetic: \\\"a\\\" -d b\"",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o out -H \"X-Synthetic: \\\"a\\\" --data b\"",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o out -H \"a\\\" \\' --data y '\"",
+        false,
+        true,
+    ),
+    // `$$` is a parameter, and `\$` a dollar sign, so neither opens `$'...'`.
+    (
+        "curl https://example.invalid/file -o out $$'\\' x '  --data y '",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o out \\$'\\' x '  --data y '",
+        false,
+        true,
+    ),
+    // A comment's quotes open nothing, so the next line is its own segment.
+    (
+        "curl --data @f https://example.invalid/upload # $'\\'\ncurl https://example.invalid/file -o out",
+        true,
+        true,
+    ),
+    (
+        "curl --data @f https://example.invalid/upload # don't\ncurl https://example.invalid/file -o out",
+        true,
+        true,
+    ),
+    // A `#` a shell may read as text hides nothing after it.
+    (
+        "echo a\\ #b; curl https://example.invalid/file -o out",
+        false,
+        true,
+    ),
+    (
+        "echo \"`echo \" #b\" `\"; curl https://example.invalid/file -o out",
+        false,
+        true,
+    ),
+    // A Windows client keeps its backslashes, so its quote closes there.
+    (
+        "curl.exe -o \"C:\\tmp\\\" -H \"X-Synthetic: a -d b\" https://example.invalid/file",
+        false,
+        true,
+    ),
     (
         "iwr -OutFile \"C:\\tmp\\\" https://example.invalid/file",
         false,

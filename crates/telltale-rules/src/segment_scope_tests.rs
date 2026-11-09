@@ -72,7 +72,7 @@ fn segment_scope_changes_the_fingerprint() {
     // Only the scope of the bundled download rule differs from the same rules
     // in field scope: without the line, the core fingerprint is the field one.
     const CORE_BEFORE_SCOPE: &str =
-        "sha256:5910ef25222592bfbf5f0ead6d31ba6050f09a09c62a77cbd17ea8df565a606d";
+        "sha256:f4d8f649f465341d152c1384e53520d80f2657ef82f90b7341253721bafb28a8";
     let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
     let segment_fingerprint = fingerprint(&bundled);
     assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);

@@ -1068,6 +1068,20 @@ fn a_command_is_read_after_the_quoting_a_shell_removes() {
     ] {
         assert!(reader.rules(command).contains(rule), "{rule}: {command:?}");
     }
+    // What a quote holds stays one word however it is escaped, so it is no flag.
+    for command in [
+        "curl https://example.invalid/a -o a -H \"X: \\\"a\\\" -d b\"",
+        "curl https://example.invalid/a -o a $$'\\' x '  --data y '",
+        "curl https://example.invalid/a -o a \\$'\\' x '  --data y '",
+    ] {
+        let rules = reader.rules(command);
+        assert!(rules.contains("network.download"), "{command:?}");
+        assert!(!rules.contains("exfil.outbound_upload"), "{command:?}");
+    }
+    // A Windows client's shell keeps a backslash as text, so its quote closes there.
+    let rules =
+        reader.rules("curl.exe -o \"C:\\tmp\\\" -H \"X: a -d b\" https://example.invalid/a");
+    assert!(!rules.contains("exfil.outbound_upload"), "{rules:?}");
     // Quote removal leaves a quote that was itself quoted, so these name a phrase.
     for command in [
         "git commit -m \"fix \\\"rm -rf /\\\" docs\"",

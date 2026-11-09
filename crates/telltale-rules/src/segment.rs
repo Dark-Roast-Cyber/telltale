@@ -4,7 +4,11 @@
 //! separators, trimmed of surrounding ASCII whitespace; empty segments are
 //! skipped. Single quotes are literal. A backslash escapes the next character
 //! outside single quotes, so `\;` and a `\"` inside double quotes end nothing,
-//! and `$'...'` takes backslash escapes, so its `\'` ends nothing either.
+//! and `$'...'` takes backslash escapes, so its `\'` ends nothing either. A `#`
+//! after an unescaped space or tab, or at a segment's start, and outside quotes
+//! starts a comment, which runs to the end of its line and is in no segment, so
+//! its quotes open nothing. Once a backtick, `(` or `${` appears in a segment, a
+//! `#` in it is text, since a substitution or an expansion may hold it.
 //! An unclosed quote runs to the end of the text, which yields one larger
 //! segment rather than an error. A single `&` is not a separator, so `2>&1`,
 //! `&>` and unquoted query strings stay in their segment.
@@ -12,7 +16,7 @@
 //! after a single `&` can still exclude a download before it.
 //!
 //! This is a lexical split, not a shell parser: subshells, command
-//! substitution, heredocs and comments are not interpreted. It makes one pass
+//! substitution and heredocs are not interpreted. It makes one pass
 //! over the bytes and allocates nothing. Every separator, quote and escape is
 //! ASCII, so every range starts and ends on a character boundary.
 
@@ -50,9 +54,15 @@ impl Iterator for Segments<'_> {
 /// Where the segment starting at `start` ends, and where the next one starts.
 fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
     let mut quote = None;
+    // Whether the last byte read outside quotes was in a word, and whether a
+    // substitution or an expansion has opened, in which a `#` may be text.
+    let (mut word, mut nested) = (false, false);
     let mut index = start;
     while index < bytes.len() {
         let byte = bytes[index];
+        if byte == b'`' || byte == b'(' || (byte == b'{' && index > 0 && bytes[index - 1] == b'$') {
+            nested = true;
+        }
         match quote {
             Some(b'\'') => {
                 if byte == b'\'' {
@@ -69,24 +79,35 @@ fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
                 b'"' => quote = None,
                 _ => {}
             },
-            None => match byte {
-                b'\\' => index += 1,
-                // `$$` is a parameter, so only an odd run of `$` opens `$'...'`.
-                b'$' => {
-                    let run = bytes[index..].iter().take_while(|&&b| b == b'$').count();
-                    index += run - 1;
-                    if run % 2 == 1 && bytes.get(index + 1) == Some(&b'\'') {
-                        quote = Some(b'$');
-                        index += 1;
+            None => {
+                match byte {
+                    b'\\' => index += 1,
+                    // `$$` is a parameter, so only an odd run of `$` opens `$'...'`.
+                    b'$' => {
+                        let run = bytes[index..].iter().take_while(|&&b| b == b'$').count();
+                        index += run - 1;
+                        if run % 2 == 1 && bytes.get(index + 1) == Some(&b'\'') {
+                            quote = Some(b'$');
+                            index += 1;
+                        }
                     }
+                    b'\'' | b'"' => quote = Some(byte),
+                    // A comment runs to the end of its line and is in no segment.
+                    b'#' if !word && !nested => {
+                        return match bytes[index..].iter().position(|&b| b == b'\n') {
+                            Some(offset) => (index, index + offset + 1),
+                            None => (index, bytes.len()),
+                        };
+                    }
+                    b';' | b'\n' => return (index, index + 1),
+                    b'|' if bytes.get(index + 1) == Some(&b'|') => return (index, index + 2),
+                    b'|' => return (index, index + 1),
+                    b'&' if bytes.get(index + 1) == Some(&b'&') => return (index, index + 2),
+                    _ => {}
                 }
-                b'\'' | b'"' => quote = Some(byte),
-                b';' | b'\n' => return (index, index + 1),
-                b'|' if bytes.get(index + 1) == Some(&b'|') => return (index, index + 2),
-                b'|' => return (index, index + 1),
-                b'&' if bytes.get(index + 1) == Some(&b'&') => return (index, index + 2),
-                _ => {}
-            },
+                // Only a shell's blanks end a word; an escaped one is in it.
+                word = !matches!(byte, b' ' | b'\t');
+            }
         }
         index += 1;
     }
@@ -143,6 +164,40 @@ mod tests {
         // `$$` is a parameter, so the quote after it is a plain one.
         assert_eq!(split("a $$'x\\'; c"), ["a $$'x\\'", "c"]);
         assert_eq!(split("a $$$'x\\'; y' b; c"), ["a $$$'x\\'; y' b", "c"]);
+    }
+
+    #[test]
+    fn a_comment_is_in_no_segment_and_its_quotes_open_nothing() {
+        assert_eq!(split("a # b; c\nd"), ["a", "d"]);
+        assert_eq!(split("a # don't\nb"), ["a", "b"]);
+        assert_eq!(split("a # $'\\'\nb"), ["a", "b"]);
+        assert_eq!(split("# x\nb"), ["b"]);
+        assert_eq!(split("a;# x\nb"), ["a", "b"]);
+        assert_eq!(split("a # x"), ["a"]);
+        // Inside a word, a quote or a parameter, `#` is text.
+        assert_eq!(split("a#b; c"), ["a#b", "c"]);
+        assert_eq!(
+            split("echo $# ${#x} '# y'; c"),
+            ["echo $# ${#x} '# y'", "c"]
+        );
+        assert_eq!(
+            split("curl https://example.invalid/#f; c"),
+            ["curl https://example.invalid/#f", "c"]
+        );
+    }
+
+    #[test]
+    fn a_hash_that_may_be_text_starts_no_comment() {
+        // An escaped blank or a carriage return is part of the word.
+        assert_eq!(split("a\\ #b; c"), ["a\\ #b", "c"]);
+        assert_eq!(split("a\r#b; c"), ["a\r#b", "c"]);
+        // After a substitution or an expansion opens, a `#` stays text.
+        assert_eq!(split("a `b #c`; d"), ["a `b #c`", "d"]);
+        assert_eq!(split("a \"`b \" #c\" `\"; d"), ["a \"`b \" #c\" `\"", "d"]);
+        assert_eq!(split("a $(b #c)\nd"), ["a $(b #c)", "d"]);
+        assert_eq!(split("a \"$(b \" #c\")\"; d"), ["a \"$(b \" #c\")\"", "d"]);
+        assert_eq!(split("a ${x:- #}; c"), ["a ${x:- #}", "c"]);
+        assert_eq!(split("a=(b #c); d"), ["a=(b #c)", "d"]);
     }
 
     #[test]

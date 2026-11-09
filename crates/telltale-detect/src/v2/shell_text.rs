@@ -1669,9 +1669,9 @@ pub(super) fn unescaped(text: &str) -> String {
 }
 
 /// The words a POSIX shell passes on from one command, its quotes and escapes taken:
-/// `"a\"b"` and `$'a\'b'` are one word each, and a continued line ends none. A
-/// Windows path loses its backslashes here, so this is a further reading of the
-/// command and never the only one.
+/// `"a\"b"` and `$'a\'b'` are one word each, and a continued line ends none. Only
+/// blanks end a word. A Windows path loses its backslashes here, so this is a
+/// further reading of the command and never the only one.
 pub(super) fn words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -1695,6 +1695,12 @@ pub(super) fn words(text: &str) -> Vec<String> {
                     started = true;
                 }
             }
+            // `$$` is a parameter, so only an odd run of `$` opens `$'...'`.
+            (None, '$') if chars.peek() == Some(&'$') => {
+                word.push('$');
+                word.extend(chars.next());
+                started = true;
+            }
             (None, '$') if chars.peek() == Some(&'\'') => {
                 chars.next();
                 quote = Some('$');
@@ -1704,7 +1710,7 @@ pub(super) fn words(text: &str) -> Vec<String> {
                 quote = Some(character);
                 started = true;
             }
-            (None, blank) if blank.is_whitespace() => {
+            (None, ' ' | '\t' | '\n') => {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
