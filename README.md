@@ -267,6 +267,10 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 Use the [documentation map](docs/README.md) for contracts and operational guides.
 
+## AI-assisted development
+
+This project incorporates AI tools throughout its software development process.
+
 ## License
 
 Telltale Core is licensed under Apache-2.0. See [LICENSE](LICENSE) and
