@@ -73,6 +73,42 @@ git status"#,
 }
 
 #[test]
+fn a_quote_in_a_comment_opens_nothing() {
+    for command in [
+        "# don't\ncmd /c whoami && cmd /c hostname",
+        "# \"\ncmd /c whoami && cmd /c hostname",
+        "true # don't\ncmd /c whoami && cmd /c hostname",
+        "true;# don't\ncmd /c whoami && cmd /c hostname",
+    ] {
+        let children = observations_from_command_line(command)
+            .into_iter()
+            .map(|o| o.child.normalized_name())
+            .collect::<Vec<_>>();
+        assert!(
+            children.iter().any(|child| child == "whoami"),
+            "{command:?}: {children:?}"
+        );
+        assert!(
+            children.iter().any(|child| child == "hostname"),
+            "{command:?}: {children:?}"
+        );
+    }
+    // `#` opens no comment here, so these quotes still group their separators.
+    for command in ["echo a#'b;c'", "echo $#'b;c'", "echo '#' 'b;c'"] {
+        assert_eq!(split_statements(command), [command], "{command:?}");
+    }
+    // Only POSIX shells comment with `#`, so its separators still split.
+    let children = observations_from_command_line("cmd /c echo # & whoami")
+        .into_iter()
+        .map(|o| o.child.normalized_name())
+        .collect::<Vec<_>>();
+    assert!(
+        children.iter().any(|child| child == "whoami"),
+        "{children:?}"
+    );
+}
+
+#[test]
 fn statement_spans_locate_each_statement_in_the_command() {
     let command = "cd /w && curl -o a 'x|y' | sh; echo \"a;b\" || true &\nlast";
     let statements: Vec<&str> = statement_spans(command)

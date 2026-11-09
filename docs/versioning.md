@@ -7,8 +7,9 @@ format.
 
 ## Current Series
 
-- `v0.7.0` is the current stable GitHub Release; `v0.6.0` is the previous stable.
-  See the [migration guide](migrations/0.7.0.md) before upgrading from 0.6.x.
+- `v0.7.1` is the current stable GitHub Release; `v0.7.0` is the previous stable.
+  See the [migration guide](migrations/0.7.0.md) before upgrading from 0.6.x, and
+  the 0.7.1 changelog entry before upgrading from 0.7.0.
 - The final prerelease is `v0.7.0-rc.4`. Each release's source SHA, artifacts
   and qualification results are recorded on its
   [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases)
@@ -175,7 +176,7 @@ availability immediately before publication, then publish in the gate's order,
 waiting after each until it resolves from the index without a local patch.
 After all six are available, remove every local `patch.crates-io` override and
 confirm the clean consumers and CLI installation using only pinned
-`=0.7.0` registry dependencies while that remains the workspace package
+`=0.7.1` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version. Do not
 declare publication complete before those unpatched checks pass, and do not
 publish credentials or local release state.

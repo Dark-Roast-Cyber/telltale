@@ -20,7 +20,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 2;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 5;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 6;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -570,9 +570,31 @@ fn frame(hash: &mut Sha256, bytes: &[u8]) {
 struct ActionView {
     fields: BTreeMap<&'static str, String>,
     commands: Vec<Vec<String>>,
-    /// Byte ranges of the command stages in the `command` field.
+    /// Byte ranges of the command stages in the `command` field, in order, one
+    /// per entry of `commands`: a stage read two ways is here twice.
     stage_spans: Vec<Range<usize>>,
+    /// Offsets of the pipes between command stages in the `command` field, by
+    /// the shell reader and by a plain reading of the same text.
+    pipes: [Vec<usize>; 2],
+    /// The `command` field as a shell leaves its words, then each command inside it
+    /// the same way, when that differs. Rules over the whole field also match this,
+    /// but it is no field: redaction relies on the quotes it lacks, so evidence never
+    /// shows it.
+    unquoted_command: String,
+    /// The `command` field with its comments blank at the same offsets, when it
+    /// has any. Rules over the whole field also match this, so a comment cannot
+    /// veto one through its exclusion.
+    uncommented_command: String,
     reads_paths: bool,
+    /// In a shell call, the parameters whose files a stage may read. One that a
+    /// stage only writes, tests for or prints as text is not among them.
+    read_operands: Option<BTreeSet<String>>,
+    /// In a shell call, how much of `file_path` is the parameters of its stages.
+    /// What follows was read further into them and is no part of a replay identity.
+    recorded_paths: Option<usize>,
+    /// Where in `file_path` the files input redirections open are. These are read
+    /// whatever else the call does, and say nothing of its other words.
+    opened_paths: Range<usize>,
 }
 impl ActionView {
     fn put(&mut self, field: &'static str, text: String) {
@@ -709,45 +731,146 @@ fn view(
                 out.put("file_path", paths);
             }
             budget.charge(command.len())?;
-            let (command, authored) = strip_heredocs(&command);
-            out.put("authored_content", authored);
+            let shell = super::shell_text::read(&command);
+            budget.charge(shell.work)?;
+            out.put("authored_content", shell.authored);
+            let command = shell.command;
             budget.charge(command.len())?;
-            out.stage_spans = if shell_comment(&command) {
-                Vec::new()
-            } else {
-                budget.charge(command.len())?;
-                statement_spans(&command)
-            };
-            for span in &out.stage_spans {
-                let stage = &command[span.clone()];
+            // The reader's stages are one shell's. A plain split of its code finds
+            // where others differ, and holds no comment or body the reader took out.
+            // Comments are blank in the code, so this trims one off a stage's end.
+            // The span holds in the command, which keeps its comments.
+            budget.charge(shell.code.len())?;
+            let spans = shell
+                .stages
+                .iter()
+                .cloned()
+                .chain(statement_spans(&shell.code))
+                .map(|span| trimmed(&shell.code, span))
+                .filter(|span| !span.is_empty())
+                .map(|span| (span.start, span.end))
+                .collect::<BTreeSet<_>>();
+            // A command inside a stage is read as one too, and is no stage recorded.
+            let inner = shell
+                .inner_commands
+                .iter()
+                .cloned()
+                .map(|span| trimmed(&shell.code, span))
+                .filter(|span| !span.is_empty())
+                .map(|span| (span.start, span.end))
+                .filter(|span| !spans.contains(span))
+                .collect::<BTreeSet<_>>();
+            out.pipes = [shell.pipes, plain_pipes(&shell.code)];
+            let last_pipe = out.pipes.iter().flatten().max().copied();
+            let every_span = spans.union(&inner).copied().collect::<Vec<_>>();
+            let last_start = every_span.last().map(|span| span.0);
+            let mut operands = BTreeSet::new();
+            let mut opened = BTreeSet::new();
+            // A call's identity holds the plain split of what it recorded, as written.
+            // The reader's own stages and a word's other reading only find more in it.
+            let split = statement_spans(&shell.code)
+                .into_iter()
+                .map(|span| trimmed(&shell.code, span))
+                .map(|span| (span.start, span.end))
+                .collect::<BTreeSet<_>>();
+            let mut recorded = Vec::new();
+            for (start, end) in every_span {
+                let stage = &command[start..end];
                 budget.charge(stage.len())?;
-                out.commands.push(tokenize(stage));
-            }
-            charge_commands(&out.commands, budget)?;
-            out.reads_paths |= out.commands.iter().any(|tokens| {
-                matches!(
-                    command_word(tokens),
-                    "cat"
-                        | "head"
-                        | "tail"
-                        | "grep"
-                        | "rg"
-                        | "source"
-                        | "."
-                        | "openssl"
-                        | "find"
-                        | "ssh"
-                )
-            });
-            out.put("command", command.clone());
-            // Command parameters, never interpreter code or quoted prose, are paths.
-            for tokens in &out.commands.clone() {
-                for token in tokens.iter().skip(1) {
-                    if !token.contains(char::is_whitespace) {
-                        out.put("file_path", token.clone());
+                // A word means what is left once a shell takes its escapes, and
+                // a Windows path keeps them, so both readings count.
+                let plain = stage
+                    .contains('\\')
+                    .then(|| super::shell_text::unescaped(stage));
+                for (index, reading) in std::iter::once(stage).chain(plain.as_deref()).enumerate() {
+                    budget.charge(2 * reading.len())?;
+                    let tokens = tokenize(reading);
+                    if reading.len() == stage.len() || out.commands.last() != Some(&tokens) {
+                        operands.extend(read_operands(
+                            reading,
+                            last_pipe.is_some_and(|pipe| pipe >= end),
+                            last_start.is_some_and(|next| next >= end),
+                        ));
+                        opened.extend(input_files(reading, &tokens));
+                        let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        if index == 0 && split.contains(&(start, end)) {
+                            recorded.push(out.commands.len());
+                        }
+                        out.stage_spans.push(start..end);
+                        out.commands.push(tokens);
+                        if let Some(script) = script {
+                            out.stage_spans.push(start..end);
+                            out.commands.push(script);
+                        }
+                    }
+                }
+                // A POSIX shell also takes a quote's own escapes, so `"a\"b"` is
+                // one word. A Windows client's shell keeps its backslashes as text.
+                if plain.is_some() {
+                    budget.charge(3 * stage.len())?;
+                    let words = super::shell_text::words(stage)
+                        .filter(|_| !super::http::windows_client(&tokenize(stage)));
+                    if let Some(tokens) = words
+                        && !out.commands.ends_with(std::slice::from_ref(&tokens))
+                    {
+                        opened.extend(input_files(stage, &tokens));
+                        let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        out.stage_spans.push(start..end);
+                        out.commands.push(tokens);
+                        if let Some(script) = script {
+                            out.stage_spans.push(start..end);
+                            out.commands.push(script);
+                        }
                     }
                 }
             }
+            charge_commands(&out.commands, budget)?;
+            // A tool that reads by name reads every path it is given, and so
+            // does a call that names a path outside its command.
+            if !out.reads_paths {
+                operands.extend(out.text("file_path").split_whitespace().map(str::to_owned));
+                out.read_operands = Some(operands);
+            }
+            out.reads_paths |= out.commands.iter().any(|tokens| reads_named_paths(tokens));
+            out.put("command", command.clone());
+            if shell.code != command {
+                budget.charge(shell.code.len())?;
+                out.uncommented_command.clone_from(&shell.code);
+            }
+            let mut unquoted = super::shell_text::unquoted(&shell.code);
+            for (start, end) in &inner {
+                unquoted.push('\n');
+                unquoted.push_str(&super::shell_text::unquoted(&shell.code[*start..*end]));
+            }
+            if unquoted != shell.code {
+                budget.charge(unquoted.len())?;
+                out.unquoted_command = unquoted;
+            }
+            // Command parameters, never interpreter code or quoted prose, are paths.
+            let commands = std::mem::take(&mut out.commands);
+            for index in &recorded {
+                for token in paths(&commands[*index]) {
+                    out.put("file_path", token.to_owned());
+                }
+            }
+            out.recorded_paths = Some(out.text("file_path").len());
+            let from = out.text("file_path").len();
+            for file in opened {
+                out.put("file_path", file);
+            }
+            out.opened_paths = from..out.text("file_path").len();
+            // Nested commands repeat each other's words, which name a path once.
+            let mut seen = BTreeSet::new();
+            for (index, tokens) in commands.iter().enumerate() {
+                if recorded.binary_search(&index).is_err() {
+                    for token in paths(tokens) {
+                        if seen.insert(token) {
+                            out.put("file_path", token.to_owned());
+                        }
+                    }
+                }
+            }
+            out.commands = commands;
             // Unlike the session URL selector, command text is also action URL text.
             out.put("url", command);
         }
@@ -1004,43 +1127,269 @@ fn structured_input(
     }
 }
 
-/// Heredoc bodies are authored/code text, not shell statements. The shell reader
-/// deliberately declines ambiguous syntax rather than treating code as commands.
-fn strip_heredocs(command: &str) -> (String, String) {
-    let mut output = String::new();
-    let mut authored = String::new();
-    let mut delimiter: Option<(String, bool)> = None;
-    for line in command.lines() {
-        if let Some((end, writes)) = &delimiter {
-            if line.trim() == end {
-                delimiter = None;
-            } else if *writes {
-                authored.push_str(line);
-                authored.push('\n');
-            }
-            continue;
+/// A stage's parameters that can be paths.
+fn paths(tokens: &[String]) -> impl Iterator<Item = &str> {
+    tokens
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .filter(|token| !token.contains(char::is_whitespace))
+}
+
+/// The words of a script that stands unquoted after a shell's `-c` or `eval`, as an
+/// array-form command's does once it is joined. A quoted script is one word with a
+/// blank in it, and the shell reader has read that one.
+fn joined_script(tokens: &[String]) -> Option<&[String]> {
+    let from = if super::http::client_name(tokens.first()?) == "eval" {
+        1
+    } else {
+        let flag = tokens
+            .iter()
+            .position(|token| super::shell_text::script_flag(token))?;
+        tokens[..flag]
+            .iter()
+            .any(|token| {
+                super::shell_text::SHELLS.contains(&super::http::client_name(token).as_str())
+            })
+            .then_some(flag + 1)?
+    };
+    let script = tokens.get(from..)?;
+    script
+        .first()
+        .filter(|word| !word.contains(char::is_whitespace))?;
+    Some(script)
+}
+
+/// A command stage whose parameters name files it reads.
+fn reads_named_paths(tokens: &[String]) -> bool {
+    let reader = |token: &String| {
+        matches!(
+            command_word(std::slice::from_ref(token)),
+            "cat" | "head" | "tail" | "grep" | "rg" | "source" | "." | "openssl" | "find" | "ssh"
+        )
+    };
+    let mut words = program_words(tokens);
+    let Some(first) = words.next() else {
+        return false;
+    };
+    // A wrapper's options can take values, so any later word may be the program.
+    if wrapper(first) {
+        words.any(reader)
+    } else {
+        reader(first)
+    }
+}
+
+/// A stage's words from its program on: a reserved word or an assignment only
+/// prefixes the program.
+fn program_words(tokens: &[String]) -> impl Iterator<Item = &String> {
+    tokens.iter().skip_while(|token| {
+        matches!(
+            token.as_str(),
+            "if" | "elif" | "then" | "else" | "while" | "until" | "do" | "!" | "{" | "time"
+        ) || (super::http::assignment(token) && !token.contains("=$("))
+    })
+}
+
+fn wrapper(word: &str) -> bool {
+    matches!(
+        word,
+        "sudo"
+            | "doas"
+            | "env"
+            | "nohup"
+            | "nice"
+            | "timeout"
+            | "command"
+            | "exec"
+            | "stdbuf"
+            | "xargs"
+    )
+}
+
+/// A stage's parameters whose files it may read, wherever it names them: any
+/// program can pass a file on, so the list says what cannot read one. A file only
+/// written is no read, a test looks at no content, and `echo` opens nothing.
+///
+/// What `echo` prints can still be the list of files another program reads, so
+/// it only counts as text when nothing can take it: no pipe follows it, through
+/// any group that ends in one, and no stage follows the file it writes.
+fn read_operands(stage: &str, pipe_follows: bool, stage_follows: bool) -> Vec<String> {
+    let kept = without_written(stage);
+    let tokens = tokenize(&kept);
+    let writes = kept.len() != stage.len();
+    let mut words = program_words(&tokens);
+    let mut program = words.next();
+    // Past a wrapper, only a word that is surely its program says it reads nothing.
+    if program.is_some_and(|word| wrapper(word)) {
+        program = words.find(|word| !word.starts_with('-'));
+    }
+    let parameters = tokens.get(1..).unwrap_or_default();
+    // Past the program, for what names its own parameters by position.
+    let own = program
+        .and_then(|word| tokens.iter().position(|token| std::ptr::eq(token, word)))
+        .and_then(|at| tokens.get(at + 1..))
+        .unwrap_or_default();
+    match program.map(|word| command_word(std::slice::from_ref(word))) {
+        Some("echo" | "printf") if !pipe_follows && !(writes && stage_follows) => Vec::new(),
+        Some("tee" | "test" | "[" | "[[") => Vec::new(),
+        // A copy's last parameter is where it writes.
+        Some("cp" | "mv" | "ln" | "install") => parameters
+            .split_last()
+            .map_or_else(Vec::new, |(_, read)| read.to_vec()),
+        // Tokens lose an empty word, which would leave a file as the pattern.
+        Some("grep" | "egrep" | "fgrep" | "rg") if kept.contains("\"\"") || kept.contains("''") => {
+            own.to_vec()
         }
-        output.push_str(line);
-        output.push('\n');
-        if let Some((head, rest)) = line.split_once("<<") {
-            if rest.starts_with('<') {
-                continue;
+        Some("grep" | "egrep" | "fgrep" | "rg") => without_pattern(own),
+        _ => parameters.to_vec(),
+    }
+}
+
+/// A search's parameters without its pattern, the first word no option takes. An
+/// option that names the pattern or a file of them leaves every word a file, and a
+/// long one may be cut short. A value option's value reads as the pattern, which
+/// only keeps the real one.
+fn without_pattern(parameters: &[String]) -> Vec<String> {
+    let named = parameters.iter().any(|word| {
+        word.starts_with("--reg")
+            || word.starts_with("--file")
+            || (word.starts_with('-') && !word.starts_with("--") && word.contains(['e', 'f']))
+    });
+    let pattern = parameters
+        .iter()
+        .position(|word| word == "--" || !word.starts_with('-') || word == "-")
+        .map(|at| at + usize::from(parameters[at] == "--"));
+    parameters
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| named || Some(*at) != pattern)
+        .map(|(_, word)| word.clone())
+        .collect()
+}
+
+/// The files a stage's input redirections open, whatever program stands there.
+/// Found in the text, because tokens have lost the quotes that make `'<'` an
+/// argument. `<<`, `<(` and `<&` open no file by name, and `<` compares in a test.
+fn input_files(stage: &str, tokens: &[String]) -> Vec<String> {
+    let program = program_words(tokens).next();
+    if program.is_some_and(|word| matches!(word.as_str(), "test" | "[" | "[[")) {
+        return Vec::new();
+    }
+    let bytes = stage.as_bytes();
+    let mut files = Vec::new();
+    let mut quote = None;
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        at += 1;
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if byte == b'\\' => at += 1,
+            None if matches!(byte, b'\'' | b'"') => quote = Some(byte),
+            None if byte == b'<' => {
+                if matches!(bytes.get(at), Some(b'<' | b'(' | b'&')) {
+                    at += 1 + bytes[at + 1..].iter().take_while(|b| **b == b'<').count();
+                    continue;
+                }
+                at += usize::from(bytes.get(at) == Some(&b'>'));
+                while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+                    at += 1;
+                }
+                let word = word_end(bytes, at);
+                if let Some(file) = stage
+                    .get(at..word)
+                    .and_then(|word| tokenize(word).into_iter().next())
+                {
+                    files.push(file);
+                }
+                at = word;
             }
-            let end = rest
-                .trim_start_matches('-')
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches(['\'', '"']);
-            if !end.is_empty() {
-                delimiter = Some((
-                    end.to_owned(),
-                    (head.contains("cat") && head.contains('>')) || head.contains("tee "),
-                ));
-            }
+            None => {}
         }
     }
-    (output.trim_end().to_owned(), authored)
+    files
+}
+
+/// Where the shell word starting at `at` ends: the first blank or operator no quote
+/// or backslash holds.
+fn word_end(bytes: &[u8], mut at: usize) -> usize {
+    let mut quote = None;
+    while let Some(byte) = bytes.get(at).copied() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if byte == b'\\' => at += 1,
+            None if matches!(byte, b'\'' | b'"') => quote = Some(byte),
+            None if byte.is_ascii_whitespace() || b";|&)<>".contains(&byte) => return at,
+            None => {}
+        }
+        at += 1;
+    }
+    bytes.len()
+}
+
+/// A stage's text without its output redirections, found in the text because
+/// tokens have lost the quotes that make `'>'` an argument. `<>` also reads.
+pub(super) fn without_written(stage: &str) -> String {
+    let bytes = stage.as_bytes();
+    let mut kept = String::with_capacity(stage.len());
+    let mut copied = 0;
+    let mut quote = None;
+    let mut previous = b' ';
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        at += 1;
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if byte == b'\\' => at += 1,
+            None if matches!(byte, b'\'' | b'"') => quote = Some(byte),
+            None if byte == b'>' && previous != b'<' => {
+                kept.push_str(&stage[copied..at - 1]);
+                while matches!(bytes.get(at), Some(b'>' | b'|' | b'&' | b' ' | b'\t')) {
+                    at += 1;
+                }
+                at += bytes[at..]
+                    .iter()
+                    .position(u8::is_ascii_whitespace)
+                    .unwrap_or(bytes.len() - at);
+                copied = at;
+            }
+            None => {}
+        }
+        previous = byte;
+    }
+    kept.push_str(&stage[copied..]);
+    kept
+}
+
+/// The pipes a plain reading of the text finds: a quote pairs with the next like
+/// it, and a backslash escapes what follows. None if a quote stays open.
+fn plain_pipes(code: &str) -> Vec<usize> {
+    let bytes = code.as_bytes();
+    let mut pipes = Vec::new();
+    let mut quote = None;
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        match quote {
+            _ if byte == b'\\' => at += 1,
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if matches!(byte, b'\'' | b'"') => quote = Some(byte),
+            None if byte == b'|' && bytes.get(at + 1) == Some(&b'|') => at += 1,
+            None if byte == b'|' => pipes.push(at),
+            None => {}
+        }
+        at += 1;
+    }
+    if quote.is_some() {
+        pipes.clear();
+    }
+    pipes
 }
 
 fn regex(
@@ -1088,33 +1437,6 @@ fn command_word(tokens: &[String]) -> &str {
         .split_once("=$(")
         .map_or(first, |(_, command)| command);
     first.rsplit(['/', '\\']).next().unwrap_or(first)
-}
-fn shell_comment(command: &str) -> bool {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut previous = None;
-    for c in command.chars() {
-        if escaped {
-            escaped = false;
-            previous = Some(c);
-            continue;
-        }
-        if c == '\\' && quote != Some('\'') {
-            escaped = true;
-            continue;
-        }
-        if let Some(open) = quote {
-            if c == open {
-                quote = None;
-            }
-        } else if matches!(c, '\'' | '"') {
-            quote = Some(c);
-        } else if c == '#' && previous.is_none_or(char::is_whitespace) {
-            return true;
-        }
-        previous = Some(c);
-    }
-    false
 }
 /// The client invocation in a command stage that downloads, if any.
 fn download_command<'a>(
@@ -1201,9 +1523,32 @@ fn native_fields<'a>(
                         )?)
                 }
             };
-            if matches {
-                selected.push(("command", stage, span.start, None));
+            // Two readings of one stage are one hit.
+            let hit = ("command", stage, span.start, None);
+            if matches && selected.last() != Some(&hit) {
+                selected.push(hit);
             }
+        }
+        return Ok(selected);
+    }
+    if id == "secret.env.read" {
+        // The field joins every stage's parameters and the rule's anchors
+        // describe one path, so the matcher reads the counted token alone.
+        let text = view.text("file_path");
+        if view.reads_paths
+            && let Some(token) = secret_file_token(text, view.read_operands.as_ref(), budget)?
+        {
+            selected.push(("file_path", &text[token.clone()], token.start, None));
+        } else if let Some(opened) = text.get(view.opened_paths.clone())
+            && let Some(token) = secret_file_token(opened, None, budget)?
+        {
+            let offset = view.opened_paths.start;
+            selected.push((
+                "file_path",
+                &opened[token.clone()],
+                offset + token.start,
+                None,
+            ));
         }
         return Ok(selected);
     }
@@ -1232,24 +1577,18 @@ fn native_fields<'a>(
                     .map(|stage| Some(view.stage_spans[stage].clone()))
             }
             "execution.shell" | "install.package_manager" => None,
-            "secret.env.read" => {
-                if field == "file_path"
-                    && view.reads_paths
-                    && !contains(view.text("command"), "<<", budget)?
-                {
-                    secret_file_token(text, budget)?.map(Some)
-                } else {
-                    None
-                }
-            }
             "secret.private_key.read" => {
+                const KEY_FILE: &str = r"(?i)(^|[/\\\s])id_(rsa|ed25519|ecdsa|dsa)($|\s)|(^|[/\\\s])[^\s]*key[^\s]*\.(pem|p12)($|\s)|\*\.(pem|p12)";
                 if field == "file_path" && view.reads_paths {
+                    find(KEY_FILE, text, budget)?.map(Some)
+                } else if field == "file_path" {
+                    let opened = view.opened_paths.clone();
                     find(
-                        r"(?i)(^|[/\\\s])id_(rsa|ed25519|ecdsa|dsa)($|\s)|(^|[/\\\s])[^\s]*key[^\s]*\.(pem|p12)($|\s)|\*\.(pem|p12)",
-                        text,
+                        KEY_FILE,
+                        text.get(opened.clone()).unwrap_or_default(),
                         budget,
                     )?
-                    .map(Some)
+                    .map(|hit| Some(opened.start + hit.start..opened.start + hit.end))
                 } else if field == "tool_result" {
                     find(
                         r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}",
@@ -1301,13 +1640,18 @@ fn native_fields<'a>(
     Ok(selected)
 }
 
-/// The first path token naming a secrets file that is not a template copy.
+/// The first path token naming a secrets file that is not a template copy,
+/// among `reads` when the call narrows which tokens it reads.
 fn secret_file_token(
     text: &str,
+    reads: Option<&BTreeSet<String>>,
     budget: &mut RetentionBudget,
 ) -> Result<Option<Range<usize>>, ProcessingError> {
     budget.charge(text.len())?;
     for token in text.split_whitespace() {
+        if reads.is_some_and(|reads| !reads.contains(token)) {
+            continue;
+        }
         if regex(
             r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$",
             token,
@@ -1400,7 +1744,7 @@ pub(super) fn download_execution_linked(
         if view.commands.is_empty() {
             continue;
         }
-        if piped_execution(view.text("command"), budget)?.is_some() {
+        if piped_execution(&view, budget)?.is_some() {
             return Ok(true);
         }
         // A file link is timed, as for action findings; a pipe is not.
@@ -1571,7 +1915,7 @@ pub(crate) fn evaluate(
         let mut contributions = Vec::new();
         let mut correlation_support = BTreeMap::new();
         for (rule, compiled) in export.rules().iter().zip(compiled) {
-            let fields = if compiled.native {
+            let mut fields = if compiled.native {
                 native_fields(&rule.id, view, budget)?
             } else {
                 view.fields()
@@ -1579,6 +1923,25 @@ pub(crate) fn evaluate(
                     .map(|(field, text)| (field, text, 0, None))
                     .collect()
             };
+            let reads_whole_command = fields.iter().any(|(_, text, _, counted)| {
+                counted.is_none() && std::ptr::eq(*text, view.text("command"))
+            });
+            if reads_whole_command {
+                // Comments are blank here at their own offsets, so a hit keeps its
+                // place, and their text can neither veto the rule nor merge segments.
+                if !view.uncommented_command.is_empty() {
+                    fields.push(("command", &view.uncommented_command, 0, None));
+                }
+                // Quote removal would split on the separators a segment rule's
+                // quotes keep in one word.
+                let segmented = rule
+                    .matchers
+                    .iter()
+                    .any(|matcher| matcher.scope == telltale_rules::MatchScope::Segment);
+                if !segmented && !view.unquoted_command.is_empty() {
+                    fields.push(("command", &view.unquoted_command, 0, None));
+                }
+            }
             // Native profiles are canonical interpretation of bundled predicates;
             // custom predicates always retain the effective Rule v1 matcher.
             let mapped = fields
@@ -1642,6 +2005,8 @@ pub(crate) fn evaluate(
                             .map(|(_, _, hit)| counted.start + hit.start..counted.start + hit.end)
                     }
                 };
+                // A hit in the unquoted reading has no position in the recorded text.
+                let hit = hit.filter(|_| !std::ptr::eq(text, view.unquoted_command.as_str()));
                 candidate = Some((field, hit.map(|hit| offset + hit.start..offset + hit.end)));
                 break;
             }
@@ -1796,7 +2161,11 @@ pub(crate) fn evaluate(
             });
             if ids.contains("network.download") {
                 for (artifact, command_index) in downloaded_artifacts(&view.commands, budget)? {
-                    if artifact != "-" {
+                    // Two readings of one stage are one download.
+                    let repeated = pending
+                        .last()
+                        .is_some_and(|last| last.0 == artifact && last.2 == index);
+                    if artifact != "-" && !repeated {
                         pending.push((artifact, time, index, command_index));
                     }
                 }
@@ -1824,7 +2193,7 @@ pub(crate) fn evaluate(
                     }
                 }
                 let pipe = if ids.contains("network.download") {
-                    piped_execution(view.text("command"), budget)?
+                    piped_execution(view, budget)?
                 } else {
                     None
                 };
@@ -2437,53 +2806,71 @@ fn trimmed(text: &str, span: Range<usize>) -> Range<usize> {
 /// The byte range of a download piped into an interpreter: the download
 /// stage, the pipe and the interpreter stage.
 fn piped_execution(
-    command: &str,
+    view: &ActionView,
     budget: &mut RetentionBudget,
 ) -> Result<Option<Range<usize>>, ProcessingError> {
+    let command = view.text("command");
     budget.charge(command.len())?;
-    let mut quote = None;
-    let mut pipes = Vec::new();
-    let mut escaped = false;
-    for (index, c) in command.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if c == '\\' {
-            escaped = true;
-            continue;
-        }
-        if let Some(open) = quote {
-            if c == open {
-                quote = None;
+    let spans = &view.stage_spans;
+    // A stage ends after the commands it holds, so a pipe follows what ends last.
+    let mut by_end = spans.iter().collect::<Vec<_>>();
+    by_end.sort_by_key(|span| span.end);
+    by_end.dedup();
+    for pipes in &view.pipes {
+        // A walk that finds no shell says the same for each download it passed.
+        let mut walked = 0;
+        let mut judged = None;
+        for (index, pipe) in pipes.iter().enumerate() {
+            if index < walked {
+                continue;
             }
-            continue;
-        }
-        if matches!(c, '\'' | '"') {
-            quote = Some(c);
-        } else if c == '|'
-            && !command[index..].starts_with("||")
-            && (index == 0 || command.as_bytes()[index - 1] != b'|')
-        {
-            pipes.push(index);
-        }
-    }
-    if quote.is_some() || pipes.len() != 1 {
-        return Ok(None);
-    }
-    let index = pipes[0];
-    budget.charge(command.len())?;
-    let left = statement_spans(&command[..index]);
-    let right = statement_spans(&command[index + 1..]);
-    if let Some((left, right)) = left.last().zip(right.first()) {
-        let right = index + 1 + right.start..index + 1 + right.end;
-        budget.charge(left.len())?;
-        let tokens = tokenize(&command[left.clone()]);
-        if is_download(&tokens, budget)? && download_stdout(&tokens, budget)? {
-            budget.charge(right.len())?;
-            let tokens = tokenize(&command[right.clone()]);
-            charge_tokens(&tokens, budget)?;
-            return Ok(consumes_stdin_code(&tokens).then_some(left.start..right.end));
+            let ended = by_end.partition_point(|span| span.end <= *pipe);
+            let Some(last) = ended.checked_sub(1).map(|at| by_end[at]) else {
+                continue;
+            };
+            // Pipes with nothing between them follow the same stage.
+            if judged.replace(last.end) == Some(last.end) {
+                continue;
+            }
+            // Readings that split `2>&1` differently still end in the same place.
+            let mut download = None;
+            for left in by_end[..ended]
+                .iter()
+                .rev()
+                .take_while(|span| span.end == last.end)
+            {
+                budget.charge(left.len())?;
+                let tokens = tokenize(&command[(*left).clone()]);
+                let tokens = joined_script(&tokens).unwrap_or(&tokens);
+                if is_download(tokens, budget)? && download_stdout(tokens, budget)? {
+                    download = Some(*left);
+                    break;
+                }
+            }
+            let Some(left) = download else {
+                continue;
+            };
+            // What a pipeline carries reaches each command in turn, up to the
+            // first thing between two of them that is not a pipe.
+            let mut after = *pipe;
+            walked = index + 1;
+            while let Some(right) = spans.get(spans.partition_point(|span| span.start <= after)) {
+                budget.charge(right.len())?;
+                let tokens = tokenize(&command[right.clone()]);
+                charge_tokens(&tokens, budget)?;
+                if consumes_stdin_code(&tokens) {
+                    return Ok(Some(left.start..right.end));
+                }
+                let Some(next) = pipes.get(walked).copied().filter(|next| {
+                    command
+                        .get(right.end..*next)
+                        .is_some_and(|between| between.trim().is_empty())
+                }) else {
+                    break;
+                };
+                after = next;
+                walked += 1;
+            }
         }
     }
     Ok(None)
@@ -2503,9 +2890,10 @@ fn download_stdout(
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;
+    // What stderr does says nothing about where stdout goes.
     Ok(artifacts.is_empty()
         && !tokens.iter().any(|token| {
-            token.contains('>')
+            (token.contains('>') && !token.starts_with("2>"))
                 || token.starts_with("--output")
                 || token == "--head"
                 || token == "--remote-name"
@@ -2515,11 +2903,43 @@ fn download_stdout(
         }))
 }
 fn consumes_stdin_code(tokens: &[String]) -> bool {
-    let Some(program) = tokens.first() else {
+    let name = |token: &String| command_word(std::slice::from_ref(token)).to_ascii_lowercase();
+    let Some(first) = tokens.first() else {
         return false;
     };
-    let args = &tokens[1..];
-    match program.to_ascii_lowercase().as_str() {
+    // A wrapper's options can take values, so any later word may be the program,
+    // until one that reads data: `sudo tee /usr/local/bin/node` writes that file.
+    // `xargs` hands its input over as arguments, which no program reads as code.
+    let at = if wrapper(first) && first != "xargs" {
+        let runs_code = |token: &&String| {
+            matches!(
+                name(token).as_str(),
+                "bash"
+                    | "sh"
+                    | "zsh"
+                    | "python"
+                    | "python3"
+                    | "node"
+                    | "perl"
+                    | "ruby"
+                    | "iex"
+                    | "invoke-expression"
+                    | "powershell"
+                    | "pwsh"
+            )
+        };
+        tokens
+            .iter()
+            .take_while(|token| runs_code(token) || !super::shell_text::reads_data(&name(token)))
+            .position(|token| runs_code(&token))
+    } else {
+        Some(0)
+    };
+    let Some(at) = at else {
+        return false;
+    };
+    let args = &tokens[at + 1..];
+    match name(&tokens[at]).as_str() {
         "bash" | "sh" | "zsh" => {
             args.is_empty()
                 || args == ["-"]
@@ -2565,6 +2985,14 @@ fn replay(
         frame(&mut hash, value.as_bytes());
     }
     for (field, value) in &view.fields {
+        // What the reader found further inside the call's stages stays out of this.
+        let value = match view.recorded_paths {
+            Some(recorded) if *field == "file_path" => &value[..recorded],
+            _ => value.as_str(),
+        };
+        if value.is_empty() {
+            continue;
+        }
         budget.charge(field.len())?;
         frame(&mut hash, field.as_bytes());
         budget.charge(value.len())?;

@@ -3,7 +3,8 @@
 //! A segment is the text between unquoted `;`, `|`, `||`, `&&` and newline
 //! separators, trimmed of surrounding ASCII whitespace; empty segments are
 //! skipped. Single quotes are literal. A backslash escapes the next character
-//! outside single quotes, so `\;` and a `\"` inside double quotes end nothing.
+//! outside single quotes, so `\;` and a `\"` inside double quotes end nothing,
+//! and `$'...'` takes backslash escapes, so its `\'` ends nothing either.
 //! An unclosed quote runs to the end of the text, which yields one larger
 //! segment rather than an error. A single `&` is not a separator, so `2>&1`,
 //! `&>` and unquoted query strings stay in their segment.
@@ -58,6 +59,11 @@ fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
                     quote = None;
                 }
             }
+            Some(b'$') => match byte {
+                b'\\' => index += 1,
+                b'\'' => quote = None,
+                _ => {}
+            },
             Some(_) => match byte {
                 b'\\' => index += 1,
                 b'"' => quote = None,
@@ -65,6 +71,15 @@ fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
             },
             None => match byte {
                 b'\\' => index += 1,
+                // `$$` is a parameter, so only an odd run of `$` opens `$'...'`.
+                b'$' => {
+                    let run = bytes[index..].iter().take_while(|&&b| b == b'$').count();
+                    index += run - 1;
+                    if run % 2 == 1 && bytes.get(index + 1) == Some(&b'\'') {
+                        quote = Some(b'$');
+                        index += 1;
+                    }
+                }
                 b'\'' | b'"' => quote = Some(byte),
                 b';' | b'\n' => return (index, index + 1),
                 b'|' if bytes.get(index + 1) == Some(&b'|') => return (index, index + 2),
@@ -122,6 +137,12 @@ mod tests {
         );
         assert_eq!(split("grep a\\|b f | c"), ["grep a\\|b f", "c"]);
         assert_eq!(split("a 'x\ny'; c"), ["a 'x\ny'", "c"]);
+        assert_eq!(split("a $'x\\'; y' b; c"), ["a $'x\\'; y' b", "c"]);
+        assert_eq!(split("a $'x\\\\'; c"), ["a $'x\\\\'", "c"]);
+        assert_eq!(split("a \"$'x\"; c"), ["a \"$'x\"", "c"]);
+        // `$$` is a parameter, so the quote after it is a plain one.
+        assert_eq!(split("a $$'x\\'; c"), ["a $$'x\\'", "c"]);
+        assert_eq!(split("a $$$'x\\'; y' b; c"), ["a $$$'x\\'; y' b", "c"]);
     }
 
     #[test]

@@ -353,7 +353,7 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (5),
+  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (6),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
@@ -380,6 +380,24 @@ Three scores exist and must stay distinct: native finding risk
   `localhost` is a name, not a literal IP. `-G` data is a query unless it is read
   from a file. Semantic identities change from profile 4; replay identities are
   unchanged.
+  Native profile 6 reads a shell call's stages by shell grammar. Comments supply
+  no stage. A here-document body leaves action evaluation only when every command
+  it can reach is a known data reader; a pipe into data readers alone runs nothing
+  it carries. Each command in a substitution, a shell `-c` script, or an `eval` or
+  `trap` script is read on its own as well as in the stage around it. This reading
+  is bounded in step with the text's length. A stage that a plain split of the
+  comment-blanked text finds also counts, because shells split differently. Rules
+  over the whole `command` field also match it with comments blanked and, unless
+  segment-scoped,
+  with the quotes around its words removed, each inner command's too. Evidence
+  always shows the recorded text, and a hit in the unquoted reading has a null
+  highlight. A secrets file counts wherever a stage may read it, and a file an input
+  redirection opens counts for itself alone; one only written, tested for or printed
+  does not, and neither does a search's pattern. A piped download links through each
+  command of its pipeline. Semantic identities change from profile 5. Replay
+  identities change only for a call that holds a comment or a here-document, which
+  this profile can record differently; what the reader finds further inside a stage
+  is no part of one.
   `ActionModifierSemantics::within_calls` reports a declared link's call bound.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not
