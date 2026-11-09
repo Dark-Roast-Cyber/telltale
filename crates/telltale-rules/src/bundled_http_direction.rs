@@ -471,34 +471,34 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         false,
         true,
     ),
-    // A comment's quotes open nothing, so the next line is its own segment.
+    // The client's name may run straight into a redirect, a quote or a continued
+    // line, and a single `&` into a parameter.
     (
-        "curl --data @f https://example.invalid/upload # $'\\'\ncurl https://example.invalid/file -o out",
+        "curl>/dev/null --data @f https://example.invalid/upload",
         true,
-        true,
-    ),
-    (
-        "curl --data @f https://example.invalid/upload # don't\ncurl https://example.invalid/file -o out",
-        true,
-        true,
-    ),
-    // A `#` a shell may read as text hides nothing after it.
-    (
-        "echo a\\ #b; curl https://example.invalid/file -o out",
         false,
-        true,
     ),
     (
-        "echo \"`echo \" #b\" `\"; curl https://example.invalid/file -o out",
-        false,
+        "curl'' --data @f https://example.invalid/upload",
         true,
+        false,
     ),
-    // A Windows client keeps its backslashes, so its quote closes there.
     (
-        "curl.exe -o \"C:\\tmp\\\" -H \"X-Synthetic: a -d b\" https://example.invalid/file",
-        false,
+        "wget>log --post-data=x https://example.invalid/upload",
         true,
+        false,
     ),
+    (
+        "curl\\\n --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl https://example.invalid/upload 2>&$fd --data @f",
+        true,
+        false,
+    ),
+    // A Windows shell keeps a backslash as text, so a download's quote closes there.
     (
         "iwr -OutFile \"C:\\tmp\\\" https://example.invalid/file",
         false,

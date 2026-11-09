@@ -1078,6 +1078,9 @@ fn a_command_is_read_after_the_quoting_a_shell_removes() {
         assert!(rules.contains("network.download"), "{command:?}");
         assert!(!rules.contains("exfil.outbound_upload"), "{command:?}");
     }
+    // A quote a shell leaves open runs no command, so its words name nothing.
+    let rules = reader.rules("curl -H \"a\\\" \"X: https://example.invalid/a\"");
+    assert!(!rules.contains("network.download"), "{rules:?}");
     // A Windows client's shell keeps a backslash as text, so its quote closes there.
     let rules =
         reader.rules("curl.exe -o \"C:\\tmp\\\" -H \"X: a -d b\" https://example.invalid/a");

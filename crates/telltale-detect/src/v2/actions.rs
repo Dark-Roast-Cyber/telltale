@@ -808,8 +808,9 @@ fn view(
                 // one word. A Windows client's shell keeps its backslashes as text.
                 if plain.is_some() {
                     budget.charge(3 * stage.len())?;
-                    let tokens = super::shell_text::words(stage);
-                    if !super::http::windows_client(&tokenize(stage))
+                    let words = super::shell_text::words(stage)
+                        .filter(|_| !super::http::windows_client(&tokenize(stage)));
+                    if let Some(tokens) = words
                         && !out.commands.ends_with(std::slice::from_ref(&tokens))
                     {
                         opened.extend(input_files(stage, &tokens));

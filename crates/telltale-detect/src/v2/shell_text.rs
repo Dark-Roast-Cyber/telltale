@@ -1671,8 +1671,9 @@ pub(super) fn unescaped(text: &str) -> String {
 /// The words a POSIX shell passes on from one command, its quotes and escapes taken:
 /// `"a\"b"` and `$'a\'b'` are one word each, and a continued line ends none. Only
 /// blanks end a word. A Windows path loses its backslashes here, so this is a
-/// further reading of the command and never the only one.
-pub(super) fn words(text: &str) -> Vec<String> {
+/// further reading of the command and never the only one. A quote left open is
+/// no command a shell runs, so it gives no words.
+pub(super) fn words(text: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut started = false;
@@ -1722,10 +1723,13 @@ pub(super) fn words(text: &str) -> Vec<String> {
             }
         }
     }
+    if quote.is_some() {
+        return None;
+    }
     if started {
         words.push(word);
     }
-    words
+    Some(words)
 }
 
 /// `text` with the quotes around its words gone, for matching what a word spells.

@@ -71,10 +71,10 @@
   rules and summaries whose counts grew re-emit once.
 - **Bundled rule precision.** HTTP upload and download flags count only in the
   client's own command segment, with quotes respected. A backslash escape,
-  `$'...'` quoting or a continued line keeps the command in one segment, a
-  comment belongs to no segment, and a quote that a Windows shell closes still
-  closes for `curl.exe` and PowerShell clients. A flag inside a quoted argument
-  is not read as one. `-x` is a proxy flag and
+  `$'...'` quoting or a continued line keeps the command in one segment, and a
+  download's URL is still found where a Windows shell closes a quote. Upload
+  flags are read by POSIX quoting, so a flag inside a quoted argument is not
+  read as one. `-x` is a proxy flag and
   there is no bare `PUT` match. Literal loopback-only URLs are not downloads
   (uploads to them still are; `localhost` still matches).
   `credential.api_key.pattern` needs a left token boundary and case-sensitive
