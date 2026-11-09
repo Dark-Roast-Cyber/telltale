@@ -292,11 +292,15 @@ pub(crate) fn split_statements(command_line: &str) -> Vec<String> {
 }
 
 /// Byte ranges of [`split_statements`] in `command_line`: each statement is
-/// the text between two separators.
+/// the text between two separators. A quote after `#` that does not close on
+/// its line opens nothing, because a POSIX shell reads it as a comment.
+/// Separators there still split, because other shells run what follows the `#`.
 pub(crate) fn statement_spans(command_line: &str) -> Vec<std::ops::Range<usize>> {
     let mut spans = Vec::new();
     let mut start = 0;
     let mut quote: Option<char> = None;
+    let mut comment = false;
+    let mut word_start = true;
     let mut chars = command_line.char_indices().peekable();
 
     while let Some((offset, character)) = chars.next() {
@@ -307,8 +311,22 @@ pub(crate) fn statement_spans(command_line: &str) -> Vec<std::ops::Range<usize>>
             continue;
         }
         let separator = match character {
+            '"' | '\''
+                if comment
+                    && !command_line[offset + 1..]
+                        .chars()
+                        .take_while(|next| !matches!(next, '\n' | '\r'))
+                        .any(|next| next == character) =>
+            {
+                continue;
+            }
             '"' | '\'' => {
                 quote = Some(character);
+                word_start = false;
+                continue;
+            }
+            '#' if word_start => {
+                comment = true;
                 continue;
             }
             // `&&`, `||`, and single `|` all end a statement.
@@ -316,9 +334,17 @@ pub(crate) fn statement_spans(command_line: &str) -> Vec<std::ops::Range<usize>>
                 chars.next();
                 2
             }
-            '\n' | '\r' | ';' | '|' | '&' => 1,
-            _ => continue,
+            '\n' | '\r' => {
+                comment = false;
+                1
+            }
+            ';' | '|' | '&' => 1,
+            _ => {
+                word_start = character.is_whitespace();
+                continue;
+            }
         };
+        word_start = true;
         spans.push(start..offset);
         start = offset + separator;
     }

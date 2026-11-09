@@ -39,6 +39,9 @@ mod process_chain_contract_tests;
 pub(crate) mod rule_v1;
 mod selector;
 pub mod session;
+#[cfg(test)]
+mod shell_reading_tests;
+mod shell_text;
 mod types;
 #[cfg(test)]
 mod written_path_tests;

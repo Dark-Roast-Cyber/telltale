@@ -194,7 +194,8 @@ matches this rule through its second segment, and a single
 outside quotes on `;`, `|`, `||`, `&&` and newlines and are trimmed of
 surrounding whitespace; `^` and `$` anchor to the segment, and a pattern cannot
 span segments. Single quotes are literal, a backslash escapes the next
-character (`\;` does not split), and a single `&` is not a separator, so `2>&1`
+character (`\;` does not split) outside single quotes and inside `$'...'`, and a
+single `&` is not a separator, so `2>&1`
 and unquoted query strings stay in their segment. An unclosed quote runs to the
 end of the target. Background commands (`a & b`) also stay in one segment, so
 an upload after a single `&` can still exclude a download before it. This is a

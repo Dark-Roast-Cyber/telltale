@@ -66,7 +66,7 @@ const WRAPPER_VALUE_OPTIONS: [&str; 19] = [
 ];
 
 /// A leading `NAME=value` shell assignment.
-fn assignment(token: &str) -> bool {
+pub(crate) fn assignment(token: &str) -> bool {
     token.split_once('=').is_some_and(|(name, _)| {
         name.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic())
             && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
@@ -137,6 +137,18 @@ pub(crate) fn download_candidate(tokens: &[String]) -> Option<&[String]> {
     invocation(tokens, &DOWNLOAD_CLIENTS).filter(|command| {
         let request = request(command);
         request.url_seen && (request.non_loopback || request.rerouted) && !request.upload
+    })
+}
+
+/// Whether the segment's client is a Windows program (`curl.exe`) or a
+/// PowerShell cmdlet, whose shell keeps a backslash as text.
+pub(crate) fn windows_client(tokens: &[String]) -> bool {
+    invocation(tokens, &DOWNLOAD_CLIENTS).is_some_and(|command| {
+        command[0].to_ascii_lowercase().ends_with(".exe")
+            || matches!(
+                client_name(&command[0]).as_str(),
+                "invoke-webrequest" | "iwr"
+            )
     })
 }
 

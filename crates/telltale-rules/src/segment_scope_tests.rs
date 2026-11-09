@@ -73,10 +73,10 @@ fn segment_scope_changes_the_fingerprint() {
     let field = command_rule("", "synthetic", "benign");
     let segment = command_rule("      scope: segment\n", "synthetic", "benign");
     assert_ne!(fingerprint(&field), fingerprint(&segment));
-    // Only the scope of the bundled download rule differs from before it was
-    // declared: without the line, the core fingerprint is the base one.
+    // Only the scope of the bundled download rule differs from the same rules
+    // in field scope: without the line, the core fingerprint is the field one.
     const CORE_BEFORE_SCOPE: &str =
-        "sha256:e67a359521c89f06399334c49c6587a9e6df4c9cbeb055392e24ae248602df25";
+        "sha256:0b1576fb8756bfe7f272a37817ed9acb510e917a48b2693448731fa39bdb18e5";
     let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
     let segment_fingerprint = fingerprint(&bundled);
     assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);

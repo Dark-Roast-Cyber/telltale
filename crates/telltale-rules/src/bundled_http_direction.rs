@@ -401,6 +401,109 @@ const DIRECTION_TABLE: &[(&str, bool, bool)] = &[
         true,
         false,
     ),
+    // An escaped quote, `$'...'` quoting or a continued line keeps the command
+    // whole, and a backslash a Windows shell keeps as text still closes a quote.
+    (
+        "curl -H \"X-Synthetic: a\\\"b\" --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H \"X-Synthetic: a\\\";b\" --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H $'X-Synthetic: a\\';b' --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H 'X-Synthetic: a' \\\n  --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl -H \"X-Synthetic: a\\\"b\" -o out https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -H \"X-Synthetic: a\\\";b\" -o out https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -H $'X-Synthetic: a\\';b' -o out https://example.invalid/file",
+        false,
+        true,
+    ),
+    (
+        "curl -sS \\\n  https://example.invalid/file -o out",
+        false,
+        true,
+    ),
+    // Each reading is whole, so no flag is found by closing a quote one way and
+    // escaping the next one the other.
+    (
+        "curl https://example.invalid/file -o out -H \"X-Synthetic: \\\"a\\\" -d b\"",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o out -H \"X-Synthetic: \\\"a\\\" --data b\"",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o out -H \"a\\\" \\' --data y '\"",
+        false,
+        true,
+    ),
+    // `$$` is a parameter, and `\$` a dollar sign, so neither opens `$'...'`.
+    (
+        "curl https://example.invalid/file -o out $$'\\' x '  --data y '",
+        false,
+        true,
+    ),
+    (
+        "curl https://example.invalid/file -o out \\$'\\' x '  --data y '",
+        false,
+        true,
+    ),
+    // The client's name may run straight into a redirect, a quote or a continued
+    // line, and a single `&` into a parameter.
+    (
+        "curl>/dev/null --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl'' --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "wget>log --post-data=x https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl\\\n --data @f https://example.invalid/upload",
+        true,
+        false,
+    ),
+    (
+        "curl https://example.invalid/upload 2>&$fd --data @f",
+        true,
+        false,
+    ),
+    // A Windows shell keeps a backslash as text, so a download's quote closes there.
+    (
+        "iwr -OutFile \"C:\\tmp\\\" https://example.invalid/file",
+        false,
+        true,
+    ),
     (
         "curl -H \"X-Synthetic: a|b\" --data @f https://example.invalid/upload",
         true,

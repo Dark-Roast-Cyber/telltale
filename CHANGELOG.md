@@ -1,11 +1,62 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0` is the current stable release and `v0.6.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.1` is the current stable release and `v0.7.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
 
 ## Unreleased
 
+- **IMDSv2 token requests are not uploads.** A bodyless `PUT` to the literal
+  IMDSv2 token endpoint (`169.254.169.254` or `fd00:ec2::254`) no longer matches
+  `exfil.outbound_upload` when every other token in its command segment is a
+  flag listed for that client or the TTL header. It matches neither that rule
+  nor `network.download`, so a token request with a metadata lookup scores at
+  most 35 instead of 95. A body, another URL, header, path or host, or an
+  unlisted flag or wrapper such as `sudo` still matches at 60, as does a
+  bodyless `PUT` or `POST` anywhere else. Native action findings apply the same
+  exclusion to the whole command holding each upload stage. The core rule
+  fingerprint and semantic identity change; the native profile does not.
+- **`detection.scope: exclusion_segment`.** The selection reads the whole target,
+  as in field scope, and a match is dropped only when the command segment holding
+  it matches the exclusion. For `arguments` holding exactly one raw JSON shell call,
+  as Codex rollouts and Copilot store one, the decoded command can also drop a match;
+  any other shape stays raw text. `field` and `segment` rules and their fingerprints
+  are unchanged. Rust:
+  `MatchScope` gains a `ExclusionSegment` variant. See
+  [detection model](docs/detection-model.md#configurable-rules-and-policies).
+
+## 0.7.1 — published stable (2026-11-08)
+
+### Compatibility and operator impact
+
+- **Settings whose risk thresholds decrease now fail to load.** The scanner
+  stops before any output, so a service or timer using such settings fails at
+  startup. A 0.7.0 setup that set only `TELLTALE_RISK_THRESHOLD_HIGH` below 50
+  is one of these. Check the merged `low`, `medium`, `high` and `critical`
+  values with `telltale config show` before upgrading.
+- **Detection results change.** Expect new action findings from the shell
+  reading fix and from segment-scoped `network.download`. Semantic identities
+  change, and detections whose content changes re-emit once after upgrade.
+  Review and rebaseline.
+- The new settings, flags and the Rule v1 `detection.scope` field are optional
+  and off or unchanged by default. Event 3.0 is unchanged.
+
+### Changes since 0.7.0
+
+- **Security: action findings read shell text by its grammar
+  ([GHSA-mwwh-jhj3-5c4c](https://github.com/Dark-Roast-Cyber/telltale/security/advisories/GHSA-mwwh-jhj3-5c4c)).** Comments and
+  here-documents could remove commands a shell would run from action evaluation,
+  so a deny-level command returned no finding, and an escaped quote inside an
+  argument could hide the flags after it. Native action profile 6 reads stages
+  by shell grammar, including substitutions, `-c` scripts and the escapes a
+  quote takes, and a body leaves evaluation only when every command it can reach
+  is a known data reader.
+  Expect new action findings, and some on bodies handed to programs Telltale does
+  not know as data readers. Session events and offline scans still match the
+  recorded text. Semantic identities change from profile 5. Replay identities
+  change only for a call that holds a comment or a here-document, which this
+  profile can record differently. A host that re-reads old sessions sees those
+  calls as new. See [embedding](docs/embedding.md).
 - **Standing scanner warnings alert once.** `scanner_error_threshold_exceeded`
   fires when an ordinary full scan first crosses `max_scanner_errors`, not on
   every later scan above it. A blocked sink (`authentication_blocked` with its
@@ -40,7 +91,11 @@
   scan after upgrade, detections whose content changes under the corrected
   rules and summaries whose counts grew re-emit once.
 - **Bundled rule precision.** HTTP upload and download flags count only in the
-  client's own command segment, with quotes respected; `-x` is a proxy flag and
+  client's own command segment, with quotes respected. A backslash escape,
+  `$'...'` quoting or a continued line keeps the command in one segment, and a
+  download's URL is still found where a Windows shell closes a quote. Upload
+  flags are read by POSIX quoting, so a flag inside a quoted argument is not
+  read as one. `-x` is a proxy flag and
   there is no bare `PUT` match. Literal loopback-only URLs are not downloads
   (uploads to them still are; `localhost` still matches).
   `credential.api_key.pattern` needs a left token boundary and case-sensitive
@@ -60,32 +115,11 @@
   segment scope, so an upload in one command segment no longer hides a
   download in another: `curl --data @f <url>; curl <url>` now matches
   `network.download` (20) as well as `exfil.outbound_upload` (60) in the
-  session. An upload in the same segment still excludes the download. Such a
-  command now scores 95 (critical) instead of 75 (high), the same as those two
-  requests made as separate tool calls. The core rule fingerprint and semantic
-  identity change; native action findings, the native profile and replay
-  identities do not. No evaluation-corpus case changes. Rust:
-  `DetectionDefinition` and `RuleV1CompatibilityMatcher` gain a public `scope`
-  field.
-- **IMDSv2 token requests are not uploads.** A bodyless `PUT` to the literal
-  IMDSv2 token endpoint (`169.254.169.254` or `fd00:ec2::254`) no longer matches
-  `exfil.outbound_upload` when every other token in its command segment is a
-  flag listed for that client or the TTL header. It matches neither that rule
-  nor `network.download`, so a token request with a metadata lookup scores at
-  most 35 instead of 95. A body, another URL, header, path or host, or an
-  unlisted flag or wrapper such as `sudo` still matches at 60, as does a
-  bodyless `PUT` or `POST` anywhere else. Native action findings apply the same
-  exclusion to the whole command holding each upload stage. The core rule
-  fingerprint and semantic identity change; the native profile does not.
-- **`detection.scope: exclusion_segment`.** The selection reads the whole target,
-  as in field scope, and a match is dropped only when the command segment holding
-  it matches the exclusion. For `arguments` holding exactly one raw JSON shell call,
-  as Codex rollouts and Copilot store one, the decoded command can also drop a match;
-  any other shape stays raw text. `field` and `segment` rules and their fingerprints
-  are unchanged. Rust:
-  `MatchScope` gains a `ExclusionSegment` variant. See
-  [detection model](docs/detection-model.md#configurable-rules-and-policies).
-
+  session. An upload in the same segment still excludes the download. The core
+  rule fingerprint and semantic identity change; native action findings, the
+  native profile and replay identities do not. No evaluation-corpus case
+  changes. Rust: `DetectionDefinition` and `RuleV1CompatibilityMatcher` gain a
+  public `scope` field.
 - **Risk thresholds must not decrease.** Settings fail before any output when
   the merged `low`, `medium`, `high` and `critical` values decrease. Equal
   values are still allowed. Setting only `TELLTALE_RISK_THRESHOLD_HIGH` below
@@ -108,7 +142,7 @@
   stdout-only `session_store_environment_ignored` diagnostic warning.
 - The docs and help now describe how environment variables apply,
   `--no-local-config` and the meaning of `detection_count`, and the install
-  guide names `v0.7.0` as the current stable release.
+  guide names the current stable release.
 
 ## 0.7.0 — published stable (2026-10-30)
 
