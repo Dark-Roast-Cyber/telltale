@@ -71,9 +71,14 @@ fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
             },
             None => match byte {
                 b'\\' => index += 1,
-                b'$' if bytes.get(index + 1) == Some(&b'\'') => {
-                    quote = Some(b'$');
-                    index += 1;
+                // `$$` is a parameter, so only an odd run of `$` opens `$'...'`.
+                b'$' => {
+                    let run = bytes[index..].iter().take_while(|&&b| b == b'$').count();
+                    index += run - 1;
+                    if run % 2 == 1 && bytes.get(index + 1) == Some(&b'\'') {
+                        quote = Some(b'$');
+                        index += 1;
+                    }
                 }
                 b'\'' | b'"' => quote = Some(byte),
                 b';' | b'\n' => return (index, index + 1),
@@ -135,6 +140,9 @@ mod tests {
         assert_eq!(split("a $'x\\'; y' b; c"), ["a $'x\\'; y' b", "c"]);
         assert_eq!(split("a $'x\\\\'; c"), ["a $'x\\\\'", "c"]);
         assert_eq!(split("a \"$'x\"; c"), ["a \"$'x\"", "c"]);
+        // `$$` is a parameter, so the quote after it is a plain one.
+        assert_eq!(split("a $$'x\\'; c"), ["a $$'x\\'", "c"]);
+        assert_eq!(split("a $$$'x\\'; y' b; c"), ["a $$$'x\\'; y' b", "c"]);
     }
 
     #[test]
