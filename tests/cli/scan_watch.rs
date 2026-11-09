@@ -1349,17 +1349,17 @@ fn idle_durable_watch_case(
             .unwrap()
             .contains("synthetic-idle-token")
     );
-    let (event_rows, payload_bytes): (u64, u64) = delivery_state
+    let (event_rows, payload_bytes): (i64, i64) = delivery_state
         .query_row(
             "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM events",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    let (pending_rows, pending_bytes): (u64, u64) = delivery_state.query_row(
+    let (pending_rows, pending_bytes): (i64, i64) = delivery_state.query_row(
         "SELECT COUNT(*), COALESCE(SUM(length(events.payload)), 0) FROM deliveries JOIN events USING(event_id) WHERE deliveries.state IN ('pending', 'blocked')", [], |row| Ok((row.get(0)?, row.get(1)?))
     ).unwrap();
-    let leaked_payloads: u64 = delivery_state.query_row(
+    let leaked_payloads: i64 = delivery_state.query_row(
         "SELECT COUNT(*) FROM events WHERE instr(CAST(payload AS TEXT), 'synthetic-idle-token') > 0", [], |row| row.get(0)
     ).unwrap();
     assert_eq!(
@@ -5578,7 +5578,7 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
             .query_row(
                 "SELECT COUNT(*), MIN(seq) FROM session_message",
                 [],
-                |row| { Ok((row.get::<_, u64>(0)?, row.get::<_, i64>(1)?)) }
+                |row| { Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)) }
             )
             .unwrap(),
         (1, 1)
@@ -5640,7 +5640,7 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
             assert_eq!(
                 read_only
                     .query_row("SELECT COUNT(*) FROM session_message", [], |row| row
-                        .get::<_, u64>(0))
+                        .get::<_, i64>(0))
                     .unwrap(),
                 2
             );
@@ -7060,7 +7060,7 @@ mod sustained_process {
         let db = connection.transaction().unwrap();
         let mut groups = serde_json::Map::new();
         for state in ["pending", "blocked", "acked", "dead"] {
-            let (rows, bytes): (u64, u64) = db.query_row(
+            let (rows, bytes): (i64, i64) = db.query_row(
                 "SELECT COUNT(*), COALESCE(SUM(length(e.payload)),0) FROM deliveries d JOIN events e USING(event_id) WHERE d.state=?1",
                 [state], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
             groups.insert(
@@ -7092,12 +7092,12 @@ mod sustained_process {
             })
             .collect::<serde_json::Map<_, _>>();
         let retry_rows = db.prepare("SELECT event_id, attempt_count, next_attempt_at, last_error_class, updated_at FROM deliveries ORDER BY event_id, sink_id").unwrap()
-            .query_map([], |r| Ok(serde_json::json!({"event_id":r.get::<_,String>(0)?,"attempt_count":r.get::<_,u64>(1)?,"next_attempt_at":r.get::<_,Option<u64>>(2)?,"last_error_class":r.get::<_,Option<String>>(3)?,"updated_at":r.get::<_,u64>(4)?}))).unwrap()
+            .query_map([], |r| Ok(serde_json::json!({"event_id":r.get::<_,String>(0)?,"attempt_count":r.get::<_,i64>(1)?,"next_attempt_at":r.get::<_,Option<i64>>(2)?,"last_error_class":r.get::<_,Option<String>>(3)?,"updated_at":r.get::<_,i64>(4)?}))).unwrap()
             .map(Result::unwrap).collect::<Vec<_>>();
         let sink_errors = db.prepare("SELECT sink_id, last_error_at, last_error_class FROM sink_health ORDER BY sink_id").unwrap()
-            .query_map([], |r| Ok(serde_json::json!({"sink_id":r.get::<_,String>(0)?,"last_error_at":r.get::<_,Option<u64>>(1)?,"last_error_class":r.get::<_,Option<String>>(2)?}))).unwrap()
+            .query_map([], |r| Ok(serde_json::json!({"sink_id":r.get::<_,String>(0)?,"last_error_at":r.get::<_,Option<i64>>(1)?,"last_error_class":r.get::<_,Option<String>>(2)?}))).unwrap()
             .map(Result::unwrap).collect::<Vec<_>>();
-        let (events, payload_bytes): (u64, u64) = db
+        let (events, payload_bytes): (i64, i64) = db
             .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(length(payload)),0) FROM events",
                 [],
@@ -7105,9 +7105,9 @@ mod sustained_process {
             )
             .unwrap();
         let cursor: Value = db.query_row("SELECT generation_id, byte_offset, observed_length, hex(prefix_hash), hex(window_hash), journal_namespace, journal_path_hash, window_start FROM ingest_cursor WHERE id=1", [], |r| Ok(serde_json::json!({
-            "generation_id":r.get::<_,String>(0)?, "byte_offset":r.get::<_,u64>(1)?, "observed_length":r.get::<_,u64>(2)?,
+            "generation_id":r.get::<_,String>(0)?, "byte_offset":r.get::<_,i64>(1)?, "observed_length":r.get::<_,i64>(2)?,
             "prefix_hash":r.get::<_,String>(3)?, "window_hash":r.get::<_,String>(4)?,
-            "journal_namespace":r.get::<_,String>(5)?, "journal_path_hash":r.get::<_,String>(6)?, "window_start":r.get::<_,u64>(7)?,
+            "journal_namespace":r.get::<_,String>(5)?, "journal_path_hash":r.get::<_,String>(6)?, "window_start":r.get::<_,i64>(7)?,
         }))).unwrap();
         let sqlite_files = ["", "-wal", "-shm"]
             .into_iter()
@@ -9982,7 +9982,7 @@ fn scan_heartbeat_is_recorded_only_after_its_required_outbox_write() {
             .query_row(
                 "SELECT (SELECT count(*) FROM events), byte_offset FROM ingest_cursor WHERE id = 1",
                 [],
-                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             )
             .expect("outbox count and cursor")
     };
@@ -10032,7 +10032,7 @@ fn scan_heartbeat_is_recorded_only_after_its_required_outbox_write() {
         "recover the crash gap and admit the new health"
     );
     assert_eq!(
-        offset,
+        offset as u64,
         fs::metadata(&store.log).expect("log metadata").len()
     );
     for health in retained.iter().chain(&repaired) {

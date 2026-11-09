@@ -1,10 +1,10 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.1` is the current stable release and `v0.7.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0` is the current stable release. `v0.7.1` is prepared and becomes the current stable release when its GitHub Release is published. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## 0.7.1 — published stable (2026-11-08)
+## 0.7.1 — prepared (2026-11-08)
 
 ### Compatibility and operator impact
 
@@ -69,6 +69,8 @@
   `network.download`. On the first
   scan after upgrade, detections whose content changes under the corrected
   rules and summaries whose counts grew re-emit once.
+- **Dependency security.** The SQLite binding moves from `rusqlite` 0.32.1 to
+  0.41.1, which bundles `libsqlite3-sys` 0.39.1 and fixes RUSTSEC-2026-0459.
 - **Bundled rule precision.** HTTP upload and download flags count only in the
   client's own command segment, with quotes respected. A backslash escape,
   `$'...'` quoting or a continued line keeps the command in one segment, and a
