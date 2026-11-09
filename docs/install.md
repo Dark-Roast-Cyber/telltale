@@ -74,7 +74,7 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable is `v0.7.0`; `v0.7.1` is prepared and becomes official stable when its GitHub Release is published. Published candidates are immutable; each
+Official stable is `v0.7.0`. `v0.7.1` is prepared and becomes official stable when its GitHub Release is published. Published candidates are immutable; each
 candidate's identity and qualification results are on its
 [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). The
 [versioning contract](versioning.md) requires RC package/tag equality and separate exact
