@@ -20,6 +20,10 @@ fn command_rule(scope: &str, selection: &str, exclusion: &str) -> String {
     document(scope, selection, exclusion).replace("        tool_result: synthetic\n", "")
 }
 
+fn arguments_rule(scope: &str, selection: &str, exclusion: &str) -> String {
+    command_rule(scope, selection, exclusion).replace("command: ", "arguments: ")
+}
+
 fn fingerprint(document: &str) -> String {
     rule_v1_fingerprint(
         &load_rule_set_from_documents(&[document], None)
@@ -72,7 +76,7 @@ fn segment_scope_changes_the_fingerprint() {
     // Only the scope of the bundled download rule differs from the same rules
     // in field scope: without the line, the core fingerprint is the field one.
     const CORE_BEFORE_SCOPE: &str =
-        "sha256:32e020db26d8868eb3a98525bdb134ed10df436f895dc1ddc821b9ceaa91937e";
+        "sha256:0b1576fb8756bfe7f272a37817ed9acb510e917a48b2693448731fa39bdb18e5";
     let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
     let segment_fingerprint = fingerprint(&bundled);
     assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);
@@ -120,7 +124,9 @@ fn a_legacy_and_a_segment_matcher_with_the_same_pattern_both_stay_identified() {
 fn invalid_scopes_fail_at_load_with_a_clear_error() {
     let unknown = error(&command_rule("      scope: line\n", "x", "y"));
     assert!(
-        unknown.contains("unknown variant `line`, expected `field` or `segment`"),
+        unknown.contains(
+            "unknown variant `line`, expected one of `field`, `segment`, `exclusion_segment`"
+        ),
         "{unknown}"
     );
     let prose = error(&document("      scope: segment\n", "x", "y"));
@@ -149,11 +155,12 @@ fn invalid_scopes_fail_at_load_with_a_clear_error() {
         MatchScope::default().as_str(),
         SUPPORTED_DETECTION_SCOPES[0]
     );
-    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 2);
-    for (value, scope) in SUPPORTED_DETECTION_SCOPES
-        .iter()
-        .zip([MatchScope::Field, MatchScope::Segment])
-    {
+    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 3);
+    for (value, scope) in SUPPORTED_DETECTION_SCOPES.iter().zip([
+        MatchScope::Field,
+        MatchScope::Segment,
+        MatchScope::ExclusionSegment,
+    ]) {
         assert_eq!(scope.as_str(), *value);
         assert!(
             load_rule_set_from_documents(
@@ -267,6 +274,165 @@ fn anchors_apply_per_segment_and_spans_stay_field_relative() {
     let spanning = content(&command_rule("      scope: segment\n", "a.*b", "^$"));
     assert!(spanning.matching_fields(&[("command", "a; b")]).is_empty());
     assert!(!spanning.matching_fields(&[("command", "a b")]).is_empty());
+}
+
+const EXCLUSION_SCOPE: &str = "      scope: exclusion_segment\n";
+
+#[test]
+fn exclusion_segment_drops_only_matches_inside_an_excluded_segment() {
+    let rule = content(&command_rule(EXCLUSION_SCOPE, "curl", "secret"));
+    let matched = |value: &str| !rule.matching_fields(&[("command", value)]).is_empty();
+    assert!(!matched("curl secret"));
+    assert!(!matched("curl secret; echo ok"));
+    assert!(!matched("none"));
+    assert!(matched("curl secret; curl ok"));
+    assert!(matched("curl ok; curl secret"));
+    assert!(matched("echo secret; curl ok"));
+
+    // The selection reads the field: `^` anchors to it, and a match that crosses
+    // segments counts even though a segment holds the exclusion.
+    let anchored = content(&command_rule(EXCLUSION_SCOPE, "^curl", "secret"));
+    assert!(
+        anchored
+            .matching_fields(&[("command", "echo; curl ok")])
+            .is_empty()
+    );
+    let crossing = content(&command_rule(EXCLUSION_SCOPE, "a; b", "a"));
+    assert!(!crossing.matching_fields(&[("command", "a; b")]).is_empty());
+
+    // A continuation before a separator is not part of the excluded statement,
+    // but one that continues the command keeps its text in the segment.
+    let exact = content(&command_rule(EXCLUSION_SCOPE, "curl", "^curl x$"));
+    let exact_match = |value: &str| !exact.matching_fields(&[("command", value)]).is_empty();
+    assert!(!exact_match("curl x \\\n&& echo ok"));
+    assert!(exact_match("curl x \\\n  -d y"));
+    assert!(exact_match("curl x \\\\"));
+}
+
+#[test]
+fn exclusion_segment_reads_one_exact_json_shape_and_only_to_drop_a_match() {
+    let exclusion = "^curl secret$";
+    let rule = content(&arguments_rule(EXCLUSION_SCOPE, "curl", exclusion));
+    let matched = |value: &str| !rule.matching_fields(&[("arguments", value)]).is_empty();
+
+    // Every selection match in the command is excluded: the match is dropped.
+    assert!(!matched(r#"{"cmd":"curl secret"}"#));
+    assert!(!matched(r#"{"cmd":"curl secret; echo ok","workdir":"/w"}"#));
+    assert!(!matched(r#"{"command":["bash","-lc","curl secret"]}"#));
+    // The raw text decides everything else.
+    assert!(matched(r#"{"cmd":"curl secret; curl ok"}"#));
+    assert!(matched(r#"{"cmd":"curl secret","description":"curl ok"}"#));
+    assert!(matched(r#"{"cmd":"curl secret","args":"x"}"#));
+    assert!(matched(r#"{"note":"curl secret"}"#));
+    assert!(matched(r#"{"cmd":"curl secret""#));
+    // A command without a selection match leaves the raw text to decide.
+    let raw_only = content(&arguments_rule(EXCLUSION_SCOPE, "curl.,.x", exclusion));
+    assert!(
+        !raw_only
+            .matching_fields(&[("arguments", r#"{"cmd":"curl","x":1}"#)])
+            .is_empty()
+    );
+
+    // The rest of the command is read as one line, as raw JSON lets a selection
+    // cross its escaped line breaks. The excluded segment is not part of it.
+    let crossing = content(&arguments_rule(
+        EXCLUSION_SCOPE,
+        "curl(?:.*ok| secret)",
+        exclusion,
+    ));
+    let crosses = |value: &str| !crossing.matching_fields(&[("arguments", value)]).is_empty();
+    assert!(crosses(r#"{"cmd":"curl secret; curl \nok"}"#));
+    assert!(!crosses(r#"{"cmd":"curl secret; echo \nok"}"#));
+
+    // The reader only drops: text the raw field does not match stays unmatched.
+    let escaped = format!("{{\"cmd\":\"{}u0063url ok\"}}", char::from(92));
+    assert!(!matched(&escaped));
+
+    // Outside the excluded segments the raw spelling still decides, however
+    // JSON escapes it.
+    let quoted = content(&arguments_rule(
+        EXCLUSION_SCOPE,
+        "curl [^\"]*ok",
+        "^curl ok$",
+    ));
+    let quotes = |value: &str| !quoted.matching_fields(&[("arguments", value)]).is_empty();
+    assert!(!quotes(r#"{"cmd":"curl ok; curl \"ok"}"#));
+    let hidden = format!("{{\"cmd\":\"curl ok; curl {}u0022ok\"}}", char::from(92));
+    assert!(quotes(&hidden));
+
+    // Other targets and scopes never read it.
+    let shaped = r#"{"cmd":"curl secret"}"#;
+    let command = content(&command_rule(EXCLUSION_SCOPE, "curl", exclusion));
+    assert!(!command.matching_fields(&[("command", shaped)]).is_empty());
+    let segment = content(&arguments_rule("      scope: segment\n", "curl", exclusion));
+    assert!(!segment.matching_fields(&[("arguments", shaped)]).is_empty());
+    let field = content(&arguments_rule("", "curl", exclusion));
+    assert!(!field.matching_fields(&[("arguments", shaped)]).is_empty());
+}
+
+#[test]
+fn json_spelling_blanks_each_range_in_every_literal_that_decodes_to_the_text() {
+    use crate::segment::blank_json_spelling;
+    let slash = char::from(92);
+    // A decoded e-acute and a surrogate pair, each spelled as escapes.
+    let (acute, pair) = (format!("{slash}u00e9"), format!("{slash}ud83d{slash}ude00"));
+    let raw = format!(
+        "{{\"cmd\":\"a{slash}\"b {acute}{pair}; c\",\"note\":\"a{slash}\"b {acute}{pair}; c\",\"x\":\"a\"}}"
+    );
+    let text = "a\"b \u{e9}\u{1f600}; c";
+    // The first range covers the escaped quote, the second both escaped characters.
+    let blanked = blank_json_spelling(&raw, text, &[0..3, 4..10]).expect("decoded");
+    let literal = format!("{}; c", " ".repeat(5 + acute.len() + pair.len()));
+    assert_eq!(
+        blanked,
+        format!("{{\"cmd\":\"{literal}\",\"note\":\"{literal}\",\"x\":\"a\"}}")
+    );
+    // A line break reads as a space, as in the one-line remainder.
+    let lines = format!("{{\"cmd\":\"a{slash}nb\",\"x\":\"a\"}}");
+    assert_eq!(
+        blank_json_spelling(&lines, "a\nb", &[]).as_deref(),
+        Some("{\"cmd\":\"a  b\",\"x\":\"a\"}")
+    );
+    // Nothing decodes to the text, or a literal does not decode: no result.
+    assert_eq!(blank_json_spelling(&raw, "other", &[]), None);
+    let lone = format!("{{\"cmd\":\"{slash}ud83d\"}}");
+    assert_eq!(blank_json_spelling(&lone, "x", &[]), None);
+}
+
+#[test]
+fn exclusion_segment_charges_each_scan_before_it_runs() {
+    let visits = |matcher: &super::RuleV1ContentMatcher, name: &str, value: &str| {
+        let mut visits = Vec::new();
+        matcher
+            .try_matching_fields(&[(name, value)], &mut |bytes| {
+                visits.push(bytes);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        visits
+    };
+    // Name, the selection scan, the segmentation pass, then one byte over each
+    // holding segment that an exclusion scan reads.
+    let command = content(&command_rule(EXCLUSION_SCOPE, "curl", "secret"));
+    assert_eq!(
+        visits(&command, "command", "curl secret; curl ok"),
+        [7, 20, 20, 12, 8]
+    );
+
+    let arguments = content(&arguments_rule(EXCLUSION_SCOPE, "curl", "secret"));
+    // The parse, the command's scans and exclusion, the remainder's pass, exclusion
+    // and scan, each other string, then the raw text's blanking pass and scan.
+    let (dropped, text) = (r#"{"cmd":"curl secret","workdir":"/w"}"#, "plain");
+    assert_eq!(
+        visits(&arguments, "arguments", dropped),
+        [9, 36, 11, 11, 12, 11, 12, 0, 2, 36, 36]
+    );
+    // No parse is charged for text that cannot be JSON.
+    assert_eq!(visits(&arguments, "arguments", text), [9, 5, 5]);
+    assert_eq!(
+        arguments.try_matching_fields(&[("arguments", dropped)], &mut |_| Err("exhausted")),
+        Err("exhausted")
+    );
 }
 
 #[test]
