@@ -2,7 +2,7 @@
 //! of flags, environment and local configuration into run settings.
 //!
 //! Each subcommand's work lives in its own module (`scan`, `export`, `migrate`,
-//! `cursor`, `coverage`, `rules_server`); keep this module to wiring.
+//! `cursor`, `coverage`); keep this module to wiring.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -31,7 +31,6 @@ mod cursor;
 mod export;
 pub mod historical;
 mod migrate;
-mod rules_server;
 mod scan;
 
 #[derive(Parser)]
@@ -528,26 +527,6 @@ enum RulesCommand {
 
         #[command(flatten)]
         config: RuleConfigCliArgs,
-    },
-
-    /// Serve a read-only local rule editor shell.
-    ///
-    /// Open the printed numeric listen address, not a hostname alias such as
-    /// localhost. Fixture preview only works from a source checkout containing
-    /// tests/fixtures (the build checkout, or else the current directory) and
-    /// only reads fixtures under that directory.
-    Serve {
-        /// Loopback address for the read-only rule editor server. Open the printed
-        /// numeric listen address, not a hostname alias.
-        #[arg(long, default_value = "127.0.0.1:8787")]
-        addr: std::net::SocketAddr,
-
-        #[command(flatten)]
-        config: RuleConfigCliArgs,
-
-        /// Handle one HTTP request and exit. Intended for CLI integration tests.
-        #[arg(long, hide = true)]
-        once: bool,
     },
 
     /// Report rule fixture coverage, client coverage, and false-positive notes.
@@ -1749,20 +1728,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "matches": matches,
                     }))?
                 );
-            }
-            RulesCommand::Serve { addr, config, once } => {
-                let resolved_config = config.resolve()?;
-                rules_server::run_rules_server(
-                    addr,
-                    rules_server::RuleServerConfig {
-                        rule_pack_paths: &resolved_config.rule_pack_paths,
-                        explicit_rule_paths: &resolved_config.explicit_rule_paths,
-                        override_paths: &resolved_config.override_paths,
-                        policy_path: resolved_config.policy_path.as_deref(),
-                        rule_load_mode: resolved_config.rule_load_mode,
-                    },
-                    once,
-                )?;
             }
             RulesCommand::Coverage { root, config } => {
                 let resolved_config = config.resolve()?;

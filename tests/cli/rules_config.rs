@@ -189,104 +189,152 @@ fn rules_list_and_validate_default_rules() {
 }
 
 #[test]
-fn rules_serve_exposes_read_only_rule_summary_endpoint() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["rules", "serve", "--addr", "127.0.0.1:0", "--once"])
-        .arg("--no-local-config")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn telltale rules serve");
-    let stdout = child.stdout.take().expect("server stdout");
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("read listen summary");
-    let listen: Value = serde_json::from_str(line.trim()).expect("listen summary json");
-    assert_eq!(listen["status"], "listening");
-    let addr = listen["addr"].as_str().expect("listener addr");
-
-    let mut stream = TcpStream::connect(addr).expect("connect rules server");
-    let request = format!("GET /api/rules HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    assert!(response.contains("Content-Type: application/json"));
-    let body = response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .expect("response body");
-    let summary: Value = serde_json::from_str(body).expect("rules json");
-    assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["rule_count"], crate::default_rule_count());
+fn removed_rules_serve_is_rejected_before_bind_and_offline_rules_remain() {
+    let help = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "--help"])
+        .output()
+        .expect("rules help");
     assert!(
-        summary["rules"]
-            .as_array()
-            .expect("rules array")
-            .iter()
-            .any(|rule| rule["id"] == "mcp.tool_metadata.prompt_injection")
+        help.status.success(),
+        "{}",
+        String::from_utf8_lossy(&help.stderr)
     );
-
-    let output = child.wait_with_output().expect("wait for rules server");
+    let help_text = String::from_utf8_lossy(&help.stdout);
     assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !help_text.to_ascii_lowercase().contains("serve"),
+        "rules help still advertises serve:\n{help_text}"
     );
-}
+    for command in ["list", "validate", "test", "coverage", "export-default"] {
+        assert!(
+            help_text.contains(command),
+            "rules help dropped {command}:\n{help_text}"
+        );
+    }
 
-#[test]
-fn rules_serve_uses_ordered_managed_pack_for_summary() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
+    // Clap usage exit 2 happens before command dispatch. Holding the requested
+    // address distinguishes that rejection from a handler that reached bind.
+    // `--help` is first so a restored server fails closed immediately instead of
+    // the bare command binding and serving indefinitely.
+    let probe = TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+    probe
+        .set_nonblocking(true)
+        .expect("probe listener nonblocking");
+    let addr = probe.local_addr().expect("probe addr").to_string();
+    let reject = |extra: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["rules", "serve"])
+            .args(extra)
+            .output()
+            .expect("run removed rules serve");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "rules serve {extra:?}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand 'serve'"),
+            "rules serve {extra:?}: {stderr}"
+        );
+        let text = format!("{}{stderr}", String::from_utf8_lossy(&output.stdout));
+        assert!(!text.contains("listening"), "rules serve {extra:?}: {text}");
+        assert!(
+            !text.to_ascii_lowercase().contains("address already in use"),
+            "rules serve {extra:?}: {text}"
+        );
+    };
+    reject(&["--help"]);
+    reject(&[]);
+    reject(&["--addr", &addr]);
+    match probe.accept() {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        other => panic!("rules serve reached a socket despite clap rejection: {other:?}"),
+    }
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
-            "serve",
-            "--addr",
-            "127.0.0.1:0",
-            "--once",
+            "validate",
+            "--no-local-config",
             "--no-default-rules",
-            "--config-dir",
-            "tests/fixtures/rule_packs/ordered",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
         ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn ordered rules serve");
-    let stdout = child.stdout.take().expect("server stdout");
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("read listen summary");
-    let listen: Value = serde_json::from_str(line.trim()).expect("listen summary json");
-    let addr = listen["addr"].as_str().expect("listener addr");
-
-    let response = rules_serve_request(addr, "GET", "/api/rules", None);
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    let summary = json_response_body(&response);
-    let rule = summary["rules"]
-        .as_array()
-        .expect("rules array")
-        .iter()
-        .find(|rule| rule["id"] == "secret.env.read")
-        .expect("managed replacement rule");
-    assert_eq!(rule["score"], 77);
-    let provenance = summary["provenance"]
-        .as_array()
-        .expect("provenance array")
-        .iter()
-        .find(|entry| entry["id"] == "secret.env.read")
-        .expect("replacement provenance");
-    let winner = provenance["winner"].as_str().expect("winner marker");
-    let marker = telltale_schema::event::parse_canonical_opaque_identifier(winner)
-        .expect("opaque rule-source marker");
-    assert_eq!(marker.kind(), "rule-source");
-
-    let output = child
-        .wait_with_output()
-        .expect("wait for ordered rules server");
+        .output()
+        .expect("offline rules validate");
     assert!(
-        output.status.success(),
+        validate.status.success(),
         "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&validate.stdout).expect("validate json");
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["rule_count"], 1);
+
+    let tested = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "rules",
+            "test",
+            "tests/fixtures/custom_rules/custom-agent-behavior.jsonl",
+            "--no-local-config",
+            "--no-default-rules",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+        ])
+        .output()
+        .expect("offline rules test");
+    assert!(
+        tested.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&tested.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&tested.stdout).expect("test json");
+    assert_eq!(summary["match_count"], 1);
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "list", "--no-local-config"])
+        .output()
+        .expect("offline rules list");
+    assert!(
+        listed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&listed.stdout).contains("secret.env.read"));
+
+    let exported = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "export-default"])
+        .output()
+        .expect("offline rules export-default");
+    assert!(
+        exported.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    assert!(String::from_utf8_lossy(&exported.stdout).contains("secret.env.read"));
+
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-fixtures");
+    fs::create_dir(&root).expect("empty fixture root");
+    let coverage = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "rules",
+            "coverage",
+            "--no-local-config",
+            "--no-default-rules",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--root",
+        ])
+        .arg(&root)
+        .output()
+        .expect("offline rules coverage");
+    assert!(
+        coverage.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&coverage.stderr)
     );
 }
 
@@ -346,255 +394,6 @@ fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
     assert_eq!(provenance, &expected_provenance);
 }
 
-#[test]
-fn rules_serve_validates_submitted_rule_yaml_without_writing() {
-    let rules_yaml =
-        fs::read_to_string("tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml")
-            .expect("read custom rules");
-    let body = serde_json::json!({ "rules_yaml": rules_yaml }).to_string();
-    let (response, output) = post_rules_serve_once("/api/rules/validate", &body);
-
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    assert!(response.contains("Content-Type: application/json"));
-    let summary = json_response_body(&response);
-    assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["rule_count"], 1);
-    assert_eq!(summary["rules"][0]["id"], "custom.agent.malicious_behavior");
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn rules_serve_previews_matches_against_fixture_only_path() {
-    let rules_yaml =
-        fs::read_to_string("tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml")
-            .expect("read custom rules");
-    let body = serde_json::json!({
-        "rules_yaml": rules_yaml,
-        "fixture_path": "tests/fixtures/custom_rules/custom-agent-behavior.jsonl",
-    })
-    .to_string();
-    let (response, output) = post_rules_serve_once("/api/rules/preview", &body);
-
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    let summary = json_response_body(&response);
-    assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["match_count"], 1);
-    assert!(
-        summary["matches"][0]["rule_ids"]
-            .as_array()
-            .expect("rule ids array")
-            .iter()
-            .any(|rule| rule == "custom.agent.malicious_behavior")
-    );
-    assert_eq!(
-        summary["fixture_path"],
-        "tests/fixtures/custom_rules/custom-agent-behavior.jsonl"
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn rules_serve_rejects_preview_paths_outside_fixtures() {
-    let body = serde_json::json!({ "fixture_path": "Cargo.toml" }).to_string();
-    let (response, output) = post_rules_serve_once("/api/rules/preview", &body);
-
-    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
-    let summary = json_response_body(&response);
-    assert_eq!(summary["status"], "error");
-    assert!(
-        summary["error"]
-            .as_str()
-            .expect("error string")
-            .contains("preview fixture must be under tests/fixtures")
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn post_rules_serve_once(path: &str, body: &str) -> (String, std::process::Output) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "rules",
-            "serve",
-            "--addr",
-            "127.0.0.1:0",
-            "--once",
-            "--no-local-config",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn telltale rules serve");
-    let stdout = child.stdout.take().expect("server stdout");
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("read listen summary");
-    let listen: Value = serde_json::from_str(line.trim()).expect("listen summary json");
-    let addr = listen["addr"].as_str().expect("listener addr");
-
-    let mut stream = TcpStream::connect(addr).expect("connect rules server");
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    let output = child.wait_with_output().expect("wait for rules server");
-    (response, output)
-}
-
-fn json_response_body(response: &str) -> Value {
-    let body = response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .expect("response body");
-    serde_json::from_str(body).expect("json response")
-}
-
-#[test]
-fn rules_serve_rejects_unauthorized_writes_and_survives_bad_clients() {
-    let dir = tempdir().unwrap();
-    let rule_file = dir.path().join("rules.yaml");
-    let original = custom_rule_yaml("synthetic.rule", "synthetic");
-    fs::write(&rule_file, &original).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "rules",
-            "serve",
-            "--addr",
-            "127.0.0.1:0",
-            "--no-local-config",
-            "--no-default-rules",
-            "--rules",
-        ])
-        .arg(&rule_file)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let listen: Value = serde_json::from_str(&line).unwrap();
-    let addr = listen["addr"].as_str().unwrap();
-    let body =
-        serde_json::json!({"rules_yaml": original.replace("enabled: true", "enabled: false")})
-            .to_string();
-    let alias_yaml = format!(
-        "version: 1\ndescription: &large '{}'\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: synthetic\n    category: test\n    severity: low\n    score: 1\n    targets: &targets [*large, *large]\n    regex: 'x'\n    tags: []\n    explanation: synthetic\nmodifiers: []\n",
-        "x".repeat(1024)
-    );
-    let alias_body = serde_json::json!({"rules_yaml": alias_yaml}).to_string();
-    let cases = [
-        (
-            format!(
-                "POST /api/rules/save HTTP/1.1\r\nHost: attacker.example.invalid\r\nOrigin: https://attacker.example.invalid\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-            403,
-        ),
-        (
-            format!(
-                "POST /api/rules/save HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-            404,
-        ),
-        (
-            format!(
-                "POST /api/rules/validate HTTP/1.1\r\nHost: {addr}\r\nOrigin: https://attacker.example.invalid\r\nContent-Type: application/json\r\n\r\n"
-            ),
-            403,
-        ),
-        (
-            format!(
-                "POST /api/rules/validate HTTP/1.1\r\nHost: {addr}\r\nContent-Type: text/plain\r\n\r\n"
-            ),
-            415,
-        ),
-        (
-            format!(
-                "POST /api/rules/validate HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n{{"
-            ),
-            400,
-        ),
-        (
-            format!(
-                "POST /api/rules/validate HTTP/1.1\r\nHost: {addr}\r\nContent-Length: -1\r\n\r\n"
-            ),
-            400,
-        ),
-        (
-            format!(
-                "POST /api/rules/validate HTTP/1.1\r\nHost: {addr}\r\ncontent-length: 65537\r\n\r\n"
-            ),
-            413,
-        ),
-        (
-            format!(
-                "POST /api/rules/validate HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\ncontent-length: 1\r\n\r\n"
-            ),
-            400,
-        ),
-        (
-            format!(
-                "GET / HTTP/1.1\r\nHost: {addr}\r\nX-Large: {}",
-                "x".repeat(16384)
-            ),
-            431,
-        ),
-        ("GET / HTTP/1.1\r\nHost:".into(), 408),
-    ];
-    let mut responses = Vec::new();
-    for (request, status) in cases {
-        let mut stream = TcpStream::connect(addr).unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        let mut response = String::new();
-        let _ = stream.read_to_string(&mut response);
-        responses.push((response, status));
-    }
-    let final_response = rules_serve_request(addr, "GET", "/api/rules", None);
-    let alias_response =
-        rules_serve_request(addr, "POST", "/api/rules/validate", Some(&alias_body));
-    let after_alias = rules_serve_request(addr, "GET", "/api/rules", None);
-    // Reap even when an assertion below fails.
-    child.kill().unwrap();
-    child.wait().unwrap();
-    for (response, status) in responses {
-        assert!(
-            response.starts_with(&format!("HTTP/1.1 {status}")),
-            "expected {status}: {response}"
-        );
-    }
-    assert!(
-        final_response.starts_with("HTTP/1.1 200"),
-        "{final_response}"
-    );
-    assert!(
-        alias_response.contains("YAML anchors and aliases"),
-        "{alias_response}"
-    );
-    assert!(after_alias.starts_with("HTTP/1.1 200"));
-    assert_eq!(fs::read_to_string(&rule_file).unwrap(), original);
-    assert!(!rule_file.with_extension("yaml.bak").exists());
-}
-
 fn custom_rule_yaml(id: &str, regex: &str) -> String {
     format!(
         r#"version: 1
@@ -614,22 +413,6 @@ rules:
 modifiers: []
 "#
     )
-}
-
-fn rules_serve_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect rules server");
-    let request = if let Some(body) = body {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-    } else {
-        format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
-    };
-    stream.write_all(request.as_bytes()).expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
 }
 
 #[test]

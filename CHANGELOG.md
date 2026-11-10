@@ -4,6 +4,13 @@
 
 ---
 
+## Unreleased
+
+- Remove embedded loopback validation and fixture-preview tooling from the
+  CLI (`telltale rules serve`). That command shipped in the production binary.
+  Offline `rules list`, `validate`, `test`, `coverage`, and `export-default`
+  remain. There is no replacement server, shim, or resident service.
+
 ## 0.7.1 — published stable (2026-11-10)
 
 ### Compatibility and operator impact

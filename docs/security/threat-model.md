@@ -69,22 +69,14 @@ security claims.
 
 ## Security properties and residuals
 
-Development hardening makes `rules serve` genuinely read-only: the former
-`/api/rules/save` endpoint is removed. Edit rule files locally and restart the
-server to reload them. Validation and fixture preview remain available, bound
-to the exact listening IP and port in Host and (when supplied) Origin. Open the
-printed numeric address, not a hostname alias. No capability token is served
-over an unauthenticated loopback endpoint.
-
-The server caps headers at 16 KiB, JSON bodies at 64 KiB, and total request reads
-at two seconds; malformed clients do not terminate it. Submitted documents are
-limited to 16 rules, modifiers, and matchers, and previews to regular fixtures
-of at most 256 KiB. Larger packs should use `rules validate` offline. This is a
-conservative YAML subset: anchor/alias indicators at lexical token boundaries
-are rejected before expansion, including such indicators inside comments or
-quoted/block text. Offline rule loading retains full YAML support. This is a
-single-client local utility, not a multi-user service or an availability guarantee
-against sustained local connection floods.
+Telltale does not run an embedded rules HTTP server, loopback listener, or
+resident rules service, and it does not actively block agent actions. Rule
+files are ordinary local configuration. Operators edit them on disk and load
+them through scan, watch, and the offline `rules` commands (`list`,
+`validate`, `test`, `coverage`, and `export-default`). There is no save API
+and no replacement listener. Offline rule loading retains full YAML support,
+including anchors and aliases, and still rejects malformed and ambiguous
+documents.
 
 Copilot production acquisition now shares the 128 MiB source and 8 MiB physical
 line limits and admits at most 100,000 native events, including ignored output

@@ -46,8 +46,8 @@ Organization's maintained `yaml_serde` and `libyaml-rs`. Cargo's package rename
 preserves existing `serde_yaml` imports; no advisory exception is added. The
 parser still uses unsafe Rust internally, so this is a maintenance correction,
 not a claim of memory safety. Rule-loader regression tests preserve offline
-anchor/alias support and rejection of malformed and ambiguous documents;
-the HTTP editor retains its stricter anchor/alias admission policy.
+anchor/alias support and rejection of malformed and ambiguous documents.
+There is no rules HTTP editor.
 
 `deny.toml` is derived from the live locked graph. Sources, wildcard
 requirements, and advisories fail closed. The allow list contains only SPDX
