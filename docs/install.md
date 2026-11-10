@@ -737,12 +737,18 @@ codes: `scanner_errors` when the latest health event counted scanner errors,
 plus one code for each kind of operational alert recorded after it
 (`source_parse_outage`, `scanner_error_threshold_exceeded`,
 `scan_duration_threshold_exceeded`, `sink_delivery_failure`, or
-`operational_alert` for any other type). `attention_required` is `null` when
-the journal is unavailable, including when it contains Event 1.0/2.0 records.
-Current status does not report `historical_only`. `attention_required` is also `null`
-when no alert was recorded and the latest health event's `scanner_error_count`
-cannot be read as a number. Any positive count counts as scanner errors,
-including counts above the 64-bit range.
+`operational_alert` for any other type).
+
+With a successfully inspected durable outbox (`--outbox-path`), an unavailable
+journal produces queue-health JSON with `status: unavailable` and
+`attention_required: null`. Without that usable outbox, an unavailable journal
+produces a nonzero exit and no status JSON. Event 1.0/2.0 records make a journal
+unreadable; current status does not report `historical_only`.
+
+When native health is available, `attention_required` is `null` if no alert was
+recorded and the latest health event's `scanner_error_count` cannot be read as a
+number. Any positive count counts as scanner errors, including counts above the
+64-bit range.
 
 These fields describe the scan that wrote the latest health event
 (`last_scan_time`). Scans write health for a newly emitted scanner error, an
