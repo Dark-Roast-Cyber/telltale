@@ -1,7 +1,7 @@
 # Scanner state and historical events
 
 This version does not provide `telltale migrate state` or `telltale migrate
-events`. There is no shim and no in-place rewrite. Published v0.7.0 retains
+events`. There is no shim and no in-place rewrite. Published v0.7.0 and v0.7.1 retain
 both commands. Use that binary for explicit state migration, then select the
 destination before scanning with a later build. This is not a
 claim that a newer release is published or fully qualified.

@@ -25,7 +25,7 @@ use telltale_schema::source::Source;
 
 pub(crate) const STATE_SCHEMA_VERSION: &str = "1.0";
 const INVALID_STATE: &str = "scanner state is invalid and was not changed";
-const OLDER_STATE: &str = "scanner state may use an older format or be invalid and was not changed; published v0.7.0 migrates supported older state only, not invalid data; migration eligibility has not been validated";
+const OLDER_STATE: &str = "scanner state may use an older format or be invalid and was not changed; published v0.7.0 and v0.7.1 migrate supported older state only, not invalid data; migration eligibility has not been validated";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ScanState {

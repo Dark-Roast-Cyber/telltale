@@ -314,7 +314,7 @@ should account for source-level gaps documented in [agent-capability-profiles.md
 
 ## Baseline Deviation State
 
-Model behavioral baselines are maintained in scanner state and can be used by `--baseline-deviation-scoring` to add bounded activity risk modifiers for new tool names, path classes, or network host observations. Normal scanning requires current native state. Older state is rejected and is not rewritten. Published v0.7.0 retains explicit state migration. The emitted activity evidence should expose only deviation counts, not the raw baseline network host labels.
+Model behavioral baselines are maintained in scanner state and can be used by `--baseline-deviation-scoring` to add bounded activity risk modifiers for new tool names, path classes, or network host observations. Normal scanning requires current native state. Older state is rejected and is not rewritten. Published v0.7.0 and v0.7.1 retain explicit state migration. The emitted activity evidence should expose only deviation counts, not the raw baseline network host labels.
 
 Baseline network host identities are hashed with deterministic `sha256:` labels before they are persisted in scanner state. Existing raw labels from older state files are hashed only by the explicit migration command; normal scanning rejects unversioned state. See [privacy-model.md](privacy-model.md#4-local-only-sensitive-context) for handling guidance.
 

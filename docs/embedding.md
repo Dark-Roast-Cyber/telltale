@@ -8,7 +8,7 @@ exits the process.
 
 The versioned state file, sidecar locking, and platform-qualified local JSONL
 durability belong to the standalone CLI. This version does not migrate scanner
-state; published v0.7.0 retains `migrate state`. Embedding hosts own
+state; published v0.7.0 and v0.7.1 retain `migrate state`. Embedding hosts own
 persistence and delivery while using the same analytic and event semantics.
 
 ## Contract at a glance

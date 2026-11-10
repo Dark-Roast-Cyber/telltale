@@ -782,7 +782,7 @@ Without the flag, exit 0 means only that the scan completed.
 ## Managed Service Setup (Advanced)
 
 The checked-in systemd templates use the canonical `telltale-scan` unit names
-and `TELLTALE_*` environment. Published v0.7.0 retains explicit state and
+and `TELLTALE_*` environment. Published v0.7.0 and v0.7.1 retain explicit state and
 historical-event migration for operator-selected paths. This version does not.
 See the [migration contract](migration-contract.md). There is no in-place
 upgrade path for another product.

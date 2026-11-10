@@ -753,8 +753,7 @@ fn scan_rejects_older_state_without_rewriting_it() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("older format"), "{stderr}");
     assert!(stderr.contains("was not changed"), "{stderr}");
-    assert!(stderr.contains("v0.7.0"), "{stderr}");
-    assert!(!stderr.contains("v0.7.1"), "{stderr}");
+    assert!(stderr.contains("v0.7.0 and v0.7.1"), "{stderr}");
     assert!(!stderr.contains("internal.example.test"), "{stderr}");
     assert_eq!(fs::read(&state).expect("unchanged state"), older);
     assert!(!log.exists());
