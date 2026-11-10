@@ -13,7 +13,7 @@ outcomes, typed errors, OpenCode, inventory, and host wire guidance) lives in
 ```toml
 [dependencies]
 telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
-# To scan OpenCode (pinned rusqlite 0.32.1), add the feature inline instead:
+# To scan OpenCode (rusqlite 0.32.1 through 0.41), add the feature inline instead:
 # telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
 # The Linux-only assignment store is the `protected-assignment` feature.
 ```

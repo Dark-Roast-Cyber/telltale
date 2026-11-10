@@ -635,8 +635,19 @@ Enable `opencode-sqlite` only when scanning OpenCode:
 telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
 ```
 
-- It forwards `telltale-sources/opencode-sqlite` and uses pinned `rusqlite`
-  0.32.1. Hosts may also use SQLx 0.8.6; both bind to `libsqlite3-sys` 0.30.1.
+- It forwards `telltale-sources/opencode-sqlite` and accepts `rusqlite` from
+  0.32.1 through 0.41. The host's lock chooses the release:
+  - A host with no other SQLite binding should lock `rusqlite` 0.41.1, which
+    bundles the SQLite fixed for RUSTSEC-2026-0459 and needs Rust 1.89
+    (`cargo update -p rusqlite --precise 0.41.1`).
+  - A host that also links SQLx 0.8.6 resolves `rusqlite` 0.32.1; both bind to
+    `libsqlite3-sys` 0.30.1 and build on Rust 1.88. That SQLite is affected by
+    RUSTSEC-2026-0459, which concerns opening a database and write-ahead log
+    that a less trusted party wrote. OpenCode's store is written by the coding
+    agent, so weigh that before enabling the feature in such a build. No SQLx
+    release accepts the fixed `libsqlite3-sys` yet.
+  - `make embedding-contract-check` builds the 0.32.1 end; the CLI and its
+    tests build the 0.41.1 end.
 - Without the feature, OpenCode fails closed per source with no source I/O:
   `failure()` reports `AcquisitionError::CapabilityNotCompiled`
   (`capability_not_compiled`), while Event 3 keeps the generic
