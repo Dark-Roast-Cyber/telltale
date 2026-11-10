@@ -5609,8 +5609,13 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
             }
         }
     });
+    let (ready, stderr_lines) = watch_ready_line(&mut child);
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ready
+                .recv_timeout(Duration::from_secs(60))
+                .expect("watch must report readiness");
+            #[cfg(target_os = "linux")]
             wait_for_watch_ready(&mut child, &store);
             #[cfg(target_os = "linux")]
             assert!(
@@ -5694,11 +5699,8 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
     }
     let status = child.wait().unwrap();
     reader.join().unwrap();
+    let stderr = stderr_lines.join().unwrap().join("\n");
     if let Err(panic) = result {
-        let mut stderr = String::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
-        }
         eprintln!("synthetic existing-WAL child status: {status:?}; stderr: {stderr}");
         std::panic::resume_unwind(panic);
     }
@@ -5742,7 +5744,12 @@ fn opencode_relocation_watch_observes_new_wal_sidecars() {
             }
         }
     });
+    let (ready, stderr_lines) = watch_ready_line(&mut child);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ready
+            .recv_timeout(Duration::from_secs(60))
+            .expect("watch must report readiness");
+        #[cfg(target_os = "linux")]
         wait_for_watch_ready(&mut child, &store);
         append_relocated_opencode(&writer, 2);
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -5800,11 +5807,8 @@ fn opencode_relocation_watch_observes_new_wal_sidecars() {
     }
     let status = child.wait().unwrap();
     reader.join().unwrap();
+    let stderr = stderr_lines.join().unwrap().join("\n");
     if let Err(panic) = result {
-        let mut stderr = String::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
-        }
         eprintln!("synthetic WAL creation child status: {status:?}; stderr: {stderr}");
         std::panic::resume_unwind(panic);
     }
@@ -6048,6 +6052,32 @@ fn wait_for_watch_ready(child: &mut std::process::Child, directory: &Path) {
 #[cfg(not(target_os = "linux"))]
 fn wait_for_watch_ready(_child: &mut std::process::Child, _directory: &Path) {
     thread::sleep(Duration::from_secs(2));
+}
+
+/// Watch prints "telltale watch: ready" on stderr once every watch is
+/// registered. Outside Linux a test cannot see registration, and a write made
+/// before it is never seen, so a fixed sleep fails whenever startup is slower
+/// than the sleep. The thread keeps every stderr line for failure output.
+fn watch_ready_line(
+    child: &mut std::process::Child,
+) -> (
+    std::sync::mpsc::Receiver<()>,
+    thread::JoinHandle<Vec<String>>,
+) {
+    use std::io::BufRead;
+    let stderr = std::io::BufReader::new(child.stderr.take().expect("watch stderr"));
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let lines = thread::spawn(move || {
+        let mut lines = Vec::new();
+        for line in stderr.lines().map_while(Result::ok) {
+            if line.starts_with("telltale watch: ready") {
+                let _ = ready_tx.send(());
+            }
+            lines.push(line);
+        }
+        lines
+    });
+    (ready_rx, lines)
 }
 
 #[cfg(unix)]
