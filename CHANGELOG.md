@@ -25,7 +25,7 @@
   `MatchScope` gains a `ExclusionSegment` variant. See
   [detection model](docs/detection-model.md#configurable-rules-and-policies).
 
-## 0.7.1 — published stable (2026-11-08)
+## 0.7.1 — published stable (2026-11-10)
 
 ### Compatibility and operator impact
 
@@ -90,6 +90,12 @@
   `network.download`. On the first
   scan after upgrade, detections whose content changes under the corrected
   rules and summaries whose counts grew re-emit once.
+- **Dependency security.** The CLI's SQLite binding moves from `rusqlite` 0.32.1
+  to 0.41.1, which bundles `libsqlite3-sys` 0.39.1 and fixes RUSTSEC-2026-0459.
+  The embedding crates now accept `rusqlite` 0.32.1 through 0.41, so a host
+  chooses the release in its own lock. A host that also links SQLx 0.8.6 still
+  resolves 0.32.1 on Rust 1.88 and keeps the affected SQLite; see
+  [OpenCode acquisition](docs/embedding.md#opencode-acquisition).
 - **Bundled rule precision.** HTTP upload and download flags count only in the
   client's own command segment, with quotes respected. A backslash escape,
   `$'...'` quoting or a continued line keeps the command in one segment, and a

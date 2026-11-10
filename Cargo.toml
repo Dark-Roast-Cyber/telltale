@@ -30,7 +30,9 @@ repository = "https://github.com/Dark-Roast-Cyber/telltale"
 
 [workspace.dependencies]
 regex = "1.11"
-rusqlite = { version = "=0.32.1", features = ["bundled"] }
+# A range, so a host that also links SQLx can resolve the line SQLx allows. The
+# CLI lock holds the newest; tests/embedding-consumer locks the oldest.
+rusqlite = { version = ">=0.32.1, <0.42", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # YAML Organization successor; Cargo's rename preserves the Serde YAML imports.
