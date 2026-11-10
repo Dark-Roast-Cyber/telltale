@@ -7,8 +7,7 @@ format.
 
 ## Current Series
 
-- `v0.7.0` is the current stable GitHub Release. `v0.7.1` is prepared and becomes
-  the current stable release when its GitHub Release is published.
+- `v0.7.1` is the current stable GitHub Release; `v0.7.0` is the previous stable.
   See the [migration guide](migrations/0.7.0.md) before upgrading from 0.6.x, and
   the 0.7.1 changelog entry before upgrading from 0.7.0.
 - The final prerelease is `v0.7.0-rc.4`. Each release's source SHA, artifacts
