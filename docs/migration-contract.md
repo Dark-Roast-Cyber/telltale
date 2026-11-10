@@ -1,241 +1,82 @@
-# Migration contract
+# Scanner state and historical events
 
-Supported migration commands are explicit and operate only on operator-selected
-Telltale data paths:
+This version does not provide `telltale migrate state` or `telltale migrate
+events`. There is no shim and no in-place rewrite. Published v0.7.0 retains
+both commands. Use that binary for explicit state migration, then select the
+destination before scanning with a later build. This is not a
+claim that a newer release is published or fully qualified.
 
-```sh
-telltale migrate state --from <OLD> --to <NEW>
-```
+`migrate state` on published v0.7.0 writes current native state. It can accept
+the known unversioned state shape and native 1.0 state whose nested baseline
+schema is 1 or 2. It does not repair empty files, duplicate keys, unknown
+fields, an unknown `state_schema_version`, or plaintext hosts in current
+baseline schema 3.
 
-Native scans emit and consume Event 3.0. Historical Event 1.0 and 2.0 records
-remain explicit read/import inputs; they are validated against their immutable
-schemas and are never rewritten as native events. Runtime paths and environment
-names use the canonical `TELLTALE_*` contract. Unknown inherited environment
-variables are ignored.
-
-Canonical runtime paths are never inferred from unrelated files. An unmigrated
-first run starts with fresh canonical state and may re-emit detections already
-represented in an operator-selected source.
-
-Historical event files have one explicit command:
-
-```sh
-telltale migrate events --pair <OLD> <NEW> [--pair <OLD> <NEW> ...]
-```
-
-Event pairs are ordered. A destination may occur in more than one pair; its
-output is the exact byte concatenation of its source contributions. The source
-and destination compression must match (`.gz` selects gzip). The event command
-streams source bytes through fixed buffers, validates decompressed JSONL frames
-with a 16 MiB per-frame bound, and copies compressed input bytes unchanged.
-Oversize frames fail with a static error; malformed gzip is rejected. A
-concatenated gzip member sequence is one source contribution: member boundaries
-are not destination-contribution boundaries and do not require an LF. LF
-composition is checked only between explicit `--pair` contributions. Destination
-bytes are spooled to synchronized, same-directory temporary files and are
-installed only after every pair has validated.
-
-For each destination, a nonempty contribution after another nonempty
-contribution must have an LF boundary from the preceding contribution. A final
-nonempty contribution may omit its final newline, but that contribution must be
-the final nonempty contribution for that destination. The same rule is applied
-to each complete explicit contribution, including a contribution made from
-concatenated gzip members. Invalid joins fail before any destination or
-manifest is installed.
-
-The first pair's destination is the canonical event-manifest anchor and owns
-`<destination>.migration.json`. The manifest retains aggregate source and
-destination counts and hashes and also contains ordered destination entries
-with an ordinal, compression, source byte count and hash, and destination byte
-count and hash. It contains no paths, event IDs, or values. The complete
-manifest is the recovery journal and is installed after destination files. A
-matching manifest and its explicit source hashes permit a rerun to repair a
-missing secondary destination, but only from the exact bytes recomputed from all
-explicit pairs. A conflicting existing secondary, canonical destination, or
-manifest fails without replacement. A canonical manifest without its canonical
-destination is not silently adopted. Multi-file installation is therefore
-recoverable and journaled, not globally atomic: a crash or failure between
-destination installs can leave an incomplete subset, and a later identical run
-repairs that subset without clobbering existing bytes or changing sources.
-
-## Migration budgets
-
-Event migration has fixed cumulative limits. Raw source bytes, including all
-compressed bytes read from explicit pairs, are limited to 512 MiB. Decompressed
-JSONL frame bytes, including blank frames and line endings, are limited to 512
-MiB. The combined bytes written to destination spools and the disk-backed
-collision-body spool are limited to 1 GiB. Nonblank records are limited to
-1,000,000; total frames are limited to 1,000,000; blank frames are limited to
-100,000; and unique event IDs retained in the in-memory collision index are
-limited to 100,000. The collision bodies remain disk-backed, but that 100,000
-ID cap is a hard in-memory index cap. Gzip expansion is separately limited to
-256 MiB of decompressed bytes produced by gzip decoders, cumulative across all
-members and pairs. The 16 MiB frame limit remains in force independently. At
-most 64 explicit pairs and 32 unique destinations are accepted; these
-structural caps are checked before path validation, lock creation, temporary
-spools, or destination/manifest activity. They bound metadata and filesystem
-fan-out that byte budgets do not measure. Pair and destination cap failures
-return static errors and leave no migration side effects.
-
-Counters use checked arithmetic and each over-limit condition returns a bounded
-static error. Temporary spools may be created and cleaned up while validation is
-in progress, but no destination or manifest is installed after a failed budget
-check. Historical readers that materialize JSONL for compatibility are outside
-this primitive's streaming budget contract.
+`migrate events` on that binary relocates explicit historical files without
+rewriting Event 1.0 or 2.0 records as Event 3.0. Read or export those journals
+with the retained older binary. Current export and status accept only Event3;
+an obsolete record anywhere in the input makes the journal fail validation.
+Select a separate Event3 journal for current scans. Do not truncate or relabel
+historical evidence to make it appear current.
 
 ## Scanner state
 
 Native state is UTF-8 JSON with two-space indentation, LF line endings, one
 trailing newline, and a required top-level `state_schema_version: "1.0"`.
-The existing fingerprint, baseline, source-observation, SQLite-cursor, and
-install-inventory families remain present. A missing state file means empty
-native state. Normal scanning rejects empty, malformed, unversioned,
-duplicate-key, unknown-version, unknown-field, and raw network-host native
-state with bounded guidance to the explicit migration command.
+The fingerprint, baseline, source-observation, SQLite-cursor, and
+install-inventory families remain present. A missing state file initializes
+empty native state and does not create the file until a successful save.
+Existing state is never replaced with empty state because it failed to parse.
 
-The migration command accepts the known legacy unversioned state shape or
-native 1.0 for relocation. It recursively rejects duplicate keys and unknown
-fields. It preserves fingerprints, cursor values and keys, observations,
-timestamps, and inventory order. When the nested baseline store is schema 1 or
-2, explicit migration writes schema 3 and clears its incompatible source
-contributions and derived snapshots. Other state families remain unchanged.
-Migration of schema 3 state preserves its baseline populations. Normal loading
-rejects schema 1 or 2 with migration guidance; it never silently resets them.
-Network-host identity normalization remains the other supported normalization.
+A missing `state_schema_version` on an object that has a known state family,
+or native 1.0 state whose nested baseline schema is 1 or 2, is rejected by
+marker and left unchanged. That diagnostic is not a migration-eligibility
+check. It says the file may use an older format or be invalid. Published
+v0.7.0 migrates supported older state only. It does not repair invalid data,
+and this version does not validate whether a particular file is eligible.
+Empty files, duplicate keys, unknown top-level fields or versions, and invalid
+current-baseline data are rejected as invalid state. A nested defect in an
+old-marked file does not make the conditional upgrade guidance proof of validity.
+
+The nested baseline version must be current. Every persisted network host key
+must be exactly `sha256:` followed by 64 lowercase hexadecimal characters.
+That rule applies to both `baseline_snapshots` and
+`baseline_source_contributions`. A hashed host in current schema remains
+valid. Raw labels are not echoed in the rejection.
 
 OpenCode v2 unfinished windows optionally carry `draining: true` plus
 `continue_after_time_updated`, the raw cut independent of the monotone
-`last_time_updated` checkpoint. Native loading and explicit migration preserve
-both coordinates; a cut must be an integer no greater than the checkpoint and
-is valid only on an exact `opencode` / `opencode.sqlite` / `session_message`
-draining cursor. Unknown-field validation makes older readers fail closed on
-this shape. An older draining cursor with no raw cut remains readable and
-replays the checkpoint's ten-minute overlap, rather than assuming a strict cut.
-The raw cut is removed when the drain completes. No top-level version change or
-automatic migration write is needed; normal output-gated state installation
-writes the new coordinate after successful evaluation. This does not recover
-historically skipped rows outside the retained overlap.
+`last_time_updated` checkpoint. A cut must be an integer no greater than the
+checkpoint and is valid only on an exact `opencode` / `opencode.sqlite` /
+`session_message` draining cursor. An older draining cursor with no raw cut
+remains readable and replays the checkpoint's overlap, rather than assuming a
+strict cut. A cut past the checkpoint is invalid, not an older migratable
+shape. The raw cut is removed when the drain completes. No top-level version
+change is required.
 
-Explicit `cursor reset` is a separate, intentionally lossy maintenance operation,
-not migration or baseline replacement. With exact instance/table selection,
-matching inspection digest and explicit history-gap acceptance, it removes the
-whole selected OpenCode cursor record. An unfinished drain requires the separate
-abandonment acknowledgement, including an older drain without a raw cut. Every
-other cursor, baseline and fingerprint remains unchanged; surviving raw cuts are
-never stripped for downgrade. It evaluates nothing and installs no scan progress.
-Preparation failures preserve state; replacement or acknowledgement failure may
-be committed and requires inspection with scanners paused. See the
+Explicit `cursor reset` is a separate, intentionally lossy maintenance
+operation, not migration or baseline replacement. With exact instance/table
+selection, matching inspection digest and explicit history-gap acceptance, it
+removes the whole selected OpenCode cursor record. An unfinished drain
+requires the separate abandonment acknowledgement, including an older drain
+without a raw cut. Every other cursor, baseline and fingerprint remains
+unchanged. It evaluates nothing and installs no scan progress. Preparation
+failures preserve state. See the
 [operator procedure](opencode-live-ingestion.md#explicit-operator-cursor-reset).
 
-The documented legacy compatibility window permits omitted
-`source_instance_id` fields in source observations, SQLite cursors, and source
-contributions, plus omitted optional inventory `path_hash` and baseline key
-option fields. Native state permits none of those omissions: every serialized
-field is required, the nested baseline version must be current, and every
-persisted network host key must be exactly `sha256:` followed by 64 lowercase
-hexadecimal characters.
+Native state requires every serialized field. It does not accept omitted
+`source_instance_id` fields or omitted optional inventory `path_hash` values.
 
-The source is untouched. The destination is installed only when absent; an
-existing destination succeeds only when its bytes are identical to the
-deterministic expected bytes, otherwise the migration fails with a conflict.
-Successful migration prints a deterministic value-free manifest containing
-formats, SHA-256 hashes, byte totals, family counts, normalization count, and
-completion status. `normalization_count` includes each raw or malformed host
-key corrected during either legacy or native migration, as well as baseline
-schema promotion. The companion is written atomically at
-`<destination>.migration.json`; stdout repeats the same bytes but is not the
-durable record. On Unix, the companion installation also syncs its parent
-directory. On Windows, file contents are flushed and the rename uses
-write-through semantics, but parent-directory durability is not asserted. A
-rerun repairs a missing companion when destination bytes are identical, accepts
-an identical companion as a no-op, and refuses conflicting destination or
-companion bytes. It contains no paths, IDs, host values, or secrets.
+The `<path>.migration.json` suffix remains reserved. State, log, sidecar, and
+that companion name must not overlap, including when the file does not exist.
+This version does not write the companion. Enabled local JSONL rotation also
+reserves its `<stem>-*<extension>` namespace. Normal scans validate these
+relationships before processing. Dry-run scans do not create a state parent
+or lock.
 
-State and sidecar locks are permanent and cross-process advisory locks. They
-coordinate cooperating Telltale processes when the parent directories are
-trusted; they do not protect against an arbitrary same-account process that
-mutates files outside the protocol. Migration holds all participating state
-and manifest locks through validation and no-clobber installation. Final
-symlinks/reparse points, non-regular files, unsafe hardlinks, and source or
-destination aliases are refused. Lock contention fails fast with a bounded
-busy error.
-
-Native state locks use strict target verification. On Windows, an existing
-state target is read through a short-lived pinned handle and its complete
-SHA-256 content is compared again after cheap identity, link-count, length, and
-timestamp checks; unstable reads and content mismatches fail closed. Unix and
-macOS retain their metadata comparison semantics. Local JSONL append/rotation
-and event migration use explicit lock-only coordination because
-they intentionally mutate protected targets; their existing append, rotation,
-pinned-source, destination, no-clobber, and post-write checks remain
-authoritative. These advisory locks do not make the final verification and
-mutation sequence atomic against arbitrary writers.
-
-Native state and migration manifests are created with owner-only permissions
-(`0600`) on Unix. The local JSONL file is created no broader than `0640`.
-Before accepting exact-idempotent existing bytes, migration rejects an existing
-event destination broader than `0640` and an existing state or
-manifest target broader than `0600`; it never silently chmods an existing file.
-On Unix, every existing migration destination and manifest must also be owned by
-the effective UID. Windows currently fails closed with the bounded
-`existing migration target ownership is unsupported on Windows` error whenever a
-migration destination or manifest already exists; new targets can be installed,
-but native owner/ACL support is required for Windows idempotent reruns.
-State and log target namespaces, including sidecars and the migration
-companion, must not overlap. Enabled local JSONL rotation also reserves its
-`<stem>-*<extension>` namespace, including paths that do not exist yet, so
-cleanup cannot remove state, migration, sidecar, or another local sink data.
-Normal scans validate these relationships before processing. Dry-run scans read
-a pinned, read-only snapshot and do not create a state parent or lock;
-concurrent changes during that snapshot fail closed.
-
-Filesystem guarantees use private platform helpers: Unix file identity is
-device/inode plus modification/change times, and Linux no-replace installation
-uses `renameat2`; macOS uses `renameatx_np`. Windows uses handle volume/file
-IDs, reparse-point-safe opens, last-write evidence, writable file-handle flushes, and
-`MoveFileExW` with write-through. Windows parent-directory flush is not
-asserted because this implementation does not claim a supported local
-directory-handle durability primitive. Unsupported platforms fail closed
-rather than falling back to check-then-replace behavior. Conditional target
-identity checks occur immediately before native replacement, but no portable
-primitive makes that path check immune to an untrusted-directory race.
-Missing path suffixes use native ordinal case-insensitive comparison on Windows.
-macOS volume case sensitivity cannot be queried portably here, so ASCII
-case-only aliases are rejected as aliases and differing non-ASCII spellings
-fail closed; existing ancestors are canonicalized and existing file identities
-are still compared. Other case-sensitive Unix filesystems retain exact
-comparison.
-
-Prepared files use unpredictable same-directory names and are removed on every
-ordinary error path. A process crash can leave an ownerless temporary file;
-these names are never considered state or manifests, are not adopted on a
-later run, and may be safely removed by an operator after confirming no
-migration is active.
-
-## Historical events
-
-- Inputs and outputs are explicit paths. Validation always carries each parsed
-  `serde_json::Value` alongside its untouched raw JSONL record bytes from one
-  stable source snapshot. Raw bytes and record order are always retained.
-- Duplicate records with the same event ID remain in their original order when
-  their raw JSON object bytes match; LF, CRLF, and a missing final newline are
-  framing differences and do not create a collision. A genuine object-byte
-  difference for one event ID fails.
-- Historical event records must declare an exact supported `schema_version`.
-  The immutable 1.0 and 2.0 schemas validate the original JSON value without
-  deserializing it into native `Event`, regenerating IDs, or normalizing fields.
-- Unknown fields and the original event ID are retained. One event ID with
-  differing raw object bodies is rejected; exact duplicate object bodies remain
-  valid.
-- No historical record is rewritten to Event 3.0. Raw source bytes are always
-  retained alongside the parsed values for byte-level provenance.
-
-The runtime write path holds its state lock from load through parsing,
-detection, durable delivery, and commit. It pre-serializes and syncs a
-same-directory exclusive temporary file before delivery, then installs it only
-after durable delivery succeeds. It validates before install, cleans up
-temporary files on success and failure, atomically replaces the native state,
-and syncs the parent directory where supported. On Windows, file contents are
-flushed and the replacement uses write-through rename semantics; parent-
-directory durability is not asserted. It does not probe unrelated product paths
-or silently create fresh replacement state.
+State and sidecar locks are permanent and cross-process advisory locks. Lock
+contention fails fast with a bounded busy error. The runtime write path holds
+its state lock from load through parsing, detection, durable delivery, and
+commit. It installs a same-directory temporary file only after durable
+delivery succeeds. It does not silently create fresh replacement state for an
+existing file that failed validation.

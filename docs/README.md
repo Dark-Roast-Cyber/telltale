@@ -28,7 +28,7 @@ this repository owns versioned product contracts.
 
 [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) own
 published artifact identity, and the [CHANGELOG](../CHANGELOG.md) records release
-history. [Historical schemas](../schemas/historical/README.md) retain immutable
-wire contracts. The experimental
+history. [Historical schemas](../schemas/historical/README.md) retain the frozen
+Event 3.0 wire contract; Event 1.0/2.0 schemas are no longer packaged. The experimental
 [inference crate](../crates/telltale-inference/README.md) documents its own
 supported subsets.

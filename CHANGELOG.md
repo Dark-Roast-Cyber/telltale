@@ -10,6 +10,14 @@
   CLI (`telltale rules serve`). That command shipped in the production binary.
   Offline `rules list`, `validate`, `test`, `coverage`, and `export-default`
   remain. There is no replacement server, shim, or resident service.
+- **Breaking:** remove `telltale migrate state` and `telltale migrate events`.
+  There is no shim. Published v0.7.0 retains both commands: state migration writes current
+  native state, and event migration relocates historical files without
+  rewriting Event 1.0 or 2.0 records as Event 3.0. This version rejects older
+  scanner state and does not rewrite it. Missing state can still initialize.
+  Export and status now accept only Event3; Event 1.0/2.0 journals must be read
+  with the retained older binary. Mixed journals fail closed. Current Event3
+  schema validation, privacy, identity collision checks and reader bounds remain.
 
 ## 0.7.1 — published stable (2026-11-10)
 

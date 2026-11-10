@@ -725,8 +725,12 @@ The command keeps its top-level `status` field for the status lookup result. The
 latest scanner health check is reported separately as `health_component`,
 `health_check_name`, and `health_check_status`, matching the health event fields
 that SIEM dashboards can group by as `component`, `check_name`, and `status`.
-Neither field is a monitoring verdict. The lookup succeeds whenever native
-health exists, and the Event 3.0 health status is always `ok`.
+Neither field is a monitoring verdict. Journal-backed lookup requires a strictly
+readable Event3 journal containing native health, whose status is always `ok`.
+Event 1.0/2.0 records make that journal unreadable even when it also contains
+Event3 health. With an independently readable durable outbox, queue health can
+still be reported while the journal is unavailable (see
+[durable queue health](telemetry-output.md#durable-queue-health)).
 
 Use `attention_required` and `attention_reasons` instead. Reasons are closed
 codes: `scanner_errors` when the latest health event counted scanner errors,
@@ -734,7 +738,8 @@ plus one code for each kind of operational alert recorded after it
 (`source_parse_outage`, `scanner_error_threshold_exceeded`,
 `scan_duration_threshold_exceeded`, `sink_delivery_failure`, or
 `operational_alert` for any other type). `attention_required` is `null` when
-the journal holds only historical events or is unavailable. It is also `null`
+the journal is unavailable, including when it contains Event 1.0/2.0 records.
+Current status does not report `historical_only`. It is also `null`
 when no alert was recorded and the latest health event's `scanner_error_count`
 cannot be read as a number. Any positive count counts as scanner errors,
 including counts above the 64-bit range.
@@ -771,9 +776,10 @@ Without the flag, exit 0 means only that the scan completed.
 ## Managed Service Setup (Advanced)
 
 The checked-in systemd templates use the canonical `telltale-scan` unit names
-and `TELLTALE_*` environment. Use the explicit state/event commands in the
-[migration contract](migration-contract.md) for operator-selected Telltale data.
-There is no in-place upgrade path for another product.
+and `TELLTALE_*` environment. Published v0.7.0 retains explicit state and
+historical-event migration for operator-selected paths. This version does not.
+See the [migration contract](migration-contract.md). There is no in-place
+upgrade path for another product.
 
 The repository and release archives include Linux-oriented systemd examples in
 `config/examples/telltale-scan.service` and `config/examples/telltale-scan.timer` for

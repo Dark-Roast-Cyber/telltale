@@ -85,9 +85,11 @@ The Cargo/package version is not the version of every data contract:
   their own migration rules. A package release does not automatically change a
   configuration version.
 - **Native scanner state version:** standalone persisted state declares
-  `state_schema_version: "1.0"`. Legacy unversioned state is not loaded by
-  normal scanning; use `telltale migrate state --from <OLD> --to <NEW>`.
-  State migration is explicit and does not migrate historical events.
+  `state_schema_version: "1.0"`. This version does not load or rewrite legacy
+  unversioned state or baseline schema 1 or 2. Published v0.7.0 retains
+  `telltale migrate state`; that command does not migrate historical events.
+  Event relocation on that binary is the separate `telltale migrate events`
+  command and does not rewrite Event 1.0 or 2.0 records as Event 3.0.
 - **Rule language and bundled rules:** Rule v1 content remains compatible in
   the 0.7 line. Removing syntax, changing evaluation meaning incompatibly,
   or invalidating existing rule documents requires a separately reviewed minor

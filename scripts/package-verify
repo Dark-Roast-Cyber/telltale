@@ -103,12 +103,19 @@ done
 for schema_path in \
     schemas/event.schema.json \
     schemas/historical/README.md \
-    schemas/historical/event-1.0.schema.json \
-    schemas/historical/event-2.0.schema.json; do
+    schemas/historical/event-3.0.schema.json; do
     test -f "$(package_path telltale-cli)/$schema_path" || {
         echo "packaged CLI is missing $schema_path" >&2
         exit 1
     }
+done
+for removed in \
+    schemas/historical/event-1.0.schema.json \
+    schemas/historical/event-2.0.schema.json; do
+    if test -e "$(package_path telltale-cli)/$removed"; then
+        echo "packaged CLI still includes retired $removed" >&2
+        exit 1
+    fi
 done
 
 run_normalized_test() {

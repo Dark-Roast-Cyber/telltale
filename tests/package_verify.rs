@@ -99,8 +99,7 @@ package)
         for schema in \
             schemas/event.schema.json \
             schemas/historical/README.md \
-            schemas/historical/event-1.0.schema.json \
-            schemas/historical/event-2.0.schema.json; do
+            schemas/historical/event-3.0.schema.json; do
             : > "$package_root/$schema"
         done
         printf '%s\n' '{"git":{"sha1":"0123456789012345678901234567890123456789"}}' > "$package_root/.cargo_vcs_info.json"

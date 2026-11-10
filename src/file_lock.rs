@@ -9,10 +9,12 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fs4::{FileExt, TryLockError};
+#[cfg(windows)]
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const LOCK_BUSY: &str = "resource busy; retry later";
+#[cfg(windows)]
 pub(crate) const FILE_STREAM_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +133,7 @@ impl SidecarLock {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn lock_order_key(target: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
         normalized_path(&sidecar_path(target))
     }
@@ -182,7 +185,6 @@ pub(crate) struct PinnedFile {
     file: File,
     path: PathBuf,
     info: FileInfo,
-    digest: Option<[u8; 32]>,
 }
 
 impl PinnedFile {
@@ -234,36 +236,17 @@ impl PinnedFile {
         if safe_path_info(&self.path)? != Some(before) {
             return Err("source path changed during validation; retry".into());
         }
-        self.digest = Some(Sha256::digest(&bytes).into());
         Ok(bytes)
     }
 
-    pub(crate) fn verify_unchanged(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let expected = self
-            .digest
-            .ok_or("source was not streamed before stability verification")?;
-        let actual = self.stream_impl(|_| Ok(()), false)?;
-        if actual != expected {
-            return Err("source changed during migration; retry".into());
-        }
-        Ok(())
-    }
-
+    #[cfg(windows)]
     pub(crate) fn stream_to(
         &mut self,
-        consumer: impl FnMut(&[u8]) -> Result<(), Box<dyn std::error::Error>>,
-    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
-        self.stream_impl(consumer, true)
-    }
-
-    fn stream_impl(
-        &mut self,
         mut consumer: impl FnMut(&[u8]) -> Result<(), Box<dyn std::error::Error>>,
-        remember_digest: bool,
     ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
         let before = safe_file_info(&self.file, false)?;
         if before != self.info || safe_path_info(&self.path)? != Some(self.info) {
-            return Err("source changed during migration; retry".into());
+            return Err("source changed during pinned read; retry".into());
         }
         self.file.seek(SeekFrom::Start(0))?;
         let mut hasher = Sha256::new();
@@ -282,13 +265,9 @@ impl PinnedFile {
             before,
             after,
             safe_path_info(&self.path)?,
-            "source changed during migration; retry",
+            "source changed during pinned read; retry",
         )?;
-        let digest: [u8; 32] = hasher.finalize().into();
-        if remember_digest {
-            self.digest = Some(digest);
-        }
-        Ok(digest)
+        Ok(hasher.finalize().into())
     }
 }
 
@@ -303,7 +282,6 @@ fn pinned_file(path: &Path, file: File) -> Result<PinnedFile, Box<dyn std::error
         file,
         path: path.to_path_buf(),
         info,
-        digest: None,
     })
 }
 
@@ -495,49 +473,6 @@ pub(crate) fn validate_target(path: &Path) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-pub(crate) fn validate_existing_mode(
-    path: &Path,
-    allowed_mode: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if safe_path_info(path)?.is_none() {
-        return Ok(());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        use std::os::unix::fs::PermissionsExt;
-
-        let file = open_read(path)?;
-        let metadata = file.metadata()?;
-        if metadata.uid() != unsafe { libc::geteuid() } {
-            return Err("existing migration target is not owned by the effective user".into());
-        }
-        let mode = metadata.permissions().mode() & 0o7777;
-        if mode & !allowed_mode != 0 {
-            return Err("existing migration target permissions are too broad".into());
-        }
-        Ok(())
-    }
-    #[cfg(windows)]
-    {
-        let _ = (path, allowed_mode);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "existing migration target ownership is unsupported on Windows",
-        )
-        .into())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (path, allowed_mode);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "existing migration target ownership is unsupported on this platform",
-        )
-        .into())
-    }
-}
-
 pub(crate) fn validate_runtime_paths(
     state: &Path,
     local_logs: &[PathBuf],
@@ -555,22 +490,6 @@ pub(crate) fn validate_runtime_paths(
         paths.push(sidecar_path(log));
     }
     validate_path_set(&paths, rotation_namespaces)
-}
-
-pub(crate) fn validate_migration_paths(
-    source: &Path,
-    destination: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let manifest = manifest_path(destination);
-    validate_migration_targets(&[source.to_path_buf(), destination.to_path_buf(), manifest])
-}
-
-pub(crate) fn validate_migration_targets(
-    targets: &[PathBuf],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut paths = targets.to_vec();
-    paths.extend(targets.iter().map(|target| sidecar_path(target)));
-    validate_path_set(&paths, &[])
 }
 
 fn validate_path_set(
@@ -672,14 +591,6 @@ impl TempFile {
         Ok(())
     }
 
-    pub(crate) fn position(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
-        Ok(self
-            .file
-            .as_mut()
-            .ok_or("temporary file is closed")?
-            .stream_position()?)
-    }
-
     pub(crate) fn open_reader(&self) -> Result<File, Box<dyn std::error::Error>> {
         open_read(&self.path)
     }
@@ -711,20 +622,6 @@ pub(crate) fn atomic_replace(
     validate_destination_identity(destination, expected)?;
     temp.close();
     atomic_replace_native(&temp.path, destination)?;
-    sync_parent(destination)?;
-    temp.disarm();
-    Ok(())
-}
-
-pub(crate) fn atomic_no_replace(
-    mut temp: TempFile,
-    destination: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if safe_path_info(destination)?.is_some() {
-        return Err("destination already exists".into());
-    }
-    temp.close();
-    atomic_no_replace_native(&temp.path, destination)?;
     sync_parent(destination)?;
     temp.disarm();
     Ok(())
@@ -1358,9 +1255,9 @@ mod tests {
     use super::{sync_directory, windows_file_time};
 
     use super::{
-        RotationNamespace, SidecarLock, TempFile, atomic_no_replace, atomic_rename_no_replace,
-        safe_path_info, sidecar_path, stable_file_identity, validate_pinned_observation,
-        validate_runtime_paths, verify_target_observation,
+        RotationNamespace, SidecarLock, atomic_rename_no_replace, safe_path_info, sidecar_path,
+        stable_file_identity, validate_pinned_observation, validate_runtime_paths,
+        verify_target_observation,
     };
 
     #[test]
@@ -1408,28 +1305,6 @@ mod tests {
         assert_eq!(
             stable_file_identity(&rotated).expect("rotated identity after restart"),
             identity
-        );
-    }
-
-    #[test]
-    fn no_replace_is_atomic_and_temp_is_cleaned() {
-        let temp = tempdir().expect("tempdir");
-        let destination = temp.path().join("state.json");
-        let temporary = TempFile::write_and_sync(&destination, b"one", 0o600).expect("temp");
-        atomic_no_replace(temporary, &destination).expect("install");
-        assert_eq!(fs::read(&destination).expect("destination"), b"one");
-        let temporary = TempFile::write_and_sync(&destination, b"two", 0o600).expect("temp");
-        assert!(atomic_no_replace(temporary, &destination).is_err());
-        assert_eq!(fs::read(&destination).expect("destination"), b"one");
-        assert!(safe_path_info(&destination).expect("info").is_some());
-        assert!(
-            !fs::read_dir(temp.path())
-                .expect("temporary directory")
-                .filter_map(Result::ok)
-                .any(|entry| entry
-                    .file_name()
-                    .to_string_lossy()
-                    .contains(".telltale-tmp-"))
         );
     }
 
@@ -1760,10 +1635,11 @@ mod tests {
                 ),
             ),
             (
-                "migration manifest",
-                super::validate_migration_paths(
-                    &temp.path().join("native.migration.JSON"),
+                "reserved migration companion",
+                validate_runtime_paths(
                     &temp.path().join("native"),
+                    &[temp.path().join("native.migration.JSON")],
+                    &[],
                 ),
             ),
             (

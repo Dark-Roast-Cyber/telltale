@@ -2,6 +2,63 @@ use super::*;
 
 use telltale_detect::allowlist::{SuppressionMatch, suppress_detection};
 
+fn obsolete_schema_record(version: &str, canary: &str) -> String {
+    serde_json::json!({
+        "schema_version": version,
+        "event_id": canary,
+        "event_type": "detection",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "critical",
+        "risk_score": 95,
+        "client": "codex",
+        "session_id": canary,
+        "rule_ids": ["mcp.test"],
+        "evidence": [{"field": "tool_result", "redacted_value": canary}],
+    })
+    .to_string()
+}
+
+fn assert_obsolete_schema_rejected(output: &std::process::Output, canary: &str) {
+    assert!(
+        !output.status.success(),
+        "obsolete schema was accepted: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "obsolete schema produced stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported_schema_version"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains(canary),
+        "stderr echoed a record canary: {stderr}"
+    );
+    assert!(
+        !stderr.contains("jsonschema"),
+        "stderr leaked a schema instance error: {stderr}"
+    );
+}
+
+fn assert_directory_unchanged(path: &std::path::Path, before: &[String]) {
+    let mut names = fs::read_dir(path)
+        .expect("read directory")
+        .map(|entry| {
+            entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, before);
+}
+
 #[cfg(unix)]
 #[test]
 fn export_rejects_fifo_without_waiting_for_a_writer() {
@@ -68,38 +125,6 @@ fn inherited_noncanonical_environment_is_ignored_and_canonical_values_parse() {
     assert!(!text.contains("noncanonical-mode"));
     assert!(!log.exists());
     assert!(!state.exists());
-}
-
-#[test]
-fn migration_help_retains_only_explicit_state_and_event_commands() {
-    let env = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["migrate", "env", "--help"])
-        .output()
-        .expect("run removed migration command");
-    assert!(!env.status.success());
-    assert!(String::from_utf8_lossy(&env.stderr).contains("unrecognized subcommand 'env'"));
-
-    let help = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["migrate", "--help"])
-        .output()
-        .expect("run migration help");
-    assert!(help.status.success());
-    let help_text = String::from_utf8_lossy(&help.stdout);
-    assert!(help_text.contains("state") && help_text.contains("events"));
-    assert!(!help_text.contains(" env "));
-
-    for command in ["state", "events"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-            .args(["migrate", command, "--help"])
-            .output()
-            .expect("run migration help");
-        assert!(
-            output.status.success(),
-            "{command}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("--"));
-    }
 }
 
 #[test]
@@ -265,18 +290,7 @@ fn status_reports_latest_health_event() {
 }
 
 #[test]
-fn status_distinguishes_empty_historical_native_and_mixed_logs() {
-    let historical = serde_json::json!({
-        "schema_version": "1.0",
-        "event_id": "historical-status",
-        "event_type": "activity",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "historical-session"
-    })
-    .to_string();
+fn status_accounts_native_health_and_rejects_obsolete_journals() {
     let native_activity = native_test_event(
         "activity",
         "telltale-00000000-0000-4000-8000-000000000012",
@@ -317,12 +331,23 @@ fn status_distinguishes_empty_historical_native_and_mixed_logs() {
         &[],
     )
     .to_string();
+    let detection_after_last_health = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000017",
+        "2026-05-01T00:03:00.000Z",
+        "high",
+        "codex",
+        "native-session",
+        &["rule.status"],
+    )
+    .to_string();
 
     let run_status = |contents: &[u8]| {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("events.jsonl");
+        let log_path = temp.path().join("path-canary-events.jsonl");
         let state_path = temp.path().join("state.json");
         fs::write(&log_path, contents).expect("write status fixture");
+        let before = fs::read(&log_path).expect("read status fixture");
         let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args(["status", "--log-path"])
             .arg(&log_path)
@@ -330,33 +355,52 @@ fn status_distinguishes_empty_historical_native_and_mixed_logs() {
             .arg(&state_path)
             .output()
             .expect("run status");
+        assert_eq!(fs::read(&log_path).expect("reread journal"), before);
+        assert!(!state_path.exists());
         (temp, output)
     };
 
     let (_empty_temp, empty) = run_status(b"");
     assert!(!empty.status.success());
+    assert!(empty.stdout.is_empty());
     assert!(String::from_utf8_lossy(&empty.stderr).contains("no_native_health"));
-
-    let (_historical_temp, historical_only) = run_status(historical.as_bytes());
-    assert!(historical_only.status.success());
-    let historical_summary: Value =
-        serde_json::from_slice(&historical_only.stdout).expect("historical status JSON");
-    assert_eq!(historical_summary["status"], "historical_only");
 
     let (_native_temp, native_without_health) = run_status(native_activity.as_bytes());
     assert!(!native_without_health.status.success());
+    assert!(native_without_health.stdout.is_empty());
     assert!(String::from_utf8_lossy(&native_without_health.stderr).contains("no_native_health"));
 
-    let mixed = format!(
-        "{historical}\r\n{native_health_before}\r\n{native_detection_after_first_health}\r\n{native_health_last}"
+    let reset = format!(
+        "{native_health_before}\r\n{native_detection_after_first_health}\r\n{native_health_last}"
     );
-    let (_mixed_temp, mixed_status) = run_status(mixed.as_bytes());
-    assert!(mixed_status.status.success());
-    let mixed_summary: Value =
-        serde_json::from_slice(&mixed_status.stdout).expect("mixed status JSON");
-    assert_eq!(mixed_summary["status"], "ok");
-    assert_eq!(mixed_summary["last_scan_time"], "2026-05-01T00:02:00.000Z");
-    assert_eq!(mixed_summary["detection_count"], 0);
+    let (_reset_temp, reset_status) = run_status(reset.as_bytes());
+    assert!(reset_status.status.success());
+    let reset_summary: Value = serde_json::from_slice(&reset_status.stdout).expect("status JSON");
+    assert_eq!(reset_summary["status"], "ok");
+    assert_eq!(reset_summary["last_scan_time"], "2026-05-01T00:02:00.000Z");
+    assert_eq!(reset_summary["detection_count"], 0);
+    assert_ne!(reset_summary["status"], "historical_only");
+
+    let since_last_health = format!("{native_health_last}\n{detection_after_last_health}");
+    let (_since_temp, since_status) = run_status(since_last_health.as_bytes());
+    assert!(since_status.status.success());
+    let since_summary: Value = serde_json::from_slice(&since_status.stdout).expect("status JSON");
+    assert_eq!(since_summary["status"], "ok");
+    assert_eq!(since_summary["detection_count"], 1);
+
+    for version in ["1.0", "2.0"] {
+        let canary = format!("obsolete-status-canary-{version}");
+        let obsolete = obsolete_schema_record(version, &canary);
+        let (_old_temp, old_only) = run_status(format!("{obsolete}\n").as_bytes());
+        assert_obsolete_schema_rejected(&old_only, &canary);
+        assert!(!String::from_utf8_lossy(&old_only.stderr).contains("path-canary"));
+        assert!(!String::from_utf8_lossy(&old_only.stderr).contains("historical_only"));
+
+        let mixed = format!("{native_health_last}\r\n{obsolete}\n");
+        let (_mixed_temp, mixed_status) = run_status(mixed.as_bytes());
+        assert_obsolete_schema_rejected(&mixed_status, &canary);
+        assert!(!String::from_utf8_lossy(&mixed_status.stdout).contains("\"status\""));
+    }
 }
 
 #[test]
@@ -389,6 +433,136 @@ fn status_dispatch_rejects_unknown_schema_versions_strictly() {
         .expect("run status");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown_requested_schema_version"));
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("jsonschema"));
+
+    for (label, body) in [
+        (
+            "missing_schema_version",
+            r#"{"event_id":"missing-version-canary","event_type":"health"}"#,
+        ),
+        (
+            "invalid_schema_version_type",
+            r#"{"schema_version":7,"event_id":"typed-version-canary","event_type":"health"}"#,
+        ),
+    ] {
+        fs::write(&log_path, body).expect("write rejected version");
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["status", "--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run status");
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(label), "{stderr}");
+        assert!(!stderr.contains("canary"), "{stderr}");
+        assert!(!stderr.contains("jsonschema"), "{stderr}");
+    }
+}
+
+#[test]
+fn obsolete_schema_after_native_prefix_fails_closed_without_output_or_mutation() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("path-canary-events.jsonl");
+    let state_path = temp.path().join("absent-state.json");
+    let health = native_test_event(
+        "health",
+        "telltale-00000000-0000-4000-8000-000000000021",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "scanner",
+        "scanner",
+        &[],
+    );
+    let first = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000022",
+        "2026-05-01T00:00:00.000Z",
+        "critical",
+        "codex",
+        "native-prefix-session",
+        &["mcp.test"],
+    );
+    let second = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000023",
+        "2026-05-01T00:20:00.000Z",
+        "high",
+        "codex",
+        "native-prefix-other",
+        &["mcp.test"],
+    );
+    let names_before = {
+        let mut names = fs::read_dir(temp.path())
+            .expect("read directory")
+            .map(|entry| {
+                entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    for version in ["1.0", "2.0"] {
+        let canary = format!("obsolete-export-canary-{version}");
+        let bytes = format!(
+            "{health}\n{first}\n{second}\n{}\n",
+            obsolete_schema_record(version, &canary)
+        )
+        .into_bytes();
+        fs::write(&log_path, &bytes).expect("write prefixed obsolete journal");
+        let modes = [
+            vec!["export", "--log-path"],
+            vec!["export", "--format", "jsonl", "--log-path"],
+            vec!["export", "--format", "elastic-bulk", "--log-path"],
+            vec!["export", "--format", "summary", "--log-path"],
+            vec![
+                "export",
+                "--timeline",
+                "--session-id",
+                "native-prefix-session",
+                "--log-path",
+            ],
+            vec![
+                "export",
+                "--timeline",
+                "--session-id",
+                "native-prefix-session",
+                "--format",
+                "timeline-text",
+                "--log-path",
+            ],
+            vec!["export", "--correlate", "--log-path"],
+            vec!["status", "--log-path"],
+        ];
+        for mode in modes {
+            let is_status = mode[0] == "status";
+            let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+            command.args(mode).arg(&log_path);
+            if is_status {
+                command.args(["--state-path"]).arg(&state_path);
+            }
+            let output = command.output().expect("run obsolete-schema command");
+            assert_obsolete_schema_rejected(&output, &canary);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!stderr.contains("path-canary"), "{stderr}");
+            assert!(!stderr.contains("historical_only"), "{stderr}");
+            assert_eq!(fs::read(&log_path).expect("journal unchanged"), bytes);
+            assert!(!state_path.exists());
+            assert_directory_unchanged(temp.path(), &{
+                let mut expected = names_before.clone();
+                expected.push("path-canary-events.jsonl".to_string());
+                expected.sort();
+                expected
+            });
+        }
+    }
 }
 
 #[test]
@@ -731,28 +905,22 @@ fn export_summary_reports_filtered_counts() {
 }
 
 #[test]
-fn historical_summary_terminalizes_imported_client_and_rule_labels() {
+fn export_summary_terminalizes_noncanonical_client_labels() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
-    let marker = "CONTROLLED_HISTORICAL_SUMMARY_SECRET";
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "1.0",
-            "event_id": "historical-summary",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "event_type": "detection",
-            "severity": "high",
-            "risk_score": 80,
-            "client": format!("tenant-{marker}"),
-            "session_id": "historical-summary-session",
-            "rule_ids": [format!("rule.{marker}")],
-            "categories": ["test"],
-            "evidence": [],
-        })
-        .to_string(),
-    )
-    .expect("write historical log");
+    let marker = "CONTROLLED_SUMMARY_SECRET";
+    let mut event = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000031",
+        "2026-05-01T00:00:00.000Z",
+        "high",
+        "codex",
+        "summary-session",
+        &["rule.test"],
+    );
+    event["client"] = Value::String(format!("tenant-{marker}"));
+    event["session_id"] = Value::String(format!("session-{marker}"));
+    fs::write(&log_path, format!("{event}\n")).expect("write Event 3.0 log");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
@@ -761,11 +929,17 @@ fn historical_summary_terminalizes_imported_client_and_rule_labels() {
         .output()
         .expect("run telltale export summary");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("events: 1"));
+    assert!(stdout.contains("  rule.test: 1"));
     assert!(
         !stdout.contains(marker),
-        "summary emitted a controlled historical marker"
+        "summary emitted a controlled client marker"
     );
 }
 
@@ -846,60 +1020,64 @@ fn historical_jsonl_export_replaces_a_credential_bearing_telltale_version() {
 }
 
 #[test]
-fn historical_timeline_replaces_invalid_evidence_hashes_in_json_and_text() {
+fn export_timeline_replaces_invalid_evidence_hashes_in_json_and_text() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
-    let marker = "CONTROLLED_HISTORICAL_TIMELINE_SECRET";
+    let marker = "CONTROLLED_TIMELINE_SECRET";
     let canonical_hash = "a".repeat(64);
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "1.0",
-            "event_id": "historical-timeline",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "event_type": "detection",
-            "severity": "high",
-            "risk_score": 80,
-            "client": "codex",
-            "session_id": "historical-timeline-session",
-            "rule_ids": ["rule.test"],
-            "categories": ["test"],
-            "timeline_anchors": [{
-                "entry_index": 0,
-                "rule_ids": ["rule.test", 7],
-                "categories": ["test"],
-                "evidence_fields": ["tool_result"],
-                "extension": {"nested": format!("TOKEN={marker}")},
-            }],
-            "evidence": [{
-                "field": "tool_result",
-                "redacted_value": "safe",
-                "hash": marker,
-            }, {
-                "field": "arguments",
-                "redacted_value": "safe",
-                "hash": canonical_hash,
-            }],
-        })
-        .to_string(),
-    )
-    .expect("write historical log");
+    let mut event = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000032",
+        "2026-05-01T00:00:00.000Z",
+        "high",
+        "codex",
+        "timeline-hash-session",
+        &["rule.test"],
+    );
+    event["evidence"] = serde_json::json!([
+        {
+            "field": "tool_result",
+            "redacted_value": format!("TOKEN={marker}"),
+            "hash": marker,
+        },
+        {
+            "field": "arguments",
+            "redacted_value": "safe",
+            "hash": canonical_hash,
+        }
+    ]);
+    event["response"]["investigation_summary"] = Value::String(format!("TOKEN={marker}"));
+    fs::write(&log_path, format!("{event}\n")).expect("write Event 3.0 log");
 
     let json = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
-        .args(["--timeline", "--session-id", "historical-timeline-session"])
+        .args(["--timeline", "--session-id", "timeline-hash-session"])
         .output()
         .expect("run telltale export timeline json");
-    assert!(json.status.success());
+    assert!(
+        json.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
     assert!(
         !String::from_utf8_lossy(&json.stdout).contains(marker),
-        "timeline JSON emitted a controlled historical marker from evidence or anchor extensions"
+        "timeline JSON emitted a controlled marker"
     );
     let timeline: Value = serde_json::from_slice(&json.stdout).expect("timeline JSON");
+    assert_eq!(timeline["record_status"], "native");
     assert_eq!(
         timeline["entries"][0]["evidence"][1]["hash"],
         canonical_hash
+    );
+    assert_eq!(
+        timeline["entries"][0]["evidence"][0]["hash"],
+        evidence_hash(marker)
+    );
+    assert!(
+        timeline["entries"][0]["evidence"][0]
+            .get("redacted_value")
+            .is_none()
     );
 
     let text = Command::new(env!("CARGO_BIN_EXE_telltale"))
@@ -908,7 +1086,7 @@ fn historical_timeline_replaces_invalid_evidence_hashes_in_json_and_text() {
         .args([
             "--timeline",
             "--session-id",
-            "historical-timeline-session",
+            "timeline-hash-session",
             "--format",
             "timeline-text",
         ])
@@ -917,7 +1095,7 @@ fn historical_timeline_replaces_invalid_evidence_hashes_in_json_and_text() {
     assert!(text.status.success());
     assert!(
         !String::from_utf8_lossy(&text.stdout).contains(marker),
-        "timeline text emitted a controlled historical marker"
+        "timeline text emitted a controlled marker"
     );
 }
 
@@ -1047,41 +1225,25 @@ fn export_correlate_emits_cross_session_event() {
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-detection-a",
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "risk_score": 95,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "session-a",
-                "rule_ids": ["mcp.test"],
-                "categories": ["mcp_prompt_injection"],
-                "tags": ["mcp"],
-                "evidence": [],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000041",
+                "2026-05-01T00:00:00.000Z",
+                "critical",
+                "codex",
+                "session-a",
+                &["mcp.test"],
+            )
             .to_string(),
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-detection-b",
-                "timestamp": "2026-05-01T00:20:00Z",
-                "event_type": "detection",
-                "severity": "high",
-                "risk_score": 80,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "session-b",
-                "rule_ids": ["mcp.test", "network.test"],
-                "categories": ["mcp_prompt_injection", "exfiltration"],
-                "tags": ["mcp"],
-                "evidence": [],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000042",
+                "2026-05-01T00:20:00.000Z",
+                "high",
+                "codex",
+                "session-b",
+                &["mcp.test", "network.test"],
+            )
             .to_string(),
         ]
         .join("\n"),
@@ -1118,7 +1280,7 @@ fn export_correlate_emits_cross_session_event() {
     assert_eq!(lines[0]["session_id"], "correlation");
     assert_eq!(lines[0]["rule_ids"][0], "mcp.test");
     assert_eq!(lines[0]["categories"][0], "cross_session_correlation");
-    assert_eq!(lines[0]["risk_score"], 95);
+    assert_eq!(lines[0]["risk_score"], 90);
     assert_eq!(
         lines[0]["evidence"]
             .as_array()
@@ -1178,40 +1340,35 @@ fn export_timeline_keeps_operational_warnings_out_of_risk_bands() {
 fn export_timeline_warning_survives_informational_activity_in_either_order() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("events.jsonl");
-    let activity = native_test_event(
+    let mut activity = native_test_event(
         "activity",
         "telltale-00000000-0000-4000-8000-000000000003",
         "2026-05-01T00:01:00.000Z",
         "informational",
         "codex",
-        "warning-risk-session",
+        "scanner",
         &[],
     );
+    activity["client"] = Value::String("scanner".to_string());
+    activity["session_id"] = Value::String("scanner".to_string());
     let mut failures = Vec::new();
-    for warning_time in ["2026-05-01T00:00:00Z", "2026-05-01T00:02:00Z"] {
-        let warning = serde_json::json!({
-            "schema_version": "1.0",
-            "event_id": "historical-warning",
-            "timestamp": warning_time,
-            "event_type": "operational_alert",
-            "severity": "warning",
-            "risk_score": 0,
-            "client": "codex",
-            "session_id": "warning-risk-session",
-        });
+    for warning_time in ["2026-05-01T00:00:00.000Z", "2026-05-01T00:02:00.000Z"] {
+        let warning = native_test_event(
+            "operational_alert",
+            "telltale-00000000-0000-4000-8000-000000000004",
+            warning_time,
+            "warning",
+            "scanner",
+            "scanner",
+            &[],
+        );
         fs::write(&log_path, format!("{warning}\n{activity}\n"))
             .expect("write warning and activity log");
         for format in ["jsonl", "timeline-text"] {
             let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
                 .args(["export", "--log-path"])
                 .arg(&log_path)
-                .args([
-                    "--timeline",
-                    "--session-id",
-                    "warning-risk-session",
-                    "--format",
-                    format,
-                ])
+                .args(["--timeline", "--session-id", "scanner", "--format", format])
                 .output()
                 .expect("export warning and activity timeline");
             assert!(
@@ -1224,6 +1381,7 @@ fn export_timeline_warning_survives_informational_activity_in_either_order() {
                 let timeline: Value = serde_json::from_str(&stdout).expect("timeline JSON");
                 assert_eq!(timeline["entry_count"], 2);
                 assert_eq!(timeline["detection_count"], 0);
+                assert_eq!(timeline["record_status"], "native");
                 assert_eq!(timeline["risk_summary"]["max_severity"], "informational");
                 timeline["max_severity"] == "warning"
             } else {
@@ -1245,42 +1403,42 @@ fn export_timeline_warning_does_not_outrank_detection_risk_bands() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("events.jsonl");
     for severity in ["low", "medium", "high", "critical"] {
-        let detection = native_test_event(
+        let mut detection = native_test_event(
             "detection",
             "telltale-00000000-0000-4000-8000-000000000002",
             "2026-05-01T00:01:00.000Z",
             severity,
             "codex",
-            "warning-risk-session",
+            "scanner",
             &["rule.test"],
         );
-        // Historical records can share a session with native detections.
-        for warning_time in ["2026-05-01T00:00:00Z", "2026-05-01T00:02:00Z"] {
-            let warning = serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "historical-warning",
-                "timestamp": warning_time,
-                "event_type": "operational_alert",
-                "severity": "warning",
-                "risk_score": 0,
-                "client": "codex",
-                "session_id": "warning-risk-session",
-            });
+        detection["client"] = Value::String("scanner".to_string());
+        detection["session_id"] = Value::String("scanner".to_string());
+        for warning_time in ["2026-05-01T00:00:00.000Z", "2026-05-01T00:02:00.000Z"] {
+            let warning = native_test_event(
+                "operational_alert",
+                "telltale-00000000-0000-4000-8000-000000000005",
+                warning_time,
+                "warning",
+                "scanner",
+                "scanner",
+                &[],
+            );
             fs::write(&log_path, format!("{warning}\n{detection}\n"))
-                .expect("write mixed timeline log");
+                .expect("write warning and detection log");
             let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
                 .args(["export", "--log-path"])
                 .arg(&log_path)
-                .args(["--timeline", "--session-id", "warning-risk-session"])
+                .args(["--timeline", "--session-id", "scanner"])
                 .output()
-                .expect("export mixed warning/detection timeline");
+                .expect("export warning/detection timeline");
             assert!(
                 output.status.success(),
                 "{severity}, {warning_time}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
             let timeline: Value = serde_json::from_slice(&output.stdout).expect("timeline JSON");
-            assert_eq!(timeline["record_status"], "mixed");
+            assert_eq!(timeline["record_status"], "native");
             assert_eq!(timeline["entry_count"], 2);
             assert_eq!(timeline["detection_count"], 1);
             assert_eq!(timeline["max_severity"], severity);
@@ -1301,121 +1459,80 @@ fn export_timeline_warning_does_not_outrank_detection_risk_bands() {
 fn export_timeline_produces_redacted_session_timeline() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
+    let mut activity = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000051",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "session-a",
+        &[],
+    );
+    activity["agent"] = Value::String("codex".to_string());
+    activity["model"] = Value::String("gpt-5".to_string());
+    activity["provider"] = Value::String("openai".to_string());
+    activity["evidence"] = serde_json::json!([{
+        "field": "record_counts",
+        "redacted_value": "{\"tool_call\":2,\"tool_result\":1,\"user_message\":1}",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }]);
+    let mut critical = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000052",
+        "2026-05-01T00:01:00.000Z",
+        "critical",
+        "codex",
+        "session-a",
+        &["mcp.tool_metadata.prompt_injection"],
+    );
+    critical["tool_name"] = Value::String("shell".to_string());
+    critical["categories"] = serde_json::json!(["mcp_prompt_injection"]);
+    critical["evidence"] = serde_json::json!([{
+        "field": "tool_result",
+        "redacted_value": "TOKEN=timeline-redaction-canary",
+        "hash": "sha256:abc123",
+        "rule_id": "mcp.tool_metadata.prompt_injection"
+    }]);
+    let mut high = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000053",
+        "2026-05-01T00:00:30.000Z",
+        "high",
+        "codex",
+        "session-a",
+        &["network.controlled_test_domain.darkroast"],
+    );
+    high["categories"] = serde_json::json!(["exfiltration"]);
+    let other_session = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000054",
+        "2026-05-01T00:02:00.000Z",
+        "medium",
+        "opencode",
+        "session-b",
+        &["secret.test"],
+    );
+    let same_session_other_client = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000055",
+        "2026-05-01T00:00:45.000Z",
+        "medium",
+        "opencode",
+        "session-a",
+        &["secret.test"],
+    );
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-activity-a",
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "activity",
-                "severity": "low",
-                "risk_score": 15,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "session-a",
-                "rule_ids": [],
-                "categories": [],
-                "tags": [],
-                "evidence": [
-                    {
-                        "field": "record_counts",
-                        "redacted_value": "{\"tool_call\":2,\"tool_result\":1,\"user_message\":1}",
-                        "hash": "sha256:activity-counts"
-                    }
-                ],
-            })
-            .to_string(),
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-detection-a",
-                "timestamp": "2026-05-01T00:01:00Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "risk_score": 95,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "session-a",
-                "tool_name": "shell",
-                "rule_ids": ["mcp.tool_metadata.prompt_injection"],
-                "categories": ["mcp_prompt_injection"],
-                "tags": ["mcp"],
-                "evidence": [
-                    {
-                        "field": "tool_result",
-                        "redacted_value": "[REDACTED]",
-                        "hash": "sha256:abc123",
-                        "rule_id": "mcp.tool_metadata.prompt_injection"
-                    }
-                ],
-                "triage": {
-                    "verdict": "malicious",
-                    "confidence": 0.95,
-                    "reason": "MCP prompt injection detected"
-                },
-                "response": {
-                    "recommended_action": "investigate",
-                    "response_playbook": "mcp_injection",
-                    "investigation_summary": "Agent received injected MCP instructions",
-                    "escalation": "security_review_required"
-                }
-            })
-            .to_string(),
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-detection-b",
-                "timestamp": "2026-05-01T00:00:30Z",
-                "event_type": "detection",
-                "severity": "high",
-                "risk_score": 80,
-                "client": "codex",
-                "session_id": "session-a",
-                "rule_ids": ["network.controlled_test_domain.darkroast"],
-                "categories": ["exfiltration"],
-                "tags": ["network"],
-                "evidence": []
-            })
-            .to_string(),
-            // Different session — should not appear in session-a timeline.
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-detection-c",
-                "timestamp": "2026-05-01T00:02:00Z",
-                "event_type": "detection",
-                "severity": "medium",
-                "risk_score": 50,
-                "client": "opencode",
-                "session_id": "session-b",
-                "rule_ids": ["secret.test"],
-                "categories": ["credential_access"],
-                "tags": [],
-                "evidence": []
-            })
-            .to_string(),
-            // Same session_id on a different client — should force client disambiguation.
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "fixture-detection-d",
-                "timestamp": "2026-05-01T00:00:45Z",
-                "event_type": "detection",
-                "severity": "medium",
-                "risk_score": 40,
-                "client": "opencode",
-                "agent": "opencode",
-                "model": "claude-sonnet",
-                "provider": "anthropic",
-                "session_id": "session-a",
-                "rule_ids": ["secret.test"],
-                "categories": ["credential_access"],
-                "tags": [],
-                "evidence": []
-            })
-            .to_string(),
+            activity,
+            high,
+            other_session,
+            same_session_other_client,
+            critical,
         ]
+        .into_iter()
+        .map(|event| event.to_string())
+        .collect::<Vec<_>>()
         .join("\n"),
     )
     .expect("write log");
@@ -1486,12 +1603,12 @@ fn export_timeline_produces_redacted_session_timeline() {
     assert_eq!(codex_timeline["entry_count"], 3);
     assert_eq!(codex_timeline["detection_count"], 2);
     assert_eq!(codex_timeline["max_severity"], "critical");
-    assert_eq!(codex_timeline["has_triage"], true);
-    assert_eq!(codex_timeline["record_status"], "historical");
+    assert_eq!(codex_timeline["has_triage"], false);
+    assert_eq!(codex_timeline["record_status"], "native");
     assert_eq!(codex_timeline["risk_summary"]["tool_call_count"], 2);
     assert_eq!(codex_timeline["risk_summary"]["risky_action_count"], 2);
     assert_eq!(codex_timeline["risk_summary"]["max_severity"], "critical");
-    assert_eq!(codex_timeline["risk_summary"]["triage_ran"], true);
+    assert_eq!(codex_timeline["risk_summary"]["triage_ran"], false);
     assert!(
         codex_timeline["risk_summary"]["top_rule_ids"]
             .as_array()
@@ -1523,12 +1640,12 @@ fn export_timeline_produces_redacted_session_timeline() {
     // Entries sorted by timestamp.
     let entries = codex_timeline["entries"].as_array().expect("entries array");
     assert_eq!(entries.len(), 3);
-    assert_eq!(entries[0]["timestamp"], "2026-05-01T00:00:00Z");
+    assert_eq!(entries[0]["timestamp"], "2026-05-01T00:00:00.000Z");
     assert_eq!(entries[0]["event_type"], "activity");
-    assert_eq!(entries[1]["timestamp"], "2026-05-01T00:00:30Z");
+    assert_eq!(entries[1]["timestamp"], "2026-05-01T00:00:30.000Z");
     assert_eq!(entries[1]["event_type"], "detection");
     assert_eq!(entries[1]["severity"], "high");
-    assert_eq!(entries[2]["timestamp"], "2026-05-01T00:01:00Z");
+    assert_eq!(entries[2]["timestamp"], "2026-05-01T00:01:00.000Z");
     assert_eq!(entries[2]["event_type"], "detection");
     assert_eq!(entries[2]["severity"], "critical");
     assert_eq!(entries[2]["tool_name"], "shell");
@@ -1543,10 +1660,12 @@ fn export_timeline_produces_redacted_session_timeline() {
         "redacted_value should not appear in timeline"
     );
 
-    // Triage and response are included.
-    assert_eq!(entries[2]["triage"]["verdict"], "malicious");
-    assert_eq!(entries[2]["triage"]["confidence"], 0.95);
-    assert_eq!(entries[2]["response"]["recommended_action"], "investigate");
+    assert!(entries[2].get("triage").is_none());
+    assert!(!stdout.contains("timeline-redaction-canary"));
+    assert_eq!(
+        entries[2]["response"]["recommended_action"],
+        "investigate_immediately"
+    );
 
     // Rule ids are preserved.
     assert_eq!(
@@ -1615,21 +1734,7 @@ fn export_timeline_rejects_multiple_session_ids() {
 fn export_timeline_rejects_summary_format() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "1.0",
-            "event_type": "activity",
-            "session_id": "timeline-summary-session",
-            "client": "codex",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "severity": "low",
-            "risk_score": 20,
-            "evidence": []
-        })
-        .to_string(),
-    )
-    .expect("write log event");
+    fs::write(&log_path, "").expect("write empty log");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
@@ -1646,7 +1751,7 @@ fn export_timeline_rejects_summary_format() {
 }
 
 #[test]
-fn native_schema_is_closed_and_historical_schemas_remain_separate() {
+fn native_schema_is_closed_and_frozen_event3_asset_matches() {
     let native_schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
     let native_validator = validator_for(&native_schema).expect("native validator");
@@ -1788,165 +1893,187 @@ fn native_schema_is_closed_and_historical_schemas_remain_separate() {
     legacy_id["event_id"] = serde_json::json!("fixture-legacy");
     assert!(!native_validator.is_valid(&legacy_id));
 
-    let historical_schema: Value = serde_json::from_str(include_str!(
-        "../../schemas/historical/event-1.0.schema.json"
-    ))
-    .expect("historical schema");
-    let historical_validator = validator_for(&historical_schema).expect("historical validator");
-    let historical = serde_json::json!({
-        "schema_version": "1.0",
-        "event_id": "historical",
-        "event_type": "activity",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "session",
-        "rule_ids": ["Legacy Rule ID"]
-    });
-    assert!(historical_validator.is_valid(&historical));
-    assert!(!native_validator.is_valid(&historical));
-
-    let v2_schema: Value = serde_json::from_str(include_str!(
-        "../../schemas/historical/event-2.0.schema.json"
-    ))
-    .expect("Event 2.0 schema");
-    let v2_validator = validator_for(&v2_schema).expect("Event 2.0 validator");
-    let missing_ledger = serde_json::json!({
-        "schema_version": "2.0",
-        "event_id": "current",
-        "event_type": "activity",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "session"
-    });
-    assert!(!v2_validator.is_valid(&missing_ledger));
-
-    let valid_rule_id = serde_json::json!({
-        "schema_version": "2.0",
-        "event_id": "valid-rule-id",
-        "event_type": "detection",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "session",
-        "risk_contributions": [],
-        "rule_ids": ["rule.valid"]
-    });
-    assert!(v2_validator.is_valid(&valid_rule_id));
+    assert_eq!(
+        include_bytes!("../../schemas/event.schema.json"),
+        include_bytes!("../../schemas/historical/event-3.0.schema.json"),
+        "frozen Event 3.0 schema drifted from the current schema"
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        !root
+            .join("schemas/historical/event-1.0.schema.json")
+            .exists()
+    );
+    assert!(
+        !root
+            .join("schemas/historical/event-2.0.schema.json")
+            .exists()
+    );
+    for version in ["1.0", "2.0"] {
+        let mut obsolete = native_activity.clone();
+        obsolete["schema_version"] = serde_json::json!(version);
+        assert!(
+            !native_validator.is_valid(&obsolete),
+            "Event {version} must not validate as current Event 3.0"
+        );
+    }
 }
 
 #[test]
-fn export_rejects_schema_two_overflowing_contribution_ledger() {
+fn export_rejects_schema_two_before_native_accounting() {
+    for (canary, body) in [
+        (
+            "overflow-schema-canary",
+            serde_json::json!({
+                "schema_version": "2.0",
+                "event_id": "overflow-schema-canary",
+                "event_type": "detection",
+                "timestamp": "2026-05-01T00:00:00Z",
+                "severity": "critical",
+                "risk_score": 18446744073709551615_u64,
+                "client": "codex",
+                "session_id": "overflow-schema-canary",
+                "risk_contributions": [
+                    {"id": "rule.max", "type": "deterministic_rule", "points": 18446744073709551615_u64, "rationale": "max"},
+                    {"id": "rule.one", "type": "deterministic_rule", "points": 1, "rationale": "one"}
+                ]
+            }),
+        ),
+        (
+            "scope-schema-canary",
+            serde_json::json!({
+                "schema_version": "2.0",
+                "event_id": "scope-schema-canary",
+                "event_type": "detection",
+                "timestamp": "2026-05-01T00:00:00Z",
+                "severity": "low",
+                "risk_score": 1,
+                "client": "codex",
+                "session_id": "scope-schema-canary",
+                "risk_contributions": [
+                    {"id": "rule.missing", "type": "deterministic_rule", "points": 1, "rationale": "missing rule link"}
+                ]
+            }),
+        ),
+        (
+            "rule-schema-canary",
+            serde_json::json!({
+                "schema_version": "2.0",
+                "event_id": "rule-schema-canary",
+                "event_type": "detection",
+                "timestamp": "2026-05-01T00:00:00Z",
+                "severity": "informational",
+                "risk_score": 0,
+                "client": "codex",
+                "session_id": "rule-schema-canary",
+                "rule_ids": ["rule"],
+                "risk_contributions": []
+            }),
+        ),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("telltale-events.jsonl");
+        fs::write(&log_path, format!("{body}\n")).expect("write obsolete event");
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["export", "--log-path"])
+            .arg(&log_path)
+            .output()
+            .expect("run export");
+        assert_obsolete_schema_rejected(&output, canary);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("overflowed u64"), "{stderr}");
+        assert!(!stderr.contains("missing from rule_ids"), "{stderr}");
+    }
+}
+
+#[test]
+fn export_rejects_event3_accounting_after_schema_validation() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "2.0",
-            "event_id": "overflow",
-            "event_type": "detection",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "severity": "critical",
-            "risk_score": 18446744073709551615_u64,
-            "client": "codex",
-            "session_id": "overflow-session",
-            "risk_contributions": [
-                {"id": "rule.max", "type": "deterministic_rule", "points": 18446744073709551615_u64, "rationale": "max"},
-                {"id": "rule.one", "type": "deterministic_rule", "points": 1, "rationale": "one"}
-            ]
-        })
-        .to_string(),
-    )
-    .expect("write overflow event");
-
+    let mut overflow = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000061",
+        "2026-05-01T00:00:00.000Z",
+        "critical",
+        "codex",
+        "overflow-session",
+        &["rule.max", "rule.one"],
+    );
+    overflow["risk_score"] = serde_json::json!(18446744073709551615_u64);
+    overflow["risk_contributions"] = serde_json::json!([
+        {"id": "rule.max", "type": "deterministic_rule", "points": 18446744073709551615_u64, "rationale": "max"},
+        {"id": "rule.one", "type": "deterministic_rule", "points": 1, "rationale": "one"}
+    ]);
+    fs::write(&log_path, format!("{overflow}\n")).expect("write overflow event");
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .output()
         .expect("run export");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("overflowed u64"));
-}
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("overflowed u64"), "{stderr}");
+    assert!(!stderr.contains("jsonschema"), "{stderr}");
 
-#[test]
-fn export_rejects_schema_two_contribution_outside_event_scope() {
-    let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("telltale-events.jsonl");
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "2.0",
-            "event_id": "invalid-scope",
-            "event_type": "detection",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "severity": "low",
-            "risk_score": 1,
-            "client": "codex",
-            "session_id": "invalid-scope-session",
-            "risk_contributions": [
-                {"id": "rule.missing", "type": "deterministic_rule", "points": 1, "rationale": "missing rule link"}
-            ]
-        })
-        .to_string(),
-    )
-    .expect("write invalid scope event");
-
+    let mut missing_rule = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000062",
+        "2026-05-01T00:00:00.000Z",
+        "low",
+        "codex",
+        "invalid-scope-session",
+        &["rule.present"],
+    );
+    missing_rule["risk_score"] = serde_json::json!(1);
+    missing_rule["risk_contributions"] = serde_json::json!([
+        {"id": "rule.missing", "type": "deterministic_rule", "points": 1, "rationale": "missing rule link"}
+    ]);
+    fs::write(&log_path, format!("{missing_rule}\n")).expect("write scope event");
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .output()
         .expect("run export");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing from rule_ids"));
-}
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing from rule_ids"), "{stderr}");
+    assert!(!stderr.contains("jsonschema"), "{stderr}");
 
-#[test]
-fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
-    let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("telltale-events.jsonl");
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "2.0",
-            "event_id": "invalid-rule-id",
-            "event_type": "detection",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "severity": "informational",
-            "risk_score": 0,
-            "client": "codex",
-            "session_id": "invalid-rule-id-session",
-            "rule_ids": ["rule"],
-            "risk_contributions": []
-        })
-        .to_string(),
-    )
-    .expect("write invalid rule-id event");
-
+    let mut invalid_rule = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000063",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "invalid-rule-session",
+        &["rule.test"],
+    );
+    invalid_rule["rule_ids"] = serde_json::json!(["rule-id-canary"]);
+    fs::write(&log_path, format!("{invalid_rule}\n")).expect("write invalid rule event");
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .output()
         .expect("run export");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("historical_schema_violation"));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("historical_schema_violation"), "{stderr}");
+    assert!(!stderr.contains("rule-id-canary"), "{stderr}");
+    assert!(!stderr.contains("jsonschema"), "{stderr}");
 }
 
 #[test]
-fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions() {
+fn export_jsonl_and_elastic_redact_unsafe_sessions_and_evidence() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("historical-events.jsonl");
-    let triage_marker = "TT_PRIVACY_HISTORICAL_TRIAGE_25";
-    let note_marker = "TT_PRIVACY_HISTORICAL_NOTE_25";
-    let deep_marker = "TT_PRIVACY_HISTORICAL_DEEP_25";
-    let key_marker = "TT_PRIVACY_HISTORICAL_UNSAFE_KEY_25";
+    let log_path = temp.path().join("events.jsonl");
+    let note_marker = "TT_PRIVACY_EXPORT_NOTE_25";
     let sessions = [
-        "TOKEN=TT_PRIVACY_HISTORICAL_SESSION_ASSIGNMENT_25",
+        "TOKEN=TT_PRIVACY_EXPORT_SESSION_ASSIGNMENT_25",
         "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12",
-        "https://user:TT_PRIVACY_HISTORICAL_SESSION_URL_25@session.example.invalid",
+        "https://user:TT_PRIVACY_EXPORT_SESSION_URL_25@session.example.invalid",
     ];
     let source_path_hash = "a".repeat(64);
     let evidence_hash_value = "b".repeat(64);
@@ -1954,43 +2081,23 @@ fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions
         .iter()
         .enumerate()
         .map(|(index, session)| {
-            let mut event = serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": format!("historical-privacy-{index}"),
-                "event_type": "activity",
-                "timestamp": "2026-05-01T00:00:00Z",
-                "severity": "informational",
-                "risk_score": 0,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": session,
-                "source_path_hash": source_path_hash,
-                "risk_entity_type": "session",
-                "risk_entity_value": session,
-                "rule_ids": ["secret.env.read"],
-                "response": {
-                    "recommended_action": "investigate",
-                    "response_playbook": "telltale-playbook-credential-access",
-                    "investigation_summary": "synthetic historical fixture",
-                    "escalation": "security_review_required"
-                },
-                "triage": {"reason": format!("TOKEN={triage_marker}")},
-                "evidence": [{
-                    "field": "arguments",
-                    "redacted_value": "safe",
-                    "hash": evidence_hash_value
-                }],
-                "unknown_extension": {
-                    "note": format!("TOKEN={note_marker}"),
-                    "deep": {"array": [{"text": format!("TOKEN={deep_marker}")}]}
-                }
-            });
-            event
-                .as_object_mut()
-                .expect("historical event object")
-                .insert(key_marker.to_string(), serde_json::json!("safe value"));
+            let mut event = native_test_event(
+                "detection",
+                &format!("telltale-00000000-0000-4000-8000-00000000007{index}"),
+                "2026-05-01T00:00:00.000Z",
+                "high",
+                "codex",
+                session,
+                &["secret.env.read"],
+            );
+            event["source_path_hash"] = Value::String(source_path_hash.clone());
+            event["evidence"] = serde_json::json!([{
+                "field": "arguments",
+                "redacted_value": format!("TOKEN={note_marker}"),
+                "hash": evidence_hash_value,
+            }]);
+            event["response"]["investigation_summary"] =
+                Value::String(format!("TOKEN={note_marker}"));
             event
         })
         .collect::<Vec<_>>();
@@ -2002,7 +2109,7 @@ fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions
             .collect::<Vec<_>>()
             .join("\n"),
     )
-    .expect("write historical events");
+    .expect("write Event 3.0 events");
 
     for format in [None, Some("elastic-bulk")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
@@ -2020,19 +2127,16 @@ fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        for marker in [triage_marker, note_marker, deep_marker, key_marker]
-            .into_iter()
-            .chain(sessions)
-        {
+        for marker in sessions.iter().copied().chain(std::iter::once(note_marker)) {
             assert!(
                 !text.contains(marker),
-                "historical export retained a controlled marker"
+                "export retained a controlled marker"
             );
         }
         if format.is_none() {
             let exported = String::from_utf8_lossy(&output.stdout)
                 .lines()
-                .map(|line| serde_json::from_str::<Value>(line).expect("historical JSONL"))
+                .map(|line| serde_json::from_str::<Value>(line).expect("JSONL"))
                 .collect::<Vec<_>>();
             assert_eq!(exported.len(), sessions.len());
             for event in exported {
@@ -2049,31 +2153,16 @@ fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions
                     "telltale-playbook-credential-access"
                 );
                 assert!(
-                    event["triage"]["reason"]
+                    event["evidence"][0]["redacted_value"]
                         .as_str()
                         .is_some_and(|value| value.contains("[redacted-secret]"))
                 );
                 assert!(
-                    event["unknown_extension"]["note"]
+                    event["response"]["investigation_summary"]
                         .as_str()
                         .is_some_and(|value| value.contains("[redacted-secret]"))
                 );
-                assert!(
-                    event["unknown_extension"]["deep"]["array"][0]["text"]
-                        .as_str()
-                        .is_some_and(|value| value.contains("[redacted-secret]"))
-                );
-                let unsafe_key_replacement = event
-                    .as_object()
-                    .expect("historical object")
-                    .iter()
-                    .find(|(key, value)| {
-                        key.starts_with("[metadata-key:") && value.as_str() == Some("safe value")
-                    });
-                assert!(
-                    unsafe_key_replacement.is_some(),
-                    "unsafe historical key must be replaced deterministically without dropping its value"
-                );
+                assert!(event.get("unknown_extension").is_none());
             }
         } else {
             let lines = String::from_utf8_lossy(&output.stdout)
@@ -2102,32 +2191,35 @@ fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions
 }
 
 #[test]
-fn historical_jsonl_and_elastic_hide_sensitive_filesystem_url_paths() {
+fn export_jsonl_and_elastic_hide_sensitive_filesystem_url_paths() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("historical-url-path.jsonl");
-    let marker = "TT_PRIVACY_HISTORICAL_EXPORT_URL_PATH_USER_25";
-    let authority_marker = "TT_PRIVACY_HISTORICAL_EXPORT_URL_AUTHORITY_25";
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "1.0",
-            "event_id": "historical-url-path",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "event_type": "activity",
-            "severity": "informational",
-            "risk_score": 0,
-            "client": "codex",
-            "session_id": "safe-session",
-            "evidence": [],
-            "unknown_extension": {
-                "note": format!("https://example.invalid/home/{marker}/.ssh/id_rsa"),
-                "deep": [{"value": format!("file:///Users/{marker}/%2Essh/id%5Fed25519")}],
-                "authority": {"nested": [format!("https://example.invalid%2Fhome%2F{authority_marker}%2F.ssh%2Fid_rsa")]},
-            }
-        })
-        .to_string(),
-    )
-    .expect("write historical URL-path event");
+    let log_path = temp.path().join("events.jsonl");
+    let marker = "TT_PRIVACY_EXPORT_URL_PATH_USER_25";
+    let authority_marker = "TT_PRIVACY_EXPORT_URL_AUTHORITY_25";
+    let mut event = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000081",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "safe-session",
+        &[],
+    );
+    event["evidence"] = serde_json::json!([
+        {
+            "field": "url",
+            "redacted_value": format!("https://example.invalid/home/{marker}/.ssh/id_rsa")
+        },
+        {
+            "field": "path",
+            "redacted_value": format!("file:///Users/{marker}/%2Essh/id%5Fed25519")
+        },
+        {
+            "field": "url",
+            "redacted_value": format!("https://example.invalid%2Fhome%2F{authority_marker}%2F.ssh%2Fid_rsa")
+        }
+    ]);
+    fs::write(&log_path, format!("{event}\n")).expect("write Event 3.0 URL-path event");
 
     for format in [None, Some("elastic-bulk")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
@@ -2148,35 +2240,29 @@ fn historical_jsonl_and_elastic_hide_sensitive_filesystem_url_paths() {
 }
 
 #[test]
-fn historical_jsonl_and_elastic_redact_nested_encoded_urls_inside_outer_components() {
+fn export_jsonl_and_elastic_redact_nested_encoded_urls() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("historical-nested-url.jsonl");
-    let marker = "TT_PRIVACY_HISTORICAL_NESTED_BOUNDARY_25";
+    let log_path = temp.path().join("events.jsonl");
+    let marker = "TT_PRIVACY_NESTED_BOUNDARY_25";
     let query = format!("https://outer.invalid/?next=https%3A%2F%2Finner.invalid%252F{marker}");
     let path = format!("https://outer.invalid/redirect/https%3A%2F%2Finner.invalid%252F{marker}");
     let fragment =
         format!("https://outer.invalid/#next=https%3A%2F%2Finner.invalid%2523token%253D{marker}");
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "1.0",
-            "event_id": "historical-nested-url",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "event_type": "activity",
-            "severity": "informational",
-            "risk_score": 0,
-            "client": "codex",
-            "session_id": "historical-nested-url-session",
-            "evidence": [],
-            "diagnostic": query,
-            "unknown_extension": {
-                "path": path,
-                "nested": {"fragment": fragment},
-            },
-        })
-        .to_string(),
-    )
-    .expect("write historical nested URL event");
+    let mut event = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000082",
+        "2026-05-01T00:00:00.000Z",
+        "high",
+        "codex",
+        "nested-url-session",
+        &["rule.test"],
+    );
+    event["response"]["investigation_summary"] = Value::String(query);
+    event["evidence"] = serde_json::json!([
+        {"field": "url", "redacted_value": path},
+        {"field": "url", "redacted_value": fragment}
+    ]);
+    fs::write(&log_path, format!("{event}\n")).expect("write Event 3.0 nested URL event");
 
     let mut first_jsonl: Option<String> = None;
     for format in [None, Some("elastic-bulk")] {
@@ -2199,69 +2285,38 @@ fn historical_jsonl_and_elastic_redact_nested_encoded_urls_inside_outer_componen
         }
     }
 
-    let first_jsonl = first_jsonl.expect("historical JSONL output");
+    let first_jsonl = first_jsonl.expect("JSONL output");
     let first_event: Value = serde_json::from_str(first_jsonl.lines().next().expect("JSONL line"))
-        .expect("historical nested URL JSONL event");
+        .expect("nested URL JSONL event");
     assert_eq!(
-        first_event["diagnostic"],
+        first_event["response"]["investigation_summary"],
         "https://outer.invalid/?next=[redacted-url]"
     );
-    assert_eq!(
-        first_event["unknown_extension"]["path"],
-        "https://outer.invalid/redirect/[redacted-url]"
-    );
-    assert_eq!(
-        first_event["unknown_extension"]["nested"]["fragment"],
-        "https://outer.invalid/#next=[redacted-url]"
+    assert!(
+        first_event["evidence"]
+            .as_array()
+            .expect("evidence")
+            .iter()
+            .all(|item| item["redacted_value"]
+                .as_str()
+                .is_some_and(|value| value.contains("[redacted-url]")))
     );
 }
 
 #[test]
-fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
+fn export_rejects_obsolete_records_before_correlation() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
+    let canary = "obsolete-correlation-canary";
     fs::write(
         &log_path,
-        [
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "legacy-a",
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "risk_score": 95,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "legacy-session-a",
-                "rule_ids": ["rule"],
-                "categories": ["test"],
-                "evidence": []
-            }),
-            serde_json::json!({
-                "schema_version": "1.0",
-                "event_id": "legacy-b",
-                "timestamp": "2026-05-01T00:20:00Z",
-                "event_type": "detection",
-                "severity": "high",
-                "risk_score": 80,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "legacy-session-b",
-                "rule_ids": ["rule"],
-                "categories": ["test"],
-                "evidence": []
-            }),
-        ]
-        .into_iter()
-        .map(|event| event.to_string())
-        .collect::<Vec<_>>()
-        .join("\n"),
+        format!(
+            "{}\n{}\n",
+            obsolete_schema_record("1.0", canary),
+            obsolete_schema_record("2.0", canary)
+        ),
     )
-    .expect("write legacy events");
+    .expect("write obsolete events");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
@@ -2269,8 +2324,8 @@ fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
         .arg("--correlate")
         .output()
         .expect("run correlation export");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("rule id rule is not canonical"));
+    assert_obsolete_schema_rejected(&output, canary);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("rule id rule is not canonical"));
 }
 
 #[test]
@@ -2297,24 +2352,7 @@ fn export_timeline_rejects_elastic_bulk_format() {
 fn export_timeline_rejects_correlate() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
-    fs::write(
-        &log_path,
-        serde_json::json!({
-            "schema_version": "1.0",
-            "event_type": "detection",
-            "event_id": "fixture-detection-correlate",
-            "session_id": "timeline-correlate-session",
-            "client": "codex",
-            "timestamp": "2026-05-01T00:00:00Z",
-            "severity": "high",
-            "risk_score": 80,
-            "rule_ids": ["secret.env.read"],
-            "categories": ["secret_access"],
-            "evidence": []
-        })
-        .to_string(),
-    )
-    .expect("write log event");
+    fs::write(&log_path, "").expect("write empty log");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
@@ -2359,72 +2397,47 @@ fn export_rejects_retired_source_root_option() {
 fn export_timeline_text_produces_human_readable_session_timeline() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
+    let mut activity = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000091",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "text-session",
+        &[],
+    );
+    activity["agent"] = Value::String("codex".to_string());
+    activity["model"] = Value::String("gpt-5".to_string());
+    activity["provider"] = Value::String("openai".to_string());
+    activity["evidence"] = serde_json::json!([{
+        "field": "record_counts",
+        "redacted_value": "{\"tool_call\":1,\"tool_result\":1,\"user_message\":1}",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }]);
+    let mut detection = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000092",
+        "2026-05-01T00:00:30.000Z",
+        "critical",
+        "codex",
+        "text-session",
+        &["mcp.tool_metadata.prompt_injection"],
+    );
+    detection["tool_name"] = Value::String("shell".to_string());
+    detection["categories"] = serde_json::json!(["mcp_prompt_injection"]);
+    detection["evidence"] = serde_json::json!([{
+        "field": "tool_result",
+        "redacted_value": "safe",
+        "hash": "sha256:abc123",
+        "rule_id": "mcp.tool_metadata.prompt_injection"
+    }]);
     fs::write(
         &log_path,
-        [
-            serde_json::json!({
-                "schema_version": "1.0",
-            "event_id": "fixture-activity-text",
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "activity",
-                "severity": "low",
-                "risk_score": 15,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "text-session",
-                "rule_ids": [],
-                "categories": [],
-                "tags": [],
-                "evidence": [
-                    {
-                        "field": "record_counts",
-                        "redacted_value": "{\"tool_call\":1,\"tool_result\":1,\"user_message\":1}",
-                        "hash": "sha256:activity-counts"
-                    }
-                ]
-            })
-            .to_string(),
-            serde_json::json!({
-                "schema_version": "1.0",
-            "event_id": "fixture-detection-text",
-                "timestamp": "2026-05-01T00:00:30Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "risk_score": 95,
-                "client": "codex",
-                "agent": "codex",
-                "model": "gpt-5",
-                "provider": "openai",
-                "session_id": "text-session",
-                "tool_name": "shell",
-                "rule_ids": ["mcp.tool_metadata.prompt_injection"],
-                "categories": ["mcp_prompt_injection"],
-                "tags": ["mcp"],
-                "evidence": [
-                    {
-                        "field": "tool_result",
-                        "redacted_value": "[REDACTED]",
-                        "hash": "sha256:abc123",
-                        "rule_id": "mcp.tool_metadata.prompt_injection"
-                    }
-                ],
-                "triage": {
-                    "verdict": "malicious",
-                    "confidence": 0.95,
-                    "reason": "MCP prompt injection detected"
-                },
-                "response": {
-                    "recommended_action": "investigate",
-                    "response_playbook": "mcp_injection",
-                    "investigation_summary": "Agent received injected MCP instructions",
-                    "escalation": "security_review_required"
-                }
-            })
-            .to_string(),
-        ]
-        .join("\n"),
+        [activity, detection]
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
     )
     .expect("write log");
 
@@ -2446,23 +2459,21 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Timeline text-session (codex)"));
     assert!(stdout.contains("Agent: codex | Model: gpt-5 | Provider: openai"));
-    assert!(stdout.contains("Entries: 2 | Detections: 1 | Max severity: critical | Triage: yes"));
+    assert!(stdout.contains("Entries: 2 | Detections: 1 | Max severity: critical | Triage: no"));
     assert!(
-        stdout.contains("Risk: tool_calls=1 risky_actions=1 max_severity=critical triage_ran=yes")
+        stdout.contains("Risk: tool_calls=1 risky_actions=1 max_severity=critical triage_ran=no")
     );
-    assert!(stdout.contains("[0] 2026-05-01T00:00:00Z low activity"));
-    assert!(stdout.contains("[1] 2026-05-01T00:00:30Z critical detection tool=shell"));
+    assert!(stdout.contains("[0] 2026-05-01T00:00:00.000Z informational activity"));
+    assert!(stdout.contains("[1] 2026-05-01T00:00:30.000Z critical detection tool=shell"));
     assert!(stdout.contains("Rules: mcp.tool_metadata.prompt_injection"));
     assert!(stdout.contains("Categories: mcp_prompt_injection"));
     assert!(stdout.contains(&format!(
         "Evidence: tool_result hash={}",
         evidence_hash("sha256:abc123")
     )));
-    assert!(
-        stdout.contains("Triage: malicious confidence=0.95 reason=MCP prompt injection detected")
-    );
-    assert!(stdout.contains("Recommended action: investigate"));
-    assert!(stdout.contains("Playbook: mcp_injection"));
-    assert!(stdout.contains("Summary: Agent received injected MCP instructions"));
+    assert!(!stdout.contains("Triage: malicious"));
+    assert!(stdout.contains("Recommended action: investigate_immediately"));
+    assert!(stdout.contains("Playbook: telltale-playbook-mcp-prompt-injection"));
+    assert!(stdout.contains("critical Telltale detection matched"));
     assert!(!stdout.contains("\"event_type\""));
 }

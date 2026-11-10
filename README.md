@@ -93,9 +93,10 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
 synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
-real-session-store setup. Explicit state and historical-event
-migration guidance is in the [migration contract](docs/migration-contract.md).
-See [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) for
+real-session-store setup. This source does not provide `telltale migrate`.
+Published v0.7.0 retains explicit state and historical-event migration; see
+the [migration contract](docs/migration-contract.md). See
+[GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) for
 published builds and the [0.7.0 migration guide](docs/migrations/0.7.0.md) for that
 upgrade line. A source checkout is not evidence of release qualification.
 
