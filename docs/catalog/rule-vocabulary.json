@@ -33,7 +33,8 @@
     ],
     "values": [
       "field",
-      "segment"
+      "segment",
+      "exclusion_segment"
     ]
   },
   "generated_by": "tests/catalog.rs",

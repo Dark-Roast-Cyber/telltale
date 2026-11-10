@@ -204,7 +204,7 @@ substitution, heredocs and comments are not interpreted, and a command inside a
 JSON string in `arguments` stays one segment. Segment scope applies to every
 selection target of the rule and accepts only the command-text targets
 `command`, `arguments` and `url`; any other target, or another value, fails when
-the rule loads. The generated vocabulary lists both scopes and those targets.
+the rule loads. The generated vocabulary lists the scopes and those targets.
 The scope is part of the rule fingerprint, so changing it changes producer
 provenance; field-scoped rules keep their fingerprints whether or not they write
 `scope: field`.
@@ -213,6 +213,34 @@ The bundled `network.download` rule uses segment scope: an upload in one
 segment no longer hides a download in another, while an upload in the same
 segment still excludes it. Native action findings read HTTP direction per
 command stage on their own and are unchanged by the session scope.
+
+`scope: exclusion_segment` keeps the selection on the whole target, as in field
+scope, and narrows only the exclusion. A selection match is dropped when the
+segment holding it matches the exclusion; every other match counts, including one
+that crosses a segment boundary. A line continuation before a separator is not
+part of the text the exclusion reads. It accepts the same targets as `segment`.
+
+Some sources also store a shell call as raw JSON in `arguments`, whose quoting
+makes the call one segment. Under this scope a selection match in that raw text
+is dropped when the text is exactly one JSON shell call, every selection match
+in its decoded command is excluded, the command without its excluded segments
+does not match the selection when read as one line, no other member matches the
+selection, and the raw text without the excluded segments' own spelling does not
+match it either, so a JSON escape cannot change what the rest of the call reads
+as. A shell call has one `cmd` or `command` string, or a `command` argv naming a
+shell, `-c` or `-lc` and the script, and otherwise only scalar members that
+describe how it runs, such as `workdir`, `description` or a timeout. Any other
+shape, including an unknown member or truncated JSON, stays raw text and fails
+toward a match.
+
+The bundled `exfil.outbound_upload` rule uses this scope, and its exclusion
+covers only a bodyless IMDSv2 token request: a `PUT` to the literal token
+endpoint where every other token in the segment is a flag listed for that client
+or the TTL header. Anything else still matches, such as a body, another URL,
+header, path or host, or an unlisted flag or wrapper. Client configuration that
+the command text does not show is not visible. Native action findings apply the
+same exclusion to the whole command holding each upload stage, and may still
+report a token request that spans more than one line.
 
 The bundled `execution.shell` session rule uses this selection form to match
 exact shell-tool names (`shell`, `exec_command`, `shell_command`, and shell

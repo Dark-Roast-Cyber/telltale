@@ -586,6 +586,11 @@ struct ActionView {
     /// veto one through its exclusion.
     uncommented_command: String,
     reads_paths: bool,
+    /// Whether command text was joined from an argv array.
+    argv: bool,
+    /// Whether the command held a lone carriage return, which the shell reader
+    /// ends a line at but a POSIX shell keeps in a word.
+    lone_return: bool,
     /// In a shell call, the parameters whose files a stage may read. One that a
     /// stage only writes, tests for or prints as text is not among them.
     read_operands: Option<BTreeSet<String>>,
@@ -731,6 +736,9 @@ fn view(
                 out.put("file_path", paths);
             }
             budget.charge(command.len())?;
+            out.lone_return = command
+                .match_indices('\r')
+                .any(|(at, _)| !command[at + 1..].starts_with('\n'));
             let shell = super::shell_text::read(&command);
             budget.charge(shell.work)?;
             out.put("authored_content", shell.authored);
@@ -1080,6 +1088,7 @@ fn structured_input(
                     command.push('\n');
                 }
                 if let JsonValue::Array(items) = value {
+                    out.argv = true;
                     for v in items.iter().filter_map(string) {
                         command.push_str(v);
                         command.push(' ');
@@ -1491,6 +1500,19 @@ fn remote(value: &str) -> bool {
 /// counted, if it counts one.
 type NativeField<'a> = (&'a str, &'a str, usize, Option<Range<usize>>);
 
+/// The command that holds stage `index`, from the stage's start. A stage can end
+/// before its command does: an argv array joined into text, or a lone carriage
+/// return that the reader ends a line at but a POSIX shell keeps in a word, runs
+/// the read to the command's end.
+fn command_extent(view: &ActionView, index: usize) -> Range<usize> {
+    let span = view.stage_spans[index].clone();
+    if view.argv || view.lone_return {
+        span.start..view.text("command").len()
+    } else {
+        span
+    }
+}
+
 /// Fields a native predicate selects: a command stage, or a whole field at 0.
 /// A predicate over one command stage, path token or key reference of a
 /// whole field also returns that occurrence, so the hit can be placed there.
@@ -1504,7 +1526,7 @@ fn native_fields<'a>(
         id,
         "network.download" | "exfil.outbound_upload" | "exfil.encoded_http"
     ) {
-        for (span, tokens) in view.stage_spans.iter().zip(&view.commands) {
+        for (index, (span, tokens)) in view.stage_spans.iter().zip(&view.commands).enumerate() {
             let stage = &view.text("command")[span.clone()];
             let matches = match id {
                 "network.download" => is_download(tokens, budget)?,
@@ -1523,10 +1545,23 @@ fn native_fields<'a>(
                         )?)
                 }
             };
-            // Two readings of one stage are one hit.
-            let hit = ("command", stage, span.start, None);
-            if matches && selected.last() != Some(&hit) {
-                selected.push(hit);
+            if matches {
+                // The upload exclusion judges a whole command, never part of one.
+                let read = if id == "exfil.outbound_upload" {
+                    command_extent(view, index)
+                } else {
+                    span.clone()
+                };
+                // Two readings of one stage are one hit.
+                let hit = (
+                    "command",
+                    &view.text("command")[read.clone()],
+                    read.start,
+                    None,
+                );
+                if selected.last() != Some(&hit) {
+                    selected.push(hit);
+                }
             }
         }
         return Ok(selected);
@@ -1933,11 +1968,15 @@ pub(crate) fn evaluate(
                     fields.push(("command", &view.uncommented_command, 0, None));
                 }
                 // Quote removal would split on the separators a segment rule's
-                // quotes keep in one word.
-                let segmented = rule
-                    .matchers
-                    .iter()
-                    .any(|matcher| matcher.scope == telltale_rules::MatchScope::Segment);
+                // quotes keep in one word, and drop the quotes an exclusion
+                // segment's grammar reads.
+                let segmented = rule.matchers.iter().any(|matcher| {
+                    matches!(
+                        matcher.scope,
+                        telltale_rules::MatchScope::Segment
+                            | telltale_rules::MatchScope::ExclusionSegment
+                    )
+                });
                 if !segmented && !view.unquoted_command.is_empty() {
                     fields.push(("command", &view.unquoted_command, 0, None));
                 }

@@ -11,13 +11,31 @@
   Offline `rules list`, `validate`, `test`, `coverage`, and `export-default`
   remain. There is no replacement server, shim, or resident service.
 - **Breaking:** remove `telltale migrate state` and `telltale migrate events`.
-  There is no shim. Published v0.7.0 and v0.7.1 retain both commands: state migration writes current
-  native state, and event migration relocates historical files without
-  rewriting Event 1.0 or 2.0 records as Event 3.0. This version rejects older
-  scanner state and does not rewrite it. Missing state can still initialize.
+  There is no shim. Published v0.7.0 and v0.7.1 retain both commands: state
+  migration writes current native state, and event migration relocates
+  historical files without rewriting Event 1.0 or 2.0 records as Event 3.0.
+  This version rejects older scanner state and does not rewrite it. Missing state can still initialize.
   Export and status now accept only Event3; Event 1.0/2.0 journals must be read
   with the retained older binary. Mixed journals fail closed. Current Event3
   schema validation, privacy, identity collision checks and reader bounds remain.
+- **IMDSv2 token requests are not uploads.** A bodyless `PUT` to the literal
+  IMDSv2 token endpoint (`169.254.169.254` or `fd00:ec2::254`) no longer matches
+  `exfil.outbound_upload` when every other token in its command segment is a
+  flag listed for that client or the TTL header. It matches neither that rule
+  nor `network.download`, so a token request with a metadata lookup scores at
+  most 35 instead of 95. A body, another URL, header, path or host, or an
+  unlisted flag or wrapper such as `sudo` still matches at 60, as does a
+  bodyless `PUT` or `POST` anywhere else. Native action findings apply the same
+  exclusion to the whole command holding each upload stage. The core rule
+  fingerprint and semantic identity change; the native profile does not.
+- **`detection.scope: exclusion_segment`.** The selection reads the whole target,
+  as in field scope, and a match is dropped only when the command segment holding
+  it matches the exclusion. For `arguments` holding exactly one raw JSON shell call,
+  as Codex rollouts and Copilot store one, the decoded command can also drop a match;
+  any other shape stays raw text. `field` and `segment` rules and their fingerprints
+  are unchanged. Rust:
+  `MatchScope` gains a `ExclusionSegment` variant. See
+  [detection model](docs/detection-model.md#configurable-rules-and-policies).
 
 ## 0.7.1 — published stable (2026-11-10)
 

