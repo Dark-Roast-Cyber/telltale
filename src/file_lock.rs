@@ -133,11 +133,6 @@ impl SidecarLock {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn lock_order_key(target: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        normalized_path(&sidecar_path(target))
-    }
-
     pub(crate) fn verify(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.verify_lock()?;
         if self.verification != TargetVerification::Strict {
@@ -1487,10 +1482,6 @@ mod tests {
             .join("private/outbox.sqlite");
         assert_eq!(super::normalized_path(&target).unwrap(), expected);
         assert!(super::paths_identity_equivalent(&target, &expected).unwrap());
-        assert_eq!(
-            SidecarLock::lock_order_key(&target).unwrap(),
-            SidecarLock::lock_order_key(&expected).unwrap()
-        );
         fs::create_dir_all(sessions.join("private")).unwrap();
         fs::write(sessions.join("private/outbox.sqlite"), b"synthetic").unwrap();
         assert_eq!(
