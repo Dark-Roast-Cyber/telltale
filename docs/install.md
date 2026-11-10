@@ -739,7 +739,7 @@ plus one code for each kind of operational alert recorded after it
 `scan_duration_threshold_exceeded`, `sink_delivery_failure`, or
 `operational_alert` for any other type). `attention_required` is `null` when
 the journal is unavailable, including when it contains Event 1.0/2.0 records.
-Current status does not report `historical_only`. It is also `null`
+Current status does not report `historical_only`. `attention_required` is also `null`
 when no alert was recorded and the latest health event's `scanner_error_count`
 cannot be read as a number. Any positive count counts as scanner errors,
 including counts above the 64-bit range.

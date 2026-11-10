@@ -1250,9 +1250,9 @@ mod tests {
     use super::{sync_directory, windows_file_time};
 
     use super::{
-        RotationNamespace, SidecarLock, atomic_rename_no_replace, safe_path_info, sidecar_path,
-        stable_file_identity, validate_pinned_observation, validate_runtime_paths,
-        verify_target_observation,
+        RotationNamespace, SidecarLock, TempFile, atomic_rename_no_replace, atomic_replace,
+        safe_path_info, sidecar_path, stable_file_identity, validate_pinned_observation,
+        validate_runtime_paths, verify_target_observation,
     };
 
     #[test]
@@ -1300,6 +1300,44 @@ mod tests {
         assert_eq!(
             stable_file_identity(&rotated).expect("rotated identity after restart"),
             identity
+        );
+    }
+
+    #[test]
+    fn failed_atomic_replace_cleans_temp_and_leaves_changed_destination() {
+        let temp = tempdir().expect("tempdir");
+        let destination = temp.path().join("state.json");
+        fs::write(&destination, b"old").expect("destination");
+        let expected = safe_path_info(&destination).expect("expected info");
+        let temporary = TempFile::write_and_sync(&destination, b"new", 0o600).expect("temp");
+        let temporary_path = temporary.path.clone();
+        assert!(temporary_path.exists());
+        // Length differs from the captured identity, so rejection does not depend
+        // on timestamp granularity.
+        fs::write(&destination, b"concurrently-changed").expect("length-changing mutation");
+        let error = atomic_replace(temporary, &destination, expected).expect_err("stale identity");
+        assert!(
+            error
+                .to_string()
+                .contains("persistence destination changed during commit"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(&destination).expect("destination"),
+            b"concurrently-changed"
+        );
+        assert!(
+            !temporary_path.exists(),
+            "failed replace must remove the temporary"
+        );
+        assert!(
+            !fs::read_dir(temp.path())
+                .expect("directory")
+                .filter_map(Result::ok)
+                .any(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".telltale-tmp-"))
         );
     }
 
