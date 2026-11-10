@@ -204,9 +204,41 @@ pub(super) fn validate_scan_execution(
         execution.override_paths,
         &[],
     )?;
-    telltale_detect::v2::compile_rule_v1(&resolution.rule_set.compatibility_export())?;
+    cached_rule_plan(&resolution.rule_set.compatibility_export())?;
     load_allowlist(execution.allowlist_path)?;
     Ok(())
+}
+
+/// Compiles a resolved rule set, reusing the plan of an identical one.
+///
+/// Watch mode resolves the rules on every cycle so that an edited rule file
+/// takes effect on the next scan, and most cycles resolve the same rules. The
+/// key is the whole compile input, so a hit is always the plan a fresh compile
+/// would build. Two entries cover the active rules and their pre-policy peer.
+fn cached_rule_plan(
+    export: &telltale_rules::RuleV1CompatibilityExport,
+) -> Result<
+    std::sync::Arc<telltale_detect::v2::RuleV1CompatibilityPlan>,
+    telltale_detect::v2::RuleV1CompileError,
+> {
+    type Entry = (
+        String,
+        std::sync::Arc<telltale_detect::v2::RuleV1CompatibilityPlan>,
+    );
+    static PLANS: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
+    let key = format!("{export:?}");
+    let mut plans = PLANS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, plan)) = plans.iter().find(|(cached, _)| *cached == key) {
+        return Ok(plan.clone());
+    }
+    let plan = std::sync::Arc::new(telltale_detect::v2::compile_rule_v1(export)?);
+    if plans.len() == 2 {
+        plans.remove(0);
+    }
+    plans.push((key, plan.clone()));
+    Ok(plan)
 }
 
 /// Runs one full scan and returns the codes of its `observed_failure`
@@ -335,10 +367,10 @@ fn run_scan_for_platform(
         let snapshot = collect_install_inventory(observed_at_unix_ms);
         install_inventory_event = Some((snapshot_to_event(&snapshot)?, snapshot));
     }
-    let rules = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export())?;
+    let rules = cached_rule_plan(&rule_set.compatibility_export())?;
     let pre_policy_rules = policy_active.then(|| {
         let compiled = merged_rule_set.compile(None)?;
-        telltale_detect::v2::compile_rule_v1(&compiled.compatibility_export())
+        cached_rule_plan(&compiled.compatibility_export())
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
     });
     let observed_at = ObservedAt::new(
@@ -369,7 +401,8 @@ fn run_scan_for_platform(
                     },
                     pre_policy_rules: pre_policy_rules
                         .as_ref()
-                        .and_then(|rules| rules.as_ref().ok()),
+                        .and_then(|rules| rules.as_ref().ok())
+                        .map(std::sync::Arc::as_ref),
                 },
                 observed_at.clone(),
                 &rules,
