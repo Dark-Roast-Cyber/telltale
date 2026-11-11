@@ -2945,7 +2945,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64",
  "clap",
@@ -2975,7 +2975,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-console"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "eframe",
@@ -2988,7 +2988,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-core"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "fs4",
  "getrandom 0.4.3",
@@ -3009,7 +3009,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-detect"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "hex",
  "regex",
@@ -3026,7 +3026,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-inference"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3040,7 +3040,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-rules"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "hex",
  "regex",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-schema"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "hex",
  "hmac",
@@ -3069,7 +3069,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-sources"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "hex",
  "libc",
