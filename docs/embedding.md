@@ -6,9 +6,10 @@ The embedded pipeline returns findings and events as values; the host decides
 where they go. Nothing in the library crates writes JSONL, talks to a SIEM, or
 exits the process.
 
-The versioned state file, sidecar locking, platform-qualified local JSONL
-durability, and `migrate state` belong to the standalone CLI. Embedding hosts
-own persistence and delivery while using the same analytic and event semantics.
+The versioned state file, sidecar locking, and platform-qualified local JSONL
+durability belong to the standalone CLI. This version does not migrate scanner
+state; published v0.7.0 and v0.7.1 retain `migrate state`. Embedding hosts own
+persistence and delivery while using the same analytic and event semantics.
 
 ## Contract at a glance
 

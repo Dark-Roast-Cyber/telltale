@@ -99,10 +99,18 @@ package)
         for schema in \
             schemas/event.schema.json \
             schemas/historical/README.md \
-            schemas/historical/event-1.0.schema.json \
-            schemas/historical/event-2.0.schema.json; do
+            schemas/historical/event-3.0.schema.json; do
             : > "$package_root/$schema"
         done
+        # One retired asset per case, so each package-verify path guard is reached alone.
+        case "${FAKE_PACKAGE_VERIFY_CASE:-success}" in
+            retired-schema-1.0)
+                : > "$package_root/schemas/historical/event-1.0.schema.json"
+                ;;
+            retired-schema-2.0)
+                : > "$package_root/schemas/historical/event-2.0.schema.json"
+                ;;
+        esac
         printf '%s\n' '{"git":{"sha1":"0123456789012345678901234567890123456789"}}' > "$package_root/.cargo_vcs_info.json"
     elif test "$package" = telltale-schema; then
         mkdir -p "$package_root/data"
@@ -256,6 +264,45 @@ fn package_verifier_enforces_the_canonical_executable_set() {
             output_text(&output).contains(expected_error),
             "{case}: expected {expected_error}, got {}",
             output_text(&output)
+        );
+    }
+}
+
+#[test]
+fn package_verifier_rejects_each_retired_historical_schema() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (case, schema) in [
+        (
+            "retired-schema-1.0",
+            "schemas/historical/event-1.0.schema.json",
+        ),
+        (
+            "retired-schema-2.0",
+            "schemas/historical/event-2.0.schema.json",
+        ),
+    ] {
+        let output = run_package_verifier(root, case);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{case}: {}",
+            output_text(&output)
+        );
+        let expected = format!("packaged CLI still includes retired {schema}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&expected),
+            "{case}: expected {expected}, got {}",
+            output_text(&output)
+        );
+        let other = if schema.ends_with("event-1.0.schema.json") {
+            "event-2.0.schema.json"
+        } else {
+            "event-1.0.schema.json"
+        };
+        assert!(
+            !stderr.contains(other),
+            "{case} must fail only its own retired schema guard, got {stderr}"
         );
     }
 }

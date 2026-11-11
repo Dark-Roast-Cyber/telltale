@@ -1,6 +1,9 @@
-//! Reading and schema validation of historical Event 1.0, 2.0 and 3.0 JSONL
-//! records, shared by export and migration. Historical bytes are validated,
-//! not rewritten.
+//! Bounded JSONL journal reading for export and status.
+//!
+//! Only Event 3.0 records are admitted. Event 1.0 and 2.0 are rejected with a
+//! fixed `unsupported_schema_version` error and are never treated as Event 3.0
+//! or skipped. Bytes are validated, not rewritten. This reader is not
+//! `LocalEventFeed`: retention, framing, and replay contracts differ.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -12,35 +15,16 @@ use jsonschema::{Validator, validator_for};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const EVENT_1_SCHEMA: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/schemas/historical/event-1.0.schema.json"
-));
-const EVENT_2_SCHEMA: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/schemas/historical/event-2.0.schema.json"
-));
 const EVENT_3_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/schemas/historical/event-3.0.schema.json"
 ));
-static EVENT_1_VALIDATOR: LazyLock<Result<Validator, HistoricalEventValidationError>> =
-    LazyLock::new(|| compile_validator(EVENT_1_SCHEMA));
-static EVENT_2_VALIDATOR: LazyLock<Result<Validator, HistoricalEventValidationError>> =
-    LazyLock::new(|| compile_validator(EVENT_2_SCHEMA));
 static EVENT_3_VALIDATOR: LazyLock<Result<Validator, HistoricalEventValidationError>> =
     LazyLock::new(|| compile_validator(EVENT_3_SCHEMA));
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EventRecordKind {
-    Historical,
-    Native,
-}
 
 #[derive(Debug, Clone)]
 pub struct JsonlEventRecord {
     pub value: Value,
-    pub kind: EventRecordKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,8 +32,7 @@ pub enum HistoricalEventValidationError {
     MissingSchemaVersion,
     InvalidSchemaVersionType,
     UnknownRequestedSchemaVersion,
-    UnknownActualSchemaVersion,
-    SchemaVersionMismatch,
+    UnsupportedSchemaVersion,
     SchemaUnavailable,
     SchemaViolation,
 }
@@ -60,8 +43,7 @@ impl fmt::Display for HistoricalEventValidationError {
             Self::MissingSchemaVersion => "missing_schema_version",
             Self::InvalidSchemaVersionType => "invalid_schema_version_type",
             Self::UnknownRequestedSchemaVersion => "unknown_requested_schema_version",
-            Self::UnknownActualSchemaVersion => "unknown_actual_schema_version",
-            Self::SchemaVersionMismatch => "schema_version_mismatch",
+            Self::UnsupportedSchemaVersion => "unsupported_schema_version",
             Self::SchemaUnavailable => "historical_schema_unavailable",
             Self::SchemaViolation => "historical_schema_violation",
         };
@@ -71,71 +53,31 @@ impl fmt::Display for HistoricalEventValidationError {
 
 impl std::error::Error for HistoricalEventValidationError {}
 
-pub fn validate_historical_event(
-    value: Value,
-    expected_schema_version: &str,
-) -> Result<Value, HistoricalEventValidationError> {
-    let validator = match expected_schema_version {
-        "1.0" => EVENT_1_VALIDATOR
-            .as_ref()
-            .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?,
-        "2.0" => EVENT_2_VALIDATOR
-            .as_ref()
-            .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?,
-        "3.0" => EVENT_3_VALIDATOR
-            .as_ref()
-            .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?,
-        _ => {
-            return Err(HistoricalEventValidationError::UnknownRequestedSchemaVersion);
-        }
-    };
-
+fn validate_journal_record(value: Value) -> Result<Value, HistoricalEventValidationError> {
     let object = value
         .as_object()
         .ok_or(HistoricalEventValidationError::InvalidSchemaVersionType)?;
-    let actual_schema_version = match object.get("schema_version") {
+    let version = match object.get("schema_version") {
         None => return Err(HistoricalEventValidationError::MissingSchemaVersion),
-        Some(Value::String(version)) => version,
+        Some(Value::String(version)) => version.as_str(),
         Some(_) => return Err(HistoricalEventValidationError::InvalidSchemaVersionType),
     };
-
-    if !matches!(actual_schema_version.as_str(), "1.0" | "2.0" | "3.0") {
-        return Err(HistoricalEventValidationError::UnknownActualSchemaVersion);
+    match version {
+        "1.0" | "2.0" => return Err(HistoricalEventValidationError::UnsupportedSchemaVersion),
+        "3.0" => {}
+        _ => return Err(HistoricalEventValidationError::UnknownRequestedSchemaVersion),
     }
-    if actual_schema_version != expected_schema_version {
-        return Err(HistoricalEventValidationError::SchemaVersionMismatch);
-    }
-
+    let validator = EVENT_3_VALIDATOR
+        .as_ref()
+        .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?;
     validator
         .validate(&value)
         .map_err(|_| HistoricalEventValidationError::SchemaViolation)?;
-
     Ok(value)
 }
 
-pub fn validate_event_record(
-    value: Value,
-) -> Result<(Value, EventRecordKind), HistoricalEventValidationError> {
-    let object = value
-        .as_object()
-        .ok_or(HistoricalEventValidationError::InvalidSchemaVersionType)?;
-    let version = object
-        .get("schema_version")
-        .ok_or(HistoricalEventValidationError::MissingSchemaVersion)?
-        .as_str()
-        .ok_or(HistoricalEventValidationError::InvalidSchemaVersionType)?
-        .to_string();
-    let kind = if version == "3.0" {
-        EventRecordKind::Native
-    } else {
-        EventRecordKind::Historical
-    };
-    let validated = validate_historical_event(value, &version)?;
-    Ok((validated, kind))
-}
-
-/// Read strict event records without converting historical values into `Event`.
-/// Repeated IDs require identical object bytes, excluding line terminators.
+/// Read strict Event 3.0 records. Repeated IDs require identical object bytes,
+/// excluding line terminators.
 pub fn read_jsonl_records(
     path: &std::path::Path,
 ) -> Result<Vec<JsonlEventRecord>, Box<dyn std::error::Error>> {
@@ -154,8 +96,8 @@ pub fn read_jsonl_records(
     Ok(records)
 }
 
-/// Stream all schema generations with the same physical bounds. Duplicate IDs
-/// retain file offsets, not another payload copy; compare exact bytes on demand.
+/// Stream Event 3.0 records with the same physical bounds. Duplicate IDs retain
+/// file offsets, not another payload copy; compare exact bytes on demand.
 pub(crate) fn visit_jsonl_records(
     path: &std::path::Path,
     mut visit: impl FnMut(JsonlEventRecord, usize) -> Result<(), Box<dyn std::error::Error>>,
@@ -232,7 +174,7 @@ pub(crate) fn visit_jsonl_records(
                     record_count + 1
                 )
             })?;
-            let (value, kind) = validate_event_record(value).map_err(|error| {
+            let value = validate_journal_record(value).map_err(|error| {
                 format!(
                     "invalid event at {}:{}: {error}",
                     path.display(),
@@ -271,7 +213,7 @@ pub(crate) fn visit_jsonl_records(
                 seen_ids.insert(event_id, (start, object_bytes.len(), digest));
             }
             record_count += 1;
-            visit(JsonlEventRecord { value, kind }, read)?;
+            visit(JsonlEventRecord { value }, read)?;
         }
         start = end;
     }
@@ -294,8 +236,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        EVENT_1_SCHEMA, EVENT_2_SCHEMA, EVENT_3_SCHEMA, HistoricalEventValidationError,
-        compile_validator, read_jsonl_records, validate_historical_event,
+        EVENT_3_SCHEMA, HistoricalEventValidationError, compile_validator, read_jsonl_records,
+        validate_journal_record,
     };
 
     const CURRENT_EVENT_3_SCHEMA: &str = include_str!(concat!(
@@ -303,32 +245,155 @@ mod tests {
         "/schemas/event.schema.json"
     ));
 
-    const EVENT_1_DETECTION: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/historical_events/event-1.0.json"
-    ));
-    const EVENT_1_HEALTH: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/historical_events/health-1.0.json"
-    ));
-    const EVENT_2_DETECTION: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/historical_events/event-2.0.json"
-    ));
-    const EVENT_2_HEALTH: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/historical_events/health-2.0.json"
-    ));
+    const EVENT_3_ACTIVITY: &str = r#"{
+        "schema_version": "3.0",
+        "event_id": "telltale-00000000-0000-4000-8000-000000000001",
+        "telltale_version": "0.7.1",
+        "timestamp": "2026-05-01T00:00:00.000Z",
+        "observed_at": "2026-05-01T00:00:00.000Z",
+        "ingested_at": "2026-05-01T00:00:00.000Z",
+        "time_source": "observed",
+        "time_confidence": "high",
+        "event_type": "activity",
+        "severity": "informational",
+        "risk_score": 0,
+        "risk_contributions": [],
+        "client": "codex",
+        "session_id": "native-session",
+        "source_path_hash": "synthetic-source-hash",
+        "tags": ["synthetic"],
+        "evidence": [{"field": "synthetic", "redacted_value": "fixture"}]
+    }"#;
 
     fn fixture(raw: &str) -> Value {
-        serde_json::from_str(raw).expect("historical fixture JSON")
+        serde_json::from_str(raw).expect("event fixture JSON")
+    }
+
+    fn sha256_hex(value: &[u8]) -> String {
+        hex::encode(Sha256::digest(value))
+    }
+
+    fn assert_no_canary(error: &impl std::fmt::Display, canary: &str) {
+        let rendered = error.to_string();
+        assert!(!rendered.contains(canary), "{rendered}");
+        assert!(!rendered.contains("jsonschema"), "{rendered}");
+    }
+
+    #[test]
+    fn reader_rejects_event_1_and_2_without_echoing_records() {
+        for version in ["1.0", "2.0"] {
+            let canary = format!("obsolete-schema-canary-{version}");
+            let mut record = fixture(EVENT_3_ACTIVITY);
+            record["schema_version"] = json!(version);
+            record["session_id"] = json!(canary);
+            let error = validate_journal_record(record.clone())
+                .expect_err("obsolete schema must not validate as Event 3.0");
+            assert_eq!(
+                error,
+                HistoricalEventValidationError::UnsupportedSchemaVersion
+            );
+            assert_no_canary(&error, &canary);
+            assert_eq!(error.to_string(), "unsupported_schema_version");
+
+            let directory = tempdir().expect("temporary directory");
+            let path = directory.path().join("events.jsonl");
+            let native = serde_json::to_string(&fixture(EVENT_3_ACTIVITY)).expect("compact event");
+            let obsolete = serde_json::to_string(&record).expect("compact obsolete event");
+            fs::write(&path, format!("{native}\n{obsolete}\n")).expect("write JSONL");
+            let error = read_jsonl_records(&path).expect_err("obsolete record after native prefix");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("unsupported_schema_version"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains(&canary), "{rendered}");
+            assert!(!rendered.contains("jsonschema"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn rejects_missing_non_string_and_unknown_versions_without_echoing_values() {
+        let mut missing = fixture(EVENT_3_ACTIVITY);
+        missing
+            .as_object_mut()
+            .expect("object fixture")
+            .remove("schema_version");
+        assert_eq!(
+            validate_journal_record(missing),
+            Err(HistoricalEventValidationError::MissingSchemaVersion)
+        );
+
+        let canary = "version-secret-canary";
+        for actual in [Value::Null, json!(7), json!({"nested": canary})] {
+            let mut value = fixture(EVENT_3_ACTIVITY);
+            value["schema_version"] = actual;
+            let error = validate_journal_record(value).expect_err("non-string version");
+            assert_eq!(
+                error,
+                HistoricalEventValidationError::InvalidSchemaVersionType
+            );
+            assert_no_canary(&error, canary);
+        }
+
+        let mut unknown = fixture(EVENT_3_ACTIVITY);
+        unknown["schema_version"] = json!(canary);
+        let error = validate_journal_record(unknown).expect_err("unknown version");
+        assert_eq!(
+            error,
+            HistoricalEventValidationError::UnknownRequestedSchemaVersion
+        );
+        assert_no_canary(&error, canary);
+        assert_ne!(
+            error,
+            HistoricalEventValidationError::UnsupportedSchemaVersion
+        );
+    }
+
+    #[test]
+    fn schema_violation_errors_do_not_expose_input_or_validator_instances() {
+        let canary = "credential-schema-violation-canary";
+        let mut invalid = fixture(EVENT_3_ACTIVITY);
+        invalid["event_type"] = json!(canary);
+        invalid["unknown_extension"] = json!({"secret": canary});
+        let error = validate_journal_record(invalid).expect_err("invalid event type");
+        assert_eq!(error, HistoricalEventValidationError::SchemaViolation);
+        assert_no_canary(&error, canary);
+        assert!(!format!("{error:?}").contains(canary));
+    }
+
+    #[test]
+    fn historical_schema_hashes_match_tagged_source_blobs() {
+        assert_eq!(
+            sha256_hex(EVENT_3_SCHEMA.as_bytes()),
+            "9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754"
+        );
+        assert_eq!(EVENT_3_SCHEMA, CURRENT_EVENT_3_SCHEMA);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(
+            !root
+                .join("schemas/historical/event-1.0.schema.json")
+                .exists()
+        );
+        assert!(
+            !root
+                .join("schemas/historical/event-2.0.schema.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn schema_compilation_failures_are_bounded() {
+        assert!(matches!(
+            compile_validator("{not-json"),
+            Err(HistoricalEventValidationError::SchemaUnavailable)
+        ));
     }
 
     #[test]
     fn historical_reader_rejects_oversized_frames() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
-        let mut value = fixture(EVENT_1_HEALTH);
+        let mut value = fixture(EVENT_3_ACTIVITY);
         let mut exact = serde_json::to_vec(&value).unwrap();
         exact.resize(8 * 1024 * 1024, b' ');
         fs::write(&path, &exact).unwrap();
@@ -341,150 +406,29 @@ mod tests {
         assert!(read_jsonl_records(&path).is_err());
     }
 
-    fn fixtures() -> [(&'static str, &'static str, Value); 4] {
-        [
-            ("1.0", "detection", fixture(EVENT_1_DETECTION)),
-            ("1.0", "health", fixture(EVENT_1_HEALTH)),
-            ("2.0", "detection", fixture(EVENT_2_DETECTION)),
-            ("2.0", "health", fixture(EVENT_2_HEALTH)),
-        ]
-    }
-
-    fn sha256_hex(value: &[u8]) -> String {
-        hex::encode(Sha256::digest(value))
-    }
-
-    fn assert_no_canary(error: HistoricalEventValidationError, canary: &str) {
-        assert!(!format!("{error}").contains(canary));
-        assert!(!format!("{error:?}").contains(canary));
-    }
-
-    #[test]
-    fn validates_all_historical_fixtures_and_preserves_exact_values() {
-        for (version, _, original) in fixtures() {
-            let validated = validate_historical_event(original.clone(), version)
-                .expect("historical event should validate");
-            assert_eq!(validated, original);
-            assert_eq!(
-                validated["unknown_extension"],
-                json!({"nested": [true, null, 7]})
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_missing_unknown_and_mismatched_versions() {
-        let mut missing = fixture(EVENT_1_DETECTION);
-        missing
-            .as_object_mut()
-            .expect("object fixture")
-            .remove("schema_version");
-        assert_eq!(
-            validate_historical_event(missing, "1.0"),
-            Err(HistoricalEventValidationError::MissingSchemaVersion)
-        );
-
-        let actual_canary = "actual-version-secret-canary";
-        let mut unknown = fixture(EVENT_1_DETECTION);
-        unknown["schema_version"] = json!(actual_canary);
-        let error = validate_historical_event(unknown, "1.0").expect_err("unknown actual version");
-        assert_eq!(
-            error,
-            HistoricalEventValidationError::UnknownActualSchemaVersion
-        );
-        assert_no_canary(error, actual_canary);
-
-        assert_eq!(
-            validate_historical_event(fixture(EVENT_1_DETECTION), "2.0"),
-            Err(HistoricalEventValidationError::SchemaVersionMismatch)
-        );
-        assert_eq!(
-            validate_historical_event(fixture(EVENT_2_DETECTION), "1.0"),
-            Err(HistoricalEventValidationError::SchemaVersionMismatch)
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_requested_and_non_string_actual_versions() {
-        let requested_canary = "requested-version-secret-canary";
-        let error = validate_historical_event(fixture(EVENT_1_DETECTION), requested_canary)
-            .expect_err("unknown requested version");
-        assert_eq!(
-            error,
-            HistoricalEventValidationError::UnknownRequestedSchemaVersion
-        );
-        assert_no_canary(error, requested_canary);
-
-        for actual in [Value::Null, json!(7), json!({"nested": "version"})] {
-            let mut value = fixture(EVENT_1_DETECTION);
-            value["schema_version"] = actual;
-            assert_eq!(
-                validate_historical_event(value, "1.0"),
-                Err(HistoricalEventValidationError::InvalidSchemaVersionType)
-            );
-        }
-    }
-
-    #[test]
-    fn schema_violation_errors_do_not_expose_input_values() {
-        let canary = "credential-schema-violation-canary";
-        let mut invalid = fixture(EVENT_2_DETECTION);
-        invalid["event_type"] = json!(canary);
-        invalid["unknown_extension"] = json!({"secret": canary});
-        let error = validate_historical_event(invalid, "2.0").expect_err("invalid event type");
-        assert_eq!(error, HistoricalEventValidationError::SchemaViolation);
-        assert_no_canary(error, canary);
-    }
-
-    #[test]
-    fn historical_schema_hashes_match_tagged_source_blobs() {
-        assert_eq!(
-            sha256_hex(EVENT_1_SCHEMA.as_bytes()),
-            "396065acda07468b0d30cd0759fa55b60280b070aa24ccabe89bd6a868509f03"
-        );
-        assert_eq!(
-            sha256_hex(EVENT_2_SCHEMA.as_bytes()),
-            "4b41c09e2663ead7049ccdc90737f5536942da6b6247af74f43215f29cfa00a5"
-        );
-        assert_eq!(
-            sha256_hex(EVENT_3_SCHEMA.as_bytes()),
-            "9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754"
-        );
-        assert_eq!(EVENT_3_SCHEMA, CURRENT_EVENT_3_SCHEMA);
-    }
-
-    #[test]
-    fn schema_compilation_failures_are_bounded() {
-        assert!(matches!(
-            compile_validator("{not-json"),
-            Err(HistoricalEventValidationError::SchemaUnavailable)
-        ));
-    }
-
     #[test]
     fn jsonl_reader_preserves_values_and_exact_duplicates() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("events.jsonl");
-        let line = serde_json::to_string(&fixture(EVENT_1_DETECTION)).expect("compact event");
+        let line = serde_json::to_string(&fixture(EVENT_3_ACTIVITY)).expect("compact event");
         let raw = format!("{line}\n{line}\n");
         fs::write(&path, raw.as_bytes()).expect("write JSONL");
 
         let records = read_jsonl_records(&path).expect("read JSONL");
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].value["event_id"], records[1].value["event_id"]);
-        assert_eq!(records[0].value, fixture(EVENT_1_DETECTION));
+        assert_eq!(records[0].value, fixture(EVENT_3_ACTIVITY));
         assert_eq!(records[0].value, records[1].value);
-        assert_eq!(records[0].value["schema_version"], "1.0");
-        assert_eq!(records[0].kind, super::EventRecordKind::Historical);
+        assert_eq!(records[0].value["schema_version"], "3.0");
     }
 
     #[test]
     fn jsonl_reader_rejects_same_id_with_different_bytes() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("events.jsonl");
-        let first = fixture(EVENT_1_DETECTION);
+        let first = fixture(EVENT_3_ACTIVITY);
         let mut second = first.clone();
-        second["risk_score"] = json!(91);
+        second["session_id"] = json!("other-session");
         let first = serde_json::to_string(&first).expect("compact event");
         let second = serde_json::to_string(&second).expect("compact event");
         for second in [second, format!(" {first}")] {
@@ -499,7 +443,7 @@ mod tests {
     fn jsonl_reader_ignores_line_framing_when_comparing_same_id_bodies() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("events.jsonl");
-        let line = serde_json::to_string(&fixture(EVENT_1_DETECTION)).expect("compact event");
+        let line = serde_json::to_string(&fixture(EVENT_3_ACTIVITY)).expect("compact event");
         for ending in [b"\n".as_slice(), b"\r\n".as_slice(), b"".as_slice()] {
             let mut bytes = line.as_bytes().to_vec();
             bytes.extend_from_slice(b"\n");
@@ -508,8 +452,18 @@ mod tests {
             fs::write(&path, bytes).expect("write JSONL");
             let records = read_jsonl_records(&path).expect("same object body");
             assert_eq!(records.len(), 2);
-            assert_eq!(records[0].value, fixture(EVENT_1_DETECTION));
+            assert_eq!(records[0].value, fixture(EVENT_3_ACTIVITY));
             assert_eq!(records[0].value, records[1].value);
         }
+    }
+
+    #[test]
+    fn jsonl_reader_rejects_a_malformed_tail_after_a_valid_record() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("events.jsonl");
+        let line = serde_json::to_string(&fixture(EVENT_3_ACTIVITY)).expect("compact event");
+        fs::write(&path, format!("{line}\n{{not-json")).expect("write JSONL");
+        let error = read_jsonl_records(&path).expect_err("malformed tail");
+        assert!(error.to_string().contains("invalid JSONL"));
     }
 }

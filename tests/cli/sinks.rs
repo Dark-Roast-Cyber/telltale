@@ -203,21 +203,70 @@ fn status_keeps_valid_outbox_health_when_journal_is_unavailable() {
         );
         assert!(!state_path.parent().unwrap().exists());
     }
-    // Historical-only status remains a successful, explicitly non-native result.
-    fs::write(&log_path, historical).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["status", "--log-path"])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .args(["--outbox-path"])
-        .arg(&outbox_path)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(status["status"], "historical_only");
-    assert!(status.get("journal_status").is_none());
+    let health = native_test_event(
+        "health",
+        "telltale-00000000-0000-4000-8000-000000000014",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "scanner",
+        "scanner",
+        &[],
+    )
+    .to_string();
+    let obsolete_two = historical.replace("\"1.0\"", "\"2.0\"");
+    for contents in [
+        historical.clone(),
+        obsolete_two,
+        format!("{health}\n{historical}"),
+        format!("{health}\n{}", historical.replace("\"1.0\"", "\"2.0\"")),
+    ] {
+        fs::write(&log_path, &contents).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["status", "--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .args(["--outbox-path"])
+            .arg(&outbox_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(status["status"], "unavailable");
+        assert_ne!(status["status"], "historical_only");
+        assert_ne!(status["status"], "ok");
+        assert_eq!(
+            status["journal_status"],
+            serde_json::json!({"availability":"unavailable", "reason":"journal_read_failed"})
+        );
+        assert_eq!(status["last_scan_time"], Value::Null);
+        assert_eq!(status["health_check_status"], Value::Null);
+        assert_eq!(status["detection_count"], Value::Null);
+        assert_eq!(status["attention_required"], Value::Null);
+        let displayed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!displayed.contains("historical_only"));
+        assert!(!displayed.contains("unsupported_schema_version"));
+        assert!(!displayed.contains("invalid event"));
+        assert!(!displayed.contains("jsonschema"));
+        assert!(!displayed.contains("path-canary"));
+        assert!(!displayed.contains("content-canary"));
+        assert!(!displayed.contains(&temp.path().to_string_lossy().to_string()));
+        assert!(output.stderr.is_empty());
+        assert_eq!(fs::read(&outbox_path).unwrap(), before);
+        assert_eq!(
+            fs::read_dir(outbox_path.parent().unwrap()).unwrap().count(),
+            parent_entries
+        );
+        assert!(!state_path.parent().unwrap().exists());
+    }
 }
 
 #[cfg(not(windows))]

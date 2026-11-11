@@ -17,16 +17,15 @@ use crate::baseline::{
 };
 use crate::event::{Event, Evidence};
 use crate::file_lock::{
-    FileInfo, SidecarLock, TempFile, atomic_no_replace, atomic_replace, read_snapshot,
-    safe_path_info, validate_target,
+    FileInfo, SidecarLock, TempFile, atomic_replace, read_snapshot, safe_path_info, validate_target,
 };
 use crate::install_inventory::InstallInventorySnapshot;
 use telltale_schema::clients::SourceKind;
 use telltale_schema::source::Source;
 
 pub(crate) const STATE_SCHEMA_VERSION: &str = "1.0";
-const MIGRATION_GUIDANCE: &str =
-    "state requires explicit migration; run telltale migrate state --from <OLD> --to <NEW>";
+const INVALID_STATE: &str = "scanner state is invalid and was not changed";
+const OLDER_STATE: &str = "scanner state may use an older format or be invalid and was not changed; published v0.7.0 and v0.7.1 migrate supported older state only, not invalid data; migration eligibility has not been validated";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ScanState {
@@ -127,89 +126,14 @@ impl ScanState {
         })
     }
 
-    pub(crate) fn prepare_save(
-        &self,
-        path: &Path,
-    ) -> Result<PreparedState, Box<dyn std::error::Error>> {
-        let bytes = native_state_bytes(self)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        validate_target(path)?;
-        Ok(PreparedState {
-            temp: Some(TempFile::write_and_sync(path, &bytes, 0o600)?),
-        })
-    }
-
-    pub(crate) fn normalize_legacy_for_migration(&mut self) -> usize {
-        let count = raw_network_host_count(self);
-        self.reset_legacy_baseline();
-        count
-    }
-
-    fn reset_legacy_baseline(&mut self) {
-        if self.baseline_snapshots.schema_version != BASELINE_STATE_VERSION {
-            self.baseline_source_contributions.clear();
-            self.baseline_snapshots = BaselineSnapshotStore::default();
-        }
-    }
-
-    pub(crate) fn family_counts(&self) -> BTreeMap<&'static str, usize> {
-        BTreeMap::from([
-            (
-                "seen_source_fingerprints",
-                self.seen_source_fingerprints.len(),
-            ),
-            (
-                "seen_detection_fingerprints",
-                self.seen_detection_fingerprints.len(),
-            ),
-            (
-                "baseline_snapshots",
-                self.baseline_snapshots.snapshots.len(),
-            ),
-            (
-                "baseline_source_contributions",
-                self.baseline_source_contributions.len(),
-            ),
-            ("source_observations", self.source_observations.len()),
-            (
-                "sqlite_ingestion_cursors",
-                self.sqlite_ingestion_cursors.len(),
-            ),
-            (
-                "install_inventory_agents",
-                self.install_inventory
-                    .as_ref()
-                    .map(|inventory| inventory.agents.len())
-                    .unwrap_or_default(),
-            ),
-        ])
-    }
-
+    #[cfg(test)]
     pub(crate) fn canonical_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         native_state_bytes(self)
     }
 
+    #[cfg(test)]
     pub(crate) fn validate_native_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         parse_native_state(bytes)
-    }
-
-    pub(crate) fn validate_legacy_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        parse_legacy_state(bytes)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn validate_native_migration_bytes(
-        bytes: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        parse_native_state_mode(bytes, true)
-    }
-
-    pub(crate) fn validate_native_migration_bytes_with_count(
-        bytes: &[u8],
-    ) -> Result<(Self, usize), Box<dyn std::error::Error>> {
-        parse_native_state_mode_with_count(bytes, true)
     }
 
     pub fn should_emit(
@@ -559,10 +483,6 @@ impl ScanState {
     }
 }
 
-pub(crate) struct PreparedState {
-    temp: Option<TempFile>,
-}
-
 pub(crate) struct PreparedAtomicState {
     temp: Option<TempFile>,
     expected: Option<FileInfo>,
@@ -578,24 +498,6 @@ impl PreparedAtomicState {
             destination,
             self.expected,
         )
-    }
-}
-
-impl PreparedState {
-    pub(crate) fn install_no_replace(
-        mut self,
-        destination: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        atomic_no_replace(
-            self.temp.take().ok_or("state temporary already consumed")?,
-            destination,
-        )
-    }
-}
-
-impl Drop for PreparedState {
-    fn drop(&mut self) {
-        let _ = self.temp.take();
     }
 }
 
@@ -644,78 +546,43 @@ fn is_missing(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
 }
 
 fn parse_native_state(bytes: &[u8]) -> Result<ScanState, Box<dyn std::error::Error>> {
-    parse_native_state_mode(bytes, false)
-}
-
-fn parse_native_state_mode(
-    bytes: &[u8],
-    allow_legacy_baseline_version: bool,
-) -> Result<ScanState, Box<dyn std::error::Error>> {
-    parse_native_state_mode_with_count(bytes, allow_legacy_baseline_version).map(|(state, _)| state)
-}
-
-fn parse_native_state_mode_with_count(
-    bytes: &[u8],
-    allow_legacy_baseline_version: bool,
-) -> Result<(ScanState, usize), Box<dyn std::error::Error>> {
     let value = parse_json(bytes)?;
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+    let object = value.as_object().ok_or(INVALID_STATE)?;
     let mut native_fields = vec!["state_schema_version"];
     native_fields.extend_from_slice(state_field_names());
     validate_fields(object, &native_fields)?;
+    if object.get("state_schema_version").is_none() {
+        if state_field_names()
+            .iter()
+            .any(|field| object.contains_key(*field))
+        {
+            return Err(OLDER_STATE.into());
+        }
+        return Err(INVALID_STATE.into());
+    }
     if object.get("state_schema_version") != Some(&Value::String(STATE_SCHEMA_VERSION.into())) {
-        return Err(MIGRATION_GUIDANCE.into());
+        return Err(INVALID_STATE.into());
     }
     for field in state_field_names() {
         if !object.contains_key(*field) {
-            return Err(MIGRATION_GUIDANCE.into());
+            return Err(INVALID_STATE.into());
         }
     }
-    let strict_hosts = !allow_legacy_baseline_version
-        || value["baseline_snapshots"]["schema_version"].as_u64()
-            == Some(u64::from(BASELINE_STATE_VERSION));
-    validate_state_families(&value, true, allow_legacy_baseline_version, strict_hosts)?;
+    if matches!(
+        value["baseline_snapshots"]["schema_version"].as_u64(),
+        Some(1 | 2)
+    ) {
+        return Err(OLDER_STATE.into());
+    }
+    validate_state_families(&value)?;
     let mut state_object = object.clone();
     state_object.remove("state_schema_version");
-    let mut state: ScanState =
-        serde_json::from_value(Value::Object(state_object)).map_err(|_| MIGRATION_GUIDANCE)?;
-    if strict_hosts && has_raw_network_hosts(&state)
-        || (!allow_legacy_baseline_version
-            && state.baseline_snapshots.schema_version != BASELINE_STATE_VERSION)
-        || (allow_legacy_baseline_version
-            && !matches!(
-                state.baseline_snapshots.schema_version,
-                1 | 2 | BASELINE_STATE_VERSION
-            ))
+    let state: ScanState =
+        serde_json::from_value(Value::Object(state_object)).map_err(|_| INVALID_STATE)?;
+    if has_raw_network_hosts(&state)
+        || state.baseline_snapshots.schema_version != BASELINE_STATE_VERSION
     {
-        return Err(MIGRATION_GUIDANCE.into());
-    }
-    let normalization_count = if allow_legacy_baseline_version {
-        raw_network_host_count(&state)
-    } else {
-        0
-    };
-    if allow_legacy_baseline_version {
-        state.reset_legacy_baseline();
-    }
-    Ok((state, normalization_count))
-}
-
-fn parse_legacy_state(bytes: &[u8]) -> Result<ScanState, Box<dyn std::error::Error>> {
-    let value = parse_json(bytes)?;
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
-    if object.contains_key("state_schema_version") {
-        return Err(MIGRATION_GUIDANCE.into());
-    }
-    validate_fields(object, state_field_names())?;
-    validate_state_families(&value, false, true, false)?;
-    let version_missing = value
-        .get("baseline_snapshots")
-        .and_then(|value| value.get("schema_version"))
-        .is_none();
-    let mut state: ScanState = serde_json::from_value(value).map_err(|_| MIGRATION_GUIDANCE)?;
-    if version_missing {
-        state.baseline_snapshots.schema_version = 1;
+        return Err(INVALID_STATE.into());
     }
     Ok(state)
 }
@@ -732,34 +599,26 @@ fn state_field_names() -> &'static [&'static str] {
     ]
 }
 
-fn validate_state_families(
-    value: &Value,
-    native: bool,
-    allow_legacy_baseline_version: bool,
-    strict_hosts: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+fn validate_state_families(value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+    let object = value.as_object().ok_or(INVALID_STATE)?;
     if let Some(value) = object.get("baseline_snapshots") {
         validate_object(value, &["schema_version", "snapshots"])?;
-        if native {
-            require_fields(value, &["schema_version", "snapshots"])?;
-        }
-        let baseline = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+        require_fields(value, &["schema_version", "snapshots"])?;
+        let baseline = value.as_object().ok_or(INVALID_STATE)?;
         if let Some(version) = baseline.get("schema_version")
-            && !matches!(version, Value::Number(number) if number.as_u64() == Some(BASELINE_STATE_VERSION as u64) || allow_legacy_baseline_version && matches!(number.as_u64(), Some(1 | 2)))
+            && !matches!(
+                version,
+                Value::Number(number) if number.as_u64() == Some(u64::from(BASELINE_STATE_VERSION))
+            )
         {
-            return Err(MIGRATION_GUIDANCE.into());
+            return Err(INVALID_STATE.into());
         }
         if let Some(snapshots) = baseline.get("snapshots") {
-            validate_map_values(snapshots, |value| {
-                validate_baseline_summary(value, native, strict_hosts)
-            })?;
+            validate_map_values(snapshots, validate_baseline_summary)?;
         }
     }
     if let Some(value) = object.get("baseline_source_contributions") {
-        validate_map_values(value, |value| {
-            validate_baseline_contribution(value, native, strict_hosts)
-        })?;
+        validate_map_values(value, validate_baseline_contribution)?;
     }
     if let Some(value) = object.get("source_observations") {
         validate_map_values(value, |value| {
@@ -772,17 +631,15 @@ fn validate_state_families(
                     "last_seen_unix_ms",
                 ],
             )?;
-            if native {
-                require_fields(
-                    value,
-                    &[
-                        "client",
-                        "source_id",
-                        "source_instance_id",
-                        "last_seen_unix_ms",
-                    ],
-                )?;
-            }
+            require_fields(
+                value,
+                &[
+                    "client",
+                    "source_id",
+                    "source_instance_id",
+                    "last_seen_unix_ms",
+                ],
+            )?;
             Ok(())
         })?;
     }
@@ -812,22 +669,20 @@ fn validate_state_families(
                     || value["source_id"] != "opencode.sqlite"
                     || value["table"] != "session_message"
                 {
-                    return Err(MIGRATION_GUIDANCE.into());
+                    return Err(INVALID_STATE.into());
                 }
             }
-            if native {
-                require_fields(
-                    value,
-                    &[
-                        "client",
-                        "source_id",
-                        "source_instance_id",
-                        "table",
-                        "last_time_updated",
-                        "observed_at_unix_ms",
-                    ],
-                )?;
-            }
+            require_fields(
+                value,
+                &[
+                    "client",
+                    "source_id",
+                    "source_instance_id",
+                    "table",
+                    "last_time_updated",
+                    "observed_at_unix_ms",
+                ],
+            )?;
             Ok(())
         })?;
     }
@@ -835,25 +690,19 @@ fn validate_state_families(
         && !value.is_null()
     {
         validate_object(value, &["observed_at_unix_ms", "hash", "agents"])?;
-        if native {
-            require_fields(value, &["observed_at_unix_ms", "hash", "agents"])?;
-        }
-        let inventory = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+        require_fields(value, &["observed_at_unix_ms", "hash", "agents"])?;
+        let inventory = value.as_object().ok_or(INVALID_STATE)?;
         if let Some(agents) = inventory.get("agents") {
-            let agents = agents.as_array().ok_or(MIGRATION_GUIDANCE)?;
+            let agents = agents.as_array().ok_or(INVALID_STATE)?;
             for agent in agents {
                 validate_object(agent, &["agent", "installed", "confidence", "signals"])?;
-                if native {
-                    require_fields(agent, &["agent", "installed", "confidence", "signals"])?;
-                }
-                let agent = agent.as_object().ok_or(MIGRATION_GUIDANCE)?;
-                let signals = agent.get("signals").ok_or(MIGRATION_GUIDANCE)?;
-                let signals = signals.as_array().ok_or(MIGRATION_GUIDANCE)?;
+                require_fields(agent, &["agent", "installed", "confidence", "signals"])?;
+                let agent = agent.as_object().ok_or(INVALID_STATE)?;
+                let signals = agent.get("signals").ok_or(INVALID_STATE)?;
+                let signals = signals.as_array().ok_or(INVALID_STATE)?;
                 for signal in signals {
                     validate_object(signal, &["kind", "name", "present", "path_hash"])?;
-                    if native {
-                        require_fields(signal, &["kind", "name", "present", "path_hash"])?;
-                    }
+                    require_fields(signal, &["kind", "name", "present", "path_hash"])?;
                 }
             }
         }
@@ -861,11 +710,7 @@ fn validate_state_families(
     Ok(())
 }
 
-fn validate_baseline_contribution(
-    value: &Value,
-    native: bool,
-    strict_hosts: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_baseline_contribution(value: &Value) -> Result<(), Box<dyn std::error::Error>> {
     validate_object(
         value,
         &[
@@ -876,32 +721,24 @@ fn validate_baseline_contribution(
             "snapshots",
         ],
     )?;
-    if native {
-        require_fields(
-            value,
-            &[
-                "client",
-                "source_id",
-                "source_instance_id",
-                "source_fingerprint",
-                "snapshots",
-            ],
-        )?;
-    }
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+    require_fields(
+        value,
+        &[
+            "client",
+            "source_id",
+            "source_instance_id",
+            "source_fingerprint",
+            "snapshots",
+        ],
+    )?;
+    let object = value.as_object().ok_or(INVALID_STATE)?;
     if let Some(snapshots) = object.get("snapshots") {
-        validate_map_values(snapshots, |value| {
-            validate_baseline_summary(value, native, strict_hosts)
-        })?;
+        validate_map_values(snapshots, validate_baseline_summary)?;
     }
     Ok(())
 }
 
-fn validate_baseline_summary(
-    value: &Value,
-    native: bool,
-    strict_hosts: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_baseline_summary(value: &Value) -> Result<(), Box<dyn std::error::Error>> {
     validate_object(
         value,
         &[
@@ -912,31 +749,27 @@ fn validate_baseline_summary(
             "network_host_counts",
         ],
     )?;
-    if native {
-        require_fields(
-            value,
-            &[
-                "key",
-                "observations",
-                "tool_call_counts",
-                "path_class_counts",
-                "network_host_counts",
-            ],
-        )?;
-    }
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+    require_fields(
+        value,
+        &[
+            "key",
+            "observations",
+            "tool_call_counts",
+            "path_class_counts",
+            "network_host_counts",
+        ],
+    )?;
+    let object = value.as_object().ok_or(INVALID_STATE)?;
     validate_object(
-        object.get("key").ok_or(MIGRATION_GUIDANCE)?,
+        object.get("key").ok_or(INVALID_STATE)?,
         &["client", "agent", "model", "provider"],
     )?;
-    if native {
-        require_fields(
-            object.get("key").ok_or(MIGRATION_GUIDANCE)?,
-            &["client", "agent", "model", "provider"],
-        )?;
-    }
+    require_fields(
+        object.get("key").ok_or(INVALID_STATE)?,
+        &["client", "agent", "model", "provider"],
+    )?;
     validate_object(
-        object.get("observations").ok_or(MIGRATION_GUIDANCE)?,
+        object.get("observations").ok_or(INVALID_STATE)?,
         &[
             "records",
             "user_messages",
@@ -947,37 +780,33 @@ fn validate_baseline_summary(
             "other",
         ],
     )?;
-    if native {
-        require_fields(
-            object.get("observations").ok_or(MIGRATION_GUIDANCE)?,
-            &[
-                "records",
-                "user_messages",
-                "assistant_messages",
-                "tool_calls",
-                "tool_results",
-                "session_meta",
-                "other",
-            ],
-        )?;
-    }
+    require_fields(
+        object.get("observations").ok_or(INVALID_STATE)?,
+        &[
+            "records",
+            "user_messages",
+            "assistant_messages",
+            "tool_calls",
+            "tool_results",
+            "session_meta",
+            "other",
+        ],
+    )?;
     for field in [
         "tool_call_counts",
         "path_class_counts",
         "network_host_counts",
     ] {
         if !object.get(field).is_some_and(Value::is_object) {
-            return Err(MIGRATION_GUIDANCE.into());
+            return Err(INVALID_STATE.into());
         }
     }
-    if native && strict_hosts {
-        let hosts = object
-            .get("network_host_counts")
-            .and_then(Value::as_object)
-            .ok_or(MIGRATION_GUIDANCE)?;
-        if hosts.keys().any(|host| !valid_host_hash(host)) {
-            return Err(MIGRATION_GUIDANCE.into());
-        }
+    let hosts = object
+        .get("network_host_counts")
+        .and_then(Value::as_object)
+        .ok_or(INVALID_STATE)?;
+    if hosts.keys().any(|host| !valid_host_hash(host)) {
+        return Err(INVALID_STATE.into());
     }
     Ok(())
 }
@@ -986,7 +815,7 @@ fn validate_map_values(
     value: &Value,
     validate: impl Fn(&Value) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let map = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+    let map = value.as_object().ok_or(INVALID_STATE)?;
     for value in map.values() {
         validate(value)?;
     }
@@ -994,16 +823,16 @@ fn validate_map_values(
 }
 
 fn validate_object(value: &Value, fields: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+    let object = value.as_object().ok_or(INVALID_STATE)?;
     validate_fields(object, fields)
 }
 
 fn require_fields(value: &Value, fields: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let object = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
+    let object = value.as_object().ok_or(INVALID_STATE)?;
     if fields.iter().all(|field| object.contains_key(*field)) {
         Ok(())
     } else {
-        Err(MIGRATION_GUIDANCE.into())
+        Err(INVALID_STATE.into())
     }
 }
 
@@ -1024,7 +853,7 @@ fn validate_fields(
     if object.keys().all(|key| fields.contains(&key.as_str())) {
         Ok(())
     } else {
-        Err(MIGRATION_GUIDANCE.into())
+        Err(INVALID_STATE.into())
     }
 }
 
@@ -1047,32 +876,11 @@ fn has_raw_network_hosts(state: &ScanState) -> bool {
         })
 }
 
-fn raw_network_host_count(state: &ScanState) -> usize {
-    state
-        .baseline_snapshots
-        .snapshots
-        .values()
-        .chain(
-            state
-                .baseline_source_contributions
-                .values()
-                .flat_map(|contribution| contribution.snapshots.values()),
-        )
-        .map(|snapshot| {
-            snapshot
-                .network_host_counts
-                .keys()
-                .filter(|host| !valid_host_hash(host))
-                .count()
-        })
-        .sum()
-}
-
 fn parse_json(bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = serde::de::DeserializeSeed::deserialize(ValueSeed, &mut deserializer)
-        .map_err(|_| MIGRATION_GUIDANCE)?;
-    deserializer.end().map_err(|_| MIGRATION_GUIDANCE)?;
+        .map_err(|_| INVALID_STATE)?;
+    deserializer.end().map_err(|_| INVALID_STATE)?;
     Ok(value)
 }
 
@@ -1646,7 +1454,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_migration_resets_baseline_once_and_preserves_other_families() {
+    fn older_baseline_schema_is_rejected_without_reset_and_current_state_round_trips() {
         let mut state = ScanState::default();
         state
             .seen_source_fingerprints
@@ -1672,39 +1480,24 @@ mod tests {
         state
             .rebuild_baseline_snapshots_from_source_contributions()
             .unwrap();
-        let mut legacy: Value = serde_json::from_slice(&state.canonical_bytes().unwrap()).unwrap();
+        let current = state.canonical_bytes().unwrap();
+        let reloaded = ScanState::validate_native_bytes(&current).unwrap();
+        assert_eq!(reloaded.baseline_snapshots.schema_version, 3);
+        assert_eq!(reloaded.baseline_source_contributions.len(), 1);
+        assert_eq!(reloaded.canonical_bytes().unwrap(), current);
+
+        let mut legacy: Value = serde_json::from_slice(&current).unwrap();
         legacy["baseline_snapshots"]["schema_version"] = 2.into();
         let bytes = serde_json::to_vec(&legacy).unwrap();
-        assert!(ScanState::validate_native_bytes(&bytes).is_err());
-        let mut migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
-        assert_eq!(migrated.baseline_snapshots.schema_version, 3);
-        assert!(migrated.baseline_source_contributions.is_empty());
-        assert!(migrated.baseline_snapshots.snapshots.is_empty());
-        let value = serde_json::to_value(&migrated).unwrap();
-        for field in [
-            "seen_source_fingerprints",
-            "seen_detection_fingerprints",
-            "source_observations",
-            "sqlite_ingestion_cursors",
-            "install_inventory",
-        ] {
-            assert_eq!(value[field], legacy[field], "{field}");
-        }
-        migrated
-            .record_baseline_source_contribution(
-                &source,
-                "new".into(),
-                vec![BaselineSummary::default()],
-            )
-            .unwrap();
-        migrated
-            .rebuild_baseline_snapshots_from_source_contributions()
-            .unwrap();
-        let bytes = migrated.canonical_bytes().unwrap();
-        let reloaded = ScanState::validate_native_bytes(&bytes).unwrap();
-        assert_eq!(reloaded.baseline_source_contributions.len(), 1);
-        let repeated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
-        assert_eq!(repeated.canonical_bytes().unwrap(), bytes);
+        let error = ScanState::validate_native_bytes(&bytes).unwrap_err();
+        assert!(error.to_string().contains("older format"));
+        assert!(error.to_string().contains("v0.7.0"));
+        assert!(error.to_string().contains("was not changed"));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("schema2.json");
+        std::fs::write(&path, &bytes).expect("write older state");
+        assert!(ScanState::load(&path).is_err());
+        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
     }
 
     #[test]
@@ -1742,45 +1535,58 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_state_file_with_migration_guidance() {
+    fn missing_state_initializes_without_creating_a_file_until_save() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("missing.json");
+        let state = ScanState::load_snapshot(&path).expect("missing state initializes");
+        assert!(state.seen_source_fingerprints.is_empty());
+        assert!(!path.exists());
+        state.save(&path).expect("save initialized state");
+        let bytes = std::fs::read(&path).expect("saved state");
+        assert!(ScanState::validate_native_bytes(&bytes).is_ok());
+        assert_eq!(
+            std::fs::read(&path).expect("unchanged after validation"),
+            bytes
+        );
+    }
+
+    #[test]
+    fn rejects_empty_state_file_without_rewriting_it() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("empty-state.json");
         std::fs::write(&path, "").expect("write empty");
 
         let error = ScanState::load(&path).expect_err("empty state must fail");
-        assert!(error.to_string().contains("migrate state"));
+        assert!(error.to_string().contains("invalid"));
+        assert!(error.to_string().contains("was not changed"));
+        assert!(!error.to_string().contains("v0.7.0"));
+        assert_eq!(std::fs::read(&path).expect("unchanged"), b"");
     }
 
     #[test]
-    fn accepts_legacy_state_only_through_explicit_validation() {
+    fn rejects_unversioned_state_without_rewriting_it() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("legacy-state.json");
-        std::fs::write(
-            &path,
-            r#"{
+        let bytes = br#"{
   "seen_source_fingerprints": ["source-a"],
   "seen_detection_fingerprints": ["detection-a"]
-}"#,
-        )
-        .expect("write legacy state");
+}"#;
+        std::fs::write(&path, bytes).expect("write legacy state");
 
-        let state = ScanState::validate_legacy_bytes(&std::fs::read(&path).expect("read"))
-            .expect("validate legacy");
-
-        assert!(state.seen_source_fingerprints.contains("source-a"));
-        assert!(state.seen_detection_fingerprints.contains("detection-a"));
-        assert_eq!(state.baseline_snapshots.schema_version, 1);
-        assert!(state.baseline_snapshots.snapshots.is_empty());
-        assert!(state.baseline_source_contributions.is_empty());
+        let error = ScanState::load(&path).expect_err("older state must fail");
+        assert!(error.to_string().contains("older format"));
+        assert!(error.to_string().contains("v0.7.0"));
+        assert!(error.to_string().contains("was not changed"));
+        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
     }
 
     #[test]
-    fn legacy_scan_state_golden_covers_all_serialized_families_semantically() {
-        let fixture: Value = serde_json::from_str(include_str!(concat!(
+    fn legacy_scan_state_fixture_is_rejected_without_rewriting_or_echoing_hosts() {
+        let bytes = include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/state/legacy-scan-state.json"
-        )))
-        .expect("legacy state fixture");
+        ));
+        let fixture: Value = serde_json::from_slice(bytes).expect("legacy state fixture");
         for field in [
             "seen_source_fingerprints",
             "seen_detection_fingerprints",
@@ -1792,51 +1598,18 @@ mod tests {
         ] {
             assert!(fixture.get(field).is_some(), "missing state family {field}");
         }
+        assert!(fixture.get("state_schema_version").is_none());
 
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("legacy-scan-state.json");
-        std::fs::write(
-            &path,
-            serde_json::to_string_pretty(&fixture).expect("fixture JSON"),
-        )
-        .expect("write state fixture");
-
-        let mut state = ScanState::validate_legacy_bytes(&std::fs::read(&path).expect("read"))
-            .expect("validate legacy");
-        assert_eq!(state.normalize_legacy_for_migration(), 1);
-        let normalized = serde_json::to_value(&state).expect("state value");
-        assert_eq!(normalized["baseline_snapshots"]["schema_version"], 3);
-        assert!(
-            normalized["baseline_snapshots"]["snapshots"]
-                .as_object()
-                .expect("baseline snapshots")
-                .is_empty()
-        );
-        assert!(
-            normalized["baseline_source_contributions"]
-                .as_object()
-                .expect("source contributions")
-                .is_empty()
-        );
-        for field in [
-            "seen_source_fingerprints",
-            "seen_detection_fingerprints",
-            "source_observations",
-            "sqlite_ingestion_cursors",
-            "install_inventory",
-        ] {
-            assert_eq!(normalized[field], fixture[field], "{field}");
-        }
-
-        state.save(&path).expect("save state fixture");
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("saved state"))
-                .expect("saved state JSON");
-        assert_eq!(saved["state_schema_version"], STATE_SCHEMA_VERSION);
-        assert_eq!(
-            saved["seen_source_fingerprints"],
-            normalized["seen_source_fingerprints"]
-        );
+        std::fs::write(&path, bytes).expect("write state fixture");
+        let error = ScanState::load(&path).expect_err("older fixture must fail");
+        let message = error.to_string();
+        assert!(message.contains("older format"));
+        assert!(message.contains("v0.7.0"));
+        assert!(message.contains("was not changed"));
+        assert!(!message.contains("internal.example.test"));
+        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
     }
 
     #[test]
@@ -1894,10 +1667,10 @@ mod tests {
         state.observe_sqlite_ingestion_cursor(&source, "session_message", 1_000_000, 1);
         state.observe_sqlite_ingestion_drain(&source, "session_message", 600_000, 2);
         let bytes = state.canonical_bytes().unwrap();
-        let migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
-        assert_eq!(migrated.canonical_bytes().unwrap(), bytes);
+        let loaded = ScanState::validate_native_bytes(&bytes).unwrap();
+        assert_eq!(loaded.canonical_bytes().unwrap(), bytes);
         assert_eq!(
-            migrated.sqlite_ingestion_continue_after(&source, "session_message"),
+            loaded.sqlite_ingestion_continue_after(&source, "session_message"),
             Some(600_000)
         );
         let value: Value = serde_json::from_slice(&bytes).unwrap();
@@ -1918,10 +1691,11 @@ mod tests {
                 loaded.sqlite_ingestion_continue_after(&source, "session_message"),
                 Some(cut)
             );
-            let migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
+            let repeated =
+                ScanState::validate_native_bytes(&loaded.canonical_bytes().unwrap()).unwrap();
             assert_eq!(
-                migrated.canonical_bytes().unwrap(),
-                loaded.canonical_bytes().unwrap()
+                repeated.sqlite_ingestion_continue_after(&source, "session_message"),
+                Some(cut)
             );
         }
         for (field, invalid) in [
@@ -1935,10 +1709,11 @@ mod tests {
         ] {
             let mut bad = value.clone();
             bad["sqlite_ingestion_cursors"][&key][field] = invalid;
-            assert!(
-                ScanState::validate_native_bytes(&serde_json::to_vec(&bad).unwrap()).is_err(),
-                "{field}"
-            );
+            let error = ScanState::validate_native_bytes(&serde_json::to_vec(&bad).unwrap())
+                .expect_err(field);
+            let message = error.to_string();
+            assert!(message.contains("invalid"), "{field}: {message}");
+            assert!(!message.contains("v0.7.0"), "{field}: {message}");
         }
         // Old drain state remains readable, but has no trustworthy strict cut.
         let mut old = value;
@@ -1947,6 +1722,13 @@ mod tests {
             .unwrap()
             .remove("continue_after_time_updated");
         let old = ScanState::validate_native_bytes(&serde_json::to_vec(&old).unwrap()).unwrap();
+        let cursor = old
+            .sqlite_ingestion_cursors
+            .values()
+            .next()
+            .expect("old drain cursor");
+        assert!(cursor.draining);
+        assert!(cursor.continue_after_time_updated.is_none());
         assert_eq!(
             old.sqlite_ingestion_continue_after(&source, "session_message"),
             None
@@ -2025,12 +1807,10 @@ mod tests {
     }
 
     #[test]
-    fn resets_legacy_raw_baseline_hosts_during_migration() {
+    fn rejects_legacy_raw_baseline_hosts_without_rewriting_them() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("legacy-raw-host-baseline.json");
-        std::fs::write(
-            &path,
-            r#"{
+        let bytes = br#"{
   "seen_source_fingerprints": [],
   "seen_detection_fingerprints": [],
   "baseline_snapshots": {
@@ -2060,24 +1840,15 @@ mod tests {
   },
   "baseline_source_contributions": {},
   "source_observations": {}
-}"#,
-        )
-        .expect("write legacy state");
+}"#;
+        std::fs::write(&path, bytes).expect("write legacy state");
 
-        let mut state = ScanState::validate_legacy_bytes(&std::fs::read(&path).expect("read"))
-            .expect("validate legacy");
-        state.normalize_legacy_for_migration();
-        assert_eq!(
-            state.baseline_snapshots.schema_version,
-            BASELINE_STATE_VERSION
-        );
-        assert!(state.baseline_snapshots.snapshots.is_empty());
-        assert!(state.baseline_source_contributions.is_empty());
-        assert!(
-            !serde_json::to_string(&state)
-                .expect("serialize state")
-                .contains("internal.example.test")
-        );
+        let error = ScanState::load(&path).expect_err("older raw-host state must fail");
+        let message = error.to_string();
+        assert!(message.contains("older format"));
+        assert!(message.contains("was not changed"));
+        assert!(!message.contains("internal.example.test"));
+        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
     }
 
     #[test]
@@ -2286,7 +2057,7 @@ mod tests {
             .is_err()
         );
 
-        let mut unversioned = serde_json::to_value(&state).expect("state value");
+        let unversioned = serde_json::to_value(&state).expect("state value");
         assert!(
             ScanState::validate_native_bytes(
                 &serde_json::to_vec(&unversioned).expect("unversioned bytes")
@@ -2294,16 +2065,39 @@ mod tests {
             .is_err()
         );
 
-        unversioned["baseline_snapshots"]["unexpected"] = Value::Bool(true);
-        assert!(
-            ScanState::validate_legacy_bytes(
-                &serde_json::to_vec(&unversioned).expect("unknown bytes")
-            )
-            .is_err()
-        );
+        let mut versioned = serde_json::from_slice::<Value>(&state.canonical_bytes().unwrap())
+            .expect("native value");
+        versioned["baseline_snapshots"]["unexpected"] = Value::Bool(true);
+        let unknown = ScanState::validate_native_bytes(
+            &serde_json::to_vec(&versioned).expect("unknown bytes"),
+        )
+        .expect_err("unknown field");
+        assert!(unknown.to_string().contains("invalid"));
+        assert!(!unknown.to_string().contains("v0.7.0"));
+
+        versioned["not_a_state_family"] = Value::Bool(true);
+        let unknown_family = ScanState::validate_native_bytes(
+            &serde_json::to_vec(&versioned).expect("unknown family bytes"),
+        )
+        .expect_err("unknown family");
+        assert!(unknown_family.to_string().contains("invalid"));
+        assert!(!unknown_family.to_string().contains("v0.7.0"));
 
         let duplicate = br#"{"seen_source_fingerprints":[],"seen_source_fingerprints":[]}"#;
-        assert!(ScanState::validate_legacy_bytes(duplicate).is_err());
+        let duplicate_error = ScanState::validate_native_bytes(duplicate).expect_err("duplicate");
+        assert!(duplicate_error.to_string().contains("invalid"));
+        assert!(!duplicate_error.to_string().contains("v0.7.0"));
+
+        let native = String::from_utf8(state.canonical_bytes().expect("native bytes")).unwrap();
+        let native_duplicate = native.replacen(
+            "\"state_schema_version\"",
+            "\"state_schema_version\":\"1.0\",\"state_schema_version\"",
+            1,
+        );
+        let native_duplicate = ScanState::validate_native_bytes(native_duplicate.as_bytes())
+            .expect_err("native duplicate");
+        assert!(native_duplicate.to_string().contains("invalid"));
+        assert!(!native_duplicate.to_string().contains("v0.7.0"));
     }
 
     #[test]
@@ -2345,32 +2139,157 @@ mod tests {
     }
 
     #[test]
-    fn native_state_rejects_raw_network_hosts() {
-        let raw = br#"{
-          "state_schema_version":"1.0",
-          "seen_source_fingerprints":[],
-          "seen_detection_fingerprints":[],
-          "baseline_snapshots":{"schema_version":2,"snapshots":{"id":{"key":{"client":"codex","agent":null,"model":null,"provider":null},"observations":{"records":1,"user_messages":0,"assistant_messages":0,"tool_calls":1,"tool_results":0,"session_meta":0,"other":0},"tool_call_counts":{},"path_class_counts":{},"network_host_counts":{"internal.example":1}}}},
-          "baseline_source_contributions":{},"source_observations":{},"sqlite_ingestion_cursors":{},"install_inventory":null
-        }"#;
-        assert!(ScanState::validate_native_bytes(raw).is_err());
-        let malformed_hash = String::from_utf8(raw.to_vec())
-            .expect("utf8")
-            .replace("internal.example", "sha256:ABC")
-            .into_bytes();
-        assert!(ScanState::validate_native_bytes(&malformed_hash).is_err());
+    fn marker_rejection_does_not_claim_malformed_old_input_is_migratable() {
+        let secret = "not-an-object";
+        let unversioned = format!(
+            r#"{{"seen_source_fingerprints":[],"sqlite_ingestion_cursors":{{"k":"{secret}"}}}}"#
+        );
+        assert_unqualified_marker_rejection(unversioned.as_bytes(), secret);
+
+        for schema in [1, 2] {
+            let mut unknown = native_state_value();
+            unknown["baseline_snapshots"]["schema_version"] = schema.into();
+            unknown["baseline_snapshots"]["not_a_baseline_field"] = Value::Bool(true);
+            assert_unqualified_marker_rejection(
+                &serde_json::to_vec(&unknown).unwrap(),
+                "not_a_baseline_field",
+            );
+
+            let mut missing = native_state_value();
+            missing["baseline_snapshots"]["schema_version"] = schema.into();
+            missing["baseline_snapshots"]
+                .as_object_mut()
+                .unwrap()
+                .remove("snapshots");
+            assert_unqualified_marker_rejection(
+                &serde_json::to_vec(&missing).unwrap(),
+                "snapshots",
+            );
+
+            let mut cut = native_state_value();
+            cut["baseline_snapshots"]["schema_version"] = schema.into();
+            cut["sqlite_ingestion_cursors"]["cursor"] = serde_json::json!({
+                "client": "opencode",
+                "source_id": "opencode.sqlite",
+                "source_instance_id": "instance",
+                "table": "session_message",
+                "last_time_updated": 10,
+                "observed_at_unix_ms": 1,
+                "draining": true,
+                "continue_after_time_updated": 11
+            });
+            assert_unqualified_marker_rejection(
+                &serde_json::to_vec(&cut).unwrap(),
+                "continue_after",
+            );
+        }
     }
 
     #[test]
-    fn migration_rejects_plaintext_hosts_in_native_schema3() {
-        let mut value: Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/state/legacy-scan-state.json"
-        )))
-        .expect("legacy fixture");
-        value["state_schema_version"] = Value::String(STATE_SCHEMA_VERSION.to_string());
-        value["baseline_snapshots"]["schema_version"] = 3.into();
-        let bytes = serde_json::to_vec(&value).expect("native migration input");
-        assert!(ScanState::validate_native_migration_bytes(&bytes).is_err());
+    fn baseline_schema_2_is_older_state_not_a_host_rejection() {
+        let mut value = native_state_value();
+        value["baseline_snapshots"]["schema_version"] = 2.into();
+        value["baseline_snapshots"]["snapshots"]["id"] =
+            host_summary("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let error = ScanState::validate_native_bytes(&serde_json::to_vec(&value).unwrap())
+            .expect_err("schema 2");
+        assert!(error.to_string().contains("older format"));
+        assert!(error.to_string().contains("v0.7.0"));
+    }
+
+    #[test]
+    fn current_baseline_rejects_plaintext_and_malformed_hosts_in_both_families() {
+        let valid = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let cases = ["internal.example", "sha256:ABC", "sha256:gg"];
+        for host in cases {
+            for family in ["baseline_snapshots", "baseline_source_contributions"] {
+                let mut value = native_state_value();
+                assert_eq!(value["baseline_snapshots"]["schema_version"], 3);
+                let summary = host_summary(host);
+                if family == "baseline_snapshots" {
+                    value["baseline_snapshots"]["snapshots"]["id"] = summary;
+                } else {
+                    value["baseline_source_contributions"]["source"] = serde_json::json!({
+                        "client": "codex",
+                        "source_id": "codex.sessions",
+                        "source_instance_id": "instance",
+                        "source_fingerprint": "fingerprint",
+                        "snapshots": {"id": summary}
+                    });
+                }
+                let bytes = serde_json::to_vec(&value).unwrap();
+                let error = ScanState::validate_native_bytes(&bytes).expect_err(family);
+                let message = error.to_string();
+                assert!(message.contains("invalid"), "{family} {host}: {message}");
+                assert!(!message.contains("v0.7.0"), "{family} {host}: {message}");
+                assert!(!message.contains(host), "{family} echoed {host}");
+                let temp = tempfile::tempdir().expect("tempdir");
+                let path = temp.path().join("state.json");
+                std::fs::write(&path, &bytes).expect("write");
+                assert!(ScanState::load(&path).is_err());
+                assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
+            }
+        }
+        let mut accepted = native_state_value();
+        accepted["baseline_snapshots"]["snapshots"]["id"] = host_summary(valid);
+        assert!(
+            ScanState::validate_native_bytes(&serde_json::to_vec(&accepted).unwrap()).is_ok(),
+            "current hashed hosts remain valid"
+        );
+        let text = serde_json::to_string(&accepted).unwrap();
+        let nested_duplicate = text.replacen(
+            &format!("\"{valid}\":1"),
+            &format!("\"{valid}\":1,\"{valid}\":1"),
+            1,
+        );
+        let nested = ScanState::validate_native_bytes(nested_duplicate.as_bytes())
+            .expect_err("nested duplicate host key");
+        assert!(nested.to_string().contains("invalid"));
+        assert!(!nested.to_string().contains("v0.7.0"));
+    }
+
+    fn assert_unqualified_marker_rejection(bytes: &[u8], echoed: &str) {
+        let error = ScanState::validate_native_bytes(bytes).expect_err("marker rejection");
+        let message = error.to_string();
+        assert!(message.contains("older format"), "{message}");
+        assert!(message.contains("was not changed"), "{message}");
+        assert!(
+            message.contains("or be invalid"),
+            "missing qualification: {message}"
+        );
+        assert!(
+            message.contains("eligibility has not been validated"),
+            "missing qualification: {message}"
+        );
+        assert!(message.contains("not invalid data"), "{message}");
+        assert!(!message.contains(echoed), "echoed input: {message}");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("state.json");
+        std::fs::write(&path, bytes).expect("write");
+        let loaded = ScanState::load(&path).expect_err("load must reject");
+        assert_eq!(loaded.to_string(), message);
+        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
+    }
+
+    fn native_state_value() -> Value {
+        serde_json::from_slice(&ScanState::default().canonical_bytes().unwrap()).unwrap()
+    }
+
+    fn host_summary(host: &str) -> Value {
+        serde_json::json!({
+            "key": {"client": "codex", "agent": null, "model": null, "provider": null},
+            "observations": {
+                "records": 1,
+                "user_messages": 0,
+                "assistant_messages": 0,
+                "tool_calls": 1,
+                "tool_results": 0,
+                "session_meta": 0,
+                "other": 0
+            },
+            "tool_call_counts": {},
+            "path_class_counts": {},
+            "network_host_counts": {host: 1}
+        })
     }
 }

@@ -739,11 +739,12 @@ still prints the valid queue health and exits successfully. The top-level
 and an additive `journal_status` object reports `availability: unavailable`
 with the bounded reason `no_native_health` or `journal_read_failed`. No raw
 reader diagnostic is included; queue availability does not imply scanner health.
-`attention_required` is null and `attention_reasons` is empty there, as for
-historical-only journals; only native health is assessed (see
-[Check Scanner Status](install.md#check-scanner-status)). The native-health and
-historical-only shapes otherwise remain unchanged. Without a valid
-outbox lookup, journal failures retain their existing error/exit behavior.
+`attention_required` is null and `attention_reasons` is empty there; only Event3
+health is assessed (see [Check Scanner Status](install.md#check-scanner-status)).
+Event 1.0/2.0 records, including an obsolete record after valid Event3 health,
+make the journal unavailable rather than producing `historical_only` or healthy
+scanner status. Without a valid outbox lookup, journal failures retain their
+existing error/exit behavior.
 Status inspection does not create storage or parents, reconcile, prune, or
 change delivery state.
 
@@ -884,11 +885,12 @@ Each delivery path uses the same terminal canonical event payload:
 - `telltale export --format jsonl` reads existing JSONL telemetry.
 - `telltale export --format elastic-bulk` writes Elasticsearch Bulk API pairs.
 
-Development export admission accepts regular files only, with inclusive limits
+Export admission accepts Event3 regular files only, with inclusive limits
 of 8 MiB per physical frame (including terminators), 1 GiB per journal,
-1,000,000 distinct event IDs, and 64 MiB of ID text. These resource limits apply
-equally to historical schemas 1.0/2.0 and native 3.0; they do not change schema
-validation. Duplicate IDs still require byte-identical objects, excluding line
+1,000,000 distinct event IDs, and 64 MiB of ID text. Event 1.0/2.0 input is
+explicitly rejected; use a retained [v0.7.0 binary](https://github.com/Dark-Roast-Cyber/telltale/releases/tag/v0.7.0)
+to read or export those journals. Relocation with that binary does not convert
+their schema. Duplicate IDs still require byte-identical objects, excluding line
 terminators. Exceeding a limit fails explicitly rather than truncating output.
 Summary and ordinary filtered exports stream records; non-summary output is
 sanitized into a temporary spool before publication, so an invalid tail produces

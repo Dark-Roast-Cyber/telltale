@@ -6,6 +6,18 @@
 
 ## Unreleased
 
+- Remove embedded loopback validation and fixture-preview tooling from the
+  CLI (`telltale rules serve`). That command shipped in the production binary.
+  Offline `rules list`, `validate`, `test`, `coverage`, and `export-default`
+  remain. There is no replacement server, shim, or resident service.
+- **Breaking:** remove `telltale migrate state` and `telltale migrate events`.
+  There is no shim. Published v0.7.0 and v0.7.1 retain both commands: state
+  migration writes current native state, and event migration relocates
+  historical files without rewriting Event 1.0 or 2.0 records as Event 3.0.
+  This version rejects older scanner state and does not rewrite it. Missing state can still initialize.
+  Export and status now accept only Event3; Event 1.0/2.0 journals must be read
+  with the retained older binary. Mixed journals fail closed. Current Event3
+  schema validation, privacy, identity collision checks and reader bounds remain.
 - **IMDSv2 token requests are not uploads.** A bodyless `PUT` to the literal
   IMDSv2 token endpoint (`169.254.169.254` or `fd00:ec2::254`) no longer matches
   `exfil.outbound_upload` when every other token in its command segment is a

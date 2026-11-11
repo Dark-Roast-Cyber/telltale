@@ -1,8 +1,8 @@
 //! Command-line surface: argument parsing, subcommand dispatch, and resolution
 //! of flags, environment and local configuration into run settings.
 //!
-//! Each subcommand's work lives in its own module (`scan`, `export`, `migrate`,
-//! `cursor`, `coverage`, `rules_server`); keep this module to wiring.
+//! Each subcommand's work lives in its own module (`scan`, `export`, `cursor`,
+//! `coverage`); keep this module to wiring.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -14,9 +14,7 @@ use crate::rules::{
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::sink::config as sink_config;
-use clap::{
-    ArgAction, Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
-};
+use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use sha2::Digest;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::event::{
@@ -30,8 +28,6 @@ mod coverage;
 mod cursor;
 mod export;
 pub mod historical;
-mod migrate;
-mod rules_server;
 mod scan;
 
 #[derive(Parser)]
@@ -68,12 +64,6 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
-    },
-
-    /// Explicitly migrate Telltale state or historical event JSONL data.
-    Migrate {
-        #[command(subcommand)]
-        command: MigrateCommand,
     },
 
     /// Inspect or explicitly discard one stored OpenCode ingestion cursor.
@@ -366,35 +356,6 @@ struct ScanExecutionArgs {
 }
 
 #[derive(Debug, Subcommand)]
-enum MigrateCommand {
-    /// Convert legacy unversioned state or relocate native 1.0 state.
-    State {
-        /// Existing legacy or native state file.
-        #[arg(long = "from")]
-        from: PathBuf,
-
-        /// Destination native state file.
-        #[arg(long = "to")]
-        to: PathBuf,
-    },
-
-    /// Validate and relocate explicit historical event-set files without rewriting bytes.
-    /// Repeated destinations are joined only across LF boundaries; the first
-    /// pair owns the recovery manifest.
-    Events {
-        /// Explicit source and destination pair. Repeat for multiple mappings.
-        /// At most 64 pairs and 32 unique destinations are accepted.
-        #[arg(
-            long = "pair",
-            value_names = ["OLD", "NEW"],
-            num_args = 2,
-            action = ArgAction::Append
-        )]
-        pairs: Vec<PathBuf>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
 enum DeliveryCommand {
     /// Make all blocked deliveries for a sink immediately retryable.
     RetryBlocked {
@@ -528,26 +489,6 @@ enum RulesCommand {
 
         #[command(flatten)]
         config: RuleConfigCliArgs,
-    },
-
-    /// Serve a read-only local rule editor shell.
-    ///
-    /// Open the printed numeric listen address, not a hostname alias such as
-    /// localhost. Fixture preview only works from a source checkout containing
-    /// tests/fixtures (the build checkout, or else the current directory) and
-    /// only reads fixtures under that directory.
-    Serve {
-        /// Loopback address for the read-only rule editor server. Open the printed
-        /// numeric listen address, not a hostname alias.
-        #[arg(long, default_value = "127.0.0.1:8787")]
-        addr: std::net::SocketAddr,
-
-        #[command(flatten)]
-        config: RuleConfigCliArgs,
-
-        /// Handle one HTTP request and exit. Intended for CLI integration tests.
-        #[arg(long, hide = true)]
-        once: bool,
     },
 
     /// Report rule fixture coverage, client coverage, and false-positive notes.
@@ -1615,20 +1556,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Cursor { command } => cursor::run(command)?,
-        Command::Migrate { command } => match command {
-            MigrateCommand::State { from, to } => migrate::run_state_migration(&from, &to)?,
-            MigrateCommand::Events { pairs } => {
-                let (pair_chunks, remainder) = pairs.as_chunks::<2>();
-                if !remainder.is_empty() {
-                    return Err("event migration requires OLD and NEW for every --pair".into());
-                }
-                let pairs = pair_chunks
-                    .iter()
-                    .map(|pair| (pair[0].clone(), pair[1].clone()))
-                    .collect::<Vec<_>>();
-                migrate::run_event_migration(&pairs)?;
-            }
-        },
         Command::Delivery { command } => match command {
             DeliveryCommand::RetryBlocked { outbox_path, sink } => {
                 let mut outbox = crate::sink::outbox::Outbox::open(&outbox_path)?;
@@ -1749,20 +1676,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "matches": matches,
                     }))?
                 );
-            }
-            RulesCommand::Serve { addr, config, once } => {
-                let resolved_config = config.resolve()?;
-                rules_server::run_rules_server(
-                    addr,
-                    rules_server::RuleServerConfig {
-                        rule_pack_paths: &resolved_config.rule_pack_paths,
-                        explicit_rule_paths: &resolved_config.explicit_rule_paths,
-                        override_paths: &resolved_config.override_paths,
-                        policy_path: resolved_config.policy_path.as_deref(),
-                        rule_load_mode: resolved_config.rule_load_mode,
-                    },
-                    once,
-                )?;
             }
             RulesCommand::Coverage { root, config } => {
                 let resolved_config = config.resolve()?;

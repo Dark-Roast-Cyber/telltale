@@ -342,7 +342,7 @@ should account for source-level gaps documented in [agent-capability-profiles.md
 
 ## Baseline Deviation State
 
-Model behavioral baselines are maintained in scanner state and can be used by `--baseline-deviation-scoring` to add bounded activity risk modifiers for new tool names, path classes, or network host observations. Normal scanning requires current native state; legacy state is accepted only by the explicit `telltale migrate state` command. The emitted activity evidence should expose only deviation counts, not the raw baseline network host labels.
+Model behavioral baselines are maintained in scanner state and can be used by `--baseline-deviation-scoring` to add bounded activity risk modifiers for new tool names, path classes, or network host observations. Normal scanning requires current native state. Older state is rejected and is not rewritten. Published v0.7.0 and v0.7.1 retain explicit state migration. The emitted activity evidence should expose only deviation counts, not the raw baseline network host labels.
 
 Baseline network host identities are hashed with deterministic `sha256:` labels before they are persisted in scanner state. Existing raw labels from older state files are hashed only by the explicit migration command; normal scanning rejects unversioned state. See [privacy-model.md](privacy-model.md#4-local-only-sensitive-context) for handling guidance.
 
@@ -358,8 +358,9 @@ The emitted event context supports analyst review of:
 
 Native Event 3.0 retains deterministic severity, response metadata, and
 top-level `timeline_anchors` when available. It does not emit `triage`,
-`llm_triage`, or compatibility verdicts. Historical Event 1.0 and 2.0 records
-remain readable with their original fields.
+`llm_triage`, or compatibility verdicts. Current export and status accept Event3
+only. Read historical Event 1.0/2.0 records with the retained v0.7.0 binary;
+their fields are not converted into native Event3.
 
 ## Response Contract
 

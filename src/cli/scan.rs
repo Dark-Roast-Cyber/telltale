@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::BaselineDeviationConfig;
-use crate::cli::historical::{EventRecordKind, JsonlEventRecord, visit_jsonl_records};
+use crate::cli::historical::{JsonlEventRecord, visit_jsonl_records};
 use crate::discovery::is_fixture_root;
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertConfig, OperationalAlertInput,
@@ -1789,73 +1789,45 @@ fn journal_status_json(
     if !log_path.exists() {
         return Err(("no_native_health", "no_native_health".into()));
     }
-    let mut native_seen = false;
-    let mut historical_seen = false;
     let mut native_health = None;
-    let mut historical_health = None;
     let mut native_detections = 0;
     let mut native_alert_reasons = BTreeSet::new();
-    let mut historical_detections = 0;
     visit_jsonl_records(log_path, |record, _| {
-        match record.kind {
-            EventRecordKind::Native => {
-                native_seen = true;
-                if event_record_has_type(&record, "health") {
-                    native_health = Some(record.value);
-                    native_detections = 0;
-                    native_alert_reasons.clear();
-                } else if event_record_has_type(&record, "detection") {
-                    native_detections += 1;
-                } else if event_record_has_type(&record, "operational_alert") {
-                    native_alert_reasons.insert(operational_alert_reason(&record.value));
-                }
-            }
-            EventRecordKind::Historical => {
-                historical_seen = true;
-                if event_record_has_type(&record, "health") {
-                    historical_health = Some(record.value);
-                } else if event_record_has_type(&record, "detection") {
-                    historical_detections += 1;
-                }
-            }
+        if event_record_has_type(&record, "health") {
+            native_health = Some(record.value);
+            native_detections = 0;
+            native_alert_reasons.clear();
+        } else if event_record_has_type(&record, "detection") {
+            native_detections += 1;
+        } else if event_record_has_type(&record, "operational_alert") {
+            native_alert_reasons.insert(operational_alert_reason(&record.value));
         }
         Ok(())
     })
     .map_err(|error| ("journal_read_failed", error))?;
-    let status = if let Some(health) = native_health {
-        let mut status = status_json(
-            "ok",
-            Some(&health),
-            native_detections,
-            log_path,
-            state_path,
-            durable_health,
-        );
-        let scanner_errors = scanner_errors_recorded(&health);
-        if scanner_errors == Some(true) {
-            native_alert_reasons.insert("scanner_errors");
-        }
-        status["attention_required"] = if !native_alert_reasons.is_empty() {
-            true.into()
-        } else if scanner_errors.is_none() {
-            serde_json::Value::Null
-        } else {
-            false.into()
-        };
-        status["attention_reasons"] = native_alert_reasons.into_iter().collect();
-        status
-    } else if historical_seen && !native_seen {
-        status_json(
-            "historical_only",
-            historical_health.as_ref(),
-            historical_detections,
-            log_path,
-            state_path,
-            durable_health,
-        )
-    } else {
+    let Some(health) = native_health else {
         return Err(("no_native_health", "no_native_health".into()));
     };
+    let mut status = status_json(
+        "ok",
+        Some(&health),
+        native_detections,
+        log_path,
+        state_path,
+        durable_health,
+    );
+    let scanner_errors = scanner_errors_recorded(&health);
+    if scanner_errors == Some(true) {
+        native_alert_reasons.insert("scanner_errors");
+    }
+    status["attention_required"] = if !native_alert_reasons.is_empty() {
+        true.into()
+    } else if scanner_errors.is_none() {
+        serde_json::Value::Null
+    } else {
+        false.into()
+    };
+    status["attention_reasons"] = native_alert_reasons.into_iter().collect();
     Ok(status)
 }
 
@@ -3462,10 +3434,10 @@ mod tests {
     }
 
     #[test]
-    fn status_json_omits_hostile_historical_health_fields() {
+    fn status_json_omits_hostile_health_fields() {
         let marker = "sk-abcdefgh";
-        let historical_health = serde_json::json!({
-            "schema_version": "2.0",
+        let hostile_health = serde_json::json!({
+            "schema_version": "3.0",
             "event_type": "health",
             "timestamp": "2026-05-01T00:00:00Z",
             "component": marker,
@@ -3475,8 +3447,8 @@ mod tests {
             "source_counts": { marker: 1 },
         });
         let status = status_json(
-            "historical_only",
-            Some(&historical_health),
+            "ok",
+            Some(&hostile_health),
             0,
             std::path::Path::new("/tmp/telltale-events.jsonl"),
             std::path::Path::new("/tmp/telltale-state.json"),
@@ -3485,7 +3457,7 @@ mod tests {
         let status_bytes = serde_json::to_vec(&status).expect("serialize status");
         assert!(
             !String::from_utf8_lossy(&status_bytes).contains(marker),
-            "status output exposed hostile historical health metadata"
+            "status output exposed hostile health metadata"
         );
         assert_eq!(
             status["durable_queue_health"],
