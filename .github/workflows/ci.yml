@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -17,8 +18,48 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Draft and documentation-only pull requests run format, Clippy, the Linux
+  # tests and the security gates. The jobs that wait on this one run for every
+  # other pull request and every push to main.
+  scope:
+    name: CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Select full or reduced CI
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          full=true
+          reason="not a pull request"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ "$DRAFT" = "true" ]; then
+              full=false
+              reason="draft pull request"
+            else
+              # The first parent of the pull request merge commit is the base.
+              changed=$(git diff --name-only HEAD^1 HEAD)
+              reason="changes outside documentation"
+              if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -v -E '^(docs/.+|README\.md|CHANGELOG\.md)$' >/dev/null; then
+                full=false
+                reason="documentation-only change"
+              fi
+            fi
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "CI scope: full=$full ($reason)"
+
   console:
     name: Telltale Console (${{ matrix.os }})
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +167,8 @@ jobs:
 
   package-verify:
     name: Package verification (POSIX sh)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -149,6 +192,8 @@ jobs:
 
   windows:
     name: Windows (x86_64-pc-windows-msvc)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -212,6 +257,8 @@ jobs:
 
   macos:
     name: macOS (aarch64-apple-darwin)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -251,6 +298,8 @@ jobs:
 
   embedding-msrv:
     name: Embedding MSRV (${{ matrix.os }})
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -274,6 +323,8 @@ jobs:
 
   source-preflight:
     name: Prospective source preflight (exact SHA)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
