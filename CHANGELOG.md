@@ -1,10 +1,24 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.1` is the current stable release and `v0.7.0` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.2` is the current stable release and `v0.7.1` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## Unreleased
+## 0.7.2 — published stable (2026-11-10)
+
+### Compatibility and operator impact
+
+- **This patch release removes CLI commands.** `telltale migrate state`,
+  `telltale migrate events` and `telltale rules serve` are gone, and export and
+  status read Event 3.0 only. The [versioning policy](docs/versioning.md)
+  normally keeps removals for a minor release; this one ships them in 0.7.2 by
+  maintainer decision. Upgrading from 0.6.x state, or reading Event 1.0/2.0
+  journals, needs v0.7.1 first.
+- **Detection results change.** `exfil.outbound_upload` no longer matches a
+  bodyless IMDSv2 token request; its fingerprint and semantic identity change,
+  so affected detections re-emit once after upgrade.
+
+### Changes since 0.7.1
 
 - Remove embedded loopback validation and fixture-preview tooling from the
   CLI (`telltale rules serve`). That command shipped in the production binary.
@@ -14,10 +28,11 @@
   There is no shim. Published v0.7.0 and v0.7.1 retain both commands: state
   migration writes current native state, and event migration relocates
   historical files without rewriting Event 1.0 or 2.0 records as Event 3.0.
-  This version rejects older scanner state and does not rewrite it. Missing state can still initialize.
-  Export and status now accept only Event3; Event 1.0/2.0 journals must be read
-  with the retained older binary. Mixed journals fail closed. Current Event3
-  schema validation, privacy, identity collision checks and reader bounds remain.
+  This version rejects older scanner state and does not rewrite it. Missing
+  state can still initialize. Export and status now accept only Event3; read
+  Event 1.0/2.0 journals with the retained older binary. Mixed journals fail
+  closed. Current Event3 schema validation, privacy, identity collision checks
+  and reader bounds remain.
 - **IMDSv2 token requests are not uploads.** A bodyless `PUT` to the literal
   IMDSv2 token endpoint (`169.254.169.254` or `fd00:ec2::254`) no longer matches
   `exfil.outbound_upload` when every other token in its command segment is a
