@@ -13,6 +13,20 @@ publish = false
 [profile.dev]
 debug = 1
 
+# The repository workspace optimizes its dependencies. Without that, regex
+# compilation of the bundled rules dominates every test that builds a pipeline.
+# Only the regex crates: the Telltale crates are not members here.
+[profile.dev.package.regex]
+opt-level = 2
+[profile.dev.package.regex-automata]
+opt-level = 2
+[profile.dev.package.regex-syntax]
+opt-level = 2
+[profile.dev.package.aho-corasick]
+opt-level = 2
+[profile.dev.package.memchr]
+opt-level = 2
+
 [features]
 default = []
 opencode-sqlite = ["telltale-core/opencode-sqlite"]

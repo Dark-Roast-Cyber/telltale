@@ -118,11 +118,19 @@ for removed in \
     fi
 done
 
+REGEX_CRATES="regex regex-automata regex-syntax aho-corasick memchr"
+
 run_normalized_test() {
     package=$1
     shift
     dependencies="$*"
     set -- "$CARGO_BIN" test --locked --manifest-path "$(package_path "$package")/Cargo.toml"
+    # A packaged crate is its own build root and does not inherit the
+    # workspace's optimized dependencies. Unoptimized regex makes compiling the
+    # bundled rules dominate the unit-test run, so optimize the regex crates.
+    for crate in $REGEX_CRATES; do
+        set -- "$@" --config "profile.dev.package.$crate.opt-level=2"
+    done
     for dependency in $dependencies; do
         set -- "$@" --config "patch.crates-io.$dependency.path=\"$(package_path "$dependency")\""
     done
