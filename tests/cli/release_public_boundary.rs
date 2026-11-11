@@ -2060,6 +2060,90 @@ fn ci_keeps_metadata_gate_after_candidate_publication() {
     assert_ci_metadata_gate(&workflow);
 }
 
+#[cfg(unix)]
+#[test]
+fn ci_scope_reduces_only_draft_and_documentation_only_pull_requests() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow"))
+            .expect("CI YAML");
+    // Without ready_for_review, a draft marked ready would never get full CI.
+    let types = workflow["on"]["pull_request"]["types"]
+        .as_sequence()
+        .expect("pull request event types");
+    for event in ["opened", "synchronize", "reopened", "ready_for_review"] {
+        assert!(types.iter().any(|t| t == event), "missing {event}");
+    }
+    let always = ["scope", "fmt", "clippy", "test", "security"];
+    for (id, job) in workflow["jobs"].as_mapping().expect("CI jobs") {
+        let id = id.as_str().expect("job id");
+        if always.contains(&id) {
+            assert!(job["if"].is_null(), "{id} must run for every event");
+        } else {
+            assert_eq!(job["needs"], "scope", "{id}");
+            assert_eq!(job["if"], "needs.scope.outputs.full == 'true'", "{id}");
+        }
+    }
+
+    let steps = workflow_steps(&workflow, "scope");
+    let script = workflow_run(steps, workflow_step_index(steps, "run", "GITHUB_OUTPUT"));
+    let scope = |event: &str, draft: &str, changed: Option<&str>| {
+        let temp = tempdir().unwrap();
+        let git = temp.path().join("git");
+        fs::write(&git, "#!/bin/sh\nset -eu\n[ -z \"${GIT_FAIL-}\" ] || exit 128\n[ \"$*\" = 'diff --name-only HEAD^1 HEAD' ] || exit 97\nprintf '%s' \"$CHANGED\"\n").unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let output_file = temp.path().join("github-output");
+        let mut command = Command::new("/bin/bash");
+        command
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", temp.path().display()))
+            .env("GITHUB_OUTPUT", &output_file)
+            .env("EVENT_NAME", event)
+            .env("DRAFT", draft)
+            .args(["-e", "-c", script]);
+        match changed {
+            Some(files) => command.env("CHANGED", files),
+            None => command.env("GIT_FAIL", "1"),
+        };
+        let output = command.output().unwrap();
+        output
+            .status
+            .success()
+            .then(|| fs::read_to_string(&output_file).unwrap())
+    };
+    let full = Some("full=true\n".to_owned());
+    let reduced = Some("full=false\n".to_owned());
+    // Pushes and drafts never read the diff: a failing git proves it.
+    assert_eq!(scope("push", "", None), full);
+    assert_eq!(scope("pull_request", "true", None), reduced);
+    assert_eq!(
+        scope(
+            "pull_request",
+            "false",
+            Some("docs/install.md\nREADME.md\nCHANGELOG.md\n")
+        ),
+        reduced
+    );
+    for changed in [
+        "docs/install.md\nCargo.lock\n",
+        "README.md\n.github/workflows/ci.yml\n",
+        "crates/telltale-cli/README.md\n",
+        "docs-old/notes.md\n",
+        "src/docs/README.md\n",
+        "",
+    ] {
+        assert_eq!(
+            scope("pull_request", "false", Some(changed)),
+            full,
+            "{changed:?}"
+        );
+    }
+    assert_eq!(
+        scope("pull_request", "false", None),
+        None,
+        "git failure must fail"
+    );
+}
+
 fn assert_validator_bootstrap_jobs(workflow: &serde_yaml::Value, jobs: &[(&str, &[&str])]) {
     for &(job, consumers) in jobs {
         let steps = workflow_steps(workflow, job);

@@ -132,10 +132,10 @@ you opt in:
 The hosted one-line installer is not part of this repository's release cutover;
 use the checked-in script above for a reviewed install. It uses one locked,
 journaled transaction, verifies `SHA256SUMS`, stages the canonical binary, and
-smoke-tests before activation. It performs no product migration or cleanup;
-explicit Telltale state/event migration is a separate operator command.
-`--from-source` first downloads and validates the
-selected release's canonical archive provenance, resolves that tag to an
+smoke-tests before activation. It performs no product migration or cleanup.
+This version cannot migrate older state or Event 1.0/2.0 journals; see
+[Managed Service Setup](#managed-service-setup-advanced).
+`--from-source` first downloads and validates the selected release's canonical archive provenance, resolves that tag to an
 immutable commit, and builds that exact source revision; it does not skip the
 prebuilt archive download or bypass release provenance. Add `--with-timer` to
 install and enable the canonical user-level systemd timer.

@@ -216,9 +216,11 @@ The [install guide](docs/install.md) covers rule-pack tiers and precedence,
 overrides, policies and allowlists, project roots, the
 [Linux](docs/install.md#quick-install-linux), [macOS](docs/install.md#macos)
 and [Windows](docs/install.md#windows) installers and scheduling, checksum and
-attestation verification, and source builds. On Linux, run
-`./scripts/install-telltale` from a checkout; `--with-timer` opts into its
-user-level systemd timer. For an exact unreleased build, see
+attestation verification, and source builds. On Linux,
+`./scripts/install-telltale` from a checkout installs the latest stable
+release, not the checked-out source; `--from-source` builds that release's
+tagged source instead. `--with-timer` opts into its user-level systemd timer.
+For an exact unreleased build, see
 [Controlled development deployment](docs/controlled-deployment.md).
 
 Before pushing public history, run `make public-push-review` to review the
