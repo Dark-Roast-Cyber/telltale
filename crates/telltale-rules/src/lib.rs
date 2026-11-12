@@ -354,11 +354,11 @@ impl RuleV1CompatibilityRule {
                 .map(|matcher| {
                     Ok(CompiledMatcher {
                         target: matcher.target.clone(),
-                        regex: Regex::new(&matcher.regex)?,
+                        regex: shared_regex(&matcher.regex)?,
                         exclusion_regex: matcher
                             .exclusion_regex
                             .as_deref()
-                            .map(Regex::new)
+                            .map(shared_regex)
                             .transpose()?,
                         scope: matcher.scope,
                     })
@@ -1355,8 +1355,43 @@ fn compile_regex(
     } else {
         pattern.to_string()
     };
-    Regex::new(&pattern)
+    shared_regex(&pattern)
         .map_err(|error| format!("invalid regex for rule {rule_id}: {error}").into())
+}
+
+/// Patterns kept by [`shared_regex`] before it starts over.
+const SHARED_REGEX_CAPACITY: usize = 4096;
+
+static SHARED_REGEXES: std::sync::Mutex<BTreeMap<String, Regex>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Compiles `pattern`, or returns the copy compiled earlier for the same text.
+///
+/// One process compiles each bundled pattern many times: every resolution of
+/// the rule set, the content matchers of the detection plan and, in watch
+/// mode, every scan cycle. Compiling the patterns was nearly all of a scan's
+/// startup cost. A copy shares the compiled program and keeps its own match
+/// scratch space, so it behaves as a fresh compile does. Failures are not
+/// kept. The map starts over at [`SHARED_REGEX_CAPACITY`] patterns, which
+/// bounds a long-running host that keeps loading different rules.
+fn shared_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    let lock = || {
+        SHARED_REGEXES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    if let Some(regex) = lock().get(pattern) {
+        return Ok(regex.clone());
+    }
+    // Compile outside the lock: two threads may both compile a new pattern,
+    // and either result is the same program.
+    let regex = Regex::new(pattern)?;
+    let mut compiled = lock();
+    if compiled.len() >= SHARED_REGEX_CAPACITY {
+        compiled.clear();
+    }
+    compiled.insert(pattern.to_owned(), regex.clone());
+    Ok(regex)
 }
 
 fn matching_field<'a>(
@@ -1459,6 +1494,48 @@ mod tests {
         }
         .compile(None)
         .expect("compile rules")
+    }
+
+    #[test]
+    fn shared_regex_matches_a_fresh_compile_and_keeps_no_failure() {
+        let pattern = r"(?i:shared-regex-test\s+(\d+))";
+        let (first, again) = (
+            super::shared_regex(pattern).unwrap(),
+            super::shared_regex(pattern).unwrap(),
+        );
+        let fresh = regex::Regex::new(pattern).unwrap();
+        for text in ["Shared-Regex-Test 42", "shared-regex-test", ""] {
+            let expected = fresh.find(text).map(|found| found.range());
+            assert_eq!(first.find(text).map(|found| found.range()), expected);
+            assert_eq!(again.find(text).map(|found| found.range()), expected);
+        }
+        // An invalid pattern fails every time, with the compiler's own error.
+        let invalid = String::from("(unclosed");
+        let expected = regex::Regex::new(&invalid).unwrap_err().to_string();
+        for _ in 0..2 {
+            assert_eq!(
+                super::shared_regex(&invalid).unwrap_err().to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn shared_regex_map_starts_over_at_capacity() {
+        let first = "bounded-first-pattern";
+        assert!(super::shared_regex(first).unwrap().is_match(first));
+        // Enough new patterns to pass the capacity whatever else is in the map.
+        for index in 0..super::SHARED_REGEX_CAPACITY {
+            let pattern = format!("bounded-{index}x");
+            assert!(super::shared_regex(&pattern).unwrap().is_match(&pattern));
+        }
+        {
+            let compiled = super::SHARED_REGEXES.lock().unwrap();
+            assert!(compiled.len() <= super::SHARED_REGEX_CAPACITY);
+            assert!(!compiled.contains_key(first), "the map did not start over");
+        }
+        // A dropped pattern compiles again and matches as before.
+        assert!(super::shared_regex(first).unwrap().is_match(first));
     }
 
     #[test]
