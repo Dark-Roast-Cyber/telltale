@@ -5,7 +5,6 @@ use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
 use super::{
-    compile_rule_v1,
     event3::{Event3CompatibilityContext, project_event3},
     session::{CanonicalSourceInput, evaluate_source},
 };
@@ -51,12 +50,7 @@ fn events_for(commands: &[(&str, &str)]) -> Vec<telltale_schema::event::Event> {
         })
         .collect::<Vec<_>>();
     let rules = load_default_process_chain_rules().expect("pack compiles");
-    let plan = compile_rule_v1(
-        &telltale_rules::load_default_rule_set()
-            .unwrap()
-            .compatibility_export(),
-    )
-    .unwrap();
+    let plan = crate::v2::bundled_plan();
     let instance = CorrelationId::source_reported("synthetic-process-source").unwrap();
     let evaluation = evaluate_source(
         CanonicalSourceInput {
@@ -65,7 +59,7 @@ fn events_for(commands: &[(&str, &str)]) -> Vec<telltale_schema::event::Event> {
             source_instance: Some(&instance),
             observations: &observations,
         },
-        &plan,
+        plan,
         Some((&rules, &ProcessChainConfig::default())),
     )
     .unwrap();

@@ -646,6 +646,7 @@ fn crafted_commands_leave_the_source_evaluated() {
             ),
         ),
     ];
+    let pipeline = Pipeline::builder().build().unwrap();
     for (shape, calls, command) in shapes {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -659,9 +660,7 @@ fn crafted_commands_leave_the_source_evaluated() {
             source_id: "claude.projects".into(),
             path,
         };
-        let scans = Pipeline::builder()
-            .build()
-            .unwrap()
+        let scans = pipeline
             .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
             .unwrap();
         assert!(scans[0].failure().is_none(), "{shape}");

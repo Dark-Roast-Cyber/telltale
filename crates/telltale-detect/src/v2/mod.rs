@@ -127,6 +127,19 @@ pub use types::{
     SIGNAL_ID_PREFIX, Score, Severity, Signal, SuppressionStatus,
 };
 
+/// The bundled default rules, compiled once per test process.
+///
+/// Compiling them costs about a second, and most tests here only evaluate
+/// against them. Tests of compilation itself still call `compile_rule_v1`.
+#[cfg(test)]
+pub(crate) fn bundled_plan() -> &'static RuleV1CompatibilityPlan {
+    static PLAN: std::sync::LazyLock<RuleV1CompatibilityPlan> = std::sync::LazyLock::new(|| {
+        let rules = telltale_rules::load_default_rule_set().expect("bundled rules");
+        compile_rule_v1(&rules.compatibility_export()).expect("bundled plan")
+    });
+    &PLAN
+}
+
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]

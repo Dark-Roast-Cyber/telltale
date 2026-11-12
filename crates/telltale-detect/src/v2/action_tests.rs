@@ -141,8 +141,7 @@ fn each_reached_nonmatching_action_matcher_charges_work() {
 
 #[test]
 fn detailed_source_work_failure_returns_no_partial_evaluation() {
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let observations = [
         tool("match", "cat .env", None),
         tool("nonmatch", &"x".repeat(4096), None),
@@ -157,7 +156,7 @@ fn detailed_source_work_failure_returns_no_partial_evaluation() {
     };
     let complete = super::session::evaluate_source_with_options_and_work_budget(
         input(),
-        &plan,
+        plan,
         None,
         &DetailedEvaluationOptions::default(),
         &measured,
@@ -170,7 +169,7 @@ fn detailed_source_work_failure_returns_no_partial_evaluation() {
     assert!(matches!(
         super::session::evaluate_source_with_options_and_work_budget(
             input(),
-            &plan,
+            plan,
             None,
             &DetailedEvaluationOptions::default(),
             &work
@@ -320,8 +319,7 @@ fn assert_large_shell_credit_batch(client: ClientId, source_id: &str, name: &str
     let mut observations = (0..4000)
         .map(|index| observation(index, command))
         .collect::<Vec<_>>();
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
     let evaluate = |observations: &[CanonicalObservationV2]| {
         let input = CanonicalSourceInput {
@@ -331,9 +329,9 @@ fn assert_large_shell_credit_batch(client: ClientId, source_id: &str, name: &str
             observations,
         };
         if wrapper {
-            evaluate_source(input, &plan, None)
+            evaluate_source(input, plan, None)
         } else {
-            evaluate_source_with_options(input, &plan, None, &DetailedEvaluationOptions::default())
+            evaluate_source_with_options(input, plan, None, &DetailedEvaluationOptions::default())
         }
         .unwrap()
     };
@@ -803,8 +801,7 @@ fn tool_session(
 }
 
 fn actions(observations: &[CanonicalObservationV2]) -> CanonicalSourceEvaluation {
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
     evaluate_source_with_options(
         CanonicalSourceInput {
@@ -813,7 +810,7 @@ fn actions(observations: &[CanonicalObservationV2]) -> CanonicalSourceEvaluation
             source_instance: Some(&instance),
             observations,
         },
-        &plan,
+        plan,
         None,
         &DetailedEvaluationOptions::default(),
     )
@@ -1393,7 +1390,7 @@ fn credential_native_profile_characterizes_token_families_and_rule_v1_difference
     let export = telltale_rules::load_default_rule_set()
         .unwrap()
         .compatibility_export();
-    let plan = compile_rule_v1(&export).unwrap();
+    let plan = crate::v2::bundled_plan();
     let matcher = export
         .rules()
         .iter()
@@ -1427,7 +1424,7 @@ fn credential_native_profile_characterizes_token_families_and_rule_v1_difference
                 rule_v1,
                 "{text}"
             );
-            assert_credential_projections(&plan, credential_result(&text), rule_v1, native, &text);
+            assert_credential_projections(plan, credential_result(&text), rule_v1, native, &text);
         }
     }
     for (text, rule_v1, native) in [
@@ -1454,7 +1451,7 @@ fn credential_native_profile_characterizes_token_families_and_rule_v1_difference
             rule_v1,
             "{text}"
         );
-        assert_credential_projections(&plan, credential_result(text), rule_v1, native, text);
+        assert_credential_projections(plan, credential_result(text), rule_v1, native, text);
     }
 }
 
@@ -1523,26 +1520,20 @@ fn assert_credential_projections(
 
 #[test]
 fn credential_boundaries_and_example_exemptions_apply_to_the_same_candidate() {
-    let export = telltale_rules::load_default_rule_set()
-        .unwrap()
-        .compatibility_export();
-    let plan = compile_rule_v1(&export).unwrap();
+    let plan = crate::v2::bundled_plan();
     for (text, session_match) in [
         ("_ghp_Zq3Wt9LmP2kR7vX4nB8c", false),
         ("AKIAIOSFODNN7EXAMPLE", true),
         ("_ghp_Zq3Wt9LmP2kR7vX4nB8c and AKIAIOSFODNN7EXAMPLE", true),
         ("AKIAIOSFODNN7EXAMPLE and _ghp_Zq3Wt9LmP2kR7vX4nB8c", true),
     ] {
-        assert_credential_projections(&plan, credential_result(text), session_match, false, text);
+        assert_credential_projections(plan, credential_result(text), session_match, false, text);
     }
 }
 
 #[test]
 fn credential_action_surfaces_remain_distinct_from_session_selectors() {
-    let export = telltale_rules::load_default_rule_set()
-        .unwrap()
-        .compatibility_export();
-    let plan = compile_rule_v1(&export).unwrap();
+    let plan = crate::v2::bundled_plan();
     let token = "ghp_Zq3Wt9LmP2kR7vX4nB8c";
     for (case, observation, session_match) in [
         ("result", credential_result(token), true),
@@ -1625,7 +1616,7 @@ fn credential_action_surfaces_remain_distinct_from_session_selectors() {
             false,
         ),
     ] {
-        assert_credential_projections(&plan, observation, session_match, true, case);
+        assert_credential_projections(plan, observation, session_match, true, case);
     }
 }
 
@@ -1957,12 +1948,7 @@ fn process_action_links_by_exact_result_identity_including_dedupe_key() {
             IngestionMode::SessionStore,
         ),
     ];
-    let plan = compile_rule_v1(
-        &telltale_rules::load_default_rule_set()
-            .unwrap()
-            .compatibility_export(),
-    )
-    .unwrap();
+    let plan = crate::v2::bundled_plan();
     let rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
     let config = crate::process_chain::ProcessChainConfig::default();
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
@@ -1973,7 +1959,7 @@ fn process_action_links_by_exact_result_identity_including_dedupe_key() {
             source_instance: Some(&instance),
             observations: &observations,
         },
-        &plan,
+        plan,
         Some((&rules, &config)),
         &DetailedEvaluationOptions::default(),
     )

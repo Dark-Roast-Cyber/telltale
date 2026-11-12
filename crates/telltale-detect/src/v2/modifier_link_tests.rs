@@ -164,11 +164,10 @@ fn result_text(id: &str, text: &str) -> CanonicalObservationV2 {
 }
 
 fn bundled_match(observations: &[CanonicalObservationV2]) -> (BTreeSet<String>, u64) {
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let refs = observations.iter().collect::<Vec<_>>();
     let result =
-        evaluate_rule_v1_session_with_budget(&plan, &refs, &mut RetentionBudget::new()).unwrap();
+        evaluate_rule_v1_session_with_budget(plan, &refs, &mut RetentionBudget::new()).unwrap();
     (
         result.effective_rule_ids().iter().cloned().collect(),
         result.compatibility_score(),

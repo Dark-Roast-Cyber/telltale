@@ -104,17 +104,15 @@ fn written_path(observation: &CanonicalObservationV2) -> Option<String> {
 }
 
 pub(super) fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<String> {
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
-    evaluate_rule_v1_session_with_budget(&plan, &[observation], &mut RetentionBudget::new())
+    let plan = crate::v2::bundled_plan();
+    evaluate_rule_v1_session_with_budget(plan, &[observation], &mut RetentionBudget::new())
         .unwrap()
         .effective_rule_ids()
         .to_vec()
 }
 
 pub(super) fn action_rule_ids(observation: CanonicalObservationV2) -> Vec<String> {
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
     let output = evaluate_source_with_options(
         CanonicalSourceInput {
@@ -123,7 +121,7 @@ pub(super) fn action_rule_ids(observation: CanonicalObservationV2) -> Vec<String
             source_instance: Some(&instance),
             observations: &[observation],
         },
-        &plan,
+        plan,
         None,
         &DetailedEvaluationOptions::default(),
     )

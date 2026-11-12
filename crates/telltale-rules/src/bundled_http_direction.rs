@@ -46,8 +46,11 @@ const LOOPBACK_POST: &str = "curl -X POST --data @f http://127.0.0.1/x";
 const LOCALHOST_DOWNLOAD: &str = "curl http://localhost/x";
 const MIXED_LOOPBACK: &str = "curl http://127.0.0.1/x http://203.0.113.10/y";
 
-fn bundled() -> CompiledRuleSet {
-    load_default_rule_set().expect("bundled rules")
+/// Loaded once per test process: `evaluate` runs for every case below.
+fn bundled() -> &'static CompiledRuleSet {
+    static RULES: std::sync::LazyLock<CompiledRuleSet> =
+        std::sync::LazyLock::new(|| load_default_rule_set().expect("bundled rules"));
+    &RULES
 }
 
 fn evaluate(fields: &[(&str, &str)]) -> Option<MatchResult> {
@@ -801,7 +804,7 @@ fn session_http_direction_follows_the_segment_contract() {
     let rules = bundled();
     for &(command, upload, download) in DIRECTION_TABLE {
         for field in ["command", "arguments", "url"] {
-            let (got_upload, got_download, _) = direction(&rules, "", field, command);
+            let (got_upload, got_download, _) = direction(rules, "", field, command);
             assert_eq!(got_upload, upload, "upload {field}: {command}");
             assert_eq!(got_download, download, "download {field}: {command}");
         }
@@ -815,7 +818,7 @@ fn renamed_http_rules_match_exactly_like_the_bundled_rules() {
         for field in ["command", "arguments", "url"] {
             assert_eq!(
                 direction(&fork, "fork.", field, command),
-                direction(&rules, "", field, command),
+                direction(rules, "", field, command),
                 "{field}: {command}"
             );
         }

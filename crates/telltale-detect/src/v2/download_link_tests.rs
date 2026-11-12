@@ -1,6 +1,5 @@
 use super::rule_v1::evaluate_rule_v1_session_with_budget;
 use super::session::RetentionBudget;
-use super::*;
 use telltale_schema::observation::*;
 
 const CHAIN: &str = "chain.download_then_execute";
@@ -53,10 +52,9 @@ pub(super) fn session(steps: &[(&str, Option<&str>)]) -> (u64, Vec<String>) {
         .map(|(index, (command, time))| tool(&format!("call-{index}"), command, *time))
         .collect::<Vec<CanonicalObservationV2>>();
     let refs = observations.iter().collect::<Vec<_>>();
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let evaluation =
-        evaluate_rule_v1_session_with_budget(&plan, &refs, &mut RetentionBudget::new()).unwrap();
+        evaluate_rule_v1_session_with_budget(plan, &refs, &mut RetentionBudget::new()).unwrap();
     (
         evaluation.compatibility_score(),
         evaluation.effective_rule_ids().to_vec(),
