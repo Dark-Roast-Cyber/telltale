@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "apps/telltale-console",
     "crates/telltale-schema",
     "crates/telltale-inference",
     "crates/telltale-rules",
@@ -21,7 +20,7 @@ default-members = [
 [workspace.package]
 version = "0.7.2"
 edition = "2024"
-# Embedding crates only; the CLI and console build with rust-toolchain.toml.
+# Embedding crates only; the CLI and tests build with rust-toolchain.toml.
 rust-version = "1.88"
 license = "Apache-2.0"
 authors = ["Dark Roast Cyber"]

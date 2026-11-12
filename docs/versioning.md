@@ -27,8 +27,6 @@ format.
   the package version.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
-  `telltale-console` also inherits the workspace version but has `publish = false`
-  and is excluded from default/headless builds and release archives.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
@@ -43,8 +41,8 @@ format.
 ## Rust Toolchain Policy
 
 Telltale is built, tested and released with the toolchain pinned in
-`rust-toolchain.toml`. The CLI and Console promise no minimum supported Rust
-version (MSRV); build them with that toolchain.
+`rust-toolchain.toml`. The CLI promises no minimum supported Rust
+version (MSRV); build it with that toolchain.
 
 The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-sources`,
 `telltale-detect` and `telltale-core`) declare `rust-version = "1.88"` so their
@@ -75,7 +73,7 @@ allowance for `0.y.z` versions:
 
 The Cargo/package version is not the version of every data contract:
 
-- **Package and CLI version:** the workspace root, five library crates and Console
+- **Package and CLI version:** the workspace root and five library crates
   move in lockstep. Internal workspace dependency requirements must be updated
   together. The root binary and library crates use the same release version.
 - **Event schema version:** `schema_version` and versioned identities such as

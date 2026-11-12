@@ -289,7 +289,6 @@ fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
     for stage in [
         "release-fixture-smoke",
         "package-verify",
-        "telltale-console-check",
         "embedding-contract-check",
     ] {
         assert!(local.contains(&format!("run_make {stage}")));

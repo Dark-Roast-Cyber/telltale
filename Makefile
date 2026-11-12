@@ -24,7 +24,6 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 
 .PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check upstream-formats-check catalog-update harness-drift-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight release-preflight-ci package-manifest package-verify status logs scan-dry scan help
 
-.PHONY: telltale-console-check
 .PHONY: version-consistency-check
 .PHONY: session-investigation-check
 .PHONY: embedding-contract-check embedding-msrv-check embedding-lock-update
@@ -47,10 +46,6 @@ help:
 version-consistency-check:
 	@python3 scripts/version-consistency-check
 	@python3 tests/version_consistency_test.py
-
-## Check the optional console without opening a native window
-telltale-console-check:
-	@scripts/telltale-console-check
 
 ## Build release binaries
 build:
