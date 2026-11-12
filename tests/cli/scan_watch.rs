@@ -10177,8 +10177,12 @@ impl Drop for HeartbeatWatch {
 }
 
 #[test]
-fn watch_targeted_change_before_heartbeat_deadline_widens_after_rate_limit() {
-    let _watch_guard = watch_process_guard();
+fn heartbeat_deadline_widens_a_targeted_watch_change_after_rate_limit() {
+    // This test sleeps for a minute. The harness starts tests in name order, so
+    // the name keeps it ahead of the other watch tests and its wait overlaps
+    // their work instead of ending the suite. It does not hold
+    // `watch_process_guard` for the same reason: every other watch test would
+    // wait behind it. Its margins are seconds wide and its store is its own.
     let store = HeartbeatStore::new(false);
     fs::write(store.sessions.join("unchanged.jsonl"), b"").expect("second known source");
     store.scan(&["--health-heartbeat-interval-seconds", "3600"]);

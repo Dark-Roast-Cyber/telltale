@@ -1434,12 +1434,7 @@ mod tests {
         .unwrap();
         let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
         let rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
-        let plan = super::super::compile_rule_v1(
-            &telltale_rules::load_default_rule_set()
-                .unwrap()
-                .compatibility_export(),
-        )
-        .unwrap();
+        let plan = crate::v2::bundled_plan();
         let config = crate::process_chain::ProcessChainConfig::default();
         let evaluation = evaluate_source(
             CanonicalSourceInput {
@@ -1448,7 +1443,7 @@ mod tests {
                 source_instance: Some(&instance),
                 observations: &[observation],
             },
-            &plan,
+            plan,
             Some((&rules, &config)),
         )
         .unwrap();

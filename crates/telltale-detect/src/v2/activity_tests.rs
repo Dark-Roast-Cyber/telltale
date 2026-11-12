@@ -67,8 +67,7 @@ fn run_with_config(
     prior: &BaselineSnapshotStore,
     config: BaselineDeviationConfig,
 ) -> Result<activity::ActivityBaselineResult, ProcessingError> {
-    let rules = telltale_rules::load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let evaluation = evaluate_source(
         CanonicalSourceInput {
             client: ClientId::Claude,
@@ -76,7 +75,7 @@ fn run_with_config(
             source_instance: None,
             observations: &[],
         },
-        &plan,
+        plan,
         None,
     )
     .unwrap();

@@ -1,6 +1,5 @@
 use super::compile_rule_v1;
 use super::session::*;
-use telltale_rules::load_default_rule_set;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
@@ -312,7 +311,7 @@ fn tool_control_lookup_does_not_visit_unrelated_large_result() {
 
 #[test]
 fn default_rules_evaluate_a_store_of_realistic_large_tool_results() {
-    let plan = compile_rule_v1(&load_default_rule_set().unwrap().compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let mut observations = Vec::new();
     for i in 0..64 {
         let output = format!(
@@ -375,7 +374,7 @@ fn default_rules_evaluate_a_store_of_realistic_large_tool_results() {
                 source_instance: Some(&instance),
                 observations: &observations
             },
-            &plan,
+            plan,
             None
         )
         .is_ok()
@@ -466,8 +465,7 @@ fn unknown_identity_never_groups_unrelated_occurrences() {
 
 #[test]
 fn unrelated_source_instances_with_identical_sessions_are_isolated() {
-    let rules = load_default_rule_set().unwrap();
-    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let plan = crate::v2::bundled_plan();
     let observations = vec![observation("one", Some("same"), None, 1)];
     let first = CorrelationId::source_reported("instance-one").unwrap();
     let second = CorrelationId::source_reported("instance-two").unwrap();
@@ -479,7 +477,7 @@ fn unrelated_source_instances_with_identical_sessions_are_isolated() {
                 source_instance: Some(instance),
                 observations: &observations,
             },
-            &plan,
+            plan,
             None,
         )
         .unwrap();
@@ -1462,8 +1460,7 @@ fn source_instance_none_keeps_deterministic_singletons_and_limited_visibility() 
         observation("one", Some("same"), Some("2026-09-17T00:00:00Z"), 1),
         observation("two", Some("same"), Some("2026-09-17T00:00:01Z"), 2),
     ];
-    let rules = load_default_rule_set().unwrap();
-    let compatibility = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let compatibility = crate::v2::bundled_plan();
     let unverified = evaluate_source(
         CanonicalSourceInput {
             client: ClientId::Claude,
@@ -1471,7 +1468,7 @@ fn source_instance_none_keeps_deterministic_singletons_and_limited_visibility() 
             source_instance: None,
             observations: &observations,
         },
-        &compatibility,
+        compatibility,
         None,
     )
     .unwrap();
@@ -1496,7 +1493,7 @@ fn source_instance_none_keeps_deterministic_singletons_and_limited_visibility() 
             source_instance: Some(&instance),
             observations: &observations,
         },
-        &compatibility,
+        compatibility,
         None,
     )
     .unwrap();

@@ -1026,12 +1026,19 @@ fn bundled_rules_for_source(
         AcquisitionOptions::new(ObservedAt::new("2026-10-05T12:00:00Z").unwrap()),
     )
     .unwrap();
-    let rules = compile_rule_v1(
-        &telltale_rules::load_default_rule_set()
+    // Built once: the caller runs this for every command and source shape.
+    static RULES: std::sync::LazyLock<telltale_detect::v2::RuleV1CompatibilityPlan> =
+        std::sync::LazyLock::new(|| {
+            compile_rule_v1(
+                &telltale_rules::load_default_rule_set()
+                    .unwrap()
+                    .compatibility_export(),
+            )
             .unwrap()
-            .compatibility_export(),
-    )
-    .unwrap();
+        });
+    static PIPELINE: std::sync::LazyLock<Pipeline> =
+        std::sync::LazyLock::new(|| Pipeline::builder().build().unwrap());
+    let rules = &*RULES;
     let instance = CorrelationId::source_reported("imds:synthetic").unwrap();
     let evaluation = evaluate_source(
         CanonicalSourceInput {
@@ -1040,7 +1047,7 @@ fn bundled_rules_for_source(
             source_instance: Some(&instance),
             observations: &batch.observations,
         },
-        &rules,
+        rules,
         None,
     )
     .unwrap();
@@ -1048,9 +1055,7 @@ fn bundled_rules_for_source(
     let session = &evaluation.sessions()[0];
     let mut session_rules = session.rule_ids().to_vec();
     session_rules.sort();
-    let scan = Pipeline::builder()
-        .build()
-        .unwrap()
+    let scan = PIPELINE
         .scan_sources_detailed(
             std::slice::from_ref(&source),
             &DetailedEvaluationOptions::default(),

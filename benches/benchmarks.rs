@@ -161,6 +161,8 @@ fn bench_rule_loading(c: &mut Criterion) {
     let mut group = c.benchmark_group("rules");
     group.sample_size(50);
 
+    // After the first iteration the rules crate reuses its compiled patterns,
+    // so this measures a warm load, not regex compilation.
     group.bench_function("load_default", |b| {
         b.iter(|| {
             let _ = load_default_rule_set().expect("rule set");

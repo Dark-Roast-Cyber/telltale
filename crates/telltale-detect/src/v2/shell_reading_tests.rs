@@ -593,15 +593,14 @@ fn call(id: &str, arguments: serde_json::Value) -> CanonicalObservationV2 {
     .unwrap()
 }
 
-struct Reader {
-    plan: RuleV1CompatibilityPlan,
+struct Reader<'a> {
+    plan: &'a RuleV1CompatibilityPlan,
 }
 
-impl Reader {
-    fn new() -> Self {
-        let rules = telltale_rules::load_default_rule_set().unwrap();
-        Self {
-            plan: compile_rule_v1(&rules.compatibility_export()).unwrap(),
+impl Reader<'_> {
+    fn new() -> Reader<'static> {
+        Reader {
+            plan: crate::v2::bundled_plan(),
         }
     }
 
@@ -645,7 +644,7 @@ impl Reader {
                 source_instance: Some(&instance),
                 observations: &observations,
             },
-            &self.plan,
+            self.plan,
             None,
             &DetailedEvaluationOptions::default(),
             work,
@@ -1475,9 +1474,8 @@ fn a_segment_rule_reads_the_code_with_its_quotes() {
     }
     let document = custom("custom.fetch", "^fetch\\b", "--post");
     let rules = telltale_rules::load_rule_set_from_documents(&[&document], None).unwrap();
-    let reader = Reader {
-        plan: compile_rule_v1(&rules.compatibility_export()).unwrap(),
-    };
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let reader = Reader { plan: &plan };
     let fires = |command: &str| reader.rules(command).contains("custom.fetch");
     assert!(fires("fetch a"));
     assert!(fires("true; fetch a"));
