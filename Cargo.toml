@@ -36,7 +36,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # YAML Organization successor; Cargo's rename preserves the Serde YAML imports.
 serde_yaml = { package = "yaml_serde", version = "0.10.7" }
-jsonschema = { version = "0.60.1", default-features = false }
+jsonschema = { version = "0.61.0", default-features = false }
 sha2 = "0.11"
 getrandom = "0.4.3"
 hmac = "0.13"
