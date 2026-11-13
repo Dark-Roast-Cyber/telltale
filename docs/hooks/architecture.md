@@ -188,7 +188,7 @@ The crate builds and its tests run on Linux, macOS and Windows (CI matrix).
 | State default | `$XDG_STATE_HOME/telltale-hooks`, else `~/.local/state/telltale-hooks` | `%LOCALAPPDATA%\telltale-hooks` |
 | State directory permissions | `0700` | Inherited ACL (no explicit hardening) |
 | Long-lived evaluator | Unix socket, autostarted | None: the client reports `evaluator_unsupported_platform`, nothing is autostarted, and every hook evaluates in-process |
-| Executable identity in the fingerprint | device, inode, size, mtime | path, size, mtime |
+| Executable identity in the fingerprint | device, inode, size, mtime (Linux: of `/proc/self/exe`); unique to the process if unreadable | path, size, mtime; unique to the process if unreadable |
 
 Residual risks, both deferred until the **first verified Windows harness
 E2E** (see the [threat model](../security/hooks-threat-model.md)):

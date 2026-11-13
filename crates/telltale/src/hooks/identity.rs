@@ -10,7 +10,8 @@
 //!   [`set_host_build`] (the CLI registers its Git hash; `unknown` otherwise);
 //! - [`executable_identity`], the file identity of the running executable,
 //!   read at run time. It changes whenever the binary is rebuilt or replaced,
-//!   whether or not the version or commit changed.
+//!   whether or not the version or commit changed. When the file cannot be
+//!   read, the identity is unique to the process, so it matches nothing.
 //!
 //! [`crate::hooks::config::Config::fingerprint`] folds all three in. The
 //! telemetry `producer.telltale_rev` field is [`revision`], a 40-hex digest of
@@ -65,12 +66,36 @@ pub fn revision() -> &'static str {
     })
 }
 
-/// Device, inode, size and modification time of the running executable.
+/// An identity no other process has: this process's id and the time it was
+/// first needed. It stays fixed for the life of the process, because the
+/// evaluator compares its fingerprint before and after building its rules.
+/// An executable whose file cannot be read therefore never shares an
+/// evaluator with another process; its hooks evaluate in-process instead.
+fn unknown_identity() -> String {
+    static UNKNOWN: OnceLock<String> = OnceLock::new();
+    UNKNOWN
+        .get_or_init(|| {
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos());
+            format!("unknown:{}:{at}", std::process::id())
+        })
+        .clone()
+}
+
+/// Device, inode, size and modification time of the running executable. On
+/// Linux this reads `/proc/self/exe`, the image the process runs even after
+/// its path was replaced; elsewhere, the file at [`std::env::current_exe`].
+/// When neither can be read, [`unknown_identity`].
 #[cfg(unix)]
 pub fn executable_identity() -> String {
     use std::os::unix::fs::MetadataExt;
-    std::env::current_exe()
-        .and_then(std::fs::metadata)
+    #[cfg(target_os = "linux")]
+    let running = std::fs::metadata("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let running: std::io::Result<std::fs::Metadata> = Err(std::io::ErrorKind::Unsupported.into());
+    running
+        .or_else(|_| std::env::current_exe().and_then(std::fs::metadata))
         .map(|m| {
             format!(
                 "{}:{}:{}:{}.{}",
@@ -81,15 +106,15 @@ pub fn executable_identity() -> String {
                 m.mtime_nsec()
             )
         })
-        .unwrap_or_else(|_| "unknown".to_owned())
+        .unwrap_or_else(|_| unknown_identity())
 }
 
 /// Path, size and modification time of the running executable (there is no
-/// portable file identity outside Unix).
+/// portable file identity outside Unix), or [`unknown_identity`].
 #[cfg(not(unix))]
 pub fn executable_identity() -> String {
     let Ok(exe) = std::env::current_exe() else {
-        return "unknown".to_owned();
+        return unknown_identity();
     };
     std::fs::metadata(&exe)
         .map(|m| {
@@ -101,7 +126,7 @@ pub fn executable_identity() -> String {
                 .unwrap_or_default();
             format!("{}:{}:{modified}", exe.display(), m.len())
         })
-        .unwrap_or_else(|_| "unknown".to_owned())
+        .unwrap_or_else(|_| unknown_identity())
 }
 
 #[cfg(test)]
@@ -129,7 +154,16 @@ mod tests {
     #[test]
     fn the_executable_has_a_file_identity() {
         let identity = executable_identity();
-        assert_ne!(identity, "unknown");
+        assert!(!identity.starts_with("unknown"), "{identity}");
         assert_eq!(identity, executable_identity());
+    }
+
+    #[test]
+    fn an_unreadable_executable_gets_an_identity_only_this_process_has() {
+        let identity = unknown_identity();
+        assert_eq!(identity, unknown_identity());
+        let pid = std::process::id().to_string();
+        assert_eq!(identity.split(':').nth(1), Some(pid.as_str()));
+        assert_ne!(identity, "unknown");
     }
 }
