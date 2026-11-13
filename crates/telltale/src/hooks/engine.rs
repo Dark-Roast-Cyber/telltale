@@ -953,7 +953,7 @@ fn family_document(family: &Family, coverage: &mut GeneratedCoverage) -> Option<
                 quote(&regex)
             ),
             Selection::Command(regex) => format!(
-                "    detection:\n      selection:\n        command: '{}'\n      exclude:\n        command: '{}'\n      condition: selection\n",
+                "    detection:\n      selection:\n        command: '{}'\n      exclude:\n        command: '{}'\n      scope: recorded_exclusion\n      condition: selection\n",
                 quote(&regex),
                 quote(HARMLESS)
             ),
