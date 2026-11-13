@@ -342,12 +342,12 @@ fn hook(harness: Harness) -> i32 {
         && let Ok(socket) = config.resolved_socket_path()
     {
         let timeout = std::time::Duration::from_millis(config.evaluator.request_timeout_ms);
+        let asked_at = telltale_core::hooks::runtime::now_ms();
         match evaluator::request(&socket, harness, &config.fingerprint(), &bytes, timeout) {
             ClientOutcome::Answered(output) => return answer(output),
             ClientOutcome::DeliveredNoAnswer(code) => {
-                // The evaluator may already have recorded this event: no re-evaluation.
                 let mut runtime = Runtime::new(config);
-                let response = runtime.fail_unanswered(&ctx, &event, code);
+                let response = runtime.handle_unanswered(&ctx, event, code, asked_at);
                 return answer(harness.render(&ctx.hook_event, &response));
             }
             ClientOutcome::NotDelivered(code) => {

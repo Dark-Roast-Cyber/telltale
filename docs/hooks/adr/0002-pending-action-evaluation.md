@@ -24,7 +24,9 @@ Findings for the pending call are the action records whose `stage` is
 The runtime writes strictly increasing, unique millisecond source times on
 every journal line, so that equality identifies exactly one observation.
 If Telltale quarantines the pending line (by native `uuid`) or the source
-fails, the call is `not_evaluated` and `on_error` applies.
+fails, the call is `not_evaluated` and `on_error` applies. *Superseded: a
+quarantined line is now projected and then gets `on_unevaluable`, and a failed
+source is retried on a reduced window (addendum of 2026-11-05).*
 
 ## Evidence
 
@@ -163,3 +165,75 @@ every later call whose window includes the line `not_evaluated`. Codex
 outside `[A-Za-z0-9_-]` in its composite key, which keeps the key injective
 (`crates/telltale/src/hooks/codex_cli.rs`, regression-tested). Making journal IDs safe for every
 adapter is separate runtime work.
+
+## Addendum (2026-11-05): recovering from a failed source
+
+Telltale fails a source as a whole and has no partial result, and this
+decision scans one source per call. Tool input the model controls can fail it:
+a line Telltale refuses (keys that collide under NFC) or capacity used up across
+lines (contribution keys, projection items, evaluation budget).
+
+Rescanning the pending line alone, as first proposed, recovers the rule verdict
+and loses every multi-call chain: poison followed by a chain's second stage
+would be a bypass. Dropping the oldest lines until a scan succeeds has the same
+hole, since everything before the newest poison goes. So:
+
+- Colliding keys are renamed in the evaluation encoding (`journal::safe_input_keys`),
+  so that shape loses nothing and needs no recovery.
+- If a scan still fails at source level, the pending call is scanned alone,
+  which secures its rule verdict. History then goes back in stages, and a block
+  Telltale refuses is split, so a line that fails on its own is found and dropped
+  wherever it sits. This needs no knowledge of the cause, so it also covers
+  sessions an older version poisoned and failures added upstream. It stops at 32
+  scans, at 2 capacity refusals after a pass (no search finds a culprit for
+  capacity, so a further refusal only trims the result and costs a full scan), or
+  at 2 s, checked before each of these scans against a forecast of its cost. The cost
+  matters twice: a hook timeout runs the call, and scans that outlast
+  `DEADLINE_MARGIN` used to make telemetry disagree with the harness.
+- Lines go back in a chosen order and are always scanned in their original order:
+  the newest 8, then older lines under 1 KB smallest first, then the rest newest
+  first. Compared on the debug build with the 2-refusal limit, before the harness
+  self-protection rules (the pinned cases still hold with them); a miss is a chain
+  stage lost, out of the sizes swept:
+
+  | Case | Newest first | Smallest first | Chosen |
+  | --- | --- | --- | --- |
+  | Flood filling capacity exactly (20 lines + a last line of 40-136 hosts) | 44/97 | 0/97 | 0/97 |
+  | Flood of 13 lines | 7/16 | 0/16 | 0/16 |
+  | 20 quiet calls, then a flood of 20 | 10/16 | 0/16 | 0/16 |
+  | 200 flood lines under 1 KB | 7/8 | 0/8 | 0/8 |
+  | Full window of flood lines | 1/1 | 0/1 | 0/1 |
+  | Deny-level stage padded past the flood, 2 lines back | 0/21 | **11/21, deny lost** | 0/21 |
+  | Benign 3.8 KB session, short stage older than all | 1/1 | 0/1 | 0/1 |
+  | Benign 3.8 KB session, short stage 3 lines back | 0/1 | 0/1 | 0/1 |
+  | Benign 3.8 KB session, long stage in the middle | 0/1 | 1/1 | 0/1 |
+
+  Smallest first drops a recent line for an old one, which is the wrong trade when
+  chains link within 3 calls, and it cost a deny. Newest first gives the capacity to
+  the flood. The mix keeps what links, then what is cheap. With no refusal limit
+  newest first misses less (1/97, 0/16, 0/16) but still loses the benign old stage,
+  and it costs each benign call 1.7 s against 1.1 s in the same build. The order
+  protects ordinary stages, not one built to be lost; that limit is accepted.
+- History loss never raises the verdict of a call with no finding. Floor and
+  plain verdict were weighed: a floor recreates the wedge (every call denied where
+  the harness cannot ask), a floor for the first N calls delays it and still
+  wedges, and a floor for rule families with chains would put chain knowledge in
+  the host, the second engine this project does not build. It would also not address
+  losses that involve no failure, which are tracked privately.
+  `history_lost` tells telemetry what was lost; it reaches neither the harness nor
+  a person answering a prompt.
+- A pending call past capacity on its own keeps `on_unevaluable` as a floor: it
+  was only evaluated in pieces, it is one call, and later calls are unaffected.
+  Its pieces do not ask the 2 s budget, because under load that dropped the piece
+  carrying a deny and a call can bring that load itself. With no limit at all they
+  outran the evaluator's margin and the hook's timeout: 24.8 s of evaluation at 80
+  busy processes on 20 logical CPUs, and 43 s for one hook. So they stop 5 s after the
+  evaluation started, which leaves `DEADLINE_MARGIN` about 250 ms for the piece in
+  flight. Findings so far keep their force and the pieces left get `on_unevaluable`
+  and the limit `pending_pieces_unscanned`, so a deny in a piece past the limit
+  becomes `ask`. That is the trade for a hook that answers more often. It does not
+  bound the scans ahead of the pieces.
+
+Nothing about the recovery is persisted, so a poisoned window pays for it on
+every call until the line leaves. That is simple and bounded; remembering what
+was dropped is the next step if the cost shows up in practice.

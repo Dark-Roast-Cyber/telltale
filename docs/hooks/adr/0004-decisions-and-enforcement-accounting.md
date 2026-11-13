@@ -67,7 +67,7 @@ real binaries with stub hooks.
    a `Decision` with private fields, constructible only through
    `Response::decision`, which applies the substitution: a type guarantee
    covering policy verdicts, `on_unevaluable`, `on_error` (`fail`,
-   `fail_unanswered`, `policy_response`) and any failure policy added later.
+   `fail_strict`, `policy_response`) and any failure policy added later.
    The reason says approval was required and the harness
    cannot ask. Telemetry keeps the policy verdict (`decision.verdict`,
    ledger counts) and records the substitution as `decision.returned_verdict`

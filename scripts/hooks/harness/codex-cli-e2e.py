@@ -42,7 +42,9 @@ sys.path.insert(0, HERE)
 from capture_common import Run, tool_results_seen_by_model  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
-CODEX = os.environ.get("CODEX_BIN", "codex")
+# Resolved now: each scenario's PATH starts with a stand-in `codex`, and a bare name
+# would run that instead, leaving the canary absent and the scenario falsely passing.
+CODEX = shutil.which(os.environ.get("CODEX_BIN", "codex")) or os.environ.get("CODEX_BIN", "codex")
 TTH = os.path.abspath(os.environ.get("TELLTALE_HOOKS_BIN", os.path.join(REPO, "target", "release", "telltale")))
 ROOT = os.environ.get("E2E_ROOT") or os.path.join(REPO, "scratch", "codex-e2e")
 MARKERS = os.path.join(REPO, "crates", "telltale", "tests", "hooks", "e2e-marker-rules.yaml")
@@ -116,8 +118,8 @@ def trust_with_picker(run, env, config_path, timeout=45):
 
 def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=None, execpolicy=False,
              model="gpt-5.5", expect, note="", canary_name="canary.txt", evaluator=False, after_trust=None,
-             marker=None, damage=None, tth_settings="", expect_model_requests=None, home_name=".codex",
-             rule=None, intact=None):
+             marker=None, damage=None, tth_settings="", expect_model_requests=None, mcp=False,
+             home_name=".codex", rule=None, intact=None):
     run = Run(ROOT, name)
     codex_home = os.path.join(run.home, home_name)
     os.makedirs(codex_home)
@@ -129,7 +131,7 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
     run.start_mock({"conversations": convs})
 
     # The hook config users install: `telltale hooks codex-cli settings [COMMAND]`.
-    hook_cmd = hook_cmd or f"{TTH} hooks codex-cli hook"
+    hook_cmd = (hook_cmd or f"{TTH} hooks codex-cli hook").replace("@RUN@", run.dir)
     if "@COPY@" in hook_cmd:  # a private copy of the binary that a scenario may replace after trust
         copy = os.path.join(run.dir, "tth-copy")
         shutil.copy2(TTH, copy)
@@ -151,6 +153,9 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
         f.write(f'model = "{model}"\nmodel_provider = "mock"\ncheck_for_update_on_startup = false\n'
                 f'[model_providers.mock]\nname = "mock"\nbase_url = "http://127.0.0.1:{run.port}/v1"\n'
                 'wire_api = "responses"\nrequest_max_retries = 0\nstream_max_retries = 0\n')
+        if mcp:
+            f.write(f'[mcp_servers.tthmock]\ncommand = "{sys.executable}"\n'
+                    f'args = ["-I", "{os.path.join(HERE, "mock-mcp.py")}"]\n')
         if trust == "picker":  # the separate first-run directory prompt, which is not under test
             f.write(f'[projects."{run.work}"]\ntrust_level = "trusted"\n')
     if execpolicy:  # the native backstop, exactly as `telltale hooks codex-cli execpolicy` prints it
@@ -212,6 +217,9 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
     decisions = [{"tool": r["action"]["tool_name"], "verdict": r["decision"]["verdict"],
                   "returned": r["decision"]["returned"],
                   "returned_verdict": r["decision"].get("returned_verdict"),
+                  "basis": r["decision"]["basis"], "status": r["evaluation"]["status"],
+                  "failure_code": r["evaluation"]["failure_code"],
+                  "limits": r["evaluation"]["visibility_limits"],
                   "rules": r["decision"]["rule_ids"], "agent": r["session"].get("agent_id") is not None,
                   "evaluator": r["evaluation"]["evaluator"], "fallback": r["evaluation"]["evaluator_fallback"]}
                  for r in records if r["kind"] == "decision"]
@@ -318,7 +326,27 @@ PATCH_HOOKS = "*** Begin Patch\n*** Add File: @WORK@/.codex/hooks.json\n+{}\n***
 PATCH_BENIGN = "*** Begin Patch\n*** Add File: @WORK@/patched.txt\n+hello\n*** End Patch\n"
 DENY_STEPS = [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}]
 
+# Input that failed the whole Telltale source: does the real harness forward
+# it to the hook, and does a later deny-level command still get its rule verdict?
+# `status`, `failure_code` and `limits` of each decision answer both.
+COLLIDING = {"é": "composed", "é": "decomposed"}
+LATER_DENY = [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}]
+# The hook behind a pass-through recorder (hook-io.jsonl), where a result claims what the hook received.
+RECORDED_HOOK = (f"{sys.executable} -I {os.path.join(HERE, 'copilot-cli-e2e.py')} tee @RUN@/hook-io.jsonl "
+                 f"{TTH} codex-cli hook")
+
 SCENARIOS = {
+    "poison-nfc-exec": lambda: scenario("poison-nfc-exec", [
+        {"tool_calls": [{"name": "exec_command", "arguments": {"cmd": "ls", **COLLIDING}}]}, *LATER_DENY],
+        hook_cmd=RECORDED_HOOK, expect="absent", note="NFC-colliding keys on exec_command"),
+    "poison-nfc-mcp": lambda: scenario("poison-nfc-mcp", [
+        {"tool_calls": [{"name": "echo", "namespace": "mcp__tthmock", "arguments": {"text": "hi", **COLLIDING}}]},
+        *LATER_DENY], hook_cmd=RECORDED_HOOK, mcp=True, expect="absent", note="NFC-colliding keys on an MCP tool"),
+    "poison-flood": lambda: scenario("poison-flood", [
+        *[{"tool_calls": [exec_call("echo " + " ".join(f"http://{i:x}-{seed:x}.test" for i in range(225)))]}
+          for seed in range(22)], *LATER_DENY],
+        hook_cmd=RECORDED_HOOK, expect="absent",
+        note="22 commands of 225 distinct hosts, each under the 4,096-byte string bound"),
     # The documented install: no bypass flag anywhere.
     "trusted": lambda: scenario("trusted", DENY_STEPS, trust="picker", expect="absent",
                                 note="trusted through the real TUI picker, no bypass flag; deny honored"),

@@ -41,7 +41,7 @@ sys.path.insert(0, HERE)
 
 
 def tee(log, argv):
-    """Pass-through recorder: run the hook, record what it printed and its exit code."""
+    """Pass-through recorder: run the hook, record what it received and printed, and its exit code."""
     raw = sys.stdin.buffer.read()
     p = subprocess.run(argv, input=raw, capture_output=True)
     try:
@@ -52,7 +52,7 @@ def tee(log, argv):
         "tool:" + str(payload.get("toolName")) + (":post" if "toolResult" in payload or "error" in payload else "")
         if "toolName" in payload else "lifecycle")
     with open(log, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"event": event, "stdout": p.stdout.decode(errors="replace"),
+        f.write(json.dumps({"event": event, "payload": payload, "stdout": p.stdout.decode(errors="replace"),
                             "stderr": p.stderr.decode(errors="replace")[-400:], "exit": p.returncode}) + "\n")
     sys.stdout.buffer.write(p.stdout)
     sys.stderr.buffer.write(p.stderr)
@@ -263,7 +263,9 @@ def scenario(name, steps, expect, *, fmt="camel", flags=("--allow-all-tools",), 
                        "tool": d["action"]["tool_name"], "agent_id": d["session"]["agent_id"],
                        "verdict": d["decision"]["verdict"], "returned": d["decision"]["returned"],
                        "returned_verdict": d["decision"].get("returned_verdict"),
-                       "basis": d["decision"]["basis"],
+                       "basis": d["decision"]["basis"], "status": d["evaluation"]["status"],
+                       "failure_code": d["evaluation"]["failure_code"],
+                       "limits": d["evaluation"]["visibility_limits"],
                        "rules": d["decision"]["rule_ids"], "evaluator": d["evaluation"]["evaluator"],
                        "fallback": d["evaluation"].get("evaluator_fallback")}
                       for d in records if d["kind"] == "decision"],
@@ -308,8 +310,29 @@ DOWN, ENTER, ESC = b"\x1b[B", b"\r", b"\x1b"
 TRUST = ("--allow-all-tools", "--trust-folder")
 UNEVALUABLE, OVERSIZED = 2_000_000, 33 * 1024 * 1024
 ALLOW_UNEVALUABLE = 'on_unevaluable = "allow"\n'
+# Input that failed the whole Telltale source: does the real harness forward
+# it to the hook, and does a later deny-level command still get its rule verdict?
+# `status`, `failure_code` and `limits` of each decision answer both; the canary
+# alone cannot, because in -p a refused ask leaves it absent too.
+COLLIDING = {"é": "composed", "é": "decomposed"}
+LATER_DENY = [{"tool_calls": [bash(f"@CANARY@ && {DENY}")]}, {"text": "done"}]
+NFC_BASH = [{"tool_calls": [{"name": "bash", "arguments": {
+    "command": "ls", "description": "e2e step", **COLLIDING}}]}, *LATER_DENY]
+NFC_MCP = [{"tool_calls": [{"name": "tthmock-echo", "arguments": {"text": "hi", **COLLIDING}}]}, *LATER_DENY]
+FLOOD = [{"tool_calls": [bash("echo " + " ".join(f"http://{i:x}-{seed:x}.test" for i in range(225)))]}
+         for seed in range(22)] + LATER_DENY
 
 SCENARIOS = {
+    "poison-nfc-bash": lambda: scenario("poison-nfc-bash", NFC_BASH, "absent", note="NFC-colliding keys on bash"),
+    "poison-nfc-mcp": lambda: scenario("poison-nfc-mcp", NFC_MCP, "absent", note="NFC-colliding keys on an MCP tool"),
+    "poison-nfc-pascal": lambda: scenario("poison-nfc-pascal", NFC_BASH, "absent", fmt="pascal",
+                                          note="NFC-colliding keys, PascalCase events"),
+    "poison-nfc-claude-settings": lambda: scenario("poison-nfc-claude-settings", NFC_BASH, "absent", claude_settings=True,
+                                                   flags=TRUST, note="NFC-colliding keys, .claude/settings.json route"),
+    "poison-flood": lambda: scenario("poison-flood", FLOOD, "absent",
+                                     note="22 commands of 225 distinct hosts, each near the 4,096-byte string bound"),
+    "poison-flood-claude-settings": lambda: scenario("poison-flood-claude-settings", FLOOD, "absent", claude_settings=True,
+                                                     flags=TRUST, note="the flood, .claude/settings.json route"),
     "benign": lambda: scenario("benign", CANARY("ls"), "present"),
     "deny": lambda: scenario("deny", CANARY(DENY), "absent"),
     "deny-pascal": lambda: scenario("deny-pascal", CANARY(DENY), "absent", fmt="pascal"),

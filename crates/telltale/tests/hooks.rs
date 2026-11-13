@@ -22,6 +22,8 @@ mod normalize_parity;
 mod scenarios;
 #[path = "hooks/self_protection_corpus.rs"]
 mod self_protection_corpus;
+#[path = "hooks/source_failure_recovery.rs"]
+mod source_failure_recovery;
 #[path = "hooks/state_tampering.rs"]
 mod state_tampering;
 #[path = "hooks/telemetry_schema.rs"]

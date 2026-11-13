@@ -3,6 +3,8 @@
 //! Telltale evaluation, policy, outcome correlation, telemetry) lives here once.
 //! See docs/architecture.md for the contract adapters must uphold.
 
+use std::time::Duration;
+
 use crate::ObservationStage;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -10,10 +12,10 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
-use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus};
+use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus, RecoveryBudget};
 use crate::hooks::journal::{Line, bound_value, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
-use crate::hooks::state::{PendingDecision, SessionHandle, Settled, Verdict};
+use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
 use crate::hooks::telemetry::{
     Action, DecisionInfo, EvaluationInfo, Harness, Kind, OutcomeInfo, Producer, Record, Session,
     Sink, TelltaleAction, new_record_id, sha256_hex,
@@ -224,7 +226,16 @@ pub struct Runtime {
     evaluator: &'static str,
     /// Why an in-process evaluation did not use the long-lived evaluator.
     evaluator_fallback: Option<&'static str>,
+    /// How long to wait behind a session's other calls.
+    session_lock_wait: Duration,
+    /// When the evaluator's client stops waiting (ms since the epoch).
+    answer_by: Option<i64>,
 }
+
+/// A session's lock stayed taken for as long as this call could wait.
+pub const STATE_LOCK_TIMEOUT: &str = "state_lock_timeout";
+/// The evaluator finished after its client stopped waiting; nothing was recorded.
+pub const ANSWER_TOO_LATE: &str = "evaluator_answer_too_late";
 
 /// Journaled tool-input strings stay under Telltale's 4,096-byte value bound.
 const HISTORY_STRING_BYTES: usize = 4000;
@@ -247,7 +258,16 @@ fn format_ms(ms: i64) -> String {
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_owned())
 }
 
-fn now_ms() -> i64 {
+/// A reason that names no detection: the record holds the detail.
+fn minimal_reason(verdict: Verdict, record_id: &str) -> String {
+    let what = match verdict {
+        Verdict::Deny => "denied by policy",
+        Verdict::Ask | Verdict::Allow => "needs approval",
+    };
+    format!("Telltale Hooks: {what}. Record {record_id}.")
+}
+
+pub fn now_ms() -> i64 {
     (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
 
@@ -269,6 +289,8 @@ impl Runtime {
             engine_error: None,
             evaluator: "in_process",
             evaluator_fallback: None,
+            session_lock_wait: SESSION_LOCK_WAIT,
+            answer_by: None,
         }
     }
 
@@ -276,6 +298,11 @@ impl Runtime {
     pub fn set_evaluator(&mut self, evaluator: &'static str, fallback: Option<&'static str>) {
         self.evaluator = evaluator;
         self.evaluator_fallback = fallback;
+    }
+
+    /// How long a call waits behind a session's other calls.
+    pub fn set_session_lock_wait(&mut self, wait: Duration) {
+        self.session_lock_wait = wait;
     }
 
     /// Use a prebuilt engine (a long-lived host or tests).
@@ -286,6 +313,8 @@ impl Runtime {
             engine_error: None,
             evaluator: "in_process",
             evaluator_fallback: None,
+            session_lock_wait: SESSION_LOCK_WAIT,
+            answer_by: None,
         }
     }
 
@@ -370,9 +399,113 @@ impl Runtime {
     pub fn handle(&mut self, ctx: &Context, event: Event) -> Response {
         match self.try_handle(ctx, &event) {
             Ok(response) => response,
-            Err(code) if self.is_strict_failure(code) => self.fail_strict(ctx, &event, code),
-            Err(code) => self.fail(ctx, &event, code),
+            Err(code) => self.answer_failure(ctx, &event, code),
         }
+    }
+
+    fn answer_failure(&mut self, ctx: &Context, event: &Event, code: &'static str) -> Response {
+        if self.is_strict_failure(code) {
+            self.fail_strict(ctx, event, code)
+        } else {
+            self.fail(ctx, event, code)
+        }
+    }
+
+    /// The evaluator's way in: [`Self::handle`], except that a tool request it
+    /// cannot answer by `answer_by` (ms since the epoch), or a session it cannot
+    /// lock within `lock_wait`, records nothing and returns the code. Its client
+    /// then evaluates the event in-process, so what is recorded is what the
+    /// harness is told, and one session's calls cannot hold up the evaluator.
+    pub fn handle_until(
+        &mut self,
+        ctx: &Context,
+        event: Event,
+        answer_by: i64,
+        lock_wait: Duration,
+    ) -> Result<Response, &'static str> {
+        self.answer_by = Some(answer_by);
+        self.session_lock_wait = lock_wait;
+        let outcome = self.try_handle(ctx, &event);
+        self.answer_by = None;
+        self.session_lock_wait = SESSION_LOCK_WAIT;
+        match outcome {
+            Ok(response) => Ok(response),
+            Err(code @ (STATE_LOCK_TIMEOUT | ANSWER_TOO_LATE)) => Err(code),
+            Err(code) => Ok(self.answer_failure(ctx, &event, code)),
+        }
+    }
+
+    /// The evaluator received the request at `asked_at` (ms since the epoch) and
+    /// no answer came. Past its client's wait the evaluator stops before
+    /// recording ([`Self::handle_until`]), and it records under the session lock,
+    /// so once this hook holds that lock the evaluator either has recorded the
+    /// call or never will. A recorded decision is answered as recorded, so the
+    /// harness gets what telemetry says. Otherwise the call is evaluated here,
+    /// as when the evaluator is busy: a stalled evaluator costs time, not the
+    /// call's verdict, and cannot turn a deny into a failure policy's allow.
+    /// A call with no correlation id cannot be looked up and is evaluated here:
+    /// if its answer was only delayed, the session then has a second decision,
+    /// the later one being what the harness was told.
+    ///
+    /// Other events carry no verdict and are not evaluated twice: they get an
+    /// error record.
+    pub fn handle_unanswered(
+        &mut self,
+        ctx: &Context,
+        event: Event,
+        code: &'static str,
+        asked_at: i64,
+    ) -> Response {
+        let Event::ToolRequested(call) = &event else {
+            return self.fail_strict(ctx, &event, code);
+        };
+        let looking = std::time::Instant::now();
+        if let Some(id) = &call.tool_use_id {
+            match self.recorded_since(ctx, id, asked_at) {
+                Ok(Some(response)) => {
+                    let mut record = self.record(ctx, Kind::Error);
+                    record.error_code = Some(code.to_owned());
+                    record.action = Some(action_of(call));
+                    self.emit(&record);
+                    return response;
+                }
+                Ok(None) => {}
+                Err(failure) => return self.answer_failure(ctx, &event, failure),
+            }
+        }
+        // One wait for this hook, however many times it takes the lock.
+        self.session_lock_wait = self.session_lock_wait.saturating_sub(looking.elapsed());
+        self.set_evaluator("in_process", Some(code));
+        self.handle(ctx, event)
+    }
+
+    /// The answer to a decision on call `id` that was recorded since `asked_at`.
+    fn recorded_since(
+        &self,
+        ctx: &Context,
+        id: &str,
+        asked_at: i64,
+    ) -> Result<Option<Response>, &'static str> {
+        let session = self.open(ctx)?;
+        let asked_at = format_ms(asked_at);
+        let Some(decision) = session
+            .state
+            .pending
+            .iter()
+            .find(|(key, decision)| decision.call_id(key) == id && decision.decided_at >= asked_at)
+            .map(|(_, decision)| decision)
+        else {
+            return Ok(None);
+        };
+        if !decision.returned {
+            return Ok(Some(Response::None));
+        }
+        let reason = minimal_reason(decision.verdict, &decision.record_id);
+        Ok(Some(Response::decision(
+            ctx.can_ask,
+            decision.verdict,
+            reason,
+        )))
     }
 
     /// Failures the agent can bring about: session files; rule content that
@@ -395,23 +528,10 @@ impl Runtime {
         self.fail_with(ctx, event, code, policy)
     }
 
-    /// The long-lived evaluator received the request but did not answer in
-    /// time. Re-evaluating could record the event twice, and a slow or
-    /// stalled evaluator must never turn into an allow by default: apply the
-    /// stricter of `on_error` and `on_unevaluable`.
-    pub fn fail_unanswered(
-        &mut self,
-        ctx: &Context,
-        event: &Event,
-        code: &'static str,
-    ) -> Response {
-        self.fail_strict(ctx, event, code)
-    }
-
-    /// Failures the agent can bring about (a stalled evaluator, damaged
-    /// session files) get the stricter of `on_error` and `on_unevaluable`,
-    /// so the default never fails open.
-    fn fail_strict(&mut self, ctx: &Context, event: &Event, code: &'static str) -> Response {
+    /// Failures the agent can bring about (a session lock held past the wait,
+    /// damaged session files) get the stricter of `on_error` and
+    /// `on_unevaluable`, so the default never fails open.
+    pub fn fail_strict(&mut self, ctx: &Context, event: &Event, code: &'static str) -> Response {
         let policy = self.strict_failure_policy();
         self.fail_with(ctx, event, code, policy)
     }
@@ -468,8 +588,9 @@ impl Runtime {
             .config
             .resolved_state_dir()
             .map_err(|_| "state_dir_unresolved")?;
-        let session = SessionHandle::open(&dir, ctx.harness, &ctx.session_id)
-            .map_err(|error| error.code())?;
+        let session =
+            SessionHandle::open_within(&dir, ctx.harness, &ctx.session_id, self.session_lock_wait)
+                .map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
         // call is still evaluated) but never silent.
         for code in &session.anomalies {
@@ -612,24 +733,27 @@ impl Runtime {
         session: &SessionHandle,
         pending: Vec<Line>,
         focus: &[Focus],
+        budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
         let window = &self.config.window;
         let tail = match session.journal().tail(window.max_records, window.max_bytes) {
             Ok(tail) => tail,
             Err(_) => return (Err("journal_read_failed"), 0, false),
         };
-        let mut lines = tail.lines;
-        let truncated = tail.truncated;
-        lines.extend(pending);
-        let count = lines.len();
         let window_path = session.window_path();
         let result = match self.engine() {
             Ok(engine) => engine
-                .evaluate(&window_path, &lines, focus)
+                .evaluate(&window_path, &tail.lines, &pending, focus, budget)
                 .map_err(|error| error.code()),
             Err(code) => Err(code),
         };
-        (result, count, truncated)
+        // What was actually scanned: recovery from a failed source can leave
+        // history out (`Engine::evaluate`).
+        let kept = result
+            .as_ref()
+            .map_or(tail.lines.len(), |evaluation| evaluation.history_kept);
+        let truncated = tail.truncated || kept < tail.lines.len();
+        (result, kept + pending.len(), truncated)
     }
 
     fn evaluation_info(
@@ -698,8 +822,13 @@ impl Runtime {
             stage: ObservationStage::ToolRequested,
             native_id: uuid.clone(),
         };
-        let (mut result, mut window_records, mut window_truncated) =
-            self.evaluate(&session, vec![pending], std::slice::from_ref(&focus));
+        let mut budget = RecoveryBudget::start();
+        let (mut result, mut window_records, mut window_truncated) = self.evaluate(
+            &session,
+            vec![pending],
+            std::slice::from_ref(&focus),
+            &mut budget,
+        );
         // Telltale excluded the call (oversized or too deeply nested input):
         // evaluate a bounded projection that still covers every byte.
         let mut projection: Option<Vec<serde_json::Value>> = None;
@@ -729,9 +858,14 @@ impl Runtime {
                     });
                 }
                 (result, window_records, window_truncated) =
-                    self.evaluate(&session, lines, &focuses);
+                    self.evaluate(&session, lines, &focuses, &mut budget);
                 projection = Some(variants);
             }
+        }
+        // The evaluator's client has stopped waiting and will evaluate this call
+        // itself. Nothing has been recorded yet, and nothing is.
+        if self.answer_by.is_some_and(|by| now_ms() > by) {
+            return Err(ANSWER_TOO_LATE);
         }
         let mut evaluation_info = self.evaluation_info(&result, window_records, window_truncated);
         if projection.is_some() {
@@ -743,6 +877,11 @@ impl Runtime {
             }
         }
 
+        if crate::hooks::journal::input_keys_collide(&encoded.input) {
+            evaluation_info
+                .visibility_limits
+                .push("input_keys_rewritten".to_owned());
+        }
         let name_malformed = crate::hooks::journal::tool_name_is_malformed(&encoded.tool_name);
         if name_malformed {
             evaluation_info
@@ -940,11 +1079,7 @@ impl Runtime {
         name_malformed: bool,
     ) -> String {
         if self.config.reason_detail == ReasonDetail::Minimal {
-            let what = match verdict {
-                Verdict::Deny => "denied by policy",
-                Verdict::Ask | Verdict::Allow => "needs approval",
-            };
-            return format!("Telltale Hooks: {what}. Record {record_id}.");
+            return minimal_reason(verdict, record_id);
         }
         let t = &self.config.thresholds;
         let why = match basis {
@@ -1047,8 +1182,12 @@ impl Runtime {
             stage: ObservationStage::ToolResultReturned,
             native_id: uuid,
         };
-        let (result, window_records, window_truncated) =
-            self.evaluate(&session, vec![line.clone()], std::slice::from_ref(&focus));
+        let (result, window_records, window_truncated) = self.evaluate(
+            &session,
+            vec![line.clone()],
+            std::slice::from_ref(&focus),
+            &mut RecoveryBudget::start(),
+        );
         session
             .journal()
             .append(&line)
@@ -1355,6 +1494,7 @@ fn is_session_file_failure(code: &str) -> bool {
         "state_dir_create_failed"
             | "state_lock_open_failed"
             | "state_lock_failed"
+            | STATE_LOCK_TIMEOUT
             | "state_read_failed"
             | "state_write_failed"
             | "state_corrupt"

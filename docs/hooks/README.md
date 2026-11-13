@@ -45,7 +45,7 @@ version` prints the inputs and the digest.
 | Harnesses | Claude Code (2.1.318), GitHub Copilot CLI (1.0.105), OpenAI Codex CLI (0.166.0; fails open by design, see below) |
 | Codex evidence | **Linux only, scripted model; real-model run pending.** Deny (main agent, subagent, `apply_patch`, autostarted evaluator) and ask-as-deny, on the real Codex binary. Also under the documented install: trusted through the real TUI, `codex exec` with no bypass flag. Hook failures fail open: [results](e2e/2026-11-04-codex-cli-0.166.0.md) |
 | Real enforcement verified | Claude Code: deny (default and `bypassPermissions` modes, subagents), ask (headless declines), self-protection, download-then-execute chain, fail-open/fail-closed behavior: [results](e2e/2026-11-04-claude-code-2.1.318.md). Copilot CLI (scripted model): deny (default, `--yolo`, autopilot, PascalCase, subagents), ask (prompts interactively, refused in `-p`), fail-closed: [results](e2e/2026-11-04-copilot-cli-1.0.105.md) |
-| Latency | PreToolUse p50 16-18 ms with the autostarted long-lived evaluator; ~690 ms in-process fallback ([ADR 0003](adr/0003-process-model.md)) |
+| Latency | PreToolUse p50 19 ms in a short window and 44 to about 190 ms in a full one, depending on what it holds, with the autostarted long-lived evaluator; ~690 ms in-process fallback ([ADR 0003](adr/0003-process-model.md)) |
 
 The reports in [`e2e/`](e2e/) are historical: they were run against the
 standalone `telltale-hooks` binary before the move into Telltale, and no real

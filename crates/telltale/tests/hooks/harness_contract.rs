@@ -213,7 +213,7 @@ fn failure_policy_asks_are_substituted_on_every_path() {
         Verdict::Ask
     );
 
-    // The infallible wrapper (on_error = ask) and the unanswered evaluator
+    // The infallible wrapper (on_error = ask) and the strict failure policy
     // (stricter of on_error and on_unevaluable).
     let mut h = Harness::with(|c| c.on_error = OnError::Ask);
     let failed = h.runtime.fail(&cannot, &event, "x");
@@ -228,32 +228,27 @@ fn failure_policy_asks_are_substituted_on_every_path() {
         c.on_error = OnError::Allow;
         c.on_unevaluable = OnError::Ask;
     });
-    let response = h
-        .runtime
-        .fail_unanswered(&cannot, &event, "evaluator_timeout");
+    let response = h.runtime.fail_strict(&cannot, &event, "evaluator_timeout");
     assert_eq!(decision(&response).unwrap().0, Verdict::Deny);
     assert_eq!(
-        decision(&h.runtime.fail_unanswered(&can, &event, "evaluator_timeout"))
+        decision(&h.runtime.fail_strict(&can, &event, "evaluator_timeout"))
             .unwrap()
             .0,
         Verdict::Ask
     );
-    // With the default on_unevaluable = ask, an unanswered evaluator is an
+    // With the default on_unevaluable = ask, a strict failure is an
     // ask, so a harness that cannot ask gets a deny; explicit allow policies
     // never become anything else.
     let mut h = Harness::new();
     assert_eq!(h.runtime.fail(&cannot, &event, "x"), Response::None);
     assert_eq!(
-        decision(&h.runtime.fail_unanswered(&cannot, &event, "x"))
+        decision(&h.runtime.fail_strict(&cannot, &event, "x"))
             .unwrap()
             .0,
         Verdict::Deny
     );
     let mut h = Harness::with(|c| c.on_unevaluable = OnError::Allow);
-    assert_eq!(
-        h.runtime.fail_unanswered(&cannot, &event, "x"),
-        Response::None
-    );
+    assert_eq!(h.runtime.fail_strict(&cannot, &event, "x"), Response::None);
 }
 
 #[test]

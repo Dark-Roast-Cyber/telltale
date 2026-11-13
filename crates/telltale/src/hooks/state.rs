@@ -7,8 +7,9 @@
 //! They are integrity-relevant but not tamper-proof; see docs/threat-model.md.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,11 @@ use crate::hooks::journal::Journal;
 pub const STATE_VERSION: u32 = 1;
 /// Decisions kept for outcome correlation; older ones are dropped.
 const MAX_PENDING: usize = 1024;
+/// How long a hook waits behind a session's other calls before it gives up with
+/// `state_lock_timeout`. A harness that times a hook out runs the call (fail
+/// open), and the shortest hook timeout installed is 30 s: this, plus the
+/// evaluator's 10.5 s and one evaluation, has to stay under it.
+pub const SESSION_LOCK_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -359,8 +365,42 @@ pub fn create_fresh(path: &Path) -> std::io::Result<File> {
     open_regular(OpenOptions::new().write(true).create_new(true), path)
 }
 
+/// Take a session's lock, or give up after `wait`. A blocking lock cannot time
+/// out, and polling behaves the same on every platform.
+fn lock_within(lock: &File, wait: Duration) -> Result<(), StateError> {
+    let started = Instant::now();
+    let mut pause = Duration::from_millis(1);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(error)) => {
+                return Err(StateError::Io("state_lock_failed", error));
+            }
+        }
+        if started.elapsed() >= wait {
+            return Err(StateError::Io(
+                "state_lock_timeout",
+                std::io::ErrorKind::TimedOut.into(),
+            ));
+        }
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(20));
+    }
+}
+
 impl SessionHandle {
     pub fn open(state_dir: &Path, harness: &str, session_id: &str) -> Result<Self, StateError> {
+        Self::open_within(state_dir, harness, session_id, SESSION_LOCK_WAIT)
+    }
+
+    /// [`Self::open`], waiting at most `wait` for the session's lock.
+    pub fn open_within(
+        state_dir: &Path,
+        harness: &str,
+        session_id: &str,
+        wait: Duration,
+    ) -> Result<Self, StateError> {
         let dir = state_dir
             .join("sessions")
             .join(session_key(harness, session_id));
@@ -370,8 +410,7 @@ impl SessionHandle {
             &dir.join("lock"),
         )
         .map_err(|e| StateError::Io("state_lock_open_failed", e))?;
-        lock.lock()
-            .map_err(|e| StateError::Io("state_lock_failed", e))?;
+        lock_within(&lock, wait)?;
         let fresh = || SessionState {
             version: STATE_VERSION,
             ..SessionState::default()

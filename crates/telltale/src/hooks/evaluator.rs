@@ -26,8 +26,7 @@ pub enum ClientOutcome {
     /// The evaluator did not record the event; evaluate in-process.
     NotDelivered(&'static str),
     /// The request was sent but no valid answer came back in time. The
-    /// evaluator may have recorded it, so the hook must not re-evaluate; a
-    /// PreToolUse then gets the stricter of on_error and on_unevaluable.
+    /// evaluator may have recorded it: see `Runtime::handle_unanswered`.
     DeliveredNoAnswer(&'static str),
 }
 

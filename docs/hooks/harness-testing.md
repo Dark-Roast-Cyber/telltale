@@ -82,6 +82,9 @@ CODEX_BIN=/path/to/codex scripts/hooks/harness/codex-cli-e2e.py [scenario ...]
 
 ## Files
 
+- `scripts/hooks/harness/evaluator-driver.py <binary> <root> <mode>`: drives the real hook and
+  `serve` with synthetic sessions and reads verdicts from telemetry, with no harness or
+  model; `BUSY=N` loads the CPU. Commands go only to the hook's stdin.
 - `e2e-marker-rules.yaml`: test-only Rule v1 markers (`TTH_E2E_DENY_MARKER`,
   `TTH_E2E_ASK_MARKER`) on `command` and `arguments`, and
   `TTH_E2E_RESULT_MARKER` in tool results, loaded through the normal

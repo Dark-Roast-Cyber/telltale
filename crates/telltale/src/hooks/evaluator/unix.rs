@@ -51,8 +51,29 @@ const MAX_CONNECTIONS: usize = 32;
 /// How long a hook waits to establish a connection (a full backlog blocks).
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 /// Part of the client's wait reserved for evaluation after the deadline by
-/// which the daemon must have started.
-const DEADLINE_MARGIN: Duration = Duration::from_secs(2);
+/// which the daemon must have started. The pieces of a call past capacity stop
+/// inside it ([`crate::hooks::engine::PIECE_SCAN_LIMIT`]) and other optional scans are
+/// forecast to fit, but a scan in flight cannot be stopped, so load can still take
+/// an evaluation past it (docs/threat-model.md has the figures). An evaluation that
+/// overruns it records nothing ([`REPLY_TIME`]) and its client evaluates in-process.
+/// Telemetry then still agrees with the harness, but the time can reach the hook's
+/// `timeout`, and a hook killed there leaves no record and the call runs.
+const DEADLINE_MARGIN: Duration = Duration::from_secs(6);
+/// How long the daemon waits for a session's lock while it holds the one
+/// runtime. A hook running in-process holds that lock for a whole evaluation;
+/// waiting that out would stall every other session.
+const SESSION_LOCK_WAIT: Duration = Duration::from_millis(500);
+/// Left of the client's wait for the reply to reach it. An evaluation that ends
+/// later than this records nothing.
+const REPLY_TIME: Duration = Duration::from_millis(250);
+// At the least: the budget, a scan that was forecast to fit and did not, the
+// lock and the reply.
+const _: () = assert!(
+    DEADLINE_MARGIN.as_millis()
+        > 2 * crate::hooks::engine::RECOVERY_BUDGET.as_millis()
+            + SESSION_LOCK_WAIT.as_millis()
+            + REPLY_TIME.as_millis()
+);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
@@ -229,7 +250,6 @@ pub fn request(
     payload: &[u8],
     timeout: Duration,
 ) -> ClientOutcome {
-    let started = Instant::now();
     if !socket.exists() {
         return ClientOutcome::NotDelivered("evaluator_unreachable");
     }
@@ -245,7 +265,9 @@ pub fn request(
         return ClientOutcome::NotDelivered("evaluator_peer_untrusted");
     }
     let wait = timeout.max(DEADLINE_MARGIN + Duration::from_millis(500));
-    let deadline = started + wait;
+    // From the same moment as `deadline_ms`, however long connecting took: the
+    // daemon stops recording `REPLY_TIME` before this.
+    let deadline = Instant::now() + wait;
     let request = Request {
         v: PROTOCOL_VERSION,
         fingerprint: fingerprint.to_owned(),
@@ -521,29 +543,51 @@ fn serve_connection(shared: &Shared, stream: &mut UnixStream) {
         shared.retire();
         return;
     }
-    // Evaluation is serial: one session-consistent Runtime.
-    let Ok(mut runtime) = shared.runtime.lock() else {
-        reply(stream, &Response::status("busy"));
-        return;
+    // Evaluation is serial: one session-consistent Runtime. A client queued
+    // behind slow evaluations is told so by its deadline, not left to give up:
+    // it evaluates in-process, and another session's calls keep their verdicts.
+    let mut runtime = match runtime_by(shared, request.deadline_ms) {
+        Ok(runtime) => runtime,
+        Err(status) => {
+            reply(stream, &Response::status(status));
+            return;
+        }
     };
-    // Checked after waiting for the runtime: never record an event whose
-    // client may already have stopped waiting.
-    if now_ms() > request.deadline_ms {
-        drop(runtime);
-        reply(stream, &Response::status("expired"));
-        return;
-    }
-    let response = match handle(&mut runtime, harness, request.payload.as_bytes()) {
-        Some(output) => Response {
+    let answer_by = request
+        .deadline_ms
+        .saturating_add((DEADLINE_MARGIN - REPLY_TIME).as_millis() as u64);
+    let response = match handle(&mut runtime, harness, request.payload.as_bytes(), answer_by) {
+        Ok(output) => Response {
             v: PROTOCOL_VERSION,
             status: "ok".into(),
             output,
         },
-        // Unusable payloads are the in-process path's job (on_unevaluable, exit codes).
-        None => Response::status("bad_request"),
+        Err(status) => Response::status(status),
     };
     drop(runtime);
     reply(stream, &response);
+}
+
+/// Wait for the one runtime until `deadline_ms`, or say why not. Checked after
+/// the wait too: never record an event whose client may already have stopped
+/// waiting.
+fn runtime_by(
+    shared: &Shared,
+    deadline_ms: u64,
+) -> Result<std::sync::MutexGuard<'_, Runtime>, &'static str> {
+    let mut pause = Duration::from_millis(1);
+    loop {
+        let expired = now_ms() > deadline_ms;
+        match shared.runtime.try_lock() {
+            Ok(_) if expired => return Err("expired"),
+            Ok(runtime) => return Ok(runtime),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err("busy"),
+            Err(std::sync::TryLockError::WouldBlock) if expired => return Err("expired"),
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(20));
+    }
 }
 
 static CLEANUP_SOCKET: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
@@ -590,19 +634,40 @@ fn install_termination_cleanup(socket: &Path, socket_ino: Option<u64>, pid_file:
     }
 }
 
-/// The same adapter path the in-process hook runs. `None` when the payload
-/// is unusable, so the client handles it in-process.
-fn handle(runtime: &mut Runtime, harness: Harness, payload: &[u8]) -> Option<Option<Value>> {
+/// The same adapter path the in-process hook runs. A status when the event
+/// should go to the in-process path instead, with nothing recorded: an unusable
+/// payload (on_unevaluable, exit codes), a session locked by a hook running
+/// in-process, or an answer that would come too late.
+fn handle(
+    runtime: &mut Runtime,
+    harness: Harness,
+    payload: &[u8],
+    answer_by: u64,
+) -> Result<Option<Value>, &'static str> {
     let Parsed::Event(ctx, event) = harness.parse(payload) else {
-        return None;
+        return Err("bad_request");
     };
-    let response = runtime.handle(&ctx, event);
-    Some(harness.render(&ctx.hook_event, &response))
+    match runtime.handle_until(&ctx, event, answer_by as i64, SESSION_LOCK_WAIT) {
+        Ok(response) => Ok(harness.render(&ctx.hook_event, &response)),
+        Err(crate::hooks::runtime::STATE_LOCK_TIMEOUT) => Err("busy"),
+        Err(_) => Err("expired"),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A guard on the constants: the wait for the lock, the evaluation up to the
+    /// limit and the reply fit the margin. What is left, about 250 ms, is for the
+    /// piece in flight, and load can overrun it.
+    #[test]
+    fn the_piece_limit_stays_below_the_margin() {
+        assert!(
+            crate::hooks::engine::PIECE_SCAN_LIMIT + SESSION_LOCK_WAIT + REPLY_TIME
+                < DEADLINE_MARGIN
+        );
+    }
 
     fn shared(dir: &Path, fingerprint: &str) -> Shared {
         let config = Config {
@@ -641,6 +706,56 @@ mod tests {
             deadline_ms,
             payload: payload.to_string(),
         }
+    }
+
+    /// A client queued behind a slow evaluation hears by its deadline, while that
+    /// evaluation is still running, and nothing of it is recorded.
+    #[test]
+    fn a_request_behind_a_slow_evaluation_is_told_by_its_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = shared(dir.path(), "fp");
+        let slow_evaluation = shared.runtime.lock().unwrap();
+        let queued = request("fp", now_ms() + 100);
+        let started = Instant::now();
+        let response = exchange(&shared, &queued);
+        let took = started.elapsed();
+        assert_eq!(response.status, "expired");
+        assert!(took < Duration::from_secs(5), "{took:?}");
+        drop(slow_evaluation);
+        assert!(!dir.path().join("state").exists(), "nothing recorded");
+    }
+
+    #[test]
+    fn a_request_gets_the_runtime_when_it_comes_free_in_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = shared(dir.path(), "fp");
+        let queued = request("fp", now_ms() + 60_000);
+        std::thread::scope(|scope| {
+            let slow_evaluation = shared.runtime.lock().unwrap();
+            let client = scope.spawn(|| exchange(&shared, &queued));
+            std::thread::sleep(Duration::from_millis(50));
+            drop(slow_evaluation);
+            assert_eq!(client.join().unwrap().status, "ok");
+        });
+    }
+
+    /// The whole margin went on the evaluation: the client is about to give up
+    /// and evaluate this call itself, so it is not recorded here as well.
+    #[test]
+    fn an_evaluation_that_overruns_the_margin_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = shared(dir.path(), "fp");
+        let mut runtime = shared.runtime.lock().unwrap();
+        let payload = request("fp", 0).payload;
+        let status = handle(
+            &mut runtime,
+            Harness::ClaudeCode,
+            payload.as_bytes(),
+            now_ms() - 1,
+        );
+        assert_eq!(status, Err("expired"));
+        let telemetry = dir.path().join("state/telemetry.jsonl");
+        assert!(!telemetry.exists(), "nothing recorded");
     }
 
     #[test]

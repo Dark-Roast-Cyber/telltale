@@ -7,12 +7,13 @@
 //! docs/embedding.md prescribes for synthetic sources. Findings for the
 //! pending call are the action findings anchored at its unique source time.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::{
-    ActionRecordV1, ClientId, DetailedEvaluationOptions, EvaluationCompletion, ObservationStage,
-    Pipeline, PipelineError, Source, SourceCoverage, SourceKind,
+    AcquisitionError, ActionRecordV1, ClientId, DetailedEvaluationOptions, EvaluationCompletion,
+    ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind,
 };
 
 use crate::hooks::config::TelltaleSettings;
@@ -124,10 +125,19 @@ pub struct Evaluation {
     pub focus_records: Vec<ActionRecordV1>,
     /// Action records anchored elsewhere in the window (already reported earlier).
     pub other_record_count: usize,
-    /// Focus lines Telltale excluded (quarantined), out of `focus_count`.
+    /// Focus lines Telltale excluded (quarantined), out of `focus_count`. All
+    /// of them when the focus could only be evaluated piece by piece: nothing
+    /// that needs two pieces together could match.
     pub unevaluated_focus: usize,
     pub focus_count: usize,
     pub scan_ms: u64,
+    /// Telltale failed the source as a whole: there is no result for any line.
+    pub source_failed: bool,
+    /// The source failed on capacity used up across lines, with no one line at
+    /// fault: a smaller window can pass, but no search can find a culprit.
+    pub capacity_failed: bool,
+    /// History lines this evaluation scanned, out of those it was given.
+    pub history_kept: usize,
 }
 
 impl Evaluation {
@@ -216,6 +226,200 @@ impl Engine {
         &self.semantic_identity
     }
 
+    /// Evaluate `pending` with as much of `history` as Telltale accepts.
+    ///
+    /// Telltale fails a source as a whole, and the failure can come from what
+    /// the model wrote: a line it refuses, or capacity used up across lines
+    /// (contribution keys, projection items, evaluation budget). The window
+    /// can be reduced, because every line in it is evaluated again for each
+    /// call: if `history` and `pending` fail together, `pending` is scanned on
+    /// its own, which secures its rule verdict, and then history goes back in
+    /// [`restoration_order`], splitting any block the scan refuses. That finds
+    /// lines that fail on their own wherever they sit (dropping only the
+    /// oldest lines would lose every stage of a chain before the poison). It
+    /// needs no knowledge of why Telltale failed, so it also covers sessions
+    /// poisoned by older versions and failures added upstream. The cost is
+    /// bounded by [`MAX_RECOVERY_SCANS`], [`MAX_CAPACITY_REFUSALS`] and
+    /// [`RECOVERY_BUDGET`]; past them the remaining lines stay out. Loss is
+    /// reported as the `history_lost` visibility limit.
+    ///
+    /// `budget` belongs to the call, so that a call evaluated twice (once
+    /// whole, once projected) spends one budget. It decides how much context a
+    /// call keeps, not whether the call itself is evaluated: the scan of
+    /// `pending` alone does not ask it, and nor do the scans of its lines when
+    /// that is past capacity, because nothing else secures the verdict. Those
+    /// stop at [`PIECE_SCAN_LIMIT`] instead.
+    pub fn evaluate(
+        &self,
+        window_path: &Path,
+        history: &[Line],
+        pending: &[Line],
+        focus: &[Focus],
+        budget: &mut RecoveryBudget,
+    ) -> Result<Evaluation, EngineError> {
+        let sizes: Vec<usize> = history.iter().map(|line| line.to_jsonl().len()).collect();
+        let pending_bytes = pending.iter().map(|line| line.to_jsonl().len()).sum();
+        let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
+        let mut failure_code = None;
+        if budget.admits(whole_bytes) {
+            let whole = self.scan(window_path, history.iter().chain(pending), focus)?;
+            budget.observe(whole_bytes, whole.scan_ms);
+            if !whole.source_failed {
+                return Ok(Evaluation {
+                    history_kept: history.len(),
+                    ..whole
+                });
+            }
+            failure_code = whole.failure_code;
+        }
+        let mut best = self.scan(window_path, pending.iter(), focus)?;
+        budget.observe(pending_bytes, best.scan_ms);
+        let mut kept = vec![false; history.len()];
+        if best.source_failed && pending.len() > 1 {
+            best = self.scan_each(window_path, pending, focus, || budget.pieces_in_time())?;
+        } else if best.status != EvalStatus::NotEvaluated {
+            let window = Window {
+                path: window_path,
+                history,
+                sizes: &sizes,
+                pending,
+                pending_bytes,
+                focus,
+            };
+            best = self.restore_history(&window, budget, best, &mut kept)?;
+        }
+        best.scan_ms = budget.elapsed_ms();
+        best.failure_code = best.failure_code.or(failure_code);
+        best.history_kept = kept.iter().filter(|kept| **kept).count();
+        // Not evaluated: the caller projects the input or applies its policy.
+        if best.status != EvalStatus::NotEvaluated && best.history_kept < history.len() {
+            best.status = EvalStatus::VisibilityLimited;
+            best.coverage = Some("partial");
+            best.visibility_limits.push("history_lost".to_owned());
+        }
+        Ok(best)
+    }
+
+    /// Put history back around a scan of `pending` alone, in
+    /// [`restoration_order`], splitting any block Telltale refuses. Returns the
+    /// widest scan that passed; `kept` says which lines it held, and they are
+    /// always scanned in their original order.
+    fn restore_history(
+        &self,
+        window: &Window<'_>,
+        budget: &mut RecoveryBudget,
+        mut best: Evaluation,
+        kept: &mut [bool],
+    ) -> Result<Evaluation, EngineError> {
+        let order = restoration_order(window.sizes);
+        let mut kept_bytes = window.pending_bytes;
+        let mut blocks = Vec::new();
+        push_halves(&mut blocks, 0..order.len());
+        let mut scans = 0;
+        let mut refusals_after_a_pass = 0;
+        let mut passed = false;
+        while let Some(block) = blocks.pop() {
+            if scans == MAX_RECOVERY_SCANS
+                || refusals_after_a_pass == MAX_CAPACITY_REFUSALS
+                || budget.spent()
+            {
+                break;
+            }
+            let lines_in_block = &order[block.clone()];
+            let bytes = kept_bytes
+                + lines_in_block
+                    .iter()
+                    .map(|&n| window.sizes[n])
+                    .sum::<usize>();
+            // A scan that may not fit in what is left does not start: a smaller
+            // block may fit, and otherwise the lines stay out.
+            if !budget.admits(bytes) {
+                push_halves(&mut blocks, block);
+                continue;
+            }
+            scans += 1;
+            for &n in lines_in_block {
+                kept[n] = true;
+            }
+            let lines = window
+                .history
+                .iter()
+                .zip(kept.iter())
+                .filter_map(|(line, kept)| kept.then_some(line));
+            let scan = self.scan(window.path, lines.chain(window.pending), window.focus)?;
+            budget.observe(bytes, scan.scan_ms);
+            if scan.source_failed {
+                for &n in lines_in_block {
+                    kept[n] = false;
+                }
+                refusals_after_a_pass += usize::from(scan.capacity_failed && passed);
+                push_halves(&mut blocks, block);
+            } else {
+                kept_bytes = bytes;
+                passed = true;
+                best = scan;
+            }
+        }
+        Ok(best)
+    }
+
+    /// Evaluate each line of a pending call that is past capacity as a whole,
+    /// on its own, and merge what the pieces found. Findings keep their force;
+    /// every focus line counts as unevaluated, because nothing spanning two
+    /// pieces could match. [`RECOVERY_BUDGET`] does not stop this loop: under load
+    /// it would decide whether the piece carrying a deny is seen, at a load a call
+    /// can bring itself. More than one pending line only comes from a projection,
+    /// so [`crate::hooks::projection::MAX_VARIANTS`] bounds the scans, and `in_time`
+    /// ([`PIECE_SCAN_LIMIT`]) bounds their time. Lines past it stay unscanned, and
+    /// the record says so.
+    fn scan_each(
+        &self,
+        window_path: &Path,
+        pending: &[Line],
+        focus: &[Focus],
+        mut in_time: impl FnMut() -> bool,
+    ) -> Result<Evaluation, EngineError> {
+        let mut merged = Evaluation {
+            status: EvalStatus::NotEvaluated,
+            coverage: None,
+            visibility_limits: Vec::new(),
+            failure_code: None,
+            focus_records: Vec::new(),
+            other_record_count: 0,
+            unevaluated_focus: focus.len(),
+            focus_count: focus.len(),
+            scan_ms: 0,
+            source_failed: false,
+            capacity_failed: false,
+            history_kept: 0,
+        };
+        for (line, one) in pending.iter().zip(focus) {
+            if !in_time() {
+                merged
+                    .visibility_limits
+                    .push("pending_pieces_unscanned".to_owned());
+                break;
+            }
+            let scan = self.scan(
+                window_path,
+                std::iter::once(line),
+                std::slice::from_ref(one),
+            )?;
+            if scan.status == EvalStatus::NotEvaluated {
+                continue;
+            }
+            merged.status = EvalStatus::VisibilityLimited;
+            merged.coverage = Some("partial");
+            merged.focus_records.extend(scan.focus_records);
+            for limit in scan.visibility_limits {
+                if !merged.visibility_limits.contains(&limit) {
+                    merged.visibility_limits.push(limit);
+                }
+            }
+        }
+        Ok(merged)
+    }
+
     /// What the generated self-protection rules cover (`telltale hooks check`).
     pub fn generated_coverage(&self) -> &GeneratedCoverage {
         &self.generated
@@ -225,13 +429,13 @@ impl Engine {
     /// source. The caller holds the session lock, so the stable path keeps
     /// Telltale's source-bound identities stable across a session. The window
     /// holds raw tool input, so it is removed as soon as the scan returns.
-    pub fn evaluate(
+    fn scan<'a>(
         &self,
         window_path: &Path,
-        lines: &[Line],
+        lines: impl Iterator<Item = &'a Line>,
         focus: &[Focus],
     ) -> Result<Evaluation, EngineError> {
-        let text: String = lines.iter().map(Line::to_jsonl).collect();
+        let text: String = lines.map(Line::to_jsonl).collect();
         // A fresh regular file: a symlink or FIFO planted at the window path
         // must neither redirect the raw input nor stall the hook.
         crate::hooks::state::create_fresh(window_path)
@@ -270,6 +474,13 @@ impl Engine {
                 unevaluated_focus: focus.len(),
                 focus_count: focus.len(),
                 scan_ms,
+                source_failed: true,
+                // No acquisition error: projection or evaluation ran out.
+                capacity_failed: matches!(
+                    failure.acquisition_error(),
+                    None | Some(AcquisitionError::ContributionCapacity)
+                ),
+                history_kept: 0,
             });
         }
         let coverage = scan.coverage().map(|coverage| match coverage {
@@ -324,7 +535,122 @@ impl Engine {
             unevaluated_focus: quarantined.len(),
             focus_count: focus.len(),
             scan_ms,
+            source_failed: false,
+            capacity_failed: false,
+            history_kept: 0,
         })
+    }
+}
+
+/// Scans one evaluation may spend putting history back after its source failed.
+/// One poison line anywhere in a full window of 256 takes at most 16 (two per
+/// halving), so two always fit. Small windows scan in milliseconds, so this is
+/// what normally decides.
+const MAX_RECOVERY_SCANS: usize = 32;
+/// Capacity refusals, after some history has gone back, that end the search.
+/// Capacity is used up across lines, so no search finds a culprit: every further
+/// refusal only trims what is restored, and costs a full window's scan. Refusals
+/// of a line for what it holds do not count; those keep looking for the line.
+const MAX_CAPACITY_REFUSALS: usize = 2;
+/// Time a call may spend evaluating before no further scan starts, except the
+/// scans of the pending call itself ([`Engine::evaluate`]). Every other scan is
+/// admitted on a forecast ([`RecoveryBudget::admits`]) and a scan in flight cannot
+/// be stopped, so the real worst case is above this. `DEADLINE_MARGIN` in the
+/// evaluator is there for that, and load can still go past it.
+pub const RECOVERY_BUDGET: Duration = Duration::from_secs(2);
+/// Time after the start of an evaluation ([`RecoveryBudget::start`]) at which no
+/// further piece of a call past capacity is scanned. It sits below `DEADLINE_MARGIN`
+/// in the evaluator by the reply and the wait for the lock, and about 250 ms for the
+/// piece in flight, which load can overrun. The scans ahead of the loop are not
+/// limited by it. Load decides how far a call gets: what the pieces scanned found
+/// keeps its force, and the rest goes to `on_unevaluable`.
+pub const PIECE_SCAN_LIMIT: Duration = Duration::from_secs(5);
+/// Scans smaller than this do not set the forecast's rate: their cost is mostly
+/// a scan's fixed setup, which would make a larger scan look far too expensive.
+const MIN_MEASURED_BYTES: usize = 64 * 1024;
+/// Lines a call restores first whatever their size. Every bundled chain but one
+/// links within 3 calls, so a line out of this reach matters only to a chain that
+/// links by time.
+const RESTORE_NEWEST: usize = 8;
+/// Older lines shorter than this go back next, smallest first: they cost little
+/// capacity, so a flood of long lines cannot push them out. A longer line is
+/// more likely to be the flood, and goes back by age.
+const SMALL_LINE_BYTES: usize = 1024;
+
+/// One call's allowance for scanning, shared by every evaluation it needs.
+pub struct RecoveryBudget {
+    started: Instant,
+    /// The slowest rate measured so far, in milliseconds per byte.
+    ms_per_byte: f64,
+}
+
+impl RecoveryBudget {
+    /// The call starts now: call this once the session lock is held, because
+    /// the wait for the lock is bounded on its own.
+    pub fn start() -> Self {
+        Self {
+            started: Instant::now(),
+            ms_per_byte: 0.0,
+        }
+    }
+
+    fn spent(&self) -> bool {
+        self.started.elapsed() >= RECOVERY_BUDGET
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// Whether another piece of a call past capacity may still be scanned.
+    fn pieces_in_time(&self) -> bool {
+        self.started.elapsed() < PIECE_SCAN_LIMIT
+    }
+
+    /// Whether a scan of `bytes` should fit in what is left. Twice the forecast,
+    /// because lines that match rules cost more than the lines measured so far
+    /// and a scan that fails at acquisition ends before the expensive stages.
+    fn admits(&self, bytes: usize) -> bool {
+        let forecast = Duration::from_secs_f64(self.ms_per_byte * bytes as f64 / 1000.0);
+        self.started.elapsed() + forecast * 2 < RECOVERY_BUDGET
+    }
+
+    fn observe(&mut self, bytes: usize, ms: u64) {
+        if bytes >= MIN_MEASURED_BYTES {
+            self.ms_per_byte = self.ms_per_byte.max(ms as f64 / bytes as f64);
+        }
+    }
+}
+
+/// What a recovery scan is made of.
+struct Window<'a> {
+    path: &'a Path,
+    history: &'a [Line],
+    sizes: &'a [usize],
+    pending: &'a [Line],
+    pending_bytes: usize,
+    focus: &'a [Focus],
+}
+
+/// History positions from the last to go back to the first (the end of the list
+/// is tried first): the newest [`RESTORE_NEWEST`] lines, then older lines under
+/// [`SMALL_LINE_BYTES`] smallest first, then the rest newest first. The sort is
+/// stable, so lines of a size stay in age order. Chosen by comparing orders; see
+/// the ADR 0002 addendum.
+fn restoration_order(sizes: &[usize]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    let older = sizes.len().saturating_sub(RESTORE_NEWEST);
+    order[..older].sort_by_key(|&n| std::cmp::Reverse(sizes[n].min(SMALL_LINE_BYTES)));
+    order
+}
+
+/// Split a block Telltale refused. The newer half goes on top of the stack,
+/// so it is tried first; a single line that fails is dropped.
+fn push_halves(blocks: &mut Vec<Range<usize>>, block: Range<usize>) {
+    if block.len() > 1 {
+        let middle = block.start + block.len() / 2;
+        blocks.push(block.start..middle);
+        blocks.push(middle..block.end);
     }
 }
 
@@ -1248,5 +1574,225 @@ mod tests {
             "2026-11-04T00:01:01.000Z"
         ));
         assert!(same_instant("not a time", "not a time"));
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    /// The end of the list is tried first.
+    fn tried_first_to_last(sizes: &[usize]) -> Vec<usize> {
+        let mut order = restoration_order(sizes);
+        order.reverse();
+        order
+    }
+
+    #[test]
+    fn the_newest_lines_go_back_first_whatever_their_size() {
+        let mut sizes = vec![100; 4];
+        sizes.extend(vec![4000; RESTORE_NEWEST]);
+        let order = tried_first_to_last(&sizes);
+        let newest: Vec<usize> = (4..4 + RESTORE_NEWEST).rev().collect();
+        assert_eq!(&order[..RESTORE_NEWEST], newest.as_slice());
+    }
+
+    #[test]
+    fn older_lines_go_back_short_ones_first_then_by_age() {
+        let mut sizes = vec![4000, 300, 2000, 100, 1024, 1500];
+        sizes.extend(vec![50; RESTORE_NEWEST]);
+        let order = tried_first_to_last(&sizes);
+        assert_eq!(&order[RESTORE_NEWEST..], &[3, 1, 5, 4, 2, 0]);
+    }
+
+    #[test]
+    fn a_short_history_goes_back_newest_first() {
+        assert_eq!(tried_first_to_last(&[9, 1, 5]), [2, 1, 0]);
+        assert!(tried_first_to_last(&[]).is_empty());
+    }
+
+    fn budget_used(used: Duration, ms_per_byte: f64) -> RecoveryBudget {
+        RecoveryBudget {
+            started: Instant::now() - used,
+            ms_per_byte,
+        }
+    }
+
+    const DENY: &str = "rm -f ~/.claude/settings.json";
+    const DENY_RULE: &str = "tth.tamper.hook_settings_modify";
+
+    fn hosts(from: usize, count: usize) -> String {
+        let hosts: Vec<String> = (from..from + count)
+            .map(|i| format!("http://{i:x}-9.test"))
+            .collect();
+        hosts.join(" ")
+    }
+
+    /// A call past capacity on its own, as the runtime projects it.
+    fn pieces(command: String) -> (Vec<Line>, Vec<Focus>) {
+        let input = serde_json::json!({ "command": command });
+        let variants = crate::hooks::projection::project(&input).unwrap();
+        assert!(variants.len() <= crate::hooks::projection::MAX_VARIANTS);
+        let mut lines = Vec::new();
+        let mut focus = Vec::new();
+        for (n, variant) in variants.iter().enumerate() {
+            let at = format!("2026-11-06T00:00:00.{n:03}Z");
+            let uuid = format!("uuid-{n}");
+            lines.push(Line::tool_use("s", &uuid, &at, "toolu_1", "Bash", variant));
+            focus.push(Focus {
+                occurred_at: at,
+                stage: ObservationStage::ToolRequested,
+                native_id: uuid,
+            });
+        }
+        (lines, focus)
+    }
+
+    /// The window path and the engine, for a scan of `pieces` alone.
+    fn engine() -> (tempfile::TempDir, Engine) {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(&TelltaleSettings::default(), &[]).unwrap();
+        (dir, engine)
+    }
+
+    /// `used` is what the evaluation has already spent. The budget starts after the
+    /// engine is built, so that the build is not charged to it.
+    fn evaluate_with(command: String, used: Duration) -> (Evaluation, usize) {
+        let (lines, focus) = pieces(command);
+        let (dir, engine) = engine();
+        let mut budget = budget_used(used, 0.0);
+        let evaluation = engine
+            .evaluate(
+                &dir.path().join("window.jsonl"),
+                &[],
+                &lines,
+                &focus,
+                &mut budget,
+            )
+            .unwrap();
+        (evaluation, lines.len())
+    }
+
+    /// Scan the pieces of `command`, with the time limit reached after one scan.
+    fn limit_after_one_piece(command: String) -> (Evaluation, usize) {
+        let (lines, focus) = pieces(command);
+        let (dir, engine) = engine();
+        let mut left = 1;
+        let evaluation = engine
+            .scan_each(&dir.path().join("window.jsonl"), &lines, &focus, || {
+                let in_time = left > 0;
+                left = 0;
+                in_time
+            })
+            .unwrap();
+        (evaluation, lines.len())
+    }
+
+    fn has_deny_rule(evaluation: &Evaluation) -> bool {
+        evaluation.rule_ids().iter().any(|rule| rule == DENY_RULE)
+    }
+
+    fn says_unscanned(evaluation: &Evaluation) -> bool {
+        evaluation
+            .visibility_limits
+            .iter()
+            .any(|limit| limit == "pending_pieces_unscanned")
+    }
+
+    fn verdict(evaluation: &Evaluation) -> crate::hooks::state::Verdict {
+        let inputs = crate::hooks::policy::Inputs {
+            action_score: evaluation.action_score(),
+            session_score: 0,
+            denied_attempts: 0,
+        };
+        crate::hooks::policy::decide(inputs, &crate::hooks::config::Thresholds::default()).verdict
+    }
+
+    /// The pieces are all that secures the verdict of a call past capacity on its
+    /// own, and an agent can load the CPU itself, so the budget must not drop the
+    /// piece that carries a deny. It sits early in the call, so that only the scans
+    /// ahead of the pieces have to finish inside the limit, not the whole call.
+    #[test]
+    fn a_spent_budget_does_not_stop_the_pieces_of_a_call_past_capacity() {
+        let (evaluation, lines) = evaluate_with(
+            format!("echo {}; {DENY}; echo {}", hosts(0, 400), hosts(400, 14600)),
+            RECOVERY_BUDGET,
+        );
+        assert_eq!(evaluation.unevaluated_focus, lines, "in pieces");
+        assert!(
+            has_deny_rule(&evaluation),
+            "{:?}, {:?}",
+            evaluation.status,
+            evaluation.rule_ids()
+        );
+    }
+
+    #[test]
+    fn a_deny_in_a_piece_scanned_before_the_limit_keeps_its_force() {
+        let (evaluation, lines) =
+            limit_after_one_piece(format!("{DENY}; echo {}", hosts(0, 15000)));
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
+        assert_eq!(evaluation.status, EvalStatus::VisibilityLimited);
+        assert_eq!(evaluation.unevaluated_focus, lines);
+        assert!(says_unscanned(&evaluation));
+    }
+
+    /// What is left is the state a call with no finding is in, which the runtime
+    /// floors at `on_unevaluable`
+    /// (`a_benign_call_past_capacity_on_its_own_is_floored_and_harms_nothing_later`).
+    #[test]
+    fn a_deny_in_a_piece_past_the_limit_is_left_to_on_unevaluable() {
+        let (evaluation, lines) =
+            limit_after_one_piece(format!("echo {}; {DENY}", hosts(0, 15000)));
+        assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_ne!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
+        assert_eq!(evaluation.status, EvalStatus::VisibilityLimited);
+        assert_eq!(evaluation.unevaluated_focus, lines);
+        assert!(says_unscanned(&evaluation));
+    }
+
+    /// The limit counts from the start of the evaluation, not from the first piece.
+    #[test]
+    fn an_evaluation_already_past_the_limit_scans_no_piece() {
+        let (evaluation, lines) = evaluate_with(
+            format!("{DENY}; echo {}", hosts(0, 15000)),
+            PIECE_SCAN_LIMIT,
+        );
+        assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(evaluation.status, EvalStatus::NotEvaluated);
+        assert_eq!(evaluation.unevaluated_focus, lines);
+        assert!(says_unscanned(&evaluation));
+    }
+
+    #[test]
+    fn the_piece_limit_is_later_than_the_budget() {
+        assert!(budget_used(RECOVERY_BUDGET, 0.0).pieces_in_time());
+        assert!(!budget_used(PIECE_SCAN_LIMIT, 0.0).pieces_in_time());
+    }
+
+    #[test]
+    fn a_scan_that_may_not_fit_is_not_admitted() {
+        let fresh = RecoveryBudget::start();
+        assert!(fresh.admits(usize::MAX / 2), "nothing measured yet");
+        // 1 MB at 0.5 ms per KB: 500 ms, doubled.
+        let rate = 0.0005;
+        assert!(budget_used(Duration::from_millis(900), rate).admits(1_000_000));
+        assert!(!budget_used(Duration::from_millis(1100), rate).admits(1_000_000));
+        assert!(budget_used(Duration::from_millis(1100), rate).admits(500_000));
+        assert!(!budget_used(RECOVERY_BUDGET, 0.0).admits(1));
+        assert!(budget_used(RECOVERY_BUDGET, 0.0).spent());
+    }
+
+    #[test]
+    fn the_slowest_rate_counts_and_small_scans_do_not_set_it() {
+        let mut budget = RecoveryBudget::start();
+        budget.observe(100, 50);
+        assert_eq!(budget.ms_per_byte, 0.0, "mostly a scan's fixed setup");
+        budget.observe(MIN_MEASURED_BYTES, 100);
+        let rate = budget.ms_per_byte;
+        assert!(rate > 0.0);
+        budget.observe(MIN_MEASURED_BYTES * 2, 100);
+        assert_eq!(budget.ms_per_byte, rate);
     }
 }

@@ -50,9 +50,24 @@ keep serving old rules):
   unreachable, untrusted, connect timeout, busy, expired, fingerprint
   mismatch, bad request. Every non-"ok" status means nothing was recorded.
 - Each request carries a deadline. The daemon starts processing only before
-  it; the client waits a further 2 s margin. A delivered request that still
-  gets no answer is not re-evaluated, and a PreToolUse then gets the
-  stricter of `on_error` and `on_unevaluable`, never allow by default.
+  it, and one waiting for the serial `Runtime` is told `expired` by then, so a
+  slow evaluation costs other sessions time, not their verdicts. The client waits
+  a further 6 s margin. That is above the slowest evaluation measured up to 40
+  busy processes on 20 logical CPUs, but a scan in flight cannot be stopped: an oversized
+  call took the daemon up to 7.64 s at 80 busy and 9.42 s at 120 in the runs taken. An evaluation
+  that would still answer after the client stopped waiting records nothing. So
+  when a delivered request gets no answer, the session lock settles it: the
+  client returns the decision the daemon recorded, or evaluates the call
+  in-process (`Runtime::handle_unanswered`). Telemetry and the harness agree on
+  each of these paths, and a stalled daemon cannot turn a deny into a failure
+  policy's allow. Events other than a tool request get an error record only.
+- The daemon waits 500 ms for a session's lock (held by a hook running in-process)
+  while it holds the `Runtime`, then answers `busy`. A hook waits 10 s for it, then
+  gets the strict policy (`state_lock_timeout`): harnesses run a call whose hook
+  timed out. 10.5 s + 10 s + one evaluation stays under the 30 s fragments when the
+  machine is not overloaded. Load stretches the evaluation, so the 10 s bounds the wait
+  and not the hook: hooks that hit it took up to 40 s at 200 busy processes on 20
+  logical CPUs (the hook `timeout` row of docs/security/hooks-threat-model.md).
 - Reads run on a thread per connection (capped at 32) with a 5 s total
   deadline. Evaluation is serialized on one `Runtime`. A trickling client
   cannot stall other hooks (tested). `connect()` has a 500 ms timeout.
@@ -78,7 +93,9 @@ keep serving old rules):
   only if the inode is still the one it bound, so it never deletes a newer
   daemon's socket.
 
-Residual risk: if a request starts processing just before its deadline and
-the evaluation takes longer than the 2 s margin, the daemon records a
-decision while the hook returns the stricter failure verdict. An `error`
-record (`evaluator_no_answer`) lets consumers spot the mismatch.
+Residual risk: a call with no correlation id cannot be looked up, so if its
+answer was only delayed the session gets a second decision, the later one being
+what the harness was told. Where the client wait is below an evaluation's real
+cost, calls fall back to in-process evaluation. That costs time, and under load the
+time can reach the hook's `timeout`, where a killed hook leaves no record and the
+call runs.

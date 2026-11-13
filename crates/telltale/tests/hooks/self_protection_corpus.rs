@@ -2930,7 +2930,13 @@ fn evaluate_with(
         native_id: uuid,
     };
     engine
-        .evaluate(window, &[line], std::slice::from_ref(&focus))
+        .evaluate(
+            window,
+            &[],
+            &[line],
+            std::slice::from_ref(&focus),
+            &mut telltale_core::hooks::engine::RecoveryBudget::start(),
+        )
         .unwrap()
 }
 

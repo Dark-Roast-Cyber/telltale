@@ -8,12 +8,14 @@
 //! calls live in separate transcripts, and transcripts carry far more content
 //! than detection needs. The journal holds only hook-reported facts.
 
+use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::hooks::state::open_regular;
 
@@ -95,6 +97,48 @@ pub fn tool_name_is_malformed(value: &str) -> bool {
     tool_name_is_encoded(value) || value != value.trim()
 }
 
+/// A tool input as it appears in a journal line. Telltale normalizes object
+/// keys to NFC and fails the whole source when two collide (`é` composed and
+/// decomposed), so a key that collides is renamed `<nfc form>~<n>`. The spelling
+/// already in NFC keeps its name, so selectors keep reading the key a harness
+/// would read, and every value stays evaluated. Input without a collision is
+/// returned unchanged. A pure function; telemetry and correlation keep the
+/// input as reported. Unlike the backstop in `Engine::evaluate`, this keeps the
+/// line in history.
+pub fn safe_input_keys(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(safe_input_keys).collect()),
+        Value::Object(map) => {
+            let forms: Vec<String> = map.keys().map(|key| key.nfc().collect()).collect();
+            let mut taken: BTreeSet<String> = map
+                .keys()
+                .zip(&forms)
+                .filter(|(key, form)| key == form)
+                .map(|(_, form)| form.clone())
+                .collect();
+            let mut safe = Map::new();
+            for ((key, item), form) in map.iter().zip(forms) {
+                let name = if *key == form || taken.insert(form.clone()) {
+                    key.clone()
+                } else {
+                    (1u64..)
+                        .map(|n| format!("{form}~{n}"))
+                        .find(|name| taken.insert(name.clone()))
+                        .expect("an unused suffix exists")
+                };
+                safe.insert(name, safe_input_keys(item));
+            }
+            Value::Object(safe)
+        }
+        other => other.clone(),
+    }
+}
+
+/// Whether [`safe_input_keys`] renames a key of this input.
+pub fn input_keys_collide(value: &Value) -> bool {
+    safe_input_keys(value) != *value
+}
+
 /// One native Claude Code JSONL line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line(pub Value);
@@ -125,7 +169,7 @@ impl Line {
             "timestamp": timestamp,
             "message": {
                 "role": "assistant",
-                "content": [{"type": "tool_use", "id": safe_id(tool_use_id), "name": safe_tool_name(tool_name), "input": input}],
+                "content": [{"type": "tool_use", "id": safe_id(tool_use_id), "name": safe_tool_name(tool_name), "input": safe_input_keys(input)}],
             },
         }))
     }
@@ -287,6 +331,58 @@ mod tests {
         for bad in ["", " ", "\u{a0}", "Bash\n", "Bash\r", "Bash\t", "Bash\0"] {
             assert!(safe_tool_name(bad).starts_with("tth-esc-"), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn colliding_keys_are_renamed_and_nothing_else_changes() {
+        // No collision: either spelling alone, ASCII, nested, arrays.
+        for clean in [
+            json!({"command": "ls", "\u{e9}": 1}),
+            json!({"command": "ls", "e\u{301}": 1}),
+            json!({"a": [{"b": "\u{e9}"}], "n": 5, "s": "e\u{301}"}),
+            json!("e\u{301}"),
+        ] {
+            assert_eq!(safe_input_keys(&clean), clean);
+            assert!(!input_keys_collide(&clean));
+        }
+        // The spelling already in NFC keeps its name; values all survive.
+        let top = json!({"\u{e9}": "composed", "e\u{301}": "decomposed", "command": "ls"});
+        let safe = json!({"\u{e9}": "composed", "\u{e9}~1": "decomposed", "command": "ls"});
+        assert_eq!(safe_input_keys(&top), safe);
+        assert!(input_keys_collide(&top));
+        // Idempotent, and nested objects inside arrays are covered.
+        assert_eq!(safe_input_keys(&safe), safe);
+        let nested = json!({"a": [{"\u{e9}": 1, "e\u{301}": 2}]});
+        assert_eq!(
+            safe_input_keys(&nested),
+            json!({"a": [{"\u{e9}": 1, "\u{e9}~1": 2}]})
+        );
+        // Non-ASCII spellings of ASCII keys: the ASCII key keeps its name.
+        let kelvin = json!({"Key": "plain", "\u{212a}ey": "kelvin"});
+        assert_eq!(
+            safe_input_keys(&kelvin),
+            json!({"Key": "plain", "Key~1": "kelvin"})
+        );
+        // A chosen suffix never lands on a key that is already there, in
+        // either spelling, and no two results share an NFC form.
+        let taken = json!({"\u{e9}": 1, "e\u{301}": 2, "\u{e9}~1": 3, "e\u{301}~1": 4});
+        let safe = safe_input_keys(&taken);
+        let map = safe.as_object().unwrap();
+        assert_eq!(map.len(), 4);
+        let forms: BTreeSet<String> = map.keys().map(|key| key.nfc().collect()).collect();
+        assert_eq!(forms.len(), 4, "{safe}");
+        assert_eq!(map["\u{e9}"], 1);
+        assert_eq!(map["\u{e9}~1"], 3);
+        // No spelling in NFC: one keeps its spelling, Telltale folds it alone.
+        let neither = json!({"\u{212b}": 1, "A\u{30a}": 2});
+        let safe = safe_input_keys(&neither);
+        let forms: BTreeSet<String> = safe
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| key.nfc().collect())
+            .collect();
+        assert_eq!(forms.len(), 2, "{safe}");
     }
 
     #[test]

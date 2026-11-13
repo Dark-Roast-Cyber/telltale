@@ -165,6 +165,15 @@ PR.
   makes hook crashes and timeouts block (verified).
 - Invalid configuration denies tool calls (an operator error should be loud).
 - Telemetry write failures go to stderr and never change a verdict.
+- Telltale fails a source as a whole, and tool input can cause that. A failed
+  scan is retried on a reduced window (`Engine::evaluate`, ADR 0002 addendum):
+  the call keeps its rule verdict, as much history as a bounded cost allows stays
+  in, and the record says `history_lost`. A lock timeout, or an oversized call past
+  its piece limit under load, can still cost that verdict (threat model).
+- Waiting is bounded. A call waits 10 s for its session's lock, then gets the
+  strict policy. The evaluator never records what its client stopped waiting for,
+  and a client that gets no answer returns what was recorded or evaluates in-process
+  (ADR 0003).
 - State and journal are written by the same OS user as the agent. They are
   integrity-relevant but not tamper-proof; self-protection rules raise the
   bar, and managed settings plus out-of-user placement are the real fix.
@@ -203,7 +212,8 @@ evaluator, so nothing consumes this fingerprint there.
 In-process, an evaluated hook takes about 690 ms end-to-end on a 4 vCPU
 container. Telltale's `Pipeline::build()` accounts for about 550-650 ms of
 that, and the scan for about 25 ms. With the long-lived evaluator
-(`telltale hooks serve`, autostarted, ADR 0003) the PreToolUse p50 is 16 ms.
+(`telltale hooks serve`, autostarted, ADR 0003) the PreToolUse p50 is 19 ms in a
+short window and 44 to about 190 ms in a full one, depending on what it holds.
 Sources: the experiment and
 `scripts/hooks/bench-hook.sh`. Any evaluator failure falls back to in-process
 evaluation.
