@@ -378,13 +378,13 @@ rules:
     falsepositives:
       - Administrators configuring a harness by hand.
   - id: tth.tamper.installed_binary_failsafe
-    title: Agent command names the installed telltale-hooks binary and a writing program
+    title: Agent command names the installed telltale binary and a writing program
     category: approval_bypass
     severity: medium
     score: 60
     detection:
       selection:
-        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$)|(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
       exclude:
         command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
       condition: selection
@@ -394,57 +394,57 @@ rules:
     falsepositives:
       - Copying or replacing the binary by hand.
   - id: tth.tamper.installed_binary_modify
-    title: Agent command replaces or removes the installed telltale-hooks binary
+    title: Agent command replaces or removes the installed telltale binary
     category: approval_bypass
     severity: high
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$)|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$)'
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)'
       exclude:
         command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A writer in the same command segment as `.../bin/telltale-hooks` or `C:\Program Files\telltale-hooks\` (the managed install directory). Replacing the program keeps the harness's trust in it (Codex). Running the binary by that path is not matched. The runtime adds a generated rule for the path this binary actually runs from.
+      A writer in the same command segment as the installed `telltale` binary (`.../bin/telltale`, `...\Programs\Telltale\telltale.exe`, `C:\Program Files\telltale\`; the old standalone name `telltale-hooks` is covered too). Replacing the program keeps the harness's trust in it (Codex). Running the binary by that path is not matched. The runtime adds a generated rule for the path this binary actually runs from.
     falsepositives:
       - Operators upgrading the binary by hand.
   - id: tth.tamper.installed_binary_variable
-    title: Agent command assigns the telltale-hooks binary to a variable and writes through a variable
+    title: Agent command assigns the telltale binary to a variable and writes through a variable
     category: approval_bypass
     severity: high
     score: 90
     detection:
       selection:
-        command: '(?s)=\s*(?:"[^"\n]*|''[^''\n]*|[^\s;&|"'']*)(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)["'']?\s*(?:[;&\n].*)?(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*[$%]'
+        command: '(?s)=\s*(?:"[^"\n]*|''[^''\n]*|[^\s;&|"'']*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*["'']?\s*(?:[;&\n].*)?(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*[$%]'
       exclude:
         command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      `p=/usr/local/bin/telltale-hooks; rm -f $p`, `$p = "C:\Program Files\telltale-hooks"; Remove-Item $p`. Running the binary, also through a variable, is not matched.
+      `p=/usr/local/bin/telltale; rm -f $p`, `$p = "C:\Program Files\telltale"; Remove-Item $p`. Running the binary, also through a variable, is not matched.
     falsepositives:
       - A script that keeps the binary's path in a variable and removes another variable's path.
   - id: tth.tamper.installed_binary_write
-    title: Agent writes the installed telltale-hooks binary or install directory
+    title: Agent writes the installed telltale binary or install directory
     category: approval_bypass
     severity: high
     score: 90
     targets: [written_path]
-    regex: '(?m)[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?$|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks(?:[\\/]|$)'
+    regex: '(?m)(?:[\\/]s?bin[\\/]+telltale(?:-hooks)?(?:\.exe)?$|(?:PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks)?(?:[\\/]|$))'
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A tool call writes `.../bin/telltale-hooks` or under `C:\Program Files\telltale-hooks\`.
+      A tool call writes `.../bin/telltale`, the installed binary under `...\Programs\Telltale\` or `C:\Program Files\telltale\` (or the old standalone `telltale-hooks` names).
     falsepositives:
       - Operators upgrading the binary by hand.
   - id: tth.tamper.hook_uninstall
-    title: Agent removes or weakens the telltale-hooks installation
+    title: Agent removes or weakens the Telltale Hooks installation
     category: approval_bypass
     severity: high
     score: 90
     detection:
       selection:
-        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale-hooks(?:\.exe|\.cmd)?["'']?\s+(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
+        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+(?:hooks\s+)?(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
       exclude:
         command: '^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$'
       condition: selection
@@ -474,13 +474,18 @@ rules:
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:\b(?:kill|pkill|killall|pgrep|systemctl|launchctl|taskkill|Stop-Process)\b.*telltale-hooks|telltale-hooks.*\b(?:pkill|killall|taskkill|Stop-Process)\b)'
+    detection:
+      selection:
+        command: '(?s)(?:\b(?:kill|pkill|killall|pgrep|systemctl|launchctl|taskkill|Stop-Process)\b.*(?:telltale-hooks|telltale\s+hooks\b|\bhooks\s+serve\b|telltale[^;&|\n]*\bserve\b)|(?:telltale-hooks|telltale\s+hooks\b|\bhooks\s+serve\b|telltale[^;&|\n]*\bserve\b).*\b(?:pkill|killall|taskkill|Stop-Process)\b|\b(?:kill|pkill|killall|taskkill|Stop-Process)\b[^;&\n]*(?:^|[\s"''=/\\])telltale(?:\.exe)?["'']?(?:\s*(?:$|[;&|)\n])|\s+[-/])|(?:^|[\s"''=/\\])telltale(?:\.exe)?["'']?(?:\s*(?:$|[;&|)\n])|\s+[-/])[^;&\n]*\b(?:kill|pkill|killall|taskkill|Stop-Process)\b)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A command signals, stops or looks up the telltale-hooks process for killing.
+      A command signals, stops or looks up the hooks evaluator for killing: by its old standalone name (`telltale-hooks`), by `hooks serve` or `telltale ... serve` in its command line, or by killing a process named `telltale`, which includes the evaluator. Stopping another Telltale command by its full command line (`pkill -f "telltale watch"`) is not matched. A plain read or a `git commit` that quotes the words is not matched.
     falsepositives:
       - Operators restarting the evaluator by hand.
+      - Stopping every Telltale process by name, for example `pkill telltale`.
   - id: tth.tamper.disable_all_hooks
     title: Agent sets disableAllHooks
     category: approval_bypass
@@ -553,7 +558,7 @@ rules:
     score: 60
     detection:
       selection:
-        command: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*@(?:openai/codex|github/copilot|anthropic-ai/claude-code)\b|\btelltale-hooks(?:\.exe)?\s.*(?:\buninstall\b|--allow-user-hooks\b))'
+        command: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*@(?:openai/codex|github/copilot|anthropic-ai/claude-code)\b|\btelltale(?:-hooks(?:\.exe)?|(?:\.exe)?\s+hooks)\s.*(?:\buninstall\b|--allow-user-hooks\b))'
       exclude:
         command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$|^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$'
       condition: selection

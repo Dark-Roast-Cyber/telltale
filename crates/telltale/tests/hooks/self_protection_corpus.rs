@@ -568,6 +568,10 @@ const MANAGED_POSIX: &[&str] = &[
     "/Library/Application Support/telltale-hooks/config.toml",
     "/usr/local/bin/telltale-hooks",
     "/opt/telltale-hooks/bin/telltale-hooks",
+    "/usr/local/bin/telltale",
+    "~/.local/bin/telltale",
+    "~/.cargo/bin/telltale",
+    "/opt/telltale/bin/telltale",
 ];
 const MANAGED_WINDOWS: &[&str] = &[
     r"C:\Program Files\ClaudeCode\managed-settings.json",
@@ -576,6 +580,10 @@ const MANAGED_WINDOWS: &[&str] = &[
     r"C:\Program Files\telltale-hooks\config.toml",
     r"C:\Program Files\telltale-hooks\telltale-hooks.exe",
     r"C:\Program Files\telltale-hooks",
+    r"C:\Program Files\telltale\telltale.exe",
+    r"C:\Program Files\telltale",
+    r"C:\Users\dev\AppData\Local\Programs\Telltale\telltale.exe",
+    r"%LOCALAPPDATA%\Programs\Telltale\telltale.exe",
 ];
 
 fn all_paths() -> impl Iterator<Item = (&'static str, bool)> {
@@ -599,6 +607,14 @@ const NOT_REVERSIBLE: &[&str] = &[
     "/opt/telltale-hooks/bin/telltale-hooks",
     r"C:\Program Files\telltale-hooks\telltale-hooks.exe",
     r"C:\Program Files\telltale-hooks",
+    "/usr/local/bin/telltale",
+    "~/.local/bin/telltale",
+    "~/.cargo/bin/telltale",
+    "/opt/telltale/bin/telltale",
+    r"C:\Program Files\telltale\telltale.exe",
+    r"C:\Program Files\telltale",
+    r"C:\Users\dev\AppData\Local\Programs\Telltale\telltale.exe",
+    r"%LOCALAPPDATA%\Programs\Telltale\telltale.exe",
 ];
 
 /// Every path through every shell writer form of its OS.
@@ -1553,6 +1569,115 @@ fn quoted_text_the_shell_reading_leaves_unquoted_is_not_excluded() {
             ),
         ],
         Some("deny"),
+    );
+}
+
+/// After the move into Telltale the hook runs as `telltale hooks ...`: the
+/// installed `telltale` binary and the evaluator process (`telltale hooks serve`)
+/// are protected beside the old standalone names.
+#[test]
+fn the_telltale_binary_and_the_evaluator_process_are_protected() {
+    assert_all(
+        &[
+            ("kill-serve", "pkill -f 'telltale hooks serve'"),
+            ("kill-hooks-command", "pkill -f 'telltale hooks'"),
+            ("kill-serve-words", "pkill -f \"hooks serve\""),
+            ("kill-serve-pattern", "pkill -f 'telltale.*serve'"),
+            ("kill-name", "pkill telltale"),
+            ("kill-name-exact", "pkill -x telltale"),
+            ("killall", "killall telltale"),
+            ("kill-subst", "kill -9 $(pgrep telltale)"),
+            ("kill-pipe", "pgrep telltale | xargs kill"),
+            ("kill-subst-f", "kill $(pgrep -f 'telltale hooks serve')"),
+            ("taskkill-exe", "taskkill /F /IM telltale.exe"),
+            ("stop-process", "Stop-Process -Name telltale -Force"),
+            ("kill-assembled", "pkill -f tell'tale' hooks serve"),
+            ("kill-name-assembled", "pkill tell'tale'"),
+            ("kill-old-name", "pkill -f telltale-hooks"),
+            (
+                "uninstall-new-name",
+                "telltale hooks claude-code uninstall --scope user",
+            ),
+            (
+                "uninstall-new-name-managed",
+                "sudo telltale hooks claude-code uninstall --scope managed",
+            ),
+            (
+                "allow-user-hooks",
+                "telltale hooks claude-code install --scope managed --allow-user-hooks",
+            ),
+            ("binary-rm-new", "rm -f ~/.local/bin/telltale"),
+            (
+                "binary-install-new",
+                "install -m 755 target/release/telltale ~/.local/bin/telltale",
+            ),
+            ("binary-cp-new", "cp /tmp/fake /usr/local/bin/telltale"),
+            (
+                "binary-redirect-new",
+                "cat /tmp/fake > ~/.cargo/bin/telltale",
+            ),
+            ("binary-var-new", "p=/usr/local/bin/telltale; rm -f $p"),
+            (
+                "binary-exe-new",
+                "Remove-Item \"$env:LOCALAPPDATA\\Programs\\Telltale\\telltale.exe\"",
+            ),
+            (
+                "binary-program-files-new",
+                "del \"C:\\Program Files\\Telltale\\telltale.exe\"",
+            ),
+        ],
+        Some("deny"),
+    );
+}
+
+/// Ordinary Telltale use stays silent: the scanner, the watcher, installs, builds,
+/// build outputs and the hooks' own read-only commands.
+#[test]
+fn ordinary_telltale_use_is_not_denied() {
+    assert_all(
+        &[
+            ("scan", "telltale scan --once --path-profile user"),
+            ("scan-out", "telltale scan --once > /tmp/out.jsonl"),
+            ("watch", "telltale watch --root /home/synthetic/work"),
+            ("install", "telltale install --with-timer"),
+            ("uninstall-scanner", "telltale uninstall"),
+            ("status", "telltale status && telltale --version"),
+            ("hooks-check", "telltale hooks check"),
+            ("hooks-version", "telltale hooks version"),
+            ("hooks-settings", "telltale hooks claude-code settings"),
+            ("hooks-help", "telltale hooks --help"),
+            ("cargo-build", "cargo build --release -p telltale-cli"),
+            ("cargo-install", "cargo install --path . --root /tmp/x"),
+            ("cargo-install-name", "cargo install telltale"),
+            ("rm-target", "rm -rf target"),
+            ("rm-target-binary", "rm -f target/release/telltale"),
+            ("rm-target-dir", "rm -rf ./target/debug"),
+            ("cargo-clean", "cargo clean"),
+            ("run-built", "./target/release/telltale hooks check"),
+            ("cp-built", "cp target/release/telltale /tmp/telltale-copy"),
+            ("which", "which telltale"),
+            ("ls-installed", "ls -la ~/.local/bin/telltale"),
+            ("run-installed", "~/.local/bin/telltale hooks check"),
+            ("run-installed-version", "/usr/local/bin/telltale --version"),
+            ("sha-installed", "sha256sum ~/.local/bin/telltale"),
+            (
+                "run-installed-exe",
+                "\"C:\\Program Files\\telltale\\telltale.exe\" hooks version",
+            ),
+            ("build-dir", "rm -rf ./build/telltale"),
+            ("bin-notes", "rm -f ./bin/telltale-notes.md"),
+            ("pkill-watch", "pkill -f 'telltale watch'"),
+            ("pkill-scan", "pkill -f \"telltale scan\""),
+            ("pgrep-other", "pgrep -f telltale-scan-timer"),
+            ("kill-other", "kill 4242"),
+            ("kill-then-telltale", "kill 4242; telltale scan --once"),
+            ("grep-kill", "grep -rn 'pkill telltale' docs/"),
+            (
+                "commit-text",
+                "git commit -m 'docs: pkill telltale hooks serve is protected'",
+            ),
+        ],
+        None,
     );
 }
 

@@ -27,7 +27,9 @@
   is configured to call it, and the scanner and watch commands are unchanged.
   Its self-protection rules cover the hook, rule and managed-configuration files of
   Claude Code, Copilot CLI and Codex CLI, hook-disabling launches and custom harness
-  homes. A tool input that makes Telltale reject the session's source no longer
+  homes. They also cover replacing or removing the installed `telltale` binary the hook
+  runs as, and stopping the evaluator (`telltale hooks serve`); the old standalone
+  `telltale-hooks` names stay covered. A tool input that makes Telltale reject the session's source no longer
   costs a call its rule verdict, and waits for a session's lock and for the
   evaluator are bounded.
   Generated settings call `telltale hooks <harness> hook`, and the long-lived

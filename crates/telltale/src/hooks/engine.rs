@@ -902,7 +902,7 @@ fn installed_binary_family(binary: Option<&Path>, coverage: &mut GeneratedCovera
         .collect();
     Family {
         prefix: "installed_binary_path",
-        subject: "the telltale-hooks binary that is running",
+        subject: "the telltale binary that is running",
         failsafe: fragments.clone(),
         fragments,
         reversible: false,
