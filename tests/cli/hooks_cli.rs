@@ -670,8 +670,12 @@ fn generated_rules_cover_the_forms_static_rules_cover() {
         Some("deny"),
         format!("rm -f \"{root}{sep}agents{sep}My Copilot{sep}settings.json\""),
     );
-    // The shell reading leaves the quotes out, so a `;` inside quoted text cannot be excluded.
-    expect(Some("deny"), format!("git commit -m 'see {hooks}; rm it'"));
+    // A `;` inside quoted text is commit-message text, not a second command.
+    expect(
+        None,
+        format!("git commit -m 'see {}; rm it'", slashed(&hooks)),
+    );
+    expect(Some("deny"), format!("git commit -m x; rm {hooks}"));
     expect(None, format!("cat {}", slashed(&hooks)));
     expect(
         None,
