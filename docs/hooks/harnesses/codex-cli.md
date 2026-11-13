@@ -172,7 +172,7 @@ nothing.
 | Program replaced at a trusted path | Trust is kept, so the replacement runs as the hook | E2E (`trusted-binary-swap`) |
 | Launch options and configuration overrides that start a Codex session without user hooks | Session runs without user hooks | Src |
 | Parallel sibling of a denied call | Runs (separate call, separately evaluated) | E2E (capture) |
-| **Healthy hook, default config: the agent can remove some protections.** Edits to some Codex configuration files, the backstop file and hook-disabling launch options are not all covered by the self-protection rules yet (tracked privately). The literal user hook file is denied | Allowed in part | Binary probe at this adapter, no Codex run |
+| **Healthy hook: the agent removes the protections.** `rm` or `mv` of `~/.codex/rules/telltale-hooks.rules` or `$CODEX_HOME/hooks.json`, a patch to them or to `/etc/codex/requirements.toml`, `codex --disable hooks`, `codex -c features.hooks=false exec ...`, `CODEX_HOME=<other> codex` | Denied | E2E `tamper-*`, and only while the hook runs |
 
 ### Exec-policy backstop (`telltale hooks codex-cli execpolicy`)
 
@@ -192,19 +192,48 @@ commands, and indirect launches (wrappers, nested shells, interpreters),
 escape the rules. Exec policy never sees `apply_patch`, and a
 prefix rule cannot match a path argument anywhere in a command, so these rules
 do **not** cover config edits, including deleting the rules file itself. The
-hook's self-protection rules only partly cover those edits, and only while the
-hook runs ([limits above](#enforcement-limits-stated-not-hidden)); the real
-fix is managed requirements. A syntax
+hook's self-protection rules cover those edits, but only while the hook runs
+([limits above](#enforcement-limits-stated-not-hidden)); the real fix is managed
+requirements. A syntax
 error in any rules file makes Codex ignore all user rules; Codex validates
 the generated `match`/`not_match` examples at load. Check with
 `codex execpolicy check --rules <file> codex exec x`.
 
 ### Self-protection inputs ()
 
-Codex paths that configure, trust or disable this hook:
-`$CODEX_HOME/hooks.json`, `$CODEX_HOME/config.toml` (hooks table and the
-`[hooks.state]` trust records), `$CODEX_HOME/rules/*.rules` (the backstop),
-project `.codex/hooks.json` and `.codex/config.toml`, managed
-`requirements.toml` and system `config.toml` (`/etc/codex/`), `CODEX_HOME=`
-overrides, plus the documented launch options that disable hooks or skip
-hook trust.
+[`codex-cli-self-protection.yaml`](../../../crates/telltale/src/hooks/rules/codex-cli-self-protection.yaml)
+and the launch rules in
+[`telltale-hooks-self-protection.yaml`](../../../crates/telltale/src/hooks/rules/telltale-hooks-self-protection.yaml)
+cover what disables or bypasses this hook. Source references are to
+`codex-rs/` at rust-v0.166.0. Linux forms ran against real Codex 0.166.0. **Every Windows
+form below comes from source only**: it is tested as rule text, not on Windows.
+
+| Input | POSIX | Windows | Source |
+| --- | --- | --- | --- |
+| User home | `$CODEX_HOME`, `~/.codex` | `%CODEX_HOME%`, `%USERPROFILE%\.codex` | `utils/home-dir/src/lib.rs` |
+| Hook files in a layer | `<layer>/hooks.json` | same | `hooks/src/engine/discovery.rs:178,394`, `config/src/state.rs:219-243` |
+| Rules (the backstop) | `<layer>/rules/*.rules` | same | `core/src/exec_policy.rs:54-56,667-690` |
+| User and profile config | `$CODEX_HOME/config.toml`, `<name>.config.toml` | same | `config/src/loader/mod.rs:131` |
+| Project | `.codex/hooks.json`, `.codex/config.toml`, `.codex/rules/` | same | `config/src/state.rs:219-243` |
+| Requirements | `/etc/codex/requirements.toml` | `%ProgramData%\OpenAI\Codex\requirements.toml` | `config/src/loader/mod.rs:113-114,807-816` |
+| System config | `/etc/codex/config.toml` | `%ProgramData%\OpenAI\Codex\config.toml` | `config/src/loader/mod.rs:80,127-128,835-838` |
+| Legacy managed config | `/etc/codex/managed_config.toml` | ignored on Windows | `config/src/loader/mod.rs:116-121`, `layer_io.rs:74-100` |
+| Requirements override | none | `HKLM\SOFTWARE\Policies\OpenAI\Codex` `RequirementsPath` | `config/src/loader/mod.rs:819-832` |
+| Turn hooks off | `--disable hooks`, `-c features.hooks=false` (legacy `codex_hooks`), `codex features disable hooks` | same | `cli/src/main.rs:966,1959`, `features/src/lib.rs:1433`, `features/src/legacy.rs:49` |
+| Skip trust records or rules | `exec --ignore-user-config`, `exec --ignore-rules` | same | `exec/src/cli.rs:45-50` |
+| Other launches | `CODEX_HOME=<other> codex`, `npx`, `bunx`, `pnpm dlx @openai/codex` | `$env:CODEX_HOME=...; codex`, `set CODEX_HOME=...&& codex` | `utils/home-dir/src/lib.rs` |
+
+macOS managed preferences are not a bypass an agent can use: only forced preferences
+count, and `defaults write` does not force them (`config/src/loader/macos.rs:1,34`).
+
+**`--dangerously-bypass-hook-trust` has its own rule, `hook_trust_bypass`,** rather than
+joining `hookless_harness_launch`. Hooks stay on with this flag, this one included, so
+"hookless" would be false in telemetry and in the deny reason. What it does is run every
+enabled hook whether or not anyone reviewed it (`hooks/src/engine/discovery.rs:918`), so a
+hook the agent planted in a project would run. `--ignore-user-config` skipping the trust
+records is an inference from where they are stored, not a run.
+
+**Custom homes.** The static rules know `$CODEX_HOME`, `${CODEX_HOME}`, `%CODEX_HOME%`
+and `$env:CODEX_HOME`. A literal path gets rules generated from the hook's own
+`CODEX_HOME`, which Codex passes to hooks (E2E `tamper-custom-home`). Some
+spellings of a home are not covered (tracked privately).

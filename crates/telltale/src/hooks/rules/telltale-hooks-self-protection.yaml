@@ -1,27 +1,47 @@
 version: 1
 description: >-
-  Telltale Hooks self-protection. Detects an agent tool call that would
+  Telltale Hooks self-protection for Claude Code, Cursor and Telltale Hooks itself,
+  plus the launch forms of every harness. Detects an agent tool call that would
   disable or alter the hooks monitoring it. Host-specific knowledge of hook
-  installation paths, loaded additively into Telltale's Rule v1 pipeline.
-  Generic agent-harness tampering belongs upstream (upstream). The runtime adds a generated rule for this installation's actual
-  state, telemetry and config paths (engine.rs protected_path_rules).
-  Patterns stay under Telltale's 1,024-byte pattern cap; the path alternations
-  are shared by every rule (the corpus in tests/self_protection_corpus.rs is
-  the regression suite, including the benign controls).
+  installation paths, loaded additively into Telltale's Rule v1 pipeline. Generic
+  agent-harness tampering belongs upstream. Paths of other harnesses are in
+  copilot-cli-self-protection.yaml and codex-cli-self-protection.yaml. The runtime
+  adds generated rules for this installation's own paths, custom harness homes and
+  binary (engine.rs). Patterns stay under Telltale's 1,024-byte cap, which is why
+  each direction of a writer and a path is its own rule
+  (crates/telltale/tests/hooks/self_protection_corpus.rs is the regression suite,
+  including the benign controls).
 defaults:
   case_insensitive: true
   enabled: true
 rules:
+  # Command position: a writing program counts only at the start of a
+  # command: start of text, after `;`, `&`, `|`, `(`, `{`, a backtick or a newline, or
+  # after find's -exec, optionally behind sudo, doas, env, command, exec, nohup, time,
+  # nice, timeout, xargs, busybox, eval, iex, if, then, do, else, !, an assignment,
+  # options, sh -c, cmd /c or powershell -c. A word after any other whitespace is an
+  # argument, so `grep -i rename` and `# copy review` are not writers. A wrapper or
+  # spelling these rules do not list falls to a *_reference or *_failsafe rule, which
+  # ask: a protected path with a writer word anywhere in the command, or a harness word
+  # with what turns its hooks off. `sed` counts
+  # only with -i or --in-place. A writer is qualified by a path or backslash if any
+  # (`/bin/rm`, `\rm`), and its target must be in its own command, unless it is an
+  # interpreter one-liner, whose program can hold `;`. An interpreter counts only with
+  # a flag other than -m, -v or -h. The exclusion lets commands that cannot write through,
+  # whatever they name: plain reads, read pipelines, git reads, `sed -n`, a
+  # script file's arguments, `gh pr` and `git commit` text, beside commands that name
+  # no path and one `cd`. It holds only for a command it can read plainly: a list of
+  # plain words and complete quoted strings. Anything else asks.
   - id: tth.tamper.hook_settings_write
     title: Agent writes harness hook settings or Telltale Hooks state
     category: approval_bypass
     severity: high
     score: 90
     targets: [written_path]
-    regex: '(?:^|[\\/])(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)'
+    regex: '(?m)(?:^|[\\/])(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+telltale-hooks'
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A tool call writes a file that configures agent hooks or holds Telltale Hooks configuration or state. Path forms with repeated separators, `/./` segments, backslashes, XDG and APPDATA environment variables are covered.
+      A tool call writes a file that configures agent hooks or holds Telltale Hooks configuration or state, including Claude Code managed settings in /etc/claude-code, /Library/Application Support/ClaudeCode and C:\Program Files\ClaudeCode (managed-settings.json and managed-settings.d). Path forms with repeated separators, `/./` segments, backslashes, XDG and APPDATA environment variables are covered, and every line of a multi-target patch counts.
     falsepositives:
       - A user explicitly asks the agent to edit its own harness settings.
   - id: tth.tamper.hook_settings_modify
@@ -29,11 +49,15 @@ rules:
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b.*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json)|(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json).*(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b)'
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A shell command names hook settings and also contains, at command position, a program that can write, move, delete or change permissions, or a file-writing redirection, in either order and across `;`-separated commands (catches variable indirection such as `p=...settings.json; rm -f $p`, `dd of=`, `install`, interpreter one-liners). `--rm` does not count; redirections are hook_settings_redirect.
+      A shell command names hook settings after a program at command position that can write, move, delete or change permissions (`rm`, `tee`, `dd of=`, `install`, `sed -i`, interpreter one-liners), in the same command unless it is an interpreter one-liner. `--rm` and words after other whitespace do not count; redirections are hook_settings_redirect.
     falsepositives:
       - Operators uninstalling or reconfiguring hooks by hand.
       - A backup copy taken from the settings file.
@@ -42,23 +66,47 @@ rules:
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b.*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json)|(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json).*(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b)'
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      The Windows counterpart of hook_settings_modify: cmd.exe (`del`, `copy`, `move`, `ren`) and PowerShell (`Remove-Item`, `Set-Content`, `Out-File`, `Move-Item`, aliases `ri`, `sc`, ...) commands that name hook settings. Separate rules keep each pattern under Telltale's size cap.
+      The Windows counterpart of hook_settings_modify: cmd.exe (`del`, `copy`, `move`, `ren`) and PowerShell (`Remove-Item`, `Set-Content`, `Out-File`, `Move-Item`, aliases `ri`, `sc`, ...) at command position.
     falsepositives:
       - Operators reconfiguring hooks by hand on Windows.
+  - id: tth.tamper.hook_settings_modify_reverse
+    title: Agent command names hook settings and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The path comes first: `p=...settings.json; rm -f $p`, `echo path | xargs rm`, `cat path | tee x`.
+    falsepositives:
+      - A backup copy taken from the settings file.
   - id: tth.tamper.own_state_modify
     title: Agent command can modify Telltale Hooks state or configuration
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b.*(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks).*(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b)'
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      Like hook_settings_modify, for the Telltale Hooks state and configuration locations: `~/.local/state/telltale-hooks`, `~/.config/telltale-hooks`, `$XDG_STATE_HOME`/`$XDG_CONFIG_HOME`, `%LOCALAPPDATA%`/`%APPDATA%` (also `$env:` and `AppData\Local|Roaming` forms), `Application Support`. A checkout or build directory merely named telltale-hooks does not match. The runtime adds a generated rule for this installation's resolved paths.
+      Like hook_settings_modify, for the Telltale Hooks state and configuration locations: `~/.local/state/telltale-hooks`, `~/.config/telltale-hooks`, `/etc/telltale-hooks`, `$XDG_STATE_HOME`/`$XDG_CONFIG_HOME`, `%LOCALAPPDATA%`/`%APPDATA%` (also `$env:` and `AppData\Local|Roaming` forms), `Application Support`. A checkout or build directory merely named telltale-hooks does not match. The runtime adds generated rules for this installation's resolved paths.
     falsepositives:
       - Operators clearing hook state by hand.
   - id: tth.tamper.own_state_modify_windows
@@ -66,49 +114,221 @@ rules:
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b.*(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks).*(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b)'
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
       The Windows counterpart of own_state_modify.
     falsepositives:
       - Operators clearing hook state by hand on Windows.
+  - id: tth.tamper.own_state_modify_reverse
+    title: Agent command names Telltale Hooks state and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The path comes first, as in hook_settings_modify_reverse.
+    falsepositives:
+      - Operators clearing hook state by hand.
   - id: tth.tamper.hook_settings_redirect
     title: Agent command redirects output into harness hook settings or Telltale Hooks state
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:^|[^0-9&>])>{1,2}\|?\s*[\"'']?[^\s;&|<>\"'']*?(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)'
+    detection:
+      selection:
+        command: '(?s)(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A shell redirection (`>`, `>>`) whose target is a hook settings file or a Telltale Hooks state or configuration path, for example `echo '{}' > ~/.claude/settings.json` or `printf ... > $XDG_CONFIG_HOME/telltale-hooks/config.toml`. `2>`, `>&2`, `&>` and redirections to other files (`cat settings.json > backup`) do not match.
+      A shell redirection (`>`, `>>`) whose target is a hook settings file or a Telltale Hooks state or configuration path, for example `echo '{{}}' > ~/.claude/settings.json` or `printf ... > $XDG_CONFIG_HOME/telltale-hooks/config.toml`. `2>`, `>&2`, `&>` and redirections to other files (`cat settings.json > backup`) do not match.
     falsepositives:
       - Operators writing their own hook settings by hand.
+  - id: tth.tamper.hook_settings_bare_name
+    title: Agent command writes a managed settings file by its bare name
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\b(?:managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `sudo rm -f managed-settings.json; ls`, from inside the system directory: a writer at command position and the name in one command segment. It has no exclusion, because the exclusion lets a command that names no path through, and a bare name names none.
+    falsepositives:
+      - A message or argument that quotes such a command after a separator, such as `git commit -m 'a; rm managed-settings.json'`.
+  - id: tth.tamper.hook_settings_git_write
+    title: Agent removes or replaces hook settings through git
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `git rm` and `git mv` change the working tree. Unlike the other writers the path must be in the same command segment, so `git mv a b && git commit -m '... .claude/settings.json'` does not match.
+    falsepositives:
+      - Reorganizing a repository's own copy of hook settings.
   - id: tth.tamper.hook_settings_modify_split
     title: Agent command reaches hook settings or Telltale Hooks state through a directory change, find or glob
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:\.claude\b|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks\b).*(?:(?:(?:^|[\s;&|(`])(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\b|\s-delete\b).*\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock)|\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock).*(?:(?:^|[\s;&|(`])(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\b|\s-delete\b)|(?:^|[^0-9&>])>{1,2}\|?\s*[\"'']?[^\s;&|<>\"'']*?\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock))'
+    detection:
+      selection:
+        command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*(?:(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?)\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      The protected directory (`.claude`, or a Telltale Hooks state or config location) and the protected file name appear in one command without forming a path, together with a writing program: `cd ~/.claude && rm settings.json`, `find ~/.claude -name 'settings*.json' -delete`, `cd .claude; sed -i ... settings.local.json`.
+      The protected directory (`.claude`, or a Telltale Hooks state or config location) and the protected file name appear in one command without forming a path, together with a writing program: `cd ~/.claude && rm settings.json`, `cd .claude; sed -i ... settings.local.json`.
     falsepositives:
       - A command that lists a `.claude` directory and deletes an unrelated `settings.json` elsewhere.
-  - id: tth.tamper.hook_dir_replace
-    title: Agent removes, moves or replaces the harness configuration directory
+  - id: tth.tamper.hook_settings_modify_split_reverse
+    title: Agent command names a protected directory and file and then runs a writing program
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:(?:^|[\s;&|(`])(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item)\b[^;&|]*(?:~|[\"'']?\$\{?HOME\}?[\"'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.claude[\\/]*(?:\s|$|[\"''`])|\b(?:cd|pushd)(?:\s+(?:~|[\"'']?\$\{?HOME\}?[\"'']?)/?)?\s*(?:&&|;|\|\|)(?:\s*(?:[^cp\s;&|][^;&|]*|c(?:[^d;&|][^;&|]*)?|p(?:[^u;&|][^;&|]*)?)?[;&|]+)*(?:^|[\s;&|(`])(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item)\b[^;&|]*\s(?:\./)?\.claude[\\/]*(?:\s|$|[\"''`])|(?:^|[\s;&|(`])(?:rm|mv|Remove-Item|Move-Item)\b[^;&|]*(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks[\\/]*(?:\s|$|[\"''`]))'
+    detection:
+      selection:
+        command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock).*(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      Instead of editing settings, the agent removes or moves the user-level `.claude` directory (or a Telltale Hooks state or config directory), or symlinks it to a directory it controls, which drops every hook with it; also `cd ~ && rm -rf .claude` (`cd`, `pushd ~`, `./.claude`), as long as no later `cd` intervenes. Project-level `.claude` directories and `docker run --rm` are not matched.
+      The file name comes before the writer: `find ~/.claude -name 'settings*.json' -delete`, `find ~/.claude -name settings.json | xargs rm`.
     falsepositives:
-      - A user asking the agent to reset their Claude Code configuration.
+      - A command that lists a `.claude` directory and deletes an unrelated `settings.json` elsewhere.
+  - id: tth.tamper.hook_dir_replace
+    title: Agent removes, moves or replaces a harness configuration directory
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+\.\.)*[\\/]*(?:\s|$|["''`])'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      Instead of editing settings, the agent removes or moves the user-level `.claude`, `.codex` or `.copilot` directory, a `$CODEX_HOME` or `$COPILOT_HOME` it names, or a system directory such as `/etc/codex`, or symlinks one to a directory it controls, which drops every hook with it. `rm -rf ~/.codex/..` takes the home with it. Project-level directories, subdirectories such as `~/.codex/sessions`, and `docker run --rm` are not matched.
+    falsepositives:
+      - A user asking the agent to reset their harness configuration.
+  - id: tth.tamper.hook_dir_replace_cd
+    title: Agent changes to the home directory and removes a harness configuration directory
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)\b(?:cd|pushd)(?:\s+(?:~|["'']?\$\{?HOME\}?["'']?)/?)?\s*(?:&&|;|\|\|)(?:\s*(?:[^cp\s;&|][^;&|]*|c(?:[^d;&|][^;&|]*)?|p(?:[^u;&|][^;&|]*)?)?[;&|]+)*\s*(?:sudo\s+)?(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s(?:\./)?\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `cd ~ && rm -rf .claude` (`cd`, `pushd ~`, `./.claude`), as long as no later `cd` intervenes.
+    falsepositives:
+      - A user asking the agent to reset their harness configuration.
+  - id: tth.tamper.hook_dir_find
+    title: Agent deletes a harness configuration directory through find
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[^-A-Za-z0-9_.])find\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+(?:rules|hooks|agents))?[\\/]*["'']?\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?-(?:delete|exec|execdir|ok|okdir)\b'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:find (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"])*-exec(?:dir)? +(?:cat|[ef]?grep|basename|dirname|head|tail|wc|ls|stat|file|du|sha256sum|md5sum|jq) (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"]|-[efd] )*(?:\\; *)?\|?\s*)?(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `find ~/.codex -delete` and `find $CODEX_HOME -type f -exec rm {} +` remove the hook files without naming one. The search must start at the home or its `hooks`, `rules` or `agents`: `find ~/.codex/sessions -mtime +30 -delete` does not match. An `-exec` of a program that only reads (`find ~/.claude -name '*.md' -exec grep -l foo {} +`) does not match either; an `-exec` of any other program does.
+    falsepositives:
+      - A user asking the agent to clean a harness directory.
+  - id: tth.tamper.hook_dir_git
+    title: Agent changes a harness configuration directory through git -C
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?git\s+-C\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`])\s*(?:(?:rm|mv|checkout|restore|reset)\b|clean(?:\s+(?:-[a-mo-z]+|--[a-ce-z]\S*|[^-\s;&|]\S*))*\s*(?:$|[;&|]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `git -C ~/.codex rm hooks.json` and `git -C ~/.copilot clean -fdx` change the working tree of a harness directory kept in git. `clean -n` and `clean --dry-run` change nothing and do not match.
+    falsepositives:
+      - A user who keeps their harness configuration in git, asking the agent to manage it.
+  - id: tth.tamper.hook_dir_glob
+    title: Agent changes to a harness configuration directory and deletes everything in it
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:cd|pushd)\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*["'']?\s*(?:;|&&)\s*\\?(?:\S*[\\/])?(?:rm|del|erase|rd|rmdir|Remove-Item|ri)\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?(?:(?:\./)?\*(?:\.(?:json|toml|rules|\*))?|\.\.?[\\/]*)(?:[\s;&|"'']|$)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `cd ~/.codex && rm *`, `cd $COPILOT_HOME; rm -rf ./*` and `cd ~/.codex && rm -rf .`, and a glob that can reach a hook file: `*.json`, `*.toml`, `*.rules`, `*.*`. A glob that cannot (`rm *.log`), a glob in a subdirectory (`rm -rf sessions/*`) and a named file do not match: a custom-named one is not known to be a hook. A partial name (`rm h*`) is not told from `rm *.log`.
+    falsepositives:
+      - A user asking the agent to reset their harness configuration.
+  - id: tth.tamper.hook_dir_list_delete
+    title: Agent lists a harness configuration directory into a deleting program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:gci|Get-ChildItem|ls|dir)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`])(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\|\s*(?:xargs\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*)?(?:rm|mv|del|ri|mi|Remove-Item|Move-Item)\b'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `gci ~/.codex | ri`, `Get-ChildItem $env:CODEX_HOME -Recurse | Remove-Item`, `ls ~/.copilot | xargs rm -rf`.
+    falsepositives:
+      - A user asking the agent to clean a harness directory.
+  - id: tth.tamper.hook_dir_tree_call
+    title: Agent deletes a harness configuration directory through an interpreter's tree removal
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)\b(?:rmtree|rmSync|rm_rf|remove_dir_all|rimraf|removeSync)\b[^;&|\n]*(?:[\s"''`(](?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])|\bhome(?:dir)?\b[^;&|\n]*["''`][\\/]?\.(?:claude|codex|copilot)[\\/]*["''`]|[$%:.\[(]\{?["'']?(?:CODEX|COPILOT)_HOME\b)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `shutil.rmtree('/home/dev/.codex')`, `fs.rmSync(home + '/.claude', ...)`, `FileUtils.rm_rf(ENV['CODEX_HOME'])`, inline in a command, in one command segment and from the user's home: `rimraf ./.claude` is a project's, and `rimraf dist && CODEX_HOME=/tmp/x pnpm test` does not remove a home. A script file's content is not visible to these rules.
+    falsepositives:
+      - A user asking the agent to reset their harness configuration.
   - id: tth.tamper.hook_settings_reference
     title: Agent command references harness hook settings or Telltale Hooks state
     category: approval_bypass
@@ -116,15 +336,139 @@ rules:
     score: 60
     detection:
       selection:
-        command: '\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks'
+        command: '\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
-        command: '^\s*(?:cat|less|more|head|tail|grep|egrep|fgrep|rg|jq|wc|ls|stat|file|diff|sha256sum|md5sum|type|Get-Content|gc)\s[^;&|<>`$()]*(?:2>/dev/null\s*)?$'
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      A shell command mentions hook settings or Telltale Hooks state in a form other than one plain read-only command (cat, grep, jq, Get-Content ...) without chaining, redirection or substitution (a trailing `2>/dev/null` is allowed). Asks rather than denies.
+      A shell command mentions hook settings or Telltale Hooks state in a form not known to be harmless (see the exclusion: reads, read pipelines, git reads, `sed -n`, a script file's arguments, `gh pr` and `git commit` text). Asks rather than denies.
     falsepositives:
-      - Read pipelines such as `cat settings.json | jq .hooks`.
+      - Programs not known to be read-only, such as `awk '/hooks/' settings.json`.
+  - id: tth.tamper.hook_dir_failsafe
+    title: Agent command names a harness configuration directory and a writing program
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The fail-safe for spellings the deny rules do not recognize: `.claude`, `.codex` or `.copilot` in any spelling, or `$CODEX_HOME` or `$COPILOT_HOME`, the directory itself or below it through a glob or `..`, with a writer word anywhere in the command. `setsid rm -rf ~/.claude`, `rm"" -rf ~/.claude`, `find ~/.codex -name hooks.json | xargs rm`, and also `cd ~/.claude && rm old.log`, which cannot be told apart from them. One rule for all of them, because Telltale adds what each rule scores: `echo .claude >> .gitignore; echo .codex >> .gitignore` matches once and asks. A read stays silent.
+    falsepositives:
+      - Cleaning a harness directory, or copying into one, by hand.
+  - id: tth.tamper.system_dir_failsafe
+    title: Agent command names a harness system or policy directory and a writing program
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The same for the directories administrators and packages own: `/etc/claude-code`, `/etc/codex`, `OpenAI/codex`, `github-copilot`. One regular expression cannot hold these and the rule above, so a command naming one of each reaches a deny.
+    falsepositives:
+      - Administrators configuring a harness by hand.
+  - id: tth.tamper.installed_binary_failsafe
+    title: Agent command names the installed telltale-hooks binary and a writing program
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$)|(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The same for the installed binary, which no reference rule covers: a read of it, or a run of it, stays silent.
+    falsepositives:
+      - Copying or replacing the binary by hand.
+  - id: tth.tamper.installed_binary_modify
+    title: Agent command replaces or removes the installed telltale-hooks binary
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$)|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)(?:[\\/\s"''`;&|)]|$)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A writer in the same command segment as `.../bin/telltale-hooks` or `C:\Program Files\telltale-hooks\` (the managed install directory). Replacing the program keeps the harness's trust in it (Codex). Running the binary by that path is not matched. The runtime adds a generated rule for the path this binary actually runs from.
+    falsepositives:
+      - Operators upgrading the binary by hand.
+  - id: tth.tamper.installed_binary_variable
+    title: Agent command assigns the telltale-hooks binary to a variable and writes through a variable
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)=\s*(?:"[^"\n]*|''[^''\n]*|[^\s;&|"'']*)(?:[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks)["'']?\s*(?:[;&\n].*)?(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*[$%]'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `p=/usr/local/bin/telltale-hooks; rm -f $p`, `$p = "C:\Program Files\telltale-hooks"; Remove-Item $p`. Running the binary, also through a variable, is not matched.
+    falsepositives:
+      - A script that keeps the binary's path in a variable and removes another variable's path.
+  - id: tth.tamper.installed_binary_write
+    title: Agent writes the installed telltale-hooks binary or install directory
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [written_path]
+    regex: '(?m)[\\/]s?bin[\\/]+telltale-hooks(?:\.exe)?$|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks(?:[\\/]|$)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A tool call writes `.../bin/telltale-hooks` or under `C:\Program Files\telltale-hooks\`.
+    falsepositives:
+      - Operators upgrading the binary by hand.
+  - id: tth.tamper.hook_uninstall
+    title: Agent removes or weakens the telltale-hooks installation
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale-hooks(?:\.exe|\.cmd)?["'']?\s+(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
+      exclude:
+        command: '^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `telltale-hooks claude-code uninstall` at any scope, with or without sudo, and any harness equivalent remove the hook that monitors the agent. `install --allow-user-hooks` re-enables user and project hooks beside a managed install, and one of those can rewrite a command after this hook evaluated it. `--dry-run` and `--help`, as the only command in the call, change nothing and are not matched.
+    falsepositives:
+      - Operators removing the hook by hand.
+  - id: tth.tamper.reader_side_effect
+    title: Agent writes a file or runs a program through a reader's own flag
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rg\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?["'']*--pre["'']*[\s=]|git\s+grep\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?["'']*(?:(?-i:-[A-Za-z]*O)|--op[a-z-]*)|git\s+(?:diff|log|show|blame|status|grep|ls-files|ls-tree)\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?["'']*--out[a-z-]*["'']*[\s=])'
+      exclude:
+        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `rg --pre rm x FILE` runs `rm FILE`, `git grep -O<program>` hands the matching files to a program, and `git diff --output=FILE` writes to the file. The exclusions read these commands as plain reads and have no list of flags, so the flags have a rule of their own, whatever the path. A spelling this rule cannot read, such as `--o''utput`, gets no exclusion, so the rule for the path fires instead.
+    falsepositives:
+      - A search through a preprocessor such as `rg --pre pdftotext`, or a patch written with `git diff --output=x.patch`.
   - id: tth.tamper.kill_hook_process
     title: Agent command stops the Telltale Hooks process
     category: approval_bypass
@@ -142,11 +486,16 @@ rules:
     category: approval_bypass
     severity: high
     score: 90
-    targets: [arguments, command]
-    regex: 'disableAllHooks\"?\s*[:=]?\s*(?:true|1)\b'
+    detection:
+      selection:
+        arguments: 'disableAllHooks"?\s*[:=]?\s*(?:true|1)\b'
+        command: 'disableAllHooks"?\s*[:=]?\s*(?:true|1)\b'
+      exclude:
+        command: '^\s*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
-      Tool arguments or a command carry a setting that turns off every configured hook, including `claude config set [-g] disableAllHooks true|1`. Content written with the native Write tool is not visible to Rule v1 targets; the path rules cover that case.
+      Tool arguments or a command carry a setting that turns off every configured hook, including `claude config set [-g] disableAllHooks true|1`. A plain read or a `git commit` that quotes the setting is not matched. Content written with the native Write tool is not visible to Rule v1 targets; the path rules cover that case.
     falsepositives:
       - Documentation that quotes the setting.
   - id: tth.tamper.hookless_harness_launch
@@ -154,23 +503,144 @@ rules:
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(\bclaude\b[^;&|]*\s--bare\b|\bCLAUDE_CODE_SIMPLE=\s*[\"'']?(1|true)\b|\bopencode\b[^;&|]*\s--pure\b)'
+    detection:
+      selection:
+        command: '(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*--bare\b|opencode(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*--pure\b|codex(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:--disable[\s=]+["'']?(?:codex_)?hooks\b|(?:-c\s*|--config[\s=]+)["'']?features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false)|--ignore-user-config\b|--ignore-rules\b|features\s+disable\s+(?:codex_)?hooks\b))|\bCLAUDE_CODE_SIMPLE=\s*["'']?(?:1|true)\b)'
+      exclude:
+        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
-      Claude Code --bare (CLAUDE_CODE_SIMPLE) skips settings, flag, policy and plugin hooks (verified in Claude Code 2.1.318), so a nested agent started this way runs without the monitoring applied to its parent.
+      Claude Code --bare (CLAUDE_CODE_SIMPLE) turns off user, project and flag hooks and SessionStart, so a user-scope install does not survive it; managed hooks did still fire on tool events in real runs, contrary to the binary's schema text. opencode --pure skips plugins. Codex: --disable hooks and -c features.hooks=false (also the legacy key codex_hooks, --config, an inline features table, and the persistent `codex features disable hooks`) turn hooks off; exec --ignore-user-config skips the file that holds hook trust records, and exec --ignore-rules skips the exec-policy backstop (Codex source rust-v0.166.0: cli/src/main.rs, features/src/legacy.rs, exec/src/cli.rs). The harness must be at command position, so `grep 'codex --disable hooks' docs/` does not match; `--help` and `--version` alone do not match.
     falsepositives:
       - A user deliberately starting a minimal harness session for testing.
+  - id: tth.tamper.harness_home_override
+    title: Agent launches a harness with another configuration home
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\b(?:CODEX_HOME|COPILOT_HOME)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)|(?:\bexport\s+(?:CODEX_HOME|COPILOT_HOME)\b|\bset\s+["'']?(?:CODEX_HOME|COPILOT_HOME)=|\$env:(?:CODEX_HOME|COPILOT_HOME)\s*=).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
+      exclude:
+        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      `CODEX_HOME=<other> codex` and `COPILOT_HOME=<other> copilot` (inline, `env`, `export` then launch, PowerShell `$env:`, cmd.exe `set`) start a session that skips the user-level hooks of the real home. The value is not compared with the current home: a regex cannot. An `export` without a launch in the same command is inert. `--help` and `--version` alone do not match.
+    falsepositives:
+      - Test harnesses that run a harness under a disposable home on purpose.
+  - id: tth.tamper.harness_launch_failsafe
+    title: Agent command names a harness and what turns its hooks off
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?s)(?:(?:^|[^.0-9A-Z_a-z])(?:claude\b.*--bare\b|opencode\b.*--pure\b|(?:claude|codex|copilot|opencode|cursor|gemini)\b.*\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_HOOKS_[A-Z_]+)\s*=|codex\b.*(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)))|--bare\b.*[^.0-9A-Z_a-z]claude\b|--pure\b.*[^.0-9A-Z_a-z]opencode\b|\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_HOOKS_[A-Z_]+)\s*=.*[^.0-9A-Z_a-z](?:claude|codex|copilot|opencode|cursor|gemini)\b|(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)).*[^.0-9A-Z_a-z]codex\b)'
+      exclude:
+        command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$|^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$|^\s*git +(?:clone|init)(?: +[-A-Za-z0-9_./:=@~+]+)* *$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      The fail-safe for launches the deny rules do not recognize: a harness word and its own hook-disabling flag, or any harness word and an override of a harness home or the hook's environment, anywhere in the command and in either order, whatever wraps it and whatever follows it: `setsid claude --bare`, `setsid codex --ignore-rules`, `claude --bare -p hi -- --help`, `CODEX_HOME=/tmp/x setsid codex`. One rule for all of them, so two launches on one line ask. A read or text that quotes a launch, and a harness's own `--help` or `--version`, stay silent.
+    falsepositives:
+      - A command that sets `HOME` or `CODEX_HOME` for a tool and mentions a harness elsewhere.
+  - id: tth.tamper.hook_removal_failsafe
+    title: Agent command names a harness package runner or the hook's uninstall
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*@(?:openai/codex|github/copilot|anthropic-ai/claude-code)\b|\btelltale-hooks(?:\.exe)?\s.*(?:\buninstall\b|--allow-user-hooks\b))'
+      exclude:
+        command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$|^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      The same for a harness run through a package runner and for removing the hook: `setsid npx @openai/codex`, `setsid telltale-hooks claude-code uninstall`.
+    falsepositives:
+      - A command that names the uninstall subcommand as text to a program that is not a known reader.
+  - id: tth.tamper.harness_package_launch
+    title: Agent launches a harness through a package runner
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:npx|pnpx|bunx|(?:pnpm|yarn)\s+dlx|npm\s+(?:exec|x))\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*@(?:openai/codex|github/copilot)\b'
+      exclude:
+        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      `npx`, `pnpx`, `bunx`, `pnpm dlx`, `yarn dlx` and `npm exec` of `@openai/codex` or `@github/copilot` can start any version, including one without hook support or with another configuration default, so the installed harness's guarantees do not carry over. `npm view`, `npm install`, `--help` and `--version` alone do not match.
+    falsepositives:
+      - A user deliberately trying another harness version.
+  - id: tth.tamper.hook_trust_bypass
+    title: Agent launches Codex with hook trust bypassed
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?codex(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*--dangerously-bypass-hook-trust\b'
+      exclude:
+        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      `codex --dangerously-bypass-hook-trust` keeps hooks on, including this one, so it is not a hookless launch. It runs every enabled hook whether or not the user reviewed it (Codex source rust-v0.166.0, hooks/src/engine/discovery.rs), so a hook the agent planted in a project or a custom home runs without review. It has its own rule so that telemetry and operators can tell it apart: an unattended pipeline that passes this flag itself is not an agent launch and never reaches this rule, and an operator who wants nested agents to use it can disable this rule without touching hookless_harness_launch.
+    falsepositives:
+      - A user deliberately running a nested Codex with unreviewed hooks.
   - id: tth.tamper.hook_env_override
     title: Agent launches a harness with Telltale Hooks pointed at its own configuration or state
     category: approval_bypass
     severity: high
     score: 90
-    targets: [command]
-    regex: '(?s)(?:\bTELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=\S*[^;&|]*|\bexport\s+TELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b'
+    detection:
+      selection:
+        command: '(?s)(?:(?:\bTELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=\S*[^;&|]*|\bexport\s+TELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b|\b(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
+      exclude:
+        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+      condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
-      A harness started in a command that also sets `TELLTALE_HOOKS_CONFIG`, `TELLTALE_HOOKS_STATE_DIR` or `TELLTALE_HOOKS_TELEMETRY` (inline in the same command segment, or `export ...` followed by a launch anywhere later in the command) would run its hooks against an agent-chosen config (for example `mode = "observe"`) or a fresh session journal, escaping the parent's policy and history. An export without a launch in the same command is inert: hook processes inherit the harness's environment, not the agent's shell.
+      A harness started in a command that also sets `TELLTALE_HOOKS_CONFIG`, `TELLTALE_HOOKS_STATE_DIR` or `TELLTALE_HOOKS_TELEMETRY` (inline in the same command segment, or `export ...` followed by a launch anywhere later in the command), or `XDG_CONFIG_HOME`, `XDG_STATE_HOME` or `HOME` inline before the launch, would run its hooks against an agent-chosen config (for example `mode = "observe"`) or a fresh session journal, escaping the parent's policy and history. An export without a launch in the same command is inert: hook processes inherit the harness's environment, not the agent's shell.
     falsepositives:
       - Test harnesses such as scripts/hooks/harness/claude-code-e2e.sh, which run under a disposable state directory on purpose.
+  - id: tth.tamper.hook_env_override_export
+    title: Agent exports the environment that locates Telltale Hooks configuration and launches a harness
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\bexport\s+(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\bset\s+["'']?(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\$env:(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)\s*=).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)'
+      exclude:
+        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      `export XDG_CONFIG_HOME=/tmp/x; claude -p hi`, `export HOME=/tmp/x && codex`, cmd.exe `set` and PowerShell `$env:`: the export form of hook_env_override.
+    falsepositives:
+      - Test harnesses that run a harness under a disposable home on purpose.
+  - id: tth.tamper.hook_config_stage
+    title: Agent writes a Telltale Hooks configuration for another home
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        written_path: '(?m)(?:^|[\\/])telltale-hooks[\\/]+config\.toml$'
+        command: '(?s)(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?)\btelltale-hooks[\\/]+config\.toml(?:[\s"''`;&|)]|$)'
+      exclude:
+        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      A file at `<dir>/telltale-hooks/config.toml` outside the real location (which hook_settings_write covers) does nothing until `XDG_CONFIG_HOME=<dir>` points a harness at it, and such a config can set `mode = "observe"`, which then allows what these rules deny. `TELLTALE_HOOKS_CONFIG` can name a file with any name, so this rule cannot see every staging write; the launch rules above are what stop it being used.
+    falsepositives:
+      - A test fixture kept in a directory named telltale-hooks.
 modifiers: []

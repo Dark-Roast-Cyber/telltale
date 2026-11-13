@@ -215,7 +215,13 @@ fn session_file_failures_inside_evaluation_apply_the_strict_policy() {
     let broken = dir.path().join("broken.yaml");
     std::fs::write(&broken, "version: 1\nrules: [ { id: x, regex: '(' } ]\n").unwrap();
     let mut h = Harness::with(|c| c.telltale.rules = vec![broken.clone()]);
-    assert_eq!(verdict(&h.pre_bash("toolu_b", EXFIL)), Some("ask"));
+    let output = h.pre_bash("toolu_b", EXFIL);
+    assert_eq!(verdict(&output), Some("ask"));
+    let reason = output.unwrap()["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(reason.contains("telltale hooks check"), "{reason}");
     let decision = h.decision_for("toolu_b");
     assert_eq!(decision["decision"]["basis"], "evaluation_gap");
     assert_eq!(

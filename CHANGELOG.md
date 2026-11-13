@@ -25,6 +25,9 @@
   `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
   before they run and answer allow, ask or deny. It does nothing until a harness
   is configured to call it, and the scanner and watch commands are unchanged.
+  Its self-protection rules cover the hook, rule and managed-configuration files of
+  Claude Code, Copilot CLI and Codex CLI, hook-disabling launches and custom harness
+  homes.
   Generated settings call `telltale hooks <harness> hook`, and the long-lived
   evaluator autostarts by running the current executable as `hooks serve`.
   Existing `telltale-hooks` configuration and state directories and the

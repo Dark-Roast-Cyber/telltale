@@ -105,14 +105,18 @@ def prepare(run, fmt, command, timeout, claude_settings, config, top_config=""):
         hooks["hooks"]["preToolUse"][0]["timeoutSec"] = timeout
     if fmt == "pascal":
         hooks["hooks"] = {PASCAL[k]: v for k, v in hooks["hooks"].items() if k in PASCAL}
-    d = os.path.join(run.home, ".copilot", "hooks")
+    d = os.path.join(copilot_home(run), "hooks")
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "telltale-hooks.json"), "w") as f:
         json.dump(hooks, f, indent=1)
 
 
+def copilot_home(run):
+    return os.path.join(run.home, getattr(run, "home_name", ".copilot"))
+
+
 def copilot_env(run):
-    return run.base_env(COPILOT_HOME=os.path.join(run.home, ".copilot"),
+    return run.base_env(COPILOT_HOME=copilot_home(run),
                         COPILOT_PROVIDER_BASE_URL=f"http://127.0.0.1:{run.port}/v1",
                         COPILOT_MODEL=os.environ.get("E2E_MODEL", "gpt-5.4"), COPILOT_PROVIDER_API_KEY="mock",
                         COPILOT_AUTO_UPDATE="false", COPILOT_OFFLINE="true",
@@ -220,11 +224,15 @@ def read_jsonl(path):
 
 
 def scenario(name, steps, expect, *, fmt="camel", flags=("--allow-all-tools",), command=None, timeout=None,
-             claude_settings=False, config=None, top_config="", answer=None, child=None, note=""):
+             claude_settings=False, config=None, top_config="", answer=None, child=None, note="",
+             home_name=None, rule=None, intact=None):
     run = Run(ROOT, name)
+    if home_name:
+        run.home_name = home_name
     marker = f"TTHE2E-{name}"
     prepare(run, fmt, command, timeout, claude_settings, config, top_config)
-    resolve = lambda obj: json.loads(json.dumps(obj).replace("@CANARY@", f"touch {run.canary()}"))  # noqa: E731
+    resolve = lambda obj: json.loads(json.dumps(obj).replace("@CANARY@", f"touch {run.canary()}")  # noqa: E731
+                                     .replace("@COPILOT_HOME@", copilot_home(run)))
     conversations = [{"match": marker, "steps": resolve(steps)}]
     if child:
         conversations.insert(0, {"match": f"TTHCHILD-{name}", "steps": resolve(child)})
@@ -269,6 +277,16 @@ def scenario(name, steps, expect, *, fmt="camel", flags=("--allow-all-tools",), 
         "model_saw": [s for s in seen if "TTH" in s or "Denied" in s or "Telltale" in s][:4],
         "exit": getattr(run, "exit", None),
     }
+    # Self-protection scenarios: the rule that decided, and the file it protects.
+    fired = [r for d in summary["decisions"] if d["verdict"] == "deny" for r in d["rules"]]
+    if rule:
+        summary["rule"] = rule
+        summary["pass"] = summary["pass"] and any(r.startswith(rule) for r in fired)
+    if rule is False:  # benign control: no opinion on the call
+        summary["pass"] = summary["pass"] and all(d["verdict"] == "allow" for d in summary["decisions"])
+    if intact:
+        summary["intact"] = os.path.exists(os.path.join(copilot_home(run), intact))
+        summary["pass"] = summary["pass"] and summary["intact"]
     if notes:
         summary["interactive"] = {"prompted": notes.get("prompted"), "trust_dialog": notes.get("trust", False)}
     line = json.dumps(summary)
@@ -353,6 +371,20 @@ SCENARIOS = {
     "timeout": lambda: scenario("timeout", CANARY(DENY), "present", timeout=2,
                                 command=f"sh -c 'sleep 5; exec {TTH} hooks copilot-cli hook'",
                                 note="residual: a hook that times out lets the call run"),
+    # Self-protection. The canary precedes the tamper command, so it shows nothing ran; --yolo
+    # turns off Copilot's own path check, which would refuse a path outside the work directory anyway.
+    "tamper-hook-file": lambda: scenario(
+        "tamper-hook-file", CANARY("rm -f @COPILOT_HOME@/hooks/telltale-hooks.json"), "absent",
+        flags=("--yolo",), rule="tth.tamper.copilot_hook_", intact="hooks/telltale-hooks.json",
+        note="agent removes its hook file: denied by rule content, file intact"),
+    "tamper-custom-home": lambda: scenario(
+        "tamper-custom-home", CANARY("rm -f @COPILOT_HOME@/hooks/telltale-hooks.json"), "absent",
+        flags=("--yolo",), home_name="agents/custom-home", rule="tth.tamper.harness_home_",
+        intact="hooks/telltale-hooks.json",
+        note="COPILOT_HOME has no .copilot in it: only the rule generated from the hook's environment knows it"),
+    "tamper-benign": lambda: scenario(
+        "tamper-benign", CANARY("rm -rf @COPILOT_HOME@/logs/old"), "present", flags=("--yolo",), rule=False,
+        note="control: a writer under the home that does not touch hook files runs"),
 }
 
 if __name__ == "__main__":

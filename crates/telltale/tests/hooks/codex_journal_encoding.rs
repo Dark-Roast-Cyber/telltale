@@ -223,7 +223,7 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
     assert!(
         rules
             .iter()
-            .any(|r| r.starts_with("tth.tamper.hook_settings_"))
+            .any(|r| r.starts_with("tth.tamper.codex_hook_"))
     );
     // Neither encoding derives a patch's written path, so hook
     // self-protection (`written_path`) does not fire for a patch to the
@@ -233,7 +233,7 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
     // lever short of an upstream change.
     assert_eq!(
         get("patch to hook config"),
-        (vec!["tth.tamper.hook_settings_reference".to_owned()], 60)
+        (vec!["tth.tamper.codex_hook_reference".to_owned()], 60)
     );
     // Telltale's shell reading also reads a patch body (the `command` key) as
     // shell text, so patch prose that quotes a download-and-pipe line scores in

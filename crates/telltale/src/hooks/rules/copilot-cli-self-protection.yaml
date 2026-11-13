@@ -1,0 +1,231 @@
+version: 1
+description: >-
+  Telltale Hooks self-protection for GitHub Copilot CLI (verified contract: 1.0.105,
+  docs/harnesses/copilot-cli.md): $COPILOT_HOME/hooks and agents, inline hooks in
+  $COPILOT_HOME/settings.json, repository .github/hooks and
+  .github/copilot/settings{,.local}.json, the machine policy directory, plugin
+  hooks.json. Repository .github/agents asks rather than denies. Same shapes and command-position discipline as
+  rules/telltale-hooks-self-protection.yaml. A resolved custom COPILOT_HOME gets a
+  generated rule at hook time (engine.rs).
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  # Command position: a writing program counts only at the start of a
+  # command: start of text, after `;`, `&`, `|`, `(`, `{`, a backtick or a newline, or
+  # after find's -exec, optionally behind sudo, doas, env, command, exec, nohup, time,
+  # nice, timeout, xargs, busybox, eval, iex, if, then, do, else, !, an assignment,
+  # options, sh -c, cmd /c or powershell -c. A word after any other whitespace is an
+  # argument, so `grep -i rename` and `# copy review` are not writers. A wrapper or
+  # spelling these rules do not list falls to a *_reference or *_failsafe rule, which
+  # ask: a protected path with a writer word anywhere in the command, or a harness word
+  # with what turns its hooks off. `sed` counts
+  # only with -i or --in-place. A writer is qualified by a path or backslash if any
+  # (`/bin/rm`, `\rm`), and its target must be in its own command, unless it is an
+  # interpreter one-liner, whose program can hold `;`. An interpreter counts only with
+  # a flag other than -m, -v or -h. The exclusion lets commands that cannot write through,
+  # whatever they name: plain reads, read pipelines, git reads, `sed -n`, a
+  # script file's arguments, `gh pr` and `git commit` text, beside commands that name
+  # no path and one `cd`. It holds only for a command it can read plainly: a list of
+  # plain words and complete quoted strings. Anything else asks.
+  - id: tth.tamper.copilot_hook_write
+    title: Agent writes a GitHub Copilot CLI hook file
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [written_path]
+    regex: '(?m)(?:^|[\\/$%{:])(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json)|^(?:\./)?plugins?[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A tool call writes `$COPILOT_HOME/hooks/`, `~/.copilot/hooks/` (Windows `%USERPROFILE%\.copilot\hooks\`), `settings.json` or `agents/` there, `.github/hooks/`, `.github/copilot/settings{,.local}.json`, `/etc/github-copilot/policy.d/` (`C:\ProgramData\GitHub\Copilot\policy.d\`) or a plugin `hooks.json` (hooks.json or hooks/hooks.json in a plugin root). A relative `plugins/` must start the path: `src/plugins/foo/hooks.json` is a source file. Agent definitions can carry hooks; `settings.json` can set `disableAllHooks`. Every line of a multi-target patch counts.
+    falsepositives:
+      - A user asks the agent to author repository hooks.
+  - id: tth.tamper.copilot_hook_modify
+    title: Agent command can modify a GitHub Copilot CLI hook file
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell command names a Copilot hook file or directory after a writing program at command position, in the same command unless it is an interpreter one-liner.
+    falsepositives:
+      - A user asks the agent to author repository hooks.
+  - id: tth.tamper.copilot_hook_modify_windows
+    title: Agent cmd.exe or PowerShell command can modify a GitHub Copilot CLI hook file
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The Windows counterpart of copilot_hook_modify.
+    falsepositives:
+      - A user asks the agent to author repository hooks.
+  - id: tth.tamper.copilot_hook_modify_reverse
+    title: Agent command names a GitHub Copilot CLI hook file and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The path comes first: `p=.github/hooks/a.json; rm -f $p`, `cd ~/.copilot/hooks && rm a.json`.
+    falsepositives:
+      - A user asks the agent to author repository hooks.
+  - id: tth.tamper.copilot_hook_modify_reverse_windows
+    title: Agent names a GitHub Copilot CLI hook file and then runs a cmd.exe or PowerShell writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The Windows counterpart of copilot_hook_modify_reverse.
+    falsepositives:
+      - A user asks the agent to author repository hooks.
+  - id: tth.tamper.copilot_plugin_root_modify
+    title: Agent command can modify a plugin hooks.json at the root of a plugins directory
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*[\s"''=])?(?:\./)?plugins?[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `rm plugins/foo/hooks.json`. A relative path must start there: `src/plugins/foo/hooks.json` is a source file. A plugin root that is reached by an absolute path cannot be told from one, and is not matched.
+    falsepositives:
+      - A user asks the agent to author a plugin.
+  - id: tth.tamper.copilot_plugin_root_reverse
+    title: Agent command names a plugin hooks.json and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[\s"''=])(?:\./)?plugins?[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json.*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The path comes first: `p=plugins/foo/hooks.json; rm -f $p`.
+    falsepositives:
+      - A user asks the agent to author a plugin.
+  - id: tth.tamper.copilot_hook_redirect
+    title: Agent command redirects into a GitHub Copilot CLI hook file
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?(?:\./)?plugins?[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell redirection whose target is a Copilot hook file.
+    falsepositives:
+      - A user asks the agent to author repository hooks or custom agents.
+  - id: tth.tamper.copilot_hook_git_write
+    title: Agent removes or replaces a GitHub Copilot CLI hook file through git
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*[\s"''=])?(?:\./)?plugins?[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `git rm` or `git mv` of a Copilot hook file in the same command segment.
+    falsepositives:
+      - A user asks the agent to reorganize repository hooks.
+  - id: tth.tamper.copilot_hook_split
+    title: Agent command reaches a GitHub Copilot CLI hook file through a directory change
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\.copilot|COPILOT_HOME|\.github|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d)\b.*(?:(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*(?:[\s"''=](?:\./)?(?:hooks|agents)[\\/]*(?:[\s"'']|$)|\bsettings(?:\.local|\*)?\.json|\bhooks\.json)|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:[\s"''=](?:\./)?(?:hooks|agents)[\\/]*(?:[\s"'']|$)|\bsettings(?:\.local|\*)?\.json|\bhooks\.json))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The directory and the file appear in one command without forming a path: `cd ~/.copilot && rm -rf hooks`, `cd .github/copilot && rm settings.json`.
+    falsepositives:
+      - A command that lists `.github` and deletes an unrelated `settings.json` or `hooks` directory elsewhere.
+  - id: tth.tamper.copilot_hook_split_reverse
+    title: Agent command names a Copilot directory and file and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\.copilot|COPILOT_HOME|\.github|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d)\b.*(?:[\s"''=](?:\./)?(?:hooks|agents)[\\/]*(?:[\s"'']|$)|\bsettings(?:\.local|\*)?\.json|\bhooks\.json).*(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The file name comes before the writer: `find .github -name 'settings*.json' -delete`.
+    falsepositives:
+      - A command that lists `.github` and deletes an unrelated `settings.json` or `hooks` directory elsewhere.
+  - id: tth.tamper.copilot_hook_reference
+    title: Agent command references a GitHub Copilot CLI hook file
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?:\.copilot|COPILOT_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks|agents)(?:[\\/\s"''`;&|)]|$)|settings(?:\.local)?\.json|(?:[^\s;&|"'']*[\\/])?hooks\.json)|\.github(?:[\\/]+\.)*[\\/]+(?:hooks(?:[\\/\s"''`;&|)]|$)|copilot(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json)|(?:github-copilot|GitHub[\\/]+Copilot)[\\/]+policy\.d(?:[\\/\s"''`;&|)]|$)|(?:\.plugin|\.claude-plugin|\.github(?:[\\/]+\.)*[\\/]+plugin)[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json|\.github(?:[\\/]+\.)*[\\/]+agents(?:[\\/\s"''`;&|)]|$)|(?:^|[\s"''=])(?:\./)?plugins?[\\/]+(?:[^\s;&|"'']*[\\/])?hooks\.json'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell command mentions a Copilot hook file or a repository agent definition in a form not known to be harmless. Asks rather than denies, including `rm .github/agents/a.agent.md`: an agent definition can carry hooks, but changing one is ordinary work. A harness that cannot ask turns this into a refusal.
+    falsepositives:
+      - Programs not known to be read-only, such as `awk '/hooks/' .github/hooks/a.json`.
+  - id: tth.tamper.copilot_agent_definition_write
+    title: Agent writes a repository GitHub Copilot agent definition
+    category: approval_bypass
+    severity: medium
+    score: 60
+    targets: [written_path]
+    regex: '(?m)(?:^|[\\/$%{:])\.github(?:[\\/]+\.)*[\\/]+agents(?:[\\/\s"''`;&|)]|$)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A tool call writes under `.github/agents/`. An agent definition can carry hooks, so it asks, but writing one is ordinary work in a repository, unlike `$COPILOT_HOME/agents/`, which is denied. A harness that cannot ask turns this into a refusal.
+    falsepositives:
+      - A user asks the agent to author a custom agent.
+modifiers: []

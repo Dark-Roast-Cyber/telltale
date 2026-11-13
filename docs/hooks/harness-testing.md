@@ -41,6 +41,7 @@ runs as root.
 | Scenario | Checks |
 | --- | --- |
 | `benign`, `deny`, `ask`, `bypass`, `subagent`, `tamper`, `chain`, `bare`, `exfil` | Enforcement of hook decisions (see `results/2026-11-04-claude-code-2.1.318.md`) |
+| `noexec-tamper`, `noexec-bare`, `noexec-ask` | Tamper-shaped commands with an empty allow list, so no shell can run them even if the hook fails: `-p` mode declines. An absent canary proves nothing here. They pass on telemetry (verdict, `returned`, rule ID) and the hook's reason in `permission_denials` or the transcript, which shows the decision reached the harness. The marker scenarios are the evidence that it honors one |
 | `failopen`, `failblock-hook`, `failblock-matcher` | Hook crash: fail-open default, `onFailure: "block"` placement |
 | `mcp-benign`, `mcp-deny` | MCP tool calls through a disposable stdio server; the deny marker travels in a tool argument. Both record raw payloads (`hooks.jsonl`) for fixtures |
 | `timeout-open`, `timeout-block` | Hook `timeout` (1 s) shorter than the hook's run time, without and with `onFailure: "block"` |

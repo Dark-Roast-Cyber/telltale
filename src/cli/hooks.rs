@@ -161,6 +161,19 @@ fn check() -> i32 {
             println!("semantic identity: {}", engine.semantic_identity());
             println!("pipeline build: {} ms", engine.build_ms);
             println!("mode: {:?}, on_error: {:?}", config.mode, config.on_error);
+            let generated = engine.generated_coverage();
+            println!(
+                "self-protection: {} paths in {} generated rules",
+                generated.paths, generated.rules
+            );
+            for path in &generated.reduced {
+                println!(
+                    "self-protection: too long for one rule, matched by its last bytes: {path:?}"
+                );
+            }
+            for path in &generated.unrepresentable {
+                println!("self-protection: not UTF-8, no generated rule: {path:?}");
+            }
             match (
                 config.resolved_state_dir(),
                 config.resolved_telemetry_path(),

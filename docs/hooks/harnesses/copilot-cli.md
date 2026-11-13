@@ -175,11 +175,24 @@ Copilot hook file instead of relying on it.
 
 ### Self-protection paths
 
-Host rules must cover the files that change Copilot's hooks:
+[`copilot-cli-self-protection.yaml`](../../../crates/telltale/src/hooks/rules/copilot-cli-self-protection.yaml)
+covers the files that change Copilot's hooks, in POSIX and Windows forms:
 `$COPILOT_HOME/hooks/` (default `~/.copilot/hooks/`), `~/.copilot/settings.json`
 (inline `hooks`), `.github/hooks/`, `.github/copilot/settings.json` and
 `settings.local.json` (inline `hooks`, `disableAllHooks`), `.claude/settings.json`
 and `settings.local.json`, `/etc/github-copilot/policy.d/`
 (`C:\ProgramData\GitHub\Copilot\policy.d\`), custom agent definitions with
-`hooks` frontmatter (`.github/agents/`), and plugin `hooks.json`. A relaunch
-with another `COPILOT_HOME` skips user-level hooks (policy hooks still run).
+`hooks` frontmatter under `$COPILOT_HOME/agents/`, and plugin `hooks.json` under
+`.plugin`, `.claude-plugin`, `.github/plugin`, the home, or a relative path that starts
+at `plugin/` or `plugins/`. Writing under `.github/agents/` asks instead: a definition
+there can carry hooks too, but writing one is ordinary repository work. A relaunch with another
+`COPILOT_HOME` skips user-level hooks (policy hooks still run) and is denied in
+every launch form, as is `npx @github/copilot`. Copilot 1.0.105 has no flag that
+turns hooks off (`--help`). A home named only by a literal path is covered through
+the hook's own `COPILOT_HOME`.
+
+Verified with real Copilot 1.0.105 and a scripted model. The Windows
+forms and the plugin layout are not verified at runtime; the layout comes from
+Copilot's bundled code at 1.0.56 and the plugin it ships at 1.0.105. In `-p` an ask
+is a refusal, so an agent there still cannot write an agent definition: that is the cost of
+those files being able to carry hooks.

@@ -107,7 +107,7 @@ cannot ask from a hook, so every `ask` is returned as a deny. Codex fails open
 on every hook failure and has no fail-closed option (`settings --fail-closed`
 refuses). All of this was verified on Linux with a scripted model only.
 Optional native backstop against plain relaunches of Codex without hooks (the
-agent can delete it while the hook is healthy):
+hook denies removing it, for as long as the hook runs):
 
 ```bash
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/rules"

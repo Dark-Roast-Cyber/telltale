@@ -349,12 +349,17 @@ fn self_protection_resists_reported_evasions() {
             "{command}"
         );
     }
-    // In a fresh session (repeated denials above harden this one): a plain
-    // read stays allowed and a read pipeline asks.
+    // In a fresh session (repeated denials above harden this one): a read
+    // stays allowed, also in a read pipeline, and a program not known to be
+    // read-only asks.
     let mut h = Harness::new();
     assert_eq!(h.pre_bash("toolu_r1", "cat ~/.claude/settings.json"), None);
     assert_eq!(
-        verdict(&h.pre_bash("toolu_r2", "cat ~/.claude/settings.json | jq .hooks")),
+        h.pre_bash("toolu_r2", "cat ~/.claude/settings.json | jq .hooks"),
+        None
+    );
+    assert_eq!(
+        verdict(&h.pre_bash("toolu_r3", "cat ~/.claude/settings.json | awk 1")),
         Some("ask")
     );
 }

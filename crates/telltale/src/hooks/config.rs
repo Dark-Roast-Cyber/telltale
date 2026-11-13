@@ -413,15 +413,18 @@ impl Config {
         part("revision", identity::revision().as_bytes());
         part("config", format!("{self:?}").as_bytes());
         // Every input to Engine::new, including environment-derived paths
-        // (XDG_CONFIG_HOME, HOME, XDG_RUNTIME_DIR; APPDATA, LOCALAPPDATA on Windows).
+        // (XDG_CONFIG_HOME, HOME, XDG_RUNTIME_DIR; APPDATA, LOCALAPPDATA,
+        // USERPROFILE on Windows; CODEX_HOME, COPILOT_HOME).
         let state = self.resolved_state_dir().ok();
         let telemetry = self.resolved_telemetry_path().ok();
         let socket = self.resolved_socket_path().ok();
         part(
             "paths",
             format!(
-                "{state:?}|{telemetry:?}|{socket:?}|{:?}",
-                self.protected_paths()
+                "{state:?}|{telemetry:?}|{socket:?}|{:?}|{:?}|{:?}",
+                self.protected_paths(),
+                harness_homes(),
+                user_home()
             )
             .as_bytes(),
         );
@@ -480,6 +483,72 @@ pub fn current_uid() -> u32 {
 #[cfg(not(unix))]
 pub fn current_uid() -> u32 {
     0
+}
+
+/// A harness configuration home named by this process's environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessHome {
+    pub variable: &'static str,
+    pub path: PathBuf,
+}
+
+/// `CODEX_HOME` and `COPILOT_HOME` as the hook sees them. A harness moved there
+/// loads its hooks from that directory, and static rules can only know the
+/// variable's name and the default directory, so the engine generates rules
+/// for these literal paths. A hook inherits these from the harness, so this
+/// covers the home of the session being monitored. Relative values and whatever
+/// resolves to a root are ignored: they would match unrelated paths, or every
+/// path. Each is also listed as its canonical path when that differs (Codex
+/// canonicalizes `CODEX_HOME`).
+pub fn harness_homes() -> Vec<HarnessHome> {
+    let mut homes = Vec::new();
+    for variable in ["CODEX_HOME", "COPILOT_HOME"] {
+        let Some(path) = env_path(variable) else {
+            continue;
+        };
+        if !path.is_absolute() || !names_below_root(&path) {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(&path).ok().map(|canonical| {
+            let text = canonical.to_string_lossy();
+            // Windows verbatim prefix: no one spells a path this way.
+            match text.strip_prefix(r"\\?\") {
+                Some(plain) => PathBuf::from(plain),
+                None => canonical.clone(),
+            }
+        });
+        // `/usr/..`, or a link to `/`.
+        if canonical
+            .as_deref()
+            .is_some_and(|path| !names_below_root(path))
+        {
+            continue;
+        }
+        homes.push(HarnessHome {
+            variable,
+            path: path.clone(),
+        });
+        if let Some(canonical) = canonical.filter(|canonical| *canonical != path) {
+            homes.push(HarnessHome {
+                variable,
+                path: canonical,
+            });
+        }
+    }
+    homes
+}
+
+/// The user's home as this process sees it, which a shell also spells `~`.
+pub fn user_home() -> Option<PathBuf> {
+    env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|path| path.is_absolute() && names_below_root(path))
+}
+
+/// False for `/`, `//`, `/.`, `.` and `C:\`: a rule for such a path would match
+/// any path, and so deny every write.
+pub fn names_below_root(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 /// A non-empty environment variable as a path.

@@ -80,7 +80,7 @@ Unless a row names another path, hooks were trusted with
 | Trust scope | Per handler: changing a handler un-trusts it and the call runs; reformatting or editing another handler does not; replacing the program at a trusted path keeps trust | E2E |
 | `settings --fail-closed` | Refused (no Codex equivalent) | Test |
 | Exec-policy backstop | Refuses plain nested Codex launches with the hook absent; literal, and indirect launches escape | E2E |
-| Agent removing the protections, healthy hook | **Partly allowed by default:** some configuration and launch-option edits are not covered yet (tracked privately) | Binary probe |
+| Agent removing the protections, healthy hook | Denied by rule: moving the backstop or `$CODEX_HOME/hooks.json`, `codex --disable hooks`, `CODEX_HOME=<other> codex`; custom homes through the hook's environment (Windows forms unverified) | E2E (`tamper-*`) |
 | Real model | Pending | — |
 | Interactive use (a turn inside the TUI) | Unverified | — |
 | macOS, Windows | Unverified | — |

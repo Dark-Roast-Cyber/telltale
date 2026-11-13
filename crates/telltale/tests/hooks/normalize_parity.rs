@@ -362,15 +362,8 @@ fn patch_touching_several_files_one_protected() {
             native(
                 "codex-cli-move",
                 vec![("apply_patch", json!({"command": moved}))],
-                // `*** Move to:` is read as the cmd.exe `move` writer next to
-                // the settings path: a deny, matching the reference.
-                outcome(
-                    "deny",
-                    &[
-                        "tth.tamper.hook_settings_modify_windows",
-                        "tth.tamper.hook_settings_reference",
-                    ],
-                ),
+                // `*** Move to:` is not a command word at command position.
+                outcome("ask", &["tth.tamper.hook_settings_reference"]),
             ),
             native(
                 "opencode-v1",
