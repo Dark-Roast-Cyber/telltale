@@ -19,7 +19,7 @@ use telltale_schema::observation::*;
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub const ACTION_SEMANTICS_VERSION: u32 = 2;
+pub const ACTION_SEMANTICS_VERSION: u32 = 3;
 const NATIVE_ACTION_PROFILE_VERSION: u32 = 6;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
@@ -581,6 +581,9 @@ struct ActionView {
     /// but it is no field: redaction relies on the quotes it lacks, so evidence never
     /// shows it.
     unquoted_command: String,
+    /// Where the commands inside the `command` field are, by byte range: what
+    /// `unquoted_command` reads on their own after the field.
+    inner_commands: Vec<(usize, usize)>,
     /// The `command` field with its comments blank at the same offsets, when it
     /// has any. Rules over the whole field also match this, so a comment cannot
     /// veto one through its exclusion.
@@ -615,6 +618,46 @@ impl ActionView {
     }
     fn text(&self, field: &str) -> &str {
         self.fields.get(field).map_or("", String::as_str)
+    }
+    /// The text rules over the whole `command` field read: the field with its
+    /// comments blank, which is the one the readings below are placed in.
+    fn command_code(&self) -> &str {
+        if self.uncommented_command.is_empty() {
+            self.text("command")
+        } else {
+            &self.uncommented_command
+        }
+    }
+    /// The command with its quotes read away, as one text and then each command
+    /// inside it on its own, each with the offset of every byte in the command.
+    /// A reading equal to what it reads adds nothing and is left out.
+    fn quote_free_readings(
+        &self,
+        budget: &mut RetentionBudget,
+    ) -> Result<Vec<(String, Vec<u32>)>, ProcessingError> {
+        let code = self.command_code();
+        let mut readings = Vec::new();
+        if code.is_empty() {
+            return Ok(readings);
+        }
+        for (start, end) in
+            std::iter::once((0, code.len())).chain(self.inner_commands.iter().copied())
+        {
+            let Some(piece) = code.get(start..end) else {
+                continue;
+            };
+            budget.charge(piece.len() * 5)?;
+            let (text, mut origin) = telltale_rules::unquoted_with_origin(piece);
+            if text == piece {
+                continue;
+            }
+            let base = u32::try_from(start).unwrap_or(u32::MAX);
+            for at in &mut origin {
+                *at = at.saturating_add(base);
+            }
+            readings.push((text, origin));
+        }
+        Ok(readings)
     }
     fn fields(&self) -> Vec<(&str, &str)> {
         self.fields.iter().map(|(k, v)| (*k, v.as_str())).collect()
@@ -845,6 +888,7 @@ fn view(
                 budget.charge(shell.code.len())?;
                 out.uncommented_command.clone_from(&shell.code);
             }
+            out.inner_commands = inner.iter().copied().collect();
             let mut unquoted = super::shell_text::unquoted(&shell.code);
             for (start, end) in &inner {
                 unquoted.push('\n');
@@ -1949,6 +1993,24 @@ pub(crate) fn evaluate(
         let mut evidence = Vec::new();
         let mut contributions = Vec::new();
         let mut correlation_support = BTreeMap::new();
+        // What a rule with `recorded_exclusion` scope also selects from, read once
+        // for the observation. Bundled rules read their native fields instead.
+        let quote_free = if compiled
+            .iter()
+            .any(|rule| !rule.native && rule.matcher.reads_quote_free_text())
+        {
+            view.quote_free_readings(budget)?
+        } else {
+            Vec::new()
+        };
+        let readings: Vec<telltale_rules::QuoteReading<'_>> = quote_free
+            .iter()
+            .map(|(text, origin)| telltale_rules::QuoteReading {
+                raw: view.command_code(),
+                text,
+                origin,
+            })
+            .collect();
         for (rule, compiled) in export.rules().iter().zip(compiled) {
             let mut fields = if compiled.native {
                 native_fields(&rule.id, view, budget)?
@@ -1969,12 +2031,15 @@ pub(crate) fn evaluate(
                 }
                 // Quote removal would split on the separators a segment rule's
                 // quotes keep in one word, and drop the quotes an exclusion
-                // segment's grammar reads.
+                // segment's grammar reads. A recorded-exclusion rule reads it
+                // through the matcher instead, which judges the exclusion on the
+                // recorded text, never on the reading.
                 let segmented = rule.matchers.iter().any(|matcher| {
                     matches!(
                         matcher.scope,
                         telltale_rules::MatchScope::Segment
                             | telltale_rules::MatchScope::ExclusionSegment
+                            | telltale_rules::MatchScope::RecordedExclusion
                     )
                 });
                 if !segmented && !view.unquoted_command.is_empty() {
@@ -2001,10 +2066,11 @@ pub(crate) fn evaluate(
                 .collect::<Vec<_>>();
             let matched = {
                 let mut matched = Vec::new();
-                for (name, value, hit) in compiled
-                    .matcher
-                    .try_matching_spans(&mapped, &mut |bytes| budget.charge(bytes))?
-                {
+                for (name, value, hit) in compiled.matcher.try_matching_spans_reading(
+                    &mapped,
+                    if compiled.native { &[] } else { &readings },
+                    &mut |bytes| budget.charge(bytes),
+                )? {
                     for (field, text, offset, counted) in &fields {
                         budget.charge(field.len() + name.len())?;
                         if *field == name

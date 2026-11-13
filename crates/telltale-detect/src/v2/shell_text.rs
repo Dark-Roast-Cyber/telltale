@@ -1737,62 +1737,10 @@ pub(super) fn words(text: &str) -> Option<Vec<String>> {
 /// keeps its marks. A line whose quote does not close may hold text no shell reads
 /// as a quote, an apostrophe in a body, so that quote opens nothing and hides
 /// nothing after it. A substitution or a script inside a quote is read on its own.
+/// Rule matching reads the same text, with where each byte came from, through
+/// `telltale_rules::unquoted_with_origin`.
 pub(super) fn unquoted(text: &str) -> String {
-    let text = joined(text);
-    let mut out = String::with_capacity(text.len());
-    let mut lines = text.split('\n').peekable();
-    while let Some(line) = lines.next() {
-        unquote_line(line, &mut out);
-        if lines.peek().is_some() {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Linear: a quote that finds no closer leaves none of its kind to search for.
-fn unquote_line(line: &str, out: &mut String) {
-    let mut rest = line;
-    while let Some(at) = rest.find(['\\', '\'', '"']) {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        rest = match rest.as_bytes()[at] {
-            b'\\' => {
-                let mut chars = after.chars();
-                out.extend(chars.next());
-                chars.as_str()
-            }
-            b'\'' => match after.find('\'') {
-                Some(close) => {
-                    out.push_str(&after[..close]);
-                    &after[close + 1..]
-                }
-                None => after,
-            },
-            _ => match closing_double_quote(after) {
-                Some(close) => {
-                    out.push_str(&after[..close]);
-                    &after[close + 1..]
-                }
-                None => after,
-            },
-        };
-    }
-    out.push_str(rest);
-}
-
-/// The next `"` no backslash escapes.
-fn closing_double_quote(text: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'\\' => at += 2,
-            b'"' => return Some(at),
-            _ => at += 1,
-        }
-    }
-    None
+    telltale_rules::unquoted(text)
 }
 
 /// `text` without its continued lines. A backslash before a backslash quotes
