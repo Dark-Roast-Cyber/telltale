@@ -50,6 +50,7 @@ defense in depth on top of it.
 | Learn the rules from deny reasons | Mitigated (opt-in) | By default reasons name rule IDs and thresholds. `reason_detail = "minimal"` keeps only the verdict kind and a record ID; use it where the agent is the adversary and runs unattended. |
 | Impersonate the evaluator (plant a socket that answers "no opinion") | Mitigated for other users | The socket and its directory must belong to the same UID and not be group- or world-writable, and both ends check peer credentials. The same OS user can still replace the socket, as with any same-user state. |
 | Stall the evaluator so other hooks time out | Mitigated | Per-connection reader threads with a total deadline, capped connections, deadlines on requests, and the stricter failure policy for an unanswered pre-execution request. |
+| A path value that breaks the generated rule document | Mitigated | Paths from the environment and the configuration reach the generated self-protection rules. A character the YAML reader refuses used to fail the whole document, so no pipeline built and, with no operator rule files, calls were allowed by default; line breaks were folded and the rule never matched. Generated rules now write every such character by its code point, and any pipeline that does not build gets the stricter failure policy. A path that is not UTF-8 still gets no generated rule. |
 | Keep a stale evaluator serving old rules after an upgrade | Mitigated | The evaluator fingerprint covers the package version, the executable's build metadata and file identity, the configuration, referenced rule bytes and every path input; on a mismatch the evaluator retires. |
 | Windows: no evaluator transport | Open | Hooks evaluate in-process with the same verdicts, slower, and never fail open. |
 | Windows: reparse points, directory ACLs and path normalization | Partial, unverified on Windows | Runtime files are opened without following reparse points. State directories inherit the parent's ACL (the default is per-user). Generated path rules are literal on the native path; static rules carry the common Windows spellings. |
@@ -60,9 +61,9 @@ defense in depth on top of it.
 | --- | --- | --- |
 | Hook crashes, times out or is missing | Claude Code fails open; Copilot CLI blocks on crash or missing binary and runs the call on timeout; Codex CLI fails open with no option | `settings --fail-closed` where the harness supports it. For Codex, managed hooks are the real fix and the exec-policy backstop only refuses plain nested launches |
 | The program at a trusted Codex hook path is replaced | Trust is kept (the hash covers the command text); the replacement runs as the hook | Keep the binary where the agent cannot write |
-| Hook infrastructure fails (state directory, bundled content, scan) | `on_error = "allow"`; `error` record | `ask` or `deny` |
+| Hook infrastructure fails (state directory unresolvable, scan) | `on_error = "allow"`; `error` record | `ask` or `deny` |
 | Referenced rule, package or policy file missing or not a regular file at configuration load | Invalid configuration: tool calls denied | none (deliberately loud) |
-| Referenced rule content unreadable or no longer building after load | Stricter of `on_error` and `on_unevaluable`; `error` record | Raise either |
+| Referenced rule content unreadable after load, or any rule pipeline that does not build (the reason names `telltale hooks check`) | Stricter of `on_error` and `on_unevaluable` (default `ask`); `error` record | Raise either |
 | Session files unreadable or unwritable | Stricter of `on_error` and `on_unevaluable`; `error` record | Raise either |
 | Session ledger unparseable or from another version | Quarantined and reset; the call is still evaluated | none needed |
 | Tool input cannot be evaluated even after projection | `on_unevaluable = "ask"` | `deny`, or `allow` (not recommended) |

@@ -832,5 +832,8 @@ mod hooks_copilot_cli_contract;
 #[path = "cli/hooks_evaluator.rs"]
 mod hooks_evaluator;
 #[cfg(feature = "hooks")]
+#[path = "cli/hooks_generated_rule_paths.rs"]
+mod hooks_generated_rule_paths;
+#[cfg(feature = "hooks")]
 #[path = "cli/hooks_unreadable_payloads.rs"]
 mod hooks_unreadable_payloads;

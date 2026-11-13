@@ -324,10 +324,30 @@ fn protected_path_rules(paths: &[PathBuf]) -> Option<String> {
             roots.push(path);
         }
     }
+    // No value may break the document. `regex::escape` leaves control characters
+    // in: the YAML reader refuses most of them, which takes the whole document and
+    // the pipeline down, and folds line breaks, which leaves a rule that never
+    // matches. What a single-quoted scalar cannot carry goes by its code point.
+    let carried = |c: char| {
+        matches!(c, ' '..='~' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
+            && !matches!(c, '\u{2028}' | '\u{2029}' | '\u{feff}')
+    };
+    let literal = |path: &str| -> String {
+        regex::escape(path)
+            .chars()
+            .map(|c| {
+                if carried(c) {
+                    c.to_string()
+                } else {
+                    format!(r"\x{{{:x}}}", c as u32)
+                }
+            })
+            .collect()
+    };
     let literals: Vec<String> = roots
         .iter()
         .filter_map(|path| path.to_str())
-        .map(regex::escape)
+        .map(literal)
         .collect();
     if literals.is_empty() {
         return None;
@@ -418,6 +438,44 @@ mod tests {
             super::protected_path_rules(&[PathBuf::from(format!("/{}", "y".repeat(1200)))])
                 .is_none()
         );
+    }
+
+    /// A character YAML refuses or folds reaches the regex by its code point, and
+    /// the pattern still matches the path. YAML carries the rest as it is, so a
+    /// non-ASCII home directory keeps its room under the pattern cap.
+    #[test]
+    fn a_path_character_yaml_cannot_carry_is_written_by_its_code_point() {
+        for (c, written) in [
+            ('\x01', r"\x{1}"),
+            ('\x1b', r"\x{1b}"),
+            ('\x7f', r"\x{7f}"),
+            ('\u{9f}', r"\x{9f}"),
+            ('\u{fffe}', r"\x{fffe}"),
+            ('\t', r"\x{9}"),
+            ('\n', r"\x{a}"),
+            ('\r', r"\x{d}"),
+            ('\u{85}', r"\x{85}"),
+            ('\u{2028}', r"\x{2028}"),
+            ('\u{2029}', r"\x{2029}"),
+            ('\u{feff}', r"\x{feff}"),
+        ] {
+            let path = format!("/srv/a{c}b");
+            let doc = super::protected_path_rules(&[std::path::PathBuf::from(&path)]).unwrap();
+            let pattern = doc
+                .lines()
+                .find_map(|line| line.strip_prefix("    regex: '"))
+                .and_then(|line| line.strip_suffix('\''))
+                .unwrap();
+            assert!(
+                pattern.contains(&format!("/srv/a{written}b")),
+                "{c:?}: {doc}"
+            );
+            assert!(!pattern.contains(c), "{c:?}: {doc}");
+            assert!(regex::Regex::new(pattern).unwrap().is_match(&path), "{c:?}");
+        }
+        let doc =
+            super::protected_path_rules(&[std::path::PathBuf::from("/home/synthetic/josé/日本語")]);
+        assert!(doc.unwrap().contains("/home/synthetic/josé/日本語"));
     }
 
     /// A rules file that is not listed would silently never load.

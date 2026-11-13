@@ -209,11 +209,8 @@ fn session_file_failures_inside_evaluation_apply_the_strict_policy() {
     assert_eq!(error_codes(&h), vec!["rule_content_unreadable"]);
 
     // Operator rule content that no longer builds (garbage appended after
-    // config load, which checks existence and file type only): the bundled
-    // content cannot break at run time, so a build failure with operator
-    // files configured is agent-reachable and gets the strict policy, with
-    // an error record. Without operator files, pipeline_build_failed stays
-    // an infrastructure failure on on_error.
+    // config load, which checks existence and file type only): the strict
+    // policy, with an error record.
     let dir = tempfile::tempdir().unwrap();
     let broken = dir.path().join("broken.yaml");
     std::fs::write(&broken, "version: 1\nrules: [ { id: x, regex: '(' } ]\n").unwrap();

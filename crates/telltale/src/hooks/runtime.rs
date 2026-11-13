@@ -365,9 +365,8 @@ impl Runtime {
 
     /// Handle one event. Infallible by design: every internal failure becomes
     /// an `Error` record plus a failure-policy response: `on_error` for the
-    /// hook's own infrastructure (configuration, rule content, pipeline
-    /// build), the stricter of `on_error` and `on_unevaluable` for failures
-    /// of the session files, which the agent's OS user can cause.
+    /// hook's own infrastructure, the stricter of `on_error` and
+    /// `on_unevaluable` for what `is_strict_failure` names.
     pub fn handle(&mut self, ctx: &Context, event: Event) -> Response {
         match self.try_handle(ctx, &event) {
             Ok(response) => response,
@@ -378,16 +377,16 @@ impl Runtime {
 
     /// Failures the agent can bring about: session files; rule content that
     /// the configuration validated at load time and that has since become
-    /// unreadable; and a pipeline build that fails while operator rule,
-    /// package or policy files are configured (bundled content cannot break
-    /// at run time, so a build failure then means operator content changed
-    /// under the hook). Load-time validation stops at existence and file
-    /// type: test-building the pipeline on every hook invocation would cost
-    /// each event the full build, so broken content is caught here instead.
+    /// unreadable; and any pipeline build that fails. A pipeline that cannot
+    /// build evaluates nothing, and operator files are not the only cause: an
+    /// environment value reaches the generated rules. Load-time validation stops
+    /// at existence and file type: test-building the pipeline on every hook
+    /// invocation would cost each event the full build, so broken content is
+    /// caught here instead.
     fn is_strict_failure(&self, code: &str) -> bool {
         is_session_file_failure(code)
             || code == "rule_content_unreadable"
-            || (code == "pipeline_build_failed" && self.config.referenced_files().next().is_some())
+            || code == "pipeline_build_failed"
     }
 
     /// Record that `event` could not be handled and answer per `on_error`.
@@ -761,9 +760,8 @@ impl Runtime {
         // window not writable): agent-reachable, so the strict policy applies
         // and the failure is reported, not just folded into the decision.
         // Any failure to evaluate is reported as an error record, whatever
-        // policy it gets. Agent-reachable failures (`is_strict_failure`) get
-        // the strict policy; failures of the hook's own bundled content and
-        // infrastructure keep on_error.
+        // policy it gets. What `is_strict_failure` names gets the strict
+        // policy; other failures of the hook's own infrastructure keep on_error.
         let strict_failure = matches!(&result, Err(code) if self.is_strict_failure(code));
         if let Err(code) = &result {
             let mut record = self.record(ctx, Kind::Error);
@@ -814,8 +812,7 @@ impl Runtime {
                 Vec::new(),
                 Vec::new(),
             ),
-            // The hook itself failed. Session files: strict policy. Engine,
-            // rule content, pipeline: infrastructure policy (`on_error`).
+            // The hook itself failed: the strict policy, or `on_error`.
             Err(_) => (
                 policy::Outcome {
                     verdict: floor(if strict_failure {
@@ -973,6 +970,9 @@ impl Runtime {
                 "{} earlier tool calls in this session were denied",
                 t.repeated_denials
             ),
+            Basis::EvaluationGap if self.engine_error == Some("pipeline_build_failed") => {
+                "the rules did not build (`telltale hooks check` shows why)".to_owned()
+            }
             Basis::EvaluationGap => "the call could not be evaluated".to_owned(),
             Basis::UnevaluableInput if name_malformed => {
                 "the tool name is malformed, so name-based rules could not apply".to_owned()
@@ -1376,6 +1376,16 @@ fn action_of(call: &ToolCall) -> Action {
 mod tests {
     use super::*;
 
+    /// A pipeline that cannot build evaluates nothing, whatever caused it, so it never
+    /// reaches an allow by default. Operator files need not be involved: an environment
+    /// value used to break the generated rules with none configured.
+    #[test]
+    fn every_pipeline_build_failure_is_strict() {
+        let runtime = Runtime::new(Config::default());
+        assert!(runtime.is_strict_failure("pipeline_build_failed"));
+        assert!(!runtime.is_strict_failure("telemetry_write_failed"));
+    }
+
     #[test]
     fn source_times_render_with_milliseconds() {
         assert_eq!(format_ms(0), "1970-01-01T00:00:00.000Z");
@@ -1430,5 +1440,65 @@ mod tests {
             a,
             synthetic_call_id("t", None, "bash", &json!({"command": "ls", "d": 1}))
         );
+    }
+
+    /// What a tool call gets from a pipeline that did not build, with no operator
+    /// files. Nothing left in the generated rules breaks a build, so the failure is
+    /// set directly, as `engine()` records it.
+    fn after_a_build_failure(edit: fn(&mut Config), can_ask: bool) -> (Response, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config {
+            state_dir: Some(dir.path().join("state")),
+            telemetry_path: Some(dir.path().join("telemetry.jsonl")),
+            ..Config::default()
+        };
+        edit(&mut config);
+        assert!(config.referenced_files().next().is_none());
+        let mut runtime = Runtime::new(config);
+        runtime.engine_error = Some("pipeline_build_failed");
+        let ctx = Context {
+            harness: "claude-code",
+            hook_event: "PreToolUse".to_owned(),
+            session_id: "s".to_owned(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask,
+        };
+        let call = ToolCall {
+            tool_use_id: Some("toolu_1".to_owned()),
+            tool_name: "Bash".to_owned(),
+            input: json!({"command": "ls"}),
+        };
+        let response = runtime.handle(&ctx, Event::ToolRequested(call));
+        let base = dir.path().file_name().unwrap().to_string_lossy();
+        (response, base.into_owned())
+    }
+
+    #[test]
+    fn a_build_failure_with_no_operator_files_is_never_an_allow_by_default() {
+        let (response, base) = after_a_build_failure(|_| {}, true);
+        let Response::Decision(decision) = response else {
+            panic!("{response:?}");
+        };
+        assert_eq!(decision.verdict(), Verdict::Ask);
+        let reason = decision.reason();
+        assert!(reason.contains("the rules did not build"), "{reason}");
+        assert!(reason.contains("`telltale hooks check`"), "{reason}");
+        assert!(!reason.contains(&base), "{reason}");
+
+        // A harness that cannot ask is given a deny, like any other ask.
+        let (response, _) = after_a_build_failure(|_| {}, false);
+        assert!(matches!(response, Response::Decision(d) if d.verdict() == Verdict::Deny));
+
+        // The stricter of the two policies, so `on_error` alone can raise it...
+        let (response, _) = after_a_build_failure(|c| c.on_error = OnError::Deny, true);
+        assert!(matches!(response, Response::Decision(d) if d.verdict() == Verdict::Deny));
+
+        // ...and only an operator who sets both to allow gets an allow.
+        let (response, _) = after_a_build_failure(|c| c.on_unevaluable = OnError::Allow, true);
+        assert_eq!(response, Response::None);
     }
 }
