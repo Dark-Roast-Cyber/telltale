@@ -55,6 +55,13 @@ fn run(
     )
 }
 
+/// A path spelled with forward slashes, which Windows and its POSIX shells
+/// also accept. The plain-read exclusion takes no unquoted backslash (one can
+/// escape a quote or a separator), so a backslash spelling of a read asks.
+fn slashed(path: impl std::fmt::Display) -> String {
+    path.to_string().replace('\\', "/")
+}
+
 fn pre(command: &str) -> Value {
     let mut payload = common::template("PreToolUse", Some("Bash"));
     payload["tool_use_id"] = "toolu_cli".into();
@@ -308,8 +315,11 @@ fn a_custom_harness_home_in_the_environment_is_protected() {
         assert_eq!(code, 0, "{stderr}");
         assert_eq!(stdout, "", "{command}");
     };
-    silent(format!("cat {}", codex.join("hooks.json").display()));
-    silent(format!("ls {copilot_home}"));
+    silent(format!(
+        "cat {}",
+        slashed(codex.join("hooks.json").display())
+    ));
+    silent(format!("ls {}", slashed(&copilot_home)));
     silent(format!(
         "rm -rf {}",
         codex.join("sessions").join("old").display()
@@ -518,7 +528,7 @@ fn generated_rules_cover_the_forms_static_rules_cover() {
         expect(Some("deny"), format!("env -u FOO rm -f {target}"));
         expect(Some("ask"), format!("strace rm -f {target}"));
         expect(Some("ask"), format!("git -C /tmp/x rm {target}"));
-        expect(None, format!("git diff -- {target}"));
+        expect(None, format!("git diff -- {}", slashed(&target)));
     }
     expect(Some("ask"), format!("cd {home_text} && rm hooks.json"));
     expect(Some("ask"), format!("find {home_text} -delete"));
@@ -564,14 +574,20 @@ fn generated_rules_cover_the_forms_static_rules_cover() {
     );
     // The shell reading leaves the quotes out, so a `;` inside quoted text cannot be excluded.
     expect(Some("deny"), format!("git commit -m 'see {hooks}; rm it'"));
-    expect(None, format!("cat {hooks}"));
-    expect(None, format!("cat {telemetry} | python3 -m json.tool"));
+    expect(None, format!("cat {}", slashed(&hooks)));
+    expect(
+        None,
+        format!("cat {} | python3 -m json.tool", slashed(&telemetry)),
+    );
     expect(None, "cat ~/agents/codex-home/hooks.json".to_owned());
     expect(None, format!("rm -rf {home_text}{sep}sessions{sep}old"));
     expect(None, format!("rm -rf build{sep}agents{sep}codex-home"));
     expect(None, "rm -f ~/agents/codex-home-notes.txt".to_owned());
-    expect(None, format!("ls -la {home_text}"));
-    expect(None, format!("cat {state_text}{sep}*.jsonl"));
+    expect(None, format!("ls -la {}", slashed(&home_text)));
+    expect(None, format!("cat {}/*.jsonl", slashed(&state_text)));
+    // A backslash spelling of the same read is not a plain read: it asks.
+    #[cfg(windows)]
+    expect(Some("ask"), format!("cat {hooks}"));
     // What no deny rule recognizes asks, in every family with a directory.
     for target in [home_text.to_string(), state_text.to_string()] {
         for command in [

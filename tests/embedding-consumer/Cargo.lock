@@ -1477,6 +1477,7 @@ dependencies = [
  "telltale-sources",
  "time",
  "toml",
+ "unicode-normalization",
 ]
 
 [[package]]

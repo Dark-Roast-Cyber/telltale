@@ -170,7 +170,7 @@ fn a_crafted_key_still_correlates_and_telemetry_keeps_the_raw_key() {
             let uuid = line["uuid"].as_str().unwrap();
             assert!(
                 uuid.len() < 300 && !uuid.contains("..") && !uuid.contains(['/', '\\', '\n', '\r']),
-                "{name}: {uuid}"
+                "{name}: a journal line ID is not a safe single path component"
             );
         }
     }
@@ -509,7 +509,7 @@ fn named(name: &str, id: &str, command: &str) -> ToolCall {
 fn a_hostile_session_id_does_not_blind_the_session() {
     let mut failures = Vec::new();
     for (policy, edit) in policies() {
-        for (name, session) in session_ids() {
+        for (case, (name, session)) in session_ids().into_iter().enumerate() {
             let mut h = Harness::with(&edit);
             let pre = ctx_in("PreToolUse", &session, "turn-1");
             let post = ctx_in("PostToolUse", &session, "turn-1");
@@ -522,16 +522,16 @@ fn a_hostile_session_id_does_not_blind_the_session() {
                 .handle(&pre, Event::ToolRequested(bash("later", EXFIL)));
             let label = format!("{policy}/session/{name}");
             audit(&h, &label, &later, &mut failures);
-            assert_eq!(
-                h.records("decision")[0]["session"]["session_id"],
-                session.as_str(),
-                "{label}"
+            // Messages name the case by number: the values are hostile IDs.
+            assert!(
+                h.records("decision")[0]["session"]["session_id"] == session.as_str(),
+                "{policy}/session case {case}: telemetry changed the session ID"
             );
             // The result still links to its decision.
-            assert_eq!(
-                h.records("outcome")[0]["outcome"]["decision_record_id"],
-                h.records("decision")[0]["record_id"],
-                "{label}"
+            assert!(
+                h.records("outcome")[0]["outcome"]["decision_record_id"]
+                    == h.records("decision")[0]["record_id"],
+                "{policy}/session case {case}: the outcome lost its decision link"
             );
         }
     }

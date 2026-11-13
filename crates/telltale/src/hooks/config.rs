@@ -639,9 +639,10 @@ mod tests {
         );
         config.state_dir = Some(PathBuf::from(format!("/{}", "d".repeat(120))));
         let socket = config.resolved_socket_path().unwrap();
+        let length = socket.as_os_str().len();
         assert!(
-            socket.as_os_str().len() <= MAX_SOCKET_PATH_BYTES,
-            "{socket:?}"
+            length <= MAX_SOCKET_PATH_BYTES,
+            "socket path of {length} bytes"
         );
         assert!(
             socket
