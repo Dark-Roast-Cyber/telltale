@@ -4,6 +4,13 @@
 
 ---
 
+## Unreleased
+
+- Remove the optional Telltale Console. It was an unpublished local Event3
+  viewer, not part of the scanner, release archives, or Event 3.0 contract.
+  `LocalEventFeed` remains the read-only local journal API. There is no
+  replacement UI.
+
 ## 0.7.2 — published stable (2026-11-10)
 
 ### Compatibility and operator impact

@@ -20,7 +20,7 @@ this repository owns versioned product contracts.
 | Policy configuration versus enforcement? | [Policy modes](policy-modes.md), [policy authoring](agent-policy-authoring.md) |
 | Event 3.0 schema, local output, and sinks? | [Telemetry output](telemetry-output.md) |
 | Rust embedding, action findings, and investigation? | [Embedding](embedding.md), [core package](../crates/telltale/README.md) |
-| Optional viewer or static MCP inventory? | [Console](telltale-console.md), [MCP inventory](mcp-tool-inventory.md) |
+| Static MCP inventory? | [MCP inventory](mcp-tool-inventory.md) |
 | Privacy and untrusted evidence? | [Privacy model](privacy-model.md), [threat model](security/threat-model.md) |
 | Measure detection behavior? | [Evaluation corpus](../tests/evaluation/README.md) |
 | Release integrity and reporting? | [Security operations](security/operations.md), [SECURITY.md](../SECURITY.md) |

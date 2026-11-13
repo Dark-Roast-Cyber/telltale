@@ -290,7 +290,6 @@ Before selecting a candidate, run:
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-make telltale-console-check
 make local-event-feed-check
 make event3-contract-check
 make producer-provenance-check

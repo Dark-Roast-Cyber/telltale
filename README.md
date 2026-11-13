@@ -44,10 +44,6 @@ active blocking system.
 
 ## What it does
 
-The optional [Telltale Console](docs/telltale-console.md) is a separate read-only
-local Event3 viewer (`cargo run -p telltale-console`). It does not start the
-scanner and is excluded from headless default builds and installs.
-
 - Discovers supported agent session stores on disk.
 - Acquires heterogeneous session-store formats into Canonical Observation v2.
 - Detects suspicious tool activity with YAML-defined rules.
@@ -115,7 +111,7 @@ information (`debug = 1`), retaining source locations, backtraces and incrementa
 compilation. Reuse warm outputs rather than routinely cleaning them. For deeper
 debugger inspection only, see [Debugging test failures](#debugging-test-failures).
 
-`make ci-local` also runs the repository-owned contract, console/headless,
+`make ci-local` also runs the repository-owned contract,
 documentation-boundary, security/supply-chain, fixture-smoke, and package checks.
 It is Linux-only and does not replace GitHub validation for Windows, macOS,
 clean-room behavior, published/native release artifacts, or release candidates.
@@ -259,7 +255,6 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 - [`src/`](src/) — CLI, scan/watch orchestration, state, and telemetry delivery
 - [`crates/`](crates/) — reusable packages and experimental inference normalization
-- [`apps/telltale-console/`](apps/telltale-console/) — optional read-only local Event3 viewer
 - [`tests/`](tests/) — CLI coverage plus synthetic fixtures
 - [`schemas/`](schemas/) — JSON schema for emitted events
 - [`config/rules/`](config/rules/) — bundled detection rules
