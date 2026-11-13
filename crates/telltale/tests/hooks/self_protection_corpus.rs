@@ -293,13 +293,30 @@ fn benign_look_alikes_are_not_denied() {
 fn generated_own_path_rule_has_the_same_controls() {
     let mut h = Harness::new();
     let state = h.dir.path().join("state").display().to_string();
+    // A plain read, spelled with forward slashes: the read exclusion takes no
+    // unquoted backslash (one can escape a quote or a separator), so on
+    // Windows the backslash spelling of the same read asks.
+    let slashed = state.replace('\\', "/");
     assert_eq!(
         h.pre_bash(
             "toolu_g0",
-            &format!("cat {state}/telemetry.jsonl 2>/dev/null")
+            &format!("cat {slashed}/telemetry.jsonl 2>/dev/null")
         ),
         None
     );
+    #[cfg(windows)]
+    {
+        // A session of its own, so this ask adds nothing to the verdicts below.
+        let mut w = Harness::new();
+        let state = w.dir.path().join("state").display().to_string();
+        assert_eq!(
+            verdict(&w.pre_bash(
+                "toolu_g0b",
+                &format!("cat {state}\\telemetry.jsonl 2>/dev/null")
+            )),
+            Some("ask")
+        );
+    }
     // Not a writer, but mounting the state somewhere is not known to be harmless.
     assert_eq!(
         verdict(&h.pre_bash(
