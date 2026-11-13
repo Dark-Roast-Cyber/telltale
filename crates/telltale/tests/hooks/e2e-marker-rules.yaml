@@ -1,0 +1,38 @@
+version: 1
+description: >-
+  Deterministic marker rules for real-harness enforcement tests only. They let
+  a test ask the model for a harmless command, or a harmless MCP tool argument,
+  that Telltale scores as deny or ask, so harness enforcement is tested independently of model-side safety
+  refusals of genuinely malicious-looking commands. Never deploy these.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: tth.e2e.deny_marker
+    title: E2E deny marker
+    category: e2e_test
+    severity: critical
+    score: 95
+    targets: [command, arguments]
+    regex: 'TTH_E2E_DENY_MARKER'
+    tags: [test-only]
+    explanation: Test-only marker that must be denied.
+  - id: tth.e2e.ask_marker
+    title: E2E ask marker
+    category: e2e_test
+    severity: medium
+    score: 60
+    targets: [command, arguments]
+    regex: 'TTH_E2E_ASK_MARKER'
+    tags: [test-only]
+    explanation: Test-only marker that must require approval.
+  - id: tth.e2e.result_marker
+    title: E2E result marker
+    category: e2e_test
+    severity: medium
+    score: 60
+    targets: [tool_result]
+    regex: 'TTH_E2E_RESULT_MARKER'
+    tags: [test-only]
+    explanation: Test-only marker in a tool result that must be flagged to the model.
+modifiers: []

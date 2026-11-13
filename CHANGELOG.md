@@ -6,6 +6,36 @@
 
 ## Unreleased
 
+### Compatibility and operator impact
+
+- **Embedding MSRV rises to Rust 1.89.** The embedding crates' `rust-version`
+  (`telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect` and
+  `telltale-core`) moves from 1.88 to 1.89. This follows the
+  [versioning policy](docs/versioning.md) for a minor line: it belongs to the
+  next planned minor release (0.8.0), not a patch.
+- **`telltale-core` has a new default feature, `hooks`.** It adds
+  `telltale_core::hooks`, the pre-execution hooks runtime that was a separate
+  project, together with `regex`, `serde_json` and a TOML parser in the default
+  dependency graph. Embedders that only read sessions opt out with
+  `default-features = false` (the external embedding consumer is checked both
+  ways). `telltale-cli` has the same default feature, `hooks`; build with
+  `--no-default-features` to leave the command and its dependencies out.
+- **New command: `telltale hooks`.** `telltale hooks {claude-code,codex-cli,copilot-cli}
+  {hook,settings}`, `telltale hooks codex-cli execpolicy`, `telltale hooks serve`,
+  `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
+  before they run and answer allow, ask or deny. It does nothing until a harness
+  is configured to call it, and the scanner and watch commands are unchanged.
+  Generated settings call `telltale hooks <harness> hook`, and the long-lived
+  evaluator autostarts by running the current executable as `hooks serve`.
+  Existing `telltale-hooks` configuration and state directories and the
+  `TELLTALE_HOOKS_*` environment variables are kept. The telemetry field
+  `producer.telltale_rev` stays 40 hex digits and is now a digest of the package
+  version and the build's Git hash (see [Telltale Hooks](docs/hooks/README.md)).
+
+### Changes
+
+- Add [Telltale Hooks](docs/hooks/README.md) documentation and a
+  [hooks threat model](docs/security/hooks-threat-model.md).
 - Remove the optional Telltale Console. It was an unpublished local Event3
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no

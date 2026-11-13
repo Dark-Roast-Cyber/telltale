@@ -1,0 +1,1 @@
+{"event": "plugin.init", "stub": "noop", "payload": {"directory": "/home/synthetic/run/work", "worktree": "/", "project": {"id": "global", "worktree": "/", "sandboxes": [], "time": {"created": 1793823443043, "updated": 1793823443043}}, "serverUrl": "http://localhost:4096/"}}

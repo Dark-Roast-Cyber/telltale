@@ -24,6 +24,7 @@ Telltale is an open-source detection layer for AI coding agents, built as the fo
 - **Explore the code:** [CLI](src/cli/), [reusable crates](crates/), and [tests](tests/).
 - **Browse detections:** [Bundled rules](config/rules/) and [synthetic samples](tests/fixtures/rule_samples/).
 - **Embed it:** [Rust API](crates/telltale/src/lib.rs) and [embedding contract](docs/embedding.md).
+- **Gate tool calls before they run:** [Telltale Hooks](docs/hooks/README.md) (`telltale hooks`, experimental).
 - **Check compatibility:** [Source validation matrix](docs/source-validation-matrix.md) and [event schema](schemas/event.schema.json).
 - **Find other guidance:** [Documentation map](docs/README.md).
 - **Learn the practice:** [Agent Archaeology](https://agentarchaeology.ai/).
@@ -39,8 +40,10 @@ harness configuration. When an action crosses a trust boundary or drifts from
 user intent, the evidence is scattered across source-specific session stores.
 
 Telltale normalizes those stores, applies deterministic detections, and emits
-redacted JSONL for investigation and alerting. It is detection-first, not an
-active blocking system.
+redacted JSONL for investigation and alerting. The scanner is detection-first,
+not an active blocking system. The separate [`telltale hooks`](docs/hooks/README.md)
+command (experimental, on by default, no effect unless a harness is configured
+to call it) uses the same detection to evaluate tool calls before they run.
 
 ## What it does
 

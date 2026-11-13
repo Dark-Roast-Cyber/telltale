@@ -1,0 +1,176 @@
+version: 1
+description: >-
+  Telltale Hooks self-protection. Detects an agent tool call that would
+  disable or alter the hooks monitoring it. Host-specific knowledge of hook
+  installation paths, loaded additively into Telltale's Rule v1 pipeline.
+  Generic agent-harness tampering belongs upstream (upstream). The runtime adds a generated rule for this installation's actual
+  state, telemetry and config paths (engine.rs protected_path_rules).
+  Patterns stay under Telltale's 1,024-byte pattern cap; the path alternations
+  are shared by every rule (the corpus in tests/self_protection_corpus.rs is
+  the regression suite, including the benign controls).
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: tth.tamper.hook_settings_write
+    title: Agent writes harness hook settings or Telltale Hooks state
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [written_path]
+    regex: '(?:^|[\\/])(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A tool call writes a file that configures agent hooks or holds Telltale Hooks configuration or state. Path forms with repeated separators, `/./` segments, backslashes, XDG and APPDATA environment variables are covered.
+    falsepositives:
+      - A user explicitly asks the agent to edit its own harness settings.
+  - id: tth.tamper.hook_settings_modify
+    title: Agent command can modify harness hook settings
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b.*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json)|(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json).*(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell command names hook settings and also contains, at command position, a program that can write, move, delete or change permissions, or a file-writing redirection, in either order and across `;`-separated commands (catches variable indirection such as `p=...settings.json; rm -f $p`, `dd of=`, `install`, interpreter one-liners). `--rm` does not count; redirections are hook_settings_redirect.
+    falsepositives:
+      - Operators uninstalling or reconfiguring hooks by hand.
+      - A backup copy taken from the settings file.
+  - id: tth.tamper.hook_settings_modify_windows
+    title: Agent cmd.exe or PowerShell command can modify harness hook settings
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b.*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json)|(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json).*(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The Windows counterpart of hook_settings_modify: cmd.exe (`del`, `copy`, `move`, `ren`) and PowerShell (`Remove-Item`, `Set-Content`, `Out-File`, `Move-Item`, aliases `ri`, `sc`, ...) commands that name hook settings. Separate rules keep each pattern under Telltale's size cap.
+    falsepositives:
+      - Operators reconfiguring hooks by hand on Windows.
+  - id: tth.tamper.own_state_modify
+    title: Agent command can modify Telltale Hooks state or configuration
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b.*(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks).*(?:^|[\s;&|(`])(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|sed|perl|python[0-9.]*|node|ruby|php|eval)\b)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      Like hook_settings_modify, for the Telltale Hooks state and configuration locations: `~/.local/state/telltale-hooks`, `~/.config/telltale-hooks`, `$XDG_STATE_HOME`/`$XDG_CONFIG_HOME`, `%LOCALAPPDATA%`/`%APPDATA%` (also `$env:` and `AppData\Local|Roaming` forms), `Application Support`. A checkout or build directory merely named telltale-hooks does not match. The runtime adds a generated rule for this installation's resolved paths.
+    falsepositives:
+      - Operators clearing hook state by hand.
+  - id: tth.tamper.own_state_modify_windows
+    title: Agent cmd.exe or PowerShell command can modify Telltale Hooks state or configuration
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b.*(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks).*(?:^|[\s;&|(`])(?:del|erase|copy|move|ren|rename|rd|rmdir|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|ri|mi|cpi|sc|ac)\b)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The Windows counterpart of own_state_modify.
+    falsepositives:
+      - Operators clearing hook state by hand on Windows.
+  - id: tth.tamper.hook_settings_redirect
+    title: Agent command redirects output into harness hook settings or Telltale Hooks state
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:^|[^0-9&>])>{1,2}\|?\s*[\"'']?[^\s;&|<>\"'']*?(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell redirection (`>`, `>>`) whose target is a hook settings file or a Telltale Hooks state or configuration path, for example `echo '{}' > ~/.claude/settings.json` or `printf ... > $XDG_CONFIG_HOME/telltale-hooks/config.toml`. `2>`, `>&2`, `&>` and redirections to other files (`cat settings.json > backup`) do not match.
+    falsepositives:
+      - Operators writing their own hook settings by hand.
+  - id: tth.tamper.hook_settings_modify_split
+    title: Agent command reaches hook settings or Telltale Hooks state through a directory change, find or glob
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:\.claude\b|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks\b).*(?:(?:(?:^|[\s;&|(`])(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\b|\s-delete\b).*\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock)|\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock).*(?:(?:^|[\s;&|(`])(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\b|\s-delete\b)|(?:^|[^0-9&>])>{1,2}\|?\s*[\"'']?[^\s;&|<>\"'']*?\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock))'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The protected directory (`.claude`, or a Telltale Hooks state or config location) and the protected file name appear in one command without forming a path, together with a writing program: `cd ~/.claude && rm settings.json`, `find ~/.claude -name 'settings*.json' -delete`, `cd .claude; sed -i ... settings.local.json`.
+    falsepositives:
+      - A command that lists a `.claude` directory and deletes an unrelated `settings.json` elsewhere.
+  - id: tth.tamper.hook_dir_replace
+    title: Agent removes, moves or replaces the harness configuration directory
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:(?:^|[\s;&|(`])(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item)\b[^;&|]*(?:~|[\"'']?\$\{?HOME\}?[\"'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.claude[\\/]*(?:\s|$|[\"''`])|\b(?:cd|pushd)(?:\s+(?:~|[\"'']?\$\{?HOME\}?[\"'']?)/?)?\s*(?:&&|;|\|\|)(?:\s*(?:[^cp\s;&|][^;&|]*|c(?:[^d;&|][^;&|]*)?|p(?:[^u;&|][^;&|]*)?)?[;&|]+)*(?:^|[\s;&|(`])(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item)\b[^;&|]*\s(?:\./)?\.claude[\\/]*(?:\s|$|[\"''`])|(?:^|[\s;&|(`])(?:rm|mv|Remove-Item|Move-Item)\b[^;&|]*(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks[\\/]*(?:\s|$|[\"''`]))'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      Instead of editing settings, the agent removes or moves the user-level `.claude` directory (or a Telltale Hooks state or config directory), or symlinks it to a directory it controls, which drops every hook with it; also `cd ~ && rm -rf .claude` (`cd`, `pushd ~`, `./.claude`), as long as no later `cd` intervenes. Project-level `.claude` directories and `docker run --rm` are not matched.
+    falsepositives:
+      - A user asking the agent to reset their Claude Code configuration.
+  - id: tth.tamper.hook_settings_reference
+    title: Agent command references harness hook settings or Telltale Hooks state
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings\.json|\.codex(?:[\\/]+\.)*[\\/]+(?:config\.toml|hooks\.json)|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application Support)(?:[\\/]+\.)*[\\/]+telltale-hooks'
+      exclude:
+        command: '^\s*(?:cat|less|more|head|tail|grep|egrep|fgrep|rg|jq|wc|ls|stat|file|diff|sha256sum|md5sum|type|Get-Content|gc)\s[^;&|<>`$()]*(?:2>/dev/null\s*)?$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell command mentions hook settings or Telltale Hooks state in a form other than one plain read-only command (cat, grep, jq, Get-Content ...) without chaining, redirection or substitution (a trailing `2>/dev/null` is allowed). Asks rather than denies.
+    falsepositives:
+      - Read pipelines such as `cat settings.json | jq .hooks`.
+  - id: tth.tamper.kill_hook_process
+    title: Agent command stops the Telltale Hooks process
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:\b(?:kill|pkill|killall|pgrep|systemctl|launchctl|taskkill|Stop-Process)\b.*telltale-hooks|telltale-hooks.*\b(?:pkill|killall|taskkill|Stop-Process)\b)'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A command signals, stops or looks up the telltale-hooks process for killing.
+    falsepositives:
+      - Operators restarting the evaluator by hand.
+  - id: tth.tamper.disable_all_hooks
+    title: Agent sets disableAllHooks
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [arguments, command]
+    regex: 'disableAllHooks\"?\s*[:=]?\s*(?:true|1)\b'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      Tool arguments or a command carry a setting that turns off every configured hook, including `claude config set [-g] disableAllHooks true|1`. Content written with the native Write tool is not visible to Rule v1 targets; the path rules cover that case.
+    falsepositives:
+      - Documentation that quotes the setting.
+  - id: tth.tamper.hookless_harness_launch
+    title: Agent launches a harness with hooks turned off
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(\bclaude\b[^;&|]*\s--bare\b|\bCLAUDE_CODE_SIMPLE=\s*[\"'']?(1|true)\b|\bopencode\b[^;&|]*\s--pure\b)'
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      Claude Code --bare (CLAUDE_CODE_SIMPLE) skips settings, flag, policy and plugin hooks (verified in Claude Code 2.1.318), so a nested agent started this way runs without the monitoring applied to its parent.
+    falsepositives:
+      - A user deliberately starting a minimal harness session for testing.
+  - id: tth.tamper.hook_env_override
+    title: Agent launches a harness with Telltale Hooks pointed at its own configuration or state
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:\bTELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=\S*[^;&|]*|\bexport\s+TELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b'
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+    explanation: >-
+      A harness started in a command that also sets `TELLTALE_HOOKS_CONFIG`, `TELLTALE_HOOKS_STATE_DIR` or `TELLTALE_HOOKS_TELEMETRY` (inline in the same command segment, or `export ...` followed by a launch anywhere later in the command) would run its hooks against an agent-chosen config (for example `mode = "observe"`) or a fresh session journal, escaping the parent's policy and history. An export without a launch in the same command is inert: hook processes inherit the harness's environment, not the agent's shell.
+    falsepositives:
+      - Test harnesses such as scripts/hooks/harness/claude-code-e2e.sh, which run under a disposable state directory on purpose.
+modifiers: []
