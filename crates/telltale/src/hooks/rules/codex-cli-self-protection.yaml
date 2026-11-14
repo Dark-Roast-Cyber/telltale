@@ -1,0 +1,186 @@
+version: 1
+description: >-
+  Telltale Hooks self-protection for OpenAI Codex CLI (source: rust-v0.166.0).
+  User layer: $CODEX_HOME (default ~/.codex, utils/home-dir/src/lib.rs) hooks.json,
+  config.toml, <profile>.config.toml, rules/*.rules (the exec-policy backstop).
+  System layer, whose folder also holds hooks.json and rules (config/src/state.rs
+  config_folder, core/src/exec_policy.rs, hooks/src/engine/discovery.rs): /etc/codex
+  on Unix, %ProgramData%\OpenAI\Codex on Windows (config/src/loader/mod.rs), with
+  requirements.toml, config.toml and the legacy /etc/codex/managed_config.toml
+  (config/src/loader/layer_io.rs). Project layer: .codex/. Same shapes and
+  command-position discipline as rules/telltale-hooks-self-protection.yaml. A
+  resolved custom CODEX_HOME gets a generated rule at hook time (engine.rs).
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  # Command position: a writing program counts only at the start of a
+  # command: start of text, after `;`, `&`, `|`, `(`, `{`, a backtick or a newline, or
+  # after find's -exec, optionally behind sudo, doas, env, command, exec, nohup, time,
+  # nice, timeout, xargs, busybox, eval, iex, if, then, do, else, !, an assignment,
+  # options, sh -c, cmd /c or powershell -c. A word after any other whitespace is an
+  # argument, so `grep -i rename` and `# copy review` are not writers. A wrapper or
+  # spelling these rules do not list falls to a *_reference or *_failsafe rule, which
+  # ask: a protected path with a writer word anywhere in the command, or a harness word
+  # with what turns its hooks off. `sed` counts
+  # only with -i or --in-place. A writer is qualified by a path or backslash if any
+  # (`/bin/rm`, `\rm`), and its target must be in its own command, unless it is an
+  # interpreter one-liner, whose program can hold `;`. An interpreter counts only with
+  # a flag other than -m, -v or -h. The exclusion lets commands that cannot write through,
+  # whatever they name: plain reads, read pipelines, git reads, `sed -n`, a
+  # script file's arguments, `gh pr` and `git commit` text, beside commands that name
+  # no path and one `cd`. It holds only for a command it can read plainly: a list of
+  # plain words and complete quoted strings. Anything else asks.
+  - id: tth.tamper.codex_hook_write
+    title: Agent writes a Codex CLI hook, rules or managed configuration file
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [written_path]
+    regex: '(?m)(?:(?:^|[\\/$%{:])\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$)))'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A tool call writes `hooks.json`, `config.toml`, `<profile>.config.toml` or `rules/` under `.codex` or `$CODEX_HOME`, a plugin `hooks.json` below them, or `requirements.toml`, `config.toml`, `managed_config.toml`, `hooks.json` or `rules/` under `/etc/codex` or `%ProgramData%\OpenAI\Codex`. config.toml also holds the hook trust records. Every line of a multi-target patch counts.
+    falsepositives:
+      - A user explicitly asks the agent to edit its own harness configuration.
+  - id: tth.tamper.codex_hook_modify
+    title: Agent command can modify a Codex CLI hook, rules or managed configuration file
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell command names a Codex hook, rules or managed configuration file after a writing program at command position, in the same command unless it is an interpreter one-liner: `rm ~/.codex/rules/telltale-hooks.rules`, `rm $CODEX_HOME/hooks.json`, `sudo tee /etc/codex/requirements.toml`.
+    falsepositives:
+      - A user explicitly asks the agent to edit its own harness configuration.
+  - id: tth.tamper.codex_hook_modify_windows
+    title: Agent cmd.exe or PowerShell command can modify a Codex CLI hook, rules or managed configuration file
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The Windows counterpart of codex_hook_modify.
+    falsepositives:
+      - A user explicitly asks the agent to edit its own harness configuration.
+  - id: tth.tamper.codex_hook_modify_reverse
+    title: Agent command names a Codex CLI protected file and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$)))).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The path comes first: `p=$CODEX_HOME/hooks.json; rm -f $p`, `cd ~/.codex/rules && rm a.rules`.
+    falsepositives:
+      - A user explicitly asks the agent to edit its own harness configuration.
+  - id: tth.tamper.codex_hook_redirect
+    title: Agent command redirects into a Codex CLI protected file
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell redirection whose target is a Codex hook, rules or managed configuration file, including `telltale-hooks codex-cli settings > $CODEX_HOME/hooks.json`.
+    falsepositives:
+      - A user explicitly asks the agent to edit its own harness configuration.
+  - id: tth.tamper.codex_hook_git_write
+    title: Agent removes or replaces a Codex CLI protected file through git
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      `git rm` or `git mv` of a project `.codex` file in the same command segment.
+    falsepositives:
+      - A user asks the agent to reorganize project configuration.
+  - id: tth.tamper.codex_hook_split
+    title: Agent command reaches a Codex CLI protected file through a directory change
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\.codex|CODEX_HOME|[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)\b.*(?:(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*(?:\bhooks\.json|\bconfig\.toml|\brequirements\.toml|\bmanaged_config\.toml|\.rules\b|\brules(?:[\\/]\*?)?(?:[\s"'']|$))|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:\bhooks\.json|\bconfig\.toml|\brequirements\.toml|\bmanaged_config\.toml|\.rules\b|\brules(?:[\\/]\*?)?(?:[\s"'']|$)))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The directory and the file appear in one command without forming a path: `cd $CODEX_HOME && rm hooks.json`, `cd ~/.codex && rm -rf rules`.
+    falsepositives:
+      - A command that lists `.codex` and deletes an unrelated `config.toml` elsewhere.
+  - id: tth.tamper.codex_hook_split_reverse
+    title: Agent command names a Codex directory and file and then runs a writing program
+    category: approval_bypass
+    severity: high
+    score: 90
+    detection:
+      selection:
+        command: '(?s)(?:\.codex|CODEX_HOME|[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)\b.*(?:\bhooks\.json|\bconfig\.toml|\brequirements\.toml|\bmanaged_config\.toml|\.rules\b|\brules(?:[\\/]\*?)?(?:[\s"'']|$)).*(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      The file name comes before the writer: `find ~/.codex -name '*.rules' -delete`.
+    falsepositives:
+      - A command that lists `.codex` and deletes an unrelated `config.toml` elsewhere.
+  - id: tth.tamper.codex_policy_registry
+    title: Agent changes the Windows registry value that relocates Codex requirements
+    category: approval_bypass
+    severity: high
+    score: 90
+    targets: [command]
+    regex: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:reg(?:\.exe)?\s+(?:add|delete|import|copy)|Set-ItemProperty|New-ItemProperty|Remove-ItemProperty|Remove-Item|sp|ni|rp|ri)\s[^;&|]*Policies[\\/]+OpenAI[\\/]+Codex'
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      HKLM\SOFTWARE\Policies\OpenAI\Codex RequirementsPath moves requirements.toml on Windows (Codex source rust-v0.166.0, config/src/loader/mod.rs). It takes administrator rights to write, so this is a backstop.
+    falsepositives:
+      - Administrators configuring Codex by hand.
+  - id: tth.tamper.codex_hook_reference
+    title: Agent command references a Codex CLI hook, rules or managed configuration file
+    category: approval_bypass
+    severity: medium
+    score: 60
+    detection:
+      selection:
+        command: '(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$)))'
+      exclude:
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+      condition: selection
+    tags: [self-protection, hooks, defense-evasion]
+    explanation: >-
+      A shell command mentions a Codex protected file in a form not known to be harmless. Asks rather than denies. Codex cannot ask, so under Codex this is a refusal; under other harnesses it prompts.
+    falsepositives:
+      - Programs not known to be read-only, such as `awk '/hooks/' ~/.codex/config.toml`.
+modifiers: []

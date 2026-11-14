@@ -49,9 +49,16 @@ fn rc_package_and_lockfile_versions_are_exactly_lockstep() {
         ("telltale-detect", "crates/telltale-detect"),
         ("telltale-core", "crates/telltale"),
     ] {
+        // `telltale-core` is declared without its default `hooks` feature so each
+        // member chooses it explicitly.
+        let options = if package == "telltale-core" {
+            ", default-features = false"
+        } else {
+            ""
+        };
         assert!(
             workspace_manifest.contains(&format!(
-                "{package} = {{ path = \"{path}\", version = \"={VERSION}\" }}"
+                "{package} = {{ path = \"{path}\", version = \"={VERSION}\"{options} }}"
             )),
             "internal workspace requirement for {package} must be exact {VERSION}"
         );

@@ -813,3 +813,27 @@ fn scan_max_sources_preserves_full_string_nested_hyphen_order() {
     assert_eq!(activity["source_path_hash"], path_hash(&hyphen));
     assert_ne!(activity["source_path_hash"], path_hash(&nested));
 }
+
+// `telltale hooks`: binary-level tests. The library-level suites are
+// `crates/telltale/tests/hooks.rs`; this shares their helpers.
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_cli.rs"]
+mod hooks_cli;
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_codex_cli_contract.rs"]
+mod hooks_codex_cli_contract;
+#[cfg(feature = "hooks")]
+#[path = "../crates/telltale/tests/hooks/common.rs"]
+mod hooks_common;
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_copilot_cli_contract.rs"]
+mod hooks_copilot_cli_contract;
+#[cfg(all(feature = "hooks", unix))]
+#[path = "cli/hooks_evaluator.rs"]
+mod hooks_evaluator;
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_generated_rule_paths.rs"]
+mod hooks_generated_rule_paths;
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_unreadable_payloads.rs"]
+mod hooks_unreadable_payloads;

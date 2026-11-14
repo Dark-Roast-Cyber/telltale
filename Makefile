@@ -80,14 +80,16 @@ test:
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib
+	cargo test $(CARGO_LOCKED) --no-default-features
 
 ## Format check
 fmt:
 	cargo fmt --all --check
 
-## Lint
+## Lint, with the default `hooks` feature and without it
 clippy:
 	cargo clippy $(CARGO_LOCKED) --all-targets -- -D warnings
+	cargo clippy $(CARGO_LOCKED) --all-targets --no-default-features -- -D warnings
 
 ## Fast local feedback: format, strict Clippy, CLI and embedding library tests
 check-fast: fmt clippy
@@ -107,6 +109,9 @@ ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
+	@echo "Building and testing without the default hooks feature."
+	cargo test $(CARGO_LOCKED) --quiet --no-default-features --lib --test cli --test ci_gates
+	cargo test $(CARGO_LOCKED) -p telltale-core --no-default-features --lib --quiet
 	@scripts/event3-contract-check --checks-only
 	@scripts/producer-provenance-check --checks-only
 	@scripts/local-event-feed-check --checks-only

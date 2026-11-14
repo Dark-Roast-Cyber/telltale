@@ -1,0 +1,959 @@
+{"command": "cat ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "cat ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "cat ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "cat .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "cat .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "cat ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "cat ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "cat ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "cat ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "cat .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "cat .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "cat .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "cat .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "cat ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "cat ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "cat ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "cat ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "cat ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json; ls ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json && ls ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json\nls ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.claude/settings.json | head -1; ls ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/settings.json 2>/dev/null; ls ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .claude/settings.json; ls ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .claude/settings.json && ls ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls .claude/settings.json\nls ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls .claude/settings.json | head -1; ls ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .claude/settings.json 2>/dev/null; ls ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml; ls .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml && ls .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml\nls .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.codex/config.toml | head -1; ls .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/config.toml 2>/dev/null; ls .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json; ls ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json && ls ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json\nls ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.codex/hooks.json | head -1; ls ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex/hooks.json 2>/dev/null; ls ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls .github/hooks/a.json; ls ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json && ls ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json\nls ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json | head -1; ls ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls .github/hooks/a.json 2>/dev/null; ls ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.copilot/settings.json; ls ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.copilot/settings.json && ls ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.copilot/settings.json\nls ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.copilot/settings.json | head -1; ls ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.copilot/settings.json 2>/dev/null; ls ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh; ls .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh && ls .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh\nls .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "ls ~/.claude/hooks/x.sh | head -1; ls .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude/hooks/x.sh 2>/dev/null; ls .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls -la ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json; ls -la ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json && ls -la ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json\nls -la ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.claude/settings.json | head -1; ls -la ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/settings.json 2>/dev/null; ls -la ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json; ls -la ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json && ls -la ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json\nls -la ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la .claude/settings.json | head -1; ls -la ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .claude/settings.json 2>/dev/null; ls -la ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml; ls -la .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml && ls -la .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml\nls -la .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.codex/config.toml | head -1; ls -la .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/config.toml 2>/dev/null; ls -la .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json; ls -la ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json && ls -la ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json\nls -la ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.codex/hooks.json | head -1; ls -la ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.codex/hooks.json 2>/dev/null; ls -la ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la .github/hooks/a.json; ls -la ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json && ls -la ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json\nls -la ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json | head -1; ls -la ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls -la .github/hooks/a.json 2>/dev/null; ls -la ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "ls -la ~/.copilot/settings.json; ls -la ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.copilot/settings.json && ls -la ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.copilot/settings.json\nls -la ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.copilot/settings.json | head -1; ls -la ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.copilot/settings.json 2>/dev/null; ls -la ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh; ls -la .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh && ls -la .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh\nls -la .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "ls -la ~/.claude/hooks/x.sh | head -1; ls -la .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "ls -la ~/.claude/hooks/x.sh 2>/dev/null; ls -la .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "head .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json; head ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json && head ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json\nhead ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.claude/settings.json | head -1; head ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/settings.json 2>/dev/null; head ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .claude/settings.json; head ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .claude/settings.json && head ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head .claude/settings.json\nhead ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head .claude/settings.json | head -1; head ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .claude/settings.json 2>/dev/null; head ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml; head .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml && head .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml\nhead .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.codex/config.toml | head -1; head .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/config.toml 2>/dev/null; head .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json; head ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json && head ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json\nhead ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.codex/hooks.json | head -1; head ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.codex/hooks.json 2>/dev/null; head ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head .github/hooks/a.json; head ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head .github/hooks/a.json && head ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "head .github/hooks/a.json\nhead ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head .github/hooks/a.json | head -1; head ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head .github/hooks/a.json 2>/dev/null; head ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head ~/.copilot/settings.json; head ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.copilot/settings.json && head ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head ~/.copilot/settings.json\nhead ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.copilot/settings.json | head -1; head ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.copilot/settings.json 2>/dev/null; head ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh; head .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh && head .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh\nhead .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "head ~/.claude/hooks/x.sh | head -1; head .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head ~/.claude/hooks/x.sh 2>/dev/null; head .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head -n 5 ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json; head -n 5 ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json && head -n 5 ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json\nhead -n 5 ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.claude/settings.json | head -1; head -n 5 ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/settings.json 2>/dev/null; head -n 5 ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json; head -n 5 ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json && head -n 5 ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json\nhead -n 5 ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 .claude/settings.json | head -1; head -n 5 ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .claude/settings.json 2>/dev/null; head -n 5 ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml; head -n 5 .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml && head -n 5 .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml\nhead -n 5 .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.codex/config.toml | head -1; head -n 5 .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/config.toml 2>/dev/null; head -n 5 .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json; head -n 5 ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json && head -n 5 ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json\nhead -n 5 ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.codex/hooks.json | head -1; head -n 5 ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.codex/hooks.json 2>/dev/null; head -n 5 ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 .github/hooks/a.json; head -n 5 ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json && head -n 5 ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json\nhead -n 5 ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json | head -1; head -n 5 ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head -n 5 .github/hooks/a.json 2>/dev/null; head -n 5 ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "head -n 5 ~/.copilot/settings.json; head -n 5 ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.copilot/settings.json && head -n 5 ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.copilot/settings.json\nhead -n 5 ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.copilot/settings.json | head -1; head -n 5 ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.copilot/settings.json 2>/dev/null; head -n 5 ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh; head -n 5 .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh && head -n 5 .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh\nhead -n 5 .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh | head -1; head -n 5 .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "head -n 5 ~/.claude/hooks/x.sh 2>/dev/null; head -n 5 .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "tail -n 5 ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json; tail -n 5 ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json && tail -n 5 ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json\ntail -n 5 ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.claude/settings.json | head -1; tail -n 5 ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/settings.json 2>/dev/null; tail -n 5 ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json; tail -n 5 ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json && tail -n 5 ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json\ntail -n 5 ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 .claude/settings.json | head -1; tail -n 5 ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .claude/settings.json 2>/dev/null; tail -n 5 ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml; tail -n 5 .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml && tail -n 5 .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml\ntail -n 5 .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.codex/config.toml | head -1; tail -n 5 .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/config.toml 2>/dev/null; tail -n 5 .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json; tail -n 5 ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json && tail -n 5 ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json\ntail -n 5 ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.codex/hooks.json | head -1; tail -n 5 ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.codex/hooks.json 2>/dev/null; tail -n 5 ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 .github/hooks/a.json; tail -n 5 ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json && tail -n 5 ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json\ntail -n 5 ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json | head -1; tail -n 5 ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "tail -n 5 .github/hooks/a.json 2>/dev/null; tail -n 5 ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "tail -n 5 ~/.copilot/settings.json; tail -n 5 ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.copilot/settings.json && tail -n 5 ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.copilot/settings.json\ntail -n 5 ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.copilot/settings.json | head -1; tail -n 5 ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.copilot/settings.json 2>/dev/null; tail -n 5 ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh; tail -n 5 .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh && tail -n 5 .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh\ntail -n 5 .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh | head -1; tail -n 5 .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "tail -n 5 ~/.claude/hooks/x.sh 2>/dev/null; tail -n 5 .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "stat ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json; stat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json && stat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json\nstat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.claude/settings.json | head -1; stat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/settings.json 2>/dev/null; stat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .claude/settings.json; stat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .claude/settings.json && stat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat .claude/settings.json\nstat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat .claude/settings.json | head -1; stat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .claude/settings.json 2>/dev/null; stat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml; stat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml && stat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml\nstat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.codex/config.toml | head -1; stat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/config.toml 2>/dev/null; stat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json; stat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json && stat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json\nstat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.codex/hooks.json | head -1; stat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.codex/hooks.json 2>/dev/null; stat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat .github/hooks/a.json; stat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json && stat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json\nstat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json | head -1; stat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "stat .github/hooks/a.json 2>/dev/null; stat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "stat ~/.copilot/settings.json; stat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.copilot/settings.json && stat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.copilot/settings.json\nstat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.copilot/settings.json | head -1; stat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.copilot/settings.json 2>/dev/null; stat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh; stat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh && stat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh\nstat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "stat ~/.claude/hooks/x.sh | head -1; stat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "stat ~/.claude/hooks/x.sh 2>/dev/null; stat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "wc -l ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json; wc -l ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json && wc -l ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json\nwc -l ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.claude/settings.json | head -1; wc -l ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/settings.json 2>/dev/null; wc -l ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json; wc -l ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json && wc -l ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json\nwc -l ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l .claude/settings.json | head -1; wc -l ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .claude/settings.json 2>/dev/null; wc -l ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml; wc -l .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml && wc -l .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml\nwc -l .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.codex/config.toml | head -1; wc -l .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/config.toml 2>/dev/null; wc -l .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json; wc -l ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json && wc -l ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json\nwc -l ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.codex/hooks.json | head -1; wc -l ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.codex/hooks.json 2>/dev/null; wc -l ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l .github/hooks/a.json; wc -l ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json && wc -l ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json\nwc -l ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json | head -1; wc -l ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "wc -l .github/hooks/a.json 2>/dev/null; wc -l ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "wc -l ~/.copilot/settings.json; wc -l ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.copilot/settings.json && wc -l ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.copilot/settings.json\nwc -l ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.copilot/settings.json | head -1; wc -l ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.copilot/settings.json 2>/dev/null; wc -l ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh; wc -l .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh && wc -l .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh\nwc -l .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "wc -l ~/.claude/hooks/x.sh | head -1; wc -l .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "wc -l ~/.claude/hooks/x.sh 2>/dev/null; wc -l .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "jq . ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json; jq . ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json && jq . ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json\njq . ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.claude/settings.json | head -1; jq . ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/settings.json 2>/dev/null; jq . ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .claude/settings.json; jq . ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .claude/settings.json && jq . ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . .claude/settings.json\njq . ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . .claude/settings.json | head -1; jq . ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .claude/settings.json 2>/dev/null; jq . ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml; jq . .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml && jq . .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml\njq . .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.codex/config.toml | head -1; jq . .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/config.toml 2>/dev/null; jq . .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json; jq . ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json && jq . ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json\njq . ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.codex/hooks.json | head -1; jq . ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.codex/hooks.json 2>/dev/null; jq . ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . .github/hooks/a.json; jq . ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json && jq . ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json\njq . ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json | head -1; jq . ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "jq . .github/hooks/a.json 2>/dev/null; jq . ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "jq . ~/.copilot/settings.json; jq . ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.copilot/settings.json && jq . ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.copilot/settings.json\njq . ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.copilot/settings.json | head -1; jq . ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.copilot/settings.json 2>/dev/null; jq . ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh; jq . .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh && jq . .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh\njq . .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "jq . ~/.claude/hooks/x.sh | head -1; jq . .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "jq . ~/.claude/hooks/x.sh 2>/dev/null; jq . .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "grep -n hooks ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json; grep -n hooks ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json && grep -n hooks ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json\ngrep -n hooks ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.claude/settings.json | head -1; grep -n hooks ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/settings.json 2>/dev/null; grep -n hooks ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json; grep -n hooks ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json && grep -n hooks ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json\ngrep -n hooks ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks .claude/settings.json | head -1; grep -n hooks ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .claude/settings.json 2>/dev/null; grep -n hooks ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml; grep -n hooks .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml && grep -n hooks .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml\ngrep -n hooks .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.codex/config.toml | head -1; grep -n hooks .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/config.toml 2>/dev/null; grep -n hooks .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json; grep -n hooks ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json && grep -n hooks ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json\ngrep -n hooks ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.codex/hooks.json | head -1; grep -n hooks ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.codex/hooks.json 2>/dev/null; grep -n hooks ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks .github/hooks/a.json; grep -n hooks ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json && grep -n hooks ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json\ngrep -n hooks ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json | head -1; grep -n hooks ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "grep -n hooks .github/hooks/a.json 2>/dev/null; grep -n hooks ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "grep -n hooks ~/.copilot/settings.json; grep -n hooks ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.copilot/settings.json && grep -n hooks ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.copilot/settings.json\ngrep -n hooks ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.copilot/settings.json | head -1; grep -n hooks ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.copilot/settings.json 2>/dev/null; grep -n hooks ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh; grep -n hooks .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh && grep -n hooks .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh\ngrep -n hooks .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "silent"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh | head -1; grep -n hooks .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "grep -n hooks ~/.claude/hooks/x.sh 2>/dev/null; grep -n hooks .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "sed -n 1,5p ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json; sed -n 1,5p ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json && sed -n 1,5p ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json\nsed -n 1,5p ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json | head -1; sed -n 1,5p ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/settings.json 2>/dev/null; sed -n 1,5p ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json; sed -n 1,5p ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json && sed -n 1,5p ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json\nsed -n 1,5p ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json | head -1; sed -n 1,5p ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .claude/settings.json 2>/dev/null; sed -n 1,5p ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml; sed -n 1,5p .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml && sed -n 1,5p .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml\nsed -n 1,5p .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml | head -1; sed -n 1,5p .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/config.toml 2>/dev/null; sed -n 1,5p .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json; sed -n 1,5p ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json && sed -n 1,5p ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json\nsed -n 1,5p ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json | head -1; sed -n 1,5p ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.codex/hooks.json 2>/dev/null; sed -n 1,5p ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p .github/hooks/a.json; sed -n 1,5p ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json && sed -n 1,5p ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json\nsed -n 1,5p ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json | head -1; sed -n 1,5p ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "sed -n 1,5p .github/hooks/a.json 2>/dev/null; sed -n 1,5p ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json; sed -n 1,5p ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json && sed -n 1,5p ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json\nsed -n 1,5p ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json | head -1; sed -n 1,5p ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.copilot/settings.json 2>/dev/null; sed -n 1,5p ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh; sed -n 1,5p .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh && sed -n 1,5p .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh\nsed -n 1,5p .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh | head -1; sed -n 1,5p .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "deny"}
+{"command": "sed -n 1,5p ~/.claude/hooks/x.sh 2>/dev/null; sed -n 1,5p .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "deny"}
+{"command": "git diff -- ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff -- ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json; git diff -- ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json && git diff -- ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json\ngit diff -- ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json | head -1; git diff -- ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/settings.json 2>/dev/null; git diff -- ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json; git diff -- ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json && git diff -- ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json\ngit diff -- ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json | head -1; git diff -- ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .claude/settings.json 2>/dev/null; git diff -- ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml; git diff -- .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml && git diff -- .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml\ngit diff -- .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml | head -1; git diff -- .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/config.toml 2>/dev/null; git diff -- .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json; git diff -- ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json && git diff -- ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json\ngit diff -- ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json | head -1; git diff -- ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.codex/hooks.json 2>/dev/null; git diff -- ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- .github/hooks/a.json; git diff -- ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json && git diff -- ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json\ngit diff -- ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json | head -1; git diff -- ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff -- .github/hooks/a.json 2>/dev/null; git diff -- ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff -- ~/.copilot/settings.json; git diff -- ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json && git diff -- ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json\ngit diff -- ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json | head -1; git diff -- ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.copilot/settings.json 2>/dev/null; git diff -- ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh; git diff -- .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh && git diff -- .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh\ngit diff -- .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh | head -1; git diff -- .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff -- ~/.claude/hooks/x.sh 2>/dev/null; git diff -- .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json; cat ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json && cat ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json\ncat ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json | head -1; cat ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json 2>/dev/null; cat ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json; cat ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json && cat ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json\ncat ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json | head -1; cat ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json 2>/dev/null; cat ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml; cat .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml && cat .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml\ncat .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml | head -1; cat .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml 2>/dev/null; cat .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json; cat ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json && cat ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json\ncat ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json | head -1; cat ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json 2>/dev/null; cat ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .github/hooks/a.json; cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json && cat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json\ncat ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json | head -1; cat ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json 2>/dev/null; cat ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git log -- ~/.copilot/settings.json; cat ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json && cat ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json\ncat ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json | head -1; cat ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json 2>/dev/null; cat ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh; cat .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh && cat .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh\ncat .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh | head -1; cat .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh 2>/dev/null; cat .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json; git log -- ~/.codex/config.toml", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json && git log -- ~/.codex/config.toml", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json\ngit log -- ~/.codex/config.toml", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json | head -1; git log -- ~/.codex/config.toml | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/settings.json 2>/dev/null; git log -- ~/.codex/config.toml 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json; git log -- ~/.codex/hooks.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json && git log -- ~/.codex/hooks.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json\ngit log -- ~/.codex/hooks.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json | head -1; git log -- ~/.codex/hooks.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .claude/settings.json 2>/dev/null; git log -- ~/.codex/hooks.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml; git log -- .github/hooks/a.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml && git log -- .github/hooks/a.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml\ngit log -- .github/hooks/a.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml | head -1; git log -- .github/hooks/a.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/config.toml 2>/dev/null; git log -- .github/hooks/a.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json; git log -- ~/.copilot/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json && git log -- ~/.copilot/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json\ngit log -- ~/.copilot/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json | head -1; git log -- ~/.copilot/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.codex/hooks.json 2>/dev/null; git log -- ~/.copilot/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- .github/hooks/a.json; git log -- ~/.claude/hooks/x.sh", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json && git log -- ~/.claude/hooks/x.sh", "harnesses": "different", "join": "and", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json\ngit log -- ~/.claude/hooks/x.sh", "harnesses": "different", "join": "newline", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json | head -1; git log -- ~/.claude/hooks/x.sh | head -1", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git log -- .github/hooks/a.json 2>/dev/null; git log -- ~/.claude/hooks/x.sh 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "silent"}
+{"command": "git log -- ~/.copilot/settings.json; git log -- ~/.claude/settings.json", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json && git log -- ~/.claude/settings.json", "harnesses": "different", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json\ngit log -- ~/.claude/settings.json", "harnesses": "different", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json | head -1; git log -- ~/.claude/settings.json | head -1", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.copilot/settings.json 2>/dev/null; git log -- ~/.claude/settings.json 2>/dev/null", "harnesses": "different", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh; git log -- .claude/settings.json", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh && git log -- .claude/settings.json", "harnesses": "same", "join": "and", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh\ngit log -- .claude/settings.json", "harnesses": "same", "join": "newline", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh | head -1; git log -- .claude/settings.json | head -1", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "git log -- ~/.claude/hooks/x.sh 2>/dev/null; git log -- .claude/settings.json 2>/dev/null", "harnesses": "same", "join": "semicolon", "baseline": "ask"}
+{"command": "cd ~/.claude && cat ~/.claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cd ~/.claude; cat settings.json; cat ~/.claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude; cat ~/.claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex && cat ~/.claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cat settings.json; cat ~/.claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat hooks.json; cat ~/.claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.claude/settings.json; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "echo before; cat ~/.claude/settings.json; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "test -f ~/.claude/settings.json && cat ~/.claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "[ -f ~/.claude/settings.json ] && cat ~/.claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "git status; cat ~/.claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff; git diff -- ~/.claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cd ~/.claude && cat .claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cd ~/.claude; cat settings.json; cat .claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude; cat .claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex && cat .claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cat settings.json; cat .claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat hooks.json; cat .claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat .claude/settings.json; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "echo before; cat .claude/settings.json; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "test -f .claude/settings.json && cat .claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "[ -f .claude/settings.json ] && cat .claude/settings.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "git status; cat .claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff; git diff -- .claude/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cd ~/.claude && cat ~/.codex/config.toml", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cd ~/.claude; cat settings.json; cat ~/.codex/config.toml", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude; cat ~/.codex/config.toml", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex && cat ~/.codex/config.toml", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cat settings.json; cat ~/.codex/config.toml", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat hooks.json; cat ~/.codex/config.toml", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/config.toml; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "echo before; cat ~/.codex/config.toml; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "test -f ~/.codex/config.toml && cat ~/.codex/config.toml", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "[ -f ~/.codex/config.toml ] && cat ~/.codex/config.toml", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "git status; cat ~/.codex/config.toml", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff; git diff -- ~/.codex/config.toml", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cd ~/.claude && cat ~/.codex/hooks.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cd ~/.claude; cat settings.json; cat ~/.codex/hooks.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.claude; cat ~/.codex/hooks.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "ls ~/.codex && cat ~/.codex/hooks.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "cat settings.json; cat ~/.codex/hooks.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat hooks.json; cat ~/.codex/hooks.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cat ~/.codex/hooks.json; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "echo before; cat ~/.codex/hooks.json; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "test -f ~/.codex/hooks.json && cat ~/.codex/hooks.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "[ -f ~/.codex/hooks.json ] && cat ~/.codex/hooks.json", "harnesses": "beside", "join": "and", "baseline": "ask"}
+{"command": "git status; cat ~/.codex/hooks.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "git diff; git diff -- ~/.codex/hooks.json", "harnesses": "beside", "join": "semicolon", "baseline": "ask"}
+{"command": "cd ~/.claude && cat .github/hooks/a.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "cd ~/.claude; cat settings.json; cat .github/hooks/a.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.claude; cat .github/hooks/a.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.codex && cat .github/hooks/a.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "cat settings.json; cat .github/hooks/a.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cat hooks.json; cat .github/hooks/a.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cat .github/hooks/a.json; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "echo before; cat .github/hooks/a.json; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "test -f .github/hooks/a.json && cat .github/hooks/a.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "[ -f .github/hooks/a.json ] && cat .github/hooks/a.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "git status; cat .github/hooks/a.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff; git diff -- .github/hooks/a.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cd ~/.claude && cat ~/.copilot/settings.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "cd ~/.claude; cat settings.json; cat ~/.copilot/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.claude; cat ~/.copilot/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.codex && cat ~/.copilot/settings.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "cat settings.json; cat ~/.copilot/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cat hooks.json; cat ~/.copilot/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cat ~/.copilot/settings.json; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "echo before; cat ~/.copilot/settings.json; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "test -f ~/.copilot/settings.json && cat ~/.copilot/settings.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "[ -f ~/.copilot/settings.json ] && cat ~/.copilot/settings.json", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "git status; cat ~/.copilot/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff; git diff -- ~/.copilot/settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cd ~/.claude && cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "cd ~/.claude; cat settings.json; cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.claude; cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "ls ~/.codex && cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "cat settings.json; cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cat hooks.json; cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "cat ~/.claude/hooks/x.sh; cat settings.json", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "echo before; cat ~/.claude/hooks/x.sh; echo after", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "test -f ~/.claude/hooks/x.sh && cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "[ -f ~/.claude/hooks/x.sh ] && cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "and", "baseline": "silent"}
+{"command": "git status; cat ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}
+{"command": "git diff; git diff -- ~/.claude/hooks/x.sh", "harnesses": "beside", "join": "semicolon", "baseline": "silent"}

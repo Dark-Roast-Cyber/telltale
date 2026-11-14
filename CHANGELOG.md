@@ -6,6 +6,65 @@
 
 ## Unreleased
 
+### Compatibility and operator impact
+
+- **Embedding MSRV rises to Rust 1.89.** The embedding crates' `rust-version`
+  (`telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect` and
+  `telltale-core`) moves from 1.88 to 1.89. This follows the
+  [versioning policy](docs/versioning.md) for a minor line: it belongs to the
+  next planned minor release (0.8.0), not a patch.
+- **`telltale-core` has a new default feature, `hooks`.** It adds
+  `telltale_core::hooks`, the pre-execution hooks runtime that was a separate
+  project, together with `regex`, `serde_json` and a TOML parser in the default
+  dependency graph. Embedders that only read sessions opt out with
+  `default-features = false` (the external embedding consumer is checked both
+  ways). `telltale-cli` has the same default feature, `hooks`; build with
+  `--no-default-features` to leave the command and its dependencies out.
+- **New command: `telltale hooks`.** `telltale hooks {claude-code,codex-cli,copilot-cli}
+  {hook,settings}`, `telltale hooks codex-cli execpolicy`, `telltale hooks serve`,
+  `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
+  before they run and reach a verdict of allow, ask or deny. It does nothing until a harness
+  is configured to call it, and the scanner and watch commands are unchanged.
+  Its self-protection rules cover the hook, rule and managed-configuration files of
+  Claude Code, Copilot CLI and Codex CLI, hook-disabling launches and custom harness
+  homes. They also cover replacing or removing the installed `telltale` binary the hook
+  runs as, and stopping the evaluator (`telltale hooks serve`); the old standalone
+  `telltale-hooks` names stay covered. A tool input that makes Telltale reject the session's source no longer
+  costs a call its rule verdict, and waits for a session's lock and for the
+  evaluator are bounded.
+  **Hooks are detect-only by default.** A hook records the verdict it reached
+  and gives the harness nothing unless the configuration says
+  `mode = "enforce"`; `mode = "observe"` (also spelled `"detect"`) is the
+  default. In detect-only mode a hook cannot block: one gate releases every
+  answer, so stdout is empty and the exit status is 0 for any payload, any
+  failure policy and a panic, and the hook exits after 20 s if it has not
+  finished. A configuration that does not load denies tool calls only when it
+  says `mode = "enforce"`; otherwise the hook is detect-only on the defaults
+  and writes a `config_invalid` record. Installations of the standalone
+  `telltale-hooks` that relied on enforcement by default must add
+  `mode = "enforce"`. Verdicts recorded in detect-only mode no longer count as
+  denied attempts, unreadable payloads get an `error` record, and a tool input
+  with no scalar value no longer crashes the hook
+  ([ADR 0008](docs/hooks/adr/0008-detect-only-by-default.md)).
+  Generated settings call `telltale hooks <harness> hook`, and the long-lived
+  evaluator autostarts by running the current executable as `hooks serve`.
+  Existing `telltale-hooks` configuration and state directories and the
+  `TELLTALE_HOOKS_*` environment variables are kept. The telemetry field
+  `producer.telltale_rev` stays 40 hex digits and is now a digest of the package
+  version and the build's Git hash (see [Telltale Hooks](docs/hooks/README.md)).
+
+### Changes
+
+- Add [Telltale Hooks](docs/hooks/README.md) documentation and a
+  [hooks threat model](docs/security/hooks-threat-model.md).
+- Hooks: padding a tool input so that it is evaluated in pieces no longer
+  lowers its verdict by separating what a rule reads together. The projection
+  of a quarantined input keeps short top-level values and the head of a command
+  with every piece; where it cannot, the verdict is floored at
+  `on_unevaluable` and the record carries the new visibility limit
+  `pending_input_separated`. Large file content alone is not asked about. The
+  [threat model](docs/security/hooks-threat-model.md) row is now Partial and
+  names the residual by category.
 - Remove the optional Telltale Console. It was an unpublished local Event3
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no

@@ -1,0 +1,1 @@
+{"event": "plugin.setup", "stub": "noop", "payload": {"location": {"directory": "/home/synthetic/run/work", "project": {"id": "c5abead47e8af75bbb62c26577e069accbd929c1", "directory": "/home/synthetic/run/work", "canonical": "/home/synthetic/run/work"}}, "options": {}}}
