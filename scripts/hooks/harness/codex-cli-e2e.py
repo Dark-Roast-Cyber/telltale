@@ -173,7 +173,7 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
     tth_config = os.path.join(run.dir, "tth-config.toml")
     socket_dir = None
     with open(tth_config, "w") as f:
-        f.write(f'{tth_settings}[telltale]\nrules = ["{MARKERS}"]\n')
+        f.write(f'mode = "enforce"\n{tth_settings}[telltale]\nrules = ["{MARKERS}"]\n')
         if evaluator:  # the default deployment: autostarted evaluator, short socket path, quick idle exit
             socket_dir = tempfile.mkdtemp(prefix="tthe2e-")
             f.write(f'[evaluator]\nsocket = "{socket_dir}/e.sock"\nidle_timeout_secs = 5\n')

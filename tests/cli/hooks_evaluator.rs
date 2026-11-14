@@ -31,7 +31,7 @@ impl Env {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join(state);
         let config = format!(
-            "state_dir = \"{}\"\n{extra}\n[evaluator]\nidle_timeout_secs = 20\nautostart = false\n",
+            "mode = \"enforce\"\nstate_dir = \"{}\"\n{extra}\n[evaluator]\nidle_timeout_secs = 20\nautostart = false\n",
             state.display()
         );
         std::fs::write(dir.path().join("config.toml"), config).unwrap();

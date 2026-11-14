@@ -19,6 +19,9 @@ Status: Accepted (2026-11-04)
    `ask` resolves to `declined` or `proceeded_after_ask`; we never claim who
    approved. Session end marks unsettled calls `unknown`.
 4. **Observe mode** records the verdict it would return (`returned: false`).
+   It is the default and cannot block since
+   [ADR 0008](0008-detect-only-by-default.md), which also limits the
+   "denied attempts" of point 1 to denials that were returned.
 5. **Failure**: `on_error` (`allow` default, `ask`, `deny`) for evaluation
    gaps; invalid configuration denies tool calls; `settings --fail-closed`
    adds Claude Code's `onFailure: "block"` on the PreToolUse hook entry.

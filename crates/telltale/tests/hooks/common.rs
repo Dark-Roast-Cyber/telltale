@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use telltale_core::hooks::claude_code;
-use telltale_core::hooks::config::Config;
+use telltale_core::hooks::config::{Config, Mode};
 use telltale_core::hooks::runtime::Runtime;
 
 /// Test data (fixtures, marker rules) of the hooks suites. This module is
@@ -25,6 +25,12 @@ pub fn data_dir() -> PathBuf {
 /// A fixture directory such as `codex-cli/0.166.0`.
 pub fn fixtures(relative: &str) -> PathBuf {
     data_dir().join("fixtures").join(relative)
+}
+
+/// A configuration that only says `mode = "enforce"`, for binary-level tests
+/// of what a hook returns: with no configuration a hook is detect-only.
+pub fn enforce_config() -> PathBuf {
+    data_dir().join("enforce.toml")
 }
 
 /// Marker rules that the real-harness scripts and these tests share.
@@ -69,7 +75,10 @@ impl Harness {
 
     pub fn with(edit: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
+        // The suites test what the hook returns, so they enforce; detect-only
+        // (the default) is tested where it is the subject.
         let mut config = Config {
+            mode: Mode::Enforce,
             state_dir: Some(dir.path().join("state")),
             telemetry_path: Some(dir.path().join("telemetry.jsonl")),
             ..Config::default()

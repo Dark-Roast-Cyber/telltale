@@ -17,6 +17,7 @@ use telltale_core::hooks::engine::Engine;
 use telltale_core::hooks::evaluator;
 #[cfg(unix)]
 use telltale_core::hooks::evaluator::ClientOutcome;
+use telltale_core::hooks::gate::{Answer, DETECT_ONLY_DEADLINE, Gate};
 use telltale_core::hooks::harness::{Harness, Parsed, names_event};
 use telltale_core::hooks::identity;
 use telltale_core::hooks::runtime::Runtime;
@@ -160,7 +161,17 @@ fn check() -> i32 {
             println!("build revision: {}", identity::revision());
             println!("semantic identity: {}", engine.semantic_identity());
             println!("pipeline build: {} ms", engine.build_ms);
-            println!("mode: {:?}, on_error: {:?}", config.mode, config.on_error);
+            println!(
+                "mode: {} ({}), on_error: {:?}, on_unevaluable: {:?}",
+                Gate::for_mode(config.mode).as_str(),
+                match Gate::for_mode(config.mode) {
+                    Gate::DetectOnly =>
+                        "verdicts are recorded and never returned; set mode = \"enforce\" to block",
+                    Gate::Enforce => "ask and deny verdicts are returned to the harness",
+                },
+                config.on_error,
+                config.on_unevaluable
+            );
             let generated = engine.generated_coverage();
             println!(
                 "self-protection: {} paths in {} generated rules",
@@ -202,19 +213,17 @@ fn time_now() -> String {
         .unwrap_or_default()
 }
 
-fn emit(value: &serde_json::Value) {
-    let mut stdout = std::io::stdout().lock();
-    // A closed stdout leaves the harness without our answer; nothing more to do.
-    let _ = writeln!(stdout, "{value}");
-    let _ = stdout.flush();
-}
-
-/// Emit `output` (if any) and exit successfully.
-fn answer(output: Option<serde_json::Value>) -> i32 {
-    if let Some(output) = output {
-        emit(&output);
+/// Write a released answer and return its exit status. The only writer of a
+/// hook's stdout: everything a hook does ends in [`Gate::release`] and then
+/// here.
+fn deliver(answer: Answer) -> i32 {
+    if let Some(output) = &answer.output {
+        let mut stdout = std::io::stdout().lock();
+        // A closed stdout leaves the harness without our answer; nothing more to do.
+        let _ = writeln!(stdout, "{output}");
+        let _ = stdout.flush();
     }
-    0
+    answer.exit_code
 }
 
 /// The policy for a tool call the hook could not read: the stricter of
@@ -226,10 +235,59 @@ fn unreadable_call_policy(config: &Config) -> OnError {
     config.on_error.max(config.on_unevaluable)
 }
 
-/// Handle one hook event for `harness`: stdin payload, stdout answer. Tries
-/// the long-lived evaluator, then evaluates in-process; an unanswered
-/// pre-execution event never turns into an allow.
+/// Handle one hook event for `harness`: stdin payload, stdout answer.
+///
+/// The gate is settled first, from the configuration alone, and everything
+/// else only builds an [`Answer`] for it. Detect-only (the default) therefore
+/// holds whatever happens below: nothing is written to stdout, the exit
+/// status is 0, and the process ends by [`DETECT_ONLY_DEADLINE`], including
+/// when the payload is unreadable, the configuration is broken or the code
+/// panics. Only `mode = "enforce"` in a configuration that was read lets an
+/// answer through.
 fn hook(harness: Harness) -> i32 {
+    let loaded = Config::load();
+    let gate = Gate::for_config(&loaded, Config::unloadable_declares_enforce);
+    if gate == Gate::DetectOnly {
+        // Detached: the process exits when `hook` returns.
+        std::thread::spawn(|| {
+            std::thread::sleep(DETECT_ONLY_DEADLINE);
+            eprintln!(
+                "telltale hooks: detect-only hook gave up after {} s without an answer",
+                DETECT_ONLY_DEADLINE.as_secs()
+            );
+            std::process::exit(0);
+        });
+    }
+    // What a tool call gets if evaluating it panics while enforcing: the
+    // policy for a failure an agent can bring about, not a crash that most
+    // harnesses read as "run the call".
+    let panic_policy = match &loaded {
+        Ok(config) => unreadable_call_policy(config),
+        Err(_) => OnError::Deny,
+    };
+    let Some(bytes) = read_payload() else {
+        return deliver(gate.release(Answer::exit(1)));
+    };
+    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        evaluate(harness, loaded, gate, &bytes)
+    }))
+    .unwrap_or_else(|_| {
+        eprintln!("telltale hooks: the hook panicked (hook_panicked)");
+        if harness.looks_like_pre_tool_use(&bytes) {
+            Answer::output(harness.render_verdict(
+                panic_policy,
+                "Telltale Hooks failed while evaluating this tool call (hook_panicked).",
+            ))
+        } else {
+            Answer::exit(1)
+        }
+    });
+    deliver(gate.release(answer))
+}
+
+/// One hook payload from stdin, bounded: at most one byte past
+/// [`MAX_PAYLOAD_BYTES`], which marks it as oversized.
+fn read_payload() -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut stdin = std::io::stdin().lock();
     if let Err(error) = (&mut stdin)
@@ -237,23 +295,54 @@ fn hook(harness: Harness) -> i32 {
         .read_to_end(&mut bytes)
     {
         eprintln!("telltale hooks: cannot read hook payload: {error}");
-        return 1;
+        return None;
     }
     // Keep memory bounded but drain the rest, so the harness never sees a
     // broken pipe while writing a large payload (its handling is unknown).
     if bytes.len() as u64 > MAX_PAYLOAD_BYTES {
         let _ = std::io::copy(&mut stdin, &mut std::io::sink());
     }
-    drop(stdin);
+    Some(bytes)
+}
+
+/// Build the answer for one payload. Tries the long-lived evaluator, then
+/// evaluates in-process; an unanswered pre-execution event never turns into
+/// an allow. Writes nothing to stdout and exits nothing: the caller's gate
+/// releases the answer or does not.
+fn evaluate(
+    harness: Harness,
+    loaded: Result<Config, telltale_core::hooks::config::ConfigError>,
+    gate: Gate,
+    bytes: &[u8],
+) -> Answer {
     let oversized = bytes.len() as u64 > MAX_PAYLOAD_BYTES;
     let parsed = if oversized {
         Parsed::Invalid("payload_oversized")
     } else {
-        harness.parse(&bytes)
+        harness.parse(bytes)
     };
-    // Config problems fail closed for tool calls: an operator error should be
-    // visible at once, not silently disable monitoring. Other events continue.
-    let config = Config::load();
+    // A configuration that does not load and asks for enforcement fails closed
+    // for tool calls: an operator error should be visible at once, not
+    // silently disable enforcement. One that never asked for it is detect-only
+    // (the gate is already closed): detection carries on with the defaults and
+    // the failure is recorded.
+    let config = match loaded {
+        Ok(config) => Ok(config),
+        Err(error) => {
+            // Details (which may include a path) go to stderr only.
+            eprintln!("telltale hooks: {error}");
+            if gate == Gate::Enforce {
+                Err(())
+            } else {
+                eprintln!(
+                    "telltale hooks: the configuration did not load and does not set mode = \"enforce\": detect-only with the defaults"
+                );
+                let config = Config::detect_only_fallback();
+                Runtime::new(config.clone()).record_unhandled(harness.name(), "", "config_invalid");
+                Ok(config)
+            }
+        }
+    };
     // Split into the hook event name and either the runtime event or the
     // reason it is unusable; an unreadable payload is answered right here.
     let (hook_event, usable) = match parsed {
@@ -261,15 +350,18 @@ fn hook(harness: Harness) -> i32 {
         Parsed::Unusable { hook_event, code } => (hook_event, Err(code)),
         Parsed::Invalid(code) => {
             eprintln!("telltale hooks: unusable hook payload ({code})");
+            if let Ok(config) = &config {
+                Runtime::new(config.clone()).record_unhandled(harness.name(), "", code);
+            }
             // An oversized or malformed payload is agent-influenced (a huge
             // tool input), so a PreToolUse gets a verdict rather than a
             // non-blocking exit that the harness treats as allow.
-            if harness.looks_like_pre_tool_use(&bytes) {
+            if harness.looks_like_pre_tool_use(bytes) {
                 let policy = match &config {
                     Ok(config) => unreadable_call_policy(config),
-                    Err(_) => OnError::Deny,
+                    Err(()) => OnError::Deny,
                 };
-                return answer(harness.render_verdict(
+                return Answer::output(harness.render_verdict(
                     policy,
                     "Telltale Hooks could not read this tool call (payload too large or malformed).",
                 ));
@@ -279,53 +371,49 @@ fn hook(harness: Harness) -> i32 {
             // not a block: on a Stop it is a prompt to continue, so a damaged
             // Stop would re-prompt the model without limit (Codex: E2E
             // `damaged-stop-*`).
-            if !fail_closed || names_event(&bytes) {
-                return 1;
+            if !fail_closed || names_event(bytes) {
+                return Answer::exit(1);
             }
             // No event name: this could be a tool call, so block one without
             // making a prompt of anything else.
             return match harness {
                 // A deny on stdout is honored on a PreToolUse and rejected as
                 // invalid output on every other event (E2E `damaged-*-nameless`).
-                Harness::CodexCli => answer(harness.render_verdict(
+                Harness::CodexCli => Answer::output(harness.render_verdict(
                     OnError::Deny,
                     "Telltale Hooks could not read this hook payload and fails closed.",
                 )),
                 // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
-                Harness::CopilotCli => 1,
+                Harness::CopilotCli => Answer::exit(1),
                 // The only block that does not need the event, but on a Stop it
                 // still prompts: the known residual for this harness.
-                Harness::ClaudeCode => 2,
+                Harness::ClaudeCode => Answer::exit(2),
             };
         }
     };
-    let config = match config {
-        Ok(config) => config,
-        Err(error) => {
-            // Details (which may include a path) go to stderr only.
-            eprintln!("telltale hooks: {error}");
-            if harness.is_pre_tool_use(&hook_event) {
-                return answer(harness.render_event_verdict(
-                    &hook_event,
-                    OnError::Deny,
-                    "Telltale Hooks is misconfigured and fails closed (config_invalid); details are on the hook's stderr.",
-                ));
-            }
-            return 1;
+    let Ok(config) = config else {
+        if harness.is_pre_tool_use(&hook_event) {
+            return Answer::output(harness.render_event_verdict(
+                &hook_event,
+                OnError::Deny,
+                "Telltale Hooks is misconfigured and fails closed (config_invalid); details are on the hook's stderr.",
+            ));
         }
+        return Answer::exit(1);
     };
     let (ctx, event) = match usable {
         Ok(pair) => pair,
         Err(code) => {
             eprintln!("telltale hooks: unusable hook payload ({code})");
+            Runtime::new(config.clone()).record_unhandled(harness.name(), &hook_event, code);
             if harness.is_pre_tool_use(&hook_event) {
-                return answer(harness.render_event_verdict(
+                return Answer::output(harness.render_event_verdict(
                     &hook_event,
                     unreadable_call_policy(&config),
                     "Telltale Hooks could not read this tool call (required fields are missing).",
                 ));
             }
-            return 1;
+            return Answer::exit(1);
         }
     };
     // No evaluator transport off Unix: skip the socket path and the
@@ -343,12 +431,12 @@ fn hook(harness: Harness) -> i32 {
     {
         let timeout = std::time::Duration::from_millis(config.evaluator.request_timeout_ms);
         let asked_at = telltale_core::hooks::runtime::now_ms();
-        match evaluator::request(&socket, harness, &config.fingerprint(), &bytes, timeout) {
-            ClientOutcome::Answered(output) => return answer(output),
+        match evaluator::request(&socket, harness, &config.fingerprint(), bytes, timeout) {
+            ClientOutcome::Answered(output) => return Answer::output(output),
             ClientOutcome::DeliveredNoAnswer(code) => {
                 let mut runtime = Runtime::new(config);
                 let response = runtime.handle_unanswered(&ctx, event, code, asked_at);
-                return answer(harness.render(&ctx.hook_event, &response));
+                return Answer::output(harness.render(&ctx.hook_event, &response));
             }
             ClientOutcome::NotDelivered(code) => {
                 if code == "evaluator_unreachable"
@@ -365,7 +453,7 @@ fn hook(harness: Harness) -> i32 {
     let mut runtime = Runtime::new(config);
     runtime.set_evaluator("in_process", fallback);
     let response = runtime.handle(&ctx, event);
-    answer(harness.render(&ctx.hook_event, &response))
+    Answer::output(harness.render(&ctx.hook_event, &response))
 }
 
 fn serve() -> i32 {

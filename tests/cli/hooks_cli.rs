@@ -29,7 +29,7 @@ fn run(
     let mut command = isolated();
     command
         .args(["claude-code", "hook"])
-        .env_remove("TELLTALE_HOOKS_CONFIG")
+        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -91,10 +91,10 @@ fn binary_denies_and_allows_over_stdio() {
 }
 
 #[test]
-fn invalid_config_fails_closed_for_tool_calls_only() {
+fn invalid_config_that_asks_for_enforcement_fails_closed_for_tool_calls_only() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
-    std::fs::write(&config, "mode = \"bogus\"\n").unwrap();
+    std::fs::write(&config, "mode = \"enforce\"\nbogus = 1\n").unwrap();
     let env = [
         ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
         ("TELLTALE_HOOKS_CONFIG", config.as_path()),
@@ -118,11 +118,109 @@ fn invalid_config_fails_closed_for_tool_calls_only() {
     assert_eq!(stdout, "");
 }
 
+/// A configuration that does not load and never asked for enforcement is
+/// detect-only: nothing reaches the harness, detection carries on with the
+/// defaults, and the failure is on stderr and in telemetry.
+#[test]
+fn invalid_config_that_does_not_ask_for_enforcement_is_detect_only() {
+    for broken in [
+        "mode = \"bogus\"\n",
+        "bogus = 1\n",
+        "mode = \"observe\"\nbogus = 1\n",
+        "on_error = \"deny\"\n[thresholds\n",
+        "# mode = \"enforce\"\n= = =\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        std::fs::write(&config, broken).unwrap();
+        let env = [
+            ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
+            ("TELLTALE_HOOKS_CONFIG", config.as_path()),
+        ];
+        let (code, stdout, stderr) = run(&pre("rm -f ~/.claude/settings.json"), &env, &[]);
+        assert_eq!((code, stdout.as_str()), (0, ""), "{broken}: {stderr}");
+        assert!(stderr.contains("detect-only"), "{broken}: {stderr}");
+        let telemetry = std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap();
+        let records: Vec<Value> = telemetry
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(
+            records
+                .iter()
+                .any(|r| r["kind"] == "error" && r["error_code"] == "config_invalid"),
+            "{broken}: {telemetry}"
+        );
+        let decision = records
+            .iter()
+            .find(|r| r["kind"] == "decision")
+            .unwrap_or_else(|| panic!("{broken}: {telemetry}"));
+        assert_eq!(decision["decision"]["verdict"], "deny", "{broken}");
+        assert_eq!(decision["decision"]["returned"], false, "{broken}");
+
+        let mut prompt = common::template("UserPromptSubmit", None);
+        prompt["prompt"] = "hello".into();
+        let (code, stdout, _) = run(&prompt, &env, &[]);
+        assert_eq!((code, stdout.as_str()), (0, ""), "{broken}");
+    }
+    // The same for a configuration file that is named and is not there.
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.toml");
+    let env = [
+        ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
+        ("TELLTALE_HOOKS_CONFIG", missing.as_path()),
+    ];
+    let (code, stdout, _) = run(&pre("rm -f ~/.claude/settings.json"), &env, &[]);
+    assert_eq!((code, stdout.as_str()), (0, ""));
+}
+
+/// With no configuration at all a hook is detect-only: the call that an
+/// enforcing hook denies gets no answer, and is recorded as a deny that was
+/// not returned.
+#[test]
+fn without_a_configuration_the_binary_detects_and_never_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = isolated()
+        .args(["claude-code", "hook"])
+        .env_remove("TELLTALE_HOOKS_CONFIG")
+        .env("TELLTALE_HOOKS_EVALUATOR", "0")
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let payload = pre("rm -f ~/.claude/settings.json");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
+    let telemetry = std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap();
+    let decision: Value = telemetry
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|r| r["kind"] == "decision")
+        .unwrap();
+    assert_eq!(decision["decision"]["mode"], "observe");
+    assert_eq!(decision["decision"]["verdict"], "deny");
+    assert_eq!(decision["decision"]["returned"], false);
+
+    // The same call, enforcing.
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+    let (_, stdout, _) = run(&payload, &env, &[]);
+    assert!(stdout.contains("\"deny\""), "{stdout}");
+}
+
 #[test]
 fn garbage_payload_is_a_non_blocking_error_by_default() {
     let mut child = isolated()
         .args(["claude-code", "hook"])
-        .env_remove("TELLTALE_HOOKS_CONFIG")
+        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -153,7 +251,7 @@ fn oversized_pre_tool_use_gets_the_unevaluable_verdict() {
 fn misconfiguration_reason_carries_no_paths() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
-    std::fs::write(&config, "mode = \"bogus\"\n").unwrap();
+    std::fs::write(&config, "mode = \"enforce\"\nbogus = 1\n").unwrap();
     let env = [
         ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
         ("TELLTALE_HOOKS_CONFIG", config.as_path()),
@@ -205,7 +303,7 @@ fn default_locations_follow_platform_conventions() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        stdout.contains("mode: Observe"),
+        stdout.contains("mode: detect_only"),
         "default config not loaded: {stdout}"
     );
     assert!(

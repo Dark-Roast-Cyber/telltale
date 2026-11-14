@@ -12,3 +12,4 @@ rejected alternatives, consequences. Supersede rather than rewrite.
 | [0005](0005-telemetry-envelope.md) | Host envelope around unmodified `ActionRecordV1` | Accepted |
 | [0006](0006-first-harness-claude-code.md) | Claude Code first | Accepted |
 | [0007](0007-hooks-inside-telltale.md) | Hooks live inside Telltale as a default-on feature; build identity follows the executable | Accepted; supersedes the pin and build-ID parts of 0001 and 0003 |
+| [0008](0008-detect-only-by-default.md) | Detect-only by default; enforcement is one setting; one gate releases every answer | Accepted; amends points 1, 4 and 5 of 0004 |

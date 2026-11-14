@@ -493,7 +493,7 @@ fn binary(args: &[&str], stdin: &[u8], state: &Path) -> (i32, String, String) {
         .args(args)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_STATE_HOME")
-        .env_remove("TELLTALE_HOOKS_CONFIG")
+        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .env("TELLTALE_HOOKS_STATE_DIR", state)
         .stdin(Stdio::piped())

@@ -5,12 +5,13 @@
 
 use serde_json::json;
 use telltale_core::hooks::claude_code;
-use telltale_core::hooks::config::Config;
+use telltale_core::hooks::config::{Config, Mode};
 use telltale_core::hooks::runtime::Runtime;
 
-fn decide(command: &str) -> Option<serde_json::Value> {
+fn decide(mode: Mode, command: &str) -> Option<serde_json::Value> {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
+        mode,
         state_dir: Some(dir.path().join("state")),
         telemetry_path: Some(dir.path().join("telemetry.jsonl")),
         ..Config::default()
@@ -34,7 +35,11 @@ fn decide(command: &str) -> Option<serde_json::Value> {
 
 #[test]
 fn hooks_evaluate_through_the_embedding_facade() {
-    assert!(decide("ls -la").is_none());
-    let output = decide("rm -f ~/.claude/settings.json").expect("a verdict");
+    let tamper = "rm -f ~/.claude/settings.json";
+    assert!(decide(Mode::Enforce, "ls -la").is_none());
+    let output = decide(Mode::Enforce, tamper).expect("a verdict");
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    // Detect-only, the default, returns nothing for the same call.
+    assert_eq!(Config::default().mode, Mode::Observe);
+    assert!(decide(Mode::Observe, tamper).is_none());
 }

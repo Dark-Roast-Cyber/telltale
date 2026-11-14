@@ -43,7 +43,8 @@ Telltale normalizes those stores, applies deterministic detections, and emits
 redacted JSONL for investigation and alerting. The scanner is detection-first,
 not an active blocking system. The separate [`telltale hooks`](docs/hooks/README.md)
 command (experimental, on by default, no effect unless a harness is configured
-to call it) uses the same detection to evaluate tool calls before they run.
+to call it) uses the same detection to evaluate tool calls before they run. It
+is detect-only too unless its configuration says `mode = "enforce"`.
 
 ## What it does
 

@@ -27,6 +27,28 @@ deployment (settings the agent cannot override, state outside the agent's
 reach) is the control that closes this class; the items below are
 defense in depth on top of it.
 
+## Detect-only mode
+
+Hooks are detect-only unless the configuration was read and says
+`mode = "enforce"` ([overview](../hooks/README.md#detect-only-and-enforce)).
+In that mode the guarantee is the reverse of the rest of this page: the hook
+must not stop a call. One gate releases every answer, and in detect-only mode
+it releases nothing: no decision on stdout, exit status 0, and an exit after
+20 s for a hook that has not finished. It is settled from the configuration
+before the payload is read, so tool input, an unreadable payload, a failure
+policy of `deny`, a session lock that stays taken, and a panic cannot change
+it. Tests pin this on every entry point (`tests/cli/hooks_unreadable_payloads.rs`,
+`crates/telltale/src/hooks/gate.rs`).
+
+Residual ways a detect-only installation can still stop a call, all outside
+the hook process: the hook command cannot start (missing binary) on a harness
+that blocks on a failed hook, an operator-set hook timeout under 20 s together
+with a block-on-failure option, and the optional Codex exec-policy file, which
+Codex applies natively.
+
+Everything below describes an enforcing hook. In detect-only mode the same
+detections are recorded and the verdicts are not returned.
+
 ## Agent-controlled bypasses
 
 | Bypass | Status | Notes |
@@ -36,6 +58,7 @@ defense in depth on top of it.
 | Assemble the path or command at run time, or hide it in authored content | Accepted, Upstream | Pattern rules cannot resolve every shell or interpreter semantics, and authored file content is not visible to rule targets. Encoded forms are scored for review by bundled content. A regression test pins the accepted set privately. The real fix is managed settings plus state outside the agent's reach. |
 | Stage a hook-free configuration elsewhere, then move it into place; write through an alias created earlier | Partial | The move or link into place is denied; the staging write and a later write through an alias are indistinguishable from ordinary writes. |
 | Relaunch the harness without hooks, or point the hook at the agent's own configuration or state | Partial | Rules deny the harness's hook-disabling launch options and any command that sets a `TELLTALE_HOOKS_*` variable and launches a harness. The Codex forms are covered only by the optional exec-policy backstop, which refuses plain launches natively while its file exists and which indirect launches escape. |
+| Switch enforcement off: set `mode` to detect-only, or damage or delete the configuration so that it no longer says `mode = "enforce"` | Partial | Enforcement is one setting in a file the agent's OS user can usually write. The self-protection rules deny writes to the configuration file and commands that modify it, and a configuration that still says `mode = "enforce"` but no longer loads denies tool calls. A configuration that is deleted or no longer says so is detect-only: the hook cannot tell that from an operator who never enabled enforcement. Keep the configuration where the agent cannot write it. |
 | Tamper with journal, state or telemetry (same OS user) | Partial | Rules cover the default and resolved locations, and directories are owner-only on Unix. Deleting state resets cumulative session risk, and deleting the journal blinds cross-call chains; action-level findings are unaffected. Guaranteed: an unparseable ledger is quarantined and the call is still evaluated; files the hook cannot read or write get the stricter of `on_error` and `on_unevaluable` (default `ask`) and an `error` record, so with defaults this is never a silent allow. Runtime files are opened only as regular files (no symlink or FIFO is followed or blocks the hook). Operator inputs may be symlinks but must resolve to regular files. Tampering signals are emitted as `error` records. |
 | Pad or nest a tool input so Telltale quarantines it | Mitigated | Inputs are flattened and chunked so every byte is evaluated; only input beyond the projection budget is unevaluable and gets `on_unevaluable`. |
 | Craft identity fields (call key, session ID, tool name) so Telltale rejects the journal source | Mitigated | Unsafe values are replaced by a stable digest-based stand-in before journaling, telemetry keeps the raw value, and a call whose tool name had to be encoded is floored at `on_unevaluable` because name-routed rules cannot match the stand-in. Some malformed names remain a residual that is tracked privately. |
@@ -65,7 +88,7 @@ defense in depth on top of it.
 | Hook infrastructure fails (state directory unresolvable, the scan call itself returns an error). Tool input cannot cause these | `on_error = "allow"`; `error` record | `ask` or `deny` |
 | A scan fails at source level (Telltale rejects the window) | The window is reduced and the call keeps its rule verdict, except on a lock timeout; a call with no finding gets its plain verdict; `history_lost` on the record | none needed |
 | A pending call fails at source level on its own | Scanned piece by piece for a bounded time: findings count, floor at `on_unevaluable` (default `ask`), `pending_pieces_unscanned` on the record if pieces were left; not evaluated at all: `on_unevaluable` | Raise or lower `on_unevaluable` |
-| Referenced rule, package or policy file missing or not a regular file at configuration load | Invalid configuration: tool calls denied | none (deliberately loud) |
+| Referenced rule, package or policy file missing or not a regular file at configuration load | Invalid configuration: tool calls denied when it says `mode = "enforce"`; otherwise detect-only on the defaults with a `config_invalid` record | none (deliberately loud while enforcing) |
 | Referenced rule content unreadable after load, or any rule pipeline that does not build (the reason names `telltale hooks check`) | Stricter of `on_error` and `on_unevaluable` (default `ask`); `error` record | Raise either |
 | Session files unreadable or unwritable | Stricter of `on_error` and `on_unevaluable`; `error` record | Raise either |
 | Session ledger unparseable or from another version | Quarantined and reset; the call is still evaluated | none needed |
@@ -74,7 +97,9 @@ defense in depth on top of it.
 | Hook payload unusable, other named event | Exit 1 whatever `on_error` says: a block on a stop event would prompt the model without limit | none needed |
 | Hook payload names no event | Exit 1; under `on_error = "deny"`, each harness's block that needs no event (residual on stop events for Claude Code) | `on_error` |
 | A batch settles a call before its result arrives | Settlement is provisional; a later result supersedes it and reports `violated` for a denied call | none |
-| Invalid hooks configuration | Tool calls denied | none (deliberately loud) |
+| Invalid hooks configuration that says `mode = "enforce"` at its top level (read leniently: the one key, or the plain line if the file is not TOML) | Tool calls denied | none (deliberately loud) |
+| Invalid, missing or unreadable hooks configuration that does not say `mode = "enforce"` | Detect-only on the defaults; `config_invalid` record and stderr | Fix the configuration |
+| The hook panics | While enforcing, a tool call gets the stricter of `on_error` and `on_unevaluable` on stdout; other events exit 1 | Raise either |
 | Evaluator unreachable, untrusted, or on another configuration | In-process evaluation (correct, slower) | `[evaluator] enabled = false` |
 | Evaluator received the request but did not answer before the deadline | The decision it recorded, if any; otherwise in-process evaluation, which keeps the rule verdict unless that times out on the session's lock | none |
 | A session's lock stays taken for the 10 s a call waits (`state_lock_timeout`) | Stricter of `on_error` and `on_unevaluable` (default `ask`); `error` record | Raise either |

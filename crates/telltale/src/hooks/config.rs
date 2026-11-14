@@ -9,12 +9,17 @@ use serde::Deserialize;
 use crate::hooks::identity;
 
 /// Whether decisions are returned to the harness or only recorded.
+///
+/// Detect-only (`observe`) is the default. Blocking needs a configuration that
+/// was read and says `mode = "enforce"`: see [`crate::hooks::gate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    /// Return allow/ask/deny decisions to the harness.
+    /// Return ask/deny decisions to the harness.
     Enforce,
-    /// Record the decision that would have been made; never influence the harness.
+    /// Detect only: record the decision that would have been made and never
+    /// influence the harness. Also spelled `detect`.
+    #[serde(alias = "detect")]
     Observe,
 }
 
@@ -184,7 +189,7 @@ impl Default for EvaluatorSettings {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            mode: Mode::Enforce,
+            mode: Mode::Observe,
             on_error: OnError::Allow,
             on_unevaluable: OnError::Ask,
             reason_detail: ReasonDetail::Full,
@@ -276,6 +281,41 @@ impl Config {
         config.validate()?;
         config.make_paths_absolute();
         Ok(config)
+    }
+
+    /// Whether a configuration that [`Self::load`] refused still asks for
+    /// enforcement. Only then may a hook fail closed on it: an operator who
+    /// wrote `mode = "enforce"` gets a visible block instead of a hook that
+    /// silently stopped enforcing, and every other unloadable configuration
+    /// (missing, unreadable, or one that never asked) is detect-only.
+    ///
+    /// Lenient on purpose: the file is already invalid, so it is read for this
+    /// one key, ignoring every other, and as plain lines if it is not TOML.
+    pub fn unloadable_declares_enforce() -> bool {
+        let path = std::env::var_os(CONFIG_ENV)
+            .map(PathBuf::from)
+            .or_else(|| default_config_path().filter(|path| path.is_file()));
+        path.and_then(|path| crate::hooks::state::read_operator_input(&path).ok())
+            .is_some_and(|text| declares_enforce(&text))
+    }
+
+    /// What a detect-only hook runs on when its configuration could not be
+    /// loaded: the defaults, with the environment's state and telemetry paths,
+    /// evaluated in-process (an evaluator is keyed by a configuration this
+    /// hook does not have). Detection continues and the failure is recorded.
+    pub fn detect_only_fallback() -> Self {
+        let mut config = Self {
+            mode: Mode::Observe,
+            state_dir: std::env::var_os(STATE_DIR_ENV).map(PathBuf::from),
+            telemetry_path: std::env::var_os(TELEMETRY_ENV).map(PathBuf::from),
+            evaluator: EvaluatorSettings {
+                enabled: false,
+                ..EvaluatorSettings::default()
+            },
+            ..Self::default()
+        };
+        config.make_paths_absolute();
+        config
     }
 
     pub fn from_file(path: &Path) -> Result<Self, ConfigError> {
@@ -461,6 +501,26 @@ impl Config {
     }
 }
 
+/// Whether configuration text sets the top-level `mode` to `enforce`.
+fn declares_enforce(text: &str) -> bool {
+    #[derive(Deserialize)]
+    struct ModeOnly {
+        mode: Option<Mode>,
+    }
+    if let Ok(parsed) = toml::from_str::<ModeOnly>(text) {
+        return parsed.mode == Some(Mode::Enforce);
+    }
+    // Not TOML, or `mode` holds something else: the top-level lines, up to
+    // the first table header.
+    text.lines()
+        .map(str::trim)
+        .take_while(|line| !line.starts_with('['))
+        .filter_map(|line| line.strip_prefix("mode"))
+        .filter_map(|rest| rest.trim_start().strip_prefix('='))
+        .map(|value| value.split('#').next().unwrap_or_default().trim())
+        .any(|value| matches!(value, "\"enforce\"" | "'enforce'"))
+}
+
 /// Resolve a relative path against the current directory, so a daemon
 /// started from another directory reads and writes the same files.
 fn absolute(path: &mut PathBuf) {
@@ -595,9 +655,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_valid_and_enforcing() {
+    fn defaults_are_valid_and_detect_only() {
         let config = Config::from_toml("").unwrap();
-        assert_eq!(config.mode, Mode::Enforce);
+        assert_eq!(config.mode, Mode::Observe);
         assert_eq!(config.on_error, OnError::Allow);
         assert_eq!(config.thresholds.action_deny, 90);
     }
@@ -676,6 +736,49 @@ mod tests {
             ..Config::default()
         };
         assert_ne!(a.fingerprint(), b.fingerprint());
+    }
+
+    #[test]
+    fn detect_only_is_the_default_and_has_two_spellings() {
+        assert_eq!(Config::default().mode, Mode::Observe);
+        assert_eq!(Config::from_toml("").unwrap().mode, Mode::Observe);
+        for spelling in ["observe", "detect"] {
+            let config = Config::from_toml(&format!("mode = \"{spelling}\"")).unwrap();
+            assert_eq!(config.mode, Mode::Observe, "{spelling}");
+        }
+        assert_eq!(
+            Config::from_toml("mode = \"enforce\"").unwrap().mode,
+            Mode::Enforce
+        );
+        assert!(Config::from_toml("mode = \"block\"").is_err());
+    }
+
+    #[test]
+    fn only_a_configuration_that_says_enforce_declares_it() {
+        for text in [
+            "mode = \"enforce\"",
+            "mode = \"enforce\"\ntypo_key = 1",
+            "\"mode\" = 'enforce'\n[thresholds]\naction_ask = 0",
+            // Not TOML at all.
+            "mode = \"enforce\" # block\n[telltale\nrules = [",
+            "  mode='enforce'\n= = =",
+        ] {
+            assert!(declares_enforce(text), "{text}");
+        }
+        for text in [
+            "",
+            "typo_key = 1",
+            "mode = \"observe\"\ntypo_key = 1",
+            "mode = \"detect\"\n= = =",
+            "# mode = \"enforce\"\n= = =",
+            "model = \"enforce\"\n= = =",
+            // Under a table it is another key.
+            "= = =\n[thresholds]\nmode = \"enforce\"",
+            "[evaluator]\nmode = \"enforce\"",
+            "mode = \"enforced\"\n= = =",
+        ] {
+            assert!(!declares_enforce(text), "{text}");
+        }
     }
 
     #[test]
