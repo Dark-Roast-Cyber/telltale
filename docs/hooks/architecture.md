@@ -46,6 +46,7 @@ and not a sandbox. It is one enforcement point among several; see the
 | `claude_code` | Parse Claude Code hook payloads (2.1.318 contract, unknown fields ignored); render `permissionDecision` / `additionalContext`; generate the settings fragment. Never renders `allow`. |
 | `copilot_cli` | Parse Copilot CLI hook payloads in both dialects (1.0.105 contract), with synthetic correlation keys and `agentStop` settlement; render the flat `permissionDecision` / `additionalContext`; generate the hook file. Also receives Copilot payloads sent to the Claude Code entry point by a repository `.claude/settings.json`. Never renders `allow`. |
 | `runtime` | Harness-neutral events: `ToolRequested` (the only enforcement point), `ToolFinished`, `BatchSettled`, `UserPrompt`, `PermissionPrompt`, session and subagent lifecycle. Infallible: failures become `error` records plus `on_error`. |
+| `gate` | The one place an answer is released to the harness. Detect-only unless the configuration was read and says `mode = "enforce"`: then nothing is written to stdout and the exit status is 0, whatever the rest of the hook built ([ADR 0008](adr/0008-detect-only-by-default.md)). |
 | `journal` | Per-session append-only native Claude Code JSONL of what hooks reported. Bounded tail reads. |
 | `engine` | The only Telltale touchpoint: `Pipeline` build (bundled core + community + host rules), `scan_sources_detailed`, focus selection, quarantine/visibility handling. |
 | `policy` | Host promotion thresholds (Telltale's contract assigns these to the host). |
@@ -160,10 +161,22 @@ PR.
 
 ## Trust and failure model
 
+- **Detect-only by default.** A hook builds an answer (stdout JSON and an exit
+  status) and never writes it itself; `gate` releases it only when the
+  configuration was read and says `mode = "enforce"`. Otherwise nothing
+  reaches the harness: empty stdout, exit 0, and an exit after 20 s if the hook
+  has not finished. Everything below about `ask`, `deny` and failure policies
+  describes what is returned while enforcing and what is only recorded
+  otherwise.
 - **Fail-open by default** (`on_error = "allow"`) because Claude Code itself
   fails open; operators can choose `ask`/`deny`, and `settings --fail-closed`
   makes hook crashes and timeouts block (verified).
-- Invalid configuration denies tool calls (an operator error should be loud).
+- A configuration that does not load denies tool calls when it asks for
+  enforcement (an operator error should be loud), and is detect-only on the
+  defaults when it does not.
+- A panic while evaluating is caught at the process boundary: a tool call gets
+  the stricter of `on_error` and `on_unevaluable` while enforcing, and nothing
+  in detect-only mode.
 - Telemetry write failures go to stderr and never change a verdict.
 - Telltale fails a source as a whole, and tool input can cause that. A failed
   scan is retried on a reduced window (`Engine::evaluate`, ADR 0002 addendum):

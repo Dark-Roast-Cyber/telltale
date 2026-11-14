@@ -65,7 +65,7 @@ class Install:
         enabled = "true" if evaluator else "false"
         evaluator_extra = os.environ.get("EVALUATOR_EXTRA", "").replace(";", "\n")
         with open(self.config, "w") as f:
-            f.write(f'state_dir = "{self.state}"\n{extra}\n[evaluator]\nenabled = {enabled}\n'
+            f.write(f'mode = "enforce"\nstate_dir = "{self.state}"\n{extra}\n[evaluator]\nenabled = {enabled}\n'
                     f"idle_timeout_secs = 120\nautostart = false\n{evaluator_extra}\n")
         self.vars = {"PATH": os.environ["PATH"], "TELLTALE_HOOKS_CONFIG": self.config,
                      "HOME": "/nonexistent-home-for-test"}

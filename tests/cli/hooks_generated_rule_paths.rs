@@ -43,6 +43,9 @@ fn binary(base: &Path, env: &Env) -> Command {
         command.env(var, base.join("home"));
     }
     command.env("TELLTALE_HOOKS_EVALUATOR", "0");
+    // Enforcing, so that a verdict shows the rules built; `env` may name
+    // another configuration.
+    command.env("TELLTALE_HOOKS_CONFIG", common::enforce_config());
     command.envs(env.iter().map(|(name, value)| (name, value)));
     command
 }
@@ -98,7 +101,7 @@ fn toml_string(path: &Path) -> String {
 /// A config file at a safe path holding `toml`, as the environment of a source.
 fn config(base: &Path, toml: &str) -> Env {
     let path = base.join("config.toml");
-    std::fs::write(&path, toml).unwrap();
+    std::fs::write(&path, format!("mode = \"enforce\"\n{toml}")).unwrap();
     vec![("TELLTALE_HOOKS_CONFIG", path)]
 }
 

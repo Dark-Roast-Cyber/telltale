@@ -8,10 +8,15 @@ detection-only and unchanged; hooks are a separate, opt-in integration.
 A harness hook hands every requested tool call to `telltale hooks`, which
 evaluates it with Telltale (together with the session's earlier calls, so
 multi-step behavior such as download-then-execute or harvest-then-exfiltrate
-is correlated), applies host policy, and answers **no opinion**, **ask**, or
-**deny**. Post-execution events settle what actually happened, and every
-step is written as JSONL telemetry that forwards Telltale's own
-`ActionRecordV1` records.
+is correlated) and applies host policy. Post-execution events settle what
+actually happened, and every step is written as JSONL telemetry that forwards
+Telltale's own `ActionRecordV1` records.
+
+**Hooks are detect-only unless you switch enforcement on.** By default a hook
+records the verdict it reached (**no opinion**, **ask** or **deny**) and
+gives the harness nothing. With `mode = "enforce"` in the configuration it
+returns ask and deny verdicts to the harness. See
+[Detect-only and enforce](#detect-only-and-enforce).
 
 ## Where it lives
 
@@ -71,8 +76,10 @@ hook`; pass an absolute command when `telltale` is not on the harness's `PATH`:
 ./target/release/telltale hooks claude-code settings --fail-closed "$PWD/target/release/telltale hooks claude-code hook"
 ```
 
-`--fail-closed` makes Claude Code block a tool call if the hook crashes,
-times out, or is missing. Without it Claude Code fails open. Details:
+The hook is detect-only until the configuration says `mode = "enforce"`
+([Detect-only and enforce](#detect-only-and-enforce)). `--fail-closed` makes
+Claude Code block a tool call if the hook crashes, times out, or is missing.
+Without it Claude Code fails open. Details:
 [harnesses/claude-code.md](harnesses/claude-code.md).
 
 ## Quick start (GitHub Copilot CLI)
@@ -116,6 +123,66 @@ mkdir -p "${CODEX_HOME:-$HOME/.codex}/rules"
 
 Details and limits: [harnesses/codex-cli.md](harnesses/codex-cli.md).
 
+## Detect-only and enforce
+
+One setting decides whether a hook can influence the harness:
+
+```toml
+mode = "observe"   # default, also spelled "detect": record verdicts, never return them
+# mode = "enforce" # return ask and deny verdicts to the harness
+```
+
+Changing it needs no rebuild and no change to the harness settings; the next
+hook invocation reads it. `telltale hooks check` prints the mode in effect.
+
+**In detect-only mode a hook cannot block a tool call.** A harness hook can
+stop a call in three ways, and one gate (`telltale_core::hooks::gate`) closes
+all of them before anything else runs:
+
+| Channel | Detect-only |
+| --- | --- |
+| A decision on stdout | Nothing is written to stdout, whatever was evaluated |
+| A non-zero exit status (a block on Copilot CLI; exit 2 on Claude Code) | The exit status is 0 |
+| Not returning in time, where the harness blocks on a failed hook (`settings --fail-closed`) | The hook gives up and exits 0 after 20 s |
+
+This holds on every path, not only for rule verdicts: an unreadable or
+oversized payload, a failure policy of `deny` (`on_error`, `on_unevaluable`),
+a session lock that stays taken, and a panic all end the same way. What the
+hook would have returned is in telemetry (`decision.returned: false`), and so
+is what it could not read (`error` records).
+
+The gate opens only for a configuration that **was read and says
+`mode = "enforce"`**. Everything else is detect-only:
+
+| Configuration | Hook |
+| --- | --- |
+| None | Detect-only |
+| Loaded, `mode` unset, `"observe"` or `"detect"` | Detect-only |
+| Loaded, `mode = "enforce"` | Enforcing |
+| Does not load (unknown key, missing rule file, not TOML), and its top level says `mode = "enforce"` | Enforcing, and tool calls are denied until it is fixed (an operator error should be loud) |
+| Does not load, and does not say `mode = "enforce"`; or is named and missing | Detect-only on the defaults; `config_invalid` in telemetry and on stderr |
+
+Two things are outside the setting, because they are installed into the
+harness and act without the hook: `telltale hooks codex-cli execpolicy`
+(native Codex rules that refuse nested launches) and a hook command that
+cannot start at all under `settings --fail-closed` (a missing binary). Install
+neither for a deployment that must never block.
+
+Verdicts recorded in detect-only mode are what each call would get on its own
+score and the session's score. They are not counted as denials: the
+"repeated denials" escalation counts only denials the harness was given, so
+detect-only telemetry does not escalate on denials that never happened, and
+switching a running session to `enforce` does not start from them.
+
+Moving from detect-only to enforce: run detect-only, read the `decision`
+records with `verdict` `ask` or `deny` (rule IDs are in `rule_ids`), tune
+thresholds or disable rules with a policy document, then set
+`mode = "enforce"`. Because enforcement is one line in a file the agent's OS
+user can usually write, the same advice applies as for the harness settings:
+keep the configuration where the agent cannot write it (`TELLTALE_HOOKS_CONFIG`
+pointing at a root-owned file) when the agent is the adversary. The
+self-protection rules detect writes to it in both modes.
+
 ## Configuration
 
 Optional TOML at `$TELLTALE_HOOKS_CONFIG`, else at the platform default when
@@ -124,9 +191,11 @@ present: `$XDG_CONFIG_HOME/telltale-hooks/config.toml` or
 `%APPDATA%\telltale-hooks\config.toml` on Windows:
 
 ```toml
-mode = "enforce"      # or "observe": record verdicts, never return them
+mode = "observe"      # default (also "detect"): record verdicts, never return them.
+                      # "enforce": return ask and deny verdicts to the harness
 on_error = "allow"        # hook infrastructure failure: "allow" (fail open), "ask", "deny"
 on_unevaluable = "ask"    # tool call too large, nested or damaged to evaluate: "ask", "deny", "allow"
+                          # (both are recorded, not returned, unless mode = "enforce")
 reason_detail = "full"    # "full": reasons name rules and thresholds; "minimal": verdict and record ID only
                           # (a human approving an `ask` then sees little; use "minimal" for unattended agents)
 
@@ -135,7 +204,7 @@ action_ask = 50
 action_deny = 90
 session_ask = 150     # cumulative session score
 session_deny = 300
-repeated_denials = 3  # then any scored call is denied
+repeated_denials = 3  # after this many returned denials, any scored call is denied
 
 [telltale]
 community_rules = true

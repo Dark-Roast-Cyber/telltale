@@ -671,6 +671,7 @@ mod tests {
 
     fn shared(dir: &Path, fingerprint: &str) -> Shared {
         let config = Config {
+            mode: crate::hooks::config::Mode::Enforce,
             state_dir: Some(dir.join("state")),
             ..Config::default()
         };

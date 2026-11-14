@@ -473,12 +473,12 @@ fn run_binary(
         .args(args)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_STATE_HOME")
-        .env_remove("TELLTALE_HOOKS_CONFIG")
+        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .env("TELLTALE_HOOKS_STATE_DIR", state);
     if let Some(config) = config {
         let path = state.join("config.toml");
-        std::fs::write(&path, config).unwrap();
+        std::fs::write(&path, format!("mode = \"enforce\"\n{config}")).unwrap();
         command.env("TELLTALE_HOOKS_CONFIG", path);
     }
     let mut child = command

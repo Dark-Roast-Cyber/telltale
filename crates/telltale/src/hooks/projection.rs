@@ -122,7 +122,9 @@ pub fn project(input: &Value) -> Option<Vec<Value>> {
             }
         }
     }
-    (variants.len() <= MAX_VARIANTS).then_some(variants)
+    // An input with no scalar value at all (nested empty containers) has
+    // nothing to project: it is unevaluable, not an empty evaluation.
+    (!variants.is_empty() && variants.len() <= MAX_VARIANTS).then_some(variants)
 }
 
 #[cfg(test)]
@@ -196,6 +198,18 @@ mod tests {
                 .keys()
                 .all(|k| k.len() <= 64)
         );
+    }
+
+    #[test]
+    fn an_input_with_no_scalar_value_is_unevaluable_not_empty() {
+        for input in [
+            json!({}),
+            json!([]),
+            json!({"a": {"a": {"a": {"a": {}}}}}),
+            json!({"a": [[], [], []]}),
+        ] {
+            assert_eq!(project(&input), None, "{input}");
+        }
     }
 
     #[test]

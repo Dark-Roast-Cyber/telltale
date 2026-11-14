@@ -90,7 +90,7 @@ def prepare(run, fmt, command, timeout, claude_settings, config, top_config=""):
     sock = os.path.join(SOCKETS, f"tth-e2e-{os.getpid()}-{run.name}.sock")
     with open(os.path.join(run.dir, "tth-config.toml"), "w") as f:
         f.write(config if config is not None else
-                f'{top_config}[telltale]\nrules = ["{MARKERS}"]\n\n[evaluator]\nenabled = {EVALUATOR}\n'
+                f'mode = "enforce"\n{top_config}[telltale]\nrules = ["{MARKERS}"]\n\n[evaluator]\nenabled = {EVALUATOR}\n'
                 f'idle_timeout_secs = 120\nsocket = "{sock}"\n')
     if claude_settings:
         fragment = json.loads(subprocess.check_output([TTH, "hooks", "claude-code", "settings", hook_command(run, "claude-code")]))
@@ -387,10 +387,10 @@ SCENARIOS = {
     # Failure handling.
     "fail-missing": lambda: scenario("fail-missing", CANARY("ls"), "absent", command="/nonexistent/telltale"),
     "fail-exit1": lambda: scenario("fail-exit1", CANARY("ls"), "absent", command="sh -c 'exit 1'"),
-    "fail-config": lambda: scenario("fail-config", CANARY("ls"), "absent", config="this is = not [valid toml\n",
+    "fail-config": lambda: scenario("fail-config", CANARY("ls"), "absent", config='mode = "enforce"\nthis is = not [valid toml\n',
                                     note="invalid hooks config denies tool calls (payload-less flat form)"),
     "fail-config-pascal": lambda: scenario("fail-config-pascal", CANARY("ls"), "absent", fmt="pascal",
-                                           config="this is = not [valid toml\n"),
+                                           config='mode = "enforce"\nthis is = not [valid toml\n'),
     "timeout": lambda: scenario("timeout", CANARY(DENY), "present", timeout=2,
                                 command=f"sh -c 'sleep 5; exec {TTH} hooks copilot-cli hook'",
                                 note="residual: a hook that times out lets the call run"),

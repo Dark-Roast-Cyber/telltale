@@ -10,7 +10,9 @@
 //! (`engine`), applies host promotion policy (`policy`) and writes
 //! telemetry envelopes around Telltale's own records (`telemetry`).
 //! `identity` names the running build for telemetry and for evaluator
-//! compatibility; `evaluator` is the long-lived local evaluator.
+//! compatibility; `evaluator` is the long-lived local evaluator. `gate` is the
+//! one place an answer is released to the harness: detect-only by default,
+//! enforcing only when the configuration says so.
 //!
 //! The runtime reaches Telltale only through the crate's public facade
 //! (`Pipeline`, `ActionRecordV1`, `ObservationStage`), the same surface an
@@ -22,6 +24,7 @@ pub mod config;
 pub mod copilot_cli;
 pub mod engine;
 pub mod evaluator;
+pub mod gate;
 pub mod harness;
 pub mod identity;
 pub mod journal;

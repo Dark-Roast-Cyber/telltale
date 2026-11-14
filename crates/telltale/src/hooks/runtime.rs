@@ -508,6 +508,28 @@ impl Runtime {
         )))
     }
 
+    /// A hook invocation that never became an event: the payload could not be
+    /// read, or the configuration could not be loaded. An `error` record with
+    /// what is known, so that an answer given outside [`Self::handle`], or a
+    /// detect-only hook that saw nothing, is never silent. No session is
+    /// opened: there is no trusted session to open.
+    pub fn record_unhandled(&self, harness: &'static str, hook_event: &str, code: &str) {
+        let ctx = Context {
+            harness,
+            hook_event: hook_event.to_owned(),
+            session_id: String::new(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: false,
+        };
+        let mut record = self.record(&ctx, Kind::Error);
+        record.error_code = Some(code.to_owned());
+        self.emit(&record);
+    }
+
     /// Failures the agent can bring about: session files; rule content that
     /// the configuration validated at load time and that has since become
     /// unreadable; and any pipeline build that fails. A pipeline that cannot
@@ -980,7 +1002,12 @@ impl Runtime {
             session.state.scored_actions += 1;
         }
         match outcome.verdict {
-            Verdict::Deny => session.state.denied_attempts += 1,
+            // Denials the harness was given. A verdict that was only recorded
+            // (detect-only) denied nothing: counting it would escalate every
+            // later scored call on a denial that never happened, in the
+            // record and, once the mode changes mid-session, for real.
+            Verdict::Deny if returned => session.state.denied_attempts += 1,
+            Verdict::Deny => {}
             Verdict::Ask => session.state.asked_attempts += 1,
             Verdict::Allow => {}
         }
@@ -1588,6 +1615,7 @@ mod tests {
     fn after_a_build_failure(edit: fn(&mut Config), can_ask: bool) -> (Response, String) {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config {
+            mode: Mode::Enforce,
             state_dir: Some(dir.path().join("state")),
             telemetry_path: Some(dir.path().join("telemetry.jsonl")),
             ..Config::default()

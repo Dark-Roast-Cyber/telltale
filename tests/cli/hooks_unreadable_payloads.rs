@@ -13,8 +13,19 @@ const ENTRY_POINTS: [&str; 3] = ["claude-code", "codex-cli", "copilot-cli"];
 const ON_ERROR_DENY: &str = "on_error = \"deny\"\n";
 const MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 
-/// The installed binary with no reachable default config or state: exit code and stdout.
+/// The installed binary, enforcing, with no reachable default config or
+/// state: exit code and stdout.
 fn hook(entry_point: &str, settings: &str, payload: &[u8]) -> (i32, String) {
+    let (code, stdout, _) = hook_with(
+        entry_point,
+        &format!("mode = \"enforce\"\n{settings}"),
+        payload,
+    );
+    (code, stdout)
+}
+
+/// The installed binary on exactly `settings`: exit code, stdout and telemetry.
+fn hook_with(entry_point: &str, settings: &str, payload: &[u8]) -> (i32, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
     std::fs::write(&config, settings).unwrap();
@@ -40,7 +51,69 @@ fn hook(entry_point: &str, settings: &str, payload: &[u8]) -> (i32, String) {
     (
         out.status.code().unwrap(),
         String::from_utf8(out.stdout).unwrap(),
+        std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap_or_default(),
     )
+}
+
+/// Detect-only cannot block: on every entry point, under the strictest
+/// failure policies, no payload gets a decision on stdout or a non-zero exit
+/// (which alone blocks a Copilot `preToolUse`). What could not be read is in
+/// telemetry instead.
+#[test]
+fn detect_only_answers_nothing_whatever_the_payload() {
+    let strict = "on_error = \"deny\"\non_unevaluable = \"deny\"\n";
+    let hollow = br#"{"session_id":"s","transcript_path":"/t","cwd":"/w","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"mcp__x__y","tool_input":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{}}}}}}}}},"tool_use_id":"toolu_h"}"#;
+    let payloads: [(&str, Vec<u8>); 9] = [
+        ("garbage", b"not json".to_vec()),
+        ("empty", Vec::new()),
+        (
+            "truncated call",
+            br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls""#
+                .to_vec(),
+        ),
+        (
+            "call without fields",
+            br#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#.to_vec(),
+        ),
+        (
+            "copilot truncated call",
+            br#"{"toolName":"bash","toolArgs":"#.to_vec(),
+        ),
+        ("nameless", br#"{"tool_input":{"command":"ls"}}"#.to_vec()),
+        (
+            "damaged stop",
+            br#"{"hook_event_name":"Stop","session_id":7}"#.to_vec(),
+        ),
+        ("no scalar value", hollow.to_vec()),
+        (
+            "oversized call",
+            oversized(
+                br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":""#,
+            ),
+        ),
+    ];
+    for mode in ["", "mode = \"observe\"\n", "mode = \"detect\"\n"] {
+        for entry_point in ENTRY_POINTS {
+            for (name, payload) in &payloads {
+                let settings = format!("{mode}{strict}");
+                let (code, stdout, telemetry) = hook_with(entry_point, &settings, payload);
+                assert_eq!(
+                    (code, stdout.as_str()),
+                    (0, ""),
+                    "{entry_point}, {name}, {mode:?}"
+                );
+                assert!(
+                    telemetry.contains("\"kind\":\"error\"")
+                        || telemetry.contains("\"kind\":\"decision\""),
+                    "{entry_point}, {name}: nothing recorded: {telemetry}"
+                );
+            }
+        }
+    }
+    // The control: enforcing, the same policies answer a call that cannot be read.
+    let (code, stdout) = hook("claude-code", strict, &payloads[2].1);
+    assert_eq!(code, 0);
+    assert_eq!(decision(&stdout, true), "deny");
 }
 
 fn oversized(prefix: &[u8]) -> Vec<u8> {

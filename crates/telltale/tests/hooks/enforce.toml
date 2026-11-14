@@ -1,0 +1,3 @@
+# Test configuration: detect-only is the default, so suites that test what a
+# hook returns to the harness run with enforcement switched on.
+mode = "enforce"
