@@ -1631,7 +1631,7 @@ mod recovery_tests {
     /// A call past capacity on its own, as the runtime projects it.
     fn pieces(command: String) -> (Vec<Line>, Vec<Focus>) {
         let input = serde_json::json!({ "command": command });
-        let variants = crate::hooks::projection::project(&input).unwrap();
+        let variants = crate::hooks::projection::project(&input).unwrap().variants;
         assert!(variants.len() <= crate::hooks::projection::MAX_VARIANTS);
         let mut lines = Vec::new();
         let mut focus = Vec::new();

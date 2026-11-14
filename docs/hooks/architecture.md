@@ -52,7 +52,7 @@ and not a sandbox. It is one enforcement point among several; see the
 | `policy` | Host promotion thresholds (Telltale's contract assigns these to the host). |
 | `state` | Session directory (hashed ID), advisory lock, cumulative score, denied/asked counts, pending decisions for outcome correlation. |
 | `telemetry` | `telltale_hooks.record.v1` JSONL envelopes ([schema](../../schemas/telltale-hooks-record-v1.schema.json)). |
-| `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. |
+| `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. Keeps short top-level values and the head of a command with every variant, and reports what it had to separate (`pending_input_separated`, floored at `on_unevaluable`). |
 | `codex_cli` | Parse Codex CLI 0.166.0 hook payloads; composite, escaped correlation key (`session:agent:turn:tool_use_id`); `Stop`/`SubagentStop` settle by `turn_id`; render only `hookSpecificOutput` deny (ask becomes deny, allow prints nothing); generate `hooks.json` and the exec-policy backstop rules. |
 | `normalize` | Interim, per-harness input-shape normalization of the evaluation encoding (patch targets, authored-content keys, read-tool names). Applied by the runtime, not by adapters; ADR 0002. |
 | `evaluator` | Long-lived evaluator: Unix-socket protocol, trust checks, autostart, fallback rules (`evaluator/unix.rs`). Other platforms report `evaluator_unsupported_platform` and evaluate in-process. |
