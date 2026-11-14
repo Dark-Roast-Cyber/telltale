@@ -855,11 +855,16 @@ impl Runtime {
         // evaluate a bounded projection that still covers every byte.
         let mut projection: Option<Vec<serde_json::Value>> = None;
         let mut projection_limit = None;
+        // The projection could not keep together what a rule may need
+        // together (projection.rs), so "no finding" is not an allow.
+        let mut separated = false;
         if let Ok(first) = &result
             && first.status == EvalStatus::NotEvaluated
         {
             projection_limit = first.failure_code.clone();
-            if let Some(variants) = crate::hooks::projection::project(&encoded.input) {
+            if let Some(projected) = crate::hooks::projection::project(&encoded.input) {
+                let variants = projected.variants;
+                separated = projected.separated;
                 let mut lines = Vec::new();
                 let mut focuses = Vec::new();
                 for (n, variant) in variants.iter().enumerate() {
@@ -897,6 +902,11 @@ impl Runtime {
             if evaluation_info.failure_code.is_none() {
                 evaluation_info.failure_code = projection_limit;
             }
+        }
+        if separated {
+            evaluation_info
+                .visibility_limits
+                .push("pending_input_separated".to_owned());
         }
 
         if crate::hooks::journal::input_keys_collide(&encoded.input) {
@@ -940,15 +950,16 @@ impl Runtime {
                     },
                     &self.config.thresholds,
                 );
-                // Part of the input was still excluded, or the tool name had to
-                // be encoded for the journal (so name-routed rules could not
-                // match): findings decide only if they are at least as strict
-                // as on_unevaluable.
+                // Part of the input was still excluded, the projection had to
+                // separate values or parts of a command that a rule may need
+                // together, or the tool name had to be encoded for the journal
+                // (so name-routed rules could not match): findings decide only
+                // if they are at least as strict as on_unevaluable.
                 let unevaluable = floor(self.config.on_unevaluable);
                 // An encoded name is always noted as the basis when nothing
                 // stricter than an allow decided, even if on_unevaluable is
                 // allow too, so the record shows why no rule matched.
-                if ((evaluation.unevaluated_focus > 0 || name_malformed)
+                if ((evaluation.unevaluated_focus > 0 || separated || name_malformed)
                     && rank(unevaluable) > rank(outcome.verdict))
                     || (name_malformed && outcome.verdict == Verdict::Allow)
                 {

@@ -57,6 +57,14 @@
 
 - Add [Telltale Hooks](docs/hooks/README.md) documentation and a
   [hooks threat model](docs/security/hooks-threat-model.md).
+- Hooks: padding a tool input so that it is evaluated in pieces no longer
+  lowers its verdict by separating what a rule reads together. The projection
+  of a quarantined input keeps short top-level values and the head of a command
+  with every piece; where it cannot, the verdict is floored at
+  `on_unevaluable` and the record carries the new visibility limit
+  `pending_input_separated`. Large file content alone is not asked about. The
+  [threat model](docs/security/hooks-threat-model.md) row is now Partial and
+  names the residual by category.
 - Remove the optional Telltale Console. It was an unpublished local Event3
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no
