@@ -486,6 +486,52 @@ fn padding_with_members_cannot_separate_a_path_from_what_is_written() {
     );
 }
 
+/// Padding a top-level array past Telltale's item bound: the array is read by
+/// its member's name, which flattening took away.
+#[test]
+fn padding_an_array_cannot_take_its_role_away() {
+    let argv = |extra: usize| {
+        let mut argv = vec!["rm", "-f", "/w/.claude/settings.json"];
+        argv.extend(std::iter::repeat_n("x", extra));
+        json!({ "command": argv })
+    };
+    let paths = |extra: usize| {
+        let mut paths = vec!["/home/u/.aws/credentials".to_owned()];
+        paths.extend((0..extra).map(|i| format!("/w/f{i}")));
+        json!({ "paths": paths })
+    };
+    for (tool, input, expected) in [
+        (
+            "mcp__shell__run",
+            argv as fn(usize) -> serde_json::Value,
+            "deny",
+        ),
+        ("mcp__filesystem__read_multiple_files", paths, "ask"),
+    ] {
+        let mut h = Harness::new();
+        assert_eq!(verdict(&h.pre(tool, "toolu_few", input(0))), Some(expected));
+        let few = h.decision_for("toolu_few");
+        assert!(limits(&few).is_empty());
+
+        let mut h = Harness::new();
+        assert_eq!(
+            verdict(&h.pre(tool, "toolu_many", input(70))),
+            Some(expected),
+            "{tool}"
+        );
+        let many = h.decision_for("toolu_many");
+        assert_eq!(limits(&many), ["pending_input_projected"]);
+        assert_eq!(
+            many["decision"]["rule_ids"], few["decision"]["rule_ids"],
+            "{many:#}"
+        );
+        assert_eq!(
+            many["decision"]["action_score"],
+            few["decision"]["action_score"]
+        );
+    }
+}
+
 /// Padding inside one command, so that no chunk of the projection held both
 /// its start and its end.
 #[test]

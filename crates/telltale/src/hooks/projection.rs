@@ -20,6 +20,8 @@
 //!   other value or chunk. A top-level member that holds a container keeps
 //!   its name as an anchor too, because its presence alone is a fact (`edits`
 //!   marks a write).
+//! - A top-level array of scalars keeps its array form under its member's
+//!   name (`paths`); an argv `command` is joined into one command.
 //! - A continuation chunk of a command starts with the head of that command.
 //!
 //! What cannot be kept together is reported as [`Projection::separated`], and
@@ -75,6 +77,17 @@ struct Leaf {
     text: String,
     /// A scalar member of the input object itself.
     top: bool,
+    /// An item of a top-level array of scalars, which keeps its array form
+    /// under the member's name: the index of the array's first leaf.
+    list: Option<usize>,
+}
+
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(_) | Value::Array(_) => None,
+        Value::String(text) => Some(text.clone()),
+        other => Some(other.to_string()),
+    }
 }
 
 struct Flat {
@@ -101,6 +114,7 @@ fn flatten(value: &Value) -> Option<Flat> {
                 key: prefix.to_owned(),
                 text,
                 top: depth == 1,
+                list: None,
             });
             true
         };
@@ -120,6 +134,35 @@ fn flatten(value: &Value) -> Option<Flat> {
         Value::Object(map) => {
             for (key, member) in map {
                 let before = leaves.len();
+                // Telltale reads a top-level array of strings by its member's
+                // name too (an argv `command`, `paths`), so it is not
+                // flattened into members of other names. An argv is joined as
+                // Telltale joins it, and is then one command like any other.
+                let items = member
+                    .as_array()
+                    .filter(|items| !items.is_empty())
+                    .and_then(|items| items.iter().map(scalar_text).collect::<Option<Vec<_>>>());
+                if let Some(items) = items {
+                    if is_command_key(key) {
+                        leaves.push(Leaf {
+                            key: key.clone(),
+                            text: items.join(" "),
+                            top: true,
+                            list: None,
+                        });
+                    } else {
+                        leaves.extend(items.into_iter().map(|text| Leaf {
+                            key: key.clone(),
+                            text,
+                            top: false,
+                            list: Some(before),
+                        }));
+                    }
+                    if leaves.len() > MAX_LEAVES {
+                        return None;
+                    }
+                    continue;
+                }
                 if !walk(key, member, 1, &mut leaves) {
                     return None;
                 }
@@ -170,21 +213,37 @@ fn chunks(text: &str) -> Vec<&str> {
     out
 }
 
-/// One member of a variant.
-type Item = (String, String);
+/// One member of a variant, or one item of a member that is a list.
+struct Item {
+    key: String,
+    text: String,
+    list: bool,
+}
 
 /// A variant holding `groups`. Flattening can give two values one key (`a.b`
 /// beside `a: {b}`); the later one is renamed, so neither value is dropped.
 fn variant(groups: &[&[Item]]) -> Value {
     let mut object = Map::new();
-    for (key, text) in groups.iter().flat_map(|group| group.iter()) {
-        let mut name = key.clone();
+    for item in groups.iter().flat_map(|group| group.iter()) {
+        let text = Value::String(item.text.clone());
+        if item.list
+            && let Some(Value::Array(items)) = object.get_mut(&item.key)
+        {
+            items.push(text);
+            continue;
+        }
+        let mut name = item.key.clone();
         let mut n = 1;
         while object.contains_key(&name) {
-            name = format!("{}~{n}", cut_utf8(key, MAX_KEY_BYTES - 4));
+            name = format!("{}~{n}", cut_utf8(&item.key, MAX_KEY_BYTES - 4));
             n += 1;
         }
-        object.insert(name, Value::String(text.clone()));
+        let value = if item.list {
+            Value::Array(vec![text])
+        } else {
+            text
+        };
+        object.insert(name, value);
     }
     Value::Object(object)
 }
@@ -205,29 +264,37 @@ pub fn project(input: &Value) -> Option<Projection> {
     let mut heads: Vec<Item> = Vec::new();
     let mut continuations: Vec<Item> = Vec::new();
     for (index, leaf) in leaves.iter().enumerate() {
-        let key = bounded_key(&leaf.key, index);
+        let item = |text: String| Item {
+            key: bounded_key(&leaf.key, leaf.list.unwrap_or(index)),
+            text,
+            list: leaf.list.is_some(),
+        };
         if leaf.top && leaf.text.len() <= ANCHOR_BYTES {
-            anchors.push((key, leaf.text.clone()));
+            anchors.push(item(leaf.text.clone()));
             continue;
         }
         let command = leaf.top && is_command_key(&leaf.key);
         let pieces = chunks(&leaf.text);
         separated |= command && pieces.len() > 1;
-        heads.push((key.clone(), pieces[0].to_owned()));
+        heads.push(item(pieces[0].to_owned()));
         for piece in &pieces[1..] {
             let text = if command {
                 format!("{}{piece}", cut_utf8(&leaf.text, HEAD_BYTES))
             } else {
                 (*piece).to_owned()
             };
-            continuations.push((key.clone(), text));
+            continuations.push(item(text));
             if continuations.len() > MAX_VARIANTS {
                 return None;
             }
         }
     }
     for (index, key) in containers.iter().enumerate() {
-        anchors.push((bounded_key(key, leaves.len() + index), String::new()));
+        anchors.push(Item {
+            key: bounded_key(key, leaves.len() + index),
+            text: String::new(),
+            list: false,
+        });
     }
 
     // Few anchors go into every variant. More are split into blocks: every
@@ -287,13 +354,24 @@ mod tests {
         project(input).unwrap().variants
     }
 
+    /// The strings of one variant: its members, and the items of its lists.
+    fn texts(variant: &Value) -> Vec<&str> {
+        variant
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|value| match value {
+                Value::Array(items) => items.iter().collect(),
+                other => vec![other],
+            })
+            .map(|text| text.as_str().unwrap())
+            .collect()
+    }
+
     fn covered(variants: &[Value], needle: &str) -> bool {
-        variants.iter().any(|v| {
-            v.as_object()
-                .unwrap()
-                .values()
-                .any(|t| t.as_str().unwrap().contains(needle))
-        })
+        variants
+            .iter()
+            .any(|v| texts(v).iter().any(|text| text.contains(needle)))
     }
 
     /// Some variant holds every one of `keys`.
@@ -306,12 +384,10 @@ mod tests {
     fn within_bounds(variants: &[Value]) {
         assert!(!variants.is_empty() && variants.len() <= MAX_VARIANTS);
         for v in variants {
-            let object = v.as_object().unwrap();
-            assert!(object.len() <= LEAVES_PER_VARIANT, "{}", object.len());
-            for (key, text) in object {
-                assert!(key.len() <= 64, "{key}");
-                assert!(text.as_str().unwrap().len() <= CHUNK_BYTES + HEAD_BYTES);
-            }
+            let texts = texts(v);
+            assert!(texts.len() <= LEAVES_PER_VARIANT, "{}", texts.len());
+            assert!(texts.iter().all(|t| t.len() <= CHUNK_BYTES + HEAD_BYTES));
+            assert!(v.as_object().unwrap().keys().all(|key| key.len() <= 64));
         }
     }
 
@@ -492,14 +568,44 @@ mod tests {
         let variants = variants_of(&input);
         assert!(covered(&variants, "first") && covered(&variants, "second"));
         assert!(variants.iter().any(|v| {
-            let values: Vec<&str> = v
-                .as_object()
-                .unwrap()
-                .values()
-                .filter_map(Value::as_str)
-                .collect();
+            let values = texts(v);
             values.contains(&"first") && values.contains(&"second")
         }));
+    }
+
+    /// Telltale reads a top-level array by its member's name. Flattened into
+    /// `paths.0`, `paths.1`, ... it was read as nothing in particular.
+    #[test]
+    fn a_top_level_array_of_scalars_keeps_its_name_and_form() {
+        let mut paths: Vec<Value> = (0..70).map(|i| json!(format!("/w/f{i}"))).collect();
+        paths.push(json!(7));
+        let input = json!({"paths": paths, "content": "{}"});
+        let projection = project(&input).unwrap();
+        within_bounds(&projection.variants);
+        assert!(!projection.separated);
+        let mut seen = Vec::new();
+        for v in &projection.variants {
+            assert_eq!(v["content"], "{}");
+            seen.extend(v["paths"].as_array().unwrap().iter().cloned());
+        }
+        let mut expected: Vec<Value> = (0..70).map(|i| json!(format!("/w/f{i}"))).collect();
+        expected.push(json!("7"));
+        assert_eq!(seen, expected);
+
+        // An argv is one command: joined as Telltale joins it, kept whole.
+        let mut argv = vec!["rm", "-f", "/w/.claude/settings.json"];
+        argv.extend(["x"; 70]);
+        let projection = project(&json!({"command": argv})).unwrap();
+        assert!(!projection.separated);
+        assert_eq!(projection.variants.len(), 1);
+        assert_eq!(projection.variants[0]["command"], argv.join(" "));
+
+        // An array that holds a container is flattened, under a marker.
+        let mixed = json!({"paths": ["/w/a", {"b": "/w/c"}], "pad": "p".repeat(5000)});
+        let variants = variants_of(&mixed);
+        assert_eq!(variants[0]["paths"], "");
+        assert_eq!(variants[0]["paths.0"], "/w/a");
+        assert_eq!(variants[0]["paths.1.b"], "/w/c");
     }
 
     #[test]

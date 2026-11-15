@@ -60,7 +60,7 @@
 - Hooks: padding a tool input so that it is evaluated in pieces no longer
   lowers its verdict by separating what a rule reads together. The projection
   of a quarantined input keeps short top-level values and the head of a command
-  with every piece; where it cannot, the verdict is floored at
+  with every piece, and a top-level array keeps its member's name; where it cannot, the verdict is floored at
   `on_unevaluable` and the record carries the new visibility limit
   `pending_input_separated`. Large file content alone is not asked about. The
   [threat model](docs/security/hooks-threat-model.md) row is now Partial and
