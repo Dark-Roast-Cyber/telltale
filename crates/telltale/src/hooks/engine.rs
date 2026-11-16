@@ -19,11 +19,12 @@ use crate::{
 use crate::hooks::config::TelltaleSettings;
 use crate::hooks::journal::Line;
 
-/// Host-owned Rule v1 documents (name, content): detections of an agent
+/// Host-owned Rule v1 templates (name, content): detections of an agent
 /// disabling its own hooks. Every document is loaded into the one pipeline
 /// that serves every harness; an adapter with harness-specific host rules
-/// adds its own `rules/*.yaml` file here.
-pub const HOST_RULE_DOCUMENTS: &[(&str, &str)] = &[
+/// adds its own `rules/*.yaml` file here. A template writes the pattern text
+/// rules share as `{{NAME}}` (`RULE_FRAGMENTS`); `host_rule_documents` expands it.
+const HOST_RULE_TEMPLATES: &[(&str, &str)] = &[
     (
         "telltale-hooks-self-protection.yaml",
         include_str!("rules/telltale-hooks-self-protection.yaml"),
@@ -37,6 +38,42 @@ pub const HOST_RULE_DOCUMENTS: &[(&str, &str)] = &[
         include_str!("rules/codex-cli-self-protection.yaml"),
     ),
 ];
+
+/// The bundled host rule documents (name, content), with every placeholder expanded.
+pub fn host_rule_documents() -> &'static [(&'static str, String)] {
+    static DOCUMENTS: std::sync::LazyLock<Vec<(&str, String)>> = std::sync::LazyLock::new(|| {
+        HOST_RULE_TEMPLATES
+            .iter()
+            .map(|&(name, template)| (name, expand_fragments(template)))
+            .collect()
+    });
+    &DOCUMENTS
+}
+
+/// Replace each `{{NAME}}` that names a `RULE_FRAGMENTS` entry by its text, quoted for
+/// the single-quoted YAML value it stands in. Other text, an unknown name included,
+/// stays as written; a test holds every template to known names in quoted values.
+fn expand_fragments(template: &str) -> String {
+    let mut expanded = String::with_capacity(2 * template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        expanded.push_str(&rest[..start]);
+        rest = &rest[start + 2..];
+        let fragment = rest
+            .split_once("}}")
+            .and_then(|(name, _)| RULE_FRAGMENTS.iter().find(|(known, _)| *known == name));
+        match fragment {
+            Some((name, text)) => {
+                // YAML single-quoted values escape a quote by doubling it.
+                expanded.push_str(&text.replace('\'', "''"));
+                rest = &rest[name.len() + 2..];
+            }
+            None => expanded.push_str("{{"),
+        }
+    }
+    expanded.push_str(rest);
+    expanded
+}
 
 #[derive(Debug)]
 pub enum EngineError {
@@ -192,8 +229,8 @@ impl Engine {
             builder = builder.rule_package(read(path)?);
         }
         if settings.self_protection_rules {
-            for (_, document) in HOST_RULE_DOCUMENTS {
-                builder = builder.rules_document((*document).to_owned());
+            for (_, document) in host_rule_documents() {
+                builder = builder.rules_document(document.clone());
             }
             for document in generated_documents(protected_paths, &mut generated) {
                 builder = builder.rules_document(document);
@@ -657,25 +694,77 @@ fn push_halves(blocks: &mut Vec<Range<usize>>, block: Range<usize>) {
 /// Telltale rejects Rule v1 patterns longer than 1,024 bytes; stay under it.
 const MAX_PATTERN_BYTES: usize = 1000;
 
-// The same text as rules/*.yaml (tested): a writing program at command
-// position, not `--rm` or a word after other whitespace, in the same command as
-// the path unless it is an interpreter one-liner, whose program can hold `;`, and
-// a file-writing redirection, not `2>` or `>&2`. An interpreter counts only with a
-// flag other than `-m`: `python3 x.py <path>` hands its path to a file whose
-// content no rule can see anyway. `HARMLESS` is what cannot write, whatever it names.
+// Pattern text the bundled rules share. A template in rules/*.yaml names one as `{{NAME}}`
+// (`RULE_FRAGMENTS`) and the generated rules use the constants themselves, so no rule
+// carries its own copy.
+//
+// A writing program at command position, not `--rm` or a word after other whitespace, in
+// the same command as the path unless it is an interpreter one-liner, whose program can
+// hold `;`, and a file-writing redirection, not `2>` or `>&2`. An interpreter counts only
+// with a flag other than `-m`: `python3 x.py <path>` hands its path to a file whose content
+// no rule can see anyway. `HARMLESS` is what cannot write, whatever it names.
 const COMMAND_START: &str = r#"(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["']?)*\\?(?:\S*[\\/])?"#;
-const WRITERS: &str = r#"(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)"#;
+macro_rules! posix_writers {
+    () => {
+        r#"(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))"#
+    };
+}
+macro_rules! windows_writers {
+    () => {
+        r#"(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s"#
+    };
+}
+const POSIX_WRITERS: &str = posix_writers!();
+const WINDOWS_WRITERS: &str = windows_writers!();
+const WRITERS: &str = concat!("(?:", posix_writers!(), "|", windows_writers!(), ")");
 const INTERPRETERS: &str = r#"(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-])"#;
 const SEGMENT: &str = r#"(?:[^;&|\n]|\\\n|'[^']*'|"[^"]*")*"#;
 const REDIRECT_TO: &str = r#"(?:^|[^0-9&>])>{1,2}\|?\s*["']?"#;
 const REDIRECT_SKIP: &str = r#"[^\s;&|<>"']*?"#;
-const HARMLESS: &str = r#"^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:'(?:[^-'‘-‛]-*)*'|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:'(?:[^-'‘-‛]-*)*'|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:'[^'weW‘-‛]*p'|[0-9,]+p)[^-;&|<>`$()'"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$"#;
+// The plain reads at the end of `HARMLESS`, which the exclusions that let less through
+// also allow.
+macro_rules! readers {
+    () => {
+        r#"(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:'(?:[^-'‘-‛]-*)*'|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:'(?:[^-'‘-‛]-*)*'|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:'[^'weW‘-‛]*p'|[0-9,]+p)[^-;&|<>`$()'"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*"#
+    };
+}
+const READERS: &str = readers!();
+const HARMLESS: &str = concat!(
+    r#"^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*"#,
+    readers!(),
+    ")$"
+);
+// The exclusions of rules about what a command says rather than what it writes:
+// `git commit` and `gh pr` text, and a harness launch or uninstall that only prints its
+// version or help, or previews.
+const TEXT_ONLY: &str = r#"^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:'(?:[^-'‘-‛]-*)*'|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$"#;
+const VERSION_OR_HELP: &str =
+    r#"^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$"#;
+const DRY_RUN_OR_HELP: &str = r#"^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$"#;
 
-// The same text as the fail-safe rules in rules/*.yaml (tested): a writer word
-// anywhere, matched without a list of what can wrap it, and the words that work on what
-// they are handed when the path comes first.
+// The fail-safe rules: a writer word anywhere, matched without a list of what can wrap
+// it, and the words that work on what they are handed when the path comes first.
 const WRITER_ANYWHERE: &str = r#"(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-])"#;
 const WRITER_AFTER: &str = r#"(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-])"#;
+
+/// Every shared text a rule template can name, by the name it writes as `{{NAME}}`.
+const RULE_FRAGMENTS: &[(&str, &str)] = &[
+    ("COMMAND_START", COMMAND_START),
+    ("WRITERS", WRITERS),
+    ("POSIX_WRITERS", POSIX_WRITERS),
+    ("WINDOWS_WRITERS", WINDOWS_WRITERS),
+    ("INTERPRETERS", INTERPRETERS),
+    ("SEGMENT", SEGMENT),
+    ("REDIRECT_TO", REDIRECT_TO),
+    ("REDIRECT_SKIP", REDIRECT_SKIP),
+    ("HARMLESS", HARMLESS),
+    ("READERS", READERS),
+    ("TEXT_ONLY", TEXT_ONLY),
+    ("VERSION_OR_HELP", VERSION_OR_HELP),
+    ("DRY_RUN_OR_HELP", DRY_RUN_OR_HELP),
+    ("WRITER_ANYWHERE", WRITER_ANYWHERE),
+    ("WRITER_AFTER", WRITER_AFTER),
+];
 
 /// What can stand before a path whose rule must not match the tail of a longer
 /// one: `build/tmp` is not the home `/tmp`.
@@ -1157,192 +1246,68 @@ mod tests {
         assert_eq!(coverage.unrepresentable.len(), 1);
     }
 
+    /// Every placeholder in a template names a fragment, sits in a single-quoted value
+    /// (the quoting `expand_fragments` writes), and none is left once expanded. Every
+    /// fragment is named somewhere.
     #[test]
-    fn generated_rule_fragments_are_the_static_rules_text() {
-        for (name, document) in super::HOST_RULE_DOCUMENTS {
-            for fragment in [super::COMMAND_START, super::SEGMENT, super::HARMLESS] {
-                assert!(
-                    document.contains(&fragment.replace('\'', "''")),
-                    "{name}: {fragment}"
-                );
-            }
-        }
-        let (_, document) = super::HOST_RULE_DOCUMENTS[0];
-        for fragment in [
-            super::WRITERS,
-            super::INTERPRETERS,
-            super::REDIRECT_TO,
-            super::REDIRECT_SKIP,
-            super::WRITER_ANYWHERE,
-            super::WRITER_AFTER,
-        ] {
-            assert!(
-                document.contains(&fragment.replace('\'', "''")),
-                "{fragment}"
-            );
-        }
-    }
-
-    // How the exclusions built from the readers start. Nothing else states them.
-    const PLAIN_GIT: &str = r#"^\s*git +(?:clone|init)(?: +[-A-Za-z0-9_./:=@~+]+)* *$"#;
-    const QUOTED_START: &str = r#"^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*"#;
-    const FIND_START: &str = r#"^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:find (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\'"])*-exec(?:dir)? +(?:cat|[ef]?grep|basename|dirname|head|tail|wc|ls|stat|file|du|sha256sum|md5sum|jq) (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\'"]|-[efd] )*(?:\\; *)?\|?\s*)?"#;
-
-    /// Rules with an exclusion other than `HARMLESS`. Rules of one kind share one text.
-    const OTHER_EXCLUSIONS: &[(&str, &[&str])] = &[
-        ("find", &["tth.tamper.hook_dir_find"]),
-        (
-            "launch",
-            &[
-                "tth.tamper.hookless_harness_launch",
-                "tth.tamper.harness_home_override",
-                "tth.tamper.harness_package_launch",
-                "tth.tamper.hook_trust_bypass",
-            ],
-        ),
-        ("launch failsafe", &["tth.tamper.harness_launch_failsafe"]),
-        ("removal failsafe", &["tth.tamper.hook_removal_failsafe"]),
-        ("uninstall", &["tth.tamper.hook_uninstall"]),
-        ("read", &["tth.tamper.disable_all_hooks"]),
-        (
-            "text",
-            &[
-                "tth.tamper.reader_side_effect",
-                "tth.tamper.hook_env_override",
-                "tth.tamper.hook_env_override_export",
-                "tth.tamper.hook_config_stage",
-            ],
-        ),
-    ];
-
-    /// Every exclusion that is not what its rule should carry: `HARMLESS` byte for byte, the
-    /// one text of its kind, or what a kind of one rule is built from. A copy that drifted
-    /// would quietly let commands through one rule and not its neighbours. The same change
-    /// to every copy is not drift, and this does not see it.
-    fn drifted_exclusions(documents: &[&str]) -> Vec<String> {
-        let mut drifted = Vec::new();
-        let mut kinds: std::collections::BTreeMap<&str, &str> = Default::default();
-        for document in documents {
-            let (mut rule, mut lines) = ("", document.lines());
-            while let Some(line) = lines.next() {
-                let line = line.trim_start();
-                if let Some(id) = line.strip_prefix("- id: ") {
-                    rule = id;
-                }
-                if line != "exclude:" {
-                    continue;
-                }
-                let copy = lines
-                    .next()
-                    .and_then(|next| next.trim_start().strip_prefix("command: '"))
-                    .and_then(|text| text.strip_suffix('\''));
-                let Some(copy) = copy else {
-                    drifted.push(format!("{rule}: an exclusion this test cannot read"));
-                    continue;
-                };
-                let kind = OTHER_EXCLUSIONS
-                    .iter()
-                    .find(|(_, rules)| rules.contains(&rule))
-                    .map(|(kind, _)| *kind);
-                let same = match kind {
-                    None => copy.replace("''", "'") == super::HARMLESS,
-                    Some(kind) => *kinds.entry(kind).or_insert(copy) == copy,
-                };
-                if !same {
-                    drifted.push(format!("{rule}: {copy}"));
+    fn every_rule_template_placeholder_is_a_known_fragment() {
+        let placeholder = regex::Regex::new(r"\{\{([A-Z][A-Z0-9_]*)\}\}").unwrap();
+        let quoted = regex::Regex::new(r"^\s*[a-z_]+: '.*'$").unwrap();
+        let mut named = std::collections::BTreeSet::new();
+        for (name, template) in super::HOST_RULE_TEMPLATES {
+            for line in template.lines() {
+                for found in placeholder.captures_iter(line) {
+                    let fragment = found.get(1).unwrap().as_str();
+                    assert!(
+                        super::RULE_FRAGMENTS
+                            .iter()
+                            .any(|(known, _)| *known == fragment),
+                        "{name}: {fragment}"
+                    );
+                    assert!(
+                        quoted.is_match(line),
+                        "{name}: {fragment} outside a quoted value"
+                    );
+                    named.insert(fragment);
                 }
             }
         }
-        // A kind of one rule has nothing like it to differ from, only what it is built from.
-        let harmless = super::HARMLESS;
-        let readers = &harmless[harmless.find("(?:(?:(?:cat|").unwrap()..harmless.len() - 2];
-        let launch = exclusion_of(documents, "tth.tamper.hookless_harness_launch");
-        let uninstall = exclusion_of(documents, "tth.tamper.hook_uninstall");
-        for (rule, built) in [
-            ("disable_all_hooks", format!(r"^\s*{readers}$")),
-            ("hook_dir_find", format!("{FIND_START}{readers}$")),
-            (
-                "harness_launch_failsafe",
-                format!("{QUOTED_START}{readers}$|{launch}|{PLAIN_GIT}"),
-            ),
-            (
-                "hook_removal_failsafe",
-                format!("{QUOTED_START}{readers}$|{uninstall}"),
-            ),
-        ] {
-            let rule = format!("tth.tamper.{rule}");
-            let copy = exclusion_of(documents, &rule).replace("''", "'");
-            if copy != built.replace("''", "'") {
-                drifted.push(format!("{rule}: {copy}"));
-            }
+        for (name, document) in super::host_rule_documents() {
+            assert!(!placeholder.is_match(document), "{name}");
         }
-        drifted
-    }
-
-    /// Pieces of a shared fragment still in a document once its true copies are taken out: a
-    /// copy with one byte changed leaves the rest of itself behind. A copy rewritten through
-    /// and through, or a rule that never used the fragment, leaves nothing and is not seen.
-    fn stray_pieces(document: &str, fragments: &[&str]) -> Vec<String> {
-        let fragments: Vec<String> = fragments.iter().map(|f| f.replace('\'', "''")).collect();
-        let mut rest = document.to_owned();
-        for fragment in &fragments {
-            rest = rest.replace(fragment, "\n");
-        }
-        fragments
+        let unnamed: Vec<&str> = super::RULE_FRAGMENTS
             .iter()
-            .flat_map(|fragment| fragment.as_bytes().chunks(STRAY_PIECE))
-            .filter(|piece| piece.len() == STRAY_PIECE)
-            .filter_map(|piece| std::str::from_utf8(piece).ok())
-            .filter(|piece| rest.contains(piece))
-            .map(ToOwned::to_owned)
-            .collect()
+            .map(|(fragment, _)| *fragment)
+            .filter(|fragment| !named.contains(fragment))
+            .collect();
+        assert!(unnamed.is_empty(), "{unnamed:?}");
     }
 
-    const STRAY_PIECE: usize = 32;
-
-    fn with_one_character_changed(document: &str, mut at: usize) -> String {
-        while !document.is_char_boundary(at) {
-            at += 1;
+    /// An exclusion lets commands through its rule, so none is written out by hand: each
+    /// is built from the shared texts, and a change to one reaches every rule that uses it.
+    #[test]
+    fn every_exclusion_is_built_from_shared_text() {
+        for (name, template) in super::HOST_RULE_TEMPLATES {
+            let mut lines = template.lines();
+            while let Some(line) = lines.next() {
+                if line.trim() == "exclude:" {
+                    let value = lines.next().unwrap_or_default();
+                    assert!(value.contains("{{"), "{name}: {value}");
+                }
+            }
         }
-        let old = document[at..].chars().next().unwrap();
-        let new = if old == '~' { '^' } else { '~' };
-        let rest = at + old.len_utf8();
-        format!("{}{new}{}", &document[..at], &document[rest..])
-    }
-
-    /// What `stray_pieces` looks for. `SEGMENT` and the `REDIRECT_*` are too short to leave a
-    /// piece, and the exclusions have their own test.
-    fn shared_fragments() -> [&'static str; 6] {
-        let windows = super::WRITERS.find("|(?:del|").unwrap();
-        [
-            super::WRITER_ANYWHERE,
-            super::WRITER_AFTER,
-            super::COMMAND_START,
-            &super::WRITERS[3..windows],
-            &super::WRITERS[windows + 1..super::WRITERS.len() - 1],
-            super::INTERPRETERS,
-        ]
     }
 
     #[test]
-    fn every_shared_fragment_copy_is_the_canonical_text() {
-        for (name, document) in super::HOST_RULE_DOCUMENTS {
-            let stray = stray_pieces(document, &shared_fragments());
-            assert!(stray.is_empty(), "{name}: {stray:?}");
-            // One character in the last copy of each is enough.
-            for fragment in shared_fragments() {
-                let fragment = fragment.replace('\'', "''");
-                let Some(last) = document.rfind(&fragment) else {
-                    assert_ne!(fragment, super::COMMAND_START, "{name}");
-                    continue;
-                };
-                let changed = with_one_character_changed(document, last + fragment.len() / 2);
-                assert!(
-                    !stray_pieces(&changed, &shared_fragments()).is_empty(),
-                    "{name}: a changed copy of {fragment} was not found"
-                );
-            }
-        }
+    fn expansion_quotes_a_fragment_and_keeps_other_braces() {
+        let expanded = super::expand_fragments("a: '{{SEGMENT}}' # {{}} {{NOT_A_FRAGMENT}}");
+        assert_eq!(
+            expanded,
+            format!(
+                "a: '{}' # {{{{}}}} {{{{NOT_A_FRAGMENT}}}}",
+                super::SEGMENT.replace('\'', "''")
+            )
+        );
     }
 
     /// Every writer word of the deny rules is a writer word of the fail-safe rules, so what a
@@ -1391,7 +1356,7 @@ mod tests {
             BEFORE_FAIL_SAFE.iter().map(ToString::to_string).collect();
         // Not in a list: `git -C <home> clean`, with its flags between the words.
         words.insert("clean".to_owned());
-        for (_, document) in super::HOST_RULE_DOCUMENTS {
+        for (_, document) in super::host_rule_documents() {
             let flat = document
                 .replace(
                     "(?:Remove|Move|Copy|Rename|New)-Item",
@@ -1417,58 +1382,6 @@ mod tests {
         for word in &words {
             for spelling in [format!("{word} -i x"), format!("{word}.exe -i x")] {
                 assert!(writer.is_match(&spelling), "{spelling}");
-            }
-        }
-    }
-
-    fn exclusion_of<'a>(documents: &[&'a str], rule: &str) -> &'a str {
-        let at = format!("- id: {rule}\n");
-        let document = documents.iter().find(|d| d.contains(&at)).unwrap();
-        let rest = &document[document.find(&at).unwrap()..];
-        let rest = &rest[rest.find("exclude:").unwrap()..];
-        let text = &rest[rest.find("command: '").unwrap() + "command: '".len()..];
-        &text[..text.find('\n').unwrap() - 1]
-    }
-
-    #[test]
-    fn every_exclusion_copy_is_the_canonical_text() {
-        let documents: Vec<&str> = super::HOST_RULE_DOCUMENTS
-            .iter()
-            .map(|(_, document)| *document)
-            .collect();
-        let drifted = drifted_exclusions(&documents);
-        assert!(drifted.is_empty(), "{}", drifted.join("\n"));
-        // The readers are one text inside several exclusions: this one is only that.
-        let read = exclusion_of(&documents, "tth.tamper.disable_all_hooks").replace("''", "'");
-        let readers = read
-            .strip_prefix(r"^\s*")
-            .and_then(|read| read.strip_suffix('$'))
-            .unwrap();
-        for rule in [
-            "tth.tamper.hook_dir_find",
-            "tth.tamper.harness_launch_failsafe",
-            "tth.tamper.hook_removal_failsafe",
-        ] {
-            let exclusion = exclusion_of(&documents, rule).replace("''", "'");
-            assert!(exclusion.contains(readers), "{rule}");
-        }
-        assert!(super::HARMLESS.contains(readers));
-        // One byte is enough in any copy, whichever rule and however far along.
-        for (index, document) in documents.iter().enumerate() {
-            let starts = document.match_indices("exclude:\n").map(|(at, _)| at);
-            for start in starts {
-                let text = start + document[start..].find("command: '").unwrap() + 10;
-                let end = text + document[text..].find('\n').unwrap() - 1;
-                for at in [text + 1, (text + end) / 2, end - 2] {
-                    let changed = with_one_character_changed(document, at);
-                    let mut with_one_changed = documents.clone();
-                    with_one_changed[index] = &changed;
-                    assert!(
-                        !drifted_exclusions(&with_one_changed).is_empty(),
-                        "byte {at} of {}",
-                        &document[start..end]
-                    );
-                }
             }
         }
     }
@@ -1551,7 +1464,7 @@ mod tests {
             })
             .collect();
         files.sort();
-        let mut listed: Vec<(String, String)> = super::HOST_RULE_DOCUMENTS
+        let mut listed: Vec<(String, String)> = super::HOST_RULE_TEMPLATES
             .iter()
             .map(|(name, content)| ((*name).to_owned(), (*content).to_owned()))
             .collect();

@@ -1,3 +1,5 @@
+# A {{...}} name is pattern text several rules share, written once in engine.rs (RULE_FRAGMENTS)
+# and expanded when the rules load.
 version: 1
 description: >-
   Telltale Hooks self-protection for Claude Code, Cursor and Telltale Hooks itself,
@@ -51,9 +53,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
+        command: '(?s){{COMMAND_START}}(?:{{POSIX_WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -68,9 +70,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
+        command: '(?s){{COMMAND_START}}{{WINDOWS_WRITERS}}{{SEGMENT}}(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -84,9 +86,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+        command: '(?s)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)).*{{COMMAND_START}}(?:{{POSIX_WRITERS}}|{{WINDOWS_WRITERS}}|{{INTERPRETERS}})'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -100,9 +102,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
+        command: '(?s){{COMMAND_START}}(?:{{POSIX_WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -116,9 +118,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
+        command: '(?s){{COMMAND_START}}{{WINDOWS_WRITERS}}{{SEGMENT}}(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -132,9 +134,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]))'
+        command: '(?s)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml).*{{COMMAND_START}}(?:{{POSIX_WRITERS}}|{{WINDOWS_WRITERS}}|{{INTERPRETERS}})'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -148,9 +150,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
+        command: '(?s){{REDIRECT_TO}}{{REDIRECT_SKIP}}(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -163,7 +165,7 @@ rules:
     severity: high
     score: 90
     targets: [command]
-    regex: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\b(?:managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json)'
+    regex: '(?s){{COMMAND_START}}{{WRITERS}}{{SEGMENT}}\b(?:managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json)'
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
       `sudo rm -f managed-settings.json; ls`, from inside the system directory: a writer at command position and the name in one command segment. It has no exclusion, because the exclusion lets a command that names no path through, and a bare name names none.
@@ -176,9 +178,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
+        command: '(?s){{COMMAND_START}}git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s{{SEGMENT}}(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -192,9 +194,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*(?:(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?)\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock)'
+        command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*(?:(?:{{COMMAND_START}}(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*|{{REDIRECT_TO}}{{REDIRECT_SKIP}})\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -208,9 +210,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock).*(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
+        command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock).*(?:{{COMMAND_START}}(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -224,9 +226,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+\.\.)*[\\/]*(?:\s|$|["''`])'
+        command: '(?s){{COMMAND_START}}(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s{{SEGMENT}}(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+\.\.)*[\\/]*(?:\s|$|["''`])'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -240,9 +242,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)\b(?:cd|pushd)(?:\s+(?:~|["'']?\$\{?HOME\}?["'']?)/?)?\s*(?:&&|;|\|\|)(?:\s*(?:[^cp\s;&|][^;&|]*|c(?:[^d;&|][^;&|]*)?|p(?:[^u;&|][^;&|]*)?)?[;&|]+)*\s*(?:sudo\s+)?(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s(?:\./)?\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])'
+        command: '(?s)\b(?:cd|pushd)(?:\s+(?:~|["'']?\$\{?HOME\}?["'']?)/?)?\s*(?:&&|;|\|\|)(?:\s*(?:[^cp\s;&|][^;&|]*|c(?:[^d;&|][^;&|]*)?|p(?:[^u;&|][^;&|]*)?)?[;&|]+)*\s*(?:sudo\s+)?(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s{{SEGMENT}}\s(?:\./)?\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -256,9 +258,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[^-A-Za-z0-9_.])find\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+(?:rules|hooks|agents))?[\\/]*["'']?\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?-(?:delete|exec|execdir|ok|okdir)\b'
+        command: '(?s)(?:^|[^-A-Za-z0-9_.])find\s{{SEGMENT}}(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+(?:rules|hooks|agents))?[\\/]*["'']?\s(?:{{SEGMENT}}\s)?-(?:delete|exec|execdir|ok|okdir)\b'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:find (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"])*-exec(?:dir)? +(?:cat|[ef]?grep|basename|dirname|head|tail|wc|ls|stat|file|du|sha256sum|md5sum|jq) (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"]|-[efd] )*(?:\\; *)?\|?\s*)?(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$'
+        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:find (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"])*-exec(?:dir)? +(?:cat|[ef]?grep|basename|dirname|head|tail|wc|ls|stat|file|du|sha256sum|md5sum|jq) (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"]|-[efd] )*(?:\\; *)?\|?\s*)?{{READERS}}$'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -272,9 +274,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?git\s+-C\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`])\s*(?:(?:rm|mv|checkout|restore|reset)\b|clean(?:\s+(?:-[a-mo-z]+|--[a-ce-z]\S*|[^-\s;&|]\S*))*\s*(?:$|[;&|]))'
+        command: '(?s){{COMMAND_START}}git\s+-C\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`])\s*(?:(?:rm|mv|checkout|restore|reset)\b|clean(?:\s+(?:-[a-mo-z]+|--[a-ce-z]\S*|[^-\s;&|]\S*))*\s*(?:$|[;&|]))'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -288,9 +290,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:cd|pushd)\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*["'']?\s*(?:;|&&)\s*\\?(?:\S*[\\/])?(?:rm|del|erase|rd|rmdir|Remove-Item|ri)\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?(?:(?:\./)?\*(?:\.(?:json|toml|rules|\*))?|\.\.?[\\/]*)(?:[\s;&|"'']|$)'
+        command: '(?s){{COMMAND_START}}(?:cd|pushd)\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*["'']?\s*(?:;|&&)\s*\\?(?:\S*[\\/])?(?:rm|del|erase|rd|rmdir|Remove-Item|ri)\s(?:{{SEGMENT}}\s)?(?:(?:\./)?\*(?:\.(?:json|toml|rules|\*))?|\.\.?[\\/]*)(?:[\s;&|"'']|$)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -304,9 +306,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:gci|Get-ChildItem|ls|dir)\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`])(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\|\s*(?:xargs\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*)?(?:rm|mv|del|ri|mi|Remove-Item|Move-Item)\b'
+        command: '(?s){{COMMAND_START}}(?:gci|Get-ChildItem|ls|dir)\s{{SEGMENT}}(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`]){{SEGMENT}}\|\s*(?:xargs\s{{SEGMENT}})?(?:rm|mv|del|ri|mi|Remove-Item|Move-Item)\b'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -322,7 +324,7 @@ rules:
       selection:
         command: '(?s)\b(?:rmtree|rmSync|rm_rf|remove_dir_all|rimraf|removeSync)\b[^;&|\n]*(?:[\s"''`(](?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])|\bhome(?:dir)?\b[^;&|\n]*["''`][\\/]?\.(?:claude|codex|copilot)[\\/]*["''`]|[$%:.\[(]\{?["'']?(?:CODEX|COPILOT)_HOME\b)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -338,7 +340,7 @@ rules:
       selection:
         command: '\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -352,9 +354,9 @@ rules:
     score: 60
     detection:
       selection:
-        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+        command: '(?s)(?:{{WRITER_ANYWHERE}}.*(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*{{WRITER_AFTER}})'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -368,9 +370,9 @@ rules:
     score: 60
     detection:
       selection:
-        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+        command: '(?s)(?:{{WRITER_ANYWHERE}}.*(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*{{WRITER_AFTER}})'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -384,9 +386,9 @@ rules:
     score: 60
     detection:
       selection:
-        command: '(?s)(?:(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]).*(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$).*(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-]))'
+        command: '(?s)(?:{{WRITER_ANYWHERE}}.*(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$).*{{WRITER_AFTER}})'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -400,9 +402,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:python[0-9.]*\s+-[^mvVh\s-]|(?:perl|node|ruby|php)\s+-[^vVh\s-]).*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)'
+        command: '(?s){{COMMAND_START}}(?:{{WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|{{REDIRECT_TO}}{{REDIRECT_SKIP}}(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -416,9 +418,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)=\s*(?:"[^"\n]*|''[^''\n]*|[^\s;&|"'']*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*["'']?\s*(?:[;&\n].*)?(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*[$%]'
+        command: '(?s)=\s*(?:"[^"\n]*|''[^''\n]*|[^\s;&|"'']*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*["'']?\s*(?:[;&\n].*)?{{COMMAND_START}}{{WRITERS}}{{SEGMENT}}[$%]'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -444,9 +446,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+(?:hooks\s+)?(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
+        command: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+(?:hooks\s+)?(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
       exclude:
-        command: '^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$'
+        command: '{{DRY_RUN_OR_HELP}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -460,9 +462,9 @@ rules:
     score: 60
     detection:
       selection:
-        command: '(?s)(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:rg\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?["'']*--pre["'']*[\s=]|git\s+grep\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?["'']*(?:(?-i:-[A-Za-z]*O)|--op[a-z-]*)|git\s+(?:diff|log|show|blame|status|grep|ls-files|ls-tree)\s(?:(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*\s)?["'']*--out[a-z-]*["'']*[\s=])'
+        command: '(?s){{COMMAND_START}}(?:rg\s(?:{{SEGMENT}}\s)?["'']*--pre["'']*[\s=]|git\s+grep\s(?:{{SEGMENT}}\s)?["'']*(?:(?-i:-[A-Za-z]*O)|--op[a-z-]*)|git\s+(?:diff|log|show|blame|status|grep|ls-files|ls-tree)\s(?:{{SEGMENT}}\s)?["'']*--out[a-z-]*["'']*[\s=])'
       exclude:
-        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+        command: '{{TEXT_ONLY}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -478,7 +480,7 @@ rules:
       selection:
         command: '(?s)(?:\b(?:kill|pkill|killall|pgrep|systemctl|launchctl|taskkill|Stop-Process)\b.*(?:telltale-hooks|telltale\s+hooks\b|\bhooks\s+serve\b|telltale[^;&|\n]*\bserve\b)|(?:telltale-hooks|telltale\s+hooks\b|\bhooks\s+serve\b|telltale[^;&|\n]*\bserve\b).*\b(?:pkill|killall|taskkill|Stop-Process)\b|\b(?:kill|pkill|killall|taskkill|Stop-Process)\b[^;&\n]*(?:^|[\s"''=/\\])telltale(?:\.exe)?["'']?(?:\s*(?:$|[;&|)\n])|\s+[-/])|(?:^|[\s"''=/\\])telltale(?:\.exe)?["'']?(?:\s*(?:$|[;&|)\n])|\s+[-/])[^;&\n]*\b(?:kill|pkill|killall|taskkill|Stop-Process)\b)'
       exclude:
-        command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:(?:git +add|test|\[) +[ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)*(?:(?:git +commit|gh +(?:pr|issue))(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*|(?:(?:cd|(?:python3?|node) +[A-Z_a-z0-9./~][!*-:=?-\[\]-_a-{}~]*)(?: +(?:"(?:(?:\\?[^-"`$\\“-„]|\$[A-Z_a-z])-*)*"|(?:[!*-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*))*(?:[;&|]+\s*|$))*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*)$'
+        command: '{{HARMLESS}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -496,7 +498,7 @@ rules:
         arguments: 'disableAllHooks"?\s*[:=]?\s*(?:true|1)\b'
         command: 'disableAllHooks"?\s*[:=]?\s*(?:true|1)\b'
       exclude:
-        command: '^\s*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$'
+        command: '^\s*{{READERS}}$'
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -510,9 +512,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*--bare\b|opencode(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*--pure\b|codex(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*(?:--disable[\s=]+["'']?(?:codex_)?hooks\b|(?:-c\s*|--config[\s=]+)["'']?features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false)|--ignore-user-config\b|--ignore-rules\b|features\s+disable\s+(?:codex_)?hooks\b))|\bCLAUDE_CODE_SIMPLE=\s*["'']?(?:1|true)\b)'
+        command: '(?:{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}--bare\b|opencode(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}--pure\b|codex(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}(?:--disable[\s=]+["'']?(?:codex_)?hooks\b|(?:-c\s*|--config[\s=]+)["'']?features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false)|--ignore-user-config\b|--ignore-rules\b|features\s+disable\s+(?:codex_)?hooks\b))|\bCLAUDE_CODE_SIMPLE=\s*["'']?(?:1|true)\b)'
       exclude:
-        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+        command: '{{VERSION_OR_HELP}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -526,9 +528,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:\b(?:CODEX_HOME|COPILOT_HOME)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)|(?:\bexport\s+(?:CODEX_HOME|COPILOT_HOME)\b|\bset\s+["'']?(?:CODEX_HOME|COPILOT_HOME)=|\$env:(?:CODEX_HOME|COPILOT_HOME)\s*=).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
+        command: '(?s)(?:\b(?:CODEX_HOME|COPILOT_HOME)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)|(?:\bexport\s+(?:CODEX_HOME|COPILOT_HOME)\b|\bset\s+["'']?(?:CODEX_HOME|COPILOT_HOME)=|\$env:(?:CODEX_HOME|COPILOT_HOME)\s*=).*{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
       exclude:
-        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+        command: '{{VERSION_OR_HELP}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -544,7 +546,7 @@ rules:
       selection:
         command: '(?s)(?:(?:^|[^.0-9A-Z_a-z])(?:claude\b.*--bare\b|opencode\b.*--pure\b|(?:claude|codex|copilot|opencode|cursor|gemini)\b.*\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_HOOKS_[A-Z_]+)\s*=|codex\b.*(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)))|--bare\b.*[^.0-9A-Z_a-z]claude\b|--pure\b.*[^.0-9A-Z_a-z]opencode\b|\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_HOOKS_[A-Z_]+)\s*=.*[^.0-9A-Z_a-z](?:claude|codex|copilot|opencode|cursor|gemini)\b|(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)).*[^.0-9A-Z_a-z]codex\b)'
       exclude:
-        command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$|^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$|^\s*git +(?:clone|init)(?: +[-A-Za-z0-9_./:=@~+]+)* *$'
+        command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{VERSION_OR_HELP}}|^\s*git +(?:clone|init)(?: +[-A-Za-z0-9_./:=@~+]+)* *$'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -560,7 +562,7 @@ rules:
       selection:
         command: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*@(?:openai/codex|github/copilot|anthropic-ai/claude-code)\b|\btelltale(?:-hooks(?:\.exe)?|(?:\.exe)?\s+hooks)\s.*(?:\buninstall\b|--allow-user-hooks\b))'
       exclude:
-        command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*(?:(?:(?:cat|head|tail|grep|jq|cut|wc|ls|stat|file|diff|sha256sum|type|echo|printf|test|tr|Get-Content|gc|git +(?:add|commit)|gh +(?:pr|issue))(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|git +(?:diff|log|show|blame|status|grep|ls-files|ls-tree)(?: +(?:''(?:[^-''‘-‛]-*)*''|[!*-:=?-\[\]-_a-z~]*))*|sed +-n +(?:''[^''weW‘-‛]*p''|[0-9,]+p)[^-;&|<>`$()''"\n\r\\]*|(?:sort|uniq)(?: +-[a-np-z]+)* *|python3? +-m +json\.tool *)(?:2>/dev/null *)?(?:[|\n]\s*|(?: +#[^\n\r]*)?$))*$|^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$'
+        command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{DRY_RUN_OR_HELP}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -574,9 +576,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:npx|pnpx|bunx|(?:pnpm|yarn)\s+dlx|npm\s+(?:exec|x))\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*@(?:openai/codex|github/copilot)\b'
+        command: '{{COMMAND_START}}(?:npx|pnpx|bunx|(?:pnpm|yarn)\s+dlx|npm\s+(?:exec|x))\s{{SEGMENT}}@(?:openai/codex|github/copilot)\b'
       exclude:
-        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+        command: '{{VERSION_OR_HELP}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -590,9 +592,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?codex(?:\.exe|\.cmd)?["'']?\s(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*--dangerously-bypass-hook-trust\b'
+        command: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?codex(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}--dangerously-bypass-hook-trust\b'
       exclude:
-        command: '^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$'
+        command: '{{VERSION_OR_HELP}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -608,7 +610,7 @@ rules:
       selection:
         command: '(?s)(?:(?:\bTELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=\S*[^;&|]*|\bexport\s+TELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b|\b(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
       exclude:
-        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+        command: '{{TEXT_ONLY}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -622,9 +624,9 @@ rules:
     score: 90
     detection:
       selection:
-        command: '(?s)(?:\bexport\s+(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\bset\s+["'']?(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\$env:(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)\s*=).*(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)'
+        command: '(?s)(?:\bexport\s+(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\bset\s+["'']?(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\$env:(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)\s*=).*{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)'
       exclude:
-        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+        command: '{{TEXT_ONLY}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -639,9 +641,9 @@ rules:
     detection:
       selection:
         written_path: '(?m)(?:^|[\\/])telltale-hooks[\\/]+config\.toml$'
-        command: '(?s)(?:(?:^|[;&|({`\n]|\s-(?:exec|ok)(?:dir)?\s)\s*(?:\\?(?:\S*[\\/])?(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|timeout|xargs|busybox|eval|iex|if|then|do|else|!|[^\s=]+=\S*|-\S+(?:\s+\S+)?|/[A-Za-z]|[0-9]\S*|(?:ba|z|da|k)?sh|cmd(?:\.exe)?|(?:powershell|pwsh)(?:\.exe)?)\s+["'']?)*\\?(?:\S*[\\/])?(?:(?:(?:rm|mv|cp|dd|install|truncate|shred|unlink|chmod|chown|chattr|ln|tee|eval)\s|sed\s+(?:[^;&|]*\s)?-(?:[a-z]*i|-in-place))|(?:del|erase|copy|move|ren|rename|rd|rmdir|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|ri|mi|cpi|sc|ac)\s)(?:[^;&|\n]|\\\n|''[^'']*''|"[^"]*")*|(?:^|[^0-9&>])>{1,2}\|?\s*["'']?[^\s;&|<>"'']*?)\btelltale-hooks[\\/]+config\.toml(?:[\s"''`;&|)]|$)'
+        command: '(?s)(?:{{COMMAND_START}}{{WRITERS}}{{SEGMENT}}|{{REDIRECT_TO}}{{REDIRECT_SKIP}})\btelltale-hooks[\\/]+config\.toml(?:[\s"''`;&|)]|$)'
       exclude:
-        command: '^\s*(?:git +add [ !*-:=?-\[\]-_a-{}~]*[;&]+\s*)?(?:git +commit|gh +(?:pr|issue))(?:(?: +(?:(?:--[a-z-]+=)?(?:''(?:[^-''‘-‛]-*)*''|"(?:(?:\\?[^-"`$\\“-„]|\\\\|\$\{[A-Z_]+\}|\$[A-Z_a-z])-*)*")|(?:[!%*-,.-:=?-\[\]-_a-{}~]|-+[!*-,.-:=?-\[\]-_a-{}~]|\$[A-Z_a-z])*-*))*|(?: +(?:"(?:(?:\\?[^-"\\;&|<>`$()\n\r]|\\["\\])-*)*"|[!*-:=?-\[\]-_a-{}~]*))*)$'
+        command: '{{TEXT_ONLY}}'
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
