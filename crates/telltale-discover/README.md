@@ -11,13 +11,26 @@ events. `telltale-sources` retains the supported acquisition-source registry and
 its existing public discovery entry points.
 
 Bounded on-demand source discovery (`discover_sources_bounded`) and OpenCode
-store checks walk from the filesystem root using directory handles. Every
-component is inspected without following symbolic links, junctions or other
+store checks walk directory handles. Every component below the starting
+directory is inspected without following symbolic links, junctions or other
 reparse points, and enumeration stays on the opened handle if a pathname is
-replaced. A symlinked ancestor anywhere in a candidate path, including a
-system-level alias above the home directory, fails as `SymlinkRoot` rather than
-being followed. Returned source paths are coordinates, not opened capabilities:
-a later read must apply its own protection.
+replaced. A link there fails as `SymlinkRoot` rather than being followed.
+
+The starting directory is a caller-approved trust anchor, resolved to its real
+location once so that administrator aliases at or above it (a linked `/home`,
+macOS `/var`, a relocated profile) are accepted:
+
+- an explicit discovery root;
+- in environment mode, `HOME` (then `USERPROFILE`), plus `CODEX_HOME`,
+  `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`, `LOCALAPPDATA` or `APPDATA` when set
+  to a directory outside home.
+
+A relocation inside home gets no anchor of its own, so a link at `~/.codex` or
+`~/.local/share` stays refused even when a variable names it. The
+`OPENCODE_DB` override is never an anchor. A path under no anchor, or one whose
+`..` components climb out of it, is checked strictly from the filesystem root.
+Returned source paths keep the caller's spelling; they are coordinates, not
+opened capabilities, and a later read must apply its own protection.
 
 ## Inventory without token counts
 
@@ -58,8 +71,11 @@ independent product installation.
   ignores those variables. There is no implicit expansion of harness overrides,
   XDG variables, `PATH` or application settings.
 - `--data-root`, `--config-root` and `--app-data-root` supply explicit generic
-  directory bases. They must exist. Relative CLI roots resolve against the
-  working directory; parent components and symlinked ancestors remain rejected.
+  directory bases. They must exist. The CLI resolves each root it uses,
+  including the `HOME` default, to its real location once, so a linked
+  ancestor such as `/home` is accepted. Links at candidate locations below the
+  root are still refused. The Rust collector itself does not resolve its
+  roots: parent components and symlinked ancestors there remain rejected.
   These flags affect their own root classes only: `--config-root` does not
   relocate Cursor's pinned home-relative fallback candidate.
 - The Rust collector takes absolute roots, platform, time and limits from its

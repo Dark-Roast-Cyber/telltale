@@ -1,12 +1,15 @@
 //! Handle-relative metadata traversal for bounded source discovery.
 //!
+//! Nothing below a caller-approved anchor is followed; the anchor itself is
+//! resolved once (see `Node::open`). Discovery owns which anchors are approved.
+//!
 //! Root establishment has a separate finite component bound. Entry accounting
 //! belongs to the caller; inventory's syscall budget is deliberately unrelated.
 //! Paths returned by discovery remain coordinates, not acquisition capabilities.
 
 use super::discovery::BoundedDiscoveryError as Error;
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(unix)]
 #[path = "anchored/unix.rs"]
@@ -45,35 +48,101 @@ pub(crate) struct Node {
     directory: Option<platform::Directory>,
 }
 
+/// Absolute spelling without lexical `..` collapse: a parent component must be
+/// inspected before the walk returns to its parent.
+fn absolute(path: &Path) -> Result<PathBuf, Error> {
+    if path.is_absolute() {
+        return Ok(path.to_owned());
+    }
+    if matches!(path.components().next(), Some(Component::Prefix(_))) {
+        return Err(Error::Traversal);
+    }
+    Ok(std::env::current_dir().map_err(io_error)?.join(path))
+}
+
+/// The part of `path` below `anchor` when it lexically never leaves `anchor`.
+fn remainder_within<'a>(anchor: &Path, path: &'a Path) -> Option<&'a Path> {
+    let rest = path.strip_prefix(anchor).ok()?;
+    let mut depth = 0_usize;
+    for component in rest.components() {
+        match component {
+            Component::Normal(_) => depth += 1,
+            Component::ParentDir => depth = depth.checked_sub(1)?,
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    Some(rest)
+}
+
+/// Whether `path` stays lexically inside `anchor`; either may be relative.
+pub(crate) fn within(anchor: &Path, path: &Path) -> bool {
+    matches!((absolute(anchor), absolute(path)), (Ok(anchor), Ok(path)) if remainder_within(&anchor, &path).is_some())
+}
+
 impl Node {
-    pub(crate) fn open(path: &Path) -> Result<Option<Self>, Error> {
+    /// Open `path` without following any link. A caller-approved anchor that
+    /// lexically contains the whole path is resolved to its real location once
+    /// (accepting administrator aliases such as a linked `/home`); everything
+    /// below it is walked strictly. Paths under no anchor are walked strictly
+    /// from the filesystem root.
+    pub(crate) fn open(path: &Path, anchors: &[PathBuf]) -> Result<Option<Self>, Error> {
         // Do not apply OpenCode's explicit lexical override semantics to
         // generic paths: inspect `component/..` before returning to its parent.
         if path.as_os_str().len() > 65_536 || path.components().count() > 256 {
             return Err(Error::LimitExceeded);
         }
-        let absolute = if path.is_absolute() {
-            path.to_owned()
-        } else {
-            if matches!(path.components().next(), Some(Component::Prefix(_))) {
-                return Err(Error::Traversal);
+        let absolute_path = absolute(path)?;
+        let mut selected: Option<(PathBuf, &Path)> = None;
+        for anchor in anchors {
+            let anchor = absolute(anchor)?;
+            if let Some(rest) = remainder_within(&anchor, &absolute_path)
+                && selected
+                    .as_ref()
+                    .is_none_or(|(best, _)| anchor.components().count() > best.components().count())
+            {
+                selected = Some((anchor, rest));
             }
-            std::env::current_dir().map_err(io_error)?.join(path)
+        }
+        let Some((anchor, rest)) = selected else {
+            return Self::open_strict(&absolute_path);
         };
+        let canonical = match std::fs::canonicalize(&anchor) {
+            Ok(canonical) => canonical,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error(error)),
+        };
+        let Some(base) = Self::open_strict(&canonical)? else {
+            return Ok(None);
+        };
+        Self::walk(vec![base], rest.components())
+    }
+
+    fn open_strict(absolute: &Path) -> Result<Option<Self>, Error> {
         if absolute.components().count() > 256 {
             return Err(Error::LimitExceeded);
         }
-        let mut prefix = std::path::PathBuf::new();
+        let mut prefix = PathBuf::new();
         let mut names = Vec::new();
         for component in absolute.components() {
             match component {
                 Component::Prefix(_) | Component::RootDir => prefix.push(component.as_os_str()),
-                Component::Normal(_) | Component::ParentDir => names.push(component),
-                Component::CurDir => {}
+                component => names.push(component),
             }
         }
-        let mut stack = vec![platform::root(&prefix)?];
-        for component in names {
+        Self::walk(vec![platform::root(&prefix)?], names.into_iter())
+    }
+
+    /// `..` never climbs below the first stack entry: the filesystem root, or
+    /// an anchor whose remainder was checked to stay inside it.
+    fn walk<'a>(
+        mut stack: Vec<Self>,
+        components: impl Iterator<Item = Component<'a>>,
+    ) -> Result<Option<Self>, Error> {
+        for component in components {
+            if component == Component::CurDir {
+                continue;
+            }
             let parent = stack.last().ok_or(Error::Traversal)?;
             if parent.kind != Kind::Directory {
                 return Err(Error::Traversal);
@@ -150,6 +219,51 @@ mod tests {
     }
 
     #[test]
+    fn anchors_resolve_once_and_everything_below_stays_strict() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let alias = temp.path().join("alias");
+        fs::create_dir_all(real.join("home").join("store")).unwrap();
+        fs::create_dir_all(real.join("outside")).unwrap();
+        link(&real, &alias);
+        link(&real.join("outside"), &real.join("home").join("linked"));
+        let home = alias.join("home");
+        let anchor = std::slice::from_ref(&home);
+        let open =
+            |path: &Path, anchors: &[PathBuf]| Node::open(path, anchors).map(|n| n.map(|n| n.kind));
+
+        assert_eq!(open(&home.join("store"), anchor), Ok(Some(Kind::Directory)));
+        // Without an anchor the linked ancestor is refused, as before.
+        assert_eq!(open(&home.join("store"), &[]), Err(Error::SymlinkRoot));
+        // A link below the anchor is never followed.
+        assert_eq!(open(&home.join("linked"), anchor), Err(Error::SymlinkRoot));
+        assert_eq!(
+            open(&home.join("linked/x"), anchor),
+            Err(Error::SymlinkRoot)
+        );
+        // The longest containing anchor wins; naming the link itself trusts it.
+        assert_eq!(
+            open(&home.join("linked"), &[home.clone(), home.join("linked")]),
+            Ok(Some(Kind::Directory))
+        );
+        // A remainder that climbs out of its anchor gets no anchor: the walk is
+        // strict from the filesystem root and meets the linked ancestor.
+        assert_eq!(
+            open(&home.join("../home/store"), anchor),
+            Err(Error::SymlinkRoot)
+        );
+        // Missing anchors and missing children are absence, not errors.
+        assert_eq!(
+            open(&home.join("missing/store"), &[home.join("missing")]),
+            Ok(None)
+        );
+        assert_eq!(open(&home.join("missing"), anchor), Ok(None));
+        assert!(within(&home, &home.join("a/../b")));
+        assert!(!within(&home, &home.join("../b")));
+        assert!(!within(&home.join("a"), &home));
+    }
+
+    #[test]
     fn enumeration_remains_on_the_handle_after_root_replacement() {
         let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let root = temp.path().join("root");
@@ -158,7 +272,7 @@ mod tests {
         fs::create_dir(&outside).unwrap();
         fs::write(root.join("inside"), b"synthetic").unwrap();
         fs::write(outside.join("outside"), b"synthetic").unwrap();
-        let handle = Node::open(&root).unwrap().unwrap();
+        let handle = Node::open(&root, &[]).unwrap().unwrap();
         fs::rename(&root, temp.path().join("retained")).unwrap();
         link(&outside, &root);
         let names = handle
@@ -178,7 +292,7 @@ mod tests {
         fs::create_dir_all(root.join("child")).unwrap();
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("outside"), b"synthetic").unwrap();
-        let parent = Node::open(&root).unwrap().unwrap();
+        let parent = Node::open(&root, &[]).unwrap().unwrap();
         let child = parent.child(OsStr::new("child")).unwrap().unwrap();
         fs::rename(root.join("child"), root.join("retained")).unwrap();
         link(&outside, &root.join("child"));

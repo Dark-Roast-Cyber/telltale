@@ -61,20 +61,133 @@ fn ancestor_links_are_rejected_without_returning_external_sources() {
 }
 
 #[test]
-fn explicit_root_links_are_rejected() {
-    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
-    let outside = temp.path().join("outside");
-    fs::create_dir_all(outside.join(".codex/sessions")).unwrap();
-    link(&outside, &temp.path().join("home"));
+fn explicit_root_and_its_ancestors_are_trusted_but_nothing_below_it() {
+    // A plain temporary parent may itself be an alias (macOS `/var`); that is
+    // exactly the administrator-controlled case an explicit root must accept.
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real");
+    let alias = temp.path().join("alias");
+    fs::create_dir_all(real.join("home").join(".codex").join("sessions")).unwrap();
+    fs::write(
+        real.join("home/.codex/sessions/synthetic.jsonl"),
+        b"synthetic",
+    )
+    .unwrap();
+    link(&real, &alias);
+
+    // Linked ancestor of the root: accepted, and coordinates keep the caller's
+    // spelling rather than the resolved location.
+    let root = alias.join("home");
+    let sources = discover_sources_bounded(&root, ClientId::Codex, 1024, &registry()).unwrap();
+    assert_eq!(sources.len(), 1);
     assert_eq!(
-        discover_sources_bounded(
-            &temp.path().join("home"),
-            ClientId::Codex,
-            1024,
-            &registry()
-        ),
+        sources[0].path,
+        root.join(".codex/sessions/synthetic.jsonl")
+    );
+    assert!(fs::metadata(&sources[0].path).unwrap().is_file());
+
+    // The root itself is a link: the caller named it, so it is resolved too.
+    link(&real.join("home"), &temp.path().join("linked-home"));
+    let linked = temp.path().join("linked-home");
+    let sources = discover_sources_bounded(&linked, ClientId::Codex, 1024, &registry()).unwrap();
+    assert_eq!(
+        sources[0].path,
+        linked.join(".codex/sessions/synthetic.jsonl")
+    );
+
+    // A tool store linked below the trusted root is still refused.
+    let planted = real.join("planted");
+    fs::create_dir_all(&planted).unwrap();
+    link(&real.join("home").join(".codex"), &planted.join(".codex"));
+    assert_eq!(
+        discover_sources_bounded(&alias.join("planted"), ClientId::Codex, 1024, &registry()),
         Err(BoundedDiscoveryError::SymlinkRoot)
     );
+}
+
+/// Environment-mode anchors: HOME and relocations outside it are resolved
+/// once; a relocation inside HOME gets no anchor of its own.
+#[test]
+fn environment_home_and_outside_relocations_are_trusted_anchors() {
+    const CHILD: &str = "TELLTALE_BOUNDED_ANCHOR_CHILD";
+    const CODEX_HOME_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
+        root: PathRoot::CodexHome,
+        relative_path: "sessions",
+        ..SOURCES[0]
+    }];
+    let codex_home_registry = [ClientDef {
+        sources: CODEX_HOME_SOURCES,
+        ..registry()[0]
+    }];
+    if let Some(mode) = std::env::var_os(CHILD) {
+        let var = |name| std::path::PathBuf::from(std::env::var_os(name).unwrap());
+        let result =
+            discover_sources_bounded(Path::new("."), ClientId::Codex, 1024, &codex_home_registry);
+        let expected = match mode.to_str().unwrap() {
+            "home" => var("HOME").join(".codex/sessions/home.jsonl"),
+            "relocated" => var("CODEX_HOME").join("sessions/relocated.jsonl"),
+            _ => {
+                assert_eq!(result, Err(BoundedDiscoveryError::SymlinkRoot));
+                return;
+            }
+        };
+        let paths = result
+            .unwrap()
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec![expected]);
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real");
+    let alias = temp.path().join("alias");
+    let work = temp.path().join("work");
+    for directory in [
+        real.join("home").join(".codex").join("sessions"),
+        real.join("codex").join("sessions"),
+        real.join("planted-home"),
+        work.clone(),
+    ] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    fs::write(real.join("home/.codex/sessions/home.jsonl"), b"synthetic").unwrap();
+    fs::write(real.join("codex/sessions/relocated.jsonl"), b"synthetic").unwrap();
+    link(&real, &alias);
+    link(
+        &real.join("codex"),
+        &real.join("planted-home").join(".codex"),
+    );
+    let run = |mode: &str, home: &Path, codex_home: Option<&Path>| {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .env_clear()
+            .current_dir(&work)
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .env(CHILD, mode)
+            .args([
+                "--exact",
+                "environment_home_and_outside_relocations_are_trusted_anchors",
+                "--nocapture",
+            ]);
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
+        for key in ["PATH", "SystemRoot", "windir"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{mode}: {output:?}");
+    };
+    run("home", &alias.join("home"), None);
+    run("relocated", &alias.join("home"), Some(&alias.join("codex")));
+    // Naming the linked store explicitly does not make it an anchor.
+    let planted = alias.join("planted-home");
+    run("inside", &planted, Some(&planted.join(".codex")));
+    run("inside", &planted, None);
 }
 
 #[test]
@@ -97,15 +210,17 @@ fn parent_components_are_checked_before_returning_to_the_parent() {
     fs::create_dir_all(&outside).unwrap();
     fs::create_dir(temp.path().join("ordinary")).unwrap();
     link(&outside, &temp.path().join("linked"));
-    assert_eq!(
-        discover_sources_bounded(
-            &temp.path().join("linked/../home"),
-            ClientId::Codex,
-            1024,
-            &registry()
-        ),
-        Err(BoundedDiscoveryError::SymlinkRoot)
-    );
+    // An explicit root is trusted, so it resolves as the OS resolves it: on
+    // Unix `linked/..` is `outside`, which has no `home`; Windows collapses
+    // `..` first. Either way every coordinate names what was inspected, never
+    // the lexical `home` sibling on Unix.
+    let through_link = temp.path().join("linked/../home");
+    let sources =
+        discover_sources_bounded(&through_link, ClientId::Codex, 1024, &registry()).unwrap();
+    assert_eq!(sources.len(), usize::from(cfg!(windows)));
+    for source in &sources {
+        assert!(fs::metadata(&source.path).unwrap().is_file());
+    }
     assert!(
         discover_sources_bounded(
             &temp.path().join("missing/../home"),

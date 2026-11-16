@@ -55,6 +55,43 @@ fn inventory_is_one_content_free_record_without_token_collection() {
 }
 
 #[test]
+#[cfg(unix)]
+fn root_aliases_are_resolved_once_but_candidate_links_stay_refused() {
+    let parent = synthetic_root();
+    let real = parent.path().join("real");
+    let alias = parent.path().join("alias");
+    std::fs::create_dir_all(real.join("home/retained/agent/sessions")).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    std::os::unix::fs::symlink(real.join("home/retained"), real.join("home/.pi")).unwrap();
+    // HOME and --root both name the home through a linked ancestor.
+    for args in [
+        vec![
+            std::ffi::OsString::from("--root"),
+            alias.join("home").into_os_string(),
+        ],
+        vec![],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", alias.join("home"))
+            .arg("discover");
+        for arg in &args {
+            command.arg(arg);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("\"symlink_refused\""), "{stdout}");
+        assert!(!stdout.contains(parent.path().to_string_lossy().as_ref()));
+    }
+}
+
+#[test]
 fn license_notice_needs_no_host_roots_and_includes_upstream_mit_terms() {
     let output = discover(&["--licenses".as_ref()]);
     assert!(output.status.success());

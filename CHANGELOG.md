@@ -14,6 +14,14 @@
   state. Existing supported-source discovery imports keep their interfaces
   through adapters to the new shared crate. See the
   [inventory guide](crates/telltale-discover/README.md) for limits and attribution.
+- Fix bounded on-demand source discovery following a symbolic link, junction or
+  mid-walk replacement in an ancestor of a candidate path, which could list
+  files outside the approved root. Bounded discovery and OpenCode store checks
+  now walk directory handles on Unix and Windows and refuse every link below
+  the root they start from. That root (an explicit root, the home directory, or
+  a configured relocation outside home) is resolved once, so administrator
+  aliases such as a linked `/home` keep working; a link at a tool store such as
+  `~/.codex` is refused. Returned source paths keep their original spelling.
 - Remove the optional Telltale Console. It was an unpublished local Event3
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no

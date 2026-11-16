@@ -31,8 +31,14 @@ pub(super) struct DiscoverArgs {
     licenses: bool,
 }
 
-fn absolute(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    std::path::absolute(path).map_err(|_| "inventory root resolution failed".into())
+/// Roots are caller-approved trust anchors: resolve administrator aliases at or
+/// above them (a linked `/home`) once here, so the strict collector still
+/// refuses every link below. A root that cannot be resolved keeps its absolute
+/// spelling and fails in the collector with its typed, path-free error.
+fn root(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .map_err(|_| "inventory root resolution failed".into())
 }
 
 pub(super) fn run(args: DiscoverArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -73,10 +79,10 @@ pub(super) fn run(args: DiscoverArgs) -> Result<(), Box<dyn std::error::Error>> 
     } else {
         Platform::Unknown
     };
-    let mut context = InventoryContext::from_home(absolute(&home)?, platform);
-    context.data_dir = args.data_root.as_deref().map(absolute).transpose()?;
-    context.config_dir = args.config_root.as_deref().map(absolute).transpose()?;
-    context.app_data_dir = args.app_data_root.as_deref().map(absolute).transpose()?;
+    let mut context = InventoryContext::from_home(root(&home)?, platform);
+    context.data_dir = args.data_root.as_deref().map(root).transpose()?;
+    context.config_dir = args.config_root.as_deref().map(root).transpose()?;
+    context.app_data_dir = args.app_data_root.as_deref().map(root).transpose()?;
     let observed_at = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

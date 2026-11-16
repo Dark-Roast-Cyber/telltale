@@ -106,8 +106,9 @@ impl BoundedDiscoveryError {
 
 /// Discover one client's home/data sources using the existing registry and root
 /// resolution. Project-local process logs are outside session investigation.
-/// Limits count all visited entries, not merely matched files. Symlink roots and
-/// descendants are not followed. Unix leaf files are not opened; Windows uses
+/// Limits count all visited entries, not merely matched files. The approved
+/// starting directory is resolved once (see `trust_anchors`); no link below it
+/// is followed. Unix leaf files are not opened; Windows uses
 /// attribute-only handles. No session or database contents are read. Root
 /// establishment is separately limited to 256 components per candidate.
 pub fn discover_sources_bounded(
@@ -120,6 +121,7 @@ pub fn discover_sources_bounded(
     if max_entries == 0 || max_entries > 16384 {
         return Err(BoundedDiscoveryError::InvalidLimit);
     }
+    let anchors = trust_anchors(root);
     let mut remaining = max_entries;
     let mut sources = Vec::new();
     for def in registry.iter().filter(|def| def.id == client) {
@@ -142,6 +144,7 @@ pub fn discover_sources_bounded(
             for search in source_search_roots(root, *source_def, registry) {
                 bounded_paths(
                     &search,
+                    &anchors,
                     client,
                     *source_def,
                     &mut remaining,
@@ -157,8 +160,10 @@ pub fn discover_sources_bounded(
     Ok(sources)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bounded_paths(
     path: &Path,
+    anchors: &[PathBuf],
     client: ClientId,
     def: ClientSourceDef,
     remaining: &mut usize,
@@ -166,7 +171,7 @@ fn bounded_paths(
     opencode_channels: bool,
     sources: &mut Vec<Source>,
 ) -> Result<(), BoundedDiscoveryError> {
-    let Some(node) = crate::anchored::Node::open(path)? else {
+    let Some(node) = crate::anchored::Node::open(path, anchors)? else {
         return Ok(());
     };
     bounded_node(
@@ -448,11 +453,12 @@ fn source_watch_roots(
         {
             directories.push(parent.to_path_buf());
         }
+        let anchors = trust_anchors(root);
         return directories
             .into_iter()
             .filter(|directory| {
                 let mut remaining = usize::MAX;
-                inspect_opencode_path(directory, &mut remaining, true) == Ok(true)
+                inspect_opencode_path(directory, &anchors, &mut remaining, true) == Ok(true)
             })
             .collect();
     }
@@ -485,9 +491,10 @@ fn discover_source(
 ) -> Result<Vec<Source>, DiscoveryError> {
     if environment_opencode(root, source_def, registry) {
         let mut sources = Vec::new();
+        let anchors = trust_anchors(root);
         for directory in opencode_data_directories_for_source(root, source_def, registry) {
             let mut remaining = usize::MAX;
-            match inspect_opencode_path(&directory, &mut remaining, true) {
+            match inspect_opencode_path(&directory, &anchors, &mut remaining, true) {
                 Ok(true) => {}
                 Err(_) if mode.is_checked() => return Err(context.traversal_error()),
                 _ => continue,
@@ -881,6 +888,7 @@ fn add_opencode_override(
 
 fn inspect_opencode_path(
     path: &Path,
+    anchors: &[PathBuf],
     remaining: &mut usize,
     directory: bool,
 ) -> Result<bool, BoundedDiscoveryError> {
@@ -893,7 +901,7 @@ fn inspect_opencode_path(
         }
         *remaining -= 1;
     }
-    let Some(node) = crate::anchored::Node::open(path)? else {
+    let Some(node) = crate::anchored::Node::open(path, anchors)? else {
         return Ok(false);
     };
     if (directory && node.kind == crate::anchored::Kind::Directory)
@@ -908,7 +916,10 @@ fn inspect_opencode_path(
 /// The exact environment-configured OpenCode file, including a not-yet-created file.
 /// Explicit/fixture roots ignore it. No directory contents or source bytes are read;
 /// existing components must not be symlinks and the target must not be a directory.
-/// Watch uses this same coordinate to distinguish arbitrary names from their sidecars.
+/// The override has no trust anchor of its own: only an alias of the home
+/// directory or an explicit data root outside it, if it contains the override,
+/// is resolved. Watch uses this same coordinate to distinguish arbitrary names
+/// from their sidecars.
 pub fn opencode_database_override(
     root: &Path,
     registry: &[ClientDef],
@@ -916,9 +927,45 @@ pub fn opencode_database_override(
     let path = resolved_opencode_override(root, registry)?;
     if let Some(path) = &path {
         let mut remaining = usize::MAX;
-        inspect_opencode_path(path, &mut remaining, false)?;
+        inspect_opencode_path(path, &trust_anchors(root), &mut remaining, false)?;
     }
     Ok(path)
+}
+
+/// Caller-approved starting directories for no-follow traversal. Each is
+/// resolved to its real location once, so administrator aliases above or at it
+/// (a linked `/home`, a relocated profile) are accepted; nothing below an anchor
+/// is followed. An explicit root is its own anchor. In environment mode the
+/// home directory is one, and so is an explicitly configured relocation, but
+/// only when it lies outside home: a link at `~/.codex` or `~/.local/share`
+/// stays refused whether or not a variable names it.
+fn trust_anchors(root: &Path) -> Vec<PathBuf> {
+    if root != Path::new(".") {
+        return vec![root.to_path_buf()];
+    }
+    let var = |name: &str| {
+        env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let Some(home) = var("HOME").or_else(|| var("USERPROFILE")) else {
+        return Vec::new();
+    };
+    let mut anchors = vec![home];
+    for name in [
+        "CODEX_HOME",
+        "XDG_DATA_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "LOCALAPPDATA",
+        "APPDATA",
+    ] {
+        if let Some(path) = var(name)
+            && !crate::anchored::within(&anchors[0], &path)
+        {
+            anchors.push(path);
+        }
+    }
+    anchors
 }
 
 fn bounded_opencode_paths(
@@ -929,8 +976,9 @@ fn bounded_opencode_paths(
     sources: &mut Vec<Source>,
     registry: &[ClientDef],
 ) -> Result<(), BoundedDiscoveryError> {
+    let anchors = trust_anchors(root);
     for directory in opencode_data_directories_for_source(root, def, registry) {
-        let Some(node) = crate::anchored::Node::open(&directory)? else {
+        let Some(node) = crate::anchored::Node::open(&directory, &anchors)? else {
             continue;
         };
         if node.kind != crate::anchored::Kind::Directory {
@@ -959,7 +1007,7 @@ fn bounded_opencode_paths(
         bounded_node(&node, &directory, client, def, remaining, 1, true, sources)?;
     }
     if let Some(path) = resolved_opencode_override(root, registry)?
-        && let Some(node) = crate::anchored::Node::open(&path)?
+        && let Some(node) = crate::anchored::Node::open(&path, &anchors)?
     {
         if node.kind != crate::anchored::Kind::File {
             return Err(BoundedDiscoveryError::Traversal);
@@ -2118,6 +2166,7 @@ mod tests {
         assert_eq!(
             super::bounded_paths(
                 temp.path(),
+                &[],
                 ClientId::OpenCode,
                 lookup_source("opencode.sqlite").1,
                 &mut remaining,
@@ -2184,7 +2233,7 @@ mod tests {
                         .unwrap()
                         .unwrap();
                 assert_eq!(
-                    super::inspect_opencode_path(&override_path, &mut 1, false),
+                    super::inspect_opencode_path(&override_path, &[], &mut 1, false),
                     Err(super::BoundedDiscoveryError::LimitExceeded)
                 );
                 assert!(
@@ -2316,7 +2365,10 @@ mod tests {
             );
             let mut expected = vec![root.join("allowed.sqlite")];
             let mut expected_roots = vec![root.to_path_buf()];
-            if mode != "directory" && mode != "ancestor" && mode != "home" {
+            // A linked HOME is a trust anchor resolved once, so "home" behaves
+            // like "file". A linked XDG_DATA_HOME inside HOME ("ancestor")
+            // gets no anchor of its own and stays refused.
+            if mode != "directory" && mode != "ancestor" {
                 expected.push(data.join("opencode-preview.db"));
                 expected_roots.push(data);
             }
