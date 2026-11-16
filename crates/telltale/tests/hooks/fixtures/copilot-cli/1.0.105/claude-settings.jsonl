@@ -1,0 +1,1 @@
+{"event": "claude:PreToolUse", "stub": "deny-hso", "payload": {"hook_event_name": "PreToolUse", "session_id": "364c49ac-44b8-4c88-b7b5-4afc895b55fb", "timestamp": "2026-11-04T20:00:47.619Z", "cwd": "/home/synthetic/run/work", "tool_name": "Bash", "tool_input": {"command": "touch /home/synthetic/run/work/canary.txt && echo TTH_CANARY", "description": "capture step"}}}

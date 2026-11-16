@@ -24,6 +24,7 @@ fn fixture() -> TempDir {
         "scripts/producer-provenance-check",
         "scripts/local-event-feed-check",
         "scripts/embedding-contract-check",
+        "crates/telltale/Cargo.toml",
         "schemas/event.schema.json",
         "schemas/historical/event-3.0.schema.json",
         "crates/telltale-schema/README.md",
@@ -118,6 +119,9 @@ printf '%s\n' "$*" >> "$RECORD"
 printf '%s\n' "${TMPDIR-platform-default}" >> "$TEMP_RECORD"
 if test "$1" = tree; then
     case "$*" in
+        *"--features hooks"*) printf 'toml v0.0.0\ntelltale-core v0.0.0 features=default,hooks\n' ;;
+    esac
+    case "$*" in
         *opencode-sqlite*) printf 'telltale-sources v0.0.0 features=opencode-sqlite\n' ;;
         *) printf 'telltale-sources v0.0.0 features=\n' ;;
     esac
@@ -176,7 +180,7 @@ fi
                 .lines()
                 .filter(|line| line.starts_with("test "))
                 .count(),
-            8
+            10
         );
     }
 }
@@ -198,6 +202,9 @@ fn embedding_msrv_gate_runs_every_combination_on_the_declared_toolchain() {
 set -eu
 printf '%s %s\n' "${RUSTUP_TOOLCHAIN-unset}" "$1" >> "$RECORD"
 if test "$1" = tree; then
+    case "$*" in
+        *"--features hooks"*) printf 'toml v0.0.0\ntelltale-core v0.0.0 features=default,hooks\n' ;;
+    esac
     case "$*" in
         *opencode-sqlite*) printf 'telltale-sources v0.0.0 features=opencode-sqlite\n' ;;
         *) printf 'telltale-sources v0.0.0 features=\n' ;;
@@ -233,7 +240,7 @@ fi
     assert!(cargo.iter().all(|call| call.starts_with("1.85.0 ")));
     assert_eq!(
         cargo.iter().filter(|call| call.ends_with(" test")).count(),
-        8
+        10
     );
 
     let (output, calls) = run(&dir, "sh", &[script, "--msrv"], "missing");
@@ -274,6 +281,8 @@ fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
             "test --locked -p telltale-core --lib --quiet",
             "test --locked -p telltale-sources --lib --quiet",
             "test --locked -p telltale-sources --features opencode-sqlite --lib --quiet",
+            "test --locked --quiet --no-default-features --lib --test cli --test ci_gates",
+            "test --locked -p telltale-core --no-default-features --lib --quiet",
         ]
     );
     assert_eq!(calls.iter().filter(|s| s.starts_with("run ")).count(), 2);

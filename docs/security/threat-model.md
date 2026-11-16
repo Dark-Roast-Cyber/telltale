@@ -104,6 +104,7 @@ runtime qualification for a candidate; each candidate is qualified separately.
 
 ## Related controls
 
+- [Hooks threat model](hooks-threat-model.md)
 - [Privacy model](../privacy-model.md)
 - [Installation](../install.md)
 - [Security operations](operations.md)

@@ -566,6 +566,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn manifest_clients_are_the_client_ids() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../evaluation/manifest.schema.json"))
+                .expect("manifest schema JSON");
+        let listed = schema
+            .pointer("/$defs/client/enum")
+            .and_then(serde_json::Value::as_array)
+            .expect("client enum")
+            .iter()
+            .map(|name| name.as_str().expect("client name"))
+            .collect::<Vec<_>>();
+        let ids = ClientId::ALL
+            .iter()
+            .map(|client| client.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(listed, ids);
+        for client in ClientId::ALL {
+            let parsed: Client =
+                serde_json::from_value(serde_json::json!(client.as_str())).expect("client");
+            assert_eq!(parsed.client_id(), *client);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn source_fixture_symlink_outside_repository_is_rejected() {

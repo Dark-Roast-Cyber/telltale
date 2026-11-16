@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Dark-Roast-Cyber/telltale/schemas/telltale-hooks-record-v1.schema.json",
+  "title": "Telltale Hooks record v1",
+  "description": "Host envelope written once per hook observation. Detection content is carried only as unmodified Telltale ActionRecordV1 values (validate those with Telltale's action-record-v1 schema or ActionRecordV1::from_json). See docs/adr/0005-telemetry-envelope.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "record_id", "recorded_at", "kind", "producer", "harness", "session", "telltale"],
+  "properties": {
+    "schema": { "const": "telltale_hooks.record.v1" },
+    "record_id": { "type": "string", "pattern": "^tth:[0-9a-f]{32}$" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "kind": { "enum": ["decision", "outcome", "result_finding", "lifecycle", "error"] },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "telltale_rev", "semantic_identity"],
+      "properties": {
+        "name": { "const": "telltale-hooks" },
+        "version": { "type": "string" },
+        "telltale_rev": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Digest of the Telltale package version and the build Git hash that wrote the record; not a Git object name." },
+        "semantic_identity": { "type": ["string", "null"], "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "hook_event", "permission_mode"],
+      "properties": {
+        "name": { "type": "string" },
+        "hook_event": { "type": "string" },
+        "permission_mode": { "type": ["string", "null"] }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "agent_id", "agent_type", "prompt_id", "cwd_sha256"],
+      "properties": {
+        "session_id": { "type": "string" },
+        "agent_id": { "type": ["string", "null"] },
+        "agent_type": { "type": ["string", "null"] },
+        "prompt_id": { "type": ["string", "null"] },
+        "cwd_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_use_id", "tool_name", "input_sha256"],
+      "properties": {
+        "tool_use_id": { "type": ["string", "null"] },
+        "tool_name": { "type": ["string", "null"], "description": "The tool name as the harness reported it (for example Copilot `view`), never the normalized evaluation encoding." },
+        "input_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the canonical JSON of the tool input as the harness reported it, before any normalization of the evaluation encoding." }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "coverage", "visibility_limits", "failure_code", "window_records", "window_truncated", "build_ms", "scan_ms", "evaluator", "evaluator_fallback"],
+      "properties": {
+        "status": { "enum": ["complete", "visibility_limited", "not_evaluated"] },
+        "coverage": { "enum": ["whole_source", "partial", "unknown", null] },
+        "visibility_limits": { "type": "array", "items": { "type": "string" } },
+        "failure_code": { "type": ["string", "null"] },
+        "window_records": { "type": "integer", "minimum": 0 },
+        "window_truncated": { "type": "boolean" },
+        "build_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "scan_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "evaluator": { "enum": ["daemon", "in_process"] },
+        "evaluator_fallback": { "type": ["string", "null"] }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "verdict", "returned", "basis", "action_score", "session_score_before", "session_score_after", "denied_attempts_before", "rule_ids", "categories"],
+      "properties": {
+        "mode": { "enum": ["enforce", "observe"] },
+        "verdict": { "enum": ["allow", "ask", "deny"] },
+        "returned": { "type": "boolean" },
+        "returned_verdict": {
+          "enum": ["deny"],
+          "description": "Present only when the verdict returned to the harness differs from `verdict`: an `ask` returned as `deny` because the harness cannot put an ask to a human (Codex CLI, OpenCode v1, OpenCode v2 --auto). Never `allow`. Added 2026-11 (ADR 0004 addendum)."
+        },
+        "basis": { "enum": ["no_finding", "below_threshold", "action_score", "session_score", "repeated_denials", "evaluation_gap", "unevaluable_input"] },
+        "action_score": { "type": "integer", "minimum": 0 },
+        "session_score_before": { "type": "integer", "minimum": 0 },
+        "session_score_after": { "type": "integer", "minimum": 0 },
+        "denied_attempts_before": { "type": "integer", "minimum": 0 },
+        "rule_ids": { "type": "array", "items": { "type": "string" } },
+        "categories": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "established_by", "decision_record_id", "prior_verdict", "prior_returned", "enforcement", "duration_ms", "supersedes"],
+      "properties": {
+        "result": { "enum": ["completed", "failed", "interrupted", "not_executed", "unknown"] },
+        "established_by": { "type": "string" },
+        "decision_record_id": { "type": ["string", "null"] },
+        "prior_verdict": { "enum": ["allow", "ask", "deny", null] },
+        "prior_returned": { "type": ["boolean", "null"] },
+        "prior_returned_verdict": {
+          "enum": ["deny"],
+          "description": "Present only when the decision returned a different verdict than `prior_verdict` (an `ask` returned as `deny`); `enforcement` is accounted against it. Added 2026-11 (ADR 0004 addendum)."
+        },
+        "enforcement": { "enum": ["honored", "violated", "declined", "proceeded_after_ask", "not_returned", "no_decision", "unknown"] },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "supersedes": { "type": ["string", "null"] }
+      }
+    },
+    "lifecycle": { "type": "object" },
+    "error_code": {
+      "type": "string",
+      "description": "Content-free code. On `error` records: why the hook could not do its job. On `outcome` records: `outcome_ambiguous`, a result reported under a synthetic correlation key (`tth-syn-`) that only matched an already settled call; it may belong to that call or to a later identical one, so `result` is `unknown` and the settlement it supersedes is neither confirmed nor contradicted. It is followed by a second outcome for the same tool_use_id carrying the reported result with `enforcement: no_decision`: the execution happened, no decision is known to apply. A consumer keeping the latest outcome per tool_use_id sees that `no_decision` record (ADR 0004 addendum, point 11)."
+    },
+    "telltale": {
+      "type": "array",
+      "description": "Telltale ActionRecordV1 values anchored at this observation, unmodified. They describe the evaluation encoding, which for non-Claude harnesses is the normalized form of the call (ADR 0002 addendum), so their `tool_name` and facets may differ from `action` (for example `Read` for Copilot `view`, or `Write` with a path for a patch).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["delivery_key", "record"],
+        "properties": {
+          "delivery_key": { "type": "string" },
+          "record": { "type": "object", "properties": { "schema": { "const": "telltale.action.v1" } }, "required": ["schema"] }
+        }
+      }
+    }
+  }
+}

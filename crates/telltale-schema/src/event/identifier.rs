@@ -2,6 +2,7 @@
 
 use super::inventory::evidence_hash;
 use super::redaction::contains_credential_material;
+use crate::clients::ClientId;
 use crate::scoring::is_canonical_contribution_id;
 
 pub(super) fn terminal_tag(tag: &str) -> String {
@@ -244,19 +245,16 @@ pub(super) fn terminal_imported_client_id(canonical_event: bool, value: &str) ->
     }
 }
 
+/// Clients whose sources were retired (decision S2). They are no longer
+/// `ClientId`s, but records written while they were supported keep their
+/// readable name.
+const RETIRED_CLIENT_NAMES: &[&str] = &["gemini", "roocode", "kilocode"];
+
+/// Whether `value` is a client name that output keeps readable: every
+/// `ClientId`, so a new client cannot ship with its name hashed, plus the
+/// retired names.
 pub(super) fn is_supported_client_identifier(value: &str) -> bool {
-    matches!(
-        value,
-        "codex"
-            | "claude"
-            | "gemini"
-            | "openclaw"
-            | "qwen"
-            | "roocode"
-            | "kilocode"
-            | "opencode"
-            | "copilot"
-    )
+    ClientId::from_name(value).is_some() || RETIRED_CLIENT_NAMES.contains(&value)
 }
 
 /// Agent, model, and provider are controlled product metadata contexts, not
@@ -274,18 +272,7 @@ fn is_safe_product_metadata(kind: &str, value: &str) -> bool {
         return false;
     }
     match kind {
-        "agent" => matches!(
-            value,
-            "codex"
-                | "claude"
-                | "gemini"
-                | "openclaw"
-                | "qwen"
-                | "roocode"
-                | "kilocode"
-                | "opencode"
-                | "copilot"
-        ),
+        "agent" => is_supported_client_identifier(value),
         "provider" => matches!(
             value,
             "openai"
@@ -421,6 +408,23 @@ mod tests {
             terminal_identifier("rule", "secret.env.read"),
             "secret.env.read"
         );
+    }
+
+    #[test]
+    fn every_client_name_stays_readable() {
+        let names = ClientId::ALL
+            .iter()
+            .map(|client| client.as_str())
+            .chain(RETIRED_CLIENT_NAMES.iter().copied());
+        for name in names {
+            assert_eq!(terminal_client_id(name), name);
+            assert_eq!(terminal_product_metadata("agent", name), name);
+        }
+        assert_eq!(terminal_client_id("codex,claude"), "codex,claude");
+        for value in ["claude-code", "Claude", "notaclient"] {
+            assert_ne!(terminal_client_id(value), value, "{value}");
+            assert_ne!(terminal_product_metadata("agent", value), value, "{value}");
+        }
     }
 
     #[test]
