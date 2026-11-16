@@ -10,6 +10,7 @@ this repository owns versioned product contracts.
 | Upgrade or roll back? | [Controlled deployment](controlled-deployment.md), [migration contract](migration-contract.md), [0.7 migration](migrations/0.7.0.md) |
 | Source identities and validation depth? | [Source validation matrix](source-validation-matrix.md) |
 | Discovery paths and per-source visibility? | [Session sources](session-sources.md), [agent capability profiles](agent-capability-profiles.md) |
+| Inventory tools outside detection support, without token collection? | [Independent tool inventory](../crates/telltale-discover/README.md) (experimental) |
 | Exact source identities, roots, paths, and patterns as data? | [Source catalog](catalog/sources.json), generated from the registry; see the [catalog notes](catalog/README.md) |
 | What current harness releases write, and what Telltale reads of it? | [Upstream format cases](../tests/upstream_formats/README.md) and their pinned [harness manifest](../tests/upstream_formats/harnesses.json) |
 | OpenCode admission, cursor behavior, or recovery limits? | [OpenCode live ingestion](opencode-live-ingestion.md) |

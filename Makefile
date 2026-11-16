@@ -20,7 +20,7 @@ CARGO_LOCKED ?=
 CARGO_AUDIT_VERSION ?= 0.22.2
 CARGO_DENY_VERSION ?= 0.20.2
 RUST_TOOLCHAIN_VERSION ?= 1.99.1
-PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
+PACKAGE_ORDER = telltale-schema telltale-rules telltale-discover telltale-sources telltale-detect telltale-core telltale-cli
 
 .PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check upstream-formats-check catalog-update harness-drift-check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight release-preflight-ci package-manifest package-verify status logs scan-dry scan help
 
@@ -77,6 +77,7 @@ uninstall:
 ## Run tests
 test:
 	cargo test $(CARGO_LOCKED)
+	cargo test $(CARGO_LOCKED) -p telltale-discover
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib
@@ -93,6 +94,7 @@ clippy:
 check-fast: fmt clippy
 	@echo "Running CLI and embedding library tests (integration/package/release gates are excluded)."
 	cargo test $(CARGO_LOCKED) --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-discover --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
@@ -104,6 +106,7 @@ check: fmt clippy test
 ## Verify the Linux CI test and contract slice used by local CI and GitHub CI
 ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-discover --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
@@ -289,6 +292,13 @@ package-manifest:
 		case "$$manifest" in *"README.md"*) ;; *) echo "$$package is missing README.md"; exit 1 ;; esac; \
 		case "$$package" in \
 			telltale-rules) case "$$manifest" in *"data/tool-call-regex.yaml"*) ;; *) echo "$$package is missing packaged rules data"; exit 1 ;; esac ;; \
+			telltale-discover) \
+			for path in $$manifest; do \
+				case "$$path" in \
+					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|README.md|LICENSE|src/*|data/*|tests/*.rs) ;; \
+					*) echo "$$package includes unexpected path: $$path"; exit 1 ;; \
+				esac; \
+			done ;; \
 		telltale-schema|telltale-rules|telltale-sources|telltale-detect|telltale-core) \
 			for path in $$manifest; do \
 				case "$$path" in \

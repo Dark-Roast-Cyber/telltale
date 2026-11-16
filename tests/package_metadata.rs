@@ -5,6 +5,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
+    ("telltale-discover", "crates/telltale-discover/Cargo.toml"),
     ("telltale-sources", "crates/telltale-sources/Cargo.toml"),
     ("telltale-detect", "crates/telltale-detect/Cargo.toml"),
     ("telltale-core", "crates/telltale/Cargo.toml"),
@@ -45,6 +46,7 @@ fn rc_package_and_lockfile_versions_are_exactly_lockstep() {
     for (package, path) in [
         ("telltale-schema", "crates/telltale-schema"),
         ("telltale-rules", "crates/telltale-rules"),
+        ("telltale-discover", "crates/telltale-discover"),
         ("telltale-sources", "crates/telltale-sources"),
         ("telltale-detect", "crates/telltale-detect"),
         ("telltale-core", "crates/telltale"),
@@ -62,6 +64,7 @@ fn rc_package_and_lockfile_versions_are_exactly_lockstep() {
         "telltale-cli",
         "telltale-core",
         "telltale-detect",
+        "telltale-discover",
         "telltale-rules",
         "telltale-schema",
         "telltale-sources",
@@ -101,6 +104,7 @@ fn publication_order_and_binary_targets_are_explicit() {
         vec![
             "telltale-schema",
             "telltale-rules",
+            "telltale-discover",
             "telltale-sources",
             "telltale-detect",
             "telltale-core",
@@ -129,7 +133,7 @@ fn publication_order_and_binary_targets_are_explicit() {
 #[test]
 fn package_boundaries_and_bundled_rules_are_explicit() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for (_, relative_manifest) in &PACKAGES[..5] {
+    for (_, relative_manifest) in PACKAGES.iter().filter(|(name, _)| *name != "telltale-cli") {
         let manifest = fs::read_to_string(root.join(relative_manifest)).expect("library manifest");
         assert!(manifest.contains("include = ["));
         assert!(!manifest.contains(".ai/**"));
@@ -174,6 +178,7 @@ fn package_boundaries_and_bundled_rules_are_explicit() {
     for package in [
         "telltale-schema",
         "telltale-rules",
+        "telltale-discover",
         "telltale-sources",
         "telltale-detect",
         "telltale",
@@ -229,6 +234,7 @@ fn package_verification_is_local_and_ordered() {
     for package in [
         "telltale-schema",
         "telltale-rules",
+        "telltale-discover",
         "telltale-sources",
         "telltale-detect",
         "telltale-core",

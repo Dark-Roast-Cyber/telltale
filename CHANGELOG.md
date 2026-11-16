@@ -6,6 +6,14 @@
 
 ## Unreleased
 
+- Add experimental `telltale-discover` and `telltale discover`: bounded,
+  metadata-only data-location inventory for the pinned 61-entry Tokscale core
+  catalog, independent of detection support. Installation assessment and usage
+  counting remain unimplemented; the new inventory backend is Unix-only. Its
+  separate `telltale.inventory/v1` output does not change Event 3.0 or scanner
+  state. Existing supported-source discovery imports keep their interfaces
+  through adapters to the new shared crate. See the
+  [inventory guide](crates/telltale-discover/README.md) for limits and attribution.
 - Remove the optional Telltale Console. It was an unpublished local Event3
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no

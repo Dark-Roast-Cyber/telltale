@@ -27,6 +27,9 @@ format.
   the package version.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
+  The development workspace also adds `telltale-discover` for independent local
+  inventory and shared filesystem discovery; it is not part of those published
+  releases.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
@@ -44,7 +47,7 @@ Telltale is built, tested and released with the toolchain pinned in
 `rust-toolchain.toml`. The CLI promises no minimum supported Rust
 version (MSRV); build it with that toolchain.
 
-The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-sources`,
+The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-discover`, `telltale-sources`,
 `telltale-detect` and `telltale-core`) declare `rust-version = "1.88"` so their
 dependency graph can use patched `time` releases (`>=0.3.47`). Every CI run checks
 the independently locked external consumer, in all eight feature combinations,
@@ -73,12 +76,17 @@ allowance for `0.y.z` versions:
 
 The Cargo/package version is not the version of every data contract:
 
-- **Package and CLI version:** the workspace root and five library crates
+- **Package and CLI version:** the workspace root and library crates
   move in lockstep. Internal workspace dependency requirements must be updated
   together. The root binary and library crates use the same release version.
 - **Event schema version:** `schema_version` and versioned identities such as
   Event 3.0 and `obs:v2` describe data compatibility independently of the Cargo
   version. Change them only when the event contract changes.
+- **Experimental tool inventory:** `telltale.inventory/v1` is separate from
+  Event3, with its own pinned `catalog_revision`. It reports metadata indicators,
+  not installation or usage totals; see the
+  [inventory guide](../crates/telltale-discover/README.md). It is not part of the
+  published 0.7.2 contract.
 - **Configuration version:** configuration documents such as `version: 1` have
   their own migration rules. A package release does not automatically change a
   configuration version.

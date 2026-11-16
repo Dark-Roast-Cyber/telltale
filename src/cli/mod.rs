@@ -26,6 +26,7 @@ use telltale_sources::clients::supported_clients;
 
 mod coverage;
 mod cursor;
+mod discover;
 mod export;
 pub mod historical;
 mod scan;
@@ -43,6 +44,9 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect AI-tool data-location metadata without reading sessions or token counts.
+    Discover(discover::DiscoverArgs),
+
     /// Discover supported local session sources.
     Scan(ScanCommandArgs),
 
@@ -1503,10 +1507,47 @@ pub(crate) fn read_jsonl_events(
         .collect())
 }
 
+fn command_runtime(
+    command: &Command,
+    observe: impl FnOnce() -> RuntimeSnapshot,
+) -> Option<RuntimeSnapshot> {
+    matches!(command, Command::Scan(_) | Command::Watch(_)).then(observe)
+}
+
+#[cfg(test)]
+mod runtime_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_observation_is_lazy_and_only_for_scan_or_watch() {
+        for (arguments, expected) in [
+            (vec!["telltale", "discover", "--licenses"], false),
+            (vec!["telltale", "discover", "--root", "synthetic"], false),
+            (vec!["telltale", "rules", "list"], false),
+            (vec!["telltale", "config", "show"], false),
+            (vec!["telltale", "status"], false),
+            (vec!["telltale", "export"], false),
+            (vec!["telltale", "scan", "--once"], true),
+            (vec!["telltale", "watch"], true),
+        ] {
+            let args = Args::try_parse_from(arguments).unwrap();
+            let calls = std::cell::Cell::new(0_usize);
+            let runtime = command_runtime(&args.command, || {
+                calls.set(calls.get() + 1);
+                RuntimeSnapshot {
+                    value: serde_json::Value::Null,
+                }
+            });
+            assert_eq!(runtime.is_some(), expected);
+            assert_eq!(calls.get(), usize::from(expected));
+        }
+    }
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = observe_runtime();
     let command = Args::command();
     let args = Args::from_arg_matches(&command.get_matches())?;
+    let runtime = command_runtime(&args.command, observe_runtime);
 
     match args.command {
         Command::Scan(ScanCommandArgs {
@@ -1522,6 +1563,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             max_sources,
             history,
         }) => {
+            let runtime = runtime.as_ref().expect("scan runtime was selected");
             let mut prepared = execution.prepare(
                 SplunkCliOverrides {
                     endpoint: splunk_hec_endpoint.as_deref(),
@@ -1555,6 +1597,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
+        Command::Discover(args) => discover::run(args)?,
         Command::Cursor { command } => cursor::run(command)?,
         Command::Delivery { command } => match command {
             DeliveryCommand::RetryBlocked { outbox_path, sink } => {
@@ -1732,6 +1775,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             debounce_ms,
             min_scan_interval_ms,
         }) => {
+            let runtime = runtime.as_ref().expect("watch runtime was selected");
             let mut prepared = execution.prepare(
                 SplunkCliOverrides::default(),
                 crate::settings::CliSettings {
