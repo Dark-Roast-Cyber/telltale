@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 use telltale_discover::clients::{ClientDef, ClientSourceDef, PathRoot, SourcePattern};
-use telltale_discover::discovery::{discover_sources_bounded, BoundedDiscoveryError};
+use telltale_discover::discovery::{BoundedDiscoveryError, discover_sources_bounded};
 use telltale_schema::clients::{ClientId, SourceKind};
 
 const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -106,14 +106,16 @@ fn parent_components_are_checked_before_returning_to_the_parent() {
         ),
         Err(BoundedDiscoveryError::SymlinkRoot)
     );
-    assert!(discover_sources_bounded(
-        &temp.path().join("missing/../home"),
-        ClientId::Codex,
-        1024,
-        &registry()
-    )
-    .unwrap()
-    .is_empty());
+    assert!(
+        discover_sources_bounded(
+            &temp.path().join("missing/../home"),
+            ClientId::Codex,
+            1024,
+            &registry()
+        )
+        .unwrap()
+        .is_empty()
+    );
     let alias = temp.path().join("ordinary/../home");
     let sources = discover_sources_bounded(&alias, ClientId::Codex, 1024, &registry()).unwrap();
     assert_eq!(sources.len(), 1);
