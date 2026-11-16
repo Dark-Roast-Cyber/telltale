@@ -4,11 +4,10 @@ use std::process::{Command, Output};
 
 fn synthetic_root() -> tempfile::TempDir {
     let parent = std::env::temp_dir().canonicalize().unwrap();
-    #[cfg(unix)]
     let mut builder = tempfile::Builder::new();
-    #[cfg(not(unix))]
-    let builder = tempfile::Builder::new();
-    #[cfg(unix)]
+    builder.prefix("PRIVATE_ROOT_");
+    // Linux accepts arbitrary filename bytes; APFS and NTFS reject this one.
+    #[cfg(target_os = "linux")]
     {
         use std::os::unix::ffi::OsStrExt;
         builder.prefix(std::ffi::OsStr::from_bytes(b"PRIVATE_ROOT_\xff"));

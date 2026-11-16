@@ -78,7 +78,16 @@ fn explicit_root_links_are_rejected() {
 
 #[test]
 fn parent_components_are_checked_before_returning_to_the_parent() {
+    // Windows canonicalization yields a `\\?\` verbatim path, and pushing onto
+    // one resolves `..` lexically before discovery sees it. Keep it ordinary.
+    #[cfg(windows)]
+    let temp = tempfile::tempdir().unwrap();
+    #[cfg(not(windows))]
     let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    assert!(
+        temp.path().join("x/../y").components().count() > temp.path().components().count() + 1,
+        "test path must retain its parent component"
+    );
     let home = temp.path().join("home");
     let outside = temp.path().join("outside/deeper");
     fs::create_dir_all(home.join(".codex/sessions")).unwrap();
