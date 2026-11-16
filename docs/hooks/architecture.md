@@ -56,7 +56,7 @@ and not a sandbox. It is one enforcement point among several; see the
 | `codex_cli` | Parse Codex CLI 0.166.0 hook payloads; composite, escaped correlation key (`session:agent:turn:tool_use_id`); `Stop`/`SubagentStop` settle by `turn_id`; render only `hookSpecificOutput` deny (ask becomes deny, allow prints nothing); generate `hooks.json` and the exec-policy backstop rules. |
 | `normalize` | Interim, per-harness input-shape normalization of the evaluation encoding (patch targets, authored-content keys, read-tool names). Applied by the runtime, not by adapters; ADR 0002. |
 | `evaluator` | Long-lived evaluator: Unix-socket protocol, trust checks, autostart, fallback rules (`evaluator/unix.rs`). Other platforms report `evaluator_unsupported_platform` and evaluate in-process. |
-| `rules/` | Host-owned Rule v1 content (hook self-protection), listed in `engine::HOST_RULE_DOCUMENTS` and loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
+| `rules/` | Host-owned Rule v1 content (hook self-protection), listed in `engine::HOST_RULE_TEMPLATES` and loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
 
 ## Runtime contract for adapters
 
@@ -149,9 +149,11 @@ code; both dispatch through `crates/telltale/src/hooks/harness.rs`. Adding a har
    An unknown name is a `bad_request`, which nothing records, and the hook
    evaluates in-process.
 4. Harness-specific host rules (Rule v1) go in a new `crates/telltale/src/hooks/rules/*.yaml` file
-   listed in `engine::HOST_RULE_DOCUMENTS`. Every listed document is always
+   listed in `engine::HOST_RULE_TEMPLATES`. Every listed document is always
    loaded, because one pipeline serves every harness. A test fails if a
-   file in `rules/` is not listed.
+   file in `rules/` is not listed. Pattern text several rules share is
+   written once in `engine.rs` and named in the YAML as `{{NAME}}`
+   (`engine::RULE_FRAGMENTS`), expanded when the rules load.
 5. Install helpers (such as `claude-code settings`) stay
    harness-specific CLI subcommands.
 
