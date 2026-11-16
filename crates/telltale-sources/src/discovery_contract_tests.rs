@@ -5,7 +5,7 @@ use telltale_schema::clients::{ClientId, SourceKind};
 
 #[test]
 fn supported_registry_drives_shared_discovery_without_broadening_sources() {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     for path in [
         ".codex/sessions/synthetic.jsonl",
         ".claude/projects/synthetic/session.jsonl",
@@ -40,7 +40,7 @@ fn supported_registry_drives_shared_discovery_without_broadening_sources() {
 
 #[test]
 fn caller_owned_empty_registry_discovers_no_sources_or_watch_roots() {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     std::fs::create_dir_all(root.path().join("codex/sessions")).unwrap();
     std::fs::write(root.path().join("codex/sessions/synthetic.jsonl"), b"{}").unwrap();
     assert!(

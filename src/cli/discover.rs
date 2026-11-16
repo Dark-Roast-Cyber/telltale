@@ -44,6 +44,13 @@ pub(super) fn run(args: DiscoverArgs) -> Result<(), Box<dyn std::error::Error>> 
         );
         return Ok(());
     }
+    if !cfg!(unix) {
+        return Err(telltale_discover::inventory::InventoryError {
+            root: None,
+            kind: telltale_discover::inventory::InventoryErrorKind::UnsupportedExecutionPlatform,
+        }
+        .into());
+    }
     let home = args
         .root
         .or_else(|| {

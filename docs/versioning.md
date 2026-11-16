@@ -25,11 +25,12 @@ format.
   package build proves official release provenance.
 - Event3 schema version stays `3.0` and Rule v1 stays version 1; neither follows
   the package version.
-- The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
-  `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
-  The development workspace also adds `telltale-discover` for independent local
-  inventory and shared filesystem discovery; it is not part of those published
-  releases.
+- Published v0.7.2 contains six functional Cargo packages: `telltale-schema`,
+  `telltale-rules`, `telltale-sources`, `telltale-detect`, `telltale-core`, and
+  `telltale-cli`. The current workspace adds the publishable `telltale-discover`
+  package for independent local inventory and shared filesystem discovery. It
+  participates in package verification and the next release's publication order,
+  but is not part of the already published v0.7.2 artifacts.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.

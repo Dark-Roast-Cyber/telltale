@@ -433,18 +433,20 @@ fn symlink_to_inside_the_approved_root_is_also_refused() {
 
 #[test]
 fn permissions_are_not_clean_absence() {
+    // Root bypasses DAC. Require an unprivileged runner rather than reporting a
+    // passing permission test without exercising the boundary.
+    // SAFETY: geteuid has no arguments or memory ownership preconditions.
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "run permission tests as an unprivileged user"
+    );
     let temp = tempdir();
     directory(temp.path(), "denied");
     let denied = temp.path().join("denied");
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
     let result = discover(&context(&denied), 0, InventoryLimits::default());
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o700)).unwrap();
-    // Root can bypass DAC; never present that run as permission-boundary proof.
-    // SAFETY: geteuid has no arguments or memory ownership preconditions.
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("permission boundary not exercised: effective uid is root");
-        return;
-    }
     assert_eq!(
         result.unwrap_err().kind,
         InventoryErrorKind::PermissionDenied

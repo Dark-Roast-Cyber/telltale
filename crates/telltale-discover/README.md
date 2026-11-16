@@ -10,6 +10,15 @@ configuration. It does not register parsers, run tools, schedule scans or ship
 events. `telltale-sources` retains the supported acquisition-source registry and
 its existing public discovery entry points.
 
+Bounded on-demand source discovery (`discover_sources_bounded`) and OpenCode
+store checks walk from the filesystem root using directory handles. Every
+component is inspected without following symbolic links, junctions or other
+reparse points, and enumeration stays on the opened handle if a pathname is
+replaced. A symlinked ancestor anywhere in a candidate path, including a
+system-level alias above the home directory, fails as `SymlinkRoot` rather than
+being followed. Returned source paths are coordinates, not opened capabilities:
+a later read must apply its own protection.
+
 ## Inventory without token counts
 
 ```sh
@@ -82,6 +91,10 @@ account names, session titles, arbitrary OS diagnostics or conversation content.
 Scheduling, persistence, delivery and trusted fleet attribution belong to callers.
 
 ## Provenance and maintenance
+
+Run the inventory permission tests as an unprivileged user. A root test runner
+fails explicitly because root can bypass the DAC boundary; it is not counted as
+permission-classification evidence.
 
 [Pinned provenance](data/TOKSCALE-PROVENANCE.md) records the upstream revision,
 adopted fields, modifications and interpretation limits. The independently

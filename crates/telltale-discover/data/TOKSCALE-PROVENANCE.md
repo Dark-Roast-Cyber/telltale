@@ -12,12 +12,14 @@ Adopted metadata comes exclusively from MIT-licensed Rust core files:
 - [`crates/tokscale-core/src/scanner.rs`](https://github.com/junhoyeo/tokscale/blob/6ff87bdd4eb1e9e3d26a51b0b788d4ccaa154a5e/crates/tokscale-core/src/scanner.rs):
   the additional exact `opencode/opencode.db` data-root candidate and
   `.copilot/session-store.db` home-root candidate. Channel databases,
-  configured extra roots, and other scanner paths are not implemented here.
+  configured extra roots, and other scanner paths are not implemented by the
+  inventory collector. Existing supported-source discovery in `discovery.rs`
+  retains its separate channel-database and configured-root behavior.
 - [Root `LICENSE`](https://github.com/junhoyeo/tokscale/blob/6ff87bdd4eb1e9e3d26a51b0b788d4ccaa154a5e/LICENSE):
   retained verbatim in `TOKSCALE-LICENSE-MIT`, copyright (c) 2025 Junho Yeo.
 
 Changes: metadata is transcribed into a standalone static Rust catalog; the
-collector is new and does not adopt upstream parsers, traversal, environment
+inventory collector is new and does not adopt upstream parsers, traversal, environment
 resolution, network calls, execution, or usage calculations. Artifact categories
 and conservative platform restrictions are Telltale annotations. No code,
 assets, or data from `packages/frontend` or other AGPL/CC-BY frontend material

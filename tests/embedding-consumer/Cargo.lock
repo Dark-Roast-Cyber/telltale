@@ -1488,10 +1488,12 @@ name = "telltale-discover"
 version = "0.7.2"
 dependencies = [
  "libc",
+ "rustix",
  "serde",
  "serde_json",
  "telltale-schema",
  "walkdir",
+ "windows-sys",
  "yaml_serde",
 ]
 

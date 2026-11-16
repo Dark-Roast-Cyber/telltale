@@ -60,7 +60,7 @@ fn adopted_metadata_attribution_is_shipped() {
     assert!(provenance.contains("crates/tokscale-core/src/clients.rs"));
     assert!(provenance.contains("crates/tokscale-core/src/scanner.rs"));
     let license = include_str!("../data/TOKSCALE-LICENSE-MIT");
-    assert!(license.starts_with("MIT License\n"));
+    assert_eq!(license.lines().next(), Some("MIT License"));
     assert!(license.contains("Copyright (c) 2025 Junho Yeo"));
     assert!(license.contains("OUT OF OR IN CONNECTION WITH THE SOFTWARE"));
 }

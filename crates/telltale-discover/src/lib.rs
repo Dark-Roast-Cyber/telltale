@@ -4,6 +4,7 @@
 //! has a separate catalog: an inventory entry is not a supported detection source.
 //! This crate never schedules scans, parses session content, or delivers events.
 
+mod anchored;
 pub mod catalog;
 pub mod clients;
 pub mod discovery;
@@ -22,7 +23,8 @@ pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {
     use std::sync::OnceLock;
     static ROOT: OnceLock<tempfile::TempDir> = OnceLock::new();
     let root = ROOT.get_or_init(|| {
-        let root = tempfile::tempdir().expect("synthetic discovery fixtures");
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .expect("synthetic discovery fixtures");
         for path in [
             "codex/sessions/2026/04/session-a.jsonl",
             "codex/archived_sessions/session-b.jsonl",

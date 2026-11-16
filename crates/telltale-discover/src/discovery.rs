@@ -96,7 +96,7 @@ pub enum BoundedDiscoveryError {
 }
 
 impl BoundedDiscoveryError {
-    fn from_io(error: std::io::Error) -> Self {
+    pub(crate) fn from_io(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
             _ => Self::Traversal,
@@ -107,7 +107,9 @@ impl BoundedDiscoveryError {
 /// Discover one client's home/data sources using the existing registry and root
 /// resolution. Project-local process logs are outside session investigation.
 /// Limits count all visited entries, not merely matched files. Symlink roots and
-/// descendants are not followed. No session files or databases are opened.
+/// descendants are not followed. Unix leaf files are not opened; Windows uses
+/// attribute-only handles. No session or database contents are read. Root
+/// establishment is separately limited to 256 components per candidate.
 pub fn discover_sources_bounded(
     root: &Path,
     client: ClientId,
@@ -138,14 +140,6 @@ pub fn discover_sources_bounded(
                 continue;
             }
             for search in source_search_roots(root, *source_def, registry) {
-                match fs::symlink_metadata(&search) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
-                    Ok(meta) if meta.file_type().is_symlink() => {
-                        return Err(BoundedDiscoveryError::SymlinkRoot);
-                    }
-                    _ => {}
-                }
                 bounded_paths(
                     &search,
                     client,
@@ -172,18 +166,44 @@ fn bounded_paths(
     opencode_channels: bool,
     sources: &mut Vec<Source>,
 ) -> Result<(), BoundedDiscoveryError> {
+    let Some(node) = crate::anchored::Node::open(path)? else {
+        return Ok(());
+    };
+    bounded_node(
+        &node,
+        path,
+        client,
+        def,
+        remaining,
+        depth,
+        opencode_channels,
+        sources,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bounded_node(
+    node: &crate::anchored::Node,
+    path: &Path,
+    client: ClientId,
+    def: ClientSourceDef,
+    remaining: &mut usize,
+    depth: usize,
+    opencode_channels: bool,
+    sources: &mut Vec<Source>,
+) -> Result<(), BoundedDiscoveryError> {
+    use crate::anchored::Kind;
     if *remaining == 0 {
         return Err(BoundedDiscoveryError::LimitExceeded);
     }
     *remaining -= 1;
-    let metadata = fs::symlink_metadata(path).map_err(BoundedDiscoveryError::from_io)?;
-    if metadata.file_type().is_symlink() {
+    if node.kind == Kind::Link {
         if opencode_channels && path.file_name().is_some_and(|name| name == "opencode.db") {
             return Err(BoundedDiscoveryError::SymlinkRoot);
         }
         return Ok(());
     }
-    if metadata.is_file() {
+    if node.kind == Kind::File {
         let matched = if opencode_channels {
             path.file_name().is_some_and(|name| name != "opencode.db")
                 && opencode_database_name(path)
@@ -200,29 +220,27 @@ fn bounded_paths(
         if matched {
             sources.push(new_source(client, def, path.to_path_buf()));
         }
-    } else if metadata.is_dir() {
+    } else if node.kind == Kind::Directory {
         if depth == 0 {
             return Err(BoundedDiscoveryError::LimitExceeded);
         }
-        // Do not let a walker collect a directory before the budget sees its
-        // entries. ReadDir streams one entry at a time; recursion holds at most
-        // MAX_DEPTH directory handles and a bounded path stack.
-        for entry in fs::read_dir(path).map_err(BoundedDiscoveryError::from_io)? {
-            let entry = entry.map_err(BoundedDiscoveryError::from_io)?;
-            if !def.recursive
-                && entry
-                    .file_type()
-                    .map_err(BoundedDiscoveryError::from_io)?
-                    .is_dir()
-            {
-                if *remaining == 0 {
-                    return Err(BoundedDiscoveryError::LimitExceeded);
-                }
+        // Enumeration and every child lookup remain relative to the opened
+        // parent, even if its original pathname is replaced during the walk.
+        for name in node.entries()? {
+            let name = name?;
+            if *remaining == 0 {
+                return Err(BoundedDiscoveryError::LimitExceeded);
+            }
+            let child = node
+                .child_for_walk(&name, def.recursive)?
+                .ok_or(BoundedDiscoveryError::Traversal)?;
+            if !def.recursive && child.kind == Kind::Directory {
                 *remaining -= 1;
                 continue;
             }
-            bounded_paths(
-                &entry.path(),
+            bounded_node(
+                &child,
+                &path.join(name),
                 client,
                 def,
                 remaining,
@@ -866,35 +884,25 @@ fn inspect_opencode_path(
     remaining: &mut usize,
     directory: bool,
 ) -> Result<bool, BoundedDiscoveryError> {
-    let mut ancestor = PathBuf::new();
     for component in path.components() {
         if matches!(component, std::path::Component::Prefix(_)) {
-            ancestor.push(component.as_os_str());
             continue;
         }
         if *remaining == 0 {
             return Err(BoundedDiscoveryError::LimitExceeded);
         }
         *remaining -= 1;
-        ancestor.push(component.as_os_str());
-        match fs::symlink_metadata(&ancestor) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(BoundedDiscoveryError::SymlinkRoot);
-            }
-            Ok(metadata) if ancestor == path => {
-                return if (directory && metadata.is_dir()) || (!directory && metadata.is_file()) {
-                    Ok(true)
-                } else {
-                    Err(BoundedDiscoveryError::Traversal)
-                };
-            }
-            Ok(metadata) if !metadata.is_dir() => return Err(BoundedDiscoveryError::Traversal),
-            _ => {}
-        }
     }
-    Ok(false)
+    let Some(node) = crate::anchored::Node::open(path)? else {
+        return Ok(false);
+    };
+    if (directory && node.kind == crate::anchored::Kind::Directory)
+        || (!directory && node.kind == crate::anchored::Kind::File)
+    {
+        Ok(true)
+    } else {
+        Err(BoundedDiscoveryError::Traversal)
+    }
 }
 
 /// The exact environment-configured OpenCode file, including a not-yet-created file.
@@ -922,28 +930,44 @@ fn bounded_opencode_paths(
     registry: &[ClientDef],
 ) -> Result<(), BoundedDiscoveryError> {
     for directory in opencode_data_directories_for_source(root, def, registry) {
-        if !inspect_opencode_path(&directory, remaining, true)? {
+        let Some(node) = crate::anchored::Node::open(&directory)? else {
             continue;
+        };
+        if node.kind != crate::anchored::Kind::Directory {
+            return Err(BoundedDiscoveryError::Traversal);
         }
         // Preserve the default's exact spelling, including native Windows case aliases.
         let default = directory.join("opencode.db");
-        let default_present = match fs::symlink_metadata(&default) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+        if let Some(default_node) = node.child(std::ffi::OsStr::new("opencode.db"))? {
+            if default_node.kind == crate::anchored::Kind::Link {
                 return Err(BoundedDiscoveryError::SymlinkRoot);
             }
-            Ok(metadata) if !metadata.is_file() => return Err(BoundedDiscoveryError::Traversal),
-            _ => true,
-        };
-        if default_present {
-            bounded_paths(&default, client, def, remaining, 0, false, sources)?;
+            if default_node.kind != crate::anchored::Kind::File {
+                return Err(BoundedDiscoveryError::Traversal);
+            }
+            bounded_node(
+                &default_node,
+                &default,
+                client,
+                def,
+                remaining,
+                0,
+                false,
+                sources,
+            )?;
         }
-        bounded_paths(&directory, client, def, remaining, 1, true, sources)?;
+        bounded_node(&node, &directory, client, def, remaining, 1, true, sources)?;
     }
     if let Some(path) = resolved_opencode_override(root, registry)?
-        && inspect_opencode_path(&path, remaining, false)?
+        && let Some(node) = crate::anchored::Node::open(&path)?
     {
+        if node.kind != crate::anchored::Kind::File {
+            return Err(BoundedDiscoveryError::Traversal);
+        }
+        if *remaining == 0 {
+            return Err(BoundedDiscoveryError::LimitExceeded);
+        }
+        *remaining -= 1;
         add_opencode_override(sources, client, def, path);
     }
     Ok(())
@@ -1281,7 +1305,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use telltale_schema::clients::{ClientId, SourceKind};
-    use tempfile::tempdir;
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)
+    }
 
     use crate::clients::{ClientSourceDef, PathRoot};
 
