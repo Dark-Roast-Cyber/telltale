@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 use telltale_discover::clients::{ClientDef, ClientSourceDef, PathRoot, SourcePattern};
-use telltale_discover::discovery::{BoundedDiscoveryError, discover_sources_bounded};
+use telltale_discover::discovery::{discover_sources_bounded, BoundedDiscoveryError};
 use telltale_schema::clients::{ClientId, SourceKind};
 
 const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -39,7 +39,8 @@ fn link(target: &Path, path: &Path) {
             .unwrap();
         assert!(
             result.status.success(),
-            "synthetic junction creation failed"
+            "synthetic junction creation failed: {}",
+            String::from_utf8_lossy(&result.stderr)
         );
     }
 }
@@ -89,7 +90,8 @@ fn parent_components_are_checked_before_returning_to_the_parent() {
         "test path must retain its parent component"
     );
     let home = temp.path().join("home");
-    let outside = temp.path().join("outside/deeper");
+    // Native separators: `mklink /J` rejects a target written with `/`.
+    let outside = temp.path().join("outside").join("deeper");
     fs::create_dir_all(home.join(".codex/sessions")).unwrap();
     fs::write(home.join(".codex/sessions/synthetic.jsonl"), b"synthetic").unwrap();
     fs::create_dir_all(&outside).unwrap();
@@ -104,16 +106,14 @@ fn parent_components_are_checked_before_returning_to_the_parent() {
         ),
         Err(BoundedDiscoveryError::SymlinkRoot)
     );
-    assert!(
-        discover_sources_bounded(
-            &temp.path().join("missing/../home"),
-            ClientId::Codex,
-            1024,
-            &registry()
-        )
-        .unwrap()
-        .is_empty()
-    );
+    assert!(discover_sources_bounded(
+        &temp.path().join("missing/../home"),
+        ClientId::Codex,
+        1024,
+        &registry()
+    )
+    .unwrap()
+    .is_empty());
     let alias = temp.path().join("ordinary/../home");
     let sources = discover_sources_bounded(&alias, ClientId::Codex, 1024, &registry()).unwrap();
     assert_eq!(sources.len(), 1);
