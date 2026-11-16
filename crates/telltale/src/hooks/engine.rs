@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
     AcquisitionError, ActionRecordV1, ClientId, DetailedEvaluationOptions, EvaluationCompletion,
-    ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind,
+    ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
 use crate::hooks::config::TelltaleSettings;
@@ -178,6 +178,24 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
+    /// Nothing about the focus was evaluated (yet).
+    fn not_evaluated(focus_count: usize, scan_ms: u64) -> Self {
+        Self {
+            status: EvalStatus::NotEvaluated,
+            coverage: None,
+            visibility_limits: Vec::new(),
+            failure_code: None,
+            focus_records: Vec::new(),
+            other_record_count: 0,
+            unevaluated_focus: focus_count,
+            focus_count,
+            scan_ms,
+            source_failed: false,
+            capacity_failed: false,
+            history_kept: 0,
+        }
+    }
+
     /// Highest promotion score among actions anchored at the focus.
     pub fn action_score(&self) -> u64 {
         self.focus_records
@@ -416,20 +434,7 @@ impl Engine {
         focus: &[Focus],
         mut in_time: impl FnMut() -> bool,
     ) -> Result<Evaluation, EngineError> {
-        let mut merged = Evaluation {
-            status: EvalStatus::NotEvaluated,
-            coverage: None,
-            visibility_limits: Vec::new(),
-            failure_code: None,
-            focus_records: Vec::new(),
-            other_record_count: 0,
-            unevaluated_focus: focus.len(),
-            focus_count: focus.len(),
-            scan_ms: 0,
-            source_failed: false,
-            capacity_failed: false,
-            history_kept: 0,
-        };
+        let mut merged = Evaluation::not_evaluated(focus.len(), 0);
         for (line, one) in pending.iter().zip(focus) {
             if !in_time() {
                 merged
@@ -462,16 +467,39 @@ impl Engine {
         &self.generated
     }
 
-    /// Write `lines` to `window_path` and evaluate them as one Claude Code
-    /// source. The caller holds the session lock, so the stable path keeps
-    /// Telltale's source-bound identities stable across a session. The window
-    /// holds raw tool input, so it is removed as soon as the scan returns.
+    /// Evaluate `lines` as one Claude Code source, the focus lines among them.
     fn scan<'a>(
         &self,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
         focus: &[Focus],
     ) -> Result<Evaluation, EngineError> {
+        let (scan, scan_ms) = self.scan_window(window_path, lines)?;
+        if let Some(failure) = scan.failure() {
+            return Ok(Evaluation {
+                failure_code: Some(failure.code().to_owned()),
+                source_failed: true,
+                // No acquisition error: projection or evaluation ran out.
+                capacity_failed: matches!(
+                    failure.acquisition_error(),
+                    None | Some(AcquisitionError::ContributionCapacity)
+                ),
+                ..Evaluation::not_evaluated(focus.len(), scan_ms)
+            });
+        }
+        Ok(evaluation_of(&scan, focus, scan_ms))
+    }
+
+    /// Write `lines` to `window_path` and scan them as one Claude Code source,
+    /// returning its result and how long the scan took. The caller holds the
+    /// session lock, so the stable path keeps Telltale's source-bound identities
+    /// stable across a session. The window holds raw tool input, so it is removed
+    /// as soon as the scan returns.
+    fn scan_window<'a>(
+        &self,
+        window_path: &Path,
+        lines: impl Iterator<Item = &'a Line>,
+    ) -> Result<(SourceScan, u64), EngineError> {
         let text: String = lines.map(Line::to_jsonl).collect();
         // A fresh regular file: a symlink or FIFO planted at the window path
         // must neither redirect the raw input nor stall the hook.
@@ -499,83 +527,68 @@ impl Engine {
             .into_iter()
             .next()
             .ok_or(EngineError::NoResult)?;
+        Ok((scan, scan_ms))
+    }
+}
 
-        if let Some(failure) = scan.failure() {
-            return Ok(Evaluation {
-                status: EvalStatus::NotEvaluated,
-                coverage: None,
-                visibility_limits: Vec::new(),
-                failure_code: Some(failure.code().to_owned()),
-                focus_records: Vec::new(),
-                other_record_count: 0,
-                unevaluated_focus: focus.len(),
-                focus_count: focus.len(),
-                scan_ms,
-                source_failed: true,
-                // No acquisition error: projection or evaluation ran out.
-                capacity_failed: matches!(
-                    failure.acquisition_error(),
-                    None | Some(AcquisitionError::ContributionCapacity)
-                ),
-                history_kept: 0,
-            });
-        }
-        let coverage = scan.coverage().map(|coverage| match coverage {
-            SourceCoverage::WholeSource => "whole_source",
-            SourceCoverage::Partial => "partial",
-        });
-        let visibility_limits: Vec<String> = scan
-            .visibility_limits()
-            .iter()
-            .map(|limit| limit.as_str().to_owned())
-            .collect();
-        let quarantined: Vec<&str> = focus
-            .iter()
-            .filter_map(|f| {
-                scan.quarantined()
-                    .iter()
-                    .find(|unit| unit.native_id == f.native_id)
-                    .map(|unit| unit.code)
-            })
-            .collect();
-        let focus_quarantine = quarantined.first().map(|code| (*code).to_owned());
-
-        let records = scan.action_records();
-        let (focus_records, others): (Vec<_>, Vec<_>) = records.into_iter().partition(|record| {
-            focus.iter().any(|f| {
-                record.stage == f.stage
-                    && record
-                        .occurred_at
-                        .as_deref()
-                        .is_some_and(|at| same_instant(at, &f.occurred_at))
-            })
-        });
-        let status = if quarantined.len() == focus.len() {
-            EvalStatus::NotEvaluated
-        } else if !quarantined.is_empty() {
-            // Part of the focus was not evaluated; what was evaluated still counts.
-            EvalStatus::VisibilityLimited
-        } else {
-            match scan.completion {
-                Some(EvaluationCompletion::Complete) => EvalStatus::Complete,
-                Some(EvaluationCompletion::VisibilityLimited) => EvalStatus::VisibilityLimited,
-                None => EvalStatus::NotEvaluated,
-            }
-        };
-        Ok(Evaluation {
-            status,
-            coverage,
-            visibility_limits,
-            failure_code: focus_quarantine,
-            focus_records,
-            other_record_count: others.len(),
-            unevaluated_focus: quarantined.len(),
-            focus_count: focus.len(),
-            scan_ms,
-            source_failed: false,
-            capacity_failed: false,
-            history_kept: 0,
+/// What a scan that ran says about its focus lines: their findings, and how much
+/// of them was evaluated.
+fn evaluation_of(scan: &SourceScan, focus: &[Focus], scan_ms: u64) -> Evaluation {
+    let coverage = scan.coverage().map(|coverage| match coverage {
+        SourceCoverage::WholeSource => "whole_source",
+        SourceCoverage::Partial => "partial",
+    });
+    let visibility_limits: Vec<String> = scan
+        .visibility_limits()
+        .iter()
+        .map(|limit| limit.as_str().to_owned())
+        .collect();
+    let quarantined: Vec<&str> = focus
+        .iter()
+        .filter_map(|f| {
+            scan.quarantined()
+                .iter()
+                .find(|unit| unit.native_id == f.native_id)
+                .map(|unit| unit.code)
         })
+        .collect();
+    let focus_quarantine = quarantined.first().map(|code| (*code).to_owned());
+
+    let records = scan.action_records();
+    let (focus_records, others): (Vec<_>, Vec<_>) = records.into_iter().partition(|record| {
+        focus.iter().any(|f| {
+            record.stage == f.stage
+                && record
+                    .occurred_at
+                    .as_deref()
+                    .is_some_and(|at| same_instant(at, &f.occurred_at))
+        })
+    });
+    let status = if quarantined.len() == focus.len() {
+        EvalStatus::NotEvaluated
+    } else if !quarantined.is_empty() {
+        // Part of the focus was not evaluated; what was evaluated still counts.
+        EvalStatus::VisibilityLimited
+    } else {
+        match scan.completion {
+            Some(EvaluationCompletion::Complete) => EvalStatus::Complete,
+            Some(EvaluationCompletion::VisibilityLimited) => EvalStatus::VisibilityLimited,
+            None => EvalStatus::NotEvaluated,
+        }
+    };
+    Evaluation {
+        status,
+        coverage,
+        visibility_limits,
+        failure_code: focus_quarantine,
+        focus_records,
+        other_record_count: others.len(),
+        unevaluated_focus: quarantined.len(),
+        focus_count: focus.len(),
+        scan_ms,
+        source_failed: false,
+        capacity_failed: false,
+        history_kept: 0,
     }
 }
 
@@ -1029,115 +1042,171 @@ enum Selection {
 /// A Rule v1 document matching writes to, and modifying commands naming, one
 /// family's paths. Windows paths compare case-insensitively.
 fn family_document(family: &Family, coverage: &mut GeneratedCoverage) -> Option<String> {
-    let Family {
-        prefix, subject, ..
-    } = family;
-    let mut rules = String::new();
-    let mut push = |id: String, title: String, score: u8, regex: Selection| {
+    let rules: Vec<GeneratedRule> = path_rules(family)
+        .into_iter()
+        .chain(failsafe_rules(family))
+        .collect();
+    if rules.is_empty() {
+        return None;
+    }
+    coverage.rules += rules.len();
+    let rules: String = rules.iter().map(GeneratedRule::to_yaml).collect();
+    let case_insensitive = cfg!(windows);
+    Some(format!(
+        "version: 1\ndescription: Telltale Hooks self-protection generated for this installation.\ndefaults:\n  case_insensitive: {case_insensitive}\n  enabled: true\nrules:\n{rules}modifiers: []\n"
+    ))
+}
+
+/// One generated rule, before it is written out.
+struct GeneratedRule {
+    id: String,
+    title: String,
+    score: u8,
+    selection: Selection,
+}
+
+impl GeneratedRule {
+    fn new(id: String, title: String, score: u8, selection: Selection) -> Self {
+        Self {
+            id,
+            title,
+            score,
+            selection,
+        }
+    }
+
+    fn to_yaml(&self) -> String {
+        let Self {
+            id, title, score, ..
+        } = self;
         // YAML single-quoted scalars escape a quote by doubling it.
         let quote = |regex: &str| regex.replace('\'', "''");
-        let matcher = match regex {
+        let matcher = match &self.selection {
             Selection::Written(regex) => format!(
                 "    targets: [written_path]\n    regex: '{}'\n",
-                quote(&regex)
+                quote(regex)
             ),
             Selection::Command(regex) => format!(
                 "    detection:\n      selection:\n        command: '{}'\n      exclude:\n        command: '{}'\n      condition: selection\n",
-                quote(&regex),
+                quote(regex),
                 quote(HARMLESS)
             ),
         };
-        let severity = if score >= 90 { "high" } else { "medium" };
-        rules.push_str(&format!(
+        let severity = if *score >= 90 { "high" } else { "medium" };
+        format!(
             "  - id: tth.tamper.{id}\n    title: {title}\n    category: approval_bypass\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
-        ));
-        coverage.rules += 1;
-    };
-    let (anchor, writer, redirect) = if family.anchored {
+        )
+    }
+}
+
+/// What may stand before a family's path: anything, or for a family whose paths can
+/// be told from longer ones, only what cannot continue a longer path.
+fn path_anchor(family: &Family) -> String {
+    if family.anchored {
+        format!("(?:^|IFS|{BEFORE_PATH})")
+    } else {
+        String::new()
+    }
+}
+
+/// A rule's number among the chunks of one family: none for the first.
+fn chunk_suffix(index: usize) -> String {
+    match index {
+        0 => String::new(),
+        _ => format!("_{}", index + 1),
+    }
+}
+
+/// Per chunk of a family's paths: a write to one, a writing program or a redirection
+/// aimed at one, and, where the family has them, a path named before a writing
+/// program and any mention at all.
+fn path_rules(family: &Family) -> Vec<GeneratedRule> {
+    let Family {
+        prefix, subject, ..
+    } = family;
+    let anchor = path_anchor(family);
+    let (writer, redirect) = if family.anchored {
         (
-            format!("(?:^|IFS|{BEFORE_PATH})"),
             format!("(?:{WRITERS}(?:{SEGMENT}{BEFORE_PATH})?|{INTERPRETERS}.*{BEFORE_PATH})"),
             REDIRECT_TO.to_owned(),
         )
     } else {
         (
-            String::new(),
             format!("(?:{WRITERS}{SEGMENT}|{INTERPRETERS}.*)"),
             format!("{REDIRECT_TO}{REDIRECT_SKIP}"),
         )
     };
+    let mut rules = Vec::new();
     for (index, chunk) in chunk_fragments(&family.fragments).iter().enumerate() {
-        let n = match index {
-            0 => String::new(),
-            _ => format!("_{}", index + 1),
-        };
+        let n = chunk_suffix(index);
         let pattern = format!("(?:{})", chunk.join("|"));
         let mention = format!("{anchor}{pattern}");
-        push(
+        rules.push(GeneratedRule::new(
             format!("{prefix}_write{n}"),
             format!("Agent writes {subject}"),
             90,
             Selection::Written(mention.clone()),
-        );
-        push(
+        ));
+        rules.push(GeneratedRule::new(
             format!("{prefix}_command{n}"),
             format!("Agent command modifies {subject}"),
             90,
             Selection::Command(format!("(?s){COMMAND_START}{writer}{pattern}")),
-        );
+        ));
         if family.reversible {
-            push(
+            rules.push(GeneratedRule::new(
                 format!("{prefix}_command_reverse{n}"),
                 format!("Agent command names {subject} and then runs a writing program"),
                 90,
                 Selection::Command(format!(
                     "(?s){mention}.*{COMMAND_START}(?:{WRITERS}|{INTERPRETERS})"
                 )),
-            );
+            ));
         }
-        push(
+        rules.push(GeneratedRule::new(
             format!("{prefix}_redirect{n}"),
             format!("Agent command redirects into {subject}"),
             90,
             Selection::Command(format!("(?s){redirect}{pattern}")),
-        );
+        ));
         if family.reference {
-            push(
+            rules.push(GeneratedRule::new(
                 format!("{prefix}_reference{n}"),
                 format!("Agent command references {subject}"),
                 60,
                 Selection::Command(mention),
-            );
+            ));
         }
     }
+    rules
+}
+
+/// Per chunk of a family's fail-safe paths: a writer word on either side of one.
+fn failsafe_rules(family: &Family) -> Vec<GeneratedRule> {
+    let Family {
+        prefix, subject, ..
+    } = family;
+    let anchor = path_anchor(family);
+    let mut rules = Vec::new();
     for (index, chunk) in chunk_fragments(&family.failsafe).iter().enumerate() {
-        let n = match index {
-            0 => String::new(),
-            _ => format!("_{}", index + 1),
-        };
+        let n = chunk_suffix(index);
         let mention = format!("{anchor}(?:{})", chunk.join("|"));
         // One rule per direction: a path can be long and the budget holds it once. A
         // writer on both sides of it adds up to a deny, which is no loss.
-        push(
+        rules.push(GeneratedRule::new(
             format!("{prefix}_failsafe{n}"),
             format!("Agent command names a writing program and then {subject}"),
             60,
             Selection::Command(format!("(?s){WRITER_ANYWHERE}.*{mention}")),
-        );
-        push(
+        ));
+        rules.push(GeneratedRule::new(
             format!("{prefix}_failsafe_reverse{n}"),
             format!("Agent command names {subject} and then a writing program"),
             60,
             Selection::Command(format!("(?s){mention}.*{WRITER_AFTER}")),
-        );
+        ));
     }
-    if rules.is_empty() {
-        return None;
-    }
-    let case_insensitive = cfg!(windows);
-    Some(format!(
-        "version: 1\ndescription: Telltale Hooks self-protection generated for this installation.\ndefaults:\n  case_insensitive: {case_insensitive}\n  enabled: true\nrules:\n{rules}modifiers: []\n"
-    ))
+    rules
 }
 
 fn generated_documents(paths: &[PathBuf], coverage: &mut GeneratedCoverage) -> Vec<String> {
