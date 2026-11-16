@@ -101,7 +101,7 @@ pub struct TelltaleSettings {
     pub rule_packages: Vec<PathBuf>,
     /// Policy document (enable/disable, like `--policy`).
     pub policy: Option<PathBuf>,
-    /// Load the bundled host self-protection rules (`engine::HOST_RULE_DOCUMENTS`)
+    /// Load the bundled host self-protection rules (`engine::host_rule_documents`)
     /// and the generated rule for this installation's own paths.
     pub self_protection_rules: bool,
 }
