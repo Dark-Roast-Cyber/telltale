@@ -20,7 +20,7 @@ use telltale_core::hooks::evaluator::ClientOutcome;
 use telltale_core::hooks::gate::{Answer, DETECT_ONLY_DEADLINE, Gate};
 use telltale_core::hooks::harness::{Harness, Parsed, names_event};
 use telltale_core::hooks::identity;
-use telltale_core::hooks::runtime::Runtime;
+use telltale_core::hooks::runtime::{Context, Event, Runtime};
 
 /// Hook payloads larger than this are refused rather than buffered.
 const MAX_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
@@ -321,12 +321,44 @@ fn evaluate(
     } else {
         harness.parse(bytes)
     };
+    let config = resolve_config(harness, loaded, gate);
+    // Split into the hook event name and either the runtime event or the
+    // reason it is unusable; an unreadable payload is answered right here.
+    let (hook_event, usable) = match parsed {
+        Parsed::Event(ctx, event) => (ctx.hook_event.clone(), Ok((ctx, event))),
+        Parsed::Unusable { hook_event, code } => (hook_event, Err(code)),
+        Parsed::Invalid(code) => return invalid_payload_answer(harness, &config, code, bytes),
+    };
+    let Ok(config) = config else {
+        if harness.is_pre_tool_use(&hook_event) {
+            return Answer::output(harness.render_event_verdict(
+                &hook_event,
+                OnError::Deny,
+                "Telltale Hooks is misconfigured and fails closed (config_invalid); details are on the hook's stderr.",
+            ));
+        }
+        return Answer::exit(1);
+    };
+    let (ctx, event) = match usable {
+        Ok(pair) => pair,
+        Err(code) => return unusable_event_answer(harness, &config, &hook_event, code),
+    };
+    answer_from_runtime(harness, config, ctx, event, bytes)
+}
+
+/// The configuration an event is evaluated under, or `Err(())` when it did not
+/// load and the gate is enforcing.
+fn resolve_config(
+    harness: Harness,
+    loaded: Result<Config, telltale_core::hooks::config::ConfigError>,
+    gate: Gate,
+) -> Result<Config, ()> {
     // A configuration that does not load and asks for enforcement fails closed
     // for tool calls: an operator error should be visible at once, not
     // silently disable enforcement. One that never asked for it is detect-only
     // (the gate is already closed): detection carries on with the defaults and
     // the failure is recorded.
-    let config = match loaded {
+    match loaded {
         Ok(config) => Ok(config),
         Err(error) => {
             // Details (which may include a path) go to stderr only.
@@ -342,80 +374,86 @@ fn evaluate(
                 Ok(config)
             }
         }
-    };
-    // Split into the hook event name and either the runtime event or the
-    // reason it is unusable; an unreadable payload is answered right here.
-    let (hook_event, usable) = match parsed {
-        Parsed::Event(ctx, event) => (ctx.hook_event.clone(), Ok((ctx, event))),
-        Parsed::Unusable { hook_event, code } => (hook_event, Err(code)),
-        Parsed::Invalid(code) => {
-            eprintln!("telltale hooks: unusable hook payload ({code})");
-            if let Ok(config) = &config {
-                Runtime::new(config.clone()).record_unhandled(harness.name(), "", code);
-            }
-            // An oversized or malformed payload is agent-influenced (a huge
-            // tool input), so a PreToolUse gets a verdict rather than a
-            // non-blocking exit that the harness treats as allow.
-            if harness.looks_like_pre_tool_use(bytes) {
-                let policy = match &config {
-                    Ok(config) => unreadable_call_policy(config),
-                    Err(()) => OnError::Deny,
-                };
-                return Answer::output(harness.render_verdict(
-                    policy,
-                    "Telltale Hooks could not read this tool call (payload too large or malformed).",
-                ));
-            }
-            let fail_closed = matches!(&config, Ok(c) if c.on_error == OnError::Deny);
-            // A named event is not pre-execution by now, and exit 2 there is
-            // not a block: on a Stop it is a prompt to continue, so a damaged
-            // Stop would re-prompt the model without limit (Codex: E2E
-            // `damaged-stop-*`).
-            if !fail_closed || names_event(bytes) {
-                return Answer::exit(1);
-            }
-            // No event name: this could be a tool call, so block one without
-            // making a prompt of anything else.
-            return match harness {
-                // A deny on stdout is honored on a PreToolUse and rejected as
-                // invalid output on every other event (E2E `damaged-*-nameless`).
-                Harness::CodexCli => Answer::output(harness.render_verdict(
-                    OnError::Deny,
-                    "Telltale Hooks could not read this hook payload and fails closed.",
-                )),
-                // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
-                Harness::CopilotCli => Answer::exit(1),
-                // The only block that does not need the event, but on a Stop it
-                // still prompts: the known residual for this harness.
-                Harness::ClaudeCode => Answer::exit(2),
-            };
-        }
-    };
-    let Ok(config) = config else {
-        if harness.is_pre_tool_use(&hook_event) {
-            return Answer::output(harness.render_event_verdict(
-                &hook_event,
-                OnError::Deny,
-                "Telltale Hooks is misconfigured and fails closed (config_invalid); details are on the hook's stderr.",
-            ));
-        }
+    }
+}
+
+/// The answer for a payload that could not be parsed at all (oversized or
+/// malformed).
+fn invalid_payload_answer(
+    harness: Harness,
+    config: &Result<Config, ()>,
+    code: &'static str,
+    bytes: &[u8],
+) -> Answer {
+    eprintln!("telltale hooks: unusable hook payload ({code})");
+    if let Ok(config) = config {
+        Runtime::new(config.clone()).record_unhandled(harness.name(), "", code);
+    }
+    // An oversized or malformed payload is agent-influenced (a huge
+    // tool input), so a PreToolUse gets a verdict rather than a
+    // non-blocking exit that the harness treats as allow.
+    if harness.looks_like_pre_tool_use(bytes) {
+        let policy = match config {
+            Ok(config) => unreadable_call_policy(config),
+            Err(()) => OnError::Deny,
+        };
+        return Answer::output(harness.render_verdict(
+            policy,
+            "Telltale Hooks could not read this tool call (payload too large or malformed).",
+        ));
+    }
+    let fail_closed = matches!(config, Ok(c) if c.on_error == OnError::Deny);
+    // A named event is not pre-execution by now, and exit 2 there is
+    // not a block: on a Stop it is a prompt to continue, so a damaged
+    // Stop would re-prompt the model without limit (Codex: E2E
+    // `damaged-stop-*`).
+    if !fail_closed || names_event(bytes) {
         return Answer::exit(1);
-    };
-    let (ctx, event) = match usable {
-        Ok(pair) => pair,
-        Err(code) => {
-            eprintln!("telltale hooks: unusable hook payload ({code})");
-            Runtime::new(config.clone()).record_unhandled(harness.name(), &hook_event, code);
-            if harness.is_pre_tool_use(&hook_event) {
-                return Answer::output(harness.render_event_verdict(
-                    &hook_event,
-                    unreadable_call_policy(&config),
-                    "Telltale Hooks could not read this tool call (required fields are missing).",
-                ));
-            }
-            return Answer::exit(1);
-        }
-    };
+    }
+    // No event name: this could be a tool call, so block one without
+    // making a prompt of anything else.
+    match harness {
+        // A deny on stdout is honored on a PreToolUse and rejected as
+        // invalid output on every other event (E2E `damaged-*-nameless`).
+        Harness::CodexCli => Answer::output(harness.render_verdict(
+            OnError::Deny,
+            "Telltale Hooks could not read this hook payload and fails closed.",
+        )),
+        // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
+        Harness::CopilotCli => Answer::exit(1),
+        // The only block that does not need the event, but on a Stop it
+        // still prompts: the known residual for this harness.
+        Harness::ClaudeCode => Answer::exit(2),
+    }
+}
+
+/// The answer for a payload that parsed but lacks what the event needs.
+fn unusable_event_answer(
+    harness: Harness,
+    config: &Config,
+    hook_event: &str,
+    code: &'static str,
+) -> Answer {
+    eprintln!("telltale hooks: unusable hook payload ({code})");
+    Runtime::new(config.clone()).record_unhandled(harness.name(), hook_event, code);
+    if harness.is_pre_tool_use(hook_event) {
+        return Answer::output(harness.render_event_verdict(
+            hook_event,
+            unreadable_call_policy(config),
+            "Telltale Hooks could not read this tool call (required fields are missing).",
+        ));
+    }
+    Answer::exit(1)
+}
+
+/// Evaluate a readable event: the long-lived evaluator first, then in-process.
+fn answer_from_runtime(
+    harness: Harness,
+    config: Config,
+    ctx: Context,
+    event: Event,
+    bytes: &[u8],
+) -> Answer {
     // No evaluator transport off Unix: skip the socket path and the
     // fingerprint (which hashes rule files) and record why.
     #[cfg(not(unix))]
@@ -423,6 +461,9 @@ fn evaluate(
         .evaluator
         .enabled
         .then_some(evaluator::UNSUPPORTED_PLATFORM);
+    // Only the evaluator transport sends the raw payload.
+    #[cfg(not(unix))]
+    let _ = bytes;
     #[cfg(unix)]
     let mut fallback = None;
     #[cfg(unix)]
