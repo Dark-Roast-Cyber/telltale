@@ -64,6 +64,15 @@ before upgrading.
 telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
 ```
 
+Default features:
+
+- `hooks`: `telltale_core::hooks`, the pre-execution runtime behind
+  `telltale hooks` (see [Telltale Hooks](hooks/README.md)). It is the one part of
+  this crate that writes files (per-session journals and telemetry JSONL) and can
+  start a long-lived local evaluator, and it adds `regex`, `serde_json` and a
+  TOML parser to the dependency graph. A host that only reads sessions opts out:
+  `telltale-core = { ..., default-features = false }`.
+
 Default-off features:
 
 - `opencode-sqlite`: OpenCode acquisition; see [OpenCode acquisition](#opencode-acquisition).
@@ -81,9 +90,9 @@ either feature through feature unification.
 Consumers that already import `telltale::Pipeline` can alias the package during
 migration: `telltale = { package = "telltale-core", git = "…", rev = "<commit>" }`.
 
-Gates: `make embedding-contract-check` tests eight feature combinations and is
+Gates: `make embedding-contract-check` tests ten feature combinations and is
 part of `ci-local`. `make embedding-msrv-check` runs the same combinations on the
-embedding crates' declared `rust-version` (Rust 1.88.0), which CI checks on Linux,
+embedding crates' declared `rust-version` (Rust 1.89.0), which CI checks on Linux,
 macOS and Windows; it is not a CLI MSRV promise. External coverage lives in
 [`tests/embedding-consumer`](../tests/embedding-consumer/tests).
 

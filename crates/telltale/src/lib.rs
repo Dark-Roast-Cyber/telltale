@@ -15,6 +15,12 @@
 //! classification live in `docs/embedding.md`; re-exports are not a lower-level
 //! plugin ABI.
 //!
+//! The default `hooks` feature adds [`hooks`], the pre-execution enforcement
+//! runtime behind `telltale hooks`. It is the one part of this crate that
+//! writes files (per-session journals and a telemetry JSONL) and runs a
+//! long-lived local evaluator; a host that only reads sessions builds with
+//! `default-features = false` and gets none of it.
+//!
 //! ```no_run
 //! use telltale_core::{Pipeline, PipelineError};
 //!
@@ -36,6 +42,8 @@ pub mod assignment;
 /// Unstable cross-crate migration seam, not a supported embedding API.
 #[doc(hidden)]
 pub mod canonical_runtime;
+#[cfg(feature = "hooks")]
+pub mod hooks;
 pub mod inventory;
 pub mod investigation;
 pub mod local_event_feed;

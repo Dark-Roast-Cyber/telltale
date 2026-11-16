@@ -2,7 +2,7 @@
 name = "telltale-embedding-consumer"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 publish = false
 
 # Resolve as an external application, independently of the CLI's features/lock.
@@ -31,6 +31,7 @@ opt-level = 2
 default = []
 opencode-sqlite = ["telltale-core/opencode-sqlite"]
 protected-assignment = ["telltale-core/protected-assignment"]
+hooks = ["telltale-core/hooks"]
 sqlx-sqlite = ["dep:sqlx"]
 
 [dependencies]

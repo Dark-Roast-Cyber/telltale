@@ -45,11 +45,14 @@ Telltale is built, tested and released with the toolchain pinned in
 version (MSRV); build it with that toolchain.
 
 The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-sources`,
-`telltale-detect` and `telltale-core`) declare `rust-version = "1.88"` so their
-dependency graph can use patched `time` releases (`>=0.3.47`). Every CI run checks
-the independently locked external consumer, in all eight feature combinations,
-on exactly Rust 1.88.0 on Linux, macOS and Windows (`make embedding-msrv-check`).
-That lock holds the newest dependency releases Rust 1.88 can build
+`telltale-detect` and `telltale-core`) declare `rust-version = "1.89"`. The floor was 1.88 so their
+dependency graph could use patched `time` releases (`>=0.3.47`); 1.89 is the
+release that carries the default `hooks` feature of `telltale-core` (see the
+[changelog](../CHANGELOG.md)). Every CI run checks
+the independently locked external consumer, in all ten feature combinations
+(hooks off with `default-features = false`, and on),
+on exactly Rust 1.89.0 on Linux, macOS and Windows (`make embedding-msrv-check`).
+That lock holds the newest dependency releases Rust 1.89 can build
 (`make embedding-lock-update`). A host on an older Rust than current stable should
 resolve with Cargo's
 `incompatible-rust-versions = "fallback"` (the default with resolver 3) so that

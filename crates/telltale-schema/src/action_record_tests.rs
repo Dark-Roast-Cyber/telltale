@@ -410,6 +410,14 @@ fn schema_vocabularies_match_the_rust_types() {
     let enumerated =
         |pointer: &str| names(schema.pointer(pointer).unwrap().as_array().unwrap().clone());
 
+    // v1 is frozen (`v1_schema_is_frozen`), so a new `ClientId` fails here:
+    // its action records need a schema decision, not a silent enum edit.
+    let clients = crate::clients::ClientId::ALL
+        .iter()
+        .map(|client| Value::from(client.as_str()))
+        .collect();
+    assert_eq!(enumerated("/properties/client/enum"), names(clients));
+
     let families = ObservationFamily::ALL
         .iter()
         .map(|family| serde_json::to_value(family).unwrap())

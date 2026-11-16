@@ -38,12 +38,21 @@ export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"$root/target/$target"}
 printf 'External embedding contracts: '
 cargo --version
 
-for features in '' opencode-sqlite protected-assignment \
+# `telltale-core` enables `hooks` by default: embedders get it unless they write
+# `default-features = false`, which is how this consumer depends on it. `''` is
+# that opt-out with nothing enabled; `hooks` is the same dependency with the
+# default feature set explicitly enabled.
+grep -q '^default = \["hooks"\]$' "$root/crates/telltale/Cargo.toml" || {
+    echo 'telltale-core no longer enables hooks by default' >&2
+    exit 1
+}
+for features in '' hooks opencode-sqlite protected-assignment \
     opencode-sqlite,protected-assignment sqlx-sqlite \
     opencode-sqlite,sqlx-sqlite protected-assignment,sqlx-sqlite \
-    opencode-sqlite,protected-assignment,sqlx-sqlite
+    opencode-sqlite,protected-assignment,sqlx-sqlite \
+    hooks,opencode-sqlite,protected-assignment
 do
-    printf '\nEmbedding contract features: %s\n' "${features:-default}"
+    printf '\nEmbedding contract features: %s\n' "${features:-none (default-features = false)}"
     set -- --locked --manifest-path "$manifest" --no-default-features
     if [ -n "$features" ]; then
         set -- "$@" --features "$features"
@@ -59,6 +68,19 @@ do
         *)
             if printf '%s\n' "$core_graph" | grep -Eq '^(rusqlite|libsqlite3-sys) '; then
                 echo 'Default core unexpectedly depends on SQLite' >&2
+                exit 1
+            fi
+            ;;
+    esac
+    case "$features" in
+        *hooks*)
+            printf '%s\n' "$core_graph" | grep -q '^toml '
+            cargo tree "$@" -e normal,build --prefix none -f '{p} features={f}' \
+                | grep '^telltale-core ' | grep -q 'hooks'
+            ;;
+        *)
+            if printf '%s\n' "$core_graph" | grep -q '^toml '; then
+                echo 'Hooks dependencies are present without the hooks feature' >&2
                 exit 1
             fi
             ;;
