@@ -16,7 +16,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
-use telltale_core::hooks::engine::HOST_RULE_DOCUMENTS;
+use telltale_core::hooks::engine::host_rule_documents;
 use telltale_core::hooks::journal::Line;
 use telltale_core::{
     ClientId, DetailedEvaluationOptions, ObservationStage, Pipeline, Source, SourceKind,
@@ -48,8 +48,8 @@ fn ts(n: usize) -> String {
 
 fn pipeline() -> Pipeline {
     let mut builder = Pipeline::builder();
-    for (_, document) in HOST_RULE_DOCUMENTS {
-        builder = builder.rules_document((*document).to_owned());
+    for (_, document) in host_rule_documents() {
+        builder = builder.rules_document(document.clone());
     }
     builder.build().unwrap()
 }
