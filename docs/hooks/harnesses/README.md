@@ -10,6 +10,11 @@ payload looks like, and which decisions the harness actually honors.
 | OpenAI Codex CLI | [codex-cli.md](codex-cli.md) | 0.166.0 | Implemented; scripted-model E2E, real-model run pending |
 | OpenCode | [opencode.md](opencode.md) | 1.19.5 (v1 API), 2.2.5 (v2 API) | Not started |
 
+The [capability matrix](../capability-matrix.md) also lists the harnesses that
+have no contract page yet (Cursor, Gemini CLI, OpenClaw, Hermes Agent). The
+adapters in a build are the registry in `crates/telltale/src/hooks/harness.rs`;
+`telltale hooks harnesses` prints them.
+
 Copilot, Codex and OpenCode were verified with stub hooks (or capture
 plugins) on the real harness binaries, driven by a scripted model
 (`scripts/hooks/harness/mock-model.py`). This needs no credentials and spends no
@@ -25,7 +30,9 @@ Evidence levels: E2E, Capture, Src, Docs.
 Status: gaps 1 to 3 are closed in the runtime (`Context::can_ask` with
 `Harness::can_ask`, FIFO correlation with `runtime::synthetic_call_id`,
 `Event::TurnSettled`; ADR 0004 addendum, `crates/telltale/tests/hooks/harness_contract.rs`).
-Gaps 4 and 5 are adapter work (rendering, input normalization).
+Gap 4 is adapter work (rendering). Gap 5 is handled in the runtime: each
+adapter declares its native shapes (`Adapter::normalization`) and the runtime
+normalizes them, so an adapter never reshapes a tool input itself.
 
 ### 1. Ask
 

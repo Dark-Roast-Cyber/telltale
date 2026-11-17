@@ -42,6 +42,9 @@ pub mod session;
 #[cfg(test)]
 mod shell_reading_tests;
 mod shell_text;
+mod tool_arguments;
+#[cfg(test)]
+mod tool_reading_tests;
 mod types;
 #[cfg(test)]
 mod written_path_tests;

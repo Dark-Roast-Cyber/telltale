@@ -19,34 +19,36 @@ use crate::{
 use telltale_rules::RuleDefinition;
 
 use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
+use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
 
-/// Host-owned Rule v1 templates (name, content): detections of an agent
-/// disabling its own hooks. Every document is loaded into the one pipeline
-/// that serves every harness; an adapter with harness-specific host rules
-/// adds its own `rules/*.yaml` file here. A template writes the pattern text
-/// rules share as `{{NAME}}` (`RULE_FRAGMENTS`); `host_rule_documents` expands it.
-const HOST_RULE_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "telltale-hooks-self-protection.yaml",
-        include_str!("rules/telltale-hooks-self-protection.yaml"),
-    ),
-    (
-        "copilot-cli-self-protection.yaml",
-        include_str!("rules/copilot-cli-self-protection.yaml"),
-    ),
-    (
-        "codex-cli-self-protection.yaml",
-        include_str!("rules/codex-cli-self-protection.yaml"),
-    ),
-];
+/// The shared host-owned Rule v1 template (name, content): detections of an
+/// agent disabling hooks, for every harness. A template writes the pattern
+/// text rules share as `{{NAME}}` (`RULE_FRAGMENTS`).
+const SHARED_RULE_TEMPLATE: (&str, &str) = (
+    "telltale-hooks-self-protection.yaml",
+    include_str!("rules/telltale-hooks-self-protection.yaml"),
+);
+
+/// Every host rule template (name, content): the shared one, then each
+/// adapter's own (`Adapter::rules`). All are loaded into the one pipeline that
+/// serves every harness.
+fn host_rule_templates() -> Vec<(&'static str, &'static str)> {
+    let own = Harness::ALL
+        .iter()
+        .filter_map(|harness| match harness.adapter().rules {
+            HostRules::Document(name, template) => Some((name, template)),
+            HostRules::Shared => None,
+        });
+    std::iter::once(SHARED_RULE_TEMPLATE).chain(own).collect()
+}
 
 /// The bundled host rule documents (name, content), with every placeholder expanded.
 pub fn host_rule_documents() -> &'static [(&'static str, String)] {
     static DOCUMENTS: std::sync::LazyLock<Vec<(&str, String)>> = std::sync::LazyLock::new(|| {
-        HOST_RULE_TEMPLATES
-            .iter()
-            .map(|&(name, template)| (name, expand_fragments(template)))
+        host_rule_templates()
+            .into_iter()
+            .map(|(name, template)| (name, expand_fragments(template)))
             .collect()
     });
     &DOCUMENTS
@@ -967,14 +969,8 @@ fn harness_home_families(
     coverage: &mut GeneratedCoverage,
 ) -> [Family; 2] {
     coverage.paths += homes.len();
-    let name_end = NAME_END;
-    let files = |home: &crate::hooks::config::HarnessHome| match home.variable {
-        "CODEX_HOME" => format!(
-            r#"[\\/]+(?:hooks\.json|(?:[^\\/\s;&|"']+\.)?config\.toml|rules{name_end}|(?:[^\s;&|"']*[\\/])?hooks\.json)"#
-        ),
-        _ => format!(
-            r#"[\\/]+(?:(?:hooks|agents){name_end}|settings(?:\.local)?\.json|(?:[^\s;&|"']*[\\/])?hooks\.json)"#
-        ),
+    let files = |home: &crate::hooks::config::HarnessHome| {
+        home.hook_files.replace("{{NAME_END}}", NAME_END)
     };
     let fragments = |suffix: &dyn Fn(&crate::hooks::config::HarnessHome) -> String,
                      coverage: &mut GeneratedCoverage| {
@@ -1446,7 +1442,7 @@ mod tests {
         let placeholder = regex::Regex::new(r"\{\{([A-Z][A-Z0-9_]*)\}\}").unwrap();
         let quoted = regex::Regex::new(r"^\s*[a-z_]+: '.*'$").unwrap();
         let mut named = std::collections::BTreeSet::new();
-        for (name, template) in super::HOST_RULE_TEMPLATES {
+        for (name, template) in super::host_rule_templates() {
             for line in template.lines() {
                 for found in placeholder.captures_iter(line) {
                     let fragment = found.get(1).unwrap().as_str();
@@ -1479,7 +1475,7 @@ mod tests {
     /// is built from the shared texts, and a change to one reaches every rule that uses it.
     #[test]
     fn every_exclusion_is_built_from_shared_text() {
-        for (name, template) in super::HOST_RULE_TEMPLATES {
+        for (name, template) in super::host_rule_templates() {
             let mut lines = template.lines();
             while let Some(line) = lines.next() {
                 if line.trim() == "exclude:" {
@@ -1656,9 +1652,9 @@ mod tests {
             })
             .collect();
         files.sort();
-        let mut listed: Vec<(String, String)> = super::HOST_RULE_TEMPLATES
-            .iter()
-            .map(|(name, content)| ((*name).to_owned(), (*content).to_owned()))
+        let mut listed: Vec<(String, String)> = super::host_rule_templates()
+            .into_iter()
+            .map(|(name, content)| (name.to_owned(), content.to_owned()))
             .collect();
         listed.sort();
         assert_eq!(listed, files);

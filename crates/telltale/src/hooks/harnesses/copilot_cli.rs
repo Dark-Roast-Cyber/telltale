@@ -24,6 +24,11 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::hooks::harness::{
+    Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
+};
+use crate::hooks::harnesses::payload;
+use crate::hooks::normalize::Rules;
 use crate::hooks::runtime::{self, Completion, Context, Event, Response, ToolCall};
 use crate::hooks::state::Verdict;
 
@@ -33,6 +38,10 @@ pub const PRE_TOOL_USE: &str = "preToolUse";
 /// The pre-execution hook event in the PascalCase dialect (also what
 /// Copilot sends to a repository's `.claude/settings.json` hooks).
 pub const PASCAL_PRE_TOOL_USE: &str = "PreToolUse";
+/// The top-level payload keys that name the hook event: PascalCase payloads,
+/// and the camelCase events that name themselves.
+pub const PASCAL_EVENT_KEY: &str = "hook_event_name";
+pub const CAMEL_EVENT_KEY: &str = "hookName";
 /// A hook `ask` is shown to the user in an interactive session and refused
 /// in `-p` and autopilot ("unable to ask user for confirmation"), with or
 /// without `--allow-all-tools` and `--yolo` (verified in 1.0.105, see
@@ -167,7 +176,7 @@ pub fn looks_like_pre_tool_use(bytes: &[u8]) -> bool {
     if tool < at("\"hook_event_name\"") && tool < at("\"hookName\"") {
         return true;
     }
-    crate::hooks::claude_code::looks_like_pre_tool_use(bytes)
+    payload::names_event_as(bytes, PASCAL_EVENT_KEY, PASCAL_PRE_TOOL_USE)
 }
 
 /// The text a tool result gave the model: `textResultForLlm` (camelCase) or
@@ -347,6 +356,77 @@ pub fn hooks_file(command: &str) -> Value {
         }
     })
 }
+
+fn parse_payload(bytes: &[u8]) -> Parsed {
+    match parse(bytes) {
+        Err(error) => Parsed::Invalid(error.code()),
+        Ok(input) => match to_event(&input) {
+            Ok((ctx, event)) => Parsed::Event(ctx, event),
+            Err(error) => Parsed::Unusable {
+                hook_event: input.hook_event(),
+                code: error.code(),
+            },
+        },
+    }
+}
+
+/// Printed with the hook file when `--fail-closed` is asked for.
+const FAIL_CLOSED_NOTE: &str = "telltale hooks: Copilot CLI already blocks a tool call when its hook crashes, exits non-zero or is missing, and always lets it run when the hook times out; --fail-closed changes nothing.";
+
+fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'static str> {
+    Ok(InstallOutput {
+        document: hooks_file(command),
+        notes: fail_closed.then_some(FAIL_CLOSED_NOTE),
+    })
+}
+
+/// Copilot CLI 1.0.105: camelCase `apply_patch`/`create`/`edit`/`view`/`rg`,
+/// PascalCase `Edit` (raw-string patch or Copilot keys) and `Write`.
+pub const NORMALIZATION: Rules = Rules {
+    patch_tools: &[("apply_patch", true, None), ("Edit", true, None)],
+    key_tools: &["create", "edit", "Write", "Edit"],
+    keys: &[
+        ("file_text", "content"),
+        ("new_str", "new_string"),
+        ("old_str", "old_string"),
+    ],
+    tool_names: &[("view", "Read"), ("rg", "Grep")],
+};
+
+/// The registry's descriptor of this adapter.
+pub const ADAPTER: Adapter = Adapter {
+    name: HARNESS,
+    display_name: "GitHub Copilot CLI",
+    pre_tool_use: &[PRE_TOOL_USE, PASCAL_PRE_TOOL_USE],
+    event_keys: &[PASCAL_EVENT_KEY, CAMEL_EVENT_KEY],
+    can_ask: CAN_ASK,
+    parse: parse_payload,
+    render,
+    looks_like_pre_tool_use,
+    install: Install {
+        usage: "  telltale hooks copilot-cli settings [--fail-closed] [COMMAND]
+                                                  print the Copilot CLI hook file (for example
+                                                  ~/.copilot/hooks/telltale-hooks.json); Copilot
+                                                  always fails closed on a crash or missing binary
+                                                  and open on a timeout, so --fail-closed changes nothing;
+                                                  on Windows COMMAND runs under PowerShell, so quote a
+                                                  path with spaces as '& \"C:\\...\\telltale.exe\" hooks ...'",
+        output: install_output,
+    },
+    // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
+    nameless_block: NamelessBlock::Exit(1),
+    normalization: Normalization::Rules(&NORMALIZATION),
+    // The same file names as the static rules in the document below.
+    home: Some(Home {
+        variable: "COPILOT_HOME",
+        hook_files: r#"[\\/]+(?:(?:hooks|agents){{NAME_END}}|settings(?:\.local)?\.json|(?:[^\s;&|"']*[\\/])?hooks\.json)"#,
+    }),
+    rules: HostRules::Document(
+        "copilot-cli-self-protection.yaml",
+        include_str!("../rules/copilot-cli-self-protection.yaml"),
+    ),
+    launchers: &["copilot"],
+};
 
 #[cfg(test)]
 mod tests {

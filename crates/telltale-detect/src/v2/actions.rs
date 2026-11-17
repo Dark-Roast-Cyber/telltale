@@ -1,6 +1,7 @@
 //! Action interpretation beside the frozen session compatibility view. No I/O.
 use super::Severity;
 use super::session::{ProcessingError, RetentionBudget};
+use super::tool_arguments::{self, ArgumentReading};
 use crate::process_chain::{statement_spans, tokenize};
 use regex::Regex;
 use serde::Serialize;
@@ -733,26 +734,21 @@ fn view(
             if let Some(name) = tool.name() {
                 out.put("tool_name", name.to_owned());
             }
-            out.reads_paths = tool.name().is_some_and(|name| {
-                matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "read" | "read_file" | "readfile" | "view_file" | "glob" | "list" | "grep"
-                )
-            });
-            for path in super::selector::tool_written_paths(tool.name(), tool.arguments()) {
+            out.reads_paths = tool.name().is_some_and(tool_arguments::is_file_read_tool);
+            for path in tool_arguments::tool_written_paths(tool.name(), tool.arguments()) {
                 out.put("written_path", path);
             }
-            let mut command = String::new();
+            let mut reading = ArgumentReading::default();
             match tool.arguments() {
-                Some(JsonValue::Object(input)) => structured_input(input, &mut out, &mut command),
+                Some(JsonValue::Object(input)) => reading.read(input),
                 Some(JsonValue::String(text)) => {
                     // Some native envelopes carry an encoded object as a string.
                     budget.charge(text.len())?;
-                    if let Some((input, skipped)) = super::selector::decoded_argument_object(text) {
-                        structured_input(&input, &mut out, &mut command);
-                        skipped_input(&skipped, &mut out, &mut command);
+                    if let Some((input, skipped)) = tool_arguments::decoded_argument_object(text) {
+                        reading.read(&input);
+                        reading.read_skipped(&skipped);
                     } else {
-                        command.push_str(text);
+                        reading.command.push_str(text);
                     }
                 }
                 _ => {
@@ -762,11 +758,20 @@ fn view(
                         budget,
                     )?;
                     if let Some(JsonValue::String(text)) = resolution.value() {
-                        command.push_str(text);
+                        reading.command.push_str(text);
                     } else if let Some(text) = tool.searchable_arguments() {
-                        command.push_str(text);
+                        reading.command.push_str(text);
                     }
                 }
+            }
+            let ArgumentReading {
+                mut command,
+                argv,
+                facts,
+            } = reading;
+            out.argv = argv;
+            for (field, text) in facts {
+                out.put(field, text);
             }
             budget.charge(command.len())?;
             if tool
@@ -931,6 +936,25 @@ fn view(
     Ok(out)
 }
 
+/// The facts the action view reads from one observation, for tests that pin
+/// the reading: each field, then the flags that are set.
+#[cfg(test)]
+pub(super) fn view_facts(observation: &CanonicalObservationV2) -> String {
+    let view = view(observation, &mut RetentionBudget::new()).expect("within budget");
+    let mut facts: Vec<String> = view
+        .fields
+        .iter()
+        .map(|(field, text)| format!("{field}={text:?}"))
+        .collect();
+    if view.argv {
+        facts.push("argv".to_owned());
+    }
+    if view.reads_paths {
+        facts.push("reads_paths".to_owned());
+    }
+    facts.join(" ")
+}
+
 /// Read only literal arguments of the supported script-tool API. Arbitrary
 /// JavaScript is not executed, flattened, or treated as shell input.
 fn script_actions(
@@ -1020,164 +1044,6 @@ fn script_literal(
         }
     }
     Ok(None)
-}
-
-fn is_command_argument_key(key: &str) -> bool {
-    matches!(key, "command" | "cmd" | "commandLine" | "command_line")
-}
-
-fn is_authored_argument_key(key: &str) -> bool {
-    matches!(key, "content" | "new_string" | "new_source")
-}
-
-fn is_path_argument_key(key: &str) -> bool {
-    matches!(
-        key,
-        "file_path"
-            | "filePath"
-            | "path"
-            | "paths"
-            | "notebook_path"
-            | "file"
-            | "filename"
-            | "target_file"
-            | "glob"
-            | "pattern"
-    )
-}
-
-/// Encoded-argument members skipped by value-bound admission. Members with a
-/// known role are routed exactly as admitted members are, from a transient value
-/// used only for this view (its bytes were charged before decoding), so replaced
-/// `old_string` text never becomes command text. Other members, and members too
-/// deep to parse, stay searchable as command text unless their key is ignored.
-fn skipped_input(skipped: &[(String, String)], out: &mut ActionView, command: &mut String) {
-    for (key, raw) in skipped {
-        if is_ignored_argument_key(key) {
-            continue;
-        }
-        let routed = is_command_argument_key(key)
-            || is_authored_argument_key(key)
-            || is_path_argument_key(key)
-            || key == "edits"
-            || super::selector::is_url_argument_key(key);
-        match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(value) if routed => {
-                let member = BTreeMap::from([(key.clone(), transient_value(&value))]);
-                structured_input(&member, out, command);
-            }
-            _ => {
-                command.push_str(raw);
-                command.push('\n');
-            }
-        }
-    }
-}
-
-/// Unbounded copy for routing only; never retained or emitted as observation
-/// data. Depth is limited by the JSON parser that produced `value`.
-fn transient_value(value: &serde_json::Value) -> JsonValue {
-    match value {
-        serde_json::Value::Null => JsonValue::Null,
-        serde_json::Value::Bool(value) => JsonValue::Bool(*value),
-        serde_json::Value::Number(number) => number
-            .as_i64()
-            .map(JsonValue::Integer)
-            .or_else(|| number.as_u64().map(JsonValue::Unsigned))
-            .unwrap_or_else(|| JsonValue::Number(number.as_f64().unwrap_or_default())),
-        serde_json::Value::String(text) => JsonValue::String(text.clone()),
-        serde_json::Value::Array(items) => {
-            JsonValue::Array(items.iter().map(transient_value).collect())
-        }
-        serde_json::Value::Object(members) => JsonValue::Object(
-            members
-                .iter()
-                .map(|(key, value)| (key.clone(), transient_value(value)))
-                .collect(),
-        ),
-    }
-}
-
-/// Argument keys whose values are prose or replaced text, never action facts.
-fn is_ignored_argument_key(key: &str) -> bool {
-    matches!(
-        key,
-        "old_string"
-            | "prompt"
-            | "description"
-            | "todos"
-            | "plan"
-            | "questions"
-            | "summary"
-            | "title"
-            | "message"
-            | "reason"
-            | "tldr"
-            | "caption"
-            | "activeForm"
-            | "subject"
-    )
-}
-
-fn structured_input(
-    input: &BTreeMap<String, JsonValue>,
-    out: &mut ActionView,
-    command: &mut String,
-) {
-    for (key, value) in input {
-        match key.as_str() {
-            key if is_command_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    command.push_str(v);
-                    command.push('\n');
-                }
-                if let JsonValue::Array(items) = value {
-                    out.argv = true;
-                    for v in items.iter().filter_map(string) {
-                        command.push_str(v);
-                        command.push(' ');
-                    }
-                }
-            }
-            key if is_authored_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    out.put("authored_content", v.to_owned());
-                }
-            }
-            "edits" => {
-                if let JsonValue::Array(edits) = value {
-                    for edit in edits {
-                        if let JsonValue::Object(edit) = edit
-                            && let Some(v) = edit.get("new_string").and_then(string)
-                        {
-                            out.put("authored_content", v.to_owned());
-                        }
-                    }
-                }
-            }
-            key if is_ignored_argument_key(key) => {}
-            key if super::selector::is_url_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    out.put("url", v.to_owned());
-                }
-            }
-            key if is_path_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    out.put("file_path", v.to_owned());
-                }
-                if let JsonValue::Array(items) = value {
-                    for v in items.iter().filter_map(string) {
-                        out.put("file_path", v.to_owned());
-                    }
-                }
-            }
-            _ => {
-                if let Some(v) = string(value) {
-                    out.put("arguments", v.to_owned());
-                }
-            }
-        }
-    }
 }
 
 /// A stage's parameters that can be paths.

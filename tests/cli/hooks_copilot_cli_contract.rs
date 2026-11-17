@@ -14,10 +14,10 @@ use std::process::{Command, Stdio};
 
 use common::Harness as Rig;
 use serde_json::{Value, json};
-use telltale_core::hooks::claude_code;
 use telltale_core::hooks::config::OnError;
-use telltale_core::hooks::copilot_cli;
 use telltale_core::hooks::harness::{Harness, Parsed};
+use telltale_core::hooks::harnesses::claude_code;
+use telltale_core::hooks::harnesses::copilot_cli;
 use telltale_core::hooks::runtime::SYNTHETIC_ID_PREFIX;
 
 fn fixtures() -> PathBuf {
