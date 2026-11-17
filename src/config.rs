@@ -146,6 +146,17 @@ fn config_metadata_result(
     })
 }
 
+/// The config roots a command reads: the explicit roots when any are given,
+/// else the default roots, whether or not they exist yet.
+#[cfg(feature = "hooks")]
+pub(crate) fn config_roots(explicit_roots: &[PathBuf]) -> Vec<PathBuf> {
+    if explicit_roots.is_empty() {
+        default_config_roots()
+    } else {
+        explicit_roots.to_vec()
+    }
+}
+
 fn default_config_roots() -> Vec<PathBuf> {
     let mut roots = vec![PathBuf::from(SYSTEM_CONFIG_ROOT)];
     if let Some(user_root) = user_config_root() {

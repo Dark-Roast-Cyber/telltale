@@ -199,7 +199,7 @@ fn failure_policy_asks_are_substituted_on_every_path() {
     // Evaluation gap inside tool_requested (on_error = ask).
     let mut h = Harness::with(|c| {
         c.on_error = OnError::Ask;
-        c.telltale.rules = vec![missing.clone()];
+        c.rules.packs.deployment = vec![missing.clone()];
     });
     let response = h.runtime.handle(&cannot, event.clone());
     let (verdict, reason) = decision(&response).unwrap();

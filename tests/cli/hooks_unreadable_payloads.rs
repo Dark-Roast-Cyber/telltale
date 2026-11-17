@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 const ENTRY_POINTS: [&str; 3] = ["claude-code", "codex-cli", "copilot-cli"];
-const ON_ERROR_DENY: &str = "on_error = \"deny\"\n";
+const ON_ERROR_DENY: &str = "  on_error: deny\n";
 const MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 
 /// The installed binary, enforcing, with no reachable default config or
@@ -18,27 +18,33 @@ const MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 fn hook(entry_point: &str, settings: &str, payload: &[u8]) -> (i32, String) {
     let (code, stdout, _) = hook_with(
         entry_point,
-        &format!("mode = \"enforce\"\n{settings}"),
+        &format!("  mode: enforce\n{settings}"),
         payload,
     );
     (code, stdout)
 }
 
-/// The installed binary on exactly `settings`: exit code, stdout and telemetry.
+/// The installed binary on exactly `settings`, the body of the `hooks:`
+/// section: exit code, stdout and telemetry.
 fn hook_with(entry_point: &str, settings: &str, payload: &[u8]) -> (i32, String, String) {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config.toml");
-    std::fs::write(&config, settings).unwrap();
+    let config = dir.path().join("config");
+    std::fs::create_dir_all(config.join("settings.d")).unwrap();
+    std::fs::write(
+        config.join("settings.d").join("hooks.yaml"),
+        format!("version: 1\nhooks:\n{settings}"),
+    )
+    .unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
     command.arg("hooks");
     for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
         command.env(var, "/nonexistent-home-for-test");
     }
     let mut child = command
-        .args([entry_point, "hook"])
+        .args([entry_point, "hook", "--config-dir"])
+        .arg(&config)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_STATE_HOME")
-        .env("TELLTALE_HOOKS_CONFIG", &config)
         .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .stdin(Stdio::piped())
@@ -61,7 +67,7 @@ fn hook_with(entry_point: &str, settings: &str, payload: &[u8]) -> (i32, String,
 /// telemetry instead.
 #[test]
 fn detect_only_answers_nothing_whatever_the_payload() {
-    let strict = "on_error = \"deny\"\non_unevaluable = \"deny\"\n";
+    let strict = "  on_error: deny\n  on_unevaluable: deny\n";
     let hollow = br#"{"session_id":"s","transcript_path":"/t","cwd":"/w","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"mcp__x__y","tool_input":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{"a":{}}}}}}}}},"tool_use_id":"toolu_h"}"#;
     let payloads: [(&str, Vec<u8>); 9] = [
         ("garbage", b"not json".to_vec()),
@@ -92,7 +98,7 @@ fn detect_only_answers_nothing_whatever_the_payload() {
             ),
         ),
     ];
-    for mode in ["", "mode = \"observe\"\n", "mode = \"detect\"\n"] {
+    for mode in ["", "  mode: observe\n", "  mode: detect\n"] {
         for entry_point in ENTRY_POINTS {
             for (name, payload) in &payloads {
                 let settings = format!("{mode}{strict}");
@@ -234,11 +240,11 @@ fn an_unusable_pre_tool_use_gets_the_stricter_policy_on_every_entry_point() {
     for (entry_point, payload, nested, can_ask) in entries {
         let ask = if can_ask { "ask" } else { "deny" };
         for (settings, expected) in [
-            ("", ask), // default: on_unevaluable = "ask"
-            ("on_unevaluable = \"ask\"\n", ask),
-            ("on_unevaluable = \"deny\"\n", "deny"),
-            ("on_error = \"deny\"\non_unevaluable = \"allow\"\n", "deny"),
-            ("on_error = \"ask\"\non_unevaluable = \"allow\"\n", ask),
+            ("", ask), // default: on_unevaluable: ask
+            ("  on_unevaluable: ask\n", ask),
+            ("  on_unevaluable: deny\n", "deny"),
+            ("  on_error: deny\n  on_unevaluable: allow\n", "deny"),
+            ("  on_error: ask\n  on_unevaluable: allow\n", ask),
         ] {
             let (code, stdout) = hook(entry_point, settings, payload);
             assert_eq!(code, 0, "{entry_point}: {settings}");
@@ -251,7 +257,7 @@ fn an_unusable_pre_tool_use_gets_the_stricter_policy_on_every_entry_point() {
         // Only an operator's explicit allow on both lets the call through, and
         // that is an empty success, never an `allow` decision.
         assert_eq!(
-            hook(entry_point, "on_unevaluable = \"allow\"\n", payload),
+            hook(entry_point, "  on_unevaluable: allow\n", payload),
             (0, String::new()),
             "{entry_point}"
         );
