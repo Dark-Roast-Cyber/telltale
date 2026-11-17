@@ -238,6 +238,20 @@ hooks:
     # socket: <path>     # default: <state dir>/evaluator.sock
 ```
 
+While `hooks.self_protection_rules` is on, rule IDs that start with
+`tth.tamper.` belong to hooks. Rule content and policy cannot change the
+self-protection rules: a rule document, rule package or override file that names
+such an ID is invalid configuration, and so is a policy under which any
+self-protection rule would not stay enabled. A shared policy with a whitelist
+(`enabled_categories` or `enabled_rules`) must therefore include the
+self-protection rules when hooks read it: list the `approval_bypass` category,
+or every `tth.tamper.` rule ID. A policy that only turns off other rules or
+categories is unaffected. `telltale hooks check` names the file (never its
+content) and exits 1, a hook whose settings ask for `hooks.mode: enforce` denies
+tool calls until it is fixed, and any other hook is detect-only on the defaults
+with a `config_invalid` record. Turn the rules off with
+`hooks.self_protection_rules: false` to manage them yourself.
+
 The config roots are `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
 `~/.config/telltale`; a later root wins per key. `--config-dir DIR` on
 `hook`, `check` and `serve` (repeatable) replaces them, and an autostarted

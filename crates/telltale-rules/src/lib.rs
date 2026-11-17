@@ -77,7 +77,7 @@ pub struct RuleDefaults {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleDefinition {
     pub id: String,
@@ -118,7 +118,7 @@ pub struct RuleDefinition {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetectionDefinition {
     pub selection: BTreeMap<String, String>,
@@ -703,6 +703,13 @@ pub struct RuleOverrideDocument {
     #[serde(default)]
     description: Option<String>,
     overrides: Vec<RuleOverrideEntry>,
+}
+
+impl RuleOverrideDocument {
+    /// The rule IDs the entries name, in order.
+    pub fn rule_ids(&self) -> impl Iterator<Item = &str> {
+        self.overrides.iter().map(|entry| entry.rule_id.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
