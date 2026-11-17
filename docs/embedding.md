@@ -52,7 +52,14 @@ qualification.
 | Full pipeline in-process (EDR, security tool) | `telltale-core` | The supported facade: discover → native acquisition → canonical detection. |
 | Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, redaction, risk thresholds, and `Event3Record` for strict terminal Event 3 consumption. |
 | Evaluate the rule language inline (proxy, gateway) | `telltale-rules` | I/O-free YAML rule parsing, validation, policy merge, and regex evaluation. |
-| Discover and acquire agent session stores | `telltale-sources` | Cross-platform discovery, static source definitions, canonical acquisition, install inventory. |
+| Discover local AI tools without acquiring sessions | `telltale-discover` | Independent tool inventory and descriptor-driven filesystem discovery; no detection engine or SQLite/network dependency. |
+| Discover and acquire supported agent session stores | `telltale-sources` | Supported-source registry, compatibility discovery entry points, canonical acquisition and legacy install inventory. |
+
+Filesystem traversal, source-root resolution and project-root configuration live
+in `telltale-discover`. Existing facade and `telltale-sources` discovery imports
+retain their interfaces and pass the same supported-source registry. The broader
+inventory catalog does not register acquisition adapters or expand detection
+coverage. Inventory is independent of token counters.
 
 The crates are not on crates.io yet. Depend on `telltale-core` from Git and pin
 a revision, not a branch; update the pin deliberately and rerun your tests. See

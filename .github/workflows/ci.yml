@@ -443,11 +443,13 @@ jobs:
           root = Path(os.environ["TELLTALE_GIT_CONSUMER_ROOT"])
           manifest = root / "tests/embedding-consumer/Cargo.toml"
           version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
-          original = 'path = "../../crates/telltale", version = "=' + version + '"'
           replacement = 'git = "https://github.com/Dark-Roast-Cyber/telltale.git", rev = "' + os.environ["SOURCE_SHA"] + '", version = "=' + version + '"'
           text = manifest.read_text()
-          assert text.count(original) == 1, "Unexpected external consumer dependency"
-          manifest.write_text(text.replace(original, replacement))
+          for crate in ("telltale", "telltale-discover"):
+              original = 'path = "../../crates/' + crate + '", version = "=' + version + '"'
+              assert text.count(original) == 1, "Unexpected external consumer dependency"
+              text = text.replace(original, replacement)
+          manifest.write_text(text)
           (manifest.parent / "Cargo.lock").unlink()
           PY
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/git-consumer"
@@ -458,13 +460,13 @@ jobs:
           import tomllib
           lock = Path(os.environ["TELLTALE_GIT_CONSUMER_ROOT"]) / "tests/embedding-consumer/Cargo.lock"
           packages = tomllib.loads(lock.read_text())["package"]
-          expected = {"telltale-core", "telltale-detect", "telltale-sources", "telltale-rules", "telltale-schema"}
+          expected = {"telltale-core", "telltale-detect", "telltale-discover", "telltale-sources", "telltale-rules", "telltale-schema"}
           actual = [p for p in packages if p["name"] in expected]
           assert {p["name"] for p in actual} == expected and len(actual) == len(expected), "Incomplete or duplicate Git consumer dependency graph"
           source = "git+https://github.com/Dark-Roast-Cyber/telltale.git?rev=" + os.environ["SOURCE_SHA"] + "#" + os.environ["SOURCE_SHA"]
           version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
           assert all(p.get("source") == source and p["version"] == version for p in actual), "Git consumer source/version identity drift"
-          print("Standalone Git consumer resolved all five Telltale dependencies to " + os.environ["SOURCE_SHA"])
+          print("Standalone Git consumer resolved all six Telltale dependencies to " + os.environ["SOURCE_SHA"])
           PY
           sh "$consumer_root/scripts/embedding-contract-check"
           cargo clippy --locked --manifest-path "$consumer_root/tests/embedding-consumer/Cargo.toml" --all-targets --all-features -- -D warnings
