@@ -76,14 +76,11 @@ jobs:
         with:
           toolchain: 1.99.1
           components: clippy
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+          shared-key: linux-engine-hooks-opencode-sqlite-protected-assignment
+          cache-bin: false
+          save-if: false
       - run: make --silent CARGO_LOCKED=--locked clippy
 
   test:
@@ -97,14 +94,10 @@ jobs:
         with:
           toolchain: 1.99.1
           components: clippy,rustfmt
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+          shared-key: linux-engine-hooks-opencode-sqlite-protected-assignment
+          cache-bin: false
       # CI bootstrap exception: hosted runners need not have uv installed.
       - name: Install Event 3.0 validator dependency
         shell: bash
@@ -165,6 +158,27 @@ jobs:
 
   windows:
     name: Windows (x86_64-pc-windows-msvc)
+    needs: [scope, windows-tests, windows-corpus, windows-release]
+    if: always() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Windows lane
+        shell: bash
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          TEST_RESULT: ${{ needs.windows-tests.result }}
+          CORPUS_RESULT: ${{ needs.windows-corpus.result }}
+          RELEASE_RESULT: ${{ needs.windows-release.result }}
+        run: |
+          for result in "$SCOPE_RESULT" "$TEST_RESULT" "$CORPUS_RESULT" "$RELEASE_RESULT"; do
+            if [ "$result" != success ]; then
+              printf 'A required Windows lane did not succeed (%s).\n' "$result" >&2
+              exit 1
+            fi
+          done
+
+  windows-tests:
+    name: Windows tests (x86_64-pc-windows-msvc)
     needs: scope
     if: needs.scope.outputs.full == 'true'
     runs-on: windows-latest
@@ -175,14 +189,61 @@ jobs:
           toolchain: 1.99.1
           components: clippy,rustfmt
           targets: x86_64-pc-windows-msvc
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # The Rust version/manifests are hashed by the action. Cache dependencies,
+      # not workspace executables or incremental state; only this lane saves.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+          shared-key: windows-engine-hooks-opencode-sqlite-protected-assignment
+          cache-bin: false
+      - name: Install Event 3.0 validator dependency
+        shell: bash
+        run: |
+          python3 -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          python3 scripts/validate-event-jsonl --help >/dev/null
+      - name: Compile protected assignment opt-in and fail-closed tests
+        run: cargo check --locked -p telltale-core --features protected-assignment --tests --target x86_64-pc-windows-msvc
+      - name: Test protected assignment unsupported-platform boundary
+        run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test workspace outside the corpus lane
+        run: 'cargo test --locked -- --skip self_protection_corpus::'
+
+  windows-corpus:
+    name: Windows Hooks corpus (x86_64-pc-windows-msvc)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: windows-engine-hooks-opencode-sqlite-protected-assignment
+          cache-bin: false
+          save-if: false
+      - name: Test the complete Hooks corpus
+        run: 'cargo test --locked -p telltale-core --features opencode-sqlite --test hooks self_protection_corpus::'
+
+  windows-release:
+    name: Windows release and lifecycle (x86_64-pc-windows-msvc)
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: windows-release-hooks-opencode-sqlite-crt-static
+          cache-bin: false
       - name: Install Event 3.0 validator dependency
         shell: bash
         run: |
@@ -194,17 +255,9 @@ jobs:
       - name: Test Windows runtime verifier
         shell: pwsh
         run: .\tests\verify_windows_runtime.ps1
-      - name: Compile protected assignment opt-in and fail-closed tests
-        run: cargo check --locked -p telltale-core --features protected-assignment --tests --target x86_64-pc-windows-msvc
-      - name: Test protected assignment unsupported-platform boundary
-        run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
       - name: Build official Windows release configuration
         shell: pwsh
-        run: |
-          $env:RUSTFLAGS = '-C target-feature=+crt-static'
-          cargo build --locked --release --target x86_64-pc-windows-msvc
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
       - name: Verify Windows release runtime imports
         shell: pwsh
         run: .\scripts\verify-windows-runtime.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe
@@ -240,14 +293,10 @@ jobs:
           toolchain: 1.99.1
           components: clippy,rustfmt
           targets: aarch64-apple-darwin
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+          shared-key: macos-engine-hooks-opencode-sqlite-protected-assignment
+          cache-bin: false
       - name: Install Event 3.0 validator dependency
         shell: bash
         run: |
