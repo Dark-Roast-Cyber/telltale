@@ -29,6 +29,8 @@ mod cursor;
 mod discover;
 mod export;
 pub mod historical;
+#[cfg(feature = "hooks")]
+mod hooks;
 mod scan;
 
 #[derive(Parser)]
@@ -74,6 +76,16 @@ enum Command {
     Cursor {
         #[command(subcommand)]
         command: cursor::CursorCommand,
+    },
+
+    /// Pre-execution hooks for agent harnesses (Claude Code, Codex CLI,
+    /// Copilot CLI): `telltale hooks help` lists them.
+    #[cfg(feature = "hooks")]
+    #[command(disable_help_flag = true)]
+    Hooks {
+        /// A hooks subcommand and its arguments, handled by `telltale hooks`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
+        args: Vec<String>,
     },
 
     /// Manage durable delivery state.
@@ -1545,6 +1557,14 @@ mod runtime_dispatch_tests {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // A hook answers a tool call that is waiting: skip the scanner's startup
+    // work (executable hashing, full argument parsing) and use the hooks' own
+    // exit codes.
+    #[cfg(feature = "hooks")]
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "hooks") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(hooks::exit_code(&args));
+    }
     let command = Args::command();
     let args = Args::from_arg_matches(&command.get_matches())?;
     let runtime = command_runtime(&args.command, observe_runtime);
@@ -1598,6 +1618,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Discover(args) => discover::run(args)?,
+        #[cfg(feature = "hooks")]
+        Command::Hooks { args } => std::process::exit(hooks::exit_code(&args)),
         Command::Cursor { command } => cursor::run(command)?,
         Command::Delivery { command } => match command {
             DeliveryCommand::RetryBlocked { outbox_path, sink } => {
