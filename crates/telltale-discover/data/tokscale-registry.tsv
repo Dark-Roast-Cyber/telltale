@@ -1,0 +1,62 @@
+index	variant	id	display	root	variable	fallback	relative	pattern
+0	OpenCode	opencode	OpenCode	XdgData			opencode/storage/message	*.json
+1	Claude	claude	Claude Code	EnvVar	CLAUDE_CONFIG_DIR	.claude	projects	*.jsonl
+2	Codex	codex	Codex CLI	EnvVar	CODEX_HOME	.codex	sessions	*.jsonl*
+3	Cursor	cursor	Cursor IDE	EnvVar	TOKSCALE_CONFIG_DIR	.config/tokscale	cursor-cache	usage*.json|usage*.csv
+4	Gemini	gemini	Gemini CLI	EnvVar	GEMINI_CLI_HOME	.gemini	tmp	*.json|*.jsonl
+5	Amp	amp	Amp	Config			amp-cache/threads	T-*.json
+6	Droid	droid	Droid	Home			.factory/sessions	*.settings.json
+7	OpenClaw	openclaw	OpenClaw	Home			.openclaw/agents	*.jsonl*
+8	Pi	pi	Pi	Home			.pi/agent/sessions	*.jsonl
+9	Kimi	kimi	Kimi CLI	Home			.kimi/sessions	wire.jsonl
+10	Qwen	qwen	Qwen CLI	Home			.qwen/projects	*.jsonl
+11	RooCode	roocode	Roo Code	Home			.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks	ui_messages.json
+12	KiloCode	kilocode	Kilo Code	Home			.config/Code/User/globalStorage/kilocode.kilo-code/tasks	ui_messages.json
+13	Mux	mux	Mux	Home			.mux/sessions	session-usage.json
+14	Kilo	kilo	Kilo CLI	XdgData			kilo/kilo.db	kilo.db
+15	Crush	crush	Crush	XdgData			crush/projects.json	projects.json
+16	Hermes	hermes	Hermes Agent	EnvVar	HERMES_HOME	.hermes	state.db	state.db
+17	Copilot	copilot	Copilot CLI	Home			.copilot/otel	*.jsonl
+18	Goose	goose	Goose	XdgData			goose/sessions/sessions.db	sessions.db
+19	Codebuff	codebuff	Codebuff	EnvVar	CODEBUFF_DATA_DIR	.config/manicode	projects	chat-messages.json
+20	Antigravity	antigravity	Antigravity	Config			antigravity-cache/sessions	*.jsonl
+21	Zed	zed	Zed Agent	XdgData			zed/threads/threads.db	threads.db
+22	Kiro	kiro	Kiro	Home			.kiro/sessions/cli	*.json
+23	Trae	trae	Trae	Config			trae-cache/sessions	*.json
+24	Warp	warp	Warp	Config			warp-cache	usage*.json
+25	Cline	cline	Cline	Home			.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks	ui_messages.json
+26	Gjc	gjc	Gajae-Code	EnvVar	GJC_CODING_AGENT_DIR	.gjc/agent	sessions	*.jsonl
+27	Grok	grok	Grok Build	EnvVar	GROK_HOME	.grok	sessions	updates.jsonl
+28	Jcode	jcode	Jcode	EnvVar	JCODE_HOME	.jcode	sessions	session_*.json
+29	CommandCode	commandcode	Command Code	Home			.commandcode/projects	*.jsonl
+30	MiMoCode	micode	MiMo Code	XdgData			mimocode	*.db
+31	AntigravityCli	antigravity-cli	Antigravity CLI	EnvVar	GEMINI_CLI_HOME	.gemini	antigravity-cli/conversations	*.db
+32	Junie	junie	Junie	Home			.junie/sessions	events.jsonl
+33	Zcode	zcode	ZCode	Home			.zcode/projects	*.jsonl
+34	OpenCodeReview	opencodereview	OpenCodeReview	Home			.opencodereview/sessions	*.jsonl
+35	CodeBuddy	codebuddy	CodeBuddy	Home			.codebuddy/projects	*.jsonl
+36	WorkBuddy	workbuddy	WorkBuddy	Home			.workbuddy	workbuddy.db
+37	DevinCli	devin-cli	Devin CLI	XdgData			devin/cli/sessions.db	sessions.db
+38	DevinDesktop	devin-desktop	Devin Desktop	Home			Library/Application Support/Devin/User/acp-events	*.ndjson
+39	Senpi	senpi	Senpi (OmO Native)	EnvVar	SENPI_CODING_AGENT_DIR	.senpi/agent	sessions	*.jsonl
+40	Augment	augment	Augment Code	Home			.augment/sessions	*.json
+41	Kimchi	kimchi	Kimchi	EnvVar	KIMCHI_CODING_AGENT_DIR	.config/kimchi/harness	sessions	*.jsonl
+42	Reasonix	reasonix	Reasonix	ReasonixHome			stats	*.jsonl
+43	PrimeAgent	prime-agent	Prime Agent	EnvVar	PRIME_AGENT_CODING_AGENT_DIR	.prime/agent	sessions	*.jsonl
+44	Freebuff	freebuff	Freebuff	EnvVar	FREEBUFF_DATA_DIR	.config/manicode	projects	chat-messages.json
+45	CherryStudio	cherrystudio	Cherry Studio	AppData			CherryStudio/.claude/projects	*.jsonl
+46	Dsh	dsh	DeepSeek Harness	EnvVar	DSH_HOME	.dsh	sessions	dsh-session-log
+47	Mcode	mcode	MiniMax Code	Config			headless/mcode	*.jsonl
+48	Fx	fx	Fx	Home			.fx/sessions	usage-v2.json
+49	Omp	omp	Oh My Pi	Home			.omp/agent/sessions	*.jsonl
+50	LmStudio	lmstudio	LM Studio	EnvVar	LM_STUDIO_HOME	.lmstudio	server-logs	*.log
+51	Unsloth	unsloth	Unsloth	EnvVar	UNSLOTH_STUDIO_HOME	.unsloth/studio	studio.db	studio.db
+52	Hindsight	hindsight	Hindsight	EnvVar	HINDSIGHT_HOME	.hindsight	usage	*.jsonl
+53	MiMoDesktop	micode-desktop	Xiaomi MiMo AI	XdgData			mimocode	*.db
+54	Muse	muse	Muse Code	XdgData			muse/sessions	session.jsonl
+55	AntigravityExtension	antigravity-extension	Antigravity IDE Extension	Home			.gemini/antigravity/conversations	*.db
+56	Aside	aside	Aside	Home			.aside/u	messages.jsonl
+57	Vibe	vibe	Mistral Vibe	EnvVar	VIBE_HOME	.vibe	logs/session	vibe-session
+58	Proma	proma	Proma	Home			.proma	proma-session
+59	Bb	bb	BB	EnvVar	BB_DATA_DIR	.bb	bb.db	bb.db
+60	Qoder	qoder	Qoder	EnvVar	QODER_CONFIG_DIR	.qoder	projects	*.jsonl

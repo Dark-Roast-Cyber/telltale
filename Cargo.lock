@@ -1541,6 +1541,7 @@ dependencies = [
  "sha2",
  "telltale-core",
  "telltale-detect",
+ "telltale-discover",
  "telltale-rules",
  "telltale-schema",
  "telltale-sources",
@@ -1591,6 +1592,21 @@ dependencies = [
  "telltale-sources",
  "tempfile",
  "time",
+ "yaml_serde",
+]
+
+[[package]]
+name = "telltale-discover"
+version = "0.7.2"
+dependencies = [
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "telltale-schema",
+ "tempfile",
+ "walkdir",
+ "windows-sys 0.61.2",
  "yaml_serde",
 ]
 
@@ -1647,6 +1663,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "telltale-discover",
  "telltale-schema",
  "tempfile",
  "time",

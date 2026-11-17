@@ -1488,12 +1488,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "telltale-discover"
+version = "0.7.2"
+dependencies = [
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "telltale-schema",
+ "walkdir",
+ "windows-sys",
+ "yaml_serde",
+]
+
+[[package]]
 name = "telltale-embedding-consumer"
 version = "0.0.0"
 dependencies = [
  "serde_json",
  "sqlx",
  "telltale-core",
+ "telltale-discover",
  "tempfile",
 ]
 
@@ -1536,6 +1551,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "telltale-discover",
  "telltale-schema",
  "time",
  "walkdir",

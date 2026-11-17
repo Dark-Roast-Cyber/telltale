@@ -88,7 +88,7 @@ fn sources_catalog() -> Value {
     json!({
         "generated_by": "tests/catalog.rs",
         "source_of_truth": "crates/telltale-sources/src/sources/registry.rs",
-        "hand_maintained": "path_roots and source_specific_discovery are written by hand from crates/telltale-sources/src/discovery.rs, not generated; tests/upstream_formats discover cases check the behavior where a case exists.",
+        "hand_maintained": "path_roots and source_specific_discovery are written by hand from crates/telltale-discover/src/discovery.rs, not generated; tests/upstream_formats discover cases check the behavior where a case exists.",
         "path_roots": {
             "home": "Explicit --root, else $HOME, else %USERPROFILE%.",
             "codex_home": "Explicit --root joined with .codex, else $CODEX_HOME, else <home>/.codex.",

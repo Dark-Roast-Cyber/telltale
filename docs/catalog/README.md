@@ -17,8 +17,11 @@ same change as the code.
 
 Two parts of `sources.json` are written by hand rather than generated: the
 `path_roots` and `source_specific_discovery` descriptions. They summarize
-resolution code in `crates/telltale-sources/src/discovery.rs`, and the staleness
+resolution code in `crates/telltale-discover/src/discovery.rs`, and the staleness
 check only confirms the committed text matches the test. Their behavior per
 harness release is exercised by the
 [upstream format cases](../../tests/upstream_formats/README.md) where a case
 exists.
+
+This catalog describes supported acquisition sources, not the independent
+AI-tool inventory catalog. An inventory entry does not add a source here.
