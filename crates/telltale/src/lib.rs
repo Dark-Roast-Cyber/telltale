@@ -48,6 +48,7 @@ pub mod inventory;
 pub mod investigation;
 pub mod local_event_feed;
 pub mod provenance;
+pub mod rule_resolution;
 
 pub use local_event_feed::{
     FeedBatch, FeedLimits, FeedNotice, FeedNoticeCode, LocalEventFeed, LocalEventFeedConfig,
@@ -1046,10 +1047,21 @@ impl PipelineBuilder {
         let rule_set =
             telltale_rules::compile_rule_sets(rule_sets, self.policy_document.as_deref())
                 .map_err(PipelineError::Compilation)?;
+        Pipeline::from_compiled(rule_set, rule_packages)
+    }
+}
+
+impl Pipeline {
+    /// A pipeline over rule content that is already merged and compiled, such
+    /// as a [`rule_resolution`] result.
+    pub(crate) fn from_compiled(
+        rule_set: CompiledRuleSet,
+        rule_packages: Vec<RulePackageSummary>,
+    ) -> Result<Self, PipelineError> {
         // Modifiers only combine rule matches, so no effective rule leaves no
         // Rule v1 detection. Fail closed instead of building an empty pipeline,
         // even though opt-in process-chain detection does not use this rule set:
-        // `build()` cannot know whether a later scan enables it.
+        // building cannot know whether a later scan enables it.
         if rule_set.rule_count() == 0 {
             return Err(PipelineError::EmptyRuleSet);
         }

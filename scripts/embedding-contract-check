@@ -72,15 +72,21 @@ do
             fi
             ;;
     esac
+    # The hooks feature adds no package of its own to this graph, so the
+    # feature set that Cargo resolved for telltale-core is the evidence. Only
+    # the feature list is read: the package's path may contain the word.
+    core_features=$(cargo tree "$@" -e normal,build --prefix none -f '{p} features={f}' \
+        | sed -n 's/^telltale-core .* features=//p')
     case "$features" in
         *hooks*)
-            printf '%s\n' "$core_graph" | grep -q '^toml '
-            cargo tree "$@" -e normal,build --prefix none -f '{p} features={f}' \
-                | grep '^telltale-core ' | grep -q 'hooks'
+            printf '%s\n' "$core_features" | grep -q 'hooks' || {
+                echo 'The hooks feature was requested but is not enabled' >&2
+                exit 1
+            }
             ;;
         *)
-            if printf '%s\n' "$core_graph" | grep -q '^toml '; then
-                echo 'Hooks dependencies are present without the hooks feature' >&2
+            if printf '%s\n' "$core_features" | grep -q 'hooks'; then
+                echo 'The hooks feature is enabled without being requested' >&2
                 exit 1
             fi
             ;;

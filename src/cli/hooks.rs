@@ -7,11 +7,14 @@
 //! call never waits for the scanner's startup work, and the exit codes below
 //! are the hooks' own rather than the CLI's.
 
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use telltale_core::hooks::claude_code;
 use telltale_core::hooks::codex_cli;
-use telltale_core::hooks::config::{Config, OnError};
+use telltale_core::hooks::config::{Config, OnError, RuleContent};
 use telltale_core::hooks::copilot_cli;
 use telltale_core::hooks::engine::Engine;
 use telltale_core::hooks::evaluator;
@@ -50,14 +53,17 @@ usage:
   telltale hooks check                            validate config and build the Telltale pipeline
   telltale hooks version                          print the version, Git hash and build revision
 
+hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
+config roots instead of the default ones (/etc/telltale, then $XDG_CONFIG_HOME/telltale
+or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
+content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan.
+
 environment:
-  TELLTALE_HOOKS_CONFIG     config TOML, default if present:
-                              Linux, macOS: $XDG_CONFIG_HOME or ~/.config, then telltale-hooks/config.toml
-                              Windows:      %APPDATA%\\telltale-hooks\\config.toml
-  TELLTALE_HOOKS_STATE_DIR  per-session journals and state, default:
-                              Linux, macOS: $XDG_STATE_HOME/telltale-hooks or ~/.local/state/telltale-hooks
-                              Windows:      %LOCALAPPDATA%\\telltale-hooks
-  TELLTALE_HOOKS_TELEMETRY  telemetry JSONL (default <state dir>/telemetry.jsonl)";
+  TELLTALE_HOOKS_STATE_DIR  per-session journals and state (hooks.state_dir), default:
+                              Linux, macOS: $XDG_STATE_HOME/telltale/hooks or ~/.local/state/telltale/hooks
+                              Windows:      %LOCALAPPDATA%\\telltale\\hooks
+  TELLTALE_HOOKS_TELEMETRY  telemetry JSONL (hooks.telemetry_path, default <state dir>/telemetry.jsonl)
+  TELLTALE_HOOKS_EVALUATOR  0 or 1: use the long-lived evaluator (hooks.evaluator.enabled)";
 
 /// Run `telltale hooks <args>` and return the process exit status.
 pub(crate) fn exit_code(args: &[String]) -> i32 {
@@ -76,15 +82,27 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
             print!("{}", codex_cli::execpolicy_rules());
             0
         }
-        [name, "hook"] => match Harness::from_name(name) {
-            Some(harness) => hook(harness),
+        [name, "hook", flags @ ..] => match (Harness::from_name(name), config_dirs(flags)) {
+            (Some(harness), Some(dirs)) => hook(harness, &dirs),
+            _ => {
+                eprintln!("{USAGE}");
+                64
+            }
+        },
+        ["check", flags @ ..] => match config_dirs(flags) {
+            Some(dirs) => check(&dirs),
             None => {
                 eprintln!("{USAGE}");
                 64
             }
         },
-        ["check"] => check(),
-        ["serve"] => serve(),
+        ["serve", flags @ ..] => match config_dirs(flags) {
+            Some(dirs) => serve(&dirs),
+            None => {
+                eprintln!("{USAGE}");
+                64
+            }
+        },
         ["version"] | ["--version"] => {
             println!(
                 "telltale hooks {} ({}), build revision {}",
@@ -148,15 +166,151 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
     0
 }
 
-fn check() -> i32 {
-    let config = match Config::load() {
+/// `--config-dir DIR` or `--config-dir=DIR`, repeated; `None` for anything else.
+fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        let dir = match flag.strip_prefix("--config-dir") {
+            Some("") => *flags.next()?,
+            Some(value) => value.strip_prefix('=')?,
+            None => return None,
+        };
+        if dir.is_empty() {
+            return None;
+        }
+        dirs.push(PathBuf::from(dir));
+    }
+    Some(dirs)
+}
+
+/// The folders of a config root that hooks read (src/config.rs discovery).
+const HOOKS_CONFIG_FOLDERS: &[&str] = &[
+    "settings.d",
+    "organization-rules.d",
+    "rules.d",
+    "ui-rules.d",
+    "rule-packages.d",
+    "overrides.d",
+    "policies.d",
+];
+
+/// The hooks configuration in `config_dirs` (or the default config roots):
+/// the `hooks:` section of `settings.d` and the environment, and the same
+/// rule content and rule settings as `scan`. An error is described for stderr
+/// only, because it can name a path.
+fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
+    let settings =
+        crate::settings::load(config_dirs, false, &crate::settings::CliSettings::default())
+            .map_err(|error| error.to_string())?;
+    let discovered = crate::config::discover_local_config_files(
+        config_dirs,
+        false,
+        crate::config::LocalConfigDiscoveryKind::Rules,
+    )
+    .map_err(|error| error.to_string())?;
+    let policy = crate::config::resolve_policy_path(None, &discovered.policy_paths)
+        .map_err(|error| error.to_string())?;
+    let mut config = settings.hooks.config();
+    config.rules = RuleContent {
+        packs: crate::rules::RulePackPaths {
+            organization: discovered.organization_rule_paths,
+            deployment: discovered.deployment_rule_paths,
+            local: discovered.local_rule_paths,
+            packages: discovered.rule_package_paths,
+            community: super::community_rules(settings.community_rules.value),
+        },
+        overrides: discovered.override_paths,
+        policy,
+        process_chain: settings.process_chain.value,
+        self_protection: settings.hooks.self_protection_rules.value,
+    };
+    let roots = crate::config::config_roots(config_dirs);
+    // Discovery follows symlinks (dotfile managers link a root, a folder or a
+    // file), so a link's target is protected too, including files added to a
+    // linked folder later.
+    let targets = roots
+        .iter()
+        .flat_map(|root| {
+            std::iter::once(root.clone())
+                .chain(HOOKS_CONFIG_FOLDERS.iter().map(|folder| root.join(folder)))
+        })
+        .chain(settings.files().iter().cloned())
+        .chain(config.rules.files().cloned())
+        .filter_map(|path| {
+            telltale_core::hooks::config::plain_canonical(&path).filter(|target| {
+                *target != path && telltale_core::hooks::config::names_below_root(target)
+            })
+        })
+        .collect::<Vec<_>>();
+    config.sources = roots;
+    config.sources.extend(settings.files().iter().cloned());
+    config.sources.extend(targets);
+    config.validate().map_err(|error| error.to_string())?;
+    config.make_paths_absolute();
+    Ok(config)
+}
+
+/// Whether a settings file in `config_dirs` says `hooks.mode: enforce`, asked
+/// only when the configuration did not load. Lenient on purpose: it reads
+/// every `settings.d` file it can, skipping what it cannot, and as plain lines
+/// when a file is not YAML. One such file is enough, so a broken file next to
+/// one that enforces cannot turn enforcement off.
+fn settings_declare_enforce(config_dirs: &[PathBuf]) -> bool {
+    crate::config::config_roots(config_dirs).iter().any(|root| {
+        let Ok(entries) = std::fs::read_dir(root.join("settings.d")) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let path = entry.path();
+            let yaml = path
+                .extension()
+                .is_some_and(|extension| extension == "yaml" || extension == "yml");
+            yaml && telltale_core::hooks::state::read_operator_input(&path)
+                .is_ok_and(|text| declares_enforce(&text))
+        })
+    })
+}
+
+/// Whether settings text sets `hooks.mode` to `enforce`.
+fn declares_enforce(text: &str) -> bool {
+    if let Ok(document) = serde_yaml::from_str::<serde_yaml::Value>(text) {
+        return document
+            .get("hooks")
+            .and_then(|hooks| hooks.get("mode"))
+            .and_then(serde_yaml::Value::as_str)
+            == Some("enforce");
+    }
+    // Not YAML: any `mode: enforce` pair, in block or flow style, quoted or
+    // not, wherever it sits. Only `hooks` has a `mode`, and a stray match in a
+    // configuration that does not load only makes the hook deny as
+    // misconfigured.
+    fn unquote(text: &str) -> &str {
+        text.trim().trim_matches(['"', '\''])
+    }
+    text.lines()
+        .map(|line| line.split('#').next().unwrap_or_default())
+        .flat_map(|line| line.split(['{', '}', ',']))
+        .filter_map(|pair| pair.split_once(':'))
+        .any(|(key, value)| unquote(key) == "mode" && unquote(value) == "enforce")
+}
+
+/// A non-empty environment variable as a path.
+fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn check(config_dirs: &[PathBuf]) -> i32 {
+    let config = match load_config(config_dirs) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("config: {error}");
             return 1;
         }
     };
-    match Engine::new(&config.telltale, &config.protected_paths()) {
+    match Engine::new(&config.rules, &config.protected_paths()) {
         Ok(engine) => {
             println!("build revision: {}", identity::revision());
             println!("semantic identity: {}", engine.semantic_identity());
@@ -166,7 +320,7 @@ fn check() -> i32 {
                 Gate::for_mode(config.mode).as_str(),
                 match Gate::for_mode(config.mode) {
                     Gate::DetectOnly =>
-                        "verdicts are recorded and never returned; set mode = \"enforce\" to block",
+                        "verdicts are recorded and never returned; set hooks.mode: enforce to block",
                     Gate::Enforce => "ask and deny verdicts are returned to the harness",
                 },
                 config.on_error,
@@ -242,11 +396,11 @@ fn unreadable_call_policy(config: &Config) -> OnError {
 /// holds whatever happens below: nothing is written to stdout, the exit
 /// status is 0, and the process ends by [`DETECT_ONLY_DEADLINE`], including
 /// when the payload is unreadable, the configuration is broken or the code
-/// panics. Only `mode = "enforce"` in a configuration that was read lets an
-/// answer through.
-fn hook(harness: Harness) -> i32 {
-    let loaded = Config::load();
-    let gate = Gate::for_config(&loaded, Config::unloadable_declares_enforce);
+/// panics. Only `hooks.mode: enforce` in a configuration that was read lets
+/// an answer through.
+fn hook(harness: Harness, config_dirs: &[PathBuf]) -> i32 {
+    let loaded = load_config(config_dirs);
+    let gate = Gate::for_config(&loaded, || settings_declare_enforce(config_dirs));
     if gate == Gate::DetectOnly {
         // Detached: the process exits when `hook` returns.
         std::thread::spawn(|| {
@@ -269,7 +423,7 @@ fn hook(harness: Harness) -> i32 {
         return deliver(gate.release(Answer::exit(1)));
     };
     let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        evaluate(harness, loaded, gate, &bytes)
+        evaluate(harness, loaded, gate, &bytes, config_dirs)
     }))
     .unwrap_or_else(|_| {
         eprintln!("telltale hooks: the hook panicked (hook_panicked)");
@@ -311,9 +465,10 @@ fn read_payload() -> Option<Vec<u8>> {
 /// releases the answer or does not.
 fn evaluate(
     harness: Harness,
-    loaded: Result<Config, telltale_core::hooks::config::ConfigError>,
+    loaded: Result<Config, String>,
     gate: Gate,
     bytes: &[u8],
+    config_dirs: &[PathBuf],
 ) -> Answer {
     let oversized = bytes.len() as u64 > MAX_PAYLOAD_BYTES;
     let parsed = if oversized {
@@ -343,14 +498,14 @@ fn evaluate(
         Ok(pair) => pair,
         Err(code) => return unusable_event_answer(harness, &config, &hook_event, code),
     };
-    answer_from_runtime(harness, config, ctx, event, bytes)
+    answer_from_runtime(harness, config, ctx, event, bytes, config_dirs)
 }
 
 /// The configuration an event is evaluated under, or `Err(())` when it did not
 /// load and the gate is enforcing.
 fn resolve_config(
     harness: Harness,
-    loaded: Result<Config, telltale_core::hooks::config::ConfigError>,
+    loaded: Result<Config, String>,
     gate: Gate,
 ) -> Result<Config, ()> {
     // A configuration that does not load and asks for enforcement fails closed
@@ -367,9 +522,12 @@ fn resolve_config(
                 Err(())
             } else {
                 eprintln!(
-                    "telltale hooks: the configuration did not load and does not set mode = \"enforce\": detect-only with the defaults"
+                    "telltale hooks: the configuration did not load and does not set hooks.mode: enforce: detect-only with the defaults"
                 );
-                let config = Config::detect_only_fallback();
+                let config = Config::detect_only_fallback(
+                    env_path(crate::settings::STATE_DIR_ENV),
+                    env_path(crate::settings::TELEMETRY_ENV),
+                );
                 Runtime::new(config.clone()).record_unhandled(harness.name(), "", "config_invalid");
                 Ok(config)
             }
@@ -453,6 +611,7 @@ fn answer_from_runtime(
     ctx: Context,
     event: Event,
     bytes: &[u8],
+    config_dirs: &[PathBuf],
 ) -> Answer {
     // No evaluator transport off Unix: skip the socket path and the
     // fingerprint (which hashes rule files) and record why.
@@ -461,9 +620,10 @@ fn answer_from_runtime(
         .evaluator
         .enabled
         .then_some(evaluator::UNSUPPORTED_PLATFORM);
-    // Only the evaluator transport sends the raw payload.
+    // Only the evaluator transport sends the raw payload and starts an
+    // evaluator with these config roots.
     #[cfg(not(unix))]
-    let _ = bytes;
+    let _ = (bytes, config_dirs);
     #[cfg(unix)]
     let mut fallback = None;
     #[cfg(unix)]
@@ -485,7 +645,7 @@ fn answer_from_runtime(
                     && let Ok(state_dir) = config.resolved_state_dir()
                 {
                     // Best effort; this hook still evaluates in-process below.
-                    let _ = evaluator::spawn_detached(&state_dir);
+                    let _ = evaluator::spawn_detached(&state_dir, &serve_args(config_dirs));
                 }
                 fallback = Some(code);
             }
@@ -497,8 +657,24 @@ fn answer_from_runtime(
     Answer::output(harness.render(&ctx.hook_event, &response))
 }
 
-fn serve() -> i32 {
-    let config = match Config::load() {
+/// `hooks serve` arguments for an evaluator that reads the configuration this
+/// hook read.
+#[cfg(unix)]
+fn serve_args(config_dirs: &[PathBuf]) -> Vec<OsString> {
+    let mut args = vec![OsString::from("hooks"), OsString::from("serve")];
+    for dir in config_dirs {
+        args.push(OsString::from("--config-dir"));
+        args.push(
+            std::path::absolute(dir)
+                .unwrap_or_else(|_| dir.clone())
+                .into_os_string(),
+        );
+    }
+    args
+}
+
+fn serve(config_dirs: &[PathBuf]) -> i32 {
+    let config = match load_config(config_dirs) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("config: {error}");
@@ -527,6 +703,179 @@ fn serve() -> i32 {
                 let _ = writeln!(file, "{} serve failed: {error}", time_now());
             }
             1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{config_dirs, declares_enforce, load_config};
+
+    #[test]
+    fn config_dirs_reads_repeated_flags_and_refuses_anything_else() {
+        assert_eq!(config_dirs(&[]), Some(Vec::new()));
+        assert_eq!(
+            config_dirs(&["--config-dir", "a", "--config-dir=b"]),
+            Some(vec![PathBuf::from("a"), PathBuf::from("b")])
+        );
+        for refused in [
+            &["--config-dir"][..],
+            &["--config-dir="],
+            &["--config-dir", ""],
+            &["--config-dirs=a"],
+            &["--bogus"],
+            &["--config-dir", "a", "extra"],
+        ] {
+            assert_eq!(config_dirs(refused), None, "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn only_hooks_mode_enforce_declares_enforcement() {
+        for enforcing in [
+            "version: 1\nhooks:\n  mode: enforce\n",
+            "hooks:\n  mode: \"enforce\"\n  bogus: 1\n",
+            // Not YAML, so read as `key: value` pairs: any spelling of the
+            // pair counts, wherever it sits (fail closed).
+            "hooks:\n  on_error: deny\n  mode: enforce\n  thresholds: [\n",
+            "hooks:\n    mode: 'enforce'  # on\n  : : [\n",
+            "hooks: {mode: enforce, bogus: [}\n",
+            "version: 1\n\"hooks\":\n  mode: enforce\nbroken: [\n",
+            "hooks:\n  \"mode\": enforce\nbroken: [\n",
+            "hooks: {\n  on_error: deny,\n  mode: enforce\n}\nbroken: [\n",
+            "hooks:\r\n  mode: enforce\r\nbroken: [\r\n",
+            "other:\n  mode: enforce\n  bogus: [\n",
+        ] {
+            assert!(declares_enforce(enforcing), "{enforcing}");
+        }
+        for not_enforcing in [
+            "",
+            "version: 1\n",
+            "hooks:\n  mode: observe\n",
+            "mode: enforce\n",
+            "hooks:\n  # mode: enforce\n",
+            "hooks:\n  evaluator:\n    mode: enforce\n",
+            "other:\n  mode: enforce\nhooks:\n  mode: detect\n",
+            // Not YAML, and no `mode: enforce` outside a comment.
+            "hooks:\n  # mode: enforce\n  : : [\n",
+            "hooks:\n  mode: observe\n  bogus: [\n",
+        ] {
+            assert!(!declares_enforce(not_enforcing), "{not_enforcing}");
+        }
+    }
+
+    fn write(root: &Path, relative: &str, text: &str) -> PathBuf {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// The hooks configuration takes its rule content from the same folders as
+    /// `scan`, and its settings from the `hooks:` section, later roots winning.
+    #[test]
+    fn load_config_reads_the_hooks_section_and_the_shared_rule_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        write(
+            &first,
+            "settings.d/10-hooks.yaml",
+            "version: 1\nhooks:\n  mode: enforce\n  on_error: deny\n  thresholds:\n    action_ask: 30\n",
+        );
+        let settings = write(
+            &second,
+            "settings.d/10-hooks.yaml",
+            "version: 1\nhooks:\n  on_error: ask\n  self_protection_rules: false\n",
+        );
+        let rules = write(&first, "rules.d/local.yaml", "version: 1\nrules: []\n");
+        let organization = write(
+            &second,
+            "organization-rules.d/org.yaml",
+            "version: 1\nrules: []\n",
+        );
+        let override_file = write(&second, "overrides.d/quiet.yaml", "version: 1\n");
+        let policy = write(&second, "policies.d/policy.yaml", "version: 1\n");
+
+        let config = load_config(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(config.mode, telltale_core::hooks::config::Mode::Enforce);
+        assert_eq!(
+            config.on_error,
+            telltale_core::hooks::config::OnError::Ask,
+            "the later root wins"
+        );
+        assert_eq!(config.thresholds.action_ask, 30);
+        assert!(!config.rules.self_protection);
+        let absolute = |path: &Path| std::path::absolute(path).unwrap();
+        assert_eq!(config.rules.packs.deployment, vec![absolute(&rules)]);
+        assert_eq!(
+            config.rules.packs.organization,
+            vec![absolute(&organization)]
+        );
+        assert_eq!(config.rules.overrides, vec![absolute(&override_file)]);
+        assert_eq!(config.rules.policy, Some(absolute(&policy)));
+        // The roots and settings files are protected, like the rule files.
+        let protected = config.protected_paths();
+        for path in [&first, &second, &settings, &rules, &policy] {
+            assert!(protected.contains(&absolute(path)), "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn load_config_refuses_unknown_hooks_keys_and_invalid_thresholds() {
+        let dir = tempfile::tempdir().unwrap();
+        for (body, expected) in [
+            ("hooks:\n  bogus: 1\n", "bogus"),
+            (
+                "hooks:\n  thresholds:\n    action_ask: 90\n    action_deny: 80\n",
+                "hooks.thresholds",
+            ),
+        ] {
+            let root = dir.path().join(expected);
+            write(
+                &root,
+                "settings.d/hooks.yaml",
+                &format!("version: 1\n{body}"),
+            );
+            let error = load_config(&[root]).unwrap_err();
+            assert!(error.contains(expected), "{body}: {error}");
+        }
+    }
+
+    /// A linked root, folder or file is read through the link, so its target
+    /// is protected too: a file added to a linked `settings.d` later must not
+    /// be an unprotected way to change the configuration.
+    #[cfg(unix)]
+    #[test]
+    fn link_targets_in_a_config_root_are_protected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let dropins = base.join("dropins");
+        write(
+            &dropins,
+            "hooks.yaml",
+            "version: 1\nhooks:\n  mode: enforce\n",
+        );
+        let rule_target = write(&base.join("elsewhere"), "local.yaml", "rules: []\n");
+        let root = base.join("root");
+        std::fs::create_dir_all(root.join("rules.d")).unwrap();
+        symlink(&dropins, root.join("settings.d")).unwrap();
+        symlink(&rule_target, root.join("rules.d/local.yaml")).unwrap();
+        let linked_root = base.join("linked-root");
+        symlink(&root, &linked_root).unwrap();
+
+        let config = load_config(&[linked_root]).unwrap();
+        assert_eq!(config.mode, telltale_core::hooks::config::Mode::Enforce);
+        let protected = config.protected_paths();
+        for target in [&root, &dropins, &dropins.join("hooks.yaml"), &rule_target] {
+            assert!(
+                protected.contains(target),
+                "{} not in {protected:?}",
+                target.display()
+            );
         }
     }
 }

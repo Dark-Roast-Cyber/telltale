@@ -606,6 +606,30 @@ events:
 watch:
   debounce_ms: 500                   # watch --debounce-ms
   min_scan_interval_ms: 10000        # watch --min-scan-interval-ms
+hooks:                               # telltale hooks; see docs/hooks/README.md
+  mode: observe                      # detect-only; enforce returns ask and deny to the harness
+  on_error: allow                    # allow, ask or deny when evaluation fails
+  on_unevaluable: ask                # allow, ask or deny for a call that cannot be read
+  reason_detail: full                # full or minimal reason text for the harness
+  # state_dir: <path>                # TELLTALE_HOOKS_STATE_DIR; default under XDG_STATE_HOME or LOCALAPPDATA
+  # telemetry_path: <path>           # TELLTALE_HOOKS_TELEMETRY; default telemetry.jsonl in the state dir
+  self_protection_rules: true
+  thresholds:
+    action_ask: 50
+    action_deny: 90
+    session_ask: 150
+    session_deny: 300
+    repeated_denials: 3
+  window:
+    max_records: 256
+    max_bytes: 2097152
+    max_result_bytes: 16384
+  evaluator:
+    enabled: true                    # TELLTALE_HOOKS_EVALUATOR
+    autostart: true
+    idle_timeout_secs: 1800
+    request_timeout_ms: 10000
+    # socket: <path>                 # default evaluator.sock in the state dir
 ```
 
 Precedence, lowest to highest: defaults, settings files (roots in order, files

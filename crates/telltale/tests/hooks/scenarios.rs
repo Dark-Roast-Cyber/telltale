@@ -184,7 +184,7 @@ fn hook_self_protection() {
         "sed -i 's/PreToolUse/Nothing/' .claude/settings.local.json",
         "echo '{}' > ~/.claude/settings.json",
         "pkill -f telltale-hooks",
-        "rm -rf ~/.local/state/telltale-hooks/sessions",
+        "rm -rf ~/.local/state/telltale/hooks/sessions",
     ]
     .iter()
     .enumerate()
@@ -220,14 +220,14 @@ fn observe_mode_records_but_never_returns() {
 /// policy turns it into an answer: the strictest ones are recorded, not returned.
 #[test]
 fn detect_only_is_the_default_and_no_failure_policy_returns_a_verdict() {
-    let default = telltale_core::hooks::config::Config::from_toml("").unwrap();
+    let default = telltale_core::hooks::config::Config::default();
     assert_eq!(default.mode, Mode::Observe);
     // A rule file that is gone: the pipeline cannot build, a strict failure.
     let mut h = Harness::with(|c| {
         c.mode = default.mode;
         c.on_error = OnError::Deny;
         c.on_unevaluable = OnError::Deny;
-        c.telltale.rules = vec!["/nonexistent/telltale-hooks-test/gone.yaml".into()];
+        c.rules.packs.deployment = vec!["/nonexistent/telltale-hooks-test/gone.yaml".into()];
     });
     assert_eq!(h.pre_bash("toolu_f", "rm -f ~/.claude/settings.json"), None);
     let decision = h.decision_for("toolu_f");
@@ -308,7 +308,7 @@ fn evaluation_failure_applies_on_error() {
     let missing = std::path::PathBuf::from("/nonexistent/telltale-hooks-test/rules.yaml");
     let mut closed = Harness::with(|c| {
         c.on_error = OnError::Deny;
-        c.telltale.rules = vec![missing.clone()];
+        c.rules.packs.deployment = vec![missing.clone()];
     });
     let output = closed.pre_bash("toolu_e", "ls");
     assert_eq!(verdict(&output), Some("deny"));
@@ -323,7 +323,7 @@ fn evaluation_failure_applies_on_error() {
     // With on_error = allow, unreadable rule content still asks: the config
     // validated the file at load, so losing it afterwards is agent-reachable
     // (tests/state_tampering.rs). Other engine failures keep on_error.
-    let mut open = Harness::with(|c| c.telltale.rules = vec![missing.clone()]);
+    let mut open = Harness::with(|c| c.rules.packs.deployment = vec![missing.clone()]);
     assert_eq!(verdict(&open.pre_bash("toolu_e", "ls")), Some("ask"));
     assert_eq!(
         open.decision_for("toolu_e")["decision"]["basis"],

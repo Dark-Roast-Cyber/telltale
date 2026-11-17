@@ -1,0 +1,5 @@
+# Test configuration root: detect-only is the default, so suites that test
+# what a hook returns to the harness run with enforcement switched on.
+version: 1
+hooks:
+  mode: enforce

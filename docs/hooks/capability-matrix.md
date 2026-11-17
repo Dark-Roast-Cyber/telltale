@@ -74,7 +74,7 @@ Unless a row names another path, hooks were trusted with
 | Allow | Nothing printed, call runs | E2E |
 | Correlation | `session:agent:turn:tool_use_id`, escaped; settled by PostToolUse, `Stop`, `SubagentStop` | E2E, Capture |
 | Hook failure (crash, timeout, missing binary) | **Fails open**, no option | E2E |
-| Damaged hook payload, tool call | Answered on stdout with the stricter of `on_error` and `on_unevaluable`, and honored. Naming no event: denied under `on_error = "deny"`, otherwise exit 1, so the call runs | E2E (`damaged-pre-*`, `damaged-all-renamed`, via a wrapper that damages stdin) |
+| Damaged hook payload, tool call | Answered on stdout with the stricter of `on_error` and `on_unevaluable`, and honored. Naming no event: denied under `on_error: deny`, otherwise exit 1, so the call runs | E2E (`damaged-pre-*`, `damaged-all-renamed`, via a wrapper that damages stdin) |
 | Damaged hook payload, `Stop` | Exits 1 or gets an inert deny, so no continuation prompt and the turn ends | E2E (`damaged-stop-*`) |
 | Untrusted hook | Never runs (install needs the one-time trust step) | E2E |
 | Trust scope | Per handler: changing a handler un-trusts it and the call runs; reformatting or editing another handler does not; replacing the program at a trusted path keeps trust | E2E |
