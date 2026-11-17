@@ -71,6 +71,14 @@
   is resolved once, so administrator aliases such as a linked `/home` keep
   working; a link at a tool store such as `~/.codex`, or at or above a relocated
   store, is refused. Returned source paths keep their original spelling.
+- New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
+  a tool call's command with its quotes removed, as field-scoped rules do, but
+  judges its exclusion on the recorded command. Quoted commit, issue and
+  pull-request text, quoted paths and quoted search patterns that contain a
+  separator, a quote or a line break stay excluded, and a word split by quotes is
+  still selected. `ACTION_SEMANTICS_VERSION` is 3, so semantic identities change;
+  replay and coordinate identities, bundled rules and rules in other scopes do
+  not. The hooks self-protection rules use this scope.
 - Add [Telltale Hooks](docs/hooks/README.md) documentation and a
   [hooks threat model](docs/security/hooks-threat-model.md).
 - Hooks: padding a tool input so that it is evaluated in pieces no longer
