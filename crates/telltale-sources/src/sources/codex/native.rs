@@ -103,9 +103,9 @@ pub(crate) fn extract_codex_native_records(
 
 pub(crate) fn extract_codex_native_records_with_limits(
     source: &Source,
-    limits: Option<crate::acquisition::DirectReadLimits>,
+    direct: Option<crate::acquisition::DirectRead<'_>>,
 ) -> Result<(Vec<CodexNativeRecord>, usize), SourceReadError> {
-    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, limits)?;
+    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, direct)?;
     let ordinals =
         validate_native_ordinals(&values).map_err(|detail| SourceReadError::SchemaDrift {
             client: source.client,

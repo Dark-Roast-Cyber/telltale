@@ -5,7 +5,8 @@
 //!
 //! Root establishment has a separate finite component bound. Entry accounting
 //! belongs to the caller; inventory's syscall budget is deliberately unrelated.
-//! Paths returned by discovery remain coordinates, not acquisition capabilities.
+//! Paths returned by discovery remain coordinates, not acquisition capabilities:
+//! a reader reopens one with `open_file` under the same anchors.
 
 use super::discovery::BoundedDiscoveryError as Error;
 use std::ffi::{OsStr, OsString};
@@ -27,6 +28,9 @@ mod platform {
     pub(super) fn entries(
         _: &Directory,
     ) -> Result<std::iter::Empty<Result<OsString, Error>>, Error> {
+        Err(Error::Traversal)
+    }
+    pub(super) fn open_file(_: &Directory, _: &OsStr) -> Result<Option<std::fs::File>, Error> {
         Err(Error::Traversal)
     }
 }
@@ -188,6 +192,27 @@ impl Node {
     }
 }
 
+/// Open the file at `path` for reading. Its parent is reached exactly as by
+/// `Node::open`; the last component is then opened relative to that parent
+/// handle without following a link, so no link at or below the selected anchor
+/// is followed, even if a pathname is replaced concurrently. The caller checks
+/// the opened object's type (a directory or FIFO opens, nonblocking). `None`
+/// when a component is absent.
+pub(crate) fn open_file(path: &Path, anchors: &[PathBuf]) -> Result<Option<std::fs::File>, Error> {
+    let mut components = path.components();
+    let Some(Component::Normal(name)) = components.next_back() else {
+        return Err(Error::Traversal);
+    };
+    let parent = match components.as_path() {
+        parent if parent.as_os_str().is_empty() => Path::new("."),
+        parent => parent,
+    };
+    let Some(parent) = Node::open(parent, anchors)? else {
+        return Ok(None);
+    };
+    platform::open_file(parent.directory.as_ref().ok_or(Error::Traversal)?, name)
+}
+
 fn io_error(error: std::io::Error) -> Error {
     Error::from_io(error)
 }
@@ -256,6 +281,85 @@ mod tests {
         assert!(remainder_within(&home, &home.join("a/../b")).is_some());
         assert!(remainder_within(&home, &home.join("../b")).is_none());
         assert!(remainder_within(&home.join("a"), &home).is_none());
+    }
+
+    #[test]
+    fn reader_opens_follow_no_link_below_the_anchor() {
+        use std::io::Read;
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let alias = temp.path().join("alias");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(real.join("home").join("store")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(real.join("home/store/inside.jsonl"), b"inside").unwrap();
+        fs::write(outside.join("outside.jsonl"), b"outside").unwrap();
+        link(&real, &alias);
+        link(&outside, &real.join("home").join("linked"));
+        let home = alias.join("home");
+        let anchor = std::slice::from_ref(&home);
+        let read = |path: &Path, anchors: &[PathBuf]| {
+            open_file(path, anchors).map(|file| {
+                file.map(|mut file| {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes).unwrap();
+                    bytes
+                })
+            })
+        };
+
+        // The anchor alias is resolved once and the caller's spelling is kept.
+        assert_eq!(
+            read(&home.join("store/inside.jsonl"), anchor),
+            Ok(Some(b"inside".to_vec()))
+        );
+        assert_eq!(
+            read(&home.join("store/../store/inside.jsonl"), anchor),
+            Ok(Some(b"inside".to_vec()))
+        );
+        // Without an anchor the linked ancestor is refused.
+        assert_eq!(
+            read(&home.join("store/inside.jsonl"), &[]),
+            Err(Error::SymlinkRoot)
+        );
+        // A link below the anchor is never followed, nor is one reached by
+        // climbing out of the anchor.
+        assert_eq!(
+            read(&home.join("linked/outside.jsonl"), anchor),
+            Err(Error::SymlinkRoot)
+        );
+        assert_eq!(
+            read(&home.join("../home/store/inside.jsonl"), anchor),
+            Err(Error::SymlinkRoot)
+        );
+        assert_eq!(read(&home.join("store/missing.jsonl"), anchor), Ok(None));
+        assert_eq!(read(&home.join("missing/x.jsonl"), anchor), Ok(None));
+        assert_eq!(
+            read(&home.join("store/inside.jsonl/x"), anchor),
+            Err(Error::Traversal)
+        );
+        assert_eq!(read(&home.join(".."), anchor), Err(Error::Traversal));
+        // A directory opens; the reader rejects it as a non-regular source.
+        assert!(
+            open_file(&home.join("store"), anchor)
+                .unwrap()
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .is_dir()
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                outside.join("outside.jsonl"),
+                real.join("home/store/leaf.jsonl"),
+            )
+            .unwrap();
+            assert_eq!(
+                read(&home.join("store/leaf.jsonl"), anchor),
+                Err(Error::SymlinkRoot)
+            );
+        }
     }
 
     #[test]

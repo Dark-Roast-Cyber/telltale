@@ -19,7 +19,9 @@ busy timeout, part limit, and cursor overlap stay on that native path.
 
 Opt-in investigation uses `acquisition::acquire_source_bounded` for the existing
 JSONL identities and the same source-owned Canonical Observation v2 mapping,
-without restoring a parser registry or source-backed normalized records.
+without restoring a parser registry or source-backed normalized records. It
+takes the discovery root the source belongs to and opens the file under the
+same approved root as bounded discovery, following no link at or below it.
 Bounded direct acquisition rejects OpenCode before I/O. There is no native
 export helper, spawning path, or export configuration: OpenCode investigation
 is deferred until a genuinely read-only capability exists. See the core crate's

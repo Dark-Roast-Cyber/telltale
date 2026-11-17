@@ -395,7 +395,7 @@ impl SessionInvestigator {
             );
         };
         let options = AcquisitionOptions::new(observed_at);
-        let batch = match acquire_source_bounded(source, options, direct) {
+        let batch = match acquire_source_bounded(&self.config.root, source, options, direct) {
             Ok(batch) => batch,
             Err(AcquisitionError::ConflictingSessionOwnership) => {
                 return InvestigationResult::NotLocallyResolvable(
