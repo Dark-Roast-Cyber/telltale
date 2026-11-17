@@ -932,9 +932,14 @@ mod pinned_read {
             let _ = sender.send(result.is_err());
         });
         let outcome = receiver.recv_timeout(std::time::Duration::from_secs(10));
-        if outcome.is_err() {
+        if outcome == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
             // Release a reader blocked in open(2) so the thread can end.
-            let _ = std::fs::OpenOptions::new().write(true).open(&resolved.path);
+            // Nonblocking: with no reader the open fails instead of hanging.
+            use std::os::unix::fs::OpenOptionsExt;
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&resolved.path);
         }
         assert_eq!(outcome, Ok(true), "a FIFO must be refused without blocking");
     }

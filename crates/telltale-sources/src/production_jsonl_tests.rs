@@ -313,6 +313,12 @@ mod resolved_acquisition {
         AcquisitionOptions::new(ObservedAt::new("2026-09-18T12:00:00Z").unwrap())
     }
 
+    // The resolved read refuses any link in the path, so fixtures live under
+    // the canonical temporary directory (macOS aliases it under /var).
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+    }
+
     fn codex(path: std::path::PathBuf) -> Source {
         Source {
             client: ClientId::Codex,
@@ -347,7 +353,7 @@ mod resolved_acquisition {
 
     #[test]
     fn resolved_acquisition_reads_every_identity_like_acquire_source() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         for (client, source_id, kind, content) in [
             (
                 ClientId::Claude,
@@ -422,7 +428,7 @@ mod resolved_acquisition {
 
     #[test]
     fn a_swapped_directory_or_leaf_is_refused_not_followed() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let base = dir.path();
         fs::create_dir_all(base.join("store")).unwrap();
         fs::create_dir_all(base.join("outside")).unwrap();
@@ -452,7 +458,7 @@ mod resolved_acquisition {
     #[test]
     fn a_fifo_is_refused_without_blocking() {
         use std::os::unix::ffi::OsStrExt;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         for (source_id, client, kind) in [
             ("codex.sessions", ClientId::Codex, SourceKind::Jsonl),
             (
@@ -476,9 +482,14 @@ mod resolved_acquisition {
                 let _ = sender.send(source_read(&source));
             });
             let outcome = receiver.recv_timeout(std::time::Duration::from_secs(10));
-            if outcome.is_err() {
+            if outcome == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
                 // Release a reader blocked in open(2) so the thread can end.
-                let _ = fs::OpenOptions::new().write(true).open(&path);
+                // Nonblocking: with no reader the open fails instead of hanging.
+                use std::os::unix::fs::OpenOptionsExt;
+                let _ = fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&path);
             }
             assert_eq!(outcome, Ok(true), "{source_id}: a FIFO must not block");
         }
@@ -487,7 +498,7 @@ mod resolved_acquisition {
     #[cfg(unix)]
     #[test]
     fn a_path_that_still_contains_a_link_must_be_resolved_first() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let base = dir.path().canonicalize().unwrap();
         fs::create_dir_all(base.join("real")).unwrap();
         fs::write(base.join("real/session.jsonl"), RECORD).unwrap();
