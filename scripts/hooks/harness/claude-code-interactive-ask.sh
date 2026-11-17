@@ -27,13 +27,16 @@ rm -rf -- "${r:?}"; mkdir -p "$r/work"
 "$bin" claude-code settings "$bin claude-code hook" \
   | python3 -c 'import json,sys; f=json.load(sys.stdin); f["permissions"]={"allow":["Bash"]}; json.dump(f, sys.stdout)' \
   > "$r/settings.json"
-printf 'mode = "enforce"\n\n[telltale]\nrules = ["%s"]\n\n[evaluator]\nenabled = true\nidle_timeout_secs = 300\n' \
-  "$repo/crates/telltale/tests/hooks/e2e-marker-rules.yaml" > "$r/tth-config.toml"
+# Telltale's user config root for this run, as XDG_CONFIG_HOME/telltale.
+mkdir -p "$r/xdg/telltale/settings.d" "$r/xdg/telltale/rules.d"
+cp "$repo/crates/telltale/tests/hooks/e2e-marker-rules.yaml" "$r/xdg/telltale/rules.d/"
+printf 'version: 1\nhooks:\n  mode: enforce\n  evaluator:\n    enabled: true\n    idle_timeout_secs: 300\n' \
+  > "$r/xdg/telltale/settings.d/hooks.yaml"
 
 session=tth-$$
 tmux new-session -d -s "$session" -x 160 -y 50 -c "$r/work" \
   env -i PATH="$PATH" HOME="$HOME" TERM=xterm-256color \
-  TELLTALE_HOOKS_STATE_DIR="$r/tth-state" TELLTALE_HOOKS_CONFIG="$r/tth-config.toml" \
+  TELLTALE_HOOKS_STATE_DIR="$r/tth-state" XDG_CONFIG_HOME="$r/xdg" \
   claude --model "$model" --setting-sources project --settings "$r/settings.json"
 cleanup() { tmux kill-session -t "$session" 2> /dev/null || true
   local pidfile=$r/tth-state/evaluator.pid; [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2> /dev/null || true; }

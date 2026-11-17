@@ -9,7 +9,7 @@
 //! builds an [`Answer`], and the [`Gate`] decides what leaves the process.
 //!
 //! The gate is closed unless the configuration was read and says
-//! `mode = "enforce"`. Every other state is detect-only, including "no
+//! `mode: enforce`. Every other state is detect-only, including "no
 //! configuration" and "a configuration that could not be loaded and never
 //! asked for enforcement".
 
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::hooks::config::{Config, ConfigError, Mode};
+use crate::hooks::config::{Config, Mode};
 
 /// What a hook would give the harness: stdout JSON and an exit status.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,11 +68,11 @@ pub enum Gate {
 pub const DETECT_ONLY_DEADLINE: Duration = Duration::from_secs(20);
 
 impl Gate {
-    /// The gate for a configuration as [`Config::load`] returned it.
-    /// `declares_enforce` is asked only when the configuration did not load
-    /// ([`Config::unloadable_declares_enforce`]).
-    pub fn for_config(
-        loaded: &Result<Config, ConfigError>,
+    /// The gate for a configuration as the host loaded it. `declares_enforce`
+    /// is asked only when the configuration did not load: whether what could
+    /// not be loaded still asks for enforcement.
+    pub fn for_config<E>(
+        loaded: &Result<Config, E>,
         declares_enforce: impl FnOnce() -> bool,
     ) -> Self {
         match loaded {
@@ -132,18 +132,23 @@ mod tests {
     #[test]
     fn only_a_configuration_that_says_enforce_opens_the_gate() {
         let never = || -> bool { panic!("asked about a configuration that loaded") };
+        let loaded = |mode| -> Result<Config, ()> {
+            Ok(Config {
+                mode,
+                ..Config::default()
+            })
+        };
         assert_eq!(
-            Gate::for_config(&Ok(Config::default()), never),
+            Gate::for_config(&loaded(Mode::Observe), never),
             Gate::DetectOnly
         );
-        let enforce = Config::from_toml("mode = \"enforce\"");
-        assert_eq!(Gate::for_config(&enforce, never), Gate::Enforce);
-        let observe = Config::from_toml("mode = \"detect\"\non_error = \"deny\"");
-        assert_eq!(Gate::for_config(&observe, never), Gate::DetectOnly);
+        assert_eq!(
+            Gate::for_config(&loaded(Mode::Enforce), never),
+            Gate::Enforce
+        );
 
-        let broken = || Config::from_toml("typo_key = 1");
-        assert!(broken().is_err());
-        assert_eq!(Gate::for_config(&broken(), || false), Gate::DetectOnly);
-        assert_eq!(Gate::for_config(&broken(), || true), Gate::Enforce);
+        let broken: Result<Config, ()> = Err(());
+        assert_eq!(Gate::for_config(&broken, || false), Gate::DetectOnly);
+        assert_eq!(Gate::for_config(&broken, || true), Gate::Enforce);
     }
 }

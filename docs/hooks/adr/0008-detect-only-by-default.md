@@ -3,6 +3,10 @@
 Status: Accepted. Amends points 1, 4 and 5 of
 [ADR 0004](0004-decisions-and-enforcement-accounting.md).
 
+The setting is now `hooks.mode` in the `hooks:` section of a Telltale
+`settings.d` file ([Configuration](../README.md#configuration)). This record
+keeps the TOML spelling it was written with.
+
 ## Context
 
 Hooks ship in the default Telltale build, and Telltale is a detection tool

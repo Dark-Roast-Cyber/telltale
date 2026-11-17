@@ -169,7 +169,7 @@ fn mcp_tool_lifecycle_replays_and_arguments_are_evaluated() {
     // The same flow with a marker in a tool argument: evaluated as
     // `arguments`, denied, and settled by the batch as honored.
     let markers = common::marker_rules();
-    let mut h = Harness::with(|c| c.telltale.rules = vec![markers]);
+    let mut h = Harness::with(|c| c.rules.packs.deployment = vec![markers]);
     let mut denied = None;
     for payload in fixture("mcp-tool-denied.jsonl") {
         let output = h.send(&payload);

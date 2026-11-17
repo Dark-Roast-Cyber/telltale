@@ -457,7 +457,7 @@ fn unusable_tool_events_keep_their_event_name() {
 }
 
 /// The installed binary, with no reachable default config or state; `config`
-/// is the content of the config file to use instead.
+/// is more of the `hooks:` section of an enforcing config to use instead.
 fn run_binary(
     args: &[&str],
     stdin: &[u8],
@@ -469,18 +469,19 @@ fn run_binary(
     for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
         command.env(var, "/nonexistent-home-for-test");
     }
+    let root = match config {
+        Some(config) => common::config_root(state, &format!("hooks:\n  mode: enforce\n{config}")),
+        None => common::enforce_config(),
+    };
+    command.args(args);
+    if args.get(1) == Some(&"hook") {
+        command.arg("--config-dir").arg(root);
+    }
     command
-        .args(args)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_STATE_HOME")
-        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .env("TELLTALE_HOOKS_STATE_DIR", state);
-    if let Some(config) = config {
-        let path = state.join("config.toml");
-        std::fs::write(&path, format!("mode = \"enforce\"\n{config}")).unwrap();
-        command.env("TELLTALE_HOOKS_CONFIG", path);
-    }
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -542,8 +543,8 @@ fn binary_answers_both_entry_points_over_stdio() {
 /// harnesses honor there.
 #[test]
 fn payload_less_answers_take_the_form_the_event_needs() {
-    const BAD_CONFIG: &str = "this is = not [valid toml\n";
-    const ON_ERROR_DENY: &str = "on_error = \"deny\"\n";
+    const BAD_CONFIG: &str = "  this is: not [valid yaml\n";
+    const ON_ERROR_DENY: &str = "  on_error: deny\n";
     let camel = bytes(&pre_with("deny-flat.jsonl", "preToolUse", "ls -la"));
     let pascal = bytes(&pre_with(
         "deny-pascal-hso.jsonl",
