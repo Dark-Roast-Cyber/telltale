@@ -370,7 +370,7 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (6),
+  `ACTION_SEMANTICS_VERSION` (3), the native action profile version (6),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
@@ -415,6 +415,12 @@ Three scores exist and must stay distinct: native finding risk
   identities change only for a call that holds a comment or a here-document, which
   this profile can record differently; what the reader finds further inside a stage
   is no part of one.
+  Action semantics 3 adds the rule scope `recorded_exclusion`: a custom rule with
+  it on `command` selects from the quote-free reading (and each inner command's)
+  and judges its exclusion on the recorded text, so a separator or quote inside a
+  quoted string stays excluded while a word split by quotes is still selected.
+  Rules in other scopes and bundled rules are unchanged. Semantic identities
+  change from version 2; replay and coordinate identities are unchanged.
   `ActionModifierSemantics::within_calls` reports a declared link's call bound.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not

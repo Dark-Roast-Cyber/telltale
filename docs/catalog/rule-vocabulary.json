@@ -34,7 +34,8 @@
     "values": [
       "field",
       "segment",
-      "exclusion_segment"
+      "exclusion_segment",
+      "recorded_exclusion"
     ]
   },
   "generated_by": "tests/catalog.rs",

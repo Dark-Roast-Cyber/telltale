@@ -242,6 +242,20 @@ the command text does not show is not visible. Native action findings apply the
 same exclusion to the whole command holding each upload stage, and may still
 report a token request that spans more than one line.
 
+`scope: recorded_exclusion` is field scope with one addition for the `command` of
+a tool call: the selection also reads the command with the quotes around its words
+removed (and each command inside it, such as a substitution or a `sh -c` script),
+which field-scoped rules read anyway. Field scope judges the exclusion on that
+reading as well, where a `;`, quote or line break that a quoted string holds is
+bare, so an exclusion written for quoted text cannot hold there. This scope judges
+the exclusion on the recorded text alone, and drops a match in a reading when the
+recorded text matches it. `git commit -m "fix; rm x"` then stays excluded by an
+exclusion for commit messages, while `git commit -m a; "r"m x` selects `rm x`,
+because the recorded text is no excluded command. Soundness rests on the exclusion
+reading the recorded text's quotes as a shell does. The scope accepts the same
+targets as `segment`; only `command` has a reading. Bundled rules and rules in
+other scopes are unchanged.
+
 The bundled `execution.shell` session rule uses this selection form to match
 exact shell-tool names (`shell`, `exec_command`, `shell_command`, and shell
 executable names) as well as shell/interpreter patterns in command and argument

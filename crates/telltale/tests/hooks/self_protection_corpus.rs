@@ -1488,12 +1488,13 @@ fn harmless_forms_beside_protected_paths_stay_silent() {
     );
 }
 
-/// Telltale reads a shell command's words, so a quote, a `;` or a line break inside quoted
-/// text is also seen unquoted, and an exclusion written for the quoted text cannot hold for
-/// that reading. These commands only mention a protected path, and the rules ask or deny
-/// where the quoted spelling alone would be silent.
+/// Telltale also reads a shell command with its quotes removed, where a quote, a `;` or a
+/// line break inside quoted text is bare. The rules judge their exclusions on the recorded
+/// command (`scope: recorded_exclusion`), so commands that only mention a protected path in
+/// quoted text stay silent however that text is spelled. A lone carriage return is not
+/// quoted text, and still ends a command for the reader.
 #[test]
-fn quoted_text_the_shell_reading_leaves_unquoted_is_not_excluded() {
+fn quoted_text_the_shell_reading_leaves_unquoted_is_excluded_by_the_recorded_command() {
     assert_all(
         &[
             (
@@ -1554,7 +1555,7 @@ fn quoted_text_the_shell_reading_leaves_unquoted_is_not_excluded() {
             ),
             ("grep-alternation", "grep -E 'a|b' .github/hooks/a.json"),
         ],
-        Some("ask"),
+        None,
     );
     assert_all(
         &[
@@ -1562,7 +1563,6 @@ fn quoted_text_the_shell_reading_leaves_unquoted_is_not_excluded() {
                 "after-add",
                 r#"git add .codex/hooks.json && git commit -m "touch \"a\" and .claude/settings.json""#,
             ),
-            ("return", "cat\rrm -f ~/.claude/settings.json"),
             (
                 "message-separator",
                 "git commit -m 'docs; rm the stale .claude/settings.json note'",
@@ -1585,6 +1585,12 @@ fn quoted_text_the_shell_reading_leaves_unquoted_is_not_excluded() {
                 "git commit -m 'Deny XDG_CONFIG_HOME=/tmp/x claude -p; test it'",
             ),
         ],
+        None,
+    );
+    // Still denied: a lone carriage return ends a line for the shell reader, so the `rm`
+    // is a command of its own.
+    assert_all(
+        &[("return", "cat\rrm -f ~/.claude/settings.json")],
         Some("deny"),
     );
 }

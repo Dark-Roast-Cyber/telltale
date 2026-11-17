@@ -268,6 +268,141 @@ fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
     (bytes.len(), bytes.len())
 }
 
+/// `text` with the quotes around its words gone, for matching what a word spells.
+/// What a double quote holds stays as written, so an escaped quote in a message
+/// keeps its marks. A line whose quote does not close may hold text no shell reads
+/// as a quote, an apostrophe in a body, so that quote opens nothing and hides
+/// nothing after it. Line continuations are joined first.
+pub fn unquoted(text: &str) -> String {
+    unquote(text, None)
+}
+
+/// [`unquoted`], and for each byte of the result the offset of the same byte in
+/// `text`. A byte past `u32::MAX` reads as `u32::MAX`.
+pub fn unquoted_with_origin(text: &str) -> (String, Vec<u32>) {
+    let mut origin = Vec::new();
+    let out = unquote(text, Some(&mut origin));
+    (out, origin)
+}
+
+/// The result of reading quotes away, with where each byte came from.
+struct Unquoting<'a> {
+    out: String,
+    /// Offsets in the joined text, one per output byte, when asked for.
+    joined_at: Option<&'a mut Vec<u32>>,
+}
+
+impl Unquoting<'_> {
+    /// `piece` is the slice of the joined text starting at `at`.
+    fn push(&mut self, piece: &str, at: usize) {
+        self.out.push_str(piece);
+        if let Some(joined_at) = self.joined_at.as_deref_mut() {
+            joined_at
+                .extend((at..at + piece.len()).map(|at| u32::try_from(at).unwrap_or(u32::MAX)));
+        }
+    }
+}
+
+fn unquote(text: &str, origin: Option<&mut Vec<u32>>) -> String {
+    let (joined, source) = joined(text, origin.is_some());
+    let mut state = Unquoting {
+        out: String::with_capacity(joined.len()),
+        joined_at: origin,
+    };
+    let mut line_at = 0;
+    let mut lines = joined.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        unquote_line(line, line_at, &mut state);
+        line_at += line.len();
+        if lines.peek().is_some() {
+            state.push("\n", line_at);
+            line_at += 1;
+        }
+    }
+    if let Some(joined_at) = state.joined_at {
+        for at in joined_at.iter_mut() {
+            *at = source.get(*at as usize).copied().unwrap_or(u32::MAX);
+        }
+    }
+    state.out
+}
+
+/// Linear: a quote that finds no closer leaves none of its kind to search for.
+fn unquote_line(line: &str, line_at: usize, state: &mut Unquoting<'_>) {
+    let mut rest = line;
+    while let Some(at) = rest.find(['\\', '\'', '"']) {
+        let start = line_at + line.len() - rest.len();
+        state.push(&rest[..at], start);
+        let after = &rest[at + 1..];
+        let after_at = start + at + 1;
+        rest = match rest.as_bytes()[at] {
+            b'\\' => match after.chars().next() {
+                Some(escaped) => {
+                    let end = escaped.len_utf8();
+                    state.push(&after[..end], after_at);
+                    &after[end..]
+                }
+                None => after,
+            },
+            b'\'' => match after.find('\'') {
+                Some(close) => {
+                    state.push(&after[..close], after_at);
+                    &after[close + 1..]
+                }
+                None => after,
+            },
+            _ => match closing_double_quote(after) {
+                Some(close) => {
+                    state.push(&after[..close], after_at);
+                    &after[close + 1..]
+                }
+                None => after,
+            },
+        };
+    }
+    state.push(rest, line_at + line.len() - rest.len());
+}
+
+/// The next `"` no backslash escapes.
+fn closing_double_quote(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' => at += 2,
+            b'"' => return Some(at),
+            _ => at += 1,
+        }
+    }
+    None
+}
+
+/// `text` without its continued lines, and when asked, the offset in `text` of each
+/// byte kept. A backslash before a backslash quotes it, so only an unquoted one
+/// continues its line.
+fn joined(text: &str, track: bool) -> (String, Vec<u32>) {
+    let mut out = String::with_capacity(text.len());
+    let mut source = Vec::new();
+    let offset = |at: usize| u32::try_from(at).unwrap_or(u32::MAX);
+    let mut chars = text.char_indices();
+    while let Some((at, character)) = chars.next() {
+        if character != '\\' {
+            out.push(character);
+            if track {
+                source.extend((at..at + character.len_utf8()).map(offset));
+            }
+        } else if let Some((next_at, next)) = chars.next().filter(|(_, next)| *next != '\n') {
+            out.push(character);
+            out.push(next);
+            if track {
+                source.push(offset(at));
+                source.extend((next_at..next_at + next.len_utf8()).map(offset));
+            }
+        }
+    }
+    (out, source)
+}
+
 fn trim(bytes: &[u8], mut range: Range<usize>) -> Range<usize> {
     while range.start < range.end && bytes[range.start].is_ascii_whitespace() {
         range.start += 1;
@@ -280,7 +415,56 @@ fn trim(bytes: &[u8], mut range: Range<usize>) -> Range<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{json_shell_call, may_be_json, segments, without_continuation};
+    use super::{
+        json_shell_call, may_be_json, segments, unquoted, unquoted_with_origin,
+        without_continuation,
+    };
+
+    #[test]
+    fn quotes_are_read_away_and_a_quoted_string_keeps_what_it_holds() {
+        assert_eq!(
+            unquoted("rm -f ~/\".cl\"\"aude\"/s.json"),
+            "rm -f ~/.claude/s.json"
+        );
+        assert_eq!(unquoted("git commit -m \"a; b\""), "git commit -m a; b");
+        assert_eq!(
+            unquoted("git commit -m 'a; \"b\"'"),
+            "git commit -m a; \"b\""
+        );
+        assert_eq!(unquoted("a \"b \\\"c\\\" d\""), "a b \\\"c\\\" d");
+        assert_eq!(unquoted("a\\;b"), "a;b");
+        assert_eq!(unquoted("a \\\nb"), "a b");
+        // A quote with no closer opens nothing, and the quote itself goes.
+        assert_eq!(unquoted("it's\nrm x"), "its\nrm x");
+    }
+
+    /// Every byte of the reading is a byte of the text, at the offset it reports,
+    /// so a match in the reading can be placed in the text.
+    #[test]
+    fn every_byte_of_the_reading_names_its_place_in_the_text() {
+        let alphabet = ["a", " ", "'", "\"", "\\", ";", "\n", "\u{e9}"];
+        let mut texts = vec![String::new()];
+        for _ in 0..6 {
+            let longer: Vec<String> = texts
+                .iter()
+                .flat_map(|text| alphabet.iter().map(move |piece| format!("{text}{piece}")))
+                .collect();
+            for text in &longer {
+                let (reading, origin) = unquoted_with_origin(text);
+                assert_eq!(reading, unquoted(text), "{text:?}");
+                assert_eq!(origin.len(), reading.len(), "{text:?}");
+                for (at, &from) in origin.iter().enumerate() {
+                    assert_eq!(
+                        text.as_bytes()[from as usize],
+                        reading.as_bytes()[at],
+                        "{text:?} byte {at}"
+                    );
+                }
+                assert!(origin.windows(2).all(|pair| pair[0] < pair[1]), "{text:?}");
+            }
+            texts = longer;
+        }
+    }
 
     fn split(text: &str) -> Vec<&str> {
         segments(text).map(|range| &text[range]).collect()
