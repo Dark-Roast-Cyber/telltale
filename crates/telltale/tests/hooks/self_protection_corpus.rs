@@ -167,34 +167,34 @@ fn settings_tampering_is_denied() {
 fn state_process_and_environment_tampering_is_denied() {
     assert_all(
         &[
-            ("state-rm", "rm -rf ~/.local/state/telltale-hooks"),
+            ("state-rm", "rm -rf ~/.local/state/telltale/hooks"),
             ("kill-assembled", "pkill -f tell'tale'-hooks"),
             (
                 "journal-edit",
-                "sed -i '1,50d' ~/.local/state/telltale-hooks/sessions/*/journal.jsonl",
+                "sed -i '1,50d' ~/.local/state/telltale/hooks/sessions/*/journal.jsonl",
             ),
             (
                 "state-win",
-                "del %LOCALAPPDATA%\\telltale-hooks\\sessions\\x\\state.json",
+                "del %LOCALAPPDATA%\\telltale\\hooks\\sessions\\x\\state.json",
             ),
             (
                 "state-win-appdata",
-                "Remove-Item C:\\Users\\dev\\AppData\\Local\\telltale-hooks\\sessions\\x\\state.json",
+                "Remove-Item C:\\Users\\dev\\AppData\\Local\\telltale\\hooks\\sessions\\x\\state.json",
             ),
             (
                 "socket-rm",
-                "rm -f ~/.local/state/telltale-hooks/evaluator.sock",
+                "rm -f ~/.local/state/telltale/hooks/evaluator.sock",
             ),
             (
                 "config-write",
-                "printf 'mode = \"observe\"\\n' > ~/.config/telltale-hooks/config.toml",
+                "printf 'hooks: {mode: observe}\\n' > ~/.config/telltale/settings.d/hooks.yaml",
             ),
             ("kill", "pkill -f telltale-hooks"),
             ("kill-subst", "kill $(pgrep -f telltale-hooks)"),
             ("taskkill", "taskkill /F /IM telltale-hooks.exe"),
             (
                 "env-config-relaunch",
-                "TELLTALE_HOOKS_CONFIG=/tmp/open.toml claude -p hi",
+                "TELLTALE_COMMUNITY_RULES=0 claude -p hi",
             ),
             (
                 "env-state-relaunch",
@@ -202,7 +202,7 @@ fn state_process_and_environment_tampering_is_denied() {
             ),
             (
                 "export-then-launch",
-                "export TELLTALE_HOOKS_CONFIG=/tmp/open.toml; claude -p hi",
+                "export TELLTALE_PROCESS_CHAIN_DETECTIONS=0; claude -p hi",
             ),
             (
                 "export-and-launch",
@@ -213,27 +213,61 @@ fn state_process_and_environment_tampering_is_denied() {
             ("claude-config", "claude config set disableAllHooks true"),
             ("claude-config-g", "claude config set -g disableAllHooks 1"),
             // Environment-variable and platform forms of the state locations
-            // (config.rs: XDG_STATE_HOME/XDG_CONFIG_HOME, LOCALAPPDATA/APPDATA).
+            // (config.rs: XDG_STATE_HOME/XDG_CONFIG_HOME, LOCALAPPDATA, HOME).
             (
                 "xdg-state",
-                "rm -f $XDG_STATE_HOME/telltale-hooks/sessions/x/state.json",
+                "rm -f $XDG_STATE_HOME/telltale/hooks/sessions/x/state.json",
             ),
             (
                 "xdg-config",
-                "echo 'mode = \"observe\"' > ${XDG_CONFIG_HOME}/telltale-hooks/config.toml",
+                "echo 'hooks: {mode: observe}' > ${XDG_CONFIG_HOME}/telltale/settings.d/hooks.yaml",
             ),
             (
                 "ps-localappdata",
-                "Remove-Item $env:LOCALAPPDATA\\telltale-hooks\\sessions\\x\\state.json",
-            ),
-            ("cmd-appdata", "del %APPDATA%\\telltale-hooks\\config.toml"),
-            (
-                "ps-appdata",
-                "Set-Content $env:APPDATA\\telltale-hooks\\config.toml 'mode = \"observe\"'",
+                "Remove-Item $env:LOCALAPPDATA\\telltale\\hooks\\sessions\\x\\state.json",
             ),
             (
-                "win-roaming",
-                "del C:\\Users\\dev\\AppData\\Roaming\\telltale-hooks\\config.toml",
+                "cmd-config-root",
+                "del %USERPROFILE%\\.config\\telltale\\settings.d\\hooks.yaml",
+            ),
+            (
+                "ps-config-root",
+                "Set-Content $env:USERPROFILE\\.config\\telltale\\settings.d\\hooks.yaml 'hooks: {mode: observe}'",
+            ),
+            (
+                "win-config-root",
+                "del C:\\Users\\dev\\.config\\telltale\\settings.d\\hooks.yaml",
+            ),
+            // Every folder of a config root feeds the hooks: rules, overrides,
+            // policies and packages as well as settings.
+            (
+                "config-overrides",
+                "printf 'version: 1\\n' > ~/.config/telltale/overrides.d/off.yaml",
+            ),
+            ("config-rules-rm", "rm -rf ~/.config/telltale/rules.d"),
+            (
+                "config-policy",
+                "cp /tmp/p.yaml /etc/telltale/policies.d/policy.yaml",
+            ),
+            (
+                "config-packages-cd",
+                "cd ~/.config/telltale && rm -rf rule-packages.d",
+            ),
+            (
+                "config-overrides-find",
+                "find ~/.config/telltale -name overrides.d -exec rm -rf {} +",
+            ),
+            (
+                "community-rules-relaunch",
+                "TELLTALE_COMMUNITY_RULES=0 codex exec hi",
+            ),
+            (
+                "process-chain-export",
+                "export TELLTALE_PROCESS_CHAIN_DETECTIONS=off && claude -p hi",
+            ),
+            (
+                "stage-overrides",
+                "printf 'version: 1\\n' > /tmp/h/telltale/overrides.d/off.yaml",
             ),
         ],
         Some("deny"),
@@ -274,6 +308,18 @@ fn benign_look_alikes_are_not_denied() {
                 "cat ~/.claude/settings.json 2>/dev/null",
             ),
             ("cargo-test", "cargo test -p telltale-hooks 2>&1 | tail"),
+            // Reading the config roots, and a checkout named telltale.
+            ("ls-config-root", "ls ~/.config/telltale/rules.d"),
+            (
+                "read-settings",
+                "cat ~/.config/telltale/settings.d/hooks.yaml",
+            ),
+            ("config-show", "telltale config show"),
+            ("checkout-telltale", "rm -rf ~/src/telltale/target"),
+            (
+                "repo-settings-d",
+                "cp /tmp/a.yaml ~/src/telltale/docs/settings.d/a.yaml",
+            ),
         ],
         None,
     );
@@ -369,20 +415,20 @@ fn native_write_tools_against_protected_paths_are_denied() {
         ),
         (
             "Write",
-            json!({"file_path": "/home/synthetic/.local/state/telltale-hooks/sessions/x/state.json", "content": "{}"}),
+            json!({"file_path": "/home/synthetic/.local/state/telltale/hooks/sessions/x/state.json", "content": "{}"}),
         ),
         (
             "Write",
-            json!({"file_path": "C:\\Users\\dev\\AppData\\Local\\telltale-hooks\\sessions\\x\\state.json", "content": "{}"}),
+            json!({"file_path": "C:\\Users\\dev\\AppData\\Local\\telltale\\hooks\\sessions\\x\\state.json", "content": "{}"}),
         ),
         (
             "Write",
-            json!({"file_path": "/home/synthetic/.config/telltale-hooks/config.toml", "content": "mode = \"observe\""}),
+            json!({"file_path": "/home/synthetic/.config/telltale/settings.d/hooks.yaml", "content": "hooks: {mode: observe}"}),
         ),
         // Staged for `XDG_CONFIG_HOME=/tmp/x <harness>`.
         (
             "Write",
-            json!({"file_path": "/tmp/x/telltale-hooks/config.toml", "content": "mode = \"observe\""}),
+            json!({"file_path": "/tmp/x/telltale/settings.d/hooks.yaml", "content": "hooks: {mode: observe}"}),
         ),
     ];
     for (i, (tool, input)) in cases.iter().enumerate() {
@@ -581,8 +627,8 @@ const MANAGED_POSIX: &[&str] = &[
     "/etc/claude-code/managed-settings.d",
     "/Library/Application Support/ClaudeCode/managed-settings.json",
     "/Library/Application Support/ClaudeCode/managed-settings.d/50-telltale-hooks.json",
-    "/etc/telltale-hooks/config.toml",
-    "/Library/Application Support/telltale-hooks/config.toml",
+    "/etc/telltale/settings.d/hooks.yaml",
+    "/etc/telltale/policies.d/policy.yaml",
     "/usr/local/bin/telltale-hooks",
     "/opt/telltale-hooks/bin/telltale-hooks",
     "/usr/local/bin/telltale",
@@ -594,7 +640,7 @@ const MANAGED_WINDOWS: &[&str] = &[
     r"C:\Program Files\ClaudeCode\managed-settings.json",
     r"C:\Program Files\ClaudeCode\managed-settings.d\50-telltale-hooks.json",
     "C:/Program Files/ClaudeCode/managed-settings.json",
-    r"C:\Program Files\telltale-hooks\config.toml",
+    r"C:\etc\telltale\settings.d\hooks.yaml",
     r"C:\Program Files\telltale-hooks\telltale-hooks.exe",
     r"C:\Program Files\telltale-hooks",
     r"C:\Program Files\telltale\telltale.exe",
@@ -722,15 +768,15 @@ fn codex_backstop_and_hook_removal_are_denied() {
                 "reg add HKLM\\SOFTWARE\\Policies\\OpenAI\\Codex /v RequirementsPath /d C:\\x.toml",
             ),
             // Managed deployment: the directories themselves, under sudo.
-            ("etc-th-rm", "sudo rm -rf /etc/telltale-hooks"),
-            ("etc-th-rm-slash", "sudo rm -rf /etc/telltale-hooks/"),
-            ("etc-th-rm-nosudo", "rm -rf /etc/telltale-hooks"),
-            ("etc-th-mv", "sudo mv /etc/telltale-hooks /tmp/x"),
-            ("etc-th-mv-into", "sudo mv /tmp/x /etc/telltale-hooks"),
-            ("etc-th-cd", "cd /etc/telltale-hooks && sudo rm config.toml"),
+            ("etc-th-rm", "sudo rm -rf /etc/telltale"),
+            ("etc-th-rm-slash", "sudo rm -rf /etc/telltale/"),
+            ("etc-th-rm-nosudo", "rm -rf /etc/telltale"),
+            ("etc-th-mv", "sudo mv /etc/telltale /tmp/x"),
+            ("etc-th-mv-into", "sudo mv /tmp/x /etc/telltale"),
+            ("etc-th-cd", "cd /etc/telltale && sudo rm -rf settings.d"),
             (
                 "etc-th-tee",
-                "echo x | sudo tee /etc/telltale-hooks/config.toml",
+                "echo x | sudo tee /etc/telltale/settings.d/hooks.yaml",
             ),
             ("etc-cc-rm", "sudo rm -rf /etc/claude-code"),
             ("etc-cc-mv", "sudo mv /etc/claude-code /tmp/x"),
@@ -753,10 +799,7 @@ fn codex_backstop_and_hook_removal_are_denied() {
                 "mac-cc-other",
                 "sudo rm -f '/Library/Application Support/ClaudeCode/other.json'",
             ),
-            (
-                "mac-th-rm",
-                "sudo rm -rf \"/Library/Application Support/telltale-hooks\"",
-            ),
+            ("mac-th-rm", "sudo rm -rf \"/Users/dev/.config/telltale\""),
             ("win-cc-rd", "rd /s /q \"C:\\Program Files\\ClaudeCode\""),
             (
                 "win-cc-other",
@@ -1145,8 +1188,11 @@ fn benign_harness_commands_are_not_denied() {
                 "cat-managed-drop-in",
                 "cat /etc/claude-code/managed-settings.d/50-telltale-hooks.json",
             ),
-            ("cat-system-config", "cat /etc/telltale-hooks/config.toml"),
-            ("ls-system-dir", "ls /etc/telltale-hooks"),
+            (
+                "cat-system-config",
+                "cat /etc/telltale/settings.d/hooks.yaml",
+            ),
+            ("ls-system-dir", "ls /etc/telltale"),
             ("run-installed", "/usr/local/bin/telltale-hooks check"),
             (
                 "run-installed-exe",
@@ -1845,7 +1891,7 @@ fn matrix_a_cases() -> Vec<String> {
 fn sweep(commands: &[String]) -> (Vec<String>, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let window = dir.path().join("window.jsonl");
-    let settings = telltale_core::hooks::config::TelltaleSettings::default();
+    let settings = telltale_core::hooks::config::RuleContent::default();
     let engine = telltale_core::hooks::engine::Engine::new(&settings, &[]).unwrap();
     let (mut asks, mut silent) = (Vec::new(), Vec::new());
     for (n, command) in commands.iter().enumerate() {
@@ -1947,13 +1993,13 @@ matrix_tests!(
     matrix_c,
     matrix_c_cases,
     20608,
-    "65dc418545181e589b9a0dfa8ed0ee6050d2fa8578d041c7f113186e9778b267"
+    "00b2724b8af9b6d792addf017f56f222404528266d0f95160cc25767fb12e634"
 );
 matrix_tests!(
     matrix_d,
     matrix_d_cases,
     4272,
-    "b2c0e6aefbecf075945e555528a9a958883f3ef70903b4d68ab38a05cbf472a6"
+    "5a0c03d72692b8e1982c4601dd51a592e7426908d3756a51a9a3ae08d24a6673"
 );
 
 fn assert_none_silent(name: &str, commands: &[String]) {
@@ -2480,7 +2526,7 @@ const PROTECTED_SPELLINGS: &[&str] = &[
     "$COPILOT_HOME",
     ".github/hooks",
     ".github/hooks/a.json",
-    "~/.config/telltale-hooks",
+    "~/.config/telltale",
     "/usr/local/bin/telltale-hooks",
 ];
 
@@ -2543,7 +2589,7 @@ const LAUNCH_FORMS: &[&str] = &[
     "HOME=/tmp/x claude",
     "USERPROFILE=/tmp/x claude",
     "XDG_CONFIG_HOME=/tmp/x codex",
-    "TELLTALE_HOOKS_CONFIG=/tmp/x claude",
+    "TELLTALE_COMMUNITY_RULES=0 claude",
     "TELLTALE_HOOKS_STATE_DIR=/tmp/x gemini",
     "CLAUDE_CODE_SIMPLE=1 claude",
     "npx @openai/codex",
@@ -2623,7 +2669,7 @@ fn matrix_d_cases() -> Vec<String> {
         for (assign, harness) in [
             ("CODEX_HOME=/tmp/x", "codex"),
             ("HOME=/tmp/x", "claude"),
-            ("TELLTALE_HOOKS_CONFIG=/tmp/x", "copilot"),
+            ("TELLTALE_COMMUNITY_RULES=0", "copilot"),
         ] {
             commands.push(format!("{assign} {wrapper} {harness}"));
             commands.push(format!("export {assign}; {wrapper} {harness}"));
@@ -2888,7 +2934,7 @@ fn a_launch_ends_however_a_command_ends() {
         "HOME=/tmp/x timeout 5 claude",
         "XDG_CONFIG_HOME=/tmp/x codex",
         "APPDATA=/tmp/x claude",
-        "TELLTALE_HOOKS_CONFIG=/tmp/x claude",
+        "TELLTALE_COMMUNITY_RULES=0 claude",
         "CLAUDE_CODE_SIMPLE=1 claude",
         "export HOME=/tmp/x; claude",
         "export CODEX_HOME=/tmp/x; codex",
@@ -3171,22 +3217,22 @@ fn generated_rules_hold_at_every_rule_file_count() {
     let window = dir.path().join("window.jsonl");
     let mut failures = Vec::new();
     for (os, home, system) in [
-        ("linux", "/home/dev", "/etc/telltale-hooks"),
+        ("linux", "/home/dev", "/etc/telltale"),
         (
             "macos",
             "/Users/dev",
-            "/Library/Application Support/telltale-hooks",
+            "/Library/Application Support/Telltale",
         ),
     ] {
         for count in 0..=6 {
             let mut paths = vec![
-                format!("{home}/.local/state/telltale-hooks"),
-                format!("{system}/config.toml"),
-                format!("{home}/.config/telltale-hooks/config.toml"),
+                format!("{home}/.local/state/telltale/hooks"),
+                format!("{system}/settings.d/hooks.yaml"),
+                format!("{home}/.config/telltale/settings.d/hooks.yaml"),
             ];
-            paths.extend((0..count).map(|i| format!("{system}/rules/site-{i}.yaml")));
+            paths.extend((0..count).map(|i| format!("{system}/rules.d/site-{i}.yaml")));
             let built: Vec<std::path::PathBuf> = paths.iter().map(Into::into).collect();
-            let settings = telltale_core::hooks::config::TelltaleSettings::default();
+            let settings = telltale_core::hooks::config::RuleContent::default();
             let engine = telltale_core::hooks::engine::Engine::new(&settings, &built).unwrap();
             for (n, path) in paths.iter().enumerate() {
                 let rm = json!({"command": format!("rm -f \"{path}\"")});
@@ -3267,7 +3313,7 @@ const HOSTILE_CHARACTERS: &[char] = &[
 
 #[test]
 fn hostile_path_characters_build_and_match_through_the_real_pipeline() {
-    use telltale_core::hooks::config::TelltaleSettings;
+    use telltale_core::hooks::config::RuleContent;
     use telltale_core::hooks::engine::Engine;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3278,7 +3324,7 @@ fn hostile_path_characters_build_and_match_through_the_real_pipeline() {
         .map(|(i, c)| format!("/srv/hostile{i}{c}name/state"))
         .collect();
     let built: Vec<std::path::PathBuf> = paths.iter().map(Into::into).collect();
-    let engine = Engine::new(&TelltaleSettings::default(), &built)
+    let engine = Engine::new(&RuleContent::default(), &built)
         .unwrap_or_else(|error| panic!("the pipeline must build: {error}"));
     assert!(engine.generated_coverage().reduced.is_empty());
     let mut failures = Vec::new();
@@ -3318,7 +3364,10 @@ const BENIGN_CLEAN: &[(&str, &str)] = &[
         "git-diff-managed",
         "git diff /etc/claude-code/managed-settings.json",
     ),
-    ("git-diff-state", "git diff /etc/telltale-hooks/config.toml"),
+    (
+        "git-diff-state",
+        "git diff /etc/telltale/settings.d/hooks.yaml",
+    ),
     ("git-log", "git log -- .codex/hooks.json"),
     ("git-log-agents", "git log -- .github/agents/"),
     (
@@ -3376,11 +3425,11 @@ const BENIGN_CLEAN: &[(&str, &str)] = &[
     ("chain-read-and", "mkdir build && cat ~/.codex/config.toml"),
     (
         "telemetry-json",
-        "cat ~/.local/state/telltale-hooks/telemetry.jsonl | python3 -m json.tool",
+        "cat ~/.local/state/telltale/hooks/telemetry.jsonl | python3 -m json.tool",
     ),
     (
         "telemetry-jq",
-        "tail -n 5 ~/.local/state/telltale-hooks/telemetry.jsonl | jq .decision",
+        "tail -n 5 ~/.local/state/telltale/hooks/telemetry.jsonl | jq .decision",
     ),
     ("grep-sort", "grep -rn hooks .github/hooks | sort | uniq -c"),
     ("read-pipe", "cat .github/hooks/a.json | jq .hooks"),
@@ -3514,9 +3563,9 @@ fn exclusions_do_not_open_writes() {
             ),
             (
                 "chain-variable",
-                "del %APPDATA%/telltale-hooks/config.toml && type x",
+                "del %USERPROFILE%/.config/telltale/settings.d/hooks.yaml && type x",
             ),
-            ("chain-relative", "rm AppData/Local/telltale-hooks/x; cat y"),
+            ("chain-relative", "rm AppData/Local/telltale/hooks/x; cat y"),
             (
                 "version-then-rm",
                 "python3 --version; rm -f ~/.codex/hooks.json",
@@ -3696,23 +3745,23 @@ fn review_evasions_are_denied() {
             ("env-powershell", "$env:HOME = 'C:\\x'; claude -p hi"),
             (
                 "env-telltale-still",
-                "TELLTALE_HOOKS_CONFIG=/tmp/c.toml claude -p hi",
+                "TELLTALE_COMMUNITY_RULES=false claude -p hi",
             ),
             (
                 "stage-redirect",
-                "printf 'mode = \"observe\"' > /tmp/x/telltale-hooks/config.toml",
+                "printf 'hooks: {mode: observe}' > /tmp/x/telltale/settings.d/hooks.yaml",
             ),
             (
                 "stage-relative",
-                "cd /tmp/x && cp /tmp/c.toml telltale-hooks/config.toml",
+                "cd /tmp/x && cp /tmp/c.yaml telltale/settings.d/hooks.yaml",
             ),
             (
                 "stage-copy",
-                "cp /tmp/c.toml /tmp/x/telltale-hooks/config.toml",
+                "cp /tmp/c.yaml /tmp/x/telltale/settings.d/hooks.yaml",
             ),
             (
                 "stage-tee",
-                "echo 'mode = \"observe\"' | tee /tmp/x/telltale-hooks/config.toml",
+                "echo 'hooks: {mode: observe}' | tee /tmp/x/telltale/settings.d/hooks.yaml",
             ),
             ("cd-glob", "cd ~/.codex && rm *"),
             ("cd-glob-rf", "cd ~/.codex; rm -rf ./*"),
@@ -3744,10 +3793,7 @@ fn review_evasions_are_denied() {
                 "quoted-uninstall",
                 "\"telltale-hooks\" claude-code uninstall --scope user",
             ),
-            (
-                "escaped-mac",
-                "rm -rf /Library/Application\\ Support/telltale-hooks",
-            ),
+            ("escaped-mac", "rm -rf /Users/dev\\ user/.config/telltale"),
             (
                 "escaped-mac-cc",
                 "sudo rm -rf /Library/Application\\ Support/ClaudeCode",
@@ -3857,7 +3903,7 @@ fn generated_rules_keep_every_path_with_many_long_rule_files() {
     let total: usize = files.iter().map(|f| f.as_os_str().len()).sum();
     assert!(total > 1200, "only {total} bytes of paths");
     let rules = files.clone();
-    let mut h = Harness::with(move |config| config.telltale.rules = rules);
+    let mut h = Harness::with(move |config| config.rules.packs.deployment = rules);
     let mut failures = Vec::new();
     for (i, file) in files.iter().enumerate() {
         let path = file.display().to_string();
@@ -3890,7 +3936,7 @@ fn generated_rules_keep_every_path_with_many_long_rule_files() {
 /// rule, which must still be matched in a reduced form rather than vanish.
 #[test]
 fn generated_rules_keep_windows_forms_and_a_single_oversized_literal() {
-    use telltale_core::hooks::config::TelltaleSettings;
+    use telltale_core::hooks::config::RuleContent;
     use telltale_core::hooks::engine::Engine;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3906,7 +3952,7 @@ fn generated_rules_keep_windows_forms_and_a_single_oversized_literal() {
     let oversized = format!("/srv/{}/state.json", "z".repeat(1500));
     let mut paths: Vec<std::path::PathBuf> = windows.iter().map(Into::into).collect();
     paths.push((&oversized).into());
-    let engine = Engine::new(&TelltaleSettings::default(), &paths).unwrap();
+    let engine = Engine::new(&RuleContent::default(), &paths).unwrap();
     let window = dir.path().join("window.jsonl");
     let mut failures = Vec::new();
     let mut n = 0;

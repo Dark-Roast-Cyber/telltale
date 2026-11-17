@@ -27,19 +27,35 @@ impl Env {
         Self::with_state(extra, "state")
     }
 
+    /// `extra` is more of the `hooks:` section, indented under it.
     fn with_state(extra: &str, state: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join(state);
-        let config = format!(
-            "mode = \"enforce\"\nstate_dir = \"{}\"\n{extra}\n[evaluator]\nidle_timeout_secs = 20\nautostart = false\n",
-            state.display()
+        let settings = format!(
+            "version: 1\nhooks:\n  mode: enforce\n  state_dir: {:?}\n{extra}  evaluator:\n    idle_timeout_secs: 20\n    autostart: false\n",
+            state.display().to_string()
         );
-        std::fs::write(dir.path().join("config.toml"), config).unwrap();
-        Self { dir, state }
+        let env = Self { dir, state };
+        env.write_settings(&env.config(), &settings);
+        env
     }
 
+    /// The config root, for `--config-dir`.
     fn config(&self) -> PathBuf {
-        self.dir.path().join("config.toml")
+        self.dir.path().join("config")
+    }
+
+    fn settings_file(root: &Path) -> PathBuf {
+        root.join("settings.d").join("hooks.yaml")
+    }
+
+    fn settings(&self) -> String {
+        std::fs::read_to_string(Self::settings_file(&self.config())).unwrap()
+    }
+
+    fn write_settings(&self, root: &Path, settings: &str) {
+        std::fs::create_dir_all(root.join("settings.d")).unwrap();
+        std::fs::write(Self::settings_file(root), settings).unwrap();
     }
 
     fn socket(&self) -> PathBuf {
@@ -50,12 +66,17 @@ impl Env {
         config.resolved_socket_path().unwrap()
     }
 
-    fn command(&self, config: &Path) -> Command {
+    /// `telltale hooks <args> --config-dir <config>`.
+    fn command(&self, config: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(BIN);
-        command.arg("hooks");
         command
-            .env("TELLTALE_HOOKS_CONFIG", config)
+            .arg("hooks")
+            .args(args)
+            .arg("--config-dir")
+            .arg(config);
+        command
             .env("HOME", "/nonexistent-home-for-test")
+            .env_remove("XDG_CONFIG_HOME")
             .env_remove("TELLTALE_HOOKS_STATE_DIR")
             .env_remove("TELLTALE_HOOKS_EVALUATOR");
         command
@@ -63,8 +84,7 @@ impl Env {
 
     fn hook_with(&self, config: &Path, payload: &Value) -> Option<Value> {
         let mut child = self
-            .command(config)
-            .args(["claude-code", "hook"])
+            .command(config, &["claude-code", "hook"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -88,8 +108,7 @@ impl Env {
 
     fn serve(&self) -> Daemon {
         let child = self
-            .command(&self.config())
-            .arg("serve")
+            .command(&self.config(), &["serve"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -187,15 +206,14 @@ fn daemon_decisions_match_the_in_process_path() {
 fn configuration_change_falls_back_and_retires_the_daemon() {
     let env = Env::new("");
     let mut daemon = env.serve();
-    let other = env.dir.path().join("other.toml");
-    let text = std::fs::read_to_string(env.config()).unwrap();
+    let other = env.dir.path().join("other");
     // A config with different thresholds must not be answered by the old daemon.
-    let changed = text.replacen(
-        "[evaluator]",
-        "[thresholds]\naction_deny = 95\n\n[evaluator]",
+    let changed = env.settings().replacen(
+        "  evaluator:",
+        "  thresholds:\n    action_deny: 95\n  evaluator:",
         1,
     );
-    std::fs::write(&other, changed).unwrap();
+    env.write_settings(&other, &changed);
     let output = env.hook_with(&other, &pre("toolu_m", EXFIL)).expect("deny");
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
     let decision = env.decisions().pop().unwrap();
@@ -210,10 +228,10 @@ fn configuration_change_falls_back_and_retires_the_daemon() {
 #[test]
 fn unreachable_evaluator_is_autostarted_and_orphans_exit() {
     let env = Env::new("");
-    let config = std::fs::read_to_string(env.config())
-        .unwrap()
-        .replace("autostart = false", "autostart = true");
-    std::fs::write(env.config(), config).unwrap();
+    let settings = env
+        .settings()
+        .replace("autostart: false", "autostart: true");
+    env.write_settings(&env.config(), &settings);
     assert_eq!(env.hook(&pre("toolu_a", "ls")), None);
     wait_for(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
     assert_eq!(env.hook(&pre("toolu_b", "ls")), None);
@@ -254,7 +272,7 @@ fn hang_up_after_reading(env: &Env) -> std::thread::JoinHandle<()> {
 /// verdict: under a fail-open policy this exfil used to get the policy's allow.
 #[test]
 fn a_delivered_request_without_answer_is_evaluated_in_process() {
-    let env = Env::new("on_error = \"allow\"\non_unevaluable = \"allow\"");
+    let env = Env::new("  on_error: allow\n  on_unevaluable: allow\n");
     let server = hang_up_after_reading(&env);
     let output = env
         .hook(&pre("toolu_x", EXFIL))
@@ -275,7 +293,7 @@ fn a_delivered_request_without_answer_is_evaluated_in_process() {
 /// The call's own verdict: a benign call is not refused because the evaluator broke.
 #[test]
 fn a_benign_call_with_no_answer_is_not_refused() {
-    let env = Env::new("on_error = \"deny\"");
+    let env = Env::new("  on_error: deny\n");
     let server = hang_up_after_reading(&env);
     assert_eq!(env.hook(&pre("toolu_x", "ls")), None);
     server.join().unwrap();

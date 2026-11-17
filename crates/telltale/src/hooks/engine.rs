@@ -16,7 +16,7 @@ use crate::{
     ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
-use crate::hooks::config::TelltaleSettings;
+use crate::hooks::config::RuleContent;
 use crate::hooks::journal::Line;
 
 /// Host-owned Rule v1 templates (name, content): detections of an agent
@@ -233,36 +233,55 @@ impl Engine {
     /// and socket paths; with self-protection on, writes to them are detected
     /// even when they are outside the default locations the static rules know.
     /// Custom harness homes and this binary's own path get generated rules too.
-    pub fn new(
-        settings: &TelltaleSettings,
-        protected_paths: &[PathBuf],
-    ) -> Result<Self, EngineError> {
+    pub fn new(rules: &RuleContent, protected_paths: &[PathBuf]) -> Result<Self, EngineError> {
         let started = Instant::now();
-        let mut builder = Pipeline::builder();
-        if !settings.community_rules {
-            builder = builder.without_community_rules();
-        }
+        // The operator's files are read once, here, as operator input (a
+        // symlink is followed, but the target must be a regular file, so a
+        // FIFO is refused rather than waited on), and resolution uses that
+        // text. One that is gone or swapped is an unreadable-content failure,
+        // distinct from content that does not build.
+        let contents = rules
+            .files()
+            .map(|path| Ok((path.clone(), read(path)?)))
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        let replacements = contents
+            .iter()
+            .map(|(path, text)| (path.clone(), text.as_str()))
+            .collect::<Vec<_>>();
         let mut generated = GeneratedCoverage::default();
-        for path in &settings.rule_packages {
-            builder = builder.rule_package(read(path)?);
-        }
-        if settings.self_protection_rules {
-            for (_, document) in host_rule_documents() {
-                builder = builder.rules_document(document.clone());
+        let mut documents = Vec::new();
+        if rules.self_protection {
+            let host = host_rule_documents()
+                .iter()
+                .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
+            let own = generated_documents(protected_paths, &mut generated);
+            let own = own
+                .iter()
+                .enumerate()
+                .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
+            for (source, document) in host.chain(own) {
+                let rule_set = telltale_rules::parse_rule_document(document)
+                    .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))?;
+                documents.push((source, rule_set));
             }
-            for document in generated_documents(protected_paths, &mut generated) {
-                builder = builder.rules_document(document);
-            }
         }
-        for path in &settings.rules {
-            builder = builder.rules_document(read(path)?);
-        }
-        if let Some(path) = &settings.policy {
-            builder = builder.policy_document(read(path)?);
-        }
-        let pipeline = builder.build().map_err(EngineError::Build)?;
+        let resolution = crate::rule_resolution::resolve_rule_set(
+            &rules.packs,
+            &[],
+            documents,
+            rules.policy.as_deref(),
+            telltale_rules::RuleLoadMode::IncludeDefault,
+            &rules.overrides,
+            &replacements,
+        )
+        .map_err(|error| {
+            EngineError::Build(PipelineError::Compilation(error.to_string().into()))
+        })?;
+        let pipeline =
+            Pipeline::from_compiled(resolution.rule_set, resolution.diagnostics.packages)
+                .map_err(EngineError::Build)?;
         let mut options = DetailedEvaluationOptions::default();
-        options.process_chain = settings.process_chain;
+        options.process_chain = rules.process_chain;
         let semantic_identity = pipeline
             .semantic_provenance(&options)
             .map_err(EngineError::Provenance)?
@@ -1633,7 +1652,7 @@ mod recovery_tests {
     /// The window path and the engine, for a scan of `pieces` alone.
     fn engine() -> (tempfile::TempDir, Engine) {
         let dir = tempfile::tempdir().unwrap();
-        let engine = Engine::new(&TelltaleSettings::default(), &[]).unwrap();
+        let engine = Engine::new(&RuleContent::default(), &[]).unwrap();
         (dir, engine)
     }
 

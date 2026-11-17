@@ -26,10 +26,23 @@ fn run(
     env: &[(&str, &std::path::Path)],
     extra: &[(&str, &str)],
 ) -> (i32, String, String) {
+    run_in(Some(&common::enforce_config()), payload, env, extra)
+}
+
+/// One hook run reading the config root `config` (`--config-dir`), or the
+/// default roots when `None`.
+fn run_in(
+    config: Option<&std::path::Path>,
+    payload: &Value,
+    env: &[(&str, &std::path::Path)],
+    extra: &[(&str, &str)],
+) -> (i32, String, String) {
     let mut command = isolated();
+    command.args(["claude-code", "hook"]);
+    if let Some(config) = config {
+        command.arg("--config-dir").arg(config);
+    }
     command
-        .args(["claude-code", "hook"])
-        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -93,14 +106,10 @@ fn binary_denies_and_allows_over_stdio() {
 #[test]
 fn invalid_config_that_asks_for_enforcement_fails_closed_for_tool_calls_only() {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config.toml");
-    std::fs::write(&config, "mode = \"enforce\"\nbogus = 1\n").unwrap();
-    let env = [
-        ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
-        ("TELLTALE_HOOKS_CONFIG", config.as_path()),
-    ];
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n  bogus: 1\n");
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
 
-    let (code, stdout, _) = run(&pre("ls"), &env, &[]);
+    let (code, stdout, _) = run_in(Some(&config), &pre("ls"), &env, &[]);
     assert_eq!(code, 0);
     let output: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
@@ -113,9 +122,22 @@ fn invalid_config_that_asks_for_enforcement_fails_closed_for_tool_calls_only() {
 
     let mut prompt = common::template("UserPromptSubmit", None);
     prompt["prompt"] = "hello".into();
-    let (code, stdout, _) = run(&prompt, &env, &[]);
+    let (code, stdout, _) = run_in(Some(&config), &prompt, &env, &[]);
     assert_eq!(code, 1, "non-blocking error for non-tool events");
     assert_eq!(stdout, "");
+
+    // A broken file next to one that asks for enforcement does not undo it:
+    // still closed.
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n");
+    std::fs::write(
+        config.join("settings.d").join("zz-broken.yaml"),
+        "version: 1\nhooks:\n  mode: observe\n  extra: [\n",
+    )
+    .unwrap();
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+    let (_, stdout, _) = run_in(Some(&config), &pre("ls"), &env, &[]);
+    assert!(stdout.contains("misconfigured"), "{stdout}");
 }
 
 /// A configuration that does not load and never asked for enforcement is
@@ -124,20 +146,25 @@ fn invalid_config_that_asks_for_enforcement_fails_closed_for_tool_calls_only() {
 #[test]
 fn invalid_config_that_does_not_ask_for_enforcement_is_detect_only() {
     for broken in [
-        "mode = \"bogus\"\n",
-        "bogus = 1\n",
-        "mode = \"observe\"\nbogus = 1\n",
-        "on_error = \"deny\"\n[thresholds\n",
-        "# mode = \"enforce\"\n= = =\n",
+        "hooks:\n  mode: bogus\n",
+        "hooks:\n  bogus: 1\n",
+        "hooks:\n  mode: observe\n  bogus: 1\n",
+        "hooks:\n  on_error: deny\n  thresholds: [\n",
+        "hooks:\n  # mode: enforce\n  : : [\n",
+        // Only `hooks.mode` itself asks for enforcement.
+        "hooks:\n  evaluator:\n    mode: enforce\n  bogus: 1\n",
+        // Another section's error fails the whole configuration too.
+        "risk_thresholds:\n  low: many\n",
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.toml");
-        std::fs::write(&config, broken).unwrap();
-        let env = [
-            ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
-            ("TELLTALE_HOOKS_CONFIG", config.as_path()),
-        ];
-        let (code, stdout, stderr) = run(&pre("rm -f ~/.claude/settings.json"), &env, &[]);
+        let config = common::config_root(dir.path(), broken);
+        let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+        let (code, stdout, stderr) = run_in(
+            Some(&config),
+            &pre("rm -f ~/.claude/settings.json"),
+            &env,
+            &[],
+        );
         assert_eq!((code, stdout.as_str()), (0, ""), "{broken}: {stderr}");
         assert!(stderr.contains("detect-only"), "{broken}: {stderr}");
         let telemetry = std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap();
@@ -160,17 +187,19 @@ fn invalid_config_that_does_not_ask_for_enforcement_is_detect_only() {
 
         let mut prompt = common::template("UserPromptSubmit", None);
         prompt["prompt"] = "hello".into();
-        let (code, stdout, _) = run(&prompt, &env, &[]);
+        let (code, stdout, _) = run_in(Some(&config), &prompt, &env, &[]);
         assert_eq!((code, stdout.as_str()), (0, ""), "{broken}");
     }
-    // The same for a configuration file that is named and is not there.
+    // The same for a config root that is named and is not there.
     let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("missing.toml");
-    let env = [
-        ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
-        ("TELLTALE_HOOKS_CONFIG", missing.as_path()),
-    ];
-    let (code, stdout, _) = run(&pre("rm -f ~/.claude/settings.json"), &env, &[]);
+    let missing = dir.path().join("missing");
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+    let (code, stdout, _) = run_in(
+        Some(&missing),
+        &pre("rm -f ~/.claude/settings.json"),
+        &env,
+        &[],
+    );
     assert_eq!((code, stdout.as_str()), (0, ""));
 }
 
@@ -182,7 +211,6 @@ fn without_a_configuration_the_binary_detects_and_never_answers() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = isolated()
         .args(["claude-code", "hook"])
-        .env_remove("TELLTALE_HOOKS_CONFIG")
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
         .stdin(Stdio::piped())
@@ -219,8 +247,8 @@ fn without_a_configuration_the_binary_detects_and_never_answers() {
 #[test]
 fn garbage_payload_is_a_non_blocking_error_by_default() {
     let mut child = isolated()
-        .args(["claude-code", "hook"])
-        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
+        .args(["claude-code", "hook", "--config-dir"])
+        .arg(common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -250,51 +278,43 @@ fn oversized_pre_tool_use_gets_the_unevaluable_verdict() {
 #[test]
 fn misconfiguration_reason_carries_no_paths() {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config.toml");
-    std::fs::write(&config, "mode = \"enforce\"\nbogus = 1\n").unwrap();
-    let env = [
-        ("TELLTALE_HOOKS_STATE_DIR", dir.path()),
-        ("TELLTALE_HOOKS_CONFIG", config.as_path()),
-    ];
-    let (_, stdout, stderr) = run(&pre("ls"), &env, &[]);
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n  bogus: 1\n");
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+    let (_, stdout, stderr) = run_in(Some(&config), &pre("ls"), &env, &[]);
+    assert!(stdout.contains("misconfigured"), "{stdout}");
     assert!(!stdout.contains(&*dir.path().to_string_lossy()), "{stdout}");
-    assert!(stderr.contains("config.toml"), "details stay on stderr");
+    assert!(
+        stderr.contains("hooks.yaml"),
+        "details stay on stderr: {stderr}"
+    );
 }
 
-/// With no explicit paths, config and state come from the platform's
-/// conventional locations (unchanged on Linux and macOS).
+/// With no explicit paths, settings come from Telltale's default user config
+/// root and state from the platform's conventional location.
 #[test]
 fn default_locations_follow_platform_conventions() {
     let dir = tempfile::tempdir().unwrap();
     let mut command = isolated();
     command
         .arg("check")
-        .env_remove("TELLTALE_HOOKS_CONFIG")
         .env_remove("TELLTALE_HOOKS_STATE_DIR")
-        .env_remove("TELLTALE_HOOKS_TELEMETRY");
+        .env_remove("TELLTALE_HOOKS_TELEMETRY")
+        .env("HOME", dir.path());
+    let config = dir
+        .path()
+        .join(".config")
+        .join("telltale")
+        .join("settings.d")
+        .join("hooks.yaml");
     #[cfg(not(windows))]
-    let (config, state) = {
-        command.env("HOME", dir.path());
-        (
-            dir.path().join(".config/telltale-hooks/config.toml"),
-            dir.path().join(".local/state/telltale-hooks"),
-        )
-    };
+    let state = dir.path().join(".local/state/telltale/hooks");
     #[cfg(windows)]
-    let (config, state) = {
-        command
-            .env("APPDATA", dir.path().join("roaming"))
-            .env("LOCALAPPDATA", dir.path().join("local"));
-        (
-            dir.path()
-                .join("roaming")
-                .join("telltale-hooks")
-                .join("config.toml"),
-            dir.path().join("local").join("telltale-hooks"),
-        )
+    let state = {
+        command.env("LOCALAPPDATA", dir.path().join("local"));
+        dir.path().join("local").join("telltale").join("hooks")
     };
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, "mode = \"observe\"\n").unwrap();
+    std::fs::write(&config, "version: 1\nhooks:\n  on_error: deny\n").unwrap();
     let out = command.output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -303,7 +323,7 @@ fn default_locations_follow_platform_conventions() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        stdout.contains("mode: detect_only"),
+        stdout.contains("mode: detect_only") && stdout.contains("on_error: Deny"),
         "default config not loaded: {stdout}"
     );
     assert!(
@@ -427,7 +447,6 @@ fn a_custom_harness_home_in_the_environment_is_protected() {
     let mut check = isolated();
     check
         .arg("check")
-        .env_remove("TELLTALE_HOOKS_CONFIG")
         .env("TELLTALE_HOOKS_STATE_DIR", &state)
         .env("CODEX_HOME", &codex)
         .env("COPILOT_HOME", &copilot);
@@ -487,10 +506,7 @@ fn check_reports_coverage_of_an_oversized_state_dir() {
     let mut check = isolated();
     // Never created: `check` only reads the name.
     let long = format!("/tmp/{}/state", "z".repeat(1200));
-    check
-        .arg("check")
-        .env_remove("TELLTALE_HOOKS_CONFIG")
-        .env("TELLTALE_HOOKS_STATE_DIR", &long);
+    check.arg("check").env("TELLTALE_HOOKS_STATE_DIR", &long);
     let out = check.output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}");
@@ -531,17 +547,11 @@ fn hostile_environment_values_keep_the_hook_deciding() {
     const YAML_BREAKING: &[char] = &[
         '\u{1}', '\u{1b}', '\u{7f}', '\u{9f}', '\u{fffe}', '\u{ffff}',
     ];
-    let config_var = if cfg!(windows) {
-        "APPDATA"
-    } else {
-        "XDG_CONFIG_HOME"
-    };
+    // The config roots (`HOME`, `XDG_CONFIG_HOME`) are covered by
+    // hooks_generated_rule_paths.rs, which loads them instead of pinning
+    // `--config-dir`.
     let mut failures = Vec::new();
-    for (variable, characters) in [
-        ("CODEX_HOME", ALL),
-        ("COPILOT_HOME", YAML_BREAKING),
-        (config_var, YAML_BREAKING),
-    ] {
+    for (variable, characters) in [("CODEX_HOME", ALL), ("COPILOT_HOME", YAML_BREAKING)] {
         for c in characters {
             let dir = tempfile::tempdir().unwrap();
             let value = format!("/tmp/a{c}b");

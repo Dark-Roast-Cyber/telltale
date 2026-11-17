@@ -19,6 +19,22 @@ PASS_ENV = ("PATH", "LANG", "TERM", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "
             "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS")
 
 
+def write_telltale_config(home, hooks, rules=(), text=None):
+    """Telltale's user config root under `home`, which base_env makes XDG_CONFIG_HOME's
+    parent: `hooks` is the body of the `hooks:` settings section (indented YAML lines),
+    `rules` are rule files copied into rules.d, and `text`, if given, replaces the whole
+    settings file. The hook reads this root the way an installed one reads the default."""
+    root = os.path.join(home, ".config", "telltale")
+    os.makedirs(os.path.join(root, "settings.d"), exist_ok=True)
+    with open(os.path.join(root, "settings.d", "hooks.yaml"), "w") as f:
+        f.write(text if text is not None else f"version: 1\nhooks:\n{hooks}")
+    if rules:
+        os.makedirs(os.path.join(root, "rules.d"), exist_ok=True)
+        for path in rules:
+            shutil.copy2(path, os.path.join(root, "rules.d", os.path.basename(path)))
+    return root
+
+
 class Run:
     def __init__(self, root, name):
         self.name = name

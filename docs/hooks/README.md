@@ -14,7 +14,7 @@ Telltale's own `ActionRecordV1` records.
 
 **Hooks are detect-only unless you switch enforcement on.** By default a hook
 records the verdict it reached (**no opinion**, **ask** or **deny**) and
-gives the harness nothing. With `mode = "enforce"` in the configuration it
+gives the harness nothing. With `hooks.mode: enforce` in the configuration it
 returns ask and deny verdicts to the harness. See
 [Detect-only and enforce](#detect-only-and-enforce).
 
@@ -25,8 +25,10 @@ returns ask and deny verdicts to the harness. See
   embedders that only read sessions opt out with `default-features = false`.
 - CLI: `telltale hooks ...`, behind the `hooks` feature of `telltale-cli`
   (on by default; `cargo build --no-default-features` drops it).
-- Configuration and state keep the `telltale-hooks` directory names and the
-  `TELLTALE_HOOKS_*` environment variables, so existing setups keep working.
+- Configuration is the `hooks:` section of Telltale's `settings.d` YAML, read
+  from the same config roots as `telltale scan`; hooks evaluate the same
+  `rules.d`, `policies.d` and `overrides.d` content. State lives under
+  `<state home>/telltale/hooks`.
 - The runtime reaches Telltale only through the same public facade an external
   embedder has, so it needs no private access to the detection crates.
 
@@ -76,7 +78,7 @@ hook`; pass an absolute command when `telltale` is not on the harness's `PATH`:
 ./target/release/telltale hooks claude-code settings --fail-closed "$PWD/target/release/telltale hooks claude-code hook"
 ```
 
-The hook is detect-only until the configuration says `mode = "enforce"`
+The hook is detect-only until the configuration says `hooks.mode: enforce`
 ([Detect-only and enforce](#detect-only-and-enforce)). `--fail-closed` makes
 Claude Code block a tool call if the hook crashes, times out, or is missing.
 Without it Claude Code fails open. Details:
@@ -125,11 +127,14 @@ Details and limits: [harnesses/codex-cli.md](harnesses/codex-cli.md).
 
 ## Detect-only and enforce
 
-One setting decides whether a hook can influence the harness:
+One setting decides whether a hook can influence the harness, `hooks.mode` in a
+Telltale `settings.d` file:
 
-```toml
-mode = "observe"   # default, also spelled "detect": record verdicts, never return them
-# mode = "enforce" # return ask and deny verdicts to the harness
+```yaml
+version: 1
+hooks:
+  mode: observe    # default, also spelled detect: record verdicts, never return them
+  # mode: enforce  # return ask and deny verdicts to the harness
 ```
 
 Changing it needs no rebuild and no change to the harness settings; the next
@@ -152,15 +157,21 @@ hook would have returned is in telemetry (`decision.returned: false`), and so
 is what it could not read (`error` records).
 
 The gate opens only for a configuration that **was read and says
-`mode = "enforce"`**. Everything else is detect-only:
+`hooks.mode: enforce`**. Everything else is detect-only:
 
 | Configuration | Hook |
 | --- | --- |
 | None | Detect-only |
-| Loaded, `mode` unset, `"observe"` or `"detect"` | Detect-only |
-| Loaded, `mode = "enforce"` | Enforcing |
-| Does not load (unknown key, missing rule file, not TOML), and its top level says `mode = "enforce"` | Enforcing, and tool calls are denied until it is fixed (an operator error should be loud) |
-| Does not load, and does not say `mode = "enforce"`; or is named and missing | Detect-only on the defaults; `config_invalid` in telemetry and on stderr |
+| Loaded, `hooks.mode` unset, `observe` or `detect` | Detect-only |
+| Loaded, `hooks.mode: enforce` | Enforcing |
+| Does not load (an unknown key or invalid value in any section, a file that is not YAML, an inverted threshold), and a `settings.d` file says `hooks.mode: enforce` | Enforcing, and tool calls are denied until it is fixed (an operator error should be loud) |
+| Does not load, and no `settings.d` file says `hooks.mode: enforce`; or a `--config-dir` folder is missing | Detect-only on the defaults; `config_invalid` in telemetry and on stderr |
+
+When the configuration does not load, the hook still reads each `settings.d`
+file on its own. A file that is YAML counts when it sets `hooks.mode:
+enforce`; a file that is not counts when any line holds a `mode: enforce`
+pair, in any quoting or style. One such file is enough, so a broken file
+beside the one that enforces cannot switch enforcement off.
 
 Two things are outside the setting, because they are installed into the
 harness and act without the hook: `telltale hooks codex-cli execpolicy`
@@ -177,58 +188,70 @@ switching a running session to `enforce` does not start from them.
 Moving from detect-only to enforce: run detect-only, read the `decision`
 records with `verdict` `ask` or `deny` (rule IDs are in `rule_ids`), tune
 thresholds or disable rules with a policy document, then set
-`mode = "enforce"`. Because enforcement is one line in a file the agent's OS
+`hooks.mode: enforce`. Because enforcement is one line in a file the agent's OS
 user can usually write, the same advice applies as for the harness settings:
-keep the configuration where the agent cannot write it (`TELLTALE_HOOKS_CONFIG`
-pointing at a root-owned file) when the agent is the adversary. The
-self-protection rules detect writes to it in both modes.
+when the agent is the adversary, keep the configuration where the agent cannot
+write it. Put it in a root-owned config root such as `/etc/telltale` and name
+that root in the hook command (`telltale hooks claude-code hook --config-dir
+/etc/telltale`), so the user's own root, which would otherwise win, is not
+read. The self-protection rules detect writes to the config roots in both
+modes, including the target of a root, folder or file that is a symlink.
 
 ## Configuration
 
-Optional TOML at `$TELLTALE_HOOKS_CONFIG`, else at the platform default when
-present: `$XDG_CONFIG_HOME/telltale-hooks/config.toml` or
-`~/.config/telltale-hooks/config.toml` on Linux and macOS,
-`%APPDATA%\telltale-hooks\config.toml` on Windows:
+Hooks read Telltale's own configuration: the `hooks:` section of the
+`settings.d` YAML files, and the same rule content as `telltale scan`
+(`rules.d`, `organization-rules.d`, `ui-rules.d`, `rule-packages.d`,
+`overrides.d`, `policies.d`, community rules and `detections.process_chain`),
+from the same config roots and with the same precedence. See
+[install.md](../install.md#operational-settings) for the roots, precedence and
+`telltale config show`. The defaults:
 
-```toml
-mode = "observe"      # default (also "detect"): record verdicts, never return them.
-                      # "enforce": return ask and deny verdicts to the harness
-on_error = "allow"        # hook infrastructure failure: "allow" (fail open), "ask", "deny"
-on_unevaluable = "ask"    # tool call too large, nested or damaged to evaluate: "ask", "deny", "allow"
-                          # (both are recorded, not returned, unless mode = "enforce")
-reason_detail = "full"    # "full": reasons name rules and thresholds; "minimal": verdict and record ID only
-                          # (a human approving an `ask` then sees little; use "minimal" for unattended agents)
-
-[thresholds]          # Telltale promotion scores (host policy)
-action_ask = 50
-action_deny = 90
-session_ask = 150     # cumulative session score
-session_deny = 300
-repeated_denials = 3  # after this many returned denials, any scored call is denied
-
-[telltale]
-community_rules = true
-process_chain = true
-rules = []            # extra Rule v1 documents (additive)
-rule_packages = []
-# policy = "/etc/telltale-hooks/policy.yaml"
-self_protection_rules = true
-
-[evaluator]           # long-lived evaluator (telltale hooks serve)
-enabled = true
-autostart = true      # first hook starts it detached; hooks fall back in-process
-idle_timeout_secs = 1800
-request_timeout_ms = 10000
-# socket = "/run/user/1000/telltale-hooks.sock"  # default: <state dir>/evaluator.sock
+```yaml
+version: 1
+hooks:
+  mode: observe          # also detect: record verdicts, never return them.
+                         # enforce: return ask and deny verdicts to the harness
+  on_error: allow        # hook infrastructure failure: allow (fail open), ask, deny
+  on_unevaluable: ask    # tool call too large, nested or damaged to evaluate: ask, deny, allow
+                         # (both are recorded, not returned, unless mode is enforce)
+  reason_detail: full    # full: reasons name rules and thresholds; minimal: verdict and record ID only
+                         # (a human approving an `ask` then sees little; use minimal for unattended agents)
+  # state_dir: <path>    # TELLTALE_HOOKS_STATE_DIR
+  # telemetry_path: <path>  # TELLTALE_HOOKS_TELEMETRY
+  self_protection_rules: true
+  thresholds:            # Telltale promotion scores (host policy)
+    action_ask: 50
+    action_deny: 90
+    session_ask: 150     # cumulative session score
+    session_deny: 300
+    repeated_denials: 3  # after this many returned denials, any scored call is denied
+  window:                # journal records evaluated with the pending action
+    max_records: 256
+    max_bytes: 2097152
+    max_result_bytes: 16384
+  evaluator:             # long-lived evaluator (telltale hooks serve)
+    enabled: true        # TELLTALE_HOOKS_EVALUATOR
+    autostart: true      # first hook starts it detached; hooks fall back in-process
+    idle_timeout_secs: 1800
+    request_timeout_ms: 10000
+    # socket: <path>     # default: <state dir>/evaluator.sock
 ```
+
+The config roots are `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
+`~/.config/telltale`; a later root wins per key. `--config-dir DIR` on
+`hook`, `check` and `serve` (repeatable) replaces them, and an autostarted
+evaluator gets the same folders. A `hooks:` section is accepted and ignored by
+a build without the hooks feature.
 
 `TELLTALE_HOOKS_EVALUATOR=0` disables the evaluator for one process. The
 evaluator runs on Linux and macOS; on Windows hooks always evaluate
 in-process (correct, slower).
 
-State and telemetry default to `$XDG_STATE_HOME/telltale-hooks/` or
-`~/.local/state/telltale-hooks/` on Linux and macOS, and to
-`%LOCALAPPDATA%\telltale-hooks\` on Windows (`TELLTALE_HOOKS_STATE_DIR`,
+State and telemetry default to `$XDG_STATE_HOME/telltale/hooks/` or
+`~/.local/state/telltale/hooks/` on Linux and macOS, and to
+`%LOCALAPPDATA%\telltale\hooks\` on Windows (`hooks.state_dir` and
+`hooks.telemetry_path`, or `TELLTALE_HOOKS_STATE_DIR` and
 `TELLTALE_HOOKS_TELEMETRY`). Telemetry schema:
 [schemas/telltale-hooks-record-v1.schema.json](../../schemas/telltale-hooks-record-v1.schema.json).
 
