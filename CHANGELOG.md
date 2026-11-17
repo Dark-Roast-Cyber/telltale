@@ -8,11 +8,36 @@
 
 ### Compatibility and operator impact
 
+- **`telltale hooks` records carry the real harness identity.** The Telltale
+  records in hooks telemetry (`telltale[]`) name the harness's own client and
+  hook-journal source (`claude`/`claude.hooks`, `codex`/`codex.hooks`,
+  `copilot`/`copilot.hooks`) instead of `claude`/`claude.projects` for every
+  harness. The hook-journal source of every `ClientId` is the one rule
+  `<client name>.hooks` (`ClientId::hook_journal_source_id`), accepted for its
+  own client only and read with the journal encoding; a new hooks adapter
+  needs only its adapter (and its client value, if new), nothing in
+  `telltale-sources` or `telltale-detect`. The hook-journal identities are host-fed: not in the source
+  registry, so never discovered, listed or catalogued, and not session sources.
+  They exist behind the new `hook-journal` feature of `telltale-sources` and
+  `telltale-detect`, which `telltale-core`'s `hooks` feature enables; without it
+  acquisition reports `CapabilityNotCompiled` for them. A harness name with no
+  registered adapter is no longer evaluated and takes the `on_error` path.
+  Verdicts, scores and rule IDs are unchanged.
 - **Embedding MSRV rises to Rust 1.89.** The embedding crates' `rust-version`
   (`telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect` and
   `telltale-core`, plus the new `telltale-discover`) moves from 1.88 to 1.89. This follows the
   [versioning policy](docs/versioning.md) for a minor line: it belongs to the
   next planned minor release (0.8.0), not a patch.
+- **`telltale_sources::acquisition::acquire_source_bounded` takes the discovery
+  root first.** Pass the root the source was discovered under (`.` for the
+  environment), as for `discover_sources_bounded`; the file is opened under
+  that root's approved anchor without following links. Production
+  `acquire_source` is unchanged.
+- **New: `telltale_sources::acquisition::acquire_resolved_source` and
+  `telltale_discover::discovery::open_resolved_file`.** Additive; no existing
+  signature changes. They read an already-canonical path without following a
+  link, and `acquire_source` still opens by name and follows links. Embedders
+  that resolve a path themselves can use the new entry points.
 - **`telltale-core` has a new default feature, `hooks`.** It adds
   `telltale_core::hooks`, the pre-execution hooks runtime that was a separate
   project, together with `regex` and `serde_json` in the default
@@ -21,8 +46,8 @@
   ways). `telltale-cli` has the same default feature, `hooks`; build with
   `--no-default-features` to leave the command and its dependencies out.
 - **New command: `telltale hooks`.** `telltale hooks {claude-code,codex-cli,copilot-cli}
-  {hook,settings}`, `telltale hooks codex-cli execpolicy`, `telltale hooks serve`,
-  `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
+  {hook,settings}`, `telltale hooks codex-cli execpolicy`, `telltale hooks harnesses`,
+  `telltale hooks serve`, `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
   before they run and reach a verdict of allow, ask or deny. It does nothing until a harness
   is configured to call it, and the scanner and watch commands are unchanged.
   Its self-protection rules cover the hook, rule and managed-configuration files
@@ -51,7 +76,12 @@
   Hooks are configured like the rest of Telltale: the `hooks:` section of the
   `settings.d` YAML files (shown by `telltale config show`), from the same config
   roots and with the same precedence, and they evaluate the same `rules.d`,
-  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. `hook`,
+  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. Rule content and
+  policy cannot change the hooks self-protection rules while they are on: a rule
+  document, package or override file that names one of their IDs
+  (`tth.tamper.*`), or a policy under which one would not stay enabled, is
+  invalid configuration (a shared policy with a whitelist must include the
+  `approval_bypass` category or those IDs). `hook`,
   `check` and `serve` take `--config-dir`. The standalone project's TOML file, its
   location and `TELLTALE_HOOKS_CONFIG` are not read, and state moves to
   `telltale/hooks` under the state home; `TELLTALE_HOOKS_STATE_DIR`,
@@ -61,6 +91,13 @@
 
 ### Changes
 
+- Sources now declare what their built-in tools do. Each source names the kind
+  of a tool it knows (shell, file read, file write, web, delegate) and where
+  its command, path and URL arguments are, and detection reads those together
+  with the arguments it already read. Patch-style writes and some file tools
+  now yield written-path and read-path facts, so existing path rules can match
+  more calls; nothing that matched before stops matching. Observation
+  identity, replay identity, retention and Event 3.0 output are unchanged.
 - Add experimental `telltale-discover` and `telltale discover`: bounded,
   metadata-only data-location inventory for the pinned 61-entry Tokscale core
   catalog, independent of detection support. Installation assessment and usage
@@ -77,6 +114,25 @@
   is resolved once, so administrator aliases such as a linked `/home` keep
   working; a link at a tool store such as `~/.codex`, or at or above a relocated
   store, is refused. Returned source paths keep their original spelling.
+  Session investigation now reads each source the same way, including
+  caller-supplied known sources, instead of reopening the path by name: a link
+  in the file or any parent directory below the root reports
+  `non_regular_source` (previously a linked parent was followed, and a linked
+  file was `source_unreadable` on Unix). A known source outside the root is
+  walked strictly from the filesystem root, so a link anywhere in its path
+  (for example macOS `/var` or a linked `/tmp`) is now refused as well.
+- Scan, watch and embedded source processing now read the file whose path was
+  resolved. The shared runtime canonicalizes a source path to build its
+  identity, and the read used to reopen that path by name: a directory below
+  the resolved point swapped for a link, or the file replaced, in between
+  redirected the read to another file, and a FIFO swapped in blocked it. The
+  read now walks the canonical path from the filesystem root through directory
+  handles, opens the file without blocking and requires a regular file, so a
+  link or replacement made after resolution is refused as an unreadable
+  source. Nothing that is scanned changes: a symlinked store root or source
+  file is still resolved and read, and source identities, correlation
+  instances, Event 3.0 paths, cursors and state are unchanged. OpenCode SQLite
+  is not covered (SQLite resolves links and opens its journal files by name).
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and

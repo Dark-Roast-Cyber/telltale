@@ -12,6 +12,8 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
+use crate::tool_operation::declare;
+
 use super::native::{CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem};
 
 #[derive(Clone)]
@@ -206,7 +208,7 @@ fn project_function_call(
         session_id,
         ordinal,
         timestamp,
-        ObservationBody::Tool(body),
+        ObservationBody::Tool(declare(super::tools::TOOLS, body)),
         ObservationStage::ToolRequested,
         0,
         item.call_id.as_deref(),

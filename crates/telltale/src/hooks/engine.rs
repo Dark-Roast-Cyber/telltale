@@ -3,7 +3,8 @@
 //!
 //! Telltale has no API for evaluating a single pending action, so the hook
 //! writes a bounded window of native Claude Code JSONL (history plus the
-//! pending call) and scans it as a `claude.projects` source, the pattern
+//! pending call) and scans it as the hook-journal source of the harness the
+//! call belongs to (`Adapter::client`, `ClientId::hook_journal_source_id`), the pattern
 //! docs/embedding.md prescribes for synthetic sources. Findings for the
 //! pending call are the action findings anchored at its unique source time.
 
@@ -12,39 +13,43 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::{
-    AcquisitionError, ActionRecordV1, ClientId, DetailedEvaluationOptions, EvaluationCompletion,
+    AcquisitionError, ActionRecordV1, DetailedEvaluationOptions, EvaluationCompletion,
     ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
-use crate::hooks::config::RuleContent;
+use telltale_rules::RuleDefinition;
+
+use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
+use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
 
-/// Host-owned Rule v1 templates (name, content): detections of an agent
-/// disabling its own hooks. Every document is loaded into the one pipeline
-/// that serves every harness; an adapter with harness-specific host rules
-/// adds its own `rules/*.yaml` file here. A template writes the pattern text
-/// rules share as `{{NAME}}` (`RULE_FRAGMENTS`); `host_rule_documents` expands it.
-const HOST_RULE_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "telltale-hooks-self-protection.yaml",
-        include_str!("rules/telltale-hooks-self-protection.yaml"),
-    ),
-    (
-        "copilot-cli-self-protection.yaml",
-        include_str!("rules/copilot-cli-self-protection.yaml"),
-    ),
-    (
-        "codex-cli-self-protection.yaml",
-        include_str!("rules/codex-cli-self-protection.yaml"),
-    ),
-];
+/// The shared host-owned Rule v1 template (name, content): detections of an
+/// agent disabling hooks, for every harness. A template writes the pattern
+/// text rules share as `{{NAME}}` (`RULE_FRAGMENTS`).
+const SHARED_RULE_TEMPLATE: (&str, &str) = (
+    "telltale-hooks-self-protection.yaml",
+    include_str!("rules/telltale-hooks-self-protection.yaml"),
+);
+
+/// Every host rule template (name, content): the shared one, then each
+/// adapter's own (`Adapter::rules`). All are loaded into the one pipeline that
+/// serves every harness.
+fn host_rule_templates() -> Vec<(&'static str, &'static str)> {
+    let own = Harness::ALL
+        .iter()
+        .filter_map(|harness| match harness.adapter().rules {
+            HostRules::Document(name, template) => Some((name, template)),
+            HostRules::Shared => None,
+        });
+    std::iter::once(SHARED_RULE_TEMPLATE).chain(own).collect()
+}
 
 /// The bundled host rule documents (name, content), with every placeholder expanded.
 pub fn host_rule_documents() -> &'static [(&'static str, String)] {
     static DOCUMENTS: std::sync::LazyLock<Vec<(&str, String)>> = std::sync::LazyLock::new(|| {
-        HOST_RULE_TEMPLATES
-            .iter()
-            .map(|&(name, template)| (name, expand_fragments(template)))
+        host_rule_templates()
+            .into_iter()
+            .map(|(name, template)| (name, expand_fragments(template)))
             .collect()
     });
     &DOCUMENTS
@@ -249,22 +254,12 @@ impl Engine {
             .map(|(path, text)| (path.clone(), text.as_str()))
             .collect::<Vec<_>>();
         let mut generated = GeneratedCoverage::default();
-        let mut documents = Vec::new();
-        if rules.self_protection {
-            let host = host_rule_documents()
-                .iter()
-                .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
-            let own = generated_documents(protected_paths, &mut generated);
-            let own = own
-                .iter()
-                .enumerate()
-                .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
-            for (source, document) in host.chain(own) {
-                let rule_set = telltale_rules::parse_rule_document(document)
-                    .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))?;
-                documents.push((source, rule_set));
-            }
-        }
+        let documents = if rules.self_protection {
+            self_protection_documents(protected_paths, &mut generated)?
+        } else {
+            Vec::new()
+        };
+        let host_rules = host_rule_definitions(&documents);
         let resolution = crate::rule_resolution::resolve_rule_set(
             &rules.packs,
             &[],
@@ -277,6 +272,16 @@ impl Engine {
         .map_err(|error| {
             EngineError::Build(PipelineError::Compilation(error.to_string().into()))
         })?;
+        if let Some(id) = altered_host_rule(&host_rules, &resolution.merged_rule_set) {
+            return Err(EngineError::Build(PipelineError::Compilation(
+                format!("user rule content changes the self-protection rule {id}").into(),
+            )));
+        }
+        if let Some(id) = dropped_host_rule(&host_rules, &resolution.rule_set) {
+            return Err(EngineError::Build(PipelineError::Compilation(
+                format!("the policy removes the self-protection rule {id}").into(),
+            )));
+        }
         let pipeline =
             Pipeline::from_compiled(resolution.rule_set, resolution.diagnostics.packages)
                 .map_err(EngineError::Build)?;
@@ -325,6 +330,7 @@ impl Engine {
     /// stop at [`PIECE_SCAN_LIMIT`] instead.
     pub fn evaluate(
         &self,
+        harness: Harness,
         window_path: &Path,
         history: &[Line],
         pending: &[Line],
@@ -336,7 +342,7 @@ impl Engine {
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
         let mut failure_code = None;
         if budget.admits(whole_bytes) {
-            let whole = self.scan(window_path, history.iter().chain(pending), focus)?;
+            let whole = self.scan(harness, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
             if !whole.source_failed {
                 return Ok(Evaluation {
@@ -346,13 +352,16 @@ impl Engine {
             }
             failure_code = whole.failure_code;
         }
-        let mut best = self.scan(window_path, pending.iter(), focus)?;
+        let mut best = self.scan(harness, window_path, pending.iter(), focus)?;
         budget.observe(pending_bytes, best.scan_ms);
         let mut kept = vec![false; history.len()];
         if best.source_failed && pending.len() > 1 {
-            best = self.scan_each(window_path, pending, focus, || budget.pieces_in_time())?;
+            best = self.scan_each(harness, window_path, pending, focus, || {
+                budget.pieces_in_time()
+            })?;
         } else if best.status != EvalStatus::NotEvaluated {
             let window = Window {
+                harness,
                 path: window_path,
                 history,
                 sizes: &sizes,
@@ -420,7 +429,12 @@ impl Engine {
                 .iter()
                 .zip(kept.iter())
                 .filter_map(|(line, kept)| kept.then_some(line));
-            let scan = self.scan(window.path, lines.chain(window.pending), window.focus)?;
+            let scan = self.scan(
+                window.harness,
+                window.path,
+                lines.chain(window.pending),
+                window.focus,
+            )?;
             budget.observe(bytes, scan.scan_ms);
             if scan.source_failed {
                 for &n in lines_in_block {
@@ -448,6 +462,7 @@ impl Engine {
     /// the record says so.
     fn scan_each(
         &self,
+        harness: Harness,
         window_path: &Path,
         pending: &[Line],
         focus: &[Focus],
@@ -462,6 +477,7 @@ impl Engine {
                 break;
             }
             let scan = self.scan(
+                harness,
                 window_path,
                 std::iter::once(line),
                 std::slice::from_ref(one),
@@ -486,14 +502,16 @@ impl Engine {
         &self.generated
     }
 
-    /// Evaluate `lines` as one Claude Code source, the focus lines among them.
+    /// Evaluate `lines` as one hook-journal source of `harness`, the focus lines
+    /// among them.
     fn scan<'a>(
         &self,
+        harness: Harness,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
         focus: &[Focus],
     ) -> Result<Evaluation, EngineError> {
-        let (scan, scan_ms) = self.scan_window(window_path, lines)?;
+        let (scan, scan_ms) = self.scan_window(harness, window_path, lines)?;
         if let Some(failure) = scan.failure() {
             return Ok(Evaluation {
                 failure_code: Some(failure.code().to_owned()),
@@ -509,13 +527,14 @@ impl Engine {
         Ok(evaluation_of(&scan, focus, scan_ms))
     }
 
-    /// Write `lines` to `window_path` and scan them as one Claude Code source,
-    /// returning its result and how long the scan took. The caller holds the
-    /// session lock, so the stable path keeps Telltale's source-bound identities
+    /// Write `lines` to `window_path` and scan them as one hook-journal source of
+    /// `harness` (its client and `ClientId::hook_journal_source_id`), returning its result
+    /// and how long the scan took. The caller holds the session lock, so the stable path keeps Telltale's source-bound identities
     /// stable across a session. The window holds raw tool input, so it is removed
     /// as soon as the scan returns.
     fn scan_window<'a>(
         &self,
+        harness: Harness,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
     ) -> Result<(SourceScan, u64), EngineError> {
@@ -528,10 +547,11 @@ impl Engine {
                 file.write_all(text.as_bytes())
             })
             .map_err(EngineError::Window)?;
+        let adapter = harness.adapter();
         let source = Source {
-            client: ClientId::Claude,
+            client: adapter.client,
             kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_owned(),
+            source_id: adapter.client.hook_journal_source_id().to_owned(),
             path: window_path.to_owned(),
         };
         let started = Instant::now();
@@ -693,6 +713,7 @@ impl RecoveryBudget {
 
 /// What a recovery scan is made of.
 struct Window<'a> {
+    harness: Harness,
     path: &'a Path,
     history: &'a [Line],
     sizes: &'a [usize],
@@ -965,14 +986,8 @@ fn harness_home_families(
     coverage: &mut GeneratedCoverage,
 ) -> [Family; 2] {
     coverage.paths += homes.len();
-    let name_end = NAME_END;
-    let files = |home: &crate::hooks::config::HarnessHome| match home.variable {
-        "CODEX_HOME" => format!(
-            r#"[\\/]+(?:hooks\.json|(?:[^\\/\s;&|"']+\.)?config\.toml|rules{name_end}|(?:[^\s;&|"']*[\\/])?hooks\.json)"#
-        ),
-        _ => format!(
-            r#"[\\/]+(?:(?:hooks|agents){name_end}|settings(?:\.local)?\.json|(?:[^\s;&|"']*[\\/])?hooks\.json)"#
-        ),
+    let files = |home: &crate::hooks::config::HarnessHome| {
+        home.hook_files.replace("{{NAME_END}}", NAME_END)
     };
     let fragments = |suffix: &dyn Fn(&crate::hooks::config::HarnessHome) -> String,
                      coverage: &mut GeneratedCoverage| {
@@ -1113,7 +1128,7 @@ impl GeneratedRule {
         };
         let severity = if *score >= 90 { "high" } else { "medium" };
         format!(
-            "  - id: tth.tamper.{id}\n    title: {title}\n    category: approval_bypass\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
+            "  - id: {HOST_RULE_ID_PREFIX}{id}\n    title: {title}\n    category: {HOST_RULE_CATEGORY}\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
         )
     }
 }
@@ -1262,6 +1277,108 @@ fn same_instant(a: &str, b: &str) -> bool {
 /// refused rather than stalling the pipeline build. The configuration
 /// validated these at load time; a failure here is a change since then and
 /// gets the runtime's strict policy.
+/// The host rule documents and the generated rules for `protected_paths`,
+/// parsed and labelled by source.
+fn self_protection_documents(
+    protected_paths: &[PathBuf],
+    generated: &mut GeneratedCoverage,
+) -> Result<Vec<(String, telltale_rules::RuleSet)>, EngineError> {
+    let host = host_rule_documents()
+        .iter()
+        .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
+    let own = generated_documents(protected_paths, generated);
+    let own = own
+        .iter()
+        .enumerate()
+        .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
+    host.chain(own)
+        .map(|(source, document)| {
+            telltale_rules::parse_rule_document(document)
+                .map(|rule_set| (source, rule_set))
+                .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))
+        })
+        .collect()
+}
+
+/// Whether the policy at `path`, compiled over the host and generated rules
+/// alone, leaves any of them out. Decided by effect, so it follows whatever
+/// the policy can select by. A policy that does not parse is not reported
+/// here: building the rules fails on it.
+pub fn policy_drops_host_rule(path: &Path, protected_paths: &[PathBuf]) -> bool {
+    let Some(policy) = read(path)
+        .ok()
+        .and_then(|text| serde_yaml::from_str::<telltale_rules::RulePolicy>(&text).ok())
+    else {
+        return false;
+    };
+    let Ok(documents) =
+        self_protection_documents(protected_paths, &mut GeneratedCoverage::default())
+    else {
+        return false;
+    };
+    let host = host_rule_definitions(&documents);
+    let set = telltale_rules::RuleSet {
+        version: 1,
+        description: String::new(),
+        defaults: telltale_rules::RuleDefaults {
+            case_insensitive: false,
+            enabled: true,
+        },
+        rules: host.clone(),
+        modifiers: Vec::new(),
+    };
+    set.compile(Some(&policy))
+        .is_ok_and(|compiled| dropped_host_rule(&host, &compiled).is_some())
+}
+
+/// The ID of the first enabled host rule that `compiled` (the rules after the
+/// policy) does not carry.
+fn dropped_host_rule<'a>(
+    host: &'a [RuleDefinition],
+    compiled: &telltale_rules::CompiledRuleSet,
+) -> Option<&'a str> {
+    let kept = compiled
+        .summaries()
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect::<std::collections::BTreeSet<_>>();
+    host.iter()
+        .find(|rule| rule.enabled && !kept.contains(&rule.id))
+        .map(|rule| rule.id.as_str())
+}
+
+/// The host rules as their documents define them, document defaults applied
+/// the way the merged rule set applies them.
+fn host_rule_definitions(documents: &[(String, telltale_rules::RuleSet)]) -> Vec<RuleDefinition> {
+    documents
+        .iter()
+        .flat_map(|(_, set)| {
+            set.rules.iter().cloned().map(|mut rule| {
+                telltale_rules::apply_rule_defaults(&mut rule, &set.defaults);
+                rule
+            })
+        })
+        .collect()
+}
+
+/// The ID of the first host rule that `merged` (the rules after user content
+/// and overrides) does not carry exactly as defined. The rules merge adds
+/// definitions at a tier that can replace none and applies override files
+/// after them, so user content must not have reached any of these.
+fn altered_host_rule<'a>(
+    host: &'a [RuleDefinition],
+    merged: &telltale_rules::RuleSet,
+) -> Option<&'a str> {
+    let merged = merged
+        .rules
+        .iter()
+        .map(|rule| (rule.id.as_str(), rule))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    host.iter()
+        .find(|rule| merged.get(rule.id.as_str()) != Some(rule))
+        .map(|rule| rule.id.as_str())
+}
+
 fn read(path: &Path) -> Result<String, EngineError> {
     crate::hooks::state::read_operator_input(path)
         .map_err(|error| EngineError::Content(path.to_owned(), error))
@@ -1342,7 +1459,7 @@ mod tests {
         let placeholder = regex::Regex::new(r"\{\{([A-Z][A-Z0-9_]*)\}\}").unwrap();
         let quoted = regex::Regex::new(r"^\s*[a-z_]+: '.*'$").unwrap();
         let mut named = std::collections::BTreeSet::new();
-        for (name, template) in super::HOST_RULE_TEMPLATES {
+        for (name, template) in super::host_rule_templates() {
             for line in template.lines() {
                 for found in placeholder.captures_iter(line) {
                     let fragment = found.get(1).unwrap().as_str();
@@ -1375,7 +1492,7 @@ mod tests {
     /// is built from the shared texts, and a change to one reaches every rule that uses it.
     #[test]
     fn every_exclusion_is_built_from_shared_text() {
-        for (name, template) in super::HOST_RULE_TEMPLATES {
+        for (name, template) in super::host_rule_templates() {
             let mut lines = template.lines();
             while let Some(line) = lines.next() {
                 if line.trim() == "exclude:" {
@@ -1552,12 +1669,39 @@ mod tests {
             })
             .collect();
         files.sort();
-        let mut listed: Vec<(String, String)> = super::HOST_RULE_TEMPLATES
-            .iter()
-            .map(|(name, content)| ((*name).to_owned(), (*content).to_owned()))
+        let mut listed: Vec<(String, String)> = super::host_rule_templates()
+            .into_iter()
+            .map(|(name, content)| (name.to_owned(), content.to_owned()))
             .collect();
         listed.sort();
         assert_eq!(listed, files);
+    }
+
+    /// User content is kept out of the host rules by namespace, so no host or
+    /// generated rule may be outside it.
+    #[test]
+    fn every_host_and_generated_rule_is_in_the_reserved_namespace() {
+        let mut coverage = super::GeneratedCoverage::default();
+        let generated = super::generated_documents(
+            &[std::path::PathBuf::from("/srv/tth/state")],
+            &mut coverage,
+        );
+        assert!(!generated.is_empty());
+        let host = super::host_rule_documents()
+            .iter()
+            .map(|(_, document)| document);
+        for document in host.chain(&generated) {
+            let set = telltale_rules::parse_rule_document(document).unwrap();
+            assert!(!set.rules.is_empty());
+            for rule in &set.rules {
+                assert!(
+                    rule.id
+                        .starts_with(crate::hooks::config::HOST_RULE_ID_PREFIX),
+                    "{}",
+                    rule.id
+                );
+            }
+        }
     }
 
     #[test]
@@ -1664,6 +1808,7 @@ mod recovery_tests {
         let mut budget = budget_used(used, 0.0);
         let evaluation = engine
             .evaluate(
+                Harness::ClaudeCode,
                 &dir.path().join("window.jsonl"),
                 &[],
                 &lines,
@@ -1680,11 +1825,17 @@ mod recovery_tests {
         let (dir, engine) = engine();
         let mut left = 1;
         let evaluation = engine
-            .scan_each(&dir.path().join("window.jsonl"), &lines, &focus, || {
-                let in_time = left > 0;
-                left = 0;
-                in_time
-            })
+            .scan_each(
+                Harness::ClaudeCode,
+                &dir.path().join("window.jsonl"),
+                &lines,
+                &focus,
+                || {
+                    let in_time = left > 0;
+                    left = 0;
+                    in_time
+                },
+            )
             .unwrap();
         (evaluation, lines.len())
     }

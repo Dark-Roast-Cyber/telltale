@@ -118,7 +118,7 @@
     },
     "telltale": {
       "type": "array",
-      "description": "Telltale ActionRecordV1 values anchored at this observation, unmodified. They describe the evaluation encoding, which for non-Claude harnesses is the normalized form of the call (ADR 0002 addendum), so their `tool_name` and facets may differ from `action` (for example `Read` for Copilot `view`, or `Write` with a path for a patch).",
+      "description": "Telltale ActionRecordV1 values anchored at this observation, unmodified. They describe the evaluation encoding, which for non-Claude harnesses is the normalized form of the call (ADR 0002 addendum), so their `tool_name` and facets may differ from `action` (for example `Read` for Copilot `view`, or `Write` with a path for a patch). Their `client` and `source_id` are those of the call's harness (`claude`/`claude.hooks`, `codex`/`codex.hooks`, `copilot`/`copilot.hooks`).",
       "items": {
         "type": "object",
         "additionalProperties": false,

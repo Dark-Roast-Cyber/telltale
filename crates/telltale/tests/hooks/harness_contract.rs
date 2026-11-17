@@ -10,6 +10,7 @@ use crate::common;
 use common::Harness;
 use serde_json::{Value, json};
 use telltale_core::hooks::config::OnError;
+use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::{
     CANNOT_ASK_NOTE, Completion, Context, Event, Response, SYNTHETIC_ID_PREFIX, ToolCall,
     synthetic_call_id,
@@ -412,7 +413,7 @@ fn a_repeated_key_pending_in_parallel_settles_first_in_first_out() {
         input: p["input"].clone(),
     };
     let ctx = |event: &str| Context {
-        harness: "opencode",
+        harness: claude_code::HARNESS,
         hook_event: event.to_owned(),
         session_id: befores[0]["sessionID"].as_str().unwrap().to_owned(),
         agent_id: None,
@@ -673,15 +674,14 @@ fn native_ctx(harness: &'static str) -> Context {
 }
 
 /// The runtime normalizes the evaluation encoding itself: a native patch to
-/// the hook settings is denied under every harness name, while telemetry
+/// the hook settings is denied under every registered harness, while telemetry
 /// describes the call exactly as the harness sent it.
 #[test]
 fn native_patches_are_denied_and_reported_as_sent() {
     let small = settings_patch(0);
-    let cases: [(&'static str, &str, Value); 3] = [
+    let cases: [(&'static str, &str, Value); 2] = [
         ("codex-cli", "apply_patch", json!({"command": small})),
         ("copilot-cli", "apply_patch", json!(small)),
-        ("opencode", "patch", json!({"patchText": small})),
     ];
     for (harness, tool, input) in cases {
         let mut h = Harness::new();
@@ -1081,4 +1081,30 @@ fn codex_captures_replay_with_turn_settlement() {
         "completed"
     );
     validate_schema(&h.telemetry());
+}
+
+/// What a harness needs beyond its descriptor, which the compiler cannot ask
+/// for: captured payload fixtures under its own name, and its rules document
+/// among the host rules the engine loads.
+#[test]
+fn every_registered_adapter_has_fixtures_and_host_rules() {
+    use telltale_core::hooks::engine::host_rule_documents;
+    use telltale_core::hooks::harness::{Harness, HostRules};
+    let documents: Vec<&str> = host_rule_documents()
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(!documents.is_empty());
+    for harness in Harness::ALL {
+        let adapter = harness.adapter();
+        let fixtures = common::fixtures(adapter.name);
+        let versions = std::fs::read_dir(&fixtures)
+            .unwrap_or_else(|error| panic!("{}: {error}", fixtures.display()))
+            .count();
+        assert!(versions > 0, "{} has no captured fixtures", adapter.name);
+        if let HostRules::Document(name, _) = adapter.rules {
+            assert!(documents.contains(&name), "{name} is not loaded");
+            assert!(name.starts_with(adapter.name), "{name}");
+        }
+    }
 }

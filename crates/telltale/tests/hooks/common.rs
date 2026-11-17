@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use telltale_core::hooks::claude_code;
 use telltale_core::hooks::config::{Config, Mode};
+use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::Runtime;
 
 #[path = "telemetry_reader.rs"]
@@ -195,4 +195,23 @@ pub fn verdict(output: &Option<Value>) -> Option<&str> {
     output
         .as_ref()
         .and_then(|o| o["hookSpecificOutput"]["permissionDecision"].as_str())
+}
+
+/// The harness name and call the runtime evaluates for a native `call` of
+/// `harness`. A harness without a registered adapter is not evaluated, so one
+/// whose shapes are only captured (no adapter yet) is evaluated as the
+/// runtime would after its normalization: normalized here, then sent under
+/// Claude Code, whose encoding is the identity.
+pub fn evaluable(
+    harness: &'static str,
+    call: telltale_core::hooks::runtime::ToolCall,
+) -> (&'static str, telltale_core::hooks::runtime::ToolCall) {
+    if telltale_core::hooks::harness::Harness::from_name(harness).is_some() {
+        (harness, call)
+    } else {
+        (
+            claude_code::HARNESS,
+            telltale_core::hooks::normalize::tool_call(harness, call),
+        )
+    }
 }

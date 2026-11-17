@@ -101,6 +101,25 @@ do
             fi
             ;;
     esac
+    # The hook-journal source identities ride on the hooks feature: they are
+    # compiled into the sources and detection crates only with it.
+    for crate in telltale-sources telltale-detect; do
+        crate_features=$(cargo tree "$@" -e normal,build --prefix none -f '{p} features={f}' | grep "^$crate " || true)
+        case "$features" in
+            *hooks*)
+                printf '%s\n' "$crate_features" | grep -q 'hook-journal' || {
+                    echo "The hooks feature did not enable hook-journal in $crate" >&2
+                    exit 1
+                }
+                ;;
+            *)
+                if printf '%s\n' "$crate_features" | grep -q 'hook-journal'; then
+                    echo "hook-journal is enabled in $crate without the hooks feature" >&2
+                    exit 1
+                fi
+                ;;
+        esac
+    done
     case "$features" in
         *sqlx-sqlite*)
             sqlite_graph=$(cargo tree "$@" -e normal,build --no-dedupe --prefix none -f '{p}' | grep '^libsqlite3-sys ' | sort -u)

@@ -66,7 +66,7 @@ Subagent calls add `agent_id` and `agent_type`. `permission_mode` is
 | Disable | `--disable hooks` / `-c features.hooks=false` (Src); changing a trusted handler (hash change) (E2E) | Src, E2E |
 | Lockdown | Managed hooks in `requirements.toml` with `allow_managed_hooks_only` | Src |
 
-## Adapter (`crates/telltale/src/hooks/codex_cli.rs`)
+## Adapter (`crates/telltale/src/hooks/harnesses/codex_cli.rs`)
 
 ### Install
 

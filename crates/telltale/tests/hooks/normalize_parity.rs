@@ -11,8 +11,11 @@
 //! - **normalized**: the same native call sent under its real harness name,
 //!   so the runtime applies `normalize::tool_call` itself (end to end).
 //!
-//! The native column is pinned by sending the call under a harness name no
-//! normalization rule knows (the identity), which journals it unchanged.
+//! The native column is pinned by sending the call under Claude Code, whose
+//! encoding is the identity, which journals it unchanged. A harness whose
+//! adapter is not registered (OpenCode) is not evaluated by the runtime, so its
+//! normalized column applies `normalize::tool_call` first and sends the result
+//! under Claude Code (`common::evaluable`).
 //! Normalized results must equal the reference (verdict and rule IDs).
 //! Native results are pinned too, so the gap stays documented: when one of
 //! them starts matching the reference, Telltale closed that gap upstream
@@ -25,6 +28,7 @@ use crate::common;
 
 use common::Harness;
 use serde_json::{Value, json};
+use telltale_core::hooks::harnesses::{claude_code, codex_cli, copilot_cli, opencode};
 use telltale_core::hooks::normalize;
 use telltale_core::hooks::runtime::{Context, Event, ToolCall};
 
@@ -56,19 +60,15 @@ type Call = (&'static str, Value);
 /// The `Context::harness` name behind a variant label such as
 /// `copilot-cli-pascal` or `opencode-v2`.
 fn harness_of(label: &'static str) -> &'static str {
-    [
-        normalize::COPILOT_CLI,
-        normalize::CODEX_CLI,
-        normalize::OPENCODE,
-    ]
-    .into_iter()
-    .find(|name| label.starts_with(name))
-    .unwrap_or(label)
+    [copilot_cli::HARNESS, codex_cli::HARNESS, opencode::NAME]
+        .into_iter()
+        .find(|name| label.starts_with(name))
+        .unwrap_or(label)
 }
 
-/// A harness name without normalization rules: the native shape is journaled
-/// as sent.
-const NATIVE_PIN: &str = "native-pin";
+/// A registered harness without normalization rules: the native shape is
+/// journaled as sent.
+const NATIVE_PIN: &str = claude_code::HARNESS;
 
 /// Send `calls` in one fresh session; the outcome is the last call's decision.
 /// With `normalized`, the runtime normalizes for the label's harness; without
@@ -80,7 +80,7 @@ fn evaluate(label: &'static str, calls: &[Call], normalized: bool) -> Outcome {
     } else {
         NATIVE_PIN
     };
-    let ctx = Context {
+    let mut ctx = Context {
         harness,
         hook_event: "PreToolUse".into(),
         session_id: h.session_id.clone(),
@@ -109,7 +109,10 @@ fn evaluate(label: &'static str, calls: &[Call], normalized: bool) -> Outcome {
                 "{NATIVE_PIN} is normalized"
             );
         }
+        let (name, call) = common::evaluable(ctx.harness, call);
+        ctx.harness = name;
         h.runtime.handle(&ctx, Event::ToolRequested(call));
+        ctx.harness = harness;
     }
     let decision = h.decision_for(&last);
     Outcome {
