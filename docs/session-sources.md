@@ -10,6 +10,11 @@ Acquisition dispatches those identities to source-owned native extraction.
 This document records the current source-of-truth host path candidates used by
 the scanner.
 
+The traversal and root-resolution implementation lives in `telltale-discover`;
+the existing discovery entry points in `telltale-sources` supply this same
+supported-source registry. Broad tool inventory is independent: finding a tool
+or retained data does not imply that Telltale can acquire or detect its activity.
+
 Session-store discovery answers “where can Telltale acquire activity from?” It is
 intentionally separate from installed-agent inventory, which answers “which
 agent tools appear installed?” using metadata-only checks in
