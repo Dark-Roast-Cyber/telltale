@@ -13,6 +13,11 @@
   `telltale-core`, plus the new `telltale-discover`) moves from 1.88 to 1.89. This follows the
   [versioning policy](docs/versioning.md) for a minor line: it belongs to the
   next planned minor release (0.8.0), not a patch.
+- **`telltale_sources::acquisition::acquire_source_bounded` takes the discovery
+  root first.** Pass the root the source was discovered under (`.` for the
+  environment), as for `discover_sources_bounded`; the file is opened under
+  that root's approved anchor without following links. Production
+  `acquire_source` is unchanged.
 - **`telltale-core` has a new default feature, `hooks`.** It adds
   `telltale_core::hooks`, the pre-execution hooks runtime that was a separate
   project, together with `regex`, `serde_json` and a TOML parser in the default
@@ -71,6 +76,11 @@
   is resolved once, so administrator aliases such as a linked `/home` keep
   working; a link at a tool store such as `~/.codex`, or at or above a relocated
   store, is refused. Returned source paths keep their original spelling.
+  Session investigation now reads each source the same way, including
+  caller-supplied known sources, instead of reopening the path by name: a link
+  in the file or any parent directory below the root reports
+  `non_regular_source` (previously a linked parent was followed, and a linked
+  file was `source_unreadable` on Unix).
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and

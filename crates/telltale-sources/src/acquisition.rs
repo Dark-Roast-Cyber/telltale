@@ -7,6 +7,7 @@
 pub use crate::source_read::BoundedReadError;
 use crate::source_read::SourceReadError;
 use std::fmt;
+use std::path::Path;
 
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
@@ -397,9 +398,24 @@ impl DirectReadLimits {
     }
 }
 
+/// A bounded direct read of a source coordinate under its discovery root.
+#[derive(Clone, Copy)]
+pub(crate) struct DirectRead<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) limits: DirectReadLimits,
+}
+
 /// Same authoritative dispatcher and native mapping, with a bounded direct-file
 /// reader. Non-JSONL identities fail before I/O; OpenCode investigation is deferred.
+///
+/// `root` is the discovery root the source belongs to, as passed to bounded
+/// discovery (`.` for the environment). The file is opened under the same trust
+/// anchors: no link at or below the approved root is followed, at the file or
+/// any ancestor, whether the coordinate was discovered or supplied by the
+/// caller. A refused link is `non_regular_source`. The source path itself is
+/// never rewritten, so its identity is unchanged.
 pub fn acquire_source_bounded(
+    root: &Path,
     source: &Source,
     options: AcquisitionOptions,
     limits: DirectReadLimits,
@@ -409,14 +425,15 @@ pub fn acquire_source_bounded(
             BoundedReadError::LimitExceeded,
         ));
     }
-    acquire_source_impl(source, options, Some(limits))
+    acquire_source_impl(source, options, Some(DirectRead { root, limits }))
 }
 
 fn acquire_source_impl(
     source: &Source,
     options: AcquisitionOptions,
-    limits: Option<DirectReadLimits>,
+    direct: Option<DirectRead<'_>>,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
+    let limits = direct.map(|direct| direct.limits);
     let expected_kind = match (source.client, source.source_id.as_str()) {
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
@@ -444,7 +461,7 @@ fn acquire_source_impl(
     let mut source_scale = SourceScale::FLOOR;
     let observations = match source.client {
         ClientId::Claude => {
-            let (records, bytes) = extract_claude_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_claude_native_records_with_limits(source, direct)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
@@ -529,7 +546,7 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::Codex => {
-            let (records, bytes) = extract_codex_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_codex_native_records_with_limits(source, direct)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
@@ -614,7 +631,7 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::OpenClaw => {
-            let (records, bytes) = extract_openclaw_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_openclaw_native_records_with_limits(source, direct)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
@@ -636,7 +653,7 @@ fn acquire_source_impl(
             .map_err(map_openclaw_error)?
         }
         ClientId::Qwen => {
-            let (records, bytes) = extract_qwen_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_qwen_native_records_with_limits(source, direct)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
@@ -1370,6 +1387,7 @@ mod tests {
                 };
                 assert_eq!(
                     acquisition_error(super::acquire_source_bounded(
+                        directory.path(),
                         &source,
                         options(),
                         super::DirectReadLimits::default()

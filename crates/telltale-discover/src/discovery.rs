@@ -949,6 +949,21 @@ fn trust_anchors(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Open a source coordinate for reading under the trust anchors that bounded
+/// discovery of `root` uses: the anchor is resolved once, and no link at or
+/// below it (or anywhere, for a path under no anchor) is followed, including
+/// the file itself. The open walks directory handles, so replacing an ancestor
+/// pathname with a link while it runs cannot redirect it. `path` keeps the
+/// caller's spelling and may be any coordinate, discovered or caller-supplied.
+/// Returns `None` when a component is absent. The caller checks that the
+/// opened object is a regular file; a FIFO opens without blocking.
+pub fn open_source_file(
+    root: &Path,
+    path: &Path,
+) -> Result<Option<fs::File>, BoundedDiscoveryError> {
+    crate::anchored::open_file(path, &trust_anchors(root))
+}
+
 fn bounded_opencode_paths(
     root: &Path,
     client: ClientId,
