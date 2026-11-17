@@ -225,6 +225,37 @@ fn configuration_change_falls_back_and_retires_the_daemon() {
     wait_for(|| daemon.0.try_wait().unwrap().is_some());
 }
 
+/// The evaluator is keyed by the bytes of every file in the root, so a change
+/// to one (here an override file) is never answered by an evaluator that
+/// started before it.
+#[test]
+fn a_change_to_a_file_in_the_config_root_retires_the_daemon() {
+    let env = Env::new("");
+    let overrides = env.config().join("overrides.d");
+    std::fs::create_dir_all(&overrides).unwrap();
+    let file = overrides.join("quiet.yaml");
+    let quiet = |change: &str| {
+        format!(
+            "version: 1\noverrides:\n  - rule_id: network.download\n    {change}\n    reason: synthetic reason\n"
+        )
+    };
+    std::fs::write(&file, quiet("score: 5")).unwrap();
+    let mut daemon = env.serve();
+
+    assert_eq!(env.hook(&pre("toolu_1", "ls")), None);
+    assert_eq!(env.decisions()[0]["evaluation"]["evaluator"], "daemon");
+
+    std::fs::write(&file, quiet("score: 6")).unwrap();
+    assert_eq!(env.hook(&pre("toolu_2", "ls")), None);
+    let decision = env.decisions().pop().unwrap();
+    assert_eq!(decision["evaluation"]["evaluator"], "in_process");
+    assert_eq!(
+        decision["evaluation"]["evaluator_fallback"],
+        "evaluator_config_mismatch"
+    );
+    wait_for(|| daemon.0.try_wait().unwrap().is_some());
+}
+
 #[test]
 fn unreachable_evaluator_is_autostarted_and_orphans_exit() {
     let env = Env::new("");

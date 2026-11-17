@@ -16,7 +16,9 @@ use crate::{
     ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
-use crate::hooks::config::RuleContent;
+use telltale_rules::RuleDefinition;
+
+use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
 use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
 
@@ -251,22 +253,12 @@ impl Engine {
             .map(|(path, text)| (path.clone(), text.as_str()))
             .collect::<Vec<_>>();
         let mut generated = GeneratedCoverage::default();
-        let mut documents = Vec::new();
-        if rules.self_protection {
-            let host = host_rule_documents()
-                .iter()
-                .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
-            let own = generated_documents(protected_paths, &mut generated);
-            let own = own
-                .iter()
-                .enumerate()
-                .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
-            for (source, document) in host.chain(own) {
-                let rule_set = telltale_rules::parse_rule_document(document)
-                    .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))?;
-                documents.push((source, rule_set));
-            }
-        }
+        let documents = if rules.self_protection {
+            self_protection_documents(protected_paths, &mut generated)?
+        } else {
+            Vec::new()
+        };
+        let host_rules = host_rule_definitions(&documents);
         let resolution = crate::rule_resolution::resolve_rule_set(
             &rules.packs,
             &[],
@@ -279,6 +271,16 @@ impl Engine {
         .map_err(|error| {
             EngineError::Build(PipelineError::Compilation(error.to_string().into()))
         })?;
+        if let Some(id) = altered_host_rule(&host_rules, &resolution.merged_rule_set) {
+            return Err(EngineError::Build(PipelineError::Compilation(
+                format!("user rule content changes the self-protection rule {id}").into(),
+            )));
+        }
+        if let Some(id) = dropped_host_rule(&host_rules, &resolution.rule_set) {
+            return Err(EngineError::Build(PipelineError::Compilation(
+                format!("the policy removes the self-protection rule {id}").into(),
+            )));
+        }
         let pipeline =
             Pipeline::from_compiled(resolution.rule_set, resolution.diagnostics.packages)
                 .map_err(EngineError::Build)?;
@@ -1109,7 +1111,7 @@ impl GeneratedRule {
         };
         let severity = if *score >= 90 { "high" } else { "medium" };
         format!(
-            "  - id: tth.tamper.{id}\n    title: {title}\n    category: approval_bypass\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
+            "  - id: {HOST_RULE_ID_PREFIX}{id}\n    title: {title}\n    category: {HOST_RULE_CATEGORY}\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
         )
     }
 }
@@ -1258,6 +1260,108 @@ fn same_instant(a: &str, b: &str) -> bool {
 /// refused rather than stalling the pipeline build. The configuration
 /// validated these at load time; a failure here is a change since then and
 /// gets the runtime's strict policy.
+/// The host rule documents and the generated rules for `protected_paths`,
+/// parsed and labelled by source.
+fn self_protection_documents(
+    protected_paths: &[PathBuf],
+    generated: &mut GeneratedCoverage,
+) -> Result<Vec<(String, telltale_rules::RuleSet)>, EngineError> {
+    let host = host_rule_documents()
+        .iter()
+        .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
+    let own = generated_documents(protected_paths, generated);
+    let own = own
+        .iter()
+        .enumerate()
+        .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
+    host.chain(own)
+        .map(|(source, document)| {
+            telltale_rules::parse_rule_document(document)
+                .map(|rule_set| (source, rule_set))
+                .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))
+        })
+        .collect()
+}
+
+/// Whether the policy at `path`, compiled over the host and generated rules
+/// alone, leaves any of them out. Decided by effect, so it follows whatever
+/// the policy can select by. A policy that does not parse is not reported
+/// here: building the rules fails on it.
+pub fn policy_drops_host_rule(path: &Path, protected_paths: &[PathBuf]) -> bool {
+    let Some(policy) = read(path)
+        .ok()
+        .and_then(|text| serde_yaml::from_str::<telltale_rules::RulePolicy>(&text).ok())
+    else {
+        return false;
+    };
+    let Ok(documents) =
+        self_protection_documents(protected_paths, &mut GeneratedCoverage::default())
+    else {
+        return false;
+    };
+    let host = host_rule_definitions(&documents);
+    let set = telltale_rules::RuleSet {
+        version: 1,
+        description: String::new(),
+        defaults: telltale_rules::RuleDefaults {
+            case_insensitive: false,
+            enabled: true,
+        },
+        rules: host.clone(),
+        modifiers: Vec::new(),
+    };
+    set.compile(Some(&policy))
+        .is_ok_and(|compiled| dropped_host_rule(&host, &compiled).is_some())
+}
+
+/// The ID of the first enabled host rule that `compiled` (the rules after the
+/// policy) does not carry.
+fn dropped_host_rule<'a>(
+    host: &'a [RuleDefinition],
+    compiled: &telltale_rules::CompiledRuleSet,
+) -> Option<&'a str> {
+    let kept = compiled
+        .summaries()
+        .into_iter()
+        .map(|summary| summary.id)
+        .collect::<std::collections::BTreeSet<_>>();
+    host.iter()
+        .find(|rule| rule.enabled && !kept.contains(&rule.id))
+        .map(|rule| rule.id.as_str())
+}
+
+/// The host rules as their documents define them, document defaults applied
+/// the way the merged rule set applies them.
+fn host_rule_definitions(documents: &[(String, telltale_rules::RuleSet)]) -> Vec<RuleDefinition> {
+    documents
+        .iter()
+        .flat_map(|(_, set)| {
+            set.rules.iter().cloned().map(|mut rule| {
+                telltale_rules::apply_rule_defaults(&mut rule, &set.defaults);
+                rule
+            })
+        })
+        .collect()
+}
+
+/// The ID of the first host rule that `merged` (the rules after user content
+/// and overrides) does not carry exactly as defined. The rules merge adds
+/// definitions at a tier that can replace none and applies override files
+/// after them, so user content must not have reached any of these.
+fn altered_host_rule<'a>(
+    host: &'a [RuleDefinition],
+    merged: &telltale_rules::RuleSet,
+) -> Option<&'a str> {
+    let merged = merged
+        .rules
+        .iter()
+        .map(|rule| (rule.id.as_str(), rule))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    host.iter()
+        .find(|rule| merged.get(rule.id.as_str()) != Some(rule))
+        .map(|rule| rule.id.as_str())
+}
+
 fn read(path: &Path) -> Result<String, EngineError> {
     crate::hooks::state::read_operator_input(path)
         .map_err(|error| EngineError::Content(path.to_owned(), error))
@@ -1554,6 +1658,33 @@ mod tests {
             .collect();
         listed.sort();
         assert_eq!(listed, files);
+    }
+
+    /// User content is kept out of the host rules by namespace, so no host or
+    /// generated rule may be outside it.
+    #[test]
+    fn every_host_and_generated_rule_is_in_the_reserved_namespace() {
+        let mut coverage = super::GeneratedCoverage::default();
+        let generated = super::generated_documents(
+            &[std::path::PathBuf::from("/srv/tth/state")],
+            &mut coverage,
+        );
+        assert!(!generated.is_empty());
+        let host = super::host_rule_documents()
+            .iter()
+            .map(|(_, document)| document);
+        for document in host.chain(&generated) {
+            let set = telltale_rules::parse_rule_document(document).unwrap();
+            assert!(!set.rules.is_empty());
+            for rule in &set.rules {
+                assert!(
+                    rule.id
+                        .starts_with(crate::hooks::config::HOST_RULE_ID_PREFIX),
+                    "{}",
+                    rule.id
+                );
+            }
+        }
     }
 
     #[test]
