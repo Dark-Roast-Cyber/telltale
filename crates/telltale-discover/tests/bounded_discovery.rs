@@ -234,15 +234,15 @@ fn parent_components_are_checked_before_returning_to_the_parent() {
     for source in &sources {
         assert!(fs::metadata(&source.path).unwrap().is_file());
     }
+    // Likewise `missing/..` fails on Unix but collapses to `home` on Windows.
+    let through_missing = temp.path().join("missing/../home");
+    let sources =
+        discover_sources_bounded(&through_missing, ClientId::Codex, 1024, &registry()).unwrap();
+    assert_eq!(sources.len(), usize::from(cfg!(windows)));
     assert!(
-        discover_sources_bounded(
-            &temp.path().join("missing/../home"),
-            ClientId::Codex,
-            1024,
-            &registry()
-        )
-        .unwrap()
-        .is_empty()
+        sources
+            .iter()
+            .all(|source| fs::metadata(&source.path).unwrap().is_file())
     );
     let alias = temp.path().join("ordinary/../home");
     let sources = discover_sources_bounded(&alias, ClientId::Codex, 1024, &registry()).unwrap();
