@@ -1576,12 +1576,29 @@ fn assert_windows_ci_gates(workflow: &serde_yaml::Value) {
     let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
     let host = workflow_step_index(steps, "run", "windows_host_verification.ps1");
     let smoke = workflow_step_index(steps, "run", "telltale.exe --version");
+    let lifecycle = workflow_step_index(steps, "run", "windows_lifecycle.ps1");
     assert!(helper < build && verifier_tests < build);
-    assert!(build < runtime && runtime < host && host < smoke);
-    for index in [helper, verifier_tests, build, runtime, host, smoke] {
+    assert!(build < runtime && runtime < host && host < smoke && smoke < lifecycle);
+    for index in [
+        helper,
+        verifier_tests,
+        build,
+        runtime,
+        host,
+        smoke,
+        lifecycle,
+    ] {
         assert_default_success_gate(&steps[index]);
     }
-    for index in [helper, verifier_tests, build, runtime, host, smoke] {
+    for index in [
+        helper,
+        verifier_tests,
+        build,
+        runtime,
+        host,
+        smoke,
+        lifecycle,
+    ] {
         assert_eq!(steps[index]["shell"], "pwsh");
     }
     assert_eq!(
@@ -1631,6 +1648,12 @@ fn assert_windows_ci_gates(workflow: &serde_yaml::Value) {
     assert_eq!(host_run.matches("windows_host_verification.ps1").count(), 2);
     assert!(workflow_run(steps, smoke).contains("$LASTEXITCODE -ne 0"));
     assert!(workflow_run(steps, smoke).contains("throw"));
+    let lifecycle_run = workflow_run(steps, lifecycle);
+    assert!(
+        lifecycle_run
+            .contains("-BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe")
+    );
+    assert!(lifecycle_run.contains("-TestScheduledTask"));
 }
 
 fn assert_release_archive_gates(workflow: &serde_yaml::Value) {
@@ -3212,6 +3235,7 @@ fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
     let clippy = workflow_step_index(rust, "run", "cargo clippy");
     let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
     let host = workflow_step_index(steps, "run", "windows_host_verification.ps1");
+    let lifecycle = workflow_step_index(steps, "run", "windows_lifecycle.ps1");
     for fault in [
         "missing-helper",
         "late-helper",
@@ -3222,6 +3246,8 @@ fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
         "inline-rustflags-override",
         "single-powershell-host",
         "ignored-host",
+        "ignored-lifecycle",
+        "conditional-lifecycle",
         "missing-all-targets",
         "missing-deny-warnings",
     ] {
@@ -3262,6 +3288,12 @@ fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
             }
             "ignored-host" => {
                 steps[host]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "ignored-lifecycle" => {
+                steps[lifecycle]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "conditional-lifecycle" => {
+                steps[lifecycle]["if"] = serde_yaml::to_value("always()").unwrap()
             }
             "missing-all-targets" => {
                 steps[clippy]["run"] = serde_yaml::to_value("cargo clippy -- -D warnings").unwrap()
