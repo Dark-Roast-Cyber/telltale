@@ -299,7 +299,8 @@ pub enum AcquisitionError {
     SourceKindMismatch,
     SourceRead,
     /// The source identity is supported, but its acquisition was not compiled into
-    /// this build (OpenCode without `opencode-sqlite`). No source I/O is attempted.
+    /// this build (OpenCode without `opencode-sqlite`, a hook journal without
+    /// `hook-journal`). No source I/O is attempted.
     CapabilityNotCompiled,
     /// A resumed OpenCode read found the store older than the resume high-water
     /// (restored or replaced, or newest parts deleted, including by session
@@ -483,7 +484,24 @@ fn acquire_source_impl(
     access: SourceAccess<'_>,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
     let limits = access.limits();
+    // The hook-journal identity of a client (`ClientId::hook_journal_source_id`)
+    // reads as the journal of any client does, under its own identity. Hooks
+    // only ever read a window by name, never bounded.
+    let hook_journal = source.client.owns_hook_journal(&source.source_id);
+    if hook_journal {
+        if limits.is_some() {
+            return Err(AcquisitionError::UnsupportedSourceIdentity);
+        }
+        #[cfg(not(feature = "hook-journal"))]
+        return Err(AcquisitionError::CapabilityNotCompiled);
+    }
+    let reader = if hook_journal {
+        ClientId::Claude
+    } else {
+        source.client
+    };
     let expected_kind = match (source.client, source.source_id.as_str()) {
+        _ if hook_journal => SourceKind::Jsonl,
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
         | (ClientId::OpenClaw, "openclaw.agents")
@@ -508,7 +526,7 @@ fn acquire_source_impl(
     let mut accounting = AccountingBuilder::default();
     let mut quarantined = Vec::new();
     let mut source_scale = SourceScale::FLOOR;
-    let observations = match source.client {
+    let observations = match reader {
         ClientId::Claude => {
             let (records, bytes) = extract_claude_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
@@ -522,11 +540,18 @@ fn acquire_source_impl(
                     &[record.accounting_kind()],
                 )?;
             }
-            let projection = project_claude_native_records(
-                &records,
-                &ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale),
-            )
-            .map_err(map_claude_error)?;
+            let canonical =
+                ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale);
+            let canonical = if hook_journal {
+                canonical.with_adapter(
+                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
+                    source.client.hook_journal_source_id(),
+                )
+            } else {
+                canonical
+            };
+            let projection =
+                project_claude_native_records(&records, &canonical).map_err(map_claude_error)?;
             let mut excluded = projection
                 .quarantined
                 .iter()
@@ -1296,6 +1321,14 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(expected.len(), 8);
         assert_eq!(expected, registered);
+        // Hook-journal identities are host-fed: no registered source is one.
+        for client in ClientId::ALL {
+            assert!(
+                registered
+                    .iter()
+                    .all(|(_, source_id, _)| *source_id != client.hook_journal_source_id())
+            );
+        }
         let directory = tempdir().unwrap();
         for (client, source_id, kind) in registered {
             // An existing directory is unreadable as any supported source format.
@@ -1314,6 +1347,138 @@ mod tests {
                 acquisition_error(super::acquire_source(&source, options())),
                 expected
             );
+        }
+    }
+
+    const JOURNAL_WINDOW: &str = concat!(
+        r#"{"type":"user","sessionId":"synthetic-window","uuid":"u1","timestamp":"2026-11-04T00:00:00.001Z","message":{"role":"user","content":"synthetic prompt"}}"#,
+        "\n",
+        r#"{"type":"assistant","sessionId":"synthetic-window","uuid":"a1","timestamp":"2026-11-04T00:00:00.002Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        "\n",
+    );
+
+    fn journal_source(client: ClientId, source_id: &str, path: &std::path::Path) -> Source {
+        Source {
+            client,
+            kind: SourceKind::Jsonl,
+            source_id: source_id.to_owned(),
+            path: path.to_owned(),
+        }
+    }
+
+    /// The rule covers every client, including one with no registered source.
+    #[test]
+    fn every_clients_hook_journal_is_outside_the_registry() {
+        let registered = crate::clients::supported_clients();
+        for client in ClientId::ALL {
+            let id = client.hook_journal_source_id();
+            assert!(id.ends_with(".hooks"));
+            assert!(
+                registered
+                    .iter()
+                    .flat_map(|client| client.sources)
+                    .all(|source| source.id != id)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "hook-journal")]
+    fn hook_journal_pairs_acquire_and_carry_their_own_identity() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("window.jsonl");
+        std::fs::write(&path, JOURNAL_WINDOW).unwrap();
+        let session = super::acquire_source(
+            &journal_source(ClientId::Claude, "claude.projects", &path),
+            options(),
+        )
+        .unwrap();
+        assert!(!session.observations.is_empty());
+        for &client in ClientId::ALL {
+            let source_id = client.hook_journal_source_id();
+            let source = journal_source(client, source_id, &path);
+            let acquired = super::acquire_source(&source, options()).unwrap();
+            assert_eq!(acquired.observations.len(), session.observations.len());
+            for observation in &acquired.observations {
+                assert_eq!(observation.source().adapter_id(), source_id);
+                assert_eq!(
+                    observation.source().adapter_type(),
+                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE
+                );
+            }
+            // Only identity differs from the session reading of the same window.
+            for (hook, reference) in acquired.observations.iter().zip(&session.observations) {
+                assert_eq!(hook.body(), reference.body());
+                assert_eq!(hook.kind(), reference.kind());
+                assert_eq!(hook.stage(), reference.stage());
+                assert_eq!(hook.occurred_at(), reference.occurred_at());
+                assert_eq!(hook.sequence(), reference.sequence());
+                assert_eq!(hook.session_id(), reference.session_id());
+                assert_eq!(hook.correlation(), reference.correlation());
+                assert_eq!(hook.facets(), reference.facets());
+                assert_eq!(hook.fact_metadata(), reference.fact_metadata());
+                assert_eq!(hook.retained_byte_len(), reference.retained_byte_len());
+            }
+            // The same window under another identity is another source: no
+            // observation is shared.
+            for other in &session.observations {
+                assert!(
+                    acquired
+                        .observations
+                        .iter()
+                        .all(|o| o.observation_id() != other.observation_id())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hook_journal_pairs_refuse_other_clients_kinds_and_bounded_reads() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("window.jsonl");
+        std::fs::write(&path, JOURNAL_WINDOW).unwrap();
+        let compiled = cfg!(feature = "hook-journal");
+        for &client in ClientId::ALL {
+            let source_id = client.hook_journal_source_id();
+            for &other in ClientId::ALL.iter().filter(|other| **other != client) {
+                let cross = journal_source(other, source_id, &path);
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&cross, options())),
+                    AcquisitionError::UnsupportedSourceIdentity
+                );
+            }
+            let mut source = journal_source(client, source_id, &path);
+            let bounded = super::acquire_source_bounded(
+                directory.path(),
+                &source,
+                options(),
+                super::DirectReadLimits::default(),
+            );
+            assert_eq!(
+                acquisition_error(bounded),
+                AcquisitionError::UnsupportedSourceIdentity
+            );
+            if !compiled {
+                // An uncompiled capability: refused before any source I/O.
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&source, options())),
+                    AcquisitionError::CapabilityNotCompiled
+                );
+                continue;
+            }
+            for kind in [
+                SourceKind::Json,
+                SourceKind::ArchivedJsonl,
+                SourceKind::HeadlessJsonl,
+                SourceKind::Sqlite,
+                SourceKind::CopilotProcessLog,
+            ] {
+                source.kind = kind;
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&source, options())),
+                    AcquisitionError::SourceKindMismatch
+                );
+            }
         }
     }
 

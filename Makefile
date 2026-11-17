@@ -80,7 +80,7 @@ test:
 	cargo test $(CARGO_LOCKED) -p telltale-discover
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib
-	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib
+	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite,hook-journal --lib
 	cargo test $(CARGO_LOCKED) --no-default-features
 
 ## Format check
@@ -99,7 +99,7 @@ check-fast: fmt clippy
 	cargo test $(CARGO_LOCKED) -p telltale-discover --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
-	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite,hook-journal --lib --quiet
 
 ## Full verification
 check: fmt clippy test
@@ -111,7 +111,7 @@ ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) -p telltale-discover --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
-	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite,hook-journal --lib --quiet
 	@echo "Building and testing without the default hooks feature."
 	cargo test $(CARGO_LOCKED) --quiet --no-default-features --lib --test cli --test ci_gates
 	cargo test $(CARGO_LOCKED) -p telltale-core --no-default-features --lib --quiet

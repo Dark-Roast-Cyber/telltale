@@ -8,6 +8,21 @@
 
 ### Compatibility and operator impact
 
+- **`telltale hooks` records carry the real harness identity.** The Telltale
+  records in hooks telemetry (`telltale[]`) name the harness's own client and
+  hook-journal source (`claude`/`claude.hooks`, `codex`/`codex.hooks`,
+  `copilot`/`copilot.hooks`) instead of `claude`/`claude.projects` for every
+  harness. The hook-journal source of every `ClientId` is the one rule
+  `<client name>.hooks` (`ClientId::hook_journal_source_id`), accepted for its
+  own client only and read with the journal encoding; a new hooks adapter
+  needs only its adapter (and its client value, if new), nothing in
+  `telltale-sources` or `telltale-detect`. The hook-journal identities are host-fed: not in the source
+  registry, so never discovered, listed or catalogued, and not session sources.
+  They exist behind the new `hook-journal` feature of `telltale-sources` and
+  `telltale-detect`, which `telltale-core`'s `hooks` feature enables; without it
+  acquisition reports `CapabilityNotCompiled` for them. A harness name with no
+  registered adapter is no longer evaluated and takes the `on_error` path.
+  Verdicts, scores and rule IDs are unchanged.
 - **Embedding MSRV rises to Rust 1.89.** The embedding crates' `rust-version`
   (`telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect` and
   `telltale-core`, plus the new `telltale-discover`) moves from 1.88 to 1.89. This follows the

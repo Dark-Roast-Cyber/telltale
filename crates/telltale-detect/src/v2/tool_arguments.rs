@@ -10,8 +10,9 @@
 //! with the structural reading and only adds to it, so no call loses a fact
 //! it has here. The name lists remain as the fallback for a call with no
 //! declaration: a tool the source's table does not name, and observations a
-//! host supplies or imports. Hooks journal windows are read as the Claude
-//! source, so a Claude tool in one is declared like any other. A declared call
+//! host supplies or imports. Hooks journal windows, whichever client's hooks wrote
+//! them, are read with the Claude reader and tool table, so a Claude tool in one
+//! is declared like any other. A declared call
 //! takes its kind from the declaration and not from its name.
 //!
 //! `tool_reading_tests` pins the reading of every key and name below for calls

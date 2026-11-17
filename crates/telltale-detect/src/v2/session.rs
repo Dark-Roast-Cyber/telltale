@@ -389,6 +389,11 @@ fn evaluate_source_inner(
         (ClientId::OpenClaw, "openclaw.agents") => "openclaw",
         (ClientId::Qwen, "qwen.projects") => "qwen",
         (ClientId::Copilot, "copilot.process_log") => "copilot",
+        // A client's hook journal: host-fed, never discovered.
+        #[cfg(feature = "hook-journal")]
+        (client, source_id) if client.owns_hook_journal(source_id) => {
+            ClientId::HOOK_JOURNAL_ADAPTER_TYPE
+        }
         _ => return Err(ProcessingError::InvalidSource),
     };
     if let Some(instance) = input.source_instance {

@@ -24,6 +24,7 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::ClientId;
 use crate::hooks::harness::{
     Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
 };
@@ -396,6 +397,7 @@ pub const NORMALIZATION: Rules = Rules {
 /// The registry's descriptor of this adapter.
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
+    client: ClientId::Copilot,
     display_name: "GitHub Copilot CLI",
     pre_tool_use: &[PRE_TOOL_USE, PASCAL_PRE_TOOL_USE],
     event_keys: &[PASCAL_EVENT_KEY, CAMEL_EVENT_KEY],
