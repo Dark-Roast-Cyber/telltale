@@ -1,7 +1,8 @@
 //! NT parent-handle-relative opens, refusing all reparse points.
 //!
-//! Only directory handles request listing access. Regular files are opened for
-//! attributes only and immediately closed; no session/database bytes are read.
+//! Only directory handles request listing access. During discovery regular
+//! files are opened for attributes only and immediately closed; no session or
+//! database bytes are read. `open_file` opens one for a reader instead.
 
 use super::{Error, Kind, Node, OsStr, OsString, Path, io_error};
 use std::fs::File;
@@ -20,7 +21,7 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, GetFileInformationByHandle, SYNCHRONIZE,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -35,6 +36,15 @@ fn status_error(status: i32) -> Error {
 }
 
 fn open_at(parent: Option<&Directory>, name: &OsStr, listing: bool) -> io::Result<Node> {
+    let access = if listing { FILE_LIST_DIRECTORY } else { 0 };
+    let (kind, file) = open_handle(parent, name, access)?;
+    Ok(Node {
+        kind,
+        directory: (kind == Kind::Directory).then_some(Directory(file)),
+    })
+}
+
+fn open_handle(parent: Option<&Directory>, name: &OsStr, access: u32) -> io::Result<(Kind, File)> {
     let mut wide: Vec<u16> = name.encode_wide().collect();
     let bytes = wide
         .len()
@@ -65,7 +75,7 @@ fn open_at(parent: Option<&Directory>, name: &OsStr, listing: bool) -> io::Resul
     let result = unsafe {
         NtCreateFile(
             &mut handle,
-            FILE_READ_ATTRIBUTES | SYNCHRONIZE | if listing { FILE_LIST_DIRECTORY } else { 0 },
+            FILE_READ_ATTRIBUTES | SYNCHRONIZE | access,
             &attributes,
             &mut status,
             null(),
@@ -97,10 +107,7 @@ fn open_at(parent: Option<&Directory>, name: &OsStr, listing: bool) -> io::Resul
     } else {
         Kind::File
     };
-    Ok(Node {
-        kind,
-        directory: (kind == Kind::Directory).then_some(Directory(file)),
-    })
+    Ok((kind, file))
 }
 
 pub(super) fn root(path: &Path) -> Result<Node, Error> {
@@ -124,6 +131,17 @@ pub(super) fn root(path: &Path) -> Result<Node, Error> {
 pub(super) fn child(parent: &Directory, name: &OsStr, _: bool) -> Result<Option<Node>, Error> {
     match open_at(Some(parent), name, false) {
         Ok(node) => Ok(Some(node)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+/// Reads the opened object, never a reparse point's target; the caller checks
+/// that it is a regular file.
+pub(super) fn open_file(parent: &Directory, name: &OsStr) -> Result<Option<File>, Error> {
+    match open_handle(Some(parent), name, FILE_READ_DATA) {
+        Ok((Kind::Link, _)) => Err(Error::SymlinkRoot),
+        Ok((_, file)) => Ok(Some(file)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(io_error(error)),
     }

@@ -1,4 +1,5 @@
-//! Unix directory descriptors; leaf files are inspected, never opened.
+//! Unix directory descriptors. Discovery inspects leaf files without opening
+//! them; `open_file` opens one for a reader relative to its parent descriptor.
 
 use super::{Error, Kind, Node, OsStr, OsString, Path, io_error};
 use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, open, openat, statat};
@@ -87,4 +88,15 @@ pub(super) fn entries(
         )),
         Err(error) => Some(Err(map_error(error))),
     }))
+}
+
+/// Never blocks on a FIFO and never follows a link in the last component.
+pub(super) fn open_file(parent: &Directory, name: &OsStr) -> Result<Option<std::fs::File>, Error> {
+    let flags =
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+    match openat(&parent.0, name, flags, Mode::empty()) {
+        Ok(fd) => Ok(Some(fd.into())),
+        Err(Errno::NOENT) => Ok(None),
+        Err(error) => Err(map_error(error)),
+    }
 }
