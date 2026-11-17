@@ -72,7 +72,12 @@
   Hooks are configured like the rest of Telltale: the `hooks:` section of the
   `settings.d` YAML files (shown by `telltale config show`), from the same config
   roots and with the same precedence, and they evaluate the same `rules.d`,
-  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. `hook`,
+  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. Rule content and
+  policy cannot change the hooks self-protection rules while they are on: a rule
+  document, package or override file that names one of their IDs
+  (`tth.tamper.*`), or a policy under which one would not stay enabled, is
+  invalid configuration (a shared policy with a whitelist must include the
+  `approval_bypass` category or those IDs). `hook`,
   `check` and `serve` take `--config-dir`. The standalone project's TOML file, its
   location and `TELLTALE_HOOKS_CONFIG` are not read, and state moves to
   `telltale/hooks` under the state home; `TELLTALE_HOOKS_STATE_DIR`,
