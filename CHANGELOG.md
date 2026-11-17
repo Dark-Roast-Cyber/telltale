@@ -67,10 +67,10 @@
   mid-walk replacement in an ancestor of a candidate path, which could list
   files outside the approved root. Bounded discovery and OpenCode store checks
   now walk directory handles on Unix and Windows and refuse every link below
-  the root they start from. That root (an explicit root, the home directory, or
-  a configured relocation outside home) is resolved once, so administrator
-  aliases such as a linked `/home` keep working; a link at a tool store such as
-  `~/.codex` is refused. Returned source paths keep their original spelling.
+  the root they start from. That root (an explicit root or the home directory)
+  is resolved once, so administrator aliases such as a linked `/home` keep
+  working; a link at a tool store such as `~/.codex`, or at or above a relocated
+  store, is refused. Returned source paths keep their original spelling.
 - Add [Telltale Hooks](docs/hooks/README.md) documentation and a
   [hooks threat model](docs/security/hooks-threat-model.md).
 - Hooks: padding a tool input so that it is evaluated in pieces no longer

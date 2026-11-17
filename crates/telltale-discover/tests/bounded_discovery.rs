@@ -105,10 +105,10 @@ fn explicit_root_and_its_ancestors_are_trusted_but_nothing_below_it() {
     );
 }
 
-/// Environment-mode anchors: HOME and relocations outside it are resolved
-/// once; a relocation inside HOME gets no anchor of its own.
+/// Environment mode: HOME is the only anchor. Relocation variables get none,
+/// so a link at or above a relocated store is refused inside or outside home.
 #[test]
-fn environment_home_and_outside_relocations_are_trusted_anchors() {
+fn environment_home_is_the_only_trust_anchor() {
     const CHILD: &str = "TELLTALE_BOUNDED_ANCHOR_CHILD";
     const CODEX_HOME_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
         root: PathRoot::CodexHome,
@@ -168,7 +168,7 @@ fn environment_home_and_outside_relocations_are_trusted_anchors() {
             .env(CHILD, mode)
             .args([
                 "--exact",
-                "environment_home_and_outside_relocations_are_trusted_anchors",
+                "environment_home_is_the_only_trust_anchor",
                 "--nocapture",
             ]);
         if let Some(codex_home) = codex_home {
@@ -183,7 +183,20 @@ fn environment_home_and_outside_relocations_are_trusted_anchors() {
         assert!(output.status.success(), "{mode}: {output:?}");
     };
     run("home", &alias.join("home"), None);
-    run("relocated", &alias.join("home"), Some(&alias.join("codex")));
+    // A relocation outside home is walked strictly: fine on a physical path,
+    // refused through the linked ancestor.
+    let physical = temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("real")
+        .join("codex");
+    run("relocated", &alias.join("home"), Some(&physical));
+    run(
+        "relocated-alias",
+        &alias.join("home"),
+        Some(&alias.join("codex")),
+    );
     // Naming the linked store explicitly does not make it an anchor.
     let planted = alias.join("planted-home");
     run("inside", &planted, Some(&planted.join(".codex")));

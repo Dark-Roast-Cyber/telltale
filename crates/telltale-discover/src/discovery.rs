@@ -917,9 +917,8 @@ fn inspect_opencode_path(
 /// Explicit/fixture roots ignore it. No directory contents or source bytes are read;
 /// existing components must not be symlinks and the target must not be a directory.
 /// The override has no trust anchor of its own: only an alias of the home
-/// directory or an explicit data root outside it, if it contains the override,
-/// is resolved. Watch uses this same coordinate to distinguish arbitrary names
-/// from their sidecars.
+/// directory that contains it is resolved. Watch uses this same coordinate to
+/// distinguish arbitrary names from their sidecars.
 pub fn opencode_database_override(
     root: &Path,
     registry: &[ClientDef],
@@ -932,40 +931,22 @@ pub fn opencode_database_override(
     Ok(path)
 }
 
-/// Caller-approved starting directories for no-follow traversal. Each is
-/// resolved to its real location once, so administrator aliases above or at it
-/// (a linked `/home`, a relocated profile) are accepted; nothing below an anchor
-/// is followed. An explicit root is its own anchor. In environment mode the
-/// home directory is one, and so is an explicitly configured relocation, but
-/// only when it lies outside home: a link at `~/.codex` or `~/.local/share`
-/// stays refused whether or not a variable names it.
+/// Caller-approved starting directory for no-follow traversal: an explicit
+/// root, or in environment mode the home directory. It is resolved to its real
+/// location once, so administrator aliases at or above it (a linked `/home`,
+/// macOS `/var`, a linked profile) are accepted; nothing below it is followed.
+/// Relocation variables (`CODEX_HOME`, `XDG_DATA_HOME`, ...) are not anchors: a
+/// link at or above a relocated store stays refused, inside home or outside it.
 fn trust_anchors(root: &Path) -> Vec<PathBuf> {
     if root != Path::new(".") {
         return vec![root.to_path_buf()];
     }
-    let var = |name: &str| {
-        env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    let Some(home) = var("HOME").or_else(|| var("USERPROFILE")) else {
-        return Vec::new();
-    };
-    let mut anchors = vec![home];
-    for name in [
-        "CODEX_HOME",
-        "XDG_DATA_HOME",
-        "CLAUDE_CONFIG_DIR",
-        "LOCALAPPDATA",
-        "APPDATA",
-    ] {
-        if let Some(path) = var(name)
-            && !crate::anchored::within(&anchors[0], &path)
-        {
-            anchors.push(path);
-        }
-    }
-    anchors
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(|name| env::var_os(name).filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+        .take(1)
+        .collect()
 }
 
 fn bounded_opencode_paths(

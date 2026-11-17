@@ -16,19 +16,14 @@ directory is inspected without following symbolic links, junctions or other
 reparse points, and enumeration stays on the opened handle if a pathname is
 replaced. A link there fails as `SymlinkRoot` rather than being followed.
 
-The starting directory is a caller-approved trust anchor, resolved to its real
-location once so that administrator aliases at or above it (a linked `/home`,
-macOS `/var`, a relocated profile) are accepted:
-
-- an explicit discovery root;
-- in environment mode, `HOME` (then `USERPROFILE`), plus `CODEX_HOME`,
-  `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`, `LOCALAPPDATA` or `APPDATA` when set
-  to a directory outside home.
-
-A relocation inside home gets no anchor of its own, so a link at `~/.codex` or
-`~/.local/share` stays refused even when a variable names it. The
-`OPENCODE_DB` override is never an anchor. A path under no anchor, or one whose
-`..` components climb out of it, is checked strictly from the filesystem root.
+The starting directory is a caller-approved trust anchor: an explicit discovery
+root, or in environment mode `HOME` (then `USERPROFILE`). It is resolved to its
+real location once, so administrator aliases at or above it (a linked `/home`,
+macOS `/var`, a linked profile directory) are accepted. Relocation variables
+such as `CODEX_HOME` or `XDG_DATA_HOME` and the `OPENCODE_DB` override are never
+anchors: a link at `~/.codex`, at a relocated store, or above a relocation
+outside home stays refused. A path under no anchor, or one whose `..`
+components climb out of it, is checked strictly from the filesystem root.
 Returned source paths keep the caller's spelling; they are coordinates, not
 opened capabilities, and a later read must apply its own protection.
 
