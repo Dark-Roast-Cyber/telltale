@@ -30,7 +30,7 @@ refresh. Returning a finding is not durable delivery.
 | --- | --- | --- |
 | Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
-| Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
+| Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
 
 Core re-exports such as `Source`, `Event`, and error types serve the facade; they do not make every public module of the originating
@@ -76,8 +76,9 @@ Default features:
 - `hooks`: `telltale_core::hooks`, the pre-execution runtime behind
   `telltale hooks` (see [Telltale Hooks](hooks/README.md)). It is the one part of
   this crate that writes files (per-session journals and telemetry JSONL) and can
-  start a long-lived local evaluator, and it adds `regex`, `serde_json` and a
-  TOML parser to the dependency graph. A host that only reads sessions opts out:
+  start a long-lived local evaluator, and it adds `regex` and `serde_json` to the
+  dependency graph. It takes its configuration as typed values; the CLI reads
+  the `hooks:` settings section. A host that only reads sessions opts out:
   `telltale-core = { ..., default-features = false }`.
 
 Default-off features:

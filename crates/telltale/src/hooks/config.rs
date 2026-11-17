@@ -1,18 +1,23 @@
 //! Operator configuration. Everything here is host policy: Telltale owns
 //! detection semantics, the host owns promotion thresholds and enforcement
 //! (docs/embedding.md "Contract at a glance").
+//!
+//! Typed values only: the CLI reads them from the `hooks:` section of
+//! `settings.d` and the `TELLTALE_HOOKS_*` environment, and embedders build a
+//! [`Config`] directly.
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::hooks::identity;
+use crate::rule_resolution::RulePackPaths;
 
 /// Whether decisions are returned to the harness or only recorded.
 ///
 /// Detect-only (`observe`) is the default. Blocking needs a configuration that
-/// was read and says `mode = "enforce"`: see [`crate::hooks::gate`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// was read and says `mode: enforce`: see [`crate::hooks::gate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// Return ask/deny decisions to the harness.
@@ -25,7 +30,7 @@ pub enum Mode {
 
 /// What the hook tells the harness when it cannot evaluate an action.
 /// Ordered from least to most strict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnError {
     /// Fail open: express no opinion, the harness's own permission flow decides.
@@ -36,8 +41,7 @@ pub enum OnError {
     Deny,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Thresholds {
     /// Telltale action `promotion_score` at or above which the action needs approval.
     pub action_ask: u64,
@@ -67,8 +71,7 @@ impl Default for Thresholds {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Window {
     /// Most recent journal records evaluated together with the pending action.
     pub max_records: usize,
@@ -88,39 +91,54 @@ impl Default for Window {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct TelltaleSettings {
-    /// Include the embedded `telltale.community` package (mirrors `--no-community-rules`).
-    pub community_rules: bool,
-    /// Opt into the bundled process-chain pack in the same pass.
-    pub process_chain: bool,
-    /// Additional Rule v1 documents (additive, like `--rules`).
-    pub rules: Vec<PathBuf>,
-    /// Additional namespaced rule packages (additive, like `rule-packages.d`).
-    pub rule_packages: Vec<PathBuf>,
-    /// Policy document (enable/disable, like `--policy`).
+/// The rule content hooks evaluate with: the same packages, rule folders,
+/// overrides and policy as `scan`, resolved by [`crate::rule_resolution`],
+/// plus the bundled host self-protection rules.
+#[derive(Debug, Clone)]
+pub struct RuleContent {
+    /// Rule packages, the organization, deployment and local rule documents,
+    /// and whether community rules take part.
+    pub packs: RulePackPaths,
+    /// Rule override documents (`overrides.d`), applied in order.
+    pub overrides: Vec<PathBuf>,
+    /// Policy document (`policies.d`, enable/disable).
     pub policy: Option<PathBuf>,
-    /// Load the bundled host self-protection rules (`engine::host_rule_documents`)
+    /// The bundled process-chain pack in the same pass.
+    pub process_chain: bool,
+    /// The bundled host self-protection rules (`engine::host_rule_documents`)
     /// and the generated rule for this installation's own paths.
-    pub self_protection_rules: bool,
+    pub self_protection: bool,
 }
 
-impl Default for TelltaleSettings {
+impl Default for RuleContent {
     fn default() -> Self {
         Self {
-            community_rules: true,
-            process_chain: true,
-            rules: Vec::new(),
-            rule_packages: Vec::new(),
+            packs: RulePackPaths::default(),
+            overrides: Vec::new(),
             policy: None,
-            self_protection_rules: true,
+            process_chain: true,
+            self_protection: true,
         }
     }
 }
 
+impl RuleContent {
+    /// Every rule, package, override and policy file.
+    pub fn files(&self) -> impl Iterator<Item = &PathBuf> {
+        let packs = &self.packs;
+        packs
+            .packages
+            .iter()
+            .chain(&packs.organization)
+            .chain(&packs.deployment)
+            .chain(&packs.local)
+            .chain(&self.overrides)
+            .chain(self.policy.iter())
+    }
+}
+
 /// How much a deny/ask reason discloses to the model (and the user).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasonDetail {
     /// Basis, scores, thresholds and matched rule IDs.
@@ -133,8 +151,7 @@ pub enum ReasonDetail {
     Minimal,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub mode: Mode,
     /// Infrastructure failures (state, engine build): the hook could not run.
@@ -151,15 +168,15 @@ pub struct Config {
     pub telemetry_path: Option<PathBuf>,
     pub thresholds: Thresholds,
     pub window: Window,
-    pub telltale: TelltaleSettings,
-    /// The file this configuration was loaded from, if any.
-    #[serde(skip)]
-    pub source: Option<PathBuf>,
+    pub rules: RuleContent,
+    /// Where this configuration came from: the config folders that were read
+    /// and the settings files in them. Self-protection covers them, so an
+    /// agent cannot quietly change what the hook reads next.
+    pub sources: Vec<PathBuf>,
     pub evaluator: EvaluatorSettings,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct EvaluatorSettings {
     /// Try the long-lived evaluator before evaluating in-process.
     pub enabled: bool,
@@ -197,8 +214,8 @@ impl Default for Config {
             telemetry_path: None,
             thresholds: Thresholds::default(),
             window: Window::default(),
-            telltale: TelltaleSettings::default(),
-            source: None,
+            rules: RuleContent::default(),
+            sources: Vec::new(),
             evaluator: EvaluatorSettings::default(),
         }
     }
@@ -206,24 +223,13 @@ impl Default for Config {
 
 #[derive(Debug)]
 pub enum ConfigError {
-    Read(PathBuf, std::io::Error),
-    Parse(PathBuf, String),
     Invalid(&'static str),
-    /// A referenced rule, package or policy file is missing or not a regular file.
-    RuleFile(PathBuf, std::io::Error),
     NoStateDir,
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Read(path, error) => write!(f, "cannot read config {}: {error}", path.display()),
-            Self::RuleFile(path, error) => write!(
-                f,
-                "invalid config: referenced file {} is unusable: {error}",
-                path.display()
-            ),
-            Self::Parse(path, error) => write!(f, "invalid config {}: {error}", path.display()),
             Self::Invalid(what) => write!(f, "invalid config: {what}"),
             Self::NoStateDir => write!(f, "no state directory: set {NO_STATE_DIR_HINT}"),
         }
@@ -233,81 +239,24 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 #[cfg(not(windows))]
-const NO_STATE_DIR_HINT: &str = "TELLTALE_HOOKS_STATE_DIR, XDG_STATE_HOME or HOME";
+const NO_STATE_DIR_HINT: &str = "hooks.state_dir, TELLTALE_HOOKS_STATE_DIR, XDG_STATE_HOME or HOME";
 #[cfg(windows)]
-const NO_STATE_DIR_HINT: &str = "TELLTALE_HOOKS_STATE_DIR or LOCALAPPDATA";
-
-pub const CONFIG_ENV: &str = "TELLTALE_HOOKS_CONFIG";
-pub const STATE_DIR_ENV: &str = "TELLTALE_HOOKS_STATE_DIR";
-pub const TELEMETRY_ENV: &str = "TELLTALE_HOOKS_TELEMETRY";
-/// `0`/`off` disables the long-lived evaluator for this process (tests, debugging).
-pub const EVALUATOR_ENV: &str = "TELLTALE_HOOKS_EVALUATOR";
+const NO_STATE_DIR_HINT: &str = "hooks.state_dir, TELLTALE_HOOKS_STATE_DIR or LOCALAPPDATA";
 
 impl Config {
-    /// Load from `TELLTALE_HOOKS_CONFIG`, else the platform default config file
-    /// (`default_config_path`) when present, else defaults.
-    /// An explicitly named file that cannot be read is an error, never a silent default.
-    pub fn load() -> Result<Self, ConfigError> {
-        let explicit = std::env::var_os(CONFIG_ENV).map(PathBuf::from);
-        let path = match explicit {
-            Some(path) => Some(path),
-            None => default_config_path().filter(|path| path.is_file()),
-        };
-        let mut config = match path {
-            Some(path) => {
-                let mut config = Self::from_file(&path)?;
-                config.source = Some(path);
-                config
-            }
-            None => Self::default(),
-        };
-        if let Some(dir) = std::env::var_os(STATE_DIR_ENV) {
-            config.state_dir = Some(PathBuf::from(dir));
-        }
-        if let Some(path) = std::env::var_os(TELEMETRY_ENV) {
-            config.telemetry_path = Some(PathBuf::from(path));
-        }
-        if let Ok(value) = std::env::var(EVALUATOR_ENV) {
-            match value.as_str() {
-                "0" | "off" | "false" => config.evaluator.enabled = false,
-                "1" | "on" | "true" => config.evaluator.enabled = true,
-                _ => {
-                    return Err(ConfigError::Invalid(
-                        "TELLTALE_HOOKS_EVALUATOR must be 0 or 1",
-                    ));
-                }
-            }
-        }
-        config.validate()?;
-        config.make_paths_absolute();
-        Ok(config)
-    }
-
-    /// Whether a configuration that [`Self::load`] refused still asks for
-    /// enforcement. Only then may a hook fail closed on it: an operator who
-    /// wrote `mode = "enforce"` gets a visible block instead of a hook that
-    /// silently stopped enforcing, and every other unloadable configuration
-    /// (missing, unreadable, or one that never asked) is detect-only.
-    ///
-    /// Lenient on purpose: the file is already invalid, so it is read for this
-    /// one key, ignoring every other, and as plain lines if it is not TOML.
-    pub fn unloadable_declares_enforce() -> bool {
-        let path = std::env::var_os(CONFIG_ENV)
-            .map(PathBuf::from)
-            .or_else(|| default_config_path().filter(|path| path.is_file()));
-        path.and_then(|path| crate::hooks::state::read_operator_input(&path).ok())
-            .is_some_and(|text| declares_enforce(&text))
-    }
-
     /// What a detect-only hook runs on when its configuration could not be
-    /// loaded: the defaults, with the environment's state and telemetry paths,
-    /// evaluated in-process (an evaluator is keyed by a configuration this
-    /// hook does not have). Detection continues and the failure is recorded.
-    pub fn detect_only_fallback() -> Self {
+    /// loaded: the defaults, with the state and telemetry paths the caller
+    /// could still determine, evaluated in-process (an evaluator is keyed by a
+    /// configuration this hook does not have). Detection continues and the
+    /// failure is recorded.
+    pub fn detect_only_fallback(
+        state_dir: Option<PathBuf>,
+        telemetry_path: Option<PathBuf>,
+    ) -> Self {
         let mut config = Self {
             mode: Mode::Observe,
-            state_dir: std::env::var_os(STATE_DIR_ENV).map(PathBuf::from),
-            telemetry_path: std::env::var_os(TELEMETRY_ENV).map(PathBuf::from),
+            state_dir,
+            telemetry_path,
             evaluator: EvaluatorSettings {
                 enabled: false,
                 ..EvaluatorSettings::default()
@@ -318,64 +267,21 @@ impl Config {
         config
     }
 
-    pub fn from_file(path: &Path) -> Result<Self, ConfigError> {
-        // An operator input: a symlink is followed, but the target must be a
-        // regular file. A FIFO or directory is refused like an unreadable
-        // config (tool calls are then denied), never waited on.
-        let text = crate::hooks::state::read_operator_input(path)
-            .map_err(|e| ConfigError::Read(path.to_owned(), e))?;
-        let config = Self::from_toml(&text).map_err(|e| match e {
-            ConfigError::Parse(_, message) => ConfigError::Parse(path.to_owned(), message),
-            other => other,
-        })?;
-        config.validate_files()?;
-        Ok(config)
-    }
-
-    /// Parse and validate values only; `from_file` also validates the files
-    /// the configuration references.
-    pub fn from_toml(text: &str) -> Result<Self, ConfigError> {
-        let config: Self =
-            toml::from_str(text).map_err(|e| ConfigError::Parse(PathBuf::new(), e.to_string()))?;
-        config.validate()?;
-        Ok(config)
-    }
-
-    /// Rule, package and policy files referenced by the configuration.
-    pub fn referenced_files(&self) -> impl Iterator<Item = &PathBuf> {
-        let t = &self.telltale;
-        t.rules
-            .iter()
-            .chain(&t.rule_packages)
-            .chain(t.policy.iter())
-    }
-
-    /// Every referenced file must exist and resolve to a regular file at load
-    /// time; otherwise the configuration is invalid and tool calls are denied
-    /// (the documented loud path) instead of silently running without the
-    /// content the operator asked for. Checked by a non-blocking open, so a
-    /// FIFO is refused rather than waited on.
-    fn validate_files(&self) -> Result<(), ConfigError> {
-        for path in self.referenced_files() {
-            crate::hooks::state::open_operator_input(path)
-                .map_err(|e| ConfigError::RuleFile(path.clone(), e))?;
-        }
-        Ok(())
-    }
-
-    fn validate(&self) -> Result<(), ConfigError> {
+    /// Values that constrain each other, checked before the configuration is
+    /// used.
+    pub fn validate(&self) -> Result<(), ConfigError> {
         let t = &self.thresholds;
         if t.action_ask == 0 || t.action_deny == 0 {
             return Err(ConfigError::Invalid("action thresholds must be positive"));
         }
         if t.action_ask > t.action_deny {
             return Err(ConfigError::Invalid(
-                "thresholds.action_ask exceeds action_deny",
+                "hooks.thresholds.action_ask exceeds action_deny",
             ));
         }
         if t.session_ask > t.session_deny {
             return Err(ConfigError::Invalid(
-                "thresholds.session_ask exceeds session_deny",
+                "hooks.thresholds.session_ask exceeds session_deny",
             ));
         }
         if self.window.max_records == 0 || self.window.max_bytes == 0 {
@@ -391,7 +297,8 @@ impl Config {
         default_state_dir().ok_or(ConfigError::NoStateDir)
     }
 
-    /// Paths an agent must not modify: state, telemetry and configuration.
+    /// Paths an agent must not modify: state, telemetry, the configuration
+    /// and the rule content it names.
     pub fn protected_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         paths.extend(self.resolved_state_dir().ok());
@@ -399,11 +306,11 @@ impl Config {
         // Only Unix has an evaluator socket.
         #[cfg(unix)]
         paths.extend(self.resolved_socket_path().ok());
-        paths.extend(self.source.clone());
-        paths.extend(default_config_path());
-        // Rule, package and policy files: tampering with them changes what
-        // is detected, so the generated self-protection rule covers them.
-        paths.extend(self.referenced_files().cloned());
+        paths.extend(self.sources.iter().cloned());
+        // Rule, package, override and policy files: tampering with them
+        // changes what is detected, so the generated self-protection rule
+        // covers them.
+        paths.extend(self.rules.files().cloned());
         paths
     }
 
@@ -432,8 +339,8 @@ impl Config {
     }
 
     /// Identity of everything that changes evaluation results: the effective
-    /// configuration, the bytes of every referenced rule or policy file, and
-    /// this build. A long-lived evaluator serves only clients whose
+    /// configuration, the bytes of every rule, package, override or policy
+    /// file, and this build. A long-lived evaluator serves only clients whose
     /// fingerprint equals its own.
     pub fn fingerprint(&self) -> String {
         use sha2::{Digest, Sha256};
@@ -453,8 +360,8 @@ impl Config {
         part("revision", identity::revision().as_bytes());
         part("config", format!("{self:?}").as_bytes());
         // Every input to Engine::new, including environment-derived paths
-        // (XDG_CONFIG_HOME, HOME, XDG_RUNTIME_DIR; APPDATA, LOCALAPPDATA,
-        // USERPROFILE on Windows; CODEX_HOME, COPILOT_HOME).
+        // (XDG_STATE_HOME, HOME, XDG_RUNTIME_DIR; LOCALAPPDATA, USERPROFILE on
+        // Windows; CODEX_HOME, COPILOT_HOME).
         let state = self.resolved_state_dir().ok();
         let telemetry = self.resolved_telemetry_path().ok();
         let socket = self.resolved_socket_path().ok();
@@ -468,7 +375,7 @@ impl Config {
             )
             .as_bytes(),
         );
-        for path in self.referenced_files() {
+        for path in self.rules.files() {
             let text = crate::hooks::state::read_operator_input(path)
                 .unwrap_or_else(|_| "<unreadable>".to_owned());
             part(&path.to_string_lossy(), text.as_bytes());
@@ -479,15 +386,19 @@ impl Config {
     /// Configured paths become absolute (a relative state dir would otherwise
     /// split one session's journal between the daemon and in-process runs).
     pub fn make_paths_absolute(&mut self) {
+        let packs = &mut self.rules.packs;
         for path in self
             .state_dir
             .iter_mut()
             .chain(self.telemetry_path.iter_mut())
             .chain(self.evaluator.socket.iter_mut())
-            .chain(self.source.iter_mut())
-            .chain(self.telltale.rules.iter_mut())
-            .chain(self.telltale.rule_packages.iter_mut())
-            .chain(self.telltale.policy.iter_mut())
+            .chain(self.sources.iter_mut())
+            .chain(packs.packages.iter_mut())
+            .chain(packs.organization.iter_mut())
+            .chain(packs.deployment.iter_mut())
+            .chain(packs.local.iter_mut())
+            .chain(self.rules.overrides.iter_mut())
+            .chain(self.rules.policy.iter_mut())
         {
             absolute(path);
         }
@@ -499,26 +410,6 @@ impl Config {
             None => Ok(self.resolved_state_dir()?.join("telemetry.jsonl")),
         }
     }
-}
-
-/// Whether configuration text sets the top-level `mode` to `enforce`.
-fn declares_enforce(text: &str) -> bool {
-    #[derive(Deserialize)]
-    struct ModeOnly {
-        mode: Option<Mode>,
-    }
-    if let Ok(parsed) = toml::from_str::<ModeOnly>(text) {
-        return parsed.mode == Some(Mode::Enforce);
-    }
-    // Not TOML, or `mode` holds something else: the top-level lines, up to
-    // the first table header.
-    text.lines()
-        .map(str::trim)
-        .take_while(|line| !line.starts_with('['))
-        .filter_map(|line| line.strip_prefix("mode"))
-        .filter_map(|rest| rest.trim_start().strip_prefix('='))
-        .map(|value| value.split('#').next().unwrap_or_default().trim())
-        .any(|value| matches!(value, "\"enforce\"" | "'enforce'"))
 }
 
 /// Resolve a relative path against the current directory, so a daemon
@@ -569,14 +460,7 @@ pub fn harness_homes() -> Vec<HarnessHome> {
         if !path.is_absolute() || !names_below_root(&path) {
             continue;
         }
-        let canonical = std::fs::canonicalize(&path).ok().map(|canonical| {
-            let text = canonical.to_string_lossy();
-            // Windows verbatim prefix: no one spells a path this way.
-            match text.strip_prefix(r"\\?\") {
-                Some(plain) => PathBuf::from(plain),
-                None => canonical.clone(),
-            }
-        });
+        let canonical = plain_canonical(&path);
         // `/usr/..`, or a link to `/`.
         if canonical
             .as_deref()
@@ -596,6 +480,17 @@ pub fn harness_homes() -> Vec<HarnessHome> {
         }
     }
     homes
+}
+
+/// `path` canonicalized, without the Windows verbatim prefix (`\\?\`): no
+/// one spells a path that way, so a rule for it would never match.
+pub fn plain_canonical(path: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    let plain = canonical
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
+        .map(PathBuf::from);
+    Some(plain.unwrap_or(canonical))
 }
 
 /// The user's home as this process sees it, which a shell also spells `~`.
@@ -618,36 +513,20 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Linux and macOS: `$XDG_CONFIG_HOME/telltale-hooks/config.toml`, else
-/// `~/.config/telltale-hooks/config.toml`.
-#[cfg(not(windows))]
-fn default_config_path() -> Option<PathBuf> {
-    if let Some(dir) = env_path("XDG_CONFIG_HOME") {
-        return Some(dir.join("telltale-hooks/config.toml"));
-    }
-    env_path("HOME").map(|home| home.join(".config/telltale-hooks/config.toml"))
-}
-
-/// Windows: `%APPDATA%\telltale-hooks\config.toml` (roaming settings).
-#[cfg(windows)]
-fn default_config_path() -> Option<PathBuf> {
-    env_path("APPDATA").map(|dir| dir.join("telltale-hooks").join("config.toml"))
-}
-
-/// Linux and macOS: `$XDG_STATE_HOME/telltale-hooks`, else
-/// `~/.local/state/telltale-hooks`.
+/// Linux and macOS: `$XDG_STATE_HOME/telltale/hooks`, else
+/// `~/.local/state/telltale/hooks`.
 #[cfg(not(windows))]
 fn default_state_dir() -> Option<PathBuf> {
     if let Some(dir) = env_path("XDG_STATE_HOME") {
-        return Some(dir.join("telltale-hooks"));
+        return Some(dir.join("telltale/hooks"));
     }
-    env_path("HOME").map(|home| home.join(".local/state/telltale-hooks"))
+    env_path("HOME").map(|home| home.join(".local/state/telltale/hooks"))
 }
 
-/// Windows: `%LOCALAPPDATA%\telltale-hooks` (machine-local, never roamed).
+/// Windows: `%LOCALAPPDATA%\telltale\hooks` (machine-local, never roamed).
 #[cfg(windows)]
 fn default_state_dir() -> Option<PathBuf> {
-    env_path("LOCALAPPDATA").map(|dir| dir.join("telltale-hooks"))
+    env_path("LOCALAPPDATA").map(|dir| dir.join("telltale").join("hooks"))
 }
 
 #[cfg(test)]
@@ -656,16 +535,26 @@ mod tests {
 
     #[test]
     fn defaults_are_valid_and_detect_only() {
-        let config = Config::from_toml("").unwrap();
+        let config = Config::default();
+        config.validate().unwrap();
         assert_eq!(config.mode, Mode::Observe);
         assert_eq!(config.on_error, OnError::Allow);
         assert_eq!(config.thresholds.action_deny, 90);
+        assert!(config.rules.self_protection);
+        assert!(config.rules.process_chain);
     }
 
     #[test]
-    fn rejects_unknown_keys_and_inverted_thresholds() {
-        assert!(Config::from_toml("modee = \"observe\"").is_err());
-        assert!(Config::from_toml("[thresholds]\naction_ask = 95\naction_deny = 90").is_err());
+    fn rejects_inverted_thresholds() {
+        let mut config = Config::default();
+        config.thresholds.action_ask = 95;
+        assert!(config.validate().is_err());
+        let mut config = Config::default();
+        config.thresholds.session_ask = config.thresholds.session_deny + 1;
+        assert!(config.validate().is_err());
+        let mut config = Config::default();
+        config.window.max_records = 0;
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -677,7 +566,7 @@ mod tests {
             state_dir: Some(dir.path().to_owned()),
             ..Config::default()
         };
-        config.telltale.rules = vec![rules.clone()];
+        config.rules.packs.deployment = vec![rules.clone()];
         let first = config.fingerprint();
         assert_eq!(first, config.fingerprint());
         std::fs::write(&rules, "b").unwrap();
@@ -713,12 +602,16 @@ mod tests {
 
     #[test]
     fn relative_paths_become_absolute() {
-        let mut config =
-            Config::from_toml("state_dir = \"rel/state\"\n[telltale]\nrules = [\"r.yaml\"]")
-                .unwrap();
+        let mut config = Config {
+            state_dir: Some(PathBuf::from("rel/state")),
+            ..Config::default()
+        };
+        config.rules.packs.deployment = vec![PathBuf::from("r.yaml")];
+        config.sources = vec![PathBuf::from("settings.d")];
         config.make_paths_absolute();
         assert!(config.state_dir.as_ref().unwrap().is_absolute());
-        assert!(config.telltale.rules[0].is_absolute());
+        assert!(config.rules.packs.deployment[0].is_absolute());
+        assert!(config.sources[0].is_absolute());
     }
 
     #[test]
@@ -736,55 +629,36 @@ mod tests {
             ..Config::default()
         };
         assert_ne!(a.fingerprint(), b.fingerprint());
+        let c = Config {
+            state_dir: Some(PathBuf::from("/a")),
+            sources: vec![PathBuf::from("/etc/telltale")],
+            ..Config::default()
+        };
+        assert_ne!(a.fingerprint(), c.fingerprint(), "config folders");
     }
 
     #[test]
-    fn detect_only_is_the_default_and_has_two_spellings() {
-        assert_eq!(Config::default().mode, Mode::Observe);
-        assert_eq!(Config::from_toml("").unwrap().mode, Mode::Observe);
+    fn configuration_sources_and_rule_files_are_protected() {
+        let mut config = Config {
+            state_dir: Some(PathBuf::from("/state")),
+            sources: vec![PathBuf::from("/etc/telltale")],
+            ..Config::default()
+        };
+        config.rules.policy = Some(PathBuf::from("/etc/telltale/policies.d/p.yaml"));
+        let protected = config.protected_paths();
+        assert!(protected.contains(&PathBuf::from("/state")));
+        assert!(protected.contains(&PathBuf::from("/etc/telltale")));
+        assert!(protected.contains(&PathBuf::from("/etc/telltale/policies.d/p.yaml")));
+    }
+
+    #[test]
+    fn modes_parse_with_two_detect_only_spellings() {
         for spelling in ["observe", "detect"] {
-            let config = Config::from_toml(&format!("mode = \"{spelling}\"")).unwrap();
-            assert_eq!(config.mode, Mode::Observe, "{spelling}");
+            let mode: Mode = serde_json::from_value(serde_json::json!(spelling)).unwrap();
+            assert_eq!(mode, Mode::Observe, "{spelling}");
         }
-        assert_eq!(
-            Config::from_toml("mode = \"enforce\"").unwrap().mode,
-            Mode::Enforce
-        );
-        assert!(Config::from_toml("mode = \"block\"").is_err());
-    }
-
-    #[test]
-    fn only_a_configuration_that_says_enforce_declares_it() {
-        for text in [
-            "mode = \"enforce\"",
-            "mode = \"enforce\"\ntypo_key = 1",
-            "\"mode\" = 'enforce'\n[thresholds]\naction_ask = 0",
-            // Not TOML at all.
-            "mode = \"enforce\" # block\n[telltale\nrules = [",
-            "  mode='enforce'\n= = =",
-        ] {
-            assert!(declares_enforce(text), "{text}");
-        }
-        for text in [
-            "",
-            "typo_key = 1",
-            "mode = \"observe\"\ntypo_key = 1",
-            "mode = \"detect\"\n= = =",
-            "# mode = \"enforce\"\n= = =",
-            "model = \"enforce\"\n= = =",
-            // Under a table it is another key.
-            "= = =\n[thresholds]\nmode = \"enforce\"",
-            "[evaluator]\nmode = \"enforce\"",
-            "mode = \"enforced\"\n= = =",
-        ] {
-            assert!(!declares_enforce(text), "{text}");
-        }
-    }
-
-    #[test]
-    fn parses_observe_mode() {
-        let config = Config::from_toml("mode = \"observe\"\non_error = \"deny\"").unwrap();
-        assert_eq!(config.mode, Mode::Observe);
-        assert_eq!(config.on_error, OnError::Deny);
+        let mode: Mode = serde_json::from_value(serde_json::json!("enforce")).unwrap();
+        assert_eq!(mode, Mode::Enforce);
+        assert!(serde_json::from_value::<Mode>(serde_json::json!("block")).is_err());
     }
 }

@@ -28,17 +28,17 @@ Other events are accepted and recorded as `lifecycle: other`.
   `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Telltale Hooks: ... Detections: <rule ids>. Record tth:<id>."}}`
 - Post-result warning:
   `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}`
-- Detect-only (the default, until the configuration says `mode = "enforce"`):
+- Detect-only (the default, until the configuration says `hooks.mode: enforce`):
   nothing is printed and the exit status is 0 for every event and every
   payload. The rest of this list is what an enforcing hook answers.
-- Invalid configuration that says `mode = "enforce"`: PreToolUse is denied
+- Invalid configuration that says `hooks.mode: enforce`: PreToolUse is denied
   with a "misconfigured" reason; other events exit 1 (a non-blocking error in
   Claude Code). One that does not say so is detect-only.
 - Payload the hook cannot use:
   - A `PreToolUse`, even truncated or missing fields, gets the stricter of
     `on_error` and `on_unevaluable` on stdout.
   - Any other named event exits 1. Exit 2 on a `Stop` is a prompt to continue.
-  - A payload that names no event exits 1, or 2 when `on_error = "deny"`, since
+  - A payload that names no event exits 1, or 2 when `on_error: deny`, since
     only exit 2 blocks a call without knowing the event. Residual: if that
     payload was a `Stop`, Claude Code documents exit 2 as continuing the turn.
     Not run against real Claude Code.

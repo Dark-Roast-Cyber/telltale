@@ -12,7 +12,8 @@ python3 - "$bin" "$n" "$state" "$template" <<'PY'
 import json, os, statistics, subprocess, sys, time
 binary, n, state, template = sys.argv[1], int(sys.argv[2]), sys.argv[3], json.loads(sys.argv[4])
 env = dict(os.environ, TELLTALE_HOOKS_STATE_DIR=state)
-env.pop("TELLTALE_HOOKS_CONFIG", None)
+# Default settings: no user config root (an empty XDG_CONFIG_HOME).
+env["XDG_CONFIG_HOME"] = os.path.join(state, "config")
 mode = os.environ.get("BENCH_EVALUATOR", "0")  # "1": long-lived evaluator, "0": in-process
 env["TELLTALE_HOOKS_EVALUATOR"] = mode
 daemon = None
