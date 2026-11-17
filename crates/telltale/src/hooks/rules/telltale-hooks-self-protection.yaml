@@ -56,6 +56,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:{{POSIX_WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -73,6 +74,7 @@ rules:
         command: '(?s){{COMMAND_START}}{{WINDOWS_WRITERS}}{{SEGMENT}}(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -89,6 +91,7 @@ rules:
         command: '(?s)(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)).*{{COMMAND_START}}(?:{{POSIX_WRITERS}}|{{WINDOWS_WRITERS}}|{{INTERPRETERS}})'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -105,6 +108,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:{{POSIX_WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -121,6 +125,7 @@ rules:
         command: '(?s){{COMMAND_START}}{{WINDOWS_WRITERS}}{{SEGMENT}}(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -137,6 +142,7 @@ rules:
         command: '(?s)(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml).*{{COMMAND_START}}(?:{{POSIX_WRITERS}}|{{WINDOWS_WRITERS}}|{{INTERPRETERS}})'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -153,6 +159,7 @@ rules:
         command: '(?s){{REDIRECT_TO}}{{REDIRECT_SKIP}}(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -181,6 +188,7 @@ rules:
         command: '(?s){{COMMAND_START}}git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s{{SEGMENT}}(?:\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -197,6 +205,7 @@ rules:
         command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*(?:(?:{{COMMAND_START}}(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*|{{REDIRECT_TO}}{{REDIRECT_SKIP}})\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -213,6 +222,7 @@ rules:
         command: '(?s)(?:\.claude\b|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)\b).*\b(?:settings(?:\.local|\*)?\.json|managed-settings\.json|journal\.jsonl|state\.json|telemetry\.jsonl|config\.toml|evaluator\.sock).*(?:{{COMMAND_START}}(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -229,6 +239,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s{{SEGMENT}}(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+\.\.)*[\\/]*(?:\s|$|["''`])'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -245,6 +256,7 @@ rules:
         command: '(?s)\b(?:cd|pushd)(?:\s+(?:~|["'']?\$\{?HOME\}?["'']?)/?)?\s*(?:&&|;|\|\|)(?:\s*(?:[^cp\s;&|][^;&|]*|c(?:[^d;&|][^;&|]*)?|p(?:[^u;&|][^;&|]*)?)?[;&|]+)*\s*(?:sudo\s+)?(?:rm|mv|rename|rmdir|rd|ln|Remove-Item|Move-Item|Rename-Item|New-Item|ri|mi)\s{{SEGMENT}}\s(?:\./)?\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -261,6 +273,7 @@ rules:
         command: '(?s)(?:^|[^-A-Za-z0-9_.])find\s{{SEGMENT}}(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)(?:[\\/]+(?:rules|hooks|agents))?[\\/]*["'']?\s(?:{{SEGMENT}}\s)?-(?:delete|exec|execdir|ok|okdir)\b'
       exclude:
         command: '^\s*(?:(?:[-A-Za-z0-9_][-.A-Za-z0-9_]* *)+[;&]+\s*)*(?:find (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"])*-exec(?:dir)? +(?:cat|[ef]?grep|basename|dirname|head|tail|wc|ls|stat|file|du|sha256sum|md5sum|jq) (?:[^-;&|<>`$()\n\r\\]|-[^defo;&|<>`$()\n\r\\''"]|-[efd] )*(?:\\; *)?\|?\s*)?{{READERS}}$'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -277,6 +290,7 @@ rules:
         command: '(?s){{COMMAND_START}}git\s+-C\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`])\s*(?:(?:rm|mv|checkout|restore|reset)\b|clean(?:\s+(?:-[a-mo-z]+|--[a-ce-z]\S*|[^-\s;&|]\S*))*\s*(?:$|[;&|]))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -293,6 +307,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:cd|pushd)\s+["'']?(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*["'']?\s*(?:;|&&)\s*\\?(?:\S*[\\/])?(?:rm|del|erase|rd|rmdir|Remove-Item|ri)\s(?:{{SEGMENT}}\s)?(?:(?:\./)?\*(?:\.(?:json|toml|rules|\*))?|\.\.?[\\/]*)(?:[\s;&|"'']|$)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -309,6 +324,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:gci|Get-ChildItem|ls|dir)\s{{SEGMENT}}(?:(?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)|\$\{?(?:CODEX|COPILOT)_HOME\}?["'']?|%(?:CODEX|COPILOT)_HOME%|\$env:(?:CODEX|COPILOT)_HOME|[\\/]etc[\\/]+(?:codex|github-copilot|claude-code)|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)[\\/]*(?:\s|$|["''`]){{SEGMENT}}\|\s*(?:xargs\s{{SEGMENT}})?(?:rm|mv|del|ri|mi|Remove-Item|Move-Item)\b'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -325,6 +341,7 @@ rules:
         command: '(?s)\b(?:rmtree|rmSync|rm_rf|remove_dir_all|rimraf|removeSync)\b[^;&|\n]*(?:[\s"''`(](?:~|["'']?\$\{?HOME\}?["'']?|%USERPROFILE%|\$env:USERPROFILE|/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s]+)[\\/]+\.(?:claude|codex|copilot)[\\/]*(?:\s|$|["''`])|\bhome(?:dir)?\b[^;&|\n]*["''`][\\/]?\.(?:claude|codex|copilot)[\\/]*["''`]|[$%:.\[(]\{?["'']?(?:CODEX|COPILOT)_HOME\b)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -341,6 +358,7 @@ rules:
         command: '\.claude(?:[\\/]+\.)*[\\/]+settings(?:\.local)?\.json|managed-settings(?:\.json|\.d(?:[\\/\s"''`;&|)]|$))|50-telltale-hooks\.json|\.cursor(?:[\\/]+\.)*[\\/]+hooks\.json|(?:Application\\?\s+Support|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?)[\\/]+ClaudeCode(?:[\\/\s"''`;&|)]|$)|[\\/]etc[\\/]+claude-code(?:[\\/\s"''`;&|)]|$)|(?:(?:\.local(?:[\\/]+\.)*[\\/]+state|\.config|%(?:LOCAL)?APPDATA%|\$env:(?:LOCAL)?APPDATA|\$\{?XDG_(?:STATE|CONFIG)_HOME\}?|AppData[\\/]+(?:Local|Roaming)|Application\\?\s+Support)(?:[\\/]+\.)*[\\/]+telltale-hooks|[\\/]etc[\\/]+telltale-hooks|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?[\\/]+telltale-hooks[\\/]+config\.toml)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -357,6 +375,7 @@ rules:
         command: '(?s)(?:{{WRITER_ANYWHERE}}.*(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:(?:\B|IFS)\.(?:claude|codex|copilot)|(?:CODEX|COPILOT)_HOME[}%"'']*)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*{{WRITER_AFTER}})'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -373,6 +392,7 @@ rules:
         command: '(?s)(?:{{WRITER_ANYWHERE}}.*(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.))|(?:[\\/](?:etc|OpenAI)[\\/]+(?:claude-code|codex)|github[-\\/]+copilot)(?:[\\/]*(?:$|[\s"''`;&|)<>])|[\\/]+[^\s;&|]*(?:[*?\[{]|\.\.)).*{{WRITER_AFTER}})'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -389,6 +409,7 @@ rules:
         command: '(?s)(?:{{WRITER_ANYWHERE}}.*(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$).*{{WRITER_AFTER}})'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -405,6 +426,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:{{WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)|{{REDIRECT_TO}}{{REDIRECT_SKIP}}(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*(?:[\\/\s"''`;&|)]|$)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -421,6 +443,7 @@ rules:
         command: '(?s)=\s*(?:"[^"\n]*|''[^''\n]*|[^\s;&|"'']*)(?:[\\/]s?bin|PROGRA(?:m\\?\s*Files|~[0-9])[%}]?|(?:LOCALAPPDATA%?|Local)[\\/]+Programs)[\\/]+telltale(?:-hooks|\.exe)*["'']?\s*(?:[;&\n].*)?{{COMMAND_START}}{{WRITERS}}{{SEGMENT}}[$%]'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -449,6 +472,7 @@ rules:
         command: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+(?:hooks\s+)?(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
       exclude:
         command: '{{DRY_RUN_OR_HELP}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -465,6 +489,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:rg\s(?:{{SEGMENT}}\s)?["'']*--pre["'']*[\s=]|git\s+grep\s(?:{{SEGMENT}}\s)?["'']*(?:(?-i:-[A-Za-z]*O)|--op[a-z-]*)|git\s+(?:diff|log|show|blame|status|grep|ls-files|ls-tree)\s(?:{{SEGMENT}}\s)?["'']*--out[a-z-]*["'']*[\s=])'
       exclude:
         command: '{{TEXT_ONLY}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -481,6 +506,7 @@ rules:
         command: '(?s)(?:\b(?:kill|pkill|killall|pgrep|systemctl|launchctl|taskkill|Stop-Process)\b.*(?:telltale-hooks|telltale\s+hooks\b|\bhooks\s+serve\b|telltale[^;&|\n]*\bserve\b)|(?:telltale-hooks|telltale\s+hooks\b|\bhooks\s+serve\b|telltale[^;&|\n]*\bserve\b).*\b(?:pkill|killall|taskkill|Stop-Process)\b|\b(?:kill|pkill|killall|taskkill|Stop-Process)\b[^;&\n]*(?:^|[\s"''=/\\])telltale(?:\.exe)?["'']?(?:\s*(?:$|[;&|)\n])|\s+[-/])|(?:^|[\s"''=/\\])telltale(?:\.exe)?["'']?(?:\s*(?:$|[;&|)\n])|\s+[-/])[^;&\n]*\b(?:kill|pkill|killall|taskkill|Stop-Process)\b)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -515,6 +541,7 @@ rules:
         command: '(?:{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}--bare\b|opencode(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}--pure\b|codex(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}(?:--disable[\s=]+["'']?(?:codex_)?hooks\b|(?:-c\s*|--config[\s=]+)["'']?features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false)|--ignore-user-config\b|--ignore-rules\b|features\s+disable\s+(?:codex_)?hooks\b))|\bCLAUDE_CODE_SIMPLE=\s*["'']?(?:1|true)\b)'
       exclude:
         command: '{{VERSION_OR_HELP}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -531,6 +558,7 @@ rules:
         command: '(?s)(?:\b(?:CODEX_HOME|COPILOT_HOME)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)|(?:\bexport\s+(?:CODEX_HOME|COPILOT_HOME)\b|\bset\s+["'']?(?:CODEX_HOME|COPILOT_HOME)=|\$env:(?:CODEX_HOME|COPILOT_HOME)\s*=).*{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:codex|copilot)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
       exclude:
         command: '{{VERSION_OR_HELP}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -547,6 +575,7 @@ rules:
         command: '(?s)(?:(?:^|[^.0-9A-Z_a-z])(?:claude\b.*--bare\b|opencode\b.*--pure\b|(?:claude|codex|copilot|opencode|cursor|gemini)\b.*\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_HOOKS_[A-Z_]+)\s*=|codex\b.*(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)))|--bare\b.*[^.0-9A-Z_a-z]claude\b|--pure\b.*[^.0-9A-Z_a-z]opencode\b|\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_HOOKS_[A-Z_]+)\s*=.*[^.0-9A-Z_a-z](?:claude|codex|copilot|opencode|cursor|gemini)\b|(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)).*[^.0-9A-Z_a-z]codex\b)'
       exclude:
         command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{VERSION_OR_HELP}}|^\s*git +(?:clone|init)(?: +[-A-Za-z0-9_./:=@~+]+)* *$'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -563,6 +592,7 @@ rules:
         command: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*@(?:openai/codex|github/copilot|anthropic-ai/claude-code)\b|\btelltale(?:-hooks(?:\.exe)?|(?:\.exe)?\s+hooks)\s.*(?:\buninstall\b|--allow-user-hooks\b))'
       exclude:
         command: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{DRY_RUN_OR_HELP}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -579,6 +609,7 @@ rules:
         command: '{{COMMAND_START}}(?:npx|pnpx|bunx|(?:pnpm|yarn)\s+dlx|npm\s+(?:exec|x))\s{{SEGMENT}}@(?:openai/codex|github/copilot)\b'
       exclude:
         command: '{{VERSION_OR_HELP}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -595,6 +626,7 @@ rules:
         command: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?codex(?:\.exe|\.cmd)?["'']?\s{{SEGMENT}}--dangerously-bypass-hook-trust\b'
       exclude:
         command: '{{VERSION_OR_HELP}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -611,6 +643,7 @@ rules:
         command: '(?s)(?:(?:\bTELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=\S*[^;&|]*|\bexport\s+TELLTALE_HOOKS_(?:CONFIG|STATE_DIR|TELEMETRY)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b|\b(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
       exclude:
         command: '{{TEXT_ONLY}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
@@ -627,6 +660,7 @@ rules:
         command: '(?s)(?:\bexport\s+(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\bset\s+["'']?(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\$env:(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)\s*=).*{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)'
       exclude:
         command: '{{TEXT_ONLY}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion, nested-agent]
     explanation: >-
