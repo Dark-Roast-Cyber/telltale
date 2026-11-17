@@ -1953,6 +1953,8 @@ fn ci_dependency_caches_keep_configuration_identity_and_one_writer() {
     let groups = [
         ("clippy", "linux-engine", false),
         ("test", "linux-engine", true),
+        ("package-verify", "linux-engine", false),
+        ("source-preflight", "linux-engine", false),
         ("windows-tests", "windows-engine", true),
         ("windows-corpus", "windows-engine", false),
         ("windows-release", "windows-release", true),
@@ -1990,6 +1992,36 @@ fn ci_dependency_caches_keep_configuration_identity_and_one_writer() {
         }
     }
     assert!(writers.values().all(|count| *count == 1));
+    let msrv_steps = workflow_steps(&workflow, "embedding-msrv");
+    let msrv_install = workflow_step_index(msrv_steps, "run", "rustup toolchain install");
+    let msrv_cache = workflow_step_index(msrv_steps, "uses", "Swatinem/rust-cache");
+    let msrv_check =
+        workflow_step_index(msrv_steps, "run", "scripts/embedding-contract-check --msrv");
+    assert!(msrv_install < msrv_cache && msrv_cache < msrv_check);
+    assert!(workflow_run(msrv_steps, msrv_install).contains("RUSTUP_TOOLCHAIN="));
+    assert_eq!(
+        msrv_steps[msrv_cache]["with"]["workspaces"],
+        "tests/embedding-consumer -> ../../target/embedding-msrv-check"
+    );
+    assert_eq!(msrv_steps[msrv_cache]["with"]["cache-bin"], false);
+    // Unpruned `actions/cache` over `target/` previously saved ~8 GB per branch
+    // across `embedding-msrv`, `package-verify`, and `source-preflight`,
+    // evicting every platform's test cache from GitHub's 10 GB pool.
+    for (job, def) in workflow["jobs"].as_mapping().unwrap() {
+        for step in def["steps"].as_sequence().unwrap() {
+            if step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.starts_with("actions/cache@"))
+            {
+                let path = step["with"]["path"].as_str().unwrap_or_default();
+                assert!(
+                    !path.lines().any(|line| line.trim() == "target"),
+                    "{}: raw actions/cache must not archive unpruned target/",
+                    job.as_str().unwrap()
+                );
+            }
+        }
+    }
     for (a, b) in [("clippy", "test"), ("windows-tests", "windows-corpus")] {
         let config = |job| {
             let steps = workflow_steps(&workflow, job);
