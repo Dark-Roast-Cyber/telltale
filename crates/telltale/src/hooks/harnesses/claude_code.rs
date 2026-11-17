@@ -8,6 +8,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::ClientId;
 use crate::hooks::harness::{
     Adapter, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
 };
@@ -313,6 +314,7 @@ fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'s
 /// The registry's descriptor of this adapter.
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
+    client: ClientId::Claude,
     display_name: "Claude Code",
     // The second name is a routed Copilot payload's (see `parse_payload`).
     pre_tool_use: &[PRE_TOOL_USE, copilot_cli::PRE_TOOL_USE],

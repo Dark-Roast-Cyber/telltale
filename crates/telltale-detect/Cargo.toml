@@ -17,6 +17,8 @@ include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**", "/tes
 [features]
 default = ["source-io"]
 source-io = ["dep:telltale-sources"]
+# Accepts the hook-journal source identities (see `telltale-sources`).
+hook-journal = []
 
 [dependencies]
 hex.workspace = true

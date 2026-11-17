@@ -46,6 +46,7 @@ use crate::hooks::runtime::ToolCall;
 
 /// One harness's captured native shapes that need normalization. Each
 /// adapter declares its own (`harnesses/<name>.rs`).
+#[derive(Debug, PartialEq, Eq)]
 pub struct Rules {
     /// Patch tools: name, whether a raw-string input is the patch, and the
     /// object key that carries it.

@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 
+use crate::ClientId;
 use crate::hooks::config::OnError;
 use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli};
 use crate::hooks::normalize::Rules;
@@ -51,6 +52,11 @@ pub struct Adapter {
     pub name: &'static str,
     /// The product name, for listings and messages.
     pub display_name: &'static str,
+    /// The Telltale client this harness is: the client of every Telltale
+    /// record of its calls. Its evaluation windows are scanned as that
+    /// client's hook journal, `client.hook_journal_source_id()`: host-fed,
+    /// never discovered, accepted for this client only (ADR 0002 addendum).
+    pub client: ClientId,
     /// The pre-execution (enforcement) event names this entry point receives.
     /// The first answers a tool call whose payload could not be read.
     pub pre_tool_use: &'static [&'static str],
@@ -338,8 +344,10 @@ mod tests {
                     patch,
                     "{name} is not the identity"
                 ),
+                // By value: an adapter's rules are a constant, and a constant
+                // has no one address.
                 (Normalization::Rules(declared), Normalization::Rules(applied)) => {
-                    assert!(std::ptr::eq(declared, applied), "{name}");
+                    assert_eq!(declared, applied, "{name}");
                 }
                 _ => panic!("{name}: the runtime applies another normalization"),
             }

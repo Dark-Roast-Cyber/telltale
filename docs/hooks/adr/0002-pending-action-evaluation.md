@@ -48,12 +48,11 @@ the same session correlate with the parent's earlier calls.
   call itself is evaluated unmodified.
 - Chains whose first step left the window are not reconstructed; the host
   session ledger (ADR 0004) still carries cumulative risk.
-- Every Telltale record says `client: "claude"` and `source_id:
-  "claude.projects"` because that is the evaluation encoding. For other
-  harnesses this is a provenance mismatch: the envelope's `harness.name` is
-  authoritative. A first-class "evaluate host-supplied canonical activity"
-  facade would remove the temp file and the encoding mismatch; it is a
-  candidate upstream request once a second harness proves the need.
+- Every Telltale record said `client: "claude"` and `source_id:
+  "claude.projects"` because that is the evaluation encoding. *Superseded:
+  each record carries its own harness's identity (addendum of 2026-11-17).* A
+  first-class "evaluate host-supplied canonical activity" facade would remove
+  the temp file; it stays open (see that addendum).
 - The encoding also loses detection facts for other harnesses' input
   shapes. Parity tests (`crates/telltale/tests/hooks/normalize_parity.rs`) proved this, and it
   is requested upstream as
@@ -237,3 +236,52 @@ hole, since everything before the newest poison goes. So:
 Nothing about the recovery is persisted, so a poisoned window pays for it on
 every call until the line leaves. That is simple and bounded; remembering what
 was dropped is the next step if the cost shows up in practice.
+
+## Addendum (2026-11-17): records carry the harness's own identity
+
+Status: Accepted. Supersedes the open question in "Consequences" about
+the provenance of Telltale records.
+
+The journal stays: it is still the way a pending call reaches Telltale. What
+changes is the identity the window is scanned under.
+
+- Each adapter names its Telltale client (`Adapter::client`). That client's
+  hook-journal identity is one rule, not a list: the pair
+  `(client, "<client name>.hooks")` (`ClientId::hook_journal_source_id`), for
+  every `ClientId`, so `claude` / `claude.hooks`, `codex` / `codex.hooks`,
+  `copilot` / `copilot.hooks`. The engine scans the window as that source, taking the harness from the event's `Context::harness`,
+  not from the command line, so a Copilot CLI payload that arrives at the Claude
+  Code entry point is recorded as Copilot CLI. A harness name with no registered
+  adapter is not evaluated and takes the `on_error` path; there is no default
+  identity.
+- The hook-journal identities are host-fed only. They are not in the source
+  registry, so a scan, a watch, `--client` listing, an investigation, the source
+  catalog and conformance never see them, and they are outside the eight session
+  source identities. Acquisition and detection accept each for its own client
+  only (a cross pair is refused), and acquisition refuses them in its bounded
+  read. A client need not have a session source, or a hooks adapter, to have one. They exist behind the
+  `hook-journal` feature of `telltale-sources` and `telltale-detect`, which
+  `telltale-core`'s `hooks` feature turns on, so the journal encoding is not an
+  embedding contract: without the feature an acquisition of the identity is an
+  uncompiled capability.
+- Every hook journal is read with the existing journal encoding, the Claude Code
+  reader and tool table, and stamps the pair it was given with one neutral
+  adapter type, `ClientId::HOOK_JOURNAL_ADAPTER_TYPE`: the client is in the
+  source ID and in the exact-pair check, so the type says only what kind of
+  source it is. Adapter types appear in identities (observation IDs, replay
+  identities), not in any emitted field. Rule matching, scoring and
+  verdicts are unchanged; a differential test scans one window as
+  `claude.projects` and under each adapter's identity and requires equal results once
+  identity-derived fields (client, source ID and the hashes over them) are masked.
+- Relabeling a record after evaluation was rejected: it would pair a client with
+  a source that is not its own and break exact `(ClientId, source_id)`
+  ownership, which acquisition and detection both check.
+- The evaluation encoding and `normalize.rs` are unchanged. They go per tool
+  family when a client's own tool table reaches parity with what normalization
+  reshapes, as before; this addendum does not move that date.
+- The record identity of Codex and Copilot calls changes once, from the Claude
+  Code identity to their own. Nothing persisted depends on it: hooks are not yet
+  released, and the ledger and the journal do not store record identities.
+- Adding a harness therefore needs its hooks adapter and, if its client is new,
+  its `ClientId` value, and nothing in `telltale-sources` or `telltale-detect`.
+- A facade that evaluates host-supplied activity without a file stays open.

@@ -1686,6 +1686,82 @@ fn duplicate_observations_and_mismatched_sources_fail_before_evaluation() {
     ));
 }
 
+/// Every client has a hook-journal identity, by one rule and no table. It is
+/// accepted only with the feature, only for its own client, and only for
+/// observations stamped with it.
+#[test]
+fn every_clients_hook_journal_follows_the_feature_and_its_own_client() {
+    let plan = plan(0);
+    let observations = [observation("one", Some("session"), None, 1)];
+    let input = |client, source_id| CanonicalSourceInput {
+        client,
+        source_id,
+        source_instance: None,
+        observations: &observations,
+    };
+    for (index, &client) in ClientId::ALL.iter().enumerate() {
+        let source_id = client.hook_journal_source_id();
+        // The observation says `claude.projects`, which is not this identity.
+        assert!(matches!(
+            evaluate_source(input(client, source_id), &plan, None),
+            Err(ProcessingError::InvalidSource)
+        ));
+        let other = ClientId::ALL[(index + 1) % ClientId::ALL.len()];
+        assert!(matches!(
+            evaluate_source(input(other, source_id), &plan, None),
+            Err(ProcessingError::InvalidSource)
+        ));
+        #[cfg(feature = "hook-journal")]
+        {
+            let stamped = [stamped_observation(source_id)];
+            let accepted = |client, source_id| CanonicalSourceInput {
+                client,
+                source_id,
+                source_instance: None,
+                observations: &stamped,
+            };
+            evaluate_source(accepted(client, source_id), &plan, None).unwrap();
+            assert!(matches!(
+                evaluate_source(accepted(other, source_id), &plan, None),
+                Err(ProcessingError::InvalidSource)
+            ));
+        }
+    }
+}
+
+#[cfg(feature = "hook-journal")]
+fn stamped_observation(source_id: &str) -> CanonicalObservationV2 {
+    CanonicalObservationV2::builder(
+        ObservationBody::Message(
+            MessageObservation::new(MessageRole::User)
+                .with_content(JsonValue::string("ordinary synthetic text")),
+        ),
+        ObservationStage::MessageObserved,
+        ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
+            source_id,
+            Fidelity::FullNative,
+        )
+        .unwrap()
+        .with_native_id("one")
+        .unwrap(),
+    )
+    .sequence(1)
+    .session_id(CorrelationId::source_reported("session").unwrap())
+    .fact_metadata(
+        "message.role",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+    )
+    .fact_metadata(
+        "message.content",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+    )
+    .build()
+    .unwrap()
+}
+
 #[test]
 fn collapsed_process_variants_keep_truthful_correlation_step_evidence() {
     let rules = telltale_rules::process_chain::load_process_chain_rules(r#"
