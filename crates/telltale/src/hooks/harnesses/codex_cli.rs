@@ -22,13 +22,17 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::hooks::claude_code;
+use crate::hooks::harness::{
+    Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
+};
+use crate::hooks::harnesses::payload;
+use crate::hooks::normalize::Rules;
 use crate::hooks::runtime::{Completion, Context, Event, Response, ToolCall, synthetic_call_id};
 use crate::hooks::state::Verdict;
 
-/// Matches `normalize::CODEX_CLI`, which keys the runtime's input
-/// normalization for this harness.
 pub const HARNESS: &str = "codex-cli";
+/// The top-level payload key that names the hook event.
+pub const EVENT_KEY: &str = "hook_event_name";
 /// The pre-execution hook event: the only enforcement point.
 pub const PRE_TOOL_USE: &str = "PreToolUse";
 /// Codex 0.166.0 treats a returned `ask` as an unsupported decision and runs
@@ -95,9 +99,9 @@ pub fn parse(bytes: &[u8]) -> Result<HookInput, ParseError> {
 /// Whether an unparseable payload names the PreToolUse event. Codex writes
 /// `hook_event_name` after the session, turn, agent, transcript and cwd
 /// fields and before `tool_input` (`PreToolUseCommandInput`), so the
-/// bounded prefix scan shared with Claude Code applies.
+/// shared bounded prefix scan applies.
 pub fn looks_like_pre_tool_use(bytes: &[u8]) -> bool {
-    claude_code::looks_like_pre_tool_use(bytes)
+    payload::names_event_as(bytes, EVENT_KEY, PRE_TOOL_USE)
 }
 
 /// The correlation key of one Codex tool call: session, agent, turn and
@@ -219,7 +223,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
                 result_text: input
                     .tool_response
                     .as_ref()
-                    .map(claude_code::result_text)
+                    .map(payload::tool_response_text)
                     .unwrap_or_default(),
                 duration_ms: None,
             }
@@ -411,6 +415,72 @@ pub fn execpolicy_rules() -> String {
     ));
     text
 }
+
+fn parse_payload(bytes: &[u8]) -> Parsed {
+    match parse(bytes) {
+        Err(error) => Parsed::Invalid(error.code()),
+        Ok(input) => match to_event(&input) {
+            Ok((ctx, event)) => Parsed::Event(ctx, event),
+            Err(error) => Parsed::Unusable {
+                hook_event: input.hook_event_name,
+                code: error.code(),
+            },
+        },
+    }
+}
+
+/// Codex cannot fail closed, so `--fail-closed` prints nothing and fails
+/// rather than pretending. Install and trust notes go with the document.
+fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'static str> {
+    if fail_closed {
+        return Err(NO_FAIL_CLOSED);
+    }
+    Ok(InstallOutput {
+        document: hooks_file(command),
+        notes: Some(INSTALL_NOTES),
+    })
+}
+
+/// Codex CLI 0.166.0: `apply_patch` `{"command": patch}` (a freeform raw
+/// string is the same tool's other form).
+pub const NORMALIZATION: Rules = Rules {
+    patch_tools: &[("apply_patch", true, Some("command"))],
+    key_tools: &[],
+    keys: &[],
+    tool_names: &[],
+};
+
+/// The registry's descriptor of this adapter.
+pub const ADAPTER: Adapter = Adapter {
+    name: HARNESS,
+    display_name: "OpenAI Codex CLI",
+    pre_tool_use: &[PRE_TOOL_USE],
+    event_keys: &[EVENT_KEY],
+    can_ask: CAN_ASK,
+    parse: parse_payload,
+    render,
+    looks_like_pre_tool_use,
+    install: Install {
+        usage: "  telltale hooks codex-cli settings [COMMAND]     print $CODEX_HOME/hooks.json (install and trust steps
+                                                  on stderr); Codex has no fail-closed option, so
+                                                  --fail-closed is refused",
+        output: install_output,
+    },
+    // A deny on stdout is honored on a PreToolUse and rejected as invalid
+    // output on every other event (E2E `damaged-*-nameless`).
+    nameless_block: NamelessBlock::DenyOnStdout,
+    normalization: Normalization::Rules(&NORMALIZATION),
+    // The same file names as the static rules in the document below.
+    home: Some(Home {
+        variable: "CODEX_HOME",
+        hook_files: r#"[\\/]+(?:hooks\.json|(?:[^\\/\s;&|"']+\.)?config\.toml|rules{{NAME_END}}|(?:[^\s;&|"']*[\\/])?hooks\.json)"#,
+    }),
+    rules: HostRules::Document(
+        "codex-cli-self-protection.yaml",
+        include_str!("../rules/codex-cli-self-protection.yaml"),
+    ),
+    launchers: &["codex"],
+};
 
 #[cfg(test)]
 mod tests {

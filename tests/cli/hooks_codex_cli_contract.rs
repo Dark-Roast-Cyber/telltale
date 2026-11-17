@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use common::Harness;
 use serde_json::{Value, json};
-use telltale_core::hooks::codex_cli;
 use telltale_core::hooks::harness::{Harness as Registry, Parsed};
+use telltale_core::hooks::harnesses::codex_cli;
 use telltale_core::hooks::runtime::{CANNOT_ASK_NOTE, Completion, Event};
 
 fn fixtures() -> PathBuf {

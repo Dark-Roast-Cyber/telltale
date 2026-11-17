@@ -163,7 +163,7 @@ Constraint found on the way: Telltale rejects a native ID containing `/`,
 every later call whose window includes the line `not_evaluated`. Codex
 `tool_use_id` is model-supplied, so the adapter percent-encodes every byte
 outside `[A-Za-z0-9_-]` in its composite key, which keeps the key injective
-(`crates/telltale/src/hooks/codex_cli.rs`, regression-tested). Making journal IDs safe for every
+(`crates/telltale/src/hooks/harnesses/codex_cli.rs`, regression-tested). Making journal IDs safe for every
 adapter is separate runtime work.
 
 ## Addendum (2026-11-05): recovering from a failed source

@@ -1082,3 +1082,29 @@ fn codex_captures_replay_with_turn_settlement() {
     );
     validate_schema(&h.telemetry());
 }
+
+/// What a harness needs beyond its descriptor, which the compiler cannot ask
+/// for: captured payload fixtures under its own name, and its rules document
+/// among the host rules the engine loads.
+#[test]
+fn every_registered_adapter_has_fixtures_and_host_rules() {
+    use telltale_core::hooks::engine::host_rule_documents;
+    use telltale_core::hooks::harness::{Harness, HostRules};
+    let documents: Vec<&str> = host_rule_documents()
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(!documents.is_empty());
+    for harness in Harness::ALL {
+        let adapter = harness.adapter();
+        let fixtures = common::fixtures(adapter.name);
+        let versions = std::fs::read_dir(&fixtures)
+            .unwrap_or_else(|error| panic!("{}: {error}", fixtures.display()))
+            .count();
+        assert!(versions > 0, "{} has no captured fixtures", adapter.name);
+        if let HostRules::Document(name, _) = adapter.rules {
+            assert!(documents.contains(&name), "{name} is not loaded");
+            assert!(name.starts_with(adapter.name), "{name}");
+        }
+    }
+}

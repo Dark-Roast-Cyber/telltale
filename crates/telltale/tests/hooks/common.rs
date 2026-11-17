@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use telltale_core::hooks::claude_code;
 use telltale_core::hooks::config::{Config, Mode};
+use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::Runtime;
 
 /// Test data (fixtures, marker rules) of the hooks suites. This module is
