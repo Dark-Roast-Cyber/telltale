@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::hooks::harness::{Harness, Home};
 use crate::hooks::identity;
 use crate::rule_resolution::RulePackPaths;
 
@@ -361,7 +362,7 @@ impl Config {
         part("config", format!("{self:?}").as_bytes());
         // Every input to Engine::new, including environment-derived paths
         // (XDG_STATE_HOME, HOME, XDG_RUNTIME_DIR; LOCALAPPDATA, USERPROFILE on
-        // Windows; CODEX_HOME, COPILOT_HOME).
+        // Windows; each harness's home variable).
         let state = self.resolved_state_dir().ok();
         let telemetry = self.resolved_telemetry_path().ok();
         let socket = self.resolved_socket_path().ok();
@@ -440,10 +441,13 @@ pub fn current_uid() -> u32 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessHome {
     pub variable: &'static str,
+    /// Pattern text for the hook files below the home (`harness::Home`).
+    pub hook_files: &'static str,
     pub path: PathBuf,
 }
 
-/// `CODEX_HOME` and `COPILOT_HOME` as the hook sees them. A harness moved there
+/// Every adapter's relocatable config home (`Adapter::home`) as the hook sees
+/// it. A harness moved there
 /// loads its hooks from that directory, and static rules can only know the
 /// variable's name and the default directory, so the engine generates rules
 /// for these literal paths. A hook inherits these from the harness, so this
@@ -453,7 +457,14 @@ pub struct HarnessHome {
 /// canonicalizes `CODEX_HOME`).
 pub fn harness_homes() -> Vec<HarnessHome> {
     let mut homes = Vec::new();
-    for variable in ["CODEX_HOME", "COPILOT_HOME"] {
+    let declared = Harness::ALL
+        .iter()
+        .filter_map(|harness| harness.adapter().home);
+    for Home {
+        variable,
+        hook_files,
+    } in declared
+    {
         let Some(path) = env_path(variable) else {
             continue;
         };
@@ -470,11 +481,13 @@ pub fn harness_homes() -> Vec<HarnessHome> {
         }
         homes.push(HarnessHome {
             variable,
+            hook_files,
             path: path.clone(),
         });
         if let Some(canonical) = canonical.filter(|canonical| *canonical != path) {
             homes.push(HarnessHome {
                 variable,
+                hook_files,
                 path: canonical,
             });
         }

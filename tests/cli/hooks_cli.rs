@@ -875,3 +875,66 @@ fn settings_refuses_an_unknown_flag_on_every_entry_point() {
         assert!(!stderr.contains("usage:"), "{entry_point}");
     }
 }
+
+/// The CLI takes its harness list from the registry: `harnesses` prints it,
+/// the usage text has a `hook` and a `settings` line for each entry, and
+/// every entry prints a settings document.
+#[test]
+fn the_cli_lists_and_serves_every_registered_harness() {
+    use telltale_core::hooks::harness::Harness;
+    let run = |args: &[&str]| {
+        let out = isolated().args(args).output().unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+    let (code, listing) = run(&["harnesses"]);
+    assert_eq!(code, Some(0));
+    let (code, usage) = run(&["--help"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(listing.lines().count(), Harness::ALL.len());
+    for harness in Harness::ALL {
+        let adapter = harness.adapter();
+        let name = adapter.name;
+        assert!(
+            listing.lines().any(|line| {
+                line.split_once(' ').is_some_and(|(first, rest)| {
+                    first == name && rest.trim() == adapter.display_name
+                })
+            }),
+            "{name}: {listing}"
+        );
+        assert!(
+            usage.contains(&format!("\n  telltale hooks {name} hook ")),
+            "{name}"
+        );
+        assert!(
+            usage.contains(&format!("\n  telltale hooks {name} settings ")),
+            "{name}"
+        );
+        let (code, document) = run(&[name, "settings"]);
+        assert_eq!(code, Some(0), "{name}");
+        let document: Value = serde_json::from_str(&document).unwrap();
+        assert!(document["hooks"].is_object(), "{name}");
+    }
+}
+
+/// A registered adapter is an "Implemented" row of the capability matrix.
+#[test]
+fn every_registered_harness_is_implemented_in_the_capability_matrix() {
+    use telltale_core::hooks::harness::Harness;
+    let matrix = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/hooks/capability-matrix.md"),
+    )
+    .unwrap();
+    for harness in Harness::ALL {
+        let display_name = harness.adapter().display_name;
+        let row = matrix
+            .lines()
+            .find(|line| line.starts_with(&format!("| {display_name} |")))
+            .unwrap_or_else(|| panic!("no row for {display_name}"));
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        assert_eq!(cells.get(3), Some(&"Implemented"), "{row}");
+    }
+}
