@@ -15,7 +15,7 @@
   next planned minor release (0.8.0), not a patch.
 - **`telltale-core` has a new default feature, `hooks`.** It adds
   `telltale_core::hooks`, the pre-execution hooks runtime that was a separate
-  project, together with `regex`, `serde_json` and a TOML parser in the default
+  project, together with `regex` and `serde_json` in the default
   dependency graph. Embedders that only read sessions opt out with
   `default-features = false` (the external embedding consumer is checked both
   ways). `telltale-cli` has the same default feature, `hooks`; build with
@@ -25,31 +25,37 @@
   `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
   before they run and reach a verdict of allow, ask or deny. It does nothing until a harness
   is configured to call it, and the scanner and watch commands are unchanged.
-  Its self-protection rules cover the hook, rule and managed-configuration files of
-  Claude Code, Copilot CLI and Codex CLI, hook-disabling launches and custom harness
-  homes. They also cover replacing or removing the installed `telltale` binary the hook
-  runs as, and stopping the evaluator (`telltale hooks serve`); the old standalone
-  `telltale-hooks` names stay covered. A tool input that makes Telltale reject the session's source no longer
-  costs a call its rule verdict, and waits for a session's lock and for the
-  evaluator are bounded.
+  Its self-protection rules cover the hook, rule and managed-configuration files
+  of Claude Code, Copilot CLI and Codex CLI, Telltale's config roots and the
+  hooks state, hook-disabling launches and custom harness homes. They also cover
+  replacing or removing the installed `telltale` binary the hook runs as, and
+  stopping the evaluator (`telltale hooks serve`); the old standalone
+  `telltale-hooks` names stay covered. A tool input that makes Telltale reject
+  the session's source no longer costs a call its rule verdict, and waits for a
+  session's lock and for the evaluator are bounded.
   **Hooks are detect-only by default.** A hook records the verdict it reached
   and gives the harness nothing unless the configuration says
-  `mode = "enforce"`; `mode = "observe"` (also spelled `"detect"`) is the
+  `hooks.mode: enforce`; `observe` (also spelled `detect`) is the
   default. In detect-only mode a hook cannot block: one gate releases every
   answer, so stdout is empty and the exit status is 0 for any payload, any
   failure policy and a panic, and the hook exits after 20 s if it has not
-  finished. A configuration that does not load denies tool calls only when it
-  says `mode = "enforce"`; otherwise the hook is detect-only on the defaults
-  and writes a `config_invalid` record. Installations of the standalone
-  `telltale-hooks` that relied on enforcement by default must add
-  `mode = "enforce"`. Verdicts recorded in detect-only mode no longer count as
-  denied attempts, unreadable payloads get an `error` record, and a tool input
-  with no scalar value no longer crashes the hook
+  finished. A configuration that does not load denies tool calls only when a
+  settings file says `hooks.mode: enforce`; otherwise the hook is detect-only on
+  the defaults and writes a `config_invalid` record. Verdicts recorded in
+  detect-only mode no longer count as denied attempts, unreadable payloads get an
+  `error` record, and a tool input with no scalar value no longer crashes the
+  hook
   ([ADR 0008](docs/hooks/adr/0008-detect-only-by-default.md)).
   Generated settings call `telltale hooks <harness> hook`, and the long-lived
   evaluator autostarts by running the current executable as `hooks serve`.
-  Existing `telltale-hooks` configuration and state directories and the
-  `TELLTALE_HOOKS_*` environment variables are kept. The telemetry field
+  Hooks are configured like the rest of Telltale: the `hooks:` section of the
+  `settings.d` YAML files (shown by `telltale config show`), from the same config
+  roots and with the same precedence, and they evaluate the same `rules.d`,
+  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. `hook`,
+  `check` and `serve` take `--config-dir`. The standalone project's TOML file, its
+  location and `TELLTALE_HOOKS_CONFIG` are not read, and state moves to
+  `telltale/hooks` under the state home; `TELLTALE_HOOKS_STATE_DIR`,
+  `TELLTALE_HOOKS_TELEMETRY` and `TELLTALE_HOOKS_EVALUATOR` remain. The telemetry field
   `producer.telltale_rev` stays 40 hex digits and is now a digest of the package
   version and the build's Git hash (see [Telltale Hooks](docs/hooks/README.md)).
 

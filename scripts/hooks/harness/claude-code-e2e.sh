@@ -89,8 +89,11 @@ EOF
 run_claude() { # $1 name, $2 prompt, rest: extra claude args
   local name=$1 prompt=$2; shift 2
   local r=$root/$name
-  printf 'mode = "%s"\n\n[telltale]\nrules = ["%s"]\n\n[evaluator]\nenabled = %s\nidle_timeout_secs = 300\n' \
-    "${E2E_MODE:-enforce}" "$repo/crates/telltale/tests/hooks/e2e-marker-rules.yaml" "${E2E_EVALUATOR:-true}" > "$r/tth-config.toml"
+  # Telltale's user config root for this run, as XDG_CONFIG_HOME/telltale.
+  mkdir -p "$r/xdg/telltale/settings.d" "$r/xdg/telltale/rules.d"
+  cp "$repo/crates/telltale/tests/hooks/e2e-marker-rules.yaml" "$r/xdg/telltale/rules.d/"
+  printf 'version: 1\nhooks:\n  mode: %s\n  evaluator:\n    enabled: %s\n    idle_timeout_secs: 300\n' \
+    "${E2E_MODE:-enforce}" "${E2E_EVALUATOR:-true}" > "$r/xdg/telltale/settings.d/hooks.yaml"
   local -a isolation
   if [ "$auth" = host ]; then
     isolation=(HOME="$r/home")
@@ -99,7 +102,7 @@ run_claude() { # $1 name, $2 prompt, rest: extra claude args
   fi
   [ -f "$r/mcp.json" ] && set -- "$@" --mcp-config "$r/mcp.json" --strict-mcp-config
   timeout 300 env -i PATH="$PATH" "${isolation[@]}" TERM=dumb \
-    TELLTALE_HOOKS_STATE_DIR="$r/tth-state" TELLTALE_HOOKS_CONFIG="$r/tth-config.toml" \
+    TELLTALE_HOOKS_STATE_DIR="$r/tth-state" XDG_CONFIG_HOME="$r/xdg" \
     REC_LOG="$r/hooks.jsonl" E2E_WORK="$r/work" \
     ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" HTTP_PROXY="${HTTP_PROXY:-}" \
     NO_PROXY="${NO_PROXY:-}" NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-/root/.ccr/ca-bundle.crt}" \

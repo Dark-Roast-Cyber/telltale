@@ -140,6 +140,15 @@ fn documented_settings_file_sets_every_key_to_its_default() {
     );
     let shown: Value = serde_json::from_slice(&output.stdout).expect("config show json");
     for (key, entry) in shown["settings"].as_object().expect("settings") {
+        // A path with no default value is documented as a commented line.
+        if entry["default"].is_null() {
+            let leaf = key.rsplit('.').next().unwrap();
+            assert!(
+                block.contains(&format!("# {leaf}: <path>")),
+                "{key} is undocumented"
+            );
+            continue;
+        }
         assert_eq!(entry["origin"], "settings_file", "{key} is undocumented");
         assert_eq!(entry["value"], entry["default"], "{key}");
     }
@@ -214,7 +223,7 @@ fn config_show_explains_files_environment_and_defaults() {
     let vendor = settings_file(
         &vendor_root,
         "50-settings.yaml",
-        "version: 1\nlog_rotation: {keep: 2}\nrules: {community: false}\n",
+        "version: 1\nlog_rotation: {keep: 2}\nrules: {community: false}\nhooks: {mode: enforce}\n",
     );
     let local = settings_file(
         &local_root,
@@ -259,6 +268,14 @@ fn config_show_explains_files_environment_and_defaults() {
     assert_eq!(settings["log_rotation.keep"]["source"], path_hash(&local));
     assert_eq!(settings["rules.community"]["value"], false);
     assert_eq!(settings["rules.community"]["source"], path_hash(&vendor));
+    // A build without hooks accepts the section and ignores it.
+    if cfg!(feature = "hooks") {
+        assert_eq!(settings["hooks.mode"]["value"], "enforce");
+        assert_eq!(settings["hooks.mode"]["default"], "observe");
+        assert_eq!(settings["hooks.mode"]["source"], path_hash(&vendor));
+    } else {
+        assert!(settings.get("hooks.mode").is_none());
+    }
     assert_eq!(settings["risk_thresholds.critical"]["value"], 95);
     assert_eq!(
         settings["risk_thresholds.critical"]["origin"],

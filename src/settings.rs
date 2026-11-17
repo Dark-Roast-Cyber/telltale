@@ -125,6 +125,14 @@ macro_rules! env_integer {
 }
 env_integer!(u32, u64, usize);
 
+/// A path setting: any non-blank value, taken as written (no `~` expansion).
+impl EnvValue for Option<PathBuf> {
+    const EXPECTED: &'static str = "a path";
+    fn parse_env(raw: &str) -> Option<Self> {
+        Some(Some(PathBuf::from(raw)))
+    }
+}
+
 /// Flags that override settings for one invocation.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CliSettings {
@@ -163,6 +171,8 @@ pub(crate) struct Settings {
     pub(crate) baseline_deviation_scoring: Setting<bool>,
     pub(crate) watch_debounce_ms: Setting<u64>,
     pub(crate) watch_min_scan_interval_ms: Setting<u64>,
+    #[cfg(feature = "hooks")]
+    pub(crate) hooks: HooksSettings,
 }
 
 impl Default for Settings {
@@ -192,6 +202,8 @@ impl Default for Settings {
             baseline_deviation_scoring: Setting::new(false),
             watch_debounce_ms: Setting::new(500),
             watch_min_scan_interval_ms: Setting::new(10_000),
+            #[cfg(feature = "hooks")]
+            hooks: HooksSettings::default(),
         }
     }
 }
@@ -217,6 +229,15 @@ struct SettingsDocument {
     events: EventsSection,
     #[serde(default)]
     watch: WatchSection,
+    #[cfg(feature = "hooks")]
+    #[serde(default)]
+    hooks: HooksSection,
+    /// A build without hooks accepts and ignores the section, so one
+    /// `settings.d` serves both builds.
+    #[cfg(not(feature = "hooks"))]
+    #[serde(default)]
+    #[allow(dead_code)]
+    hooks: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -295,6 +316,28 @@ pub(crate) fn load(
     Ok(settings)
 }
 
+/// Open a settings file without waiting on it: discovery checked the type,
+/// but the entry can change before the open, and a FIFO would block the
+/// command (for a hook, before it can answer). The handle must be a regular
+/// file.
+fn open_settings_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
 fn resolve(
     files: &[PathBuf],
     env: &dyn Fn(&str) -> Option<String>,
@@ -306,7 +349,7 @@ fn resolve(
     };
     for path in files {
         let mut bytes = Vec::new();
-        fs::File::open(path)
+        open_settings_file(path)
             .and_then(|file| {
                 file.take(MAX_SETTINGS_FILE_BYTES + 1)
                     .read_to_end(&mut bytes)
@@ -373,6 +416,8 @@ impl Settings {
             .set(document.watch.debounce_ms, origin());
         self.watch_min_scan_interval_ms
             .set(document.watch.min_scan_interval_ms, origin());
+        #[cfg(feature = "hooks")]
+        self.hooks.apply_document(document.hooks, path);
     }
 
     fn apply_environment(
@@ -401,7 +446,10 @@ impl Settings {
         self.install_inventory_interval_seconds
             .set_env(env, "TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")?;
         self.health_heartbeat_interval_seconds
-            .set_env(env, "TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS")
+            .set_env(env, "TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS")?;
+        #[cfg(feature = "hooks")]
+        self.hooks.apply_environment(env)?;
+        Ok(())
     }
 
     fn apply_cli(&mut self, cli: &CliSettings) {
@@ -539,21 +587,8 @@ impl Settings {
     /// Each effective value with its default and origin, keyed by its
     /// `settings.d` path. A winning file appears only as its path hash.
     pub(crate) fn to_json(&self) -> serde_json::Value {
-        fn entry<T: Clone + serde::Serialize>(setting: &Setting<T>) -> serde_json::Value {
-            let (origin, source) = match &setting.origin {
-                Origin::Default => ("default", None),
-                Origin::File(path) => ("settings_file", Some(path_hash(path))),
-                Origin::Environment(name) => ("environment", Some(name.to_string())),
-                Origin::Cli(flag) => ("cli", Some(flag.to_string())),
-            };
-            serde_json::json!({
-                "value": setting.value,
-                "default": setting.default,
-                "origin": origin,
-                "source": source,
-            })
-        }
-        serde_json::json!({
+        #[cfg_attr(not(feature = "hooks"), allow(unused_mut))]
+        let mut json = serde_json::json!({
             "rules.community": entry(&self.community_rules),
             "detections.process_chain": entry(&self.process_chain),
             "risk_thresholds.low": entry(&self.risk_low),
@@ -572,7 +607,309 @@ impl Settings {
             "events.health_heartbeat_interval_seconds": entry(&self.health_heartbeat_interval_seconds),
             "watch.debounce_ms": entry(&self.watch_debounce_ms),
             "watch.min_scan_interval_ms": entry(&self.watch_min_scan_interval_ms),
-        })
+        });
+        #[cfg(feature = "hooks")]
+        if let serde_json::Value::Object(map) = &mut json {
+            self.hooks.extend_json(map);
+        }
+        json
+    }
+}
+
+fn described<T>(
+    setting: &Setting<T>,
+    value: serde_json::Value,
+    default: serde_json::Value,
+) -> serde_json::Value {
+    let (origin, source) = match &setting.origin {
+        Origin::Default => ("default", None),
+        Origin::File(path) => ("settings_file", Some(path_hash(path))),
+        Origin::Environment(name) => ("environment", Some(name.to_string())),
+        Origin::Cli(flag) => ("cli", Some(flag.to_string())),
+    };
+    serde_json::json!({
+        "value": value,
+        "default": default,
+        "origin": origin,
+        "source": source,
+    })
+}
+
+fn entry<T: Clone + serde::Serialize>(setting: &Setting<T>) -> serde_json::Value {
+    described(
+        setting,
+        serde_json::json!(setting.value),
+        serde_json::json!(setting.default),
+    )
+}
+
+/// A path appears only as its hash, like a settings file.
+#[cfg(feature = "hooks")]
+fn path_entry(setting: &Setting<Option<PathBuf>>) -> serde_json::Value {
+    let hashed = |path: &Option<PathBuf>| serde_json::json!(path.as_deref().map(path_hash));
+    described(setting, hashed(&setting.value), hashed(&setting.default))
+}
+
+#[cfg(feature = "hooks")]
+use hooks_section::HooksSection;
+#[cfg(feature = "hooks")]
+pub(crate) use hooks_section::{HooksSettings, STATE_DIR_ENV, TELEMETRY_ENV};
+
+/// The `hooks:` section: `telltale hooks` settings (docs/hooks/README.md).
+#[cfg(feature = "hooks")]
+mod hooks_section {
+    use std::path::{Path, PathBuf};
+
+    use serde::Deserialize;
+    use telltale_core::hooks::config::{
+        Config, EvaluatorSettings, Mode, OnError, ReasonDetail, Thresholds, Window,
+    };
+
+    use super::{InvalidEnvironment, Origin, Setting, entry, path_entry};
+
+    /// Paths in the environment, as hooks read them when settings do not load.
+    pub(crate) const STATE_DIR_ENV: &str = "TELLTALE_HOOKS_STATE_DIR";
+    pub(crate) const TELEMETRY_ENV: &str = "TELLTALE_HOOKS_TELEMETRY";
+    const EVALUATOR_ENV: &str = "TELLTALE_HOOKS_EVALUATOR";
+
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct HooksSection {
+        mode: Option<Mode>,
+        on_error: Option<OnError>,
+        on_unevaluable: Option<OnError>,
+        reason_detail: Option<ReasonDetail>,
+        state_dir: Option<PathBuf>,
+        telemetry_path: Option<PathBuf>,
+        self_protection_rules: Option<bool>,
+        #[serde(default)]
+        thresholds: ThresholdsSection,
+        #[serde(default)]
+        window: WindowSection,
+        #[serde(default)]
+        evaluator: EvaluatorSection,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ThresholdsSection {
+        action_ask: Option<u64>,
+        action_deny: Option<u64>,
+        session_ask: Option<u64>,
+        session_deny: Option<u64>,
+        repeated_denials: Option<u32>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct WindowSection {
+        max_records: Option<usize>,
+        max_bytes: Option<u64>,
+        max_result_bytes: Option<usize>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct EvaluatorSection {
+        enabled: Option<bool>,
+        autostart: Option<bool>,
+        idle_timeout_secs: Option<u64>,
+        request_timeout_ms: Option<u64>,
+        socket: Option<PathBuf>,
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct HooksSettings {
+        mode: Setting<Mode>,
+        on_error: Setting<OnError>,
+        on_unevaluable: Setting<OnError>,
+        reason_detail: Setting<ReasonDetail>,
+        state_dir: Setting<Option<PathBuf>>,
+        telemetry_path: Setting<Option<PathBuf>>,
+        pub(crate) self_protection_rules: Setting<bool>,
+        action_ask: Setting<u64>,
+        action_deny: Setting<u64>,
+        session_ask: Setting<u64>,
+        session_deny: Setting<u64>,
+        repeated_denials: Setting<u32>,
+        max_records: Setting<usize>,
+        max_bytes: Setting<u64>,
+        max_result_bytes: Setting<usize>,
+        evaluator_enabled: Setting<bool>,
+        evaluator_autostart: Setting<bool>,
+        evaluator_idle_timeout_secs: Setting<u64>,
+        evaluator_request_timeout_ms: Setting<u64>,
+        evaluator_socket: Setting<Option<PathBuf>>,
+    }
+
+    impl Default for HooksSettings {
+        fn default() -> Self {
+            let config = Config::default();
+            let Thresholds {
+                action_ask,
+                action_deny,
+                session_ask,
+                session_deny,
+                repeated_denials,
+            } = config.thresholds;
+            let Window {
+                max_records,
+                max_bytes,
+                max_result_bytes,
+            } = config.window;
+            let EvaluatorSettings {
+                enabled,
+                autostart,
+                idle_timeout_secs,
+                request_timeout_ms,
+                socket,
+            } = config.evaluator;
+            Self {
+                mode: Setting::new(config.mode),
+                on_error: Setting::new(config.on_error),
+                on_unevaluable: Setting::new(config.on_unevaluable),
+                reason_detail: Setting::new(config.reason_detail),
+                state_dir: Setting::new(config.state_dir),
+                telemetry_path: Setting::new(config.telemetry_path),
+                self_protection_rules: Setting::new(config.rules.self_protection),
+                action_ask: Setting::new(action_ask),
+                action_deny: Setting::new(action_deny),
+                session_ask: Setting::new(session_ask),
+                session_deny: Setting::new(session_deny),
+                repeated_denials: Setting::new(repeated_denials),
+                max_records: Setting::new(max_records),
+                max_bytes: Setting::new(max_bytes),
+                max_result_bytes: Setting::new(max_result_bytes),
+                evaluator_enabled: Setting::new(enabled),
+                evaluator_autostart: Setting::new(autostart),
+                evaluator_idle_timeout_secs: Setting::new(idle_timeout_secs),
+                evaluator_request_timeout_ms: Setting::new(request_timeout_ms),
+                evaluator_socket: Setting::new(socket),
+            }
+        }
+    }
+
+    impl HooksSettings {
+        pub(super) fn apply_document(&mut self, section: HooksSection, path: &Path) {
+            let origin = || Origin::File(path.to_path_buf());
+            self.mode.set(section.mode, origin());
+            self.on_error.set(section.on_error, origin());
+            self.on_unevaluable.set(section.on_unevaluable, origin());
+            self.reason_detail.set(section.reason_detail, origin());
+            self.state_dir.set(section.state_dir.map(Some), origin());
+            self.telemetry_path
+                .set(section.telemetry_path.map(Some), origin());
+            self.self_protection_rules
+                .set(section.self_protection_rules, origin());
+            let thresholds = section.thresholds;
+            self.action_ask.set(thresholds.action_ask, origin());
+            self.action_deny.set(thresholds.action_deny, origin());
+            self.session_ask.set(thresholds.session_ask, origin());
+            self.session_deny.set(thresholds.session_deny, origin());
+            self.repeated_denials
+                .set(thresholds.repeated_denials, origin());
+            let window = section.window;
+            self.max_records.set(window.max_records, origin());
+            self.max_bytes.set(window.max_bytes, origin());
+            self.max_result_bytes.set(window.max_result_bytes, origin());
+            let evaluator = section.evaluator;
+            self.evaluator_enabled.set(evaluator.enabled, origin());
+            self.evaluator_autostart.set(evaluator.autostart, origin());
+            self.evaluator_idle_timeout_secs
+                .set(evaluator.idle_timeout_secs, origin());
+            self.evaluator_request_timeout_ms
+                .set(evaluator.request_timeout_ms, origin());
+            self.evaluator_socket
+                .set(evaluator.socket.map(Some), origin());
+        }
+
+        pub(super) fn apply_environment(
+            &mut self,
+            env: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<(), InvalidEnvironment> {
+            self.state_dir.set_env(env, STATE_DIR_ENV)?;
+            self.telemetry_path.set_env(env, TELEMETRY_ENV)?;
+            self.evaluator_enabled.set_env(env, EVALUATOR_ENV)
+        }
+
+        pub(super) fn extend_json(&self, map: &mut serde_json::Map<String, serde_json::Value>) {
+            for (key, value) in [
+                ("hooks.mode", entry(&self.mode)),
+                ("hooks.on_error", entry(&self.on_error)),
+                ("hooks.on_unevaluable", entry(&self.on_unevaluable)),
+                ("hooks.reason_detail", entry(&self.reason_detail)),
+                ("hooks.state_dir", path_entry(&self.state_dir)),
+                ("hooks.telemetry_path", path_entry(&self.telemetry_path)),
+                (
+                    "hooks.self_protection_rules",
+                    entry(&self.self_protection_rules),
+                ),
+                ("hooks.thresholds.action_ask", entry(&self.action_ask)),
+                ("hooks.thresholds.action_deny", entry(&self.action_deny)),
+                ("hooks.thresholds.session_ask", entry(&self.session_ask)),
+                ("hooks.thresholds.session_deny", entry(&self.session_deny)),
+                (
+                    "hooks.thresholds.repeated_denials",
+                    entry(&self.repeated_denials),
+                ),
+                ("hooks.window.max_records", entry(&self.max_records)),
+                ("hooks.window.max_bytes", entry(&self.max_bytes)),
+                (
+                    "hooks.window.max_result_bytes",
+                    entry(&self.max_result_bytes),
+                ),
+                ("hooks.evaluator.enabled", entry(&self.evaluator_enabled)),
+                (
+                    "hooks.evaluator.autostart",
+                    entry(&self.evaluator_autostart),
+                ),
+                (
+                    "hooks.evaluator.idle_timeout_secs",
+                    entry(&self.evaluator_idle_timeout_secs),
+                ),
+                (
+                    "hooks.evaluator.request_timeout_ms",
+                    entry(&self.evaluator_request_timeout_ms),
+                ),
+                ("hooks.evaluator.socket", path_entry(&self.evaluator_socket)),
+            ] {
+                map.insert(key.to_owned(), value);
+            }
+        }
+
+        /// The hooks configuration these settings describe. Rule content and
+        /// the configuration's sources are the caller's: they come from the
+        /// config folders, not from this section.
+        pub(crate) fn config(&self) -> Config {
+            Config {
+                mode: self.mode.value,
+                on_error: self.on_error.value,
+                on_unevaluable: self.on_unevaluable.value,
+                reason_detail: self.reason_detail.value,
+                state_dir: self.state_dir.value.clone(),
+                telemetry_path: self.telemetry_path.value.clone(),
+                thresholds: Thresholds {
+                    action_ask: self.action_ask.value,
+                    action_deny: self.action_deny.value,
+                    session_ask: self.session_ask.value,
+                    session_deny: self.session_deny.value,
+                    repeated_denials: self.repeated_denials.value,
+                },
+                window: Window {
+                    max_records: self.max_records.value,
+                    max_bytes: self.max_bytes.value,
+                    max_result_bytes: self.max_result_bytes.value,
+                },
+                evaluator: EvaluatorSettings {
+                    enabled: self.evaluator_enabled.value,
+                    autostart: self.evaluator_autostart.value,
+                    idle_timeout_secs: self.evaluator_idle_timeout_secs.value,
+                    request_timeout_ms: self.evaluator_request_timeout_ms.value,
+                    socket: self.evaluator_socket.value.clone(),
+                },
+                ..Config::default()
+            }
+        }
     }
 }
 
@@ -983,5 +1320,20 @@ mod tests {
             .expect_err("oversized document")
             .to_string();
         assert!(error.contains("exceeds 65536 bytes"), "{error}");
+    }
+
+    /// A settings entry that became a FIFO after discovery is refused at
+    /// once: waiting on it would hold a hook before it can answer.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_settings_file_is_refused_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("hooks.yaml");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path; mkfifo only creates the entry.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let error = super::open_settings_file(&fifo).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

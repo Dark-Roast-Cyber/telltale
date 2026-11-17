@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
-use telltale_core::hooks::config::TelltaleSettings;
+use telltale_core::hooks::config::RuleContent;
 use telltale_core::hooks::engine::Engine;
 
 /// One character of each class the YAML reader refuses: C0, the escape that
@@ -23,17 +23,33 @@ const REFUSED: [char; 6] = ['\x01', '\x1b', '\x7f', '\u{9f}', '\u{fffe}', '\u{ff
 /// Denied by a bundled rule, whatever the paths are.
 const DENIED: &str = "rm -f ~/.claude/settings.json";
 
-type Env = Vec<(&'static str, PathBuf)>;
+/// Where the paths come from: environment variables, and the config roots
+/// passed with `--config-dir` (none: the default roots).
+struct Source {
+    env: Vec<(&'static str, PathBuf)>,
+    roots: Vec<PathBuf>,
+}
 
-/// The binary with safe paths everywhere but `env`, on every platform.
-fn binary(base: &Path, env: &Env) -> Command {
+/// `env`, with the enforcing test config root.
+fn env(env: Vec<(&'static str, PathBuf)>) -> Source {
+    Source {
+        env,
+        roots: vec![common::enforce_config()],
+    }
+}
+
+/// The binary running `args` with safe paths everywhere but `source`, on every
+/// platform.
+fn binary(base: &Path, source: &Source, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
-    command.arg("hooks");
+    command.arg("hooks").args(args);
+    for root in &source.roots {
+        command.arg("--config-dir").arg(root);
+    }
     for var in [
         "XDG_CONFIG_HOME",
         "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
-        "TELLTALE_HOOKS_CONFIG",
         "TELLTALE_HOOKS_STATE_DIR",
         "TELLTALE_HOOKS_TELEMETRY",
     ] {
@@ -43,20 +59,20 @@ fn binary(base: &Path, env: &Env) -> Command {
         command.env(var, base.join("home"));
     }
     command.env("TELLTALE_HOOKS_EVALUATOR", "0");
-    // Enforcing, so that a verdict shows the rules built; `env` may name
-    // another configuration.
-    command.env("TELLTALE_HOOKS_CONFIG", common::enforce_config());
-    command.envs(env.iter().map(|(name, value)| (name, value)));
+    command.envs(source.env.iter().map(|(name, value)| (name, value)));
     command
 }
 
+fn check(base: &Path, source: &Source) -> std::process::Output {
+    binary(base, source, &["check"]).output().unwrap()
+}
+
 /// The verdict and reason for a Bash call; no verdict means the call is allowed.
-fn hook(base: &Path, env: &Env, command: &str) -> (Option<String>, String) {
+fn hook(base: &Path, source: &Source, command: &str) -> (Option<String>, String) {
     let mut payload = common::template("PreToolUse", Some("Bash"));
     payload["tool_use_id"] = "toolu_generated".into();
     payload["tool_input"] = json!({"command": command});
-    let mut child = binary(base, env)
-        .args(["claude-code", "hook"])
+    let mut child = binary(base, source, &["claude-code", "hook"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -84,8 +100,9 @@ fn hook(base: &Path, env: &Env, command: &str) -> (Option<String>, String) {
     )
 }
 
-/// `path` as a TOML basic string, where control characters must be escaped.
-fn toml_string(path: &Path) -> String {
+/// `path` as a YAML double-quoted string, where control characters must be
+/// escaped.
+fn yaml_string(path: &Path) -> String {
     let mut text = String::from("\"");
     for c in path.to_str().unwrap().chars() {
         match c {
@@ -98,18 +115,33 @@ fn toml_string(path: &Path) -> String {
     text
 }
 
-/// A config file at a safe path holding `toml`, as the environment of a source.
-fn config(base: &Path, toml: &str) -> Env {
-    let path = base.join("config.toml");
-    std::fs::write(&path, format!("mode = \"enforce\"\n{toml}")).unwrap();
-    vec![("TELLTALE_HOOKS_CONFIG", path)]
+/// An enforcing settings file in config root `root`, with more of the `hooks:`
+/// section in `hooks`.
+fn write_settings(root: &Path, hooks: &str) {
+    let settings = root.join("settings.d");
+    std::fs::create_dir_all(&settings).unwrap();
+    std::fs::write(
+        settings.join("hooks.yaml"),
+        format!("version: 1\nhooks:\n  mode: enforce\n{hooks}"),
+    )
+    .unwrap();
+}
+
+/// A config root at a safe path, with more of the `hooks:` section in `hooks`.
+fn config(base: &Path, hooks: &str) -> Source {
+    let root = base.join("config");
+    write_settings(&root, hooks);
+    Source {
+        env: Vec::new(),
+        roots: vec![root],
+    }
 }
 
 /// With every refused character in the value of one source, `check` builds the
 /// pipeline and a call a rule denies is still denied. `source` gets a safe base
 /// directory and a directory named with the character. Failures are collected, so
 /// a run names every character that failed.
-fn assert_keeps_enforcing(name: &str, source: impl Fn(&Path, &Path) -> Env) {
+fn assert_keeps_enforcing(name: &str, source: impl Fn(&Path, &Path) -> Source) {
     let mut failures = Vec::new();
     for c in REFUSED {
         let dir = tempfile::tempdir().unwrap();
@@ -120,14 +152,14 @@ fn assert_keeps_enforcing(name: &str, source: impl Fn(&Path, &Path) -> Env) {
             eprintln!("{name}: this filesystem refuses {c:?}");
             continue;
         }
-        let env = source(dir.path(), &value);
-        let check = binary(dir.path(), &env).arg("check").output().unwrap();
+        let source = source(dir.path(), &value);
+        let check = check(dir.path(), &source);
         if !check.status.success() {
             let stderr = String::from_utf8_lossy(&check.stderr);
             let code = stderr.split(':').nth(1).unwrap_or_default().trim();
             failures.push(format!("{name} {c:?}: check failed ({code})"));
         }
-        let (verdict, _) = hook(dir.path(), &env, DENIED);
+        let (verdict, _) = hook(dir.path(), &source, DENIED);
         if verdict.as_deref() != Some("deny") {
             failures.push(format!("{name} {c:?}: verdict {verdict:?}, expected deny"));
         }
@@ -135,17 +167,29 @@ fn assert_keeps_enforcing(name: &str, source: impl Fn(&Path, &Path) -> Env) {
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
+/// The default user config root, under `HOME`, enforcing.
 #[cfg(not(windows))]
 #[test]
 fn home_keeps_enforcing() {
-    assert_keeps_enforcing("HOME", |_, value| vec![("HOME", value.to_owned())]);
+    assert_keeps_enforcing("HOME", |_, value| {
+        write_settings(&value.join(".config").join("telltale"), "");
+        Source {
+            env: vec![("HOME", value.to_owned())],
+            roots: Vec::new(),
+        }
+    });
 }
 
+/// The default user config root, under `XDG_CONFIG_HOME`, enforcing.
 #[cfg(not(windows))]
 #[test]
 fn xdg_config_home_keeps_enforcing() {
     assert_keeps_enforcing("XDG_CONFIG_HOME", |_, value| {
-        vec![("XDG_CONFIG_HOME", value.to_owned())]
+        write_settings(&value.join("telltale"), "");
+        Source {
+            env: vec![("XDG_CONFIG_HOME", value.to_owned())],
+            roots: Vec::new(),
+        }
     });
 }
 
@@ -153,7 +197,7 @@ fn xdg_config_home_keeps_enforcing() {
 #[test]
 fn xdg_state_home_keeps_enforcing() {
     assert_keeps_enforcing("XDG_STATE_HOME", |_, value| {
-        vec![("XDG_STATE_HOME", value.to_owned())]
+        env(vec![("XDG_STATE_HOME", value.to_owned())])
     });
 }
 
@@ -162,84 +206,88 @@ fn xdg_state_home_keeps_enforcing() {
 #[test]
 fn xdg_runtime_dir_keeps_enforcing() {
     assert_keeps_enforcing("XDG_RUNTIME_DIR", |base, value| {
-        vec![
+        env(vec![
             ("XDG_RUNTIME_DIR", value.to_owned()),
             ("TELLTALE_HOOKS_STATE_DIR", base.join("d".repeat(120))),
-        ]
+        ])
     });
-}
-
-#[cfg(windows)]
-#[test]
-fn appdata_keeps_enforcing() {
-    assert_keeps_enforcing("APPDATA", |_, value| vec![("APPDATA", value.to_owned())]);
 }
 
 #[cfg(windows)]
 #[test]
 fn localappdata_keeps_enforcing() {
     assert_keeps_enforcing("LOCALAPPDATA", |_, value| {
-        vec![("LOCALAPPDATA", value.to_owned())]
+        env(vec![("LOCALAPPDATA", value.to_owned())])
     });
 }
 
 #[test]
 fn telltale_hooks_state_dir_keeps_enforcing() {
     assert_keeps_enforcing("TELLTALE_HOOKS_STATE_DIR", |_, value| {
-        vec![("TELLTALE_HOOKS_STATE_DIR", value.to_owned())]
+        env(vec![("TELLTALE_HOOKS_STATE_DIR", value.to_owned())])
     });
 }
 
 #[test]
 fn telltale_hooks_telemetry_keeps_enforcing() {
     assert_keeps_enforcing("TELLTALE_HOOKS_TELEMETRY", |_, value| {
-        vec![("TELLTALE_HOOKS_TELEMETRY", value.join("telemetry.jsonl"))]
+        env(vec![(
+            "TELLTALE_HOOKS_TELEMETRY",
+            value.join("telemetry.jsonl"),
+        )])
+    });
+}
+
+/// A config root named with `--config-dir`, and its settings file.
+#[test]
+fn config_dir_keeps_enforcing() {
+    assert_keeps_enforcing("--config-dir", |_, value| {
+        write_settings(value, "");
+        Source {
+            env: Vec::new(),
+            roots: vec![value.to_owned()],
+        }
     });
 }
 
 #[test]
-fn telltale_hooks_config_path_keeps_enforcing() {
-    assert_keeps_enforcing("TELLTALE_HOOKS_CONFIG", |_, value| {
-        let path = value.join("config.toml");
-        std::fs::write(&path, "mode = \"enforce\"\n").unwrap();
-        vec![("TELLTALE_HOOKS_CONFIG", path)]
+fn settings_state_dir_keeps_enforcing() {
+    assert_keeps_enforcing("hooks.state_dir", |base, value| {
+        config(base, &format!("  state_dir: {}\n", yaml_string(value)))
     });
 }
 
 #[test]
-fn toml_state_dir_keeps_enforcing() {
-    assert_keeps_enforcing("TOML state_dir", |base, value| {
-        config(base, &format!("state_dir = {}\n", toml_string(value)))
-    });
-}
-
-#[test]
-fn toml_telemetry_path_keeps_enforcing() {
-    assert_keeps_enforcing("TOML telemetry_path", |base, value| {
-        let path = toml_string(&value.join("telemetry.jsonl"));
-        config(base, &format!("telemetry_path = {path}\n"))
+fn settings_telemetry_path_keeps_enforcing() {
+    assert_keeps_enforcing("hooks.telemetry_path", |base, value| {
+        let path = yaml_string(&value.join("telemetry.jsonl"));
+        config(base, &format!("  telemetry_path: {path}\n"))
     });
 }
 
 /// Only Unix has an evaluator socket among the protected paths.
 #[cfg(unix)]
 #[test]
-fn toml_evaluator_socket_keeps_enforcing() {
-    assert_keeps_enforcing("TOML [evaluator] socket", |base, value| {
-        let path = toml_string(&value.join("evaluator.sock"));
-        config(base, &format!("[evaluator]\nsocket = {path}\n"))
+fn settings_evaluator_socket_keeps_enforcing() {
+    assert_keeps_enforcing("hooks.evaluator.socket", |base, value| {
+        let path = yaml_string(&value.join("evaluator.sock"));
+        config(base, &format!("  evaluator:\n    socket: {path}\n"))
     });
 }
 
 /// A rule file's path is protected too. Before the fix this one was an `ask`, not
 /// an allow, because an operator file was configured; the build failed the same way.
 #[test]
-fn toml_rule_file_path_keeps_enforcing() {
-    assert_keeps_enforcing("TOML [telltale] rules", |base, value| {
-        let path = value.join("rules.yaml");
-        std::fs::copy(common::marker_rules(), &path).unwrap();
-        let toml = format!("[telltale]\nrules = [{}]\n", toml_string(&path));
-        config(base, &toml)
+fn rule_file_path_keeps_enforcing() {
+    assert_keeps_enforcing("rules.d file", |_, value| {
+        write_settings(value, "");
+        let rules = value.join("rules.d");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::copy(common::marker_rules(), rules.join("markers.yaml")).unwrap();
+        Source {
+            env: Vec::new(),
+            roots: vec![value.to_owned()],
+        }
     });
 }
 
@@ -258,7 +306,7 @@ fn every_character_yaml_refuses_builds_a_real_pipeline() {
         .collect();
     assert_eq!(refused.chars().count(), 63);
     let path = PathBuf::from(format!("/srv/{refused}"));
-    let built = Engine::new(&TelltaleSettings::default(), &[path]);
+    let built = Engine::new(&RuleContent::default(), &[path]);
     assert!(
         built.is_ok(),
         "{:?}",
@@ -281,10 +329,10 @@ fn the_generated_rule_still_matches_a_path_holding_such_a_character() {
             eprintln!("this filesystem refuses {c:?}");
             continue;
         }
-        let env = vec![("TELLTALE_HOOKS_STATE_DIR", value.clone())];
-        let check = binary(dir.path(), &env).arg("check").output().unwrap();
+        let source = env(vec![("TELLTALE_HOOKS_STATE_DIR", value.clone())]);
+        let check = check(dir.path(), &source);
         let command = format!("rm -rf {}", value.join("journal").display());
-        let (verdict, reason) = hook(dir.path(), &env, &command);
+        let (verdict, reason) = hook(dir.path(), &source, &command);
         if !check.status.success()
             || verdict.as_deref() != Some("deny")
             || !reason.contains("tth.tamper.own_state_command")
@@ -303,20 +351,26 @@ fn the_generated_rule_still_matches_a_path_holding_such_a_character() {
 #[test]
 fn a_build_failure_names_check_and_no_environment_value() {
     let dir = tempfile::tempdir().unwrap();
-    let broken = dir.path().join("broken.yaml");
-    std::fs::write(&broken, "version: 1\nrules: [ { id: x, regex: '(' } ]\n").unwrap();
-    let toml = format!("[telltale]\nrules = [{}]\n", toml_string(&broken));
-    let mut env = config(dir.path(), &toml);
-    env.push(("TELLTALE_HOOKS_STATE_DIR", dir.path().join("state")));
+    let mut source = config(dir.path(), "");
+    let rules = source.roots[0].join("rules.d");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("broken.yaml"),
+        "version: 1\nrules: [ { id: x, regex: '(' } ]\n",
+    )
+    .unwrap();
+    source
+        .env
+        .push(("TELLTALE_HOOKS_STATE_DIR", dir.path().join("state")));
 
-    let (verdict, reason) = hook(dir.path(), &env, "ls");
+    let (verdict, reason) = hook(dir.path(), &source, "ls");
     assert_eq!(verdict.as_deref(), Some("ask"), "{reason}");
     assert!(reason.contains("the rules did not build"), "{reason}");
     assert!(reason.contains("`telltale hooks check`"), "{reason}");
     let base = dir.path().file_name().unwrap().to_string_lossy();
     assert!(!reason.contains(&*base), "{reason}");
 
-    let check = binary(dir.path(), &env).arg("check").output().unwrap();
+    let check = check(dir.path(), &source);
     assert!(!check.status.success());
     let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(stderr.contains("pipeline_build_failed"), "{stderr}");
