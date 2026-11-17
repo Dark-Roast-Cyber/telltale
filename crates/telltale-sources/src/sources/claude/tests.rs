@@ -59,13 +59,17 @@ fn malformed_content_block_envelopes_fail_acquisition_atomically() {
             };
             assert_eq!(error, AcquisitionError::SourceRead);
             assert!(!format!("{error} {error:?}").contains("PRIVATE"));
-            let bounded =
-                match acquire_source_bounded(&source, options(), DirectReadLimits::default()) {
-                    Err(error) => error,
-                    Ok(_) => panic!(
-                        "case {case}, form {form}: bounded acquisition accepted malformed envelope"
-                    ),
-                };
+            let bounded = match acquire_source_bounded(
+                source.path.parent().unwrap(),
+                &source,
+                options(),
+                DirectReadLimits::default(),
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!(
+                    "case {case}, form {form}: bounded acquisition accepted malformed envelope"
+                ),
+            };
             assert_eq!(
                 bounded,
                 AcquisitionError::BoundedSourceRead(

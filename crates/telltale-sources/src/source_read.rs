@@ -126,32 +126,39 @@ impl SourceReadError {
 
 #[cfg(test)]
 pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, SourceReadError> {
-    read_jsonl_values_with_limits(source, None).map(|(values, _)| values)
+    read_jsonl_values_with_limits(source, crate::acquisition::SourceAccess::ByName)
+        .map(|(values, _)| values)
 }
 
 /// The values and the number of bytes read, which scale the source's bounds.
 pub(crate) fn read_jsonl_values_with_limits(
     source: &Source,
-    limits: Option<crate::acquisition::DirectReadLimits>,
+    access: crate::acquisition::SourceAccess<'_>,
 ) -> Result<(Vec<Value>, usize), SourceReadError> {
-    if let Some(limits) = limits {
-        let bytes =
-            bounded_file_bytes(&source.path, limits.bytes).map_err(SourceReadError::Bounded)?;
-        check_json_depth(&bytes, limits.json_depth)
-            .map_err(|_| SourceReadError::Bounded(BoundedReadError::LimitExceeded))?;
-        let mut values = Vec::new();
-        for line in bytes
-            .split(|b| *b == b'\n')
-            .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
-        {
-            if values.len() == limits.records {
-                return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+    use crate::acquisition::{DirectRead, SourceAccess};
+    match access {
+        SourceAccess::Direct(DirectRead { root, limits }) => {
+            let bytes = confined_file_bytes(root, &source.path, limits.bytes)
+                .map_err(SourceReadError::Bounded)?;
+            check_json_depth(&bytes, limits.json_depth)
+                .map_err(|_| SourceReadError::Bounded(BoundedReadError::LimitExceeded))?;
+            let mut values = Vec::new();
+            for line in bytes
+                .split(|b| *b == b'\n')
+                .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+            {
+                if values.len() == limits.records {
+                    return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+                }
+                values.push(serde_json::from_slice(line)?);
             }
-            values.push(serde_json::from_slice(line)?);
+            Ok((values, bytes.len()))
         }
-        return Ok((values, bytes.len()));
+        SourceAccess::Resolved => {
+            read_production_jsonl(open_resolved(&source.path).map_err(SourceReadError::Bounded)?)
+        }
+        SourceAccess::ByName => read_production_jsonl(fs::File::open(&source.path)?),
     }
-    read_production_jsonl(fs::File::open(&source.path)?)
 }
 
 pub(crate) const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
@@ -244,7 +251,64 @@ pub(crate) fn bounded_file_bytes(
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let file = options.open(path).map_err(BoundedReadError::from_io)?;
+    bounded_bytes(options.open(path).map_err(BoundedReadError::from_io)?, cap)
+}
+
+/// `bounded_file_bytes` for a source coordinate opened under the trust anchors
+/// of the discovery `root` it belongs to (`telltale-discover`'s
+/// `open_source_file`): the anchor is resolved once, and no link below it is
+/// followed, at the file or any ancestor, even if a pathname is replaced during
+/// the open. A path under no anchor is walked strictly from the filesystem root.
+/// A refused link is not a regular source.
+pub(crate) fn confined_file_bytes(
+    root: &std::path::Path,
+    path: &std::path::Path,
+    cap: usize,
+) -> Result<Vec<u8>, BoundedReadError> {
+    use telltale_discover::discovery::{BoundedDiscoveryError, open_source_file};
+    let file = match open_source_file(root, path) {
+        Ok(Some(file)) => file,
+        Ok(None) => return Err(BoundedReadError::Missing),
+        Err(BoundedDiscoveryError::SymlinkRoot) => return Err(BoundedReadError::NonRegularSource),
+        Err(BoundedDiscoveryError::PermissionDenied) => {
+            return Err(BoundedReadError::PermissionDenied);
+        }
+        Err(_) => return Err(BoundedReadError::Unreadable),
+    };
+    bounded_bytes(file, cap)
+}
+
+/// An already-resolved (canonical) path opened without following any link or
+/// blocking (`telltale-discover`'s `open_resolved_file`), checked to be a
+/// regular file. A link anywhere in the path, including one swapped in after
+/// resolution, is not a regular source.
+fn open_resolved(path: &std::path::Path) -> Result<fs::File, BoundedReadError> {
+    use telltale_discover::discovery::{BoundedDiscoveryError, open_resolved_file};
+    let file = match open_resolved_file(path) {
+        Ok(Some(file)) => file,
+        Ok(None) => return Err(BoundedReadError::Missing),
+        Err(BoundedDiscoveryError::SymlinkRoot) => return Err(BoundedReadError::NonRegularSource),
+        Err(BoundedDiscoveryError::PermissionDenied) => {
+            return Err(BoundedReadError::PermissionDenied);
+        }
+        Err(_) => return Err(BoundedReadError::Unreadable),
+    };
+    let metadata = file.metadata().map_err(BoundedReadError::from_io)?;
+    if !metadata.is_file() {
+        return Err(BoundedReadError::NonRegularSource);
+    }
+    Ok(file)
+}
+
+/// `bounded_file_bytes` for an already-resolved path (see `open_resolved`).
+pub(crate) fn resolved_file_bytes(
+    path: &std::path::Path,
+    cap: usize,
+) -> Result<Vec<u8>, BoundedReadError> {
+    bounded_bytes(open_resolved(path)?, cap)
+}
+
+fn bounded_bytes(file: fs::File, cap: usize) -> Result<Vec<u8>, BoundedReadError> {
     let metadata = file.metadata().map_err(BoundedReadError::from_io)?;
     if !metadata.is_file() {
         return Err(BoundedReadError::NonRegularSource);
@@ -379,6 +443,39 @@ mod bounded_tests {
             assert!(!public.contains("CANARY"));
             assert!(!public.contains("/synthetic"));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_read_refuses_every_link_below_the_root_and_keeps_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::create_dir_all(root.join("store")).unwrap();
+        let source = root.join("store/source.jsonl");
+        fs::write(&source, b"1234").unwrap();
+        // Even a link that stays inside the root is not followed.
+        std::os::unix::fs::symlink(root.join("store"), root.join("linked")).unwrap();
+        let linked = root.join("linked/source.jsonl");
+        assert_eq!(confined_file_bytes(&root, &source, 4).unwrap(), b"1234");
+        assert_eq!(
+            confined_file_bytes(&root, &source, 3),
+            Err(BoundedReadError::LimitExceeded)
+        );
+        assert_eq!(
+            confined_file_bytes(&root, &linked, 4),
+            Err(BoundedReadError::NonRegularSource)
+        );
+        assert_eq!(
+            confined_file_bytes(&root, &root.join("store/missing.jsonl"), 4),
+            Err(BoundedReadError::Missing)
+        );
+        assert_eq!(
+            confined_file_bytes(&root, &root.join("store"), 4),
+            Err(BoundedReadError::NonRegularSource)
+        );
+        // The unconfined reader (MCP configuration, Copilot) is unchanged: it
+        // refuses only a link in the last component.
+        assert_eq!(bounded_file_bytes(&linked, 4).unwrap(), b"1234");
     }
 
     #[test]
