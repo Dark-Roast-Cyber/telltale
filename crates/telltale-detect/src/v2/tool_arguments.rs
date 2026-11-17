@@ -2,19 +2,25 @@
 //! keys and shape, whatever harness sent the call.
 //!
 //! The session selectors and the action view both read a call through this
-//! module, so they agree on its facts. Nothing here knows a harness. The two
-//! tool-name lists ([`is_file_write_tool`], [`is_file_read_tool`]) are the
-//! exception that remains: hand-kept names from several harnesses, to be
-//! replaced by the operations each source declares for its own tools. A
-//! declaration will only add to this reading, never replace it, so a call a
-//! source does not declare keeps every fact it has here.
+//! module, so they agree on its facts. Nothing here knows a harness except the
+//! two tool-name lists ([`is_file_write_tool`], [`is_file_read_tool`]).
 //!
-//! `tool_reading_tests` pins the reading of every key and name below.
+//! A source declares the operation of each built-in tool it knows: a kind and
+//! operands (`ToolObservation::operation`). That declaration is read together
+//! with the structural reading and only adds to it, so no call loses a fact
+//! it has here. The name lists remain as the fallback for a call with no
+//! declaration: a tool the source's table does not name, and observations a
+//! host supplies or imports. Hooks journal windows are read as the Claude
+//! source, so a Claude tool in one is declared like any other. A declared call
+//! takes its kind from the declaration and not from its name.
+//!
+//! `tool_reading_tests` pins the reading of every key and name below for calls
+//! with no declaration.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use telltale_schema::observation::JsonValue;
+use telltale_schema::observation::{JsonValue, ToolKind, ToolObservation, ToolOperation};
 
 /// Top-level tool argument keys whose string values are destination URLs.
 pub(crate) fn is_url_argument_key(key: &str) -> bool {
@@ -22,16 +28,30 @@ pub(crate) fn is_url_argument_key(key: &str) -> bool {
 }
 
 /// URL-keyed top-level non-empty string arguments, in key order, from an object
-/// or a JSON-encoded object string. Nothing else in the arguments is a URL fact.
-/// Callers charge the argument bytes before resolution.
-pub(crate) fn tool_argument_urls(arguments: Option<&JsonValue>) -> Vec<String> {
-    argument_object(arguments).map_or_else(Vec::new, |object| {
+/// or a JSON-encoded object string, then the URLs the call's declaration adds.
+/// Nothing else in the arguments is a URL fact. Callers charge the argument
+/// bytes before resolution.
+pub(crate) fn tool_argument_urls(tool: &ToolObservation, declared: bool) -> Vec<String> {
+    let mut urls = argument_object(tool.arguments()).map_or_else(Vec::new, |object| {
         string_arguments(&object, is_url_argument_key)
-    })
+    });
+    if let Some(operation) = tool.operation().filter(|_| declared) {
+        add_missing(&mut urls, operation.urls());
+    }
+    urls
+}
+
+/// Append the operands not already present, in order.
+fn add_missing(into: &mut Vec<String>, operands: &[String]) {
+    for operand in operands {
+        if !into.contains(operand) {
+            into.push(operand.clone());
+        }
+    }
 }
 
 /// Native file tools that write the file their path argument names.
-fn is_file_write_tool(name: &str) -> bool {
+pub(super) fn is_file_write_tool(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "write"
@@ -49,7 +69,7 @@ fn is_file_write_tool(name: &str) -> bool {
 }
 
 /// Native file tools that read, search or list the paths their arguments name.
-pub(crate) fn is_file_read_tool(name: &str) -> bool {
+pub(super) fn is_file_read_tool(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "read" | "read_file" | "readfile" | "view_file" | "glob" | "list" | "grep"
@@ -88,13 +108,36 @@ fn is_written_content_argument_key(key: &str) -> bool {
     )
 }
 
+/// Whether a call reads the files it is given by name: a declared file-read
+/// tool, or for a call with no declaration a native file-read tool by name.
+pub(crate) fn reads_paths(tool: &ToolObservation, declared: bool) -> bool {
+    match tool.operation().filter(|_| declared) {
+        Some(operation) => operation.kind() == ToolKind::FileRead,
+        None => tool.name().is_some_and(is_file_read_tool),
+    }
+}
+
+/// Whether a call is a file-write tool: by its declaration, and for a call
+/// with none, or read without it, by its name.
+pub(crate) fn writes_by_kind(tool: &ToolObservation, declared: bool) -> bool {
+    match tool.operation().filter(|_| declared) {
+        Some(operation) => operation.kind() == ToolKind::FileWrite,
+        None => tool.name().is_some_and(is_file_write_tool),
+    }
+}
+
 /// File-keyed top-level non-empty string arguments of a call that writes them:
-/// a native file-write tool, or any call whose arguments also carry the content
-/// written. Read, search and listing calls name a path without content and
-/// yield nothing. Callers charge the argument bytes before resolution.
-pub(crate) fn tool_written_paths(name: Option<&str>, arguments: Option<&JsonValue>) -> Vec<String> {
-    argument_object(arguments).map_or_else(Vec::new, |object| {
-        if name.is_some_and(is_file_write_tool)
+/// a declared file-write tool (for a call with no declaration, a native
+/// file-write tool by name), or any call whose arguments also carry the content
+/// written. Then the paths the declaration adds. Read, search and listing calls
+/// name a path without content and yield nothing. Callers charge the argument
+/// bytes before resolution. With `declared` false the call is read as if it
+/// carried no declaration.
+pub(crate) fn tool_written_paths(tool: &ToolObservation, declared: bool) -> Vec<String> {
+    let operation = tool.operation().filter(|_| declared);
+    let writes_by_kind = writes_by_kind(tool, declared);
+    let mut paths = argument_object(tool.arguments()).map_or_else(Vec::new, |object| {
+        if writes_by_kind
             || object
                 .keys()
                 .any(|key| is_written_content_argument_key(key))
@@ -103,7 +146,11 @@ pub(crate) fn tool_written_paths(name: Option<&str>, arguments: Option<&JsonValu
         } else {
             Vec::new()
         }
-    })
+    });
+    if let Some(operation) = operation {
+        add_missing(&mut paths, operation.written_paths());
+    }
+    paths
 }
 
 /// The top-level argument object, from an object or a JSON-encoded object string.
@@ -298,6 +345,44 @@ impl ArgumentReading {
                 }
             }
         }
+    }
+
+    /// Add what a call's declaration names and its arguments did not yield:
+    /// commands not already a line of the command text, and paths and URLs
+    /// not already facts. Facts are only ever added. Whether anything was.
+    pub(crate) fn declare(&mut self, operation: &ToolOperation) -> bool {
+        let mut added = false;
+        for command in operation.commands() {
+            let command = command.trim();
+            // Text already read stays as it is; a command it holds adds nothing.
+            if command.is_empty() || self.command.contains(command) {
+                continue;
+            }
+            // An argv array leaves its text with no line end.
+            if !self.command.is_empty() && !self.command.ends_with('\n') {
+                self.command.push('\n');
+            }
+            self.command.push_str(command);
+            self.command.push('\n');
+            added = true;
+        }
+        let paths = operation
+            .written_paths()
+            .iter()
+            .chain(operation.read_paths())
+            .map(|path| ("file_path", path));
+        let urls = operation.urls().iter().map(|url| ("url", url));
+        for (field, text) in paths.chain(urls) {
+            if !self
+                .facts
+                .iter()
+                .any(|(known, fact)| *known == field && fact == text)
+            {
+                self.put(field, text.clone());
+                added = true;
+            }
+        }
+        added
     }
 
     /// Encoded-argument members skipped by value-bound admission. Members with a

@@ -199,7 +199,21 @@ fn project_opencode_native(
 fn assert_semantically_equal(left: &CanonicalObservationV2, right: &CanonicalObservationV2) {
     assert_eq!(left.kind(), right.kind());
     assert_eq!(left.stage(), right.stage());
-    assert_eq!(left.body(), right.body());
+    // A declared operation comes from the source's own tool table, so it is
+    // the one part of a tool body that differs between sources by design.
+    match (left.body(), right.body()) {
+        (ObservationBody::Tool(left), ObservationBody::Tool(right)) => {
+            assert_eq!(left.name(), right.name());
+            assert_eq!(left.arguments(), right.arguments());
+            assert_eq!(left.searchable_arguments(), right.searchable_arguments());
+            assert_eq!(left.result(), right.result());
+            assert_eq!(left.searchable_result(), right.searchable_result());
+            assert_eq!(left.reported_status(), right.reported_status());
+            assert_eq!(left.is_error(), right.is_error());
+            assert_eq!(left.exit_code(), right.exit_code());
+        }
+        (left, right) => assert_eq!(left, right),
+    }
     assert_eq!(left.facets(), right.facets());
     assert_eq!(left.fact_metadata(), right.fact_metadata());
     assert_eq!(
@@ -801,4 +815,284 @@ fn opencode_sqlite_direct_lifecycle_is_supported_without_inferred_success() {
             .all(|item| item.body().kind() == ObservationFamily::Tool)
     );
     assert_eq!(body.reported_status(), None::<ToolStatus>);
+}
+
+// Declared tool operations: every registered source identity declares what a
+// file write, a file read and a shell call do, from its own tool table.
+
+const WRITTEN: &str = "/synthetic/written.txt";
+const READ: &str = "/synthetic/read.txt";
+const COMMAND: &str = "echo synthetic-command";
+
+fn jsonl(lines: &[serde_json::Value]) -> String {
+    lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn assistant_tools(calls: &[(&str, serde_json::Value)]) -> String {
+    let content = calls
+        .iter()
+        .enumerate()
+        .map(|(index, (name, input))| {
+            serde_json::json!({"type":"tool_use","id":format!("call-{index}"),"name":name,"input":input})
+        })
+        .collect::<Vec<_>>();
+    jsonl(&[
+        serde_json::json!({"type":"assistant","sessionId":"declared-operations",
+        "message":{"role":"assistant","content":content}}),
+    ])
+}
+
+fn tool_calls(calls: &[(&str, serde_json::Value)]) -> String {
+    jsonl(
+        &calls
+            .iter()
+            .enumerate()
+            .map(|(index, (name, arguments))| {
+                serde_json::json!({"type":"tool_call","sessionId":"declared-operations",
+                    "call_id":format!("call-{index}"),"name":name,"arguments":arguments})
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn patch(path: &str) -> String {
+    format!("*** Begin Patch\n*** Add File: {path}\n+synthetic\n*** End Patch")
+}
+
+fn codex_rollout() -> String {
+    jsonl(&[
+        serde_json::json!({"type":"session_meta","payload":{"id":"declared-operations"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call",
+            "call_id":"call-0","name":"apply_patch","input":patch(WRITTEN),"status":"completed"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"function_call",
+            "name":"exec_command","call_id":"call-1",
+            "arguments":serde_json::json!({"cmd":format!("cat {READ}")}).to_string()}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"function_call",
+            "name":"exec_command","call_id":"call-2",
+            "arguments":serde_json::json!({"cmd":COMMAND}).to_string()}}),
+    ])
+}
+
+fn copilot_log() -> String {
+    let call = |name: &str, call_id: &str, arguments: serde_json::Value| {
+        serde_json::json!({"type":"function_call","name":name,"call_id":call_id,
+            "arguments":arguments.to_string(),"status":"completed"})
+    };
+    let items = serde_json::json!([
+        call(
+            "create",
+            "call-0",
+            serde_json::json!({"path":WRITTEN,"file_text":"synthetic"})
+        ),
+        call("view", "call-1", serde_json::json!({"path":READ})),
+        call("bash", "call-2", serde_json::json!({"command":COMMAND})),
+    ]);
+    format!(
+        "2026-09-02T12:00:00Z [INFO] Workspace initialized: declared-operations (checkpoints: 0)\n2026-09-02T12:00:01Z [INFO] Accumulated output items (3): {items}\n"
+    )
+}
+
+/// The observations of one registered identity's write, read and shell
+/// fixture, and whether the identity has a read tool in its table.
+fn declared_fixture(
+    client: ClientId,
+    source_id: &str,
+    kind: SourceKind,
+) -> (Vec<CanonicalObservationV2>, bool, Option<TempDir>) {
+    let text_fixture = |contents: String| {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("declared-operations.jsonl");
+        fs::write(&path, contents).expect("fixture");
+        (directory, path)
+    };
+    let (contents, read_tool) = match source_id {
+        "claude.projects" => (
+            assistant_tools(&[
+                (
+                    "Write",
+                    serde_json::json!({"file_path":WRITTEN,"content":"synthetic"}),
+                ),
+                ("Read", serde_json::json!({"file_path":READ})),
+                ("Bash", serde_json::json!({"command":COMMAND})),
+            ]),
+            true,
+        ),
+        "openclaw.agents" => (
+            tool_calls(&[
+                (
+                    "write",
+                    serde_json::json!({"path":WRITTEN,"content":"synthetic"}),
+                ),
+                ("read", serde_json::json!({"path":READ})),
+                ("bash", serde_json::json!({"command":COMMAND})),
+            ]),
+            true,
+        ),
+        "qwen.projects" => (
+            tool_calls(&[
+                (
+                    "write_file",
+                    serde_json::json!({"file_path":WRITTEN,"content":"synthetic"}),
+                ),
+                ("read_file", serde_json::json!({"absolute_path":READ})),
+                ("run_shell_command", serde_json::json!({"command":COMMAND})),
+            ]),
+            true,
+        ),
+        "codex.sessions" | "codex.archived_sessions" | "codex.headless_sessions" => {
+            (codex_rollout(), false)
+        }
+        "copilot.process_log" => {
+            let directory = tempdir().expect("tempdir");
+            let path = directory.path().join("copilot-declared.log");
+            fs::write(&path, copilot_log()).expect("fixture");
+            let batch = crate::acquisition::acquire_source(
+                &source(client, source_id, kind, path),
+                crate::acquisition::AcquisitionOptions::new(
+                    ObservedAt::new(OBSERVED_AT).expect("observed time"),
+                ),
+            )
+            .expect("Copilot declared fixture");
+            return (batch.observations, true, Some(directory));
+        }
+        #[cfg(feature = "opencode-sqlite")]
+        "opencode.sqlite" => {
+            let part = |id: &str, order: i64, tool: &str, input: serde_json::Value| {
+                (
+                    id.to_owned(),
+                    order,
+                    serde_json::json!({"type":"tool","tool":tool,"callID":id,
+                        "state":{"status":"pending","input":input}}),
+                )
+            };
+            let parts = [
+                part(
+                    "call-0",
+                    1,
+                    "write",
+                    serde_json::json!({"filePath":WRITTEN,"content":"synthetic"}),
+                ),
+                part("call-1", 2, "read", serde_json::json!({"filePath":READ})),
+                part("call-2", 3, "bash", serde_json::json!({"command":COMMAND})),
+            ];
+            let parts = parts
+                .iter()
+                .map(|(id, order, data)| (id.as_str(), "tool-context", *order, data.clone()))
+                .collect::<Vec<_>>();
+            let (directory, source) = opencode_fixture(
+                &[(
+                    "tool-context",
+                    "opencode-conformance",
+                    serde_json::json!({"role":"assistant"}),
+                )],
+                &parts,
+            );
+            let batch = crate::acquisition::acquire_source(
+                &source,
+                crate::acquisition::AcquisitionOptions::new(
+                    ObservedAt::new(OBSERVED_AT).expect("observed time"),
+                ),
+            )
+            .expect("OpenCode declared fixture");
+            return (batch.observations, true, Some(directory));
+        }
+        other => panic!("{other} has no declared-operation fixture"),
+    };
+    let (directory, path) = text_fixture(contents);
+    let batch = crate::acquisition::acquire_source(
+        &source(client, source_id, kind, path),
+        crate::acquisition::AcquisitionOptions::new(
+            ObservedAt::new(OBSERVED_AT).expect("observed time"),
+        ),
+    )
+    .unwrap_or_else(|error| panic!("{source_id}: {}", error.code()));
+    (batch.observations, read_tool, Some(directory))
+}
+
+#[test]
+fn every_registered_source_declares_its_write_read_and_shell_operations() {
+    use telltale_schema::observation::ToolKind;
+    for client in crate::clients::supported_clients() {
+        for definition in client.sources {
+            #[cfg(not(feature = "opencode-sqlite"))]
+            if definition.id == "opencode.sqlite" {
+                continue;
+            }
+            let (observations, read_tool, _directory) =
+                declared_fixture(client.id, definition.id, definition.kind);
+            let operations = observations
+                .iter()
+                .filter(|observation| observation.stage() == ObservationStage::ToolRequested)
+                .filter_map(|observation| match observation.body() {
+                    ObservationBody::Tool(tool) => tool.operation(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let id = definition.id;
+            // Operands are copies of the arguments they were read from.
+            for observation in &observations {
+                if let ObservationBody::Tool(tool) = observation.body()
+                    && let Some(operation) = tool.operation()
+                {
+                    let operands: usize = [
+                        operation.commands(),
+                        operation.written_paths(),
+                        operation.read_paths(),
+                        operation.urls(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(String::len)
+                    .sum();
+                    let arguments = tool
+                        .arguments()
+                        .map_or(0, |arguments| arguments.encoded_byte_len().unwrap());
+                    assert!(
+                        operands <= arguments,
+                        "{id}: operands exceed their arguments"
+                    );
+                }
+            }
+            assert!(
+                operations
+                    .iter()
+                    .any(|operation| operation.kind() == ToolKind::FileWrite
+                        && operation.written_paths() == [WRITTEN]),
+                "{id}: a write declares its written path"
+            );
+            assert!(
+                operations
+                    .iter()
+                    .any(|operation| operation.kind() == ToolKind::Shell
+                        && operation
+                            .commands()
+                            .iter()
+                            .any(|command| command == COMMAND)),
+                "{id}: a shell call declares its command"
+            );
+            if read_tool {
+                assert!(
+                    operations
+                        .iter()
+                        .any(|operation| operation.kind() == ToolKind::FileRead
+                            && operation.read_paths() == [READ]),
+                    "{id}: a read declares its read path"
+                );
+            } else {
+                // The source has no read tool of its own; reads are shell
+                // commands, whose text carries the path.
+                assert!(
+                    operations.iter().any(|operation| operation
+                        .commands()
+                        .iter()
+                        .any(|command| command.contains(READ))),
+                    "{id}: a read through the shell declares its command"
+                );
+            }
+        }
+    }
 }

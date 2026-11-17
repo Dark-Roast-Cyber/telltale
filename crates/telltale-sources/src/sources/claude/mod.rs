@@ -10,6 +10,7 @@ use telltale_schema::clients::SourceKind;
 pub(crate) mod canonical;
 mod install;
 pub(crate) mod native;
+pub(crate) mod tools;
 
 pub(crate) use install::{INSTALL, desktop_install_signals};
 

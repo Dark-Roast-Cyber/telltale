@@ -17,6 +17,8 @@ use telltale_schema::observation::{
     SourceTimestamp, ToolObservation, ToolStatus,
 };
 
+use crate::tool_operation::declare;
+
 use super::canonical::{
     OpenCodeCanonicalError, mapping, normal, normal_reported, require_source_id,
     with_argument_facets,
@@ -271,7 +273,7 @@ impl Context<'_> {
                 metadata.push(("tool.reported_status", FactProvenance::Reported));
             }
             let mut builder = self.builder(
-                ObservationBody::Tool(body),
+                ObservationBody::Tool(declare(super::tools::TOOLS, body)),
                 stage,
                 child,
                 occurred_at,
@@ -404,7 +406,7 @@ impl Context<'_> {
                 }
             }
             let mut builder = self.builder(
-                ObservationBody::Tool(body),
+                ObservationBody::Tool(declare(super::tools::TOOLS, body)),
                 stage,
                 0,
                 occurred_at,
