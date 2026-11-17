@@ -39,7 +39,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from capture_common import Run, tool_results_seen_by_model  # noqa: E402
+from capture_common import Run, tool_results_seen_by_model, write_telltale_config  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 # Resolved now: each scenario's PATH starts with a stand-in `codex`, and a bare name
@@ -170,15 +170,14 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
         f.write("#!/bin/sh\necho nested-codex-stub\n")
     os.chmod(os.path.join(bindir, "codex"), 0o755)
 
-    tth_config = os.path.join(run.dir, "tth-config.toml")
     socket_dir = None
-    with open(tth_config, "w") as f:
-        f.write(f'mode = "enforce"\n{tth_settings}[telltale]\nrules = ["{MARKERS}"]\n')
-        if evaluator:  # the default deployment: autostarted evaluator, short socket path, quick idle exit
-            socket_dir = tempfile.mkdtemp(prefix="tthe2e-")
-            f.write(f'[evaluator]\nsocket = "{socket_dir}/e.sock"\nidle_timeout_secs = 5\n')
+    hooks_settings = f"  mode: enforce\n{tth_settings}"
+    if evaluator:  # the default deployment: autostarted evaluator, short socket path, quick idle exit
+        socket_dir = tempfile.mkdtemp(prefix="tthe2e-")
+        hooks_settings += f'  evaluator:\n    socket: "{socket_dir}/e.sock"\n    idle_timeout_secs: 5\n'
+    write_telltale_config(run.home, hooks_settings, rules=[MARKERS])
     telemetry = os.path.join(run.dir, "telemetry.jsonl")
-    env = run.base_env(CODEX_HOME=codex_home, TELLTALE_HOOKS_CONFIG=tth_config,
+    env = run.base_env(CODEX_HOME=codex_home,
                        TELLTALE_HOOKS_STATE_DIR=os.path.join(run.dir, "tth-state"),
                        TELLTALE_HOOKS_TELEMETRY=telemetry)
     if not evaluator:
@@ -260,7 +259,7 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
 
 
 DENY = "@CANARY@ && echo TTH_E2E_DENY_MARKER"
-ON_ERROR_DENY = 'on_error = "deny"\n'
+ON_ERROR_DENY = "  on_error: deny\n"
 ASK = "@CANARY@ && echo TTH_E2E_ASK_MARKER"
 
 DAMAGING_WRAPPER = """#!/usr/bin/env python3
@@ -375,12 +374,12 @@ SCENARIOS = {
     "damaged-pre-default": lambda: scenario("damaged-pre-default", DENY_STEPS, damage=("PreToolUse", "drop-tool-name"),
                                             expect="absent", note="default config: on_unevaluable ask, returned as deny"),
     "damaged-pre-allow": lambda: scenario("damaged-pre-allow", DENY_STEPS, damage=("PreToolUse", "drop-tool-name"),
-                                          tth_settings='on_unevaluable = "allow"\n', expect="present",
+                                          tth_settings="  on_unevaluable: allow\n", expect="present",
                                           note="control: an operator who chose allow gets it"),
     "damaged-pre-nameless": lambda: scenario("damaged-pre-nameless", DENY_STEPS, damage=("PreToolUse", "cut-before-name"),
                                              tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
                                              note="no event to read: the deny on stdout blocks the call"),
-    # With on_error = "deny", a bad Stop must not exit 2: Codex would make that a prompt to continue, every turn.
+    # With on_error: deny, a bad Stop must not exit 2: Codex would make that a prompt to continue, every turn.
     "damaged-stop-named": lambda: scenario("damaged-stop-named", DENY_STEPS, damage=("Stop", "cut-after-name"),
                                            tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
                                            note="no continuation prompt"),

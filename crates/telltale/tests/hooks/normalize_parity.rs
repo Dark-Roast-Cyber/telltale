@@ -25,6 +25,7 @@ use crate::common;
 
 use common::Harness;
 use serde_json::{Value, json};
+use telltale_core::hooks::harnesses::{codex_cli, copilot_cli, opencode};
 use telltale_core::hooks::normalize;
 use telltale_core::hooks::runtime::{Context, Event, ToolCall};
 
@@ -56,14 +57,10 @@ type Call = (&'static str, Value);
 /// The `Context::harness` name behind a variant label such as
 /// `copilot-cli-pascal` or `opencode-v2`.
 fn harness_of(label: &'static str) -> &'static str {
-    [
-        normalize::COPILOT_CLI,
-        normalize::CODEX_CLI,
-        normalize::OPENCODE,
-    ]
-    .into_iter()
-    .find(|name| label.starts_with(name))
-    .unwrap_or(label)
+    [copilot_cli::HARNESS, codex_cli::HARNESS, opencode::NAME]
+        .into_iter()
+        .find(|name| label.starts_with(name))
+        .unwrap_or(label)
 }
 
 /// A harness name without normalization rules: the native shape is journaled

@@ -66,7 +66,7 @@ Subagent calls add `agent_id` and `agent_type`. `permission_mode` is
 | Disable | `--disable hooks` / `-c features.hooks=false` (Src); changing a trusted handler (hash change) (E2E) | Src, E2E |
 | Lockdown | Managed hooks in `requirements.toml` with `allow_managed_hooks_only` | Src |
 
-## Adapter (`crates/telltale/src/hooks/codex_cli.rs`)
+## Adapter (`crates/telltale/src/hooks/harnesses/codex_cli.rs`)
 
 ### Install
 
@@ -145,10 +145,10 @@ on exit 1, and turns exit 2 with stderr on a `Stop` into a prompt to continue
   explicit `allow`).
 - Any other named event exits 1, so a damaged `Stop` ends the turn normally (E2E:
   `damaged-stop-named`, `damaged-stop-mistyped`).
-- A payload naming no event gets a deny on stdout under `on_error = "deny"`. Codex
+- A payload naming no event gets a deny on stdout under `on_error: deny`. Codex
   honors it on a `PreToolUse` and it has no effect on a `Stop` (E2E:
   `damaged-pre-nameless`, `damaged-stop-nameless`, and `damaged-all-renamed`, which
-  renames the event key on every event). Under the default `on_error = "allow"` it
+  renames the event key on every event). Under the default `on_error: allow` it
   exits 1, so if that payload was a tool call, the call runs.
 
 Exit 2 on a damaged `Stop` was not theoretical: before this rule, one run made

@@ -21,7 +21,7 @@ and not a sandbox. It is one enforcement point among several; see the
    ▼
  registry (hooks/harness.rs)       `telltale hooks <harness> hook` and the
    │                              evaluator's `harness` field pick the adapter
- adapter (hooks/claude_code.rs, ...)  native payload  ->  runtime::Event
+ adapter (hooks/harnesses/*.rs)      native payload  ->  runtime::Event
    │                              runtime::Response -> native stdout
    ▼
  runtime (hooks/runtime.rs)  ── harness-neutral ─────────────────────────────────────────────────┐
@@ -42,11 +42,12 @@ and not a sandbox. It is one enforcement point among several; see the
 
 | Module | Responsibility |
 | --- | --- |
-| `harness` | Registry: `enum Harness` maps a harness name to its adapter (parse, render, pre-execution detection, verdicts without a parsed payload). The CLI driver and the evaluator dispatch only through it. |
+| `harness` | Registry: `enum Harness` maps a harness name to its adapter's descriptor (`Adapter`: names, events, parse, render, install output, normalization, config home, rules). The CLI driver, the evaluator, normalization and the engine read only the descriptor. |
+| `harnesses/` | One module per harness, each exporting its `ADAPTER`; `payload` holds what adapters share, and `opencode` the tool shapes captured ahead of that adapter. The three rows below are its adapters. |
 | `claude_code` | Parse Claude Code hook payloads (2.1.318 contract, unknown fields ignored); render `permissionDecision` / `additionalContext`; generate the settings fragment. Never renders `allow`. |
 | `copilot_cli` | Parse Copilot CLI hook payloads in both dialects (1.0.105 contract), with synthetic correlation keys and `agentStop` settlement; render the flat `permissionDecision` / `additionalContext`; generate the hook file. Also receives Copilot payloads sent to the Claude Code entry point by a repository `.claude/settings.json`. Never renders `allow`. |
 | `runtime` | Harness-neutral events: `ToolRequested` (the only enforcement point), `ToolFinished`, `BatchSettled`, `UserPrompt`, `PermissionPrompt`, session and subagent lifecycle. Infallible: failures become `error` records plus `on_error`. |
-| `gate` | The one place an answer is released to the harness. Detect-only unless the configuration was read and says `mode = "enforce"`: then nothing is written to stdout and the exit status is 0, whatever the rest of the hook built ([ADR 0008](adr/0008-detect-only-by-default.md)). |
+| `gate` | The one place an answer is released to the harness. Detect-only unless the configuration was read and says `hooks.mode: enforce`: then nothing is written to stdout and the exit status is 0, whatever the rest of the hook built ([ADR 0008](adr/0008-detect-only-by-default.md)). |
 | `journal` | Per-session append-only native Claude Code JSONL of what hooks reported. Bounded tail reads. |
 | `engine` | The only Telltale touchpoint: `Pipeline` build (bundled core + community + host rules), `scan_sources_detailed`, focus selection, quarantine/visibility handling. |
 | `policy` | Host promotion thresholds (Telltale's contract assigns these to the host). |
@@ -54,9 +55,9 @@ and not a sandbox. It is one enforcement point among several; see the
 | `telemetry` | `telltale_hooks.record.v1` JSONL envelopes ([schema](../../schemas/telltale-hooks-record-v1.schema.json)). |
 | `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. Keeps short top-level values and the head of a command with every variant, and reports what it had to separate (`pending_input_separated`, floored at `on_unevaluable`). |
 | `codex_cli` | Parse Codex CLI 0.166.0 hook payloads; composite, escaped correlation key (`session:agent:turn:tool_use_id`); `Stop`/`SubagentStop` settle by `turn_id`; render only `hookSpecificOutput` deny (ask becomes deny, allow prints nothing); generate `hooks.json` and the exec-policy backstop rules. |
-| `normalize` | Interim, per-harness input-shape normalization of the evaluation encoding (patch targets, authored-content keys, read-tool names). Applied by the runtime, not by adapters; ADR 0002. |
+| `normalize` | Interim input-shape normalization of the evaluation encoding (patch targets, authored-content keys, read-tool names), from the shapes each adapter declares. Applied by the runtime, not by adapters; ADR 0002. |
 | `evaluator` | Long-lived evaluator: Unix-socket protocol, trust checks, autostart, fallback rules (`evaluator/unix.rs`). Other platforms report `evaluator_unsupported_platform` and evaluate in-process. |
-| `rules/` | Host-owned Rule v1 content (hook self-protection), listed in `engine::HOST_RULE_TEMPLATES` and loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
+| `rules/` | Host-owned Rule v1 content (hook self-protection), the shared document and each adapter's own (`Adapter::rules`), loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
 
 ## Runtime contract for adapters
 
@@ -122,40 +123,80 @@ A new harness adapter (OpenCode, Cursor, ...) must:
 
 ### Adding an adapter
 
-The CLI driver (`hook` in `src/cli/hooks.rs`) and the evaluator hold no adapter
-code; both dispatch through `crates/telltale/src/hooks/harness.rs`. Adding a harness means:
+Everything about one harness's hook protocol lives in its adapter module,
+`crates/telltale/src/hooks/harnesses/<name>.rs`, which exports one descriptor:
+`pub const ADAPTER: Adapter` (`crates/telltale/src/hooks/harness.rs`). The CLI
+driver (`src/cli/hooks.rs`), the evaluator, normalization and the generated
+self-protection rules read the descriptor; none of them names a harness. Adding
+a harness means:
 
-1. A new adapter module (for example `crates/telltale/src/hooks/opencode.rs`) with a `HARNESS`
-   name, a parser to `(Context, Event)`, and a renderer from `Response` to
-   the harness's stdout JSON. It must never render a pre-execution `allow`.
-2. One `Harness` variant, added to `Harness::ALL`, and its arms in every
-   `match`:
-   - `name`
-   - `parse`: return `Parsed::Unusable` when the hook event is known but
-     the payload is not, and `Parsed::Invalid` when nothing is readable.
-   - `render`
-   - `is_pre_tool_use`
+1. The adapter module, with a parser to `(Context, Event)`, a renderer from
+   `Response` to the harness's stdout JSON, and the descriptor. The compiler
+   asks for every field:
+   - `name` (`<product>-<cli>`, also `Context::harness`) and `display_name`.
+   - `pre_tool_use`: the pre-execution event names. The first answers a call
+     whose payload could not be read.
+   - `event_keys`: the top-level payload keys that name the hook event. An
+     unreadable payload with no registered harness's key "names no event".
+   - `can_ask`: see the runtime contract, point 3.
+   - `parse`: return `Parsed::Unusable` when the hook event is known but the
+     payload is not, and `Parsed::Invalid` when nothing is readable.
+   - `render`: never a pre-execution `allow`.
    - `looks_like_pre_tool_use`: recognize an unparseable or oversized
      pre-execution payload so it gets a policy verdict instead of a
      non-blocking error.
-   - `render_verdict`, `render_event_verdict`
-   - The block the driver uses for a payload naming no event under
-     `on_error = "deny"` (`hook` in `src/cli/hooks.rs`): what it does on a stop event
-     matters as much as what it does on a tool call.
+   - `install`: the settings or hook-file document that
+     `telltale hooks <name> settings` prints, its usage lines, the notes for
+     the operator, and what `--fail-closed` means: honored, a note that it
+     changes nothing, or a refusal when the harness cannot fail closed.
+   - `nameless_block`: what blocks a tool call when the payload names no
+     event under `on_error: deny`. What it does on a stop event matters as
+     much as what it does on a tool call.
+   - `normalization`: `Identity` only if the harness's tools already have the
+     evaluation encoding's names and argument keys; otherwise the captured
+     shapes that need reshaping, with parity cases and benign twins in
+     `crates/telltale/tests/hooks/normalize_parity.rs`.
+   - `home`: the environment variable that relocates the harness's config
+     home, if it has one, and the pattern for the hook files below it. The
+     engine generates rules for the resolved path.
+   - `rules`: the adapter's own Rule v1 document in
+     `crates/telltale/src/hooks/rules/<name>-self-protection.yaml`, or
+     `Shared`. Every document is always loaded, because one pipeline serves
+     every harness; a test fails if a file in `rules/` belongs to no adapter.
+     Pattern text several rules share is written once in `engine.rs` and named
+     in the YAML as `{{NAME}}` (`engine::RULE_FRAGMENTS`), expanded when the
+     rules load.
+   - `launchers`: the program names an agent starts the harness by.
+2. One `Harness` variant, added to `Harness::ALL`, and its arm in
+   `Harness::adapter`, the only `match` on a harness.
 3. Nothing else in the driver or the evaluator. `telltale hooks <name> hook`
-   works at once, and the evaluator accepts the name in the request's
-   existing `harness` field. Protocol v2 is unchanged; the build
-   fingerprint guarantees that the client and the daemon share one registry.
-   An unknown name is a `bad_request`, which nothing records, and the hook
-   evaluates in-process.
-4. Harness-specific host rules (Rule v1) go in a new `crates/telltale/src/hooks/rules/*.yaml` file
-   listed in `engine::HOST_RULE_TEMPLATES`. Every listed document is always
-   loaded, because one pipeline serves every harness. A test fails if a
-   file in `rules/` is not listed. Pattern text several rules share is
-   written once in `engine.rs` and named in the YAML as `{{NAME}}`
-   (`engine::RULE_FRAGMENTS`), expanded when the rules load.
-5. Install helpers (such as `claude-code settings`) stay
-   harness-specific CLI subcommands.
+   and `settings` work at once, `telltale hooks harnesses` and the usage text
+   list the harness, and the evaluator accepts the name in the request's
+   existing `harness` field. Protocol v2 is unchanged; the build fingerprint
+   guarantees that the client and the daemon share one registry. An unknown
+   name is a `bad_request`, which nothing records, and the hook evaluates
+   in-process.
+4. If the harness also runs another harness's hook settings, its payloads
+   arrive at that harness's entry point. Route them inside the receiving
+   adapter, as the Claude Code adapter hands Copilot CLI payloads on;
+   otherwise they are labeled and rendered as the wrong harness's.
+5. The shared self-protection document names harness launchers and packages
+   in several of its rules. Add the harness there, with corpus cases in
+   `crates/telltale/tests/hooks/self_protection_corpus.rs`.
+6. Evidence and tests: captured payloads with a provenance README in
+   `crates/telltale/tests/hooks/fixtures/<name>/<version>/` (a test fails
+   without them), the pinned version in
+   `tests/upstream_formats/harnesses.json`, contract tests
+   (`tests/cli/hooks_<name>_contract.rs` and cases in
+   `crates/telltale/tests/hooks/harness_contract.rs`), the home variable in
+   `tests/cli/hooks_generated_rule_paths.rs` if there is one, and a real
+   enforcement run recorded under `docs/hooks/e2e/`.
+7. Docs: an "Implemented" row and a capability section in
+   [capability-matrix.md](capability-matrix.md) (a test checks the row), the
+   harness page in [harnesses/](harnesses/README.md), and the CHANGELOG.
+
+A harness-specific subcommand that is not install output (`codex-cli
+execpolicy`) stays a CLI route of its own.
 
 Changes to `Event`, `Response` or `Context` (for example ask capability or
 turn settlement) are a separate shared-interface PR, not part of an adapter
@@ -165,12 +206,12 @@ PR.
 
 - **Detect-only by default.** A hook builds an answer (stdout JSON and an exit
   status) and never writes it itself; `gate` releases it only when the
-  configuration was read and says `mode = "enforce"`. Otherwise nothing
+  configuration was read and says `hooks.mode: enforce`. Otherwise nothing
   reaches the harness: empty stdout, exit 0, and an exit after 20 s if the hook
   has not finished. Everything below about `ask`, `deny` and failure policies
   describes what is returned while enforcing and what is only recorded
   otherwise.
-- **Fail-open by default** (`on_error = "allow"`) because Claude Code itself
+- **Fail-open by default** (`on_error: allow`) because Claude Code itself
   fails open; operators can choose `ask`/`deny`, and `settings --fail-closed`
   makes hook crashes and timeouts block (verified).
 - A configuration that does not load denies tool calls when it asks for
@@ -199,8 +240,8 @@ The crate builds and its tests run on Linux, macOS and Windows (CI matrix).
 
 | | Linux, macOS | Windows |
 | --- | --- | --- |
-| Config default | `$XDG_CONFIG_HOME/telltale-hooks/config.toml`, else `~/.config/telltale-hooks/config.toml` | `%APPDATA%\telltale-hooks\config.toml` |
-| State default | `$XDG_STATE_HOME/telltale-hooks`, else `~/.local/state/telltale-hooks` | `%LOCALAPPDATA%\telltale-hooks` |
+| Config roots (`settings.d` `hooks:` section, rule folders) | `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or `~/.config/telltale`; `--config-dir` replaces them | The same: `\etc\telltale` on the current drive, then `$XDG_CONFIG_HOME\telltale` or `$HOME\.config\telltale` |
+| State default | `$XDG_STATE_HOME/telltale/hooks`, else `~/.local/state/telltale/hooks` | `%LOCALAPPDATA%\telltale\hooks` |
 | State directory permissions | `0700` | Inherited ACL (no explicit hardening) |
 | Long-lived evaluator | Unix socket, autostarted | None: the client reports `evaluator_unsupported_platform`, nothing is autostarted, and every hook evaluates in-process |
 | Executable identity in the fingerprint | device, inode, size, mtime (Linux: of `/proc/self/exe`); unique to the process if unreadable | path, size, mtime; unique to the process if unreadable |

@@ -16,35 +16,37 @@ use crate::{
     ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
-use crate::hooks::config::TelltaleSettings;
+use crate::hooks::config::RuleContent;
+use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
 
-/// Host-owned Rule v1 templates (name, content): detections of an agent
-/// disabling its own hooks. Every document is loaded into the one pipeline
-/// that serves every harness; an adapter with harness-specific host rules
-/// adds its own `rules/*.yaml` file here. A template writes the pattern text
-/// rules share as `{{NAME}}` (`RULE_FRAGMENTS`); `host_rule_documents` expands it.
-const HOST_RULE_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "telltale-hooks-self-protection.yaml",
-        include_str!("rules/telltale-hooks-self-protection.yaml"),
-    ),
-    (
-        "copilot-cli-self-protection.yaml",
-        include_str!("rules/copilot-cli-self-protection.yaml"),
-    ),
-    (
-        "codex-cli-self-protection.yaml",
-        include_str!("rules/codex-cli-self-protection.yaml"),
-    ),
-];
+/// The shared host-owned Rule v1 template (name, content): detections of an
+/// agent disabling hooks, for every harness. A template writes the pattern
+/// text rules share as `{{NAME}}` (`RULE_FRAGMENTS`).
+const SHARED_RULE_TEMPLATE: (&str, &str) = (
+    "telltale-hooks-self-protection.yaml",
+    include_str!("rules/telltale-hooks-self-protection.yaml"),
+);
+
+/// Every host rule template (name, content): the shared one, then each
+/// adapter's own (`Adapter::rules`). All are loaded into the one pipeline that
+/// serves every harness.
+fn host_rule_templates() -> Vec<(&'static str, &'static str)> {
+    let own = Harness::ALL
+        .iter()
+        .filter_map(|harness| match harness.adapter().rules {
+            HostRules::Document(name, template) => Some((name, template)),
+            HostRules::Shared => None,
+        });
+    std::iter::once(SHARED_RULE_TEMPLATE).chain(own).collect()
+}
 
 /// The bundled host rule documents (name, content), with every placeholder expanded.
 pub fn host_rule_documents() -> &'static [(&'static str, String)] {
     static DOCUMENTS: std::sync::LazyLock<Vec<(&str, String)>> = std::sync::LazyLock::new(|| {
-        HOST_RULE_TEMPLATES
-            .iter()
-            .map(|&(name, template)| (name, expand_fragments(template)))
+        host_rule_templates()
+            .into_iter()
+            .map(|(name, template)| (name, expand_fragments(template)))
             .collect()
     });
     &DOCUMENTS
@@ -233,36 +235,55 @@ impl Engine {
     /// and socket paths; with self-protection on, writes to them are detected
     /// even when they are outside the default locations the static rules know.
     /// Custom harness homes and this binary's own path get generated rules too.
-    pub fn new(
-        settings: &TelltaleSettings,
-        protected_paths: &[PathBuf],
-    ) -> Result<Self, EngineError> {
+    pub fn new(rules: &RuleContent, protected_paths: &[PathBuf]) -> Result<Self, EngineError> {
         let started = Instant::now();
-        let mut builder = Pipeline::builder();
-        if !settings.community_rules {
-            builder = builder.without_community_rules();
-        }
+        // The operator's files are read once, here, as operator input (a
+        // symlink is followed, but the target must be a regular file, so a
+        // FIFO is refused rather than waited on), and resolution uses that
+        // text. One that is gone or swapped is an unreadable-content failure,
+        // distinct from content that does not build.
+        let contents = rules
+            .files()
+            .map(|path| Ok((path.clone(), read(path)?)))
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        let replacements = contents
+            .iter()
+            .map(|(path, text)| (path.clone(), text.as_str()))
+            .collect::<Vec<_>>();
         let mut generated = GeneratedCoverage::default();
-        for path in &settings.rule_packages {
-            builder = builder.rule_package(read(path)?);
-        }
-        if settings.self_protection_rules {
-            for (_, document) in host_rule_documents() {
-                builder = builder.rules_document(document.clone());
+        let mut documents = Vec::new();
+        if rules.self_protection {
+            let host = host_rule_documents()
+                .iter()
+                .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
+            let own = generated_documents(protected_paths, &mut generated);
+            let own = own
+                .iter()
+                .enumerate()
+                .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
+            for (source, document) in host.chain(own) {
+                let rule_set = telltale_rules::parse_rule_document(document)
+                    .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))?;
+                documents.push((source, rule_set));
             }
-            for document in generated_documents(protected_paths, &mut generated) {
-                builder = builder.rules_document(document);
-            }
         }
-        for path in &settings.rules {
-            builder = builder.rules_document(read(path)?);
-        }
-        if let Some(path) = &settings.policy {
-            builder = builder.policy_document(read(path)?);
-        }
-        let pipeline = builder.build().map_err(EngineError::Build)?;
+        let resolution = crate::rule_resolution::resolve_rule_set(
+            &rules.packs,
+            &[],
+            documents,
+            rules.policy.as_deref(),
+            telltale_rules::RuleLoadMode::IncludeDefault,
+            &rules.overrides,
+            &replacements,
+        )
+        .map_err(|error| {
+            EngineError::Build(PipelineError::Compilation(error.to_string().into()))
+        })?;
+        let pipeline =
+            Pipeline::from_compiled(resolution.rule_set, resolution.diagnostics.packages)
+                .map_err(EngineError::Build)?;
         let mut options = DetailedEvaluationOptions::default();
-        options.process_chain = settings.process_chain;
+        options.process_chain = rules.process_chain;
         let semantic_identity = pipeline
             .semantic_provenance(&options)
             .map_err(EngineError::Provenance)?
@@ -946,14 +967,8 @@ fn harness_home_families(
     coverage: &mut GeneratedCoverage,
 ) -> [Family; 2] {
     coverage.paths += homes.len();
-    let name_end = NAME_END;
-    let files = |home: &crate::hooks::config::HarnessHome| match home.variable {
-        "CODEX_HOME" => format!(
-            r#"[\\/]+(?:hooks\.json|(?:[^\\/\s;&|"']+\.)?config\.toml|rules{name_end}|(?:[^\s;&|"']*[\\/])?hooks\.json)"#
-        ),
-        _ => format!(
-            r#"[\\/]+(?:(?:hooks|agents){name_end}|settings(?:\.local)?\.json|(?:[^\s;&|"']*[\\/])?hooks\.json)"#
-        ),
+    let files = |home: &crate::hooks::config::HarnessHome| {
+        home.hook_files.replace("{{NAME_END}}", NAME_END)
     };
     let fragments = |suffix: &dyn Fn(&crate::hooks::config::HarnessHome) -> String,
                      coverage: &mut GeneratedCoverage| {
@@ -1323,7 +1338,7 @@ mod tests {
         let placeholder = regex::Regex::new(r"\{\{([A-Z][A-Z0-9_]*)\}\}").unwrap();
         let quoted = regex::Regex::new(r"^\s*[a-z_]+: '.*'$").unwrap();
         let mut named = std::collections::BTreeSet::new();
-        for (name, template) in super::HOST_RULE_TEMPLATES {
+        for (name, template) in super::host_rule_templates() {
             for line in template.lines() {
                 for found in placeholder.captures_iter(line) {
                     let fragment = found.get(1).unwrap().as_str();
@@ -1356,7 +1371,7 @@ mod tests {
     /// is built from the shared texts, and a change to one reaches every rule that uses it.
     #[test]
     fn every_exclusion_is_built_from_shared_text() {
-        for (name, template) in super::HOST_RULE_TEMPLATES {
+        for (name, template) in super::host_rule_templates() {
             let mut lines = template.lines();
             while let Some(line) = lines.next() {
                 if line.trim() == "exclude:" {
@@ -1533,9 +1548,9 @@ mod tests {
             })
             .collect();
         files.sort();
-        let mut listed: Vec<(String, String)> = super::HOST_RULE_TEMPLATES
-            .iter()
-            .map(|(name, content)| ((*name).to_owned(), (*content).to_owned()))
+        let mut listed: Vec<(String, String)> = super::host_rule_templates()
+            .into_iter()
+            .map(|(name, content)| (name.to_owned(), content.to_owned()))
             .collect();
         listed.sort();
         assert_eq!(listed, files);
@@ -1633,7 +1648,7 @@ mod recovery_tests {
     /// The window path and the engine, for a scan of `pieces` alone.
     fn engine() -> (tempfile::TempDir, Engine) {
         let dir = tempfile::tempdir().unwrap();
-        let engine = Engine::new(&TelltaleSettings::default(), &[]).unwrap();
+        let engine = Engine::new(&RuleContent::default(), &[]).unwrap();
         (dir, engine)
     }
 

@@ -31,7 +31,7 @@ fn all_record_kinds_match_the_published_schema() {
     );
     let mut broken = Harness::with(|c| {
         c.on_error = OnError::Deny;
-        c.telltale.rules = vec!["/nonexistent/rules.yaml".into()];
+        c.rules.packs.deployment = vec!["/nonexistent/rules.yaml".into()];
     });
     broken.pre_bash("toolu_e", "ls");
 

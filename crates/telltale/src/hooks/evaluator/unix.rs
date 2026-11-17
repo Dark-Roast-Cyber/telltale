@@ -324,7 +324,10 @@ const SPAWN_BACKOFF_SECS: u64 = 30;
 /// Start `serve` detached from the hook: new process group, no inherited
 /// stdio (Claude Code waits for the hook's pipes to close). Returns false
 /// when a recent attempt makes another one pointless.
-pub fn spawn_detached(state_dir: &Path) -> std::io::Result<bool> {
+pub fn spawn_detached(
+    state_dir: &Path,
+    serve_args: &[std::ffi::OsString],
+) -> std::io::Result<bool> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let marker = state_dir.join("evaluator.spawned");
@@ -340,9 +343,10 @@ pub fn spawn_detached(state_dir: &Path) -> std::io::Result<bool> {
     // Fresh regular file: never written through a planted symlink or FIFO.
     crate::hooks::state::create_fresh(&marker)?;
     let exe = std::env::current_exe()?;
-    // The running executable must dispatch `hooks serve`, as `telltale` does.
+    // The running executable must dispatch `serve_args` (`hooks serve` and
+    // its config roots), as `telltale` does.
     Command::new(exe)
-        .args(["hooks", "serve"])
+        .args(serve_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -440,7 +444,7 @@ pub fn serve(config: Config) -> Result<(), ServeError> {
     for _ in 0..3 {
         let before = config.fingerprint();
         let engine =
-            Engine::new(&config.telltale, &config.protected_paths()).map_err(ServeError::Engine)?;
+            Engine::new(&config.rules, &config.protected_paths()).map_err(ServeError::Engine)?;
         if config.fingerprint() == before {
             built = Some((engine, before));
             break;
