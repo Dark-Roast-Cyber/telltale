@@ -1828,8 +1828,7 @@ const QUOTE_PAYLOADS: &[&str] = &[
 /// quoted text. `ls \"; rm ~/.claude/settings.json; echo \"` was silent, and is denied
 /// on the commit before any exclusion existed. If the exclusion cannot be sure of the
 /// quoting, it does not apply and the rule fires.
-#[test]
-fn no_quoting_trick_hides_a_command_behind_an_exclusion() {
+fn matrix_a_cases() -> Vec<String> {
     let mut commands = Vec::new();
     for prefix in EXCLUSION_PREFIXES {
         for trick in QUOTE_TRICKS {
@@ -1838,48 +1837,124 @@ fn no_quoting_trick_hides_a_command_behind_an_exclusion() {
             }
         }
     }
-    assert_none_silent("quoting", &commands);
+    commands
 }
 
-/// `(asks, silent)` over the commands, one engine per thread. A build per command, as a
-/// hook does without its evaluator, would take an hour on Windows.
+/// `(asks, silent)` with one engine per chunk. Libtest supplies the single
+/// available-parallelism worker limit; sweeps do not start nested worker pools.
 fn sweep(commands: &[String]) -> (Vec<String>, Vec<String>) {
-    let threads = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(4);
-    let chunk = commands.len().div_ceil(threads).max(1);
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = commands
-            .chunks(chunk)
-            .map(|commands| {
-                scope.spawn(move || {
-                    let dir = tempfile::tempdir().unwrap();
-                    let window = dir.path().join("window.jsonl");
-                    let settings = telltale_core::hooks::config::TelltaleSettings::default();
-                    let engine = telltale_core::hooks::engine::Engine::new(&settings, &[]).unwrap();
-                    let (mut asks, mut silent) = (Vec::new(), Vec::new());
-                    for (n, command) in commands.iter().enumerate() {
-                        let input = json!({"command": command});
-                        // 60 is the lowest score that promotes to `ask`, 90 to `deny`.
-                        match evaluate_with(&engine, &window, n, "Bash", input).action_score() {
-                            0..60 => silent.push(format!("{command:?}")),
-                            60..90 => asks.push(format!("{command:?}")),
-                            _ => {}
-                        }
-                    }
-                    (asks, silent)
-                })
-            })
-            .collect();
-        let (mut asks, mut silent) = (Vec::new(), Vec::new());
-        for worker in workers {
-            let (a, s) = worker.join().unwrap();
-            asks.extend(a);
-            silent.extend(s);
+    let dir = tempfile::tempdir().unwrap();
+    let window = dir.path().join("window.jsonl");
+    let settings = telltale_core::hooks::config::TelltaleSettings::default();
+    let engine = telltale_core::hooks::engine::Engine::new(&settings, &[]).unwrap();
+    let (mut asks, mut silent) = (Vec::new(), Vec::new());
+    for (n, command) in commands.iter().enumerate() {
+        let input = json!({"command": command});
+        // 60 is the lowest score that promotes to `ask`, 90 to `deny`.
+        match evaluate_with(&engine, &window, n, "Bash", input).action_score() {
+            0..60 => silent.push(format!("{command:?}")),
+            60..90 => asks.push(format!("{command:?}")),
+            _ => {}
         }
-        (asks, silent)
-    })
+    }
+    (asks, silent)
 }
+
+const MATRIX_CHUNKS: usize = 8;
+
+fn matrix_chunk(commands: &[String], part: usize) -> &[String] {
+    assert!(part < MATRIX_CHUNKS);
+    &commands[commands.len() * part / MATRIX_CHUNKS..commands.len() * (part + 1) / MATRIX_CHUNKS]
+}
+
+fn case_list_hash<'a>(commands: impl IntoIterator<Item = &'a String>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"hooks-corpus-case-list-v1\0");
+    for command in commands {
+        hash.update((command.len() as u64).to_le_bytes());
+        hash.update(command.as_bytes());
+    }
+    hex::encode(hash.finalize())
+}
+
+macro_rules! matrix_tests {
+    ($module:ident, $cases:ident, $count:expr, $hash:literal) => {
+        mod $module {
+            use super::*;
+            static CASES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new($cases);
+
+            #[test]
+            fn case_inventory() {
+                assert_eq!(CASES.len(), $count);
+                assert_eq!(case_list_hash(CASES.iter()), $hash);
+                let partitioned: Vec<&String> = (0..MATRIX_CHUNKS)
+                    .flat_map(|part| matrix_chunk(&CASES, part))
+                    .collect();
+                assert_eq!(partitioned.len(), $count);
+                assert_eq!(case_list_hash(partitioned), $hash);
+            }
+
+            #[test]
+            fn chunk_1() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 0));
+            }
+            #[test]
+            fn chunk_2() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 1));
+            }
+            #[test]
+            fn chunk_3() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 2));
+            }
+            #[test]
+            fn chunk_4() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 3));
+            }
+            #[test]
+            fn chunk_5() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 4));
+            }
+            #[test]
+            fn chunk_6() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 5));
+            }
+            #[test]
+            fn chunk_7() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 6));
+            }
+            #[test]
+            fn chunk_8() {
+                assert_none_silent(stringify!($module), matrix_chunk(&CASES, 7));
+            }
+        }
+    };
+}
+
+matrix_tests!(
+    matrix_a,
+    matrix_a_cases,
+    12190,
+    "e3d09fb107a67d331e02fdfce66f6aafdeb3249aa0a2358c002bd21127db9a2f"
+);
+matrix_tests!(
+    matrix_b,
+    matrix_b_cases,
+    36128,
+    "29d697e22459dd38997ac4870e8433cf5eaee18edbbb9498d7bcfb08a27e12b6"
+);
+matrix_tests!(
+    matrix_c,
+    matrix_c_cases,
+    20608,
+    "65dc418545181e589b9a0dfa8ed0ee6050d2fa8578d041c7f113186e9778b267"
+);
+matrix_tests!(
+    matrix_d,
+    matrix_d_cases,
+    4272,
+    "b2c0e6aefbecf075945e555528a9a958883f3ef70903b4d68ab38a05cbf472a6"
+);
 
 fn assert_none_silent(name: &str, commands: &[String]) {
     let (asks, silent) = sweep(commands);
@@ -1996,8 +2071,7 @@ const TAMPER_PATHS: &[&str] = &[
 /// `rg --\pre rm x <path>` and `git diff --o''utput=<path>` were silent,
 /// because the flag check reads text and the shell does not. A command the exclusion
 /// cannot read plainly gets no exclusion, for any word and any flag.
-#[test]
-fn no_obfuscated_flag_or_word_hides_behind_an_exclusion() {
+fn matrix_b_cases() -> Vec<String> {
     let mut commands = Vec::new();
     let mut paths = TAMPER_PATHS.iter().cycle();
     for (before, word, after) in EXCLUSION_WORDS {
@@ -2017,7 +2091,7 @@ fn no_obfuscated_flag_or_word_hides_behind_an_exclusion() {
             commands.push(format!("{before}{form}{after} {path}"));
         }
     }
-    assert_none_silent("obfuscated flag", &commands);
+    commands
 }
 
 /// The same flags, plainly. Each one is refused by the exclusion, or by its own rule.
@@ -2510,8 +2584,7 @@ fn what_a_review_found_silent_is_no_longer() {
 }
 
 /// The class those belong to. Everything here must at least ask.
-#[test]
-fn a_protected_path_and_a_writer_ask_whatever_wraps_them() {
+fn matrix_c_cases() -> Vec<String> {
     let mut commands = Vec::new();
     for spelling in PROTECTED_SPELLINGS {
         for form in WRITER_FORMS {
@@ -2522,13 +2595,12 @@ fn a_protected_path_and_a_writer_ask_whatever_wraps_them() {
             commands.push(command);
         }
     }
-    assert_none_silent("writer", &commands);
+    commands
 }
 
 /// Likewise a harness word and whatever turns its hooks off: whatever wraps it, whatever
 /// follows it, and in either order.
-#[test]
-fn a_hookless_launch_asks_whatever_wraps_or_follows_it() {
+fn matrix_d_cases() -> Vec<String> {
     let tails = [
         "",
         " -p hi",
@@ -2557,7 +2629,7 @@ fn a_hookless_launch_asks_whatever_wraps_or_follows_it() {
             commands.push(format!("export {assign}; {wrapper} {harness}"));
         }
     }
-    assert_none_silent("launch", &commands);
+    commands
 }
 
 /// Help, a version or a dry run says nothing about a flag beside it, whichever comes first.
