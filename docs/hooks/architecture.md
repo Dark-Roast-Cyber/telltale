@@ -112,9 +112,9 @@ A new harness adapter (OpenCode, Cursor, ...) must:
    enforcement test using the canary method (`scripts/hooks/harness/`).
 7. Record harness identity in `Context::harness`. The journal encoding is
    Claude Code JSONL, but the engine scans each window under the identity
-   of the harness named there: its adapter's `client` and `hook_source`, so
-   Telltale records carry that harness's client and a `<client>.hooks` source
-   ID (ADR 0002, addendum of 2026-11-17). A name with no registered adapter is
+   of the harness named there: its adapter's `client` and that client's
+   hook-journal source ID (`ClientId::hook_journal_source_id`, `<client>.hooks`),
+   so Telltale records carry that harness's client and source (ADR 0002, addendum of 2026-11-17). A name with no registered adapter is
    not evaluated and takes `on_error`.
 8. Do not reshape tool inputs. Report them as the harness sent them. The
    runtime applies `normalize::tool_call(ctx.harness, call)` once, at the
@@ -137,11 +137,14 @@ a harness means:
    `Response` to the harness's stdout JSON, and the descriptor. The compiler
    asks for every field:
    - `name` (`<product>-<cli>`, also `Context::harness`) and `display_name`.
-   - `client` and `hook_source`: the harness's Telltale client and the
-     `<client>.hooks` identity its evaluation windows are scanned under. The
-     identity must exist in `telltale-sources` and `telltale-detect` (behind
-     `hook-journal`, never in the source registry); a test accepts every
-     registered adapter's pair through acquisition.
+   - `client`: the harness's Telltale client. Its evaluation windows are
+     scanned as that client's hook-journal source, `<client name>.hooks`, which
+     is one rule for every `ClientId` (host-fed, behind `hook-journal`, never in
+     the source registry), so nothing in `telltale-sources` or
+     `telltale-detect` changes for a new harness. A client new to Telltale needs
+     its `ClientId` value (`telltale-schema`), with the follow-ups that value
+     brings (action-record schema enum, evaluation-manifest client list); a test
+     accepts every registered adapter's pair through acquisition.
    - `pre_tool_use`: the pre-execution event names. The first answers a call
      whose payload could not be read.
    - `event_keys`: the top-level payload keys that name the hook event. An

@@ -14,14 +14,6 @@ pub(crate) mod tools;
 
 pub(crate) use install::INSTALL;
 
-/// The hook-journal identity of this client: not a registered source, only
-/// known to acquisition.
-pub(crate) const HOOK_JOURNAL: super::HookJournal = super::HookJournal {
-    client: telltale_schema::clients::ClientId::Codex,
-    source_id: "codex.hooks",
-    adapter_type: "codex",
-};
-
 pub(crate) const SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
         id: "codex.sessions",

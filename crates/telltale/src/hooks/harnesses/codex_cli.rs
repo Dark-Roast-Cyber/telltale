@@ -455,7 +455,6 @@ pub const NORMALIZATION: Rules = Rules {
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
     client: ClientId::Codex,
-    hook_source: "codex.hooks",
     display_name: "OpenAI Codex CLI",
     pre_tool_use: &[PRE_TOOL_USE],
     event_keys: &[EVENT_KEY],

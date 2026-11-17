@@ -12,7 +12,11 @@
   records in hooks telemetry (`telltale[]`) name the harness's own client and
   hook-journal source (`claude`/`claude.hooks`, `codex`/`codex.hooks`,
   `copilot`/`copilot.hooks`) instead of `claude`/`claude.projects` for every
-  harness. The hook-journal identities are host-fed: not in the source
+  harness. The hook-journal source of every `ClientId` is the one rule
+  `<client name>.hooks` (`ClientId::hook_journal_source_id`), accepted for its
+  own client only and read with the journal encoding; a new hooks adapter
+  needs only its adapter (and its client value, if new), nothing in
+  `telltale-sources` or `telltale-detect`. The hook-journal identities are host-fed: not in the source
   registry, so never discovered, listed or catalogued, and not session sources.
   They exist behind the new `hook-journal` feature of `telltale-sources` and
   `telltale-detect`, which `telltale-core`'s `hooks` feature enables; without it
