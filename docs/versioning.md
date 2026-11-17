@@ -25,8 +25,12 @@ format.
   package build proves official release provenance.
 - Event3 schema version stays `3.0` and Rule v1 stays version 1; neither follows
   the package version.
-- The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
-  `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
+- Published v0.7.2 contains six functional Cargo packages: `telltale-schema`,
+  `telltale-rules`, `telltale-sources`, `telltale-detect`, `telltale-core`, and
+  `telltale-cli`. The current workspace adds the publishable `telltale-discover`
+  package for independent local inventory and shared filesystem discovery. It
+  participates in package verification and the next release's publication order,
+  but is not part of the already published v0.7.2 artifacts.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
@@ -44,8 +48,9 @@ Telltale is built, tested and released with the toolchain pinned in
 `rust-toolchain.toml`. The CLI promises no minimum supported Rust
 version (MSRV); build it with that toolchain.
 
-The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-sources`,
-`telltale-detect` and `telltale-core`) declare `rust-version = "1.89"`. The floor was 1.88 so their
+The embedding crates (`telltale-schema`, `telltale-rules`, `telltale-discover`,
+`telltale-sources`, `telltale-detect` and `telltale-core`) declare
+`rust-version = "1.89"`. The floor was 1.88 so their
 dependency graph could use patched `time` releases (`>=0.3.47`); 1.89 is the
 release that carries the default `hooks` feature of `telltale-core` (see the
 [changelog](../CHANGELOG.md)). Every CI run checks
@@ -76,12 +81,17 @@ allowance for `0.y.z` versions:
 
 The Cargo/package version is not the version of every data contract:
 
-- **Package and CLI version:** the workspace root and five library crates
+- **Package and CLI version:** the workspace root and library crates
   move in lockstep. Internal workspace dependency requirements must be updated
   together. The root binary and library crates use the same release version.
 - **Event schema version:** `schema_version` and versioned identities such as
   Event 3.0 and `obs:v2` describe data compatibility independently of the Cargo
   version. Change them only when the event contract changes.
+- **Experimental tool inventory:** `telltale.inventory/v1` is separate from
+  Event3, with its own pinned `catalog_revision`. It reports metadata indicators,
+  not installation or usage totals; see the
+  [inventory guide](../crates/telltale-discover/README.md). It is not part of the
+  published 0.7.2 contract.
 - **Configuration version:** configuration documents such as `version: 1` have
   their own migration rules. A package release does not automatically change a
   configuration version.

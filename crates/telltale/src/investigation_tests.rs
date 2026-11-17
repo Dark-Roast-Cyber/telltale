@@ -5,6 +5,10 @@ use telltale_schema::event::{ActivityEventInput, Event3Record, activity_event, p
 use telltale_schema::source::Source;
 use telltale_sources::discovery::discover_sources;
 
+fn tempdir() -> tempfile::TempDir {
+    tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+}
+
 fn event(source: &Source, session: &str) -> Event3Record {
     Event3Record::from_json(&event_json(source, session)).unwrap()
 }
@@ -45,7 +49,7 @@ const JSONL: &str = concat!(
 
 #[test]
 fn investigation_context_scan_order_matches_occurrence_and_emitted_index() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     // The offset timestamp is earlier in real time, not lexical order. Missing
     // times sort last; equal times retain source order.
     let rows = [
@@ -128,7 +132,7 @@ fn context(
 
 #[test]
 fn investigation_context_default_and_arguments_are_private() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let payload = JSONL.replace(
         "ordinary_content_canary",
         "ordinary prose password=synthetic-secret token=synthetic-token",
@@ -221,7 +225,7 @@ fn claude(dir: &std::path::Path, payload: &str) -> Source {
 
 #[test]
 fn investigation_context_mixed_native_blocks_never_export_results() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let payload = concat!(
         "{\"type\":\"user\",\"sessionId\":\"synthetic-session\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"safe user prose\"},{\"type\":\"tool_result\",\"tool_use_id\":\"synthetic-call\",\"content\":\"RESULT_MARKER\",\"input\":{\"command\":\"RESULT_ARGUMENT_MARKER\"}}]}}\n",
         "{\"type\":\"assistant\",\"sessionId\":\"synthetic-session\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"safe assistant prose\"},{\"type\":\"tool_use\",\"id\":\"synthetic-call\",\"name\":\"shell\",\"input\":{\"command\":\"safe argument prose\"}},{\"type\":\"tool_result\",\"tool_use_id\":\"synthetic-call\",\"content\":\"ASSISTANT_RESULT_MARKER\"}]}}\n"
@@ -266,7 +270,7 @@ fn investigation_context_mixed_native_blocks_never_export_results() {
     }
     // This adapter accepts extraneous arguments on a returned-result record;
     // they must never become opt-in argument context.
-    let other = tempfile::tempdir().unwrap();
+    let other = tempdir();
     let payload = JSONL.replace(
         "\"output\":",
         "\"arguments\":\"RETURNED_ARGUMENT_MARKER\",\"output\":",
@@ -313,7 +317,7 @@ fn investigation_context_mixed_native_blocks_never_export_results() {
 
 #[test]
 fn investigation_context_supported_messages_have_independent_class_gates() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let payload = concat!(
         "{\"type\":\"user\",\"sessionId\":\"synthetic-session\",\"message\":{\"role\":\"user\",\"content\":\"ordinary user prose password=synthetic-secret\"}}\n",
         "{\"type\":\"assistant\",\"sessionId\":\"synthetic-session\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ordinary assistant prose token=synthetic-token\"}]}}\n"
@@ -383,7 +387,7 @@ fn investigation_context_supported_messages_have_independent_class_gates() {
 #[test]
 fn investigation_context_radius_is_rejected_before_any_read() {
     use std::os::unix::ffi::OsStrExt;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     fs::remove_file(&source.path).unwrap();
@@ -414,7 +418,7 @@ fn investigation_context_radius_is_rejected_before_any_read() {
 
 #[test]
 fn investigation_context_occurrences_are_exact_source_facts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let payload = concat!(
         "{\"type\":\"user\",\"sessionId\":\"synthetic-session\",\"message\":{\"role\":\"user\",\"content\":\"needle first prose\"}}\n",
         "{\"type\":\"user\",\"sessionId\":\"synthetic-session\",\"message\":{\"role\":\"user\",\"content\":\"needle second prose\"}}\n"
@@ -486,7 +490,7 @@ fn investigation_context_duplicate_native_coordinates_are_ambiguous() {
     use telltale_sources::acquisition::{
         AcquisitionOptions, DirectReadLimits, acquire_source_bounded,
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = Source {
         client: ClientId::OpenClaw,
         kind: SourceKind::Jsonl,
@@ -542,7 +546,7 @@ fn investigation_context_duplicate_native_coordinates_are_ambiguous() {
 
 #[test]
 fn investigation_context_budget_drops_farthest_text_not_structure_or_anchor() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let prose = "ordinary synthetic prose with spaces ".repeat(40);
     let payload = (0..65).map(|_| format!("{}\n", serde_json::json!({"type":"user","sessionId":"synthetic-session","message":{"role":"user","content":prose}}))).collect::<String>();
     let source = claude(dir.path(), &payload);
@@ -590,7 +594,7 @@ fn investigation_context_budget_drops_farthest_text_not_structure_or_anchor() {
 
 #[test]
 fn investigation_jsonl_is_content_free_and_preserves_artifacts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     let backend = SessionInvestigator::new(InvestigationConfig::new(dir.path()));
@@ -622,7 +626,7 @@ fn investigation_jsonl_is_content_free_and_preserves_artifacts() {
 
 #[test]
 fn investigation_exact_identity_and_known_source_loss() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let mut config = InvestigationConfig::new(dir.path());
     config.known_sources = vec![source.clone()];
@@ -651,7 +655,7 @@ fn investigation_exact_identity_and_known_source_loss() {
 
 #[test]
 fn investigation_bounds_and_ambiguous_source_fail_closed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     let mut config = InvestigationConfig::new(dir.path());
@@ -683,7 +687,7 @@ fn investigation_bounds_and_ambiguous_source_fail_closed() {
 #[test]
 fn investigation_non_regular_source_never_blocks() {
     use std::os::unix::ffi::OsStrExt;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     fs::remove_file(&source.path).unwrap();
@@ -700,7 +704,7 @@ fn investigation_non_regular_source_never_blocks() {
 
 #[test]
 fn investigation_malformed_depth_and_exact_byte_record_bounds() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     let mut config = InvestigationConfig::new(dir.path());
@@ -738,7 +742,7 @@ fn investigation_malformed_depth_and_exact_byte_record_bounds() {
 
 #[test]
 fn investigation_failure_reasons_are_private_and_stateless() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     let backend = SessionInvestigator::new(InvestigationConfig::new(dir.path()));
@@ -782,7 +786,7 @@ fn investigation_failure_reasons_are_private_and_stateless() {
 
 #[test]
 fn investigation_duplicate_selection_is_order_independent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     let mut conflicting = source.clone();
@@ -812,7 +816,7 @@ fn investigation_duplicate_selection_is_order_independent() {
 
 #[test]
 fn investigation_invalid_limits_and_unsupported_source_are_distinct() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     let mut config = InvestigationConfig::new(dir.path());
@@ -844,7 +848,7 @@ fn investigation_invalid_limits_and_unsupported_source_are_distinct() {
 #[test]
 fn investigation_event_correlation_and_metadata_only_session_are_explicit() {
     use telltale_schema::event::{HealthEventInput, health_event_with_metadata};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let backend = SessionInvestigator::new(InvestigationConfig::new(dir.path()));
     let health = health_event_with_metadata(HealthEventInput {
@@ -891,7 +895,7 @@ fn investigation_event_correlation_and_metadata_only_session_are_explicit() {
 #[test]
 fn investigation_discovery_failure_is_not_source_loss() {
     use std::os::unix::fs::symlink;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let input = event(&source, "synthetic-session");
     fs::rename(dir.path().join("codex/sessions"), dir.path().join("saved")).unwrap();
@@ -906,7 +910,7 @@ fn investigation_discovery_failure_is_not_source_loss() {
 
 #[test]
 fn investigation_anchors_are_only_recorded_and_current_indexes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let source = codex(dir.path(), JSONL);
     let mut value =
         serde_json::from_slice::<serde_json::Value>(&event_json(&source, "synthetic-session"))
@@ -947,7 +951,7 @@ fn investigation_anchors_are_only_recorded_and_current_indexes() {
 
 #[test]
 fn investigation_json_object_and_jsonl_with_same_session_keep_clients_separate() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let codex_source = codex(dir.path(), JSONL);
     fs::create_dir_all(dir.path().join("claude/projects")).unwrap();
     let payload = r#"{"type":"user","sessionId":"synthetic-session","message":{"role":"user","content":[{"type":"text","text":"CLAUDE_CONTENT_CANARY"}]}}"#;
@@ -985,7 +989,7 @@ fn investigation_json_object_and_jsonl_with_same_session_keep_clients_separate()
 
 #[test]
 fn investigation_opencode_is_deferred_without_launch_or_artifact_changes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let store = dir.path().join("opencode");
     fs::create_dir(&store).unwrap();
     let paths = ["opencode.db", "opencode.db-wal", "opencode.db-shm"].map(|name| store.join(name));

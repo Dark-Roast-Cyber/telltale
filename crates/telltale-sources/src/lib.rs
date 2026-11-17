@@ -1,5 +1,5 @@
-//! Telltale's filesystem-facing source layer: session-store discovery,
-//! per-agent native extraction, canonical acquisition, and installed-agent inventory.
+//! Telltale's source registry, native extraction, canonical acquisition and
+//! legacy installed-agent inventory. Discovery delegates to `telltale-discover`.
 //!
 //! Source modules read local agent session stores into source-native facts and
 //! Canonical Observation v2. There is no normalized-record compatibility path.
