@@ -3,10 +3,16 @@
 //! Source modules own canonical semantics. Progress is operational metadata, not
 //! canonical evidence or persisted scanner state. Production runtime cutover is
 //! separate from this API; acquisition performs no detection or event delivery.
+//!
+//! File reads come in three modes: `acquire_source` opens the path by name,
+//! `acquire_resolved_source` walks an already-canonical path without following a
+//! link (the shared scan runtime), and `acquire_source_bounded` opens under a
+//! discovery root's trust anchors for investigation.
 
 pub use crate::source_read::BoundedReadError;
 use crate::source_read::SourceReadError;
 use std::fmt;
+use std::path::Path;
 
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
@@ -26,7 +32,7 @@ use crate::sources::codex::native::extract_codex_native_records_with_limits;
 use crate::sources::copilot::canonical::{
     CopilotCanonicalError, CopilotCanonicalOptions, project_copilot_native_events,
 };
-use crate::sources::copilot::native::extract_copilot_native_events;
+use crate::sources::copilot::native::extract_copilot_native_events_with;
 use crate::sources::openclaw::canonical::{
     OpenClawCanonicalError, OpenClawCanonicalOptions, project_openclaw_native_records,
 };
@@ -293,7 +299,8 @@ pub enum AcquisitionError {
     SourceKindMismatch,
     SourceRead,
     /// The source identity is supported, but its acquisition was not compiled into
-    /// this build (OpenCode without `opencode-sqlite`). No source I/O is attempted.
+    /// this build (OpenCode without `opencode-sqlite`, a hook journal without
+    /// `hook-journal`). No source I/O is attempted.
     CapabilityNotCompiled,
     /// A resumed OpenCode read found the store older than the resume high-water
     /// (restored or replaced, or newest parts deleted, including by session
@@ -363,7 +370,24 @@ pub fn acquire_source(
     source: &Source,
     options: AcquisitionOptions,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
-    acquire_source_impl(source, options, None)
+    acquire_source_impl(source, options, SourceAccess::ByName)
+}
+
+/// Acquire a source whose path is already resolved: a canonical path, as from
+/// `std::fs::canonicalize`, which no link names. Same limits, semantics and
+/// errors as [`acquire_source`], but the file is opened by walking that path
+/// from the filesystem root through directory handles without following any
+/// link, and without blocking. A link, FIFO or replacement that appears after
+/// the path was resolved is an unreadable source (`source_read`) rather than
+/// being followed, so the bytes read belong to the resolved file. A path that
+/// still contains a link is refused the same way: resolve it first.
+/// OpenCode SQLite is unchanged: SQLite resolves links and opens its journal
+/// files by name.
+pub fn acquire_resolved_source(
+    source: &Source,
+    options: AcquisitionOptions,
+) -> Result<AcquisitionBatch, AcquisitionError> {
+    acquire_source_impl(source, options, SourceAccess::Resolved)
 }
 
 /// Finite direct JSONL read controls for on-demand investigation. These do not
@@ -397,9 +421,47 @@ impl DirectReadLimits {
     }
 }
 
+/// A bounded direct read of a source coordinate under its discovery root.
+#[derive(Clone, Copy)]
+pub(crate) struct DirectRead<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) limits: DirectReadLimits,
+}
+
+/// How a JSONL or log source coordinate is opened.
+#[derive(Clone, Copy)]
+pub(crate) enum SourceAccess<'a> {
+    /// Production read by name: links are followed, as for any `File::open`.
+    ByName,
+    /// Production read of an already-resolved path, walked without links.
+    Resolved,
+    /// Bounded investigation read under a discovery root.
+    Direct(DirectRead<'a>),
+}
+
+impl SourceAccess<'_> {
+    pub(crate) fn limits(self) -> Option<DirectReadLimits> {
+        match self {
+            Self::Direct(direct) => Some(direct.limits),
+            Self::ByName | Self::Resolved => None,
+        }
+    }
+}
+
 /// Same authoritative dispatcher and native mapping, with a bounded direct-file
 /// reader. Non-JSONL identities fail before I/O; OpenCode investigation is deferred.
+///
+/// `root` is the discovery root the source belongs to, as passed to bounded
+/// discovery (`.` for the environment). The file is opened under the same trust
+/// anchors, whether the coordinate was discovered or supplied by the caller:
+/// the approved root is resolved once (aliases at or above it are accepted),
+/// and no link below it is followed, at the file or any ancestor. A coordinate
+/// outside every approved root is walked strictly from the filesystem root, so
+/// no link anywhere in its path is followed. A refused link is
+/// `non_regular_source`. The source path itself is
+/// never rewritten, so its identity is unchanged.
 pub fn acquire_source_bounded(
+    root: &Path,
     source: &Source,
     options: AcquisitionOptions,
     limits: DirectReadLimits,
@@ -409,15 +471,37 @@ pub fn acquire_source_bounded(
             BoundedReadError::LimitExceeded,
         ));
     }
-    acquire_source_impl(source, options, Some(limits))
+    acquire_source_impl(
+        source,
+        options,
+        SourceAccess::Direct(DirectRead { root, limits }),
+    )
 }
 
 fn acquire_source_impl(
     source: &Source,
     options: AcquisitionOptions,
-    limits: Option<DirectReadLimits>,
+    access: SourceAccess<'_>,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
+    let limits = access.limits();
+    // The hook-journal identity of a client (`ClientId::hook_journal_source_id`)
+    // reads as the journal of any client does, under its own identity. Hooks
+    // only ever read a window by name, never bounded.
+    let hook_journal = source.client.owns_hook_journal(&source.source_id);
+    if hook_journal {
+        if limits.is_some() {
+            return Err(AcquisitionError::UnsupportedSourceIdentity);
+        }
+        #[cfg(not(feature = "hook-journal"))]
+        return Err(AcquisitionError::CapabilityNotCompiled);
+    }
+    let reader = if hook_journal {
+        ClientId::Claude
+    } else {
+        source.client
+    };
     let expected_kind = match (source.client, source.source_id.as_str()) {
+        _ if hook_journal => SourceKind::Jsonl,
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
         | (ClientId::OpenClaw, "openclaw.agents")
@@ -442,9 +526,9 @@ fn acquire_source_impl(
     let mut accounting = AccountingBuilder::default();
     let mut quarantined = Vec::new();
     let mut source_scale = SourceScale::FLOOR;
-    let observations = match source.client {
+    let observations = match reader {
         ClientId::Claude => {
-            let (records, bytes) = extract_claude_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_claude_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
@@ -456,11 +540,18 @@ fn acquire_source_impl(
                     &[record.accounting_kind()],
                 )?;
             }
-            let projection = project_claude_native_records(
-                &records,
-                &ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale),
-            )
-            .map_err(map_claude_error)?;
+            let canonical =
+                ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale);
+            let canonical = if hook_journal {
+                canonical.with_adapter(
+                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
+                    source.client.hook_journal_source_id(),
+                )
+            } else {
+                canonical
+            };
+            let projection =
+                project_claude_native_records(&records, &canonical).map_err(map_claude_error)?;
             let mut excluded = projection
                 .quarantined
                 .iter()
@@ -529,7 +620,7 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::Codex => {
-            let (records, bytes) = extract_codex_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_codex_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
@@ -614,7 +705,7 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::OpenClaw => {
-            let (records, bytes) = extract_openclaw_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_openclaw_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
@@ -636,7 +727,7 @@ fn acquire_source_impl(
             .map_err(map_openclaw_error)?
         }
         ClientId::Qwen => {
-            let (records, bytes) = extract_qwen_native_records_with_limits(source, limits)
+            let (records, bytes) = extract_qwen_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
@@ -658,12 +749,15 @@ fn acquire_source_impl(
             .map_err(map_qwen_error)?
         }
         ClientId::Copilot => {
-            let events = extract_copilot_native_events(source).map_err(|error| match error {
-                SourceReadError::Bounded(reason @ BoundedReadError::LimitExceeded) => {
-                    AcquisitionError::BoundedSourceRead(reason)
-                }
-                _ => AcquisitionError::SourceRead,
-            })?;
+            let events =
+                extract_copilot_native_events_with(source, access).map_err(
+                    |error| match error {
+                        SourceReadError::Bounded(reason @ BoundedReadError::LimitExceeded) => {
+                            AcquisitionError::BoundedSourceRead(reason)
+                        }
+                        _ => AcquisitionError::SourceRead,
+                    },
+                )?;
             use crate::sources::copilot::native::CopilotNativeEvent;
             use telltale_schema::record::RecordKind;
             for event in &events {
@@ -1105,6 +1199,58 @@ mod tests {
 
     const OBSERVED_AT: &str = "2026-09-18T12:00:00Z";
 
+    /// A call's declared operation spends no retention: the observations of a
+    /// source that fit its limit exactly, as acquired with their declarations,
+    /// still fit it and one byte less does not.
+    #[test]
+    fn declared_operations_leave_the_retention_limit_where_it_was() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("limit.jsonl");
+        let content = serde_json::json!({"type":"assistant","sessionId":"limit","message":{
+            "role":"assistant","content":[{"type":"tool_use","id":"call-0","name":"Write",
+            "input":{"file_path":"/synthetic/w.txt","content":"synthetic"}}]}});
+        std::fs::write(&path, content.to_string()).unwrap();
+        let batch = super::acquire_source(
+            &Source {
+                client: ClientId::Claude,
+                kind: SourceKind::Jsonl,
+                source_id: "claude.projects".to_owned(),
+                path,
+            },
+            options(),
+        )
+        .unwrap();
+        let declared = batch
+            .observations
+            .iter()
+            .filter(|observation| match observation.body() {
+                ObservationBody::Tool(tool) => tool.operation().is_some(),
+                _ => false,
+            })
+            .count();
+        assert_eq!(declared, 1);
+        let total: usize = batch
+            .observations
+            .iter()
+            .map(telltale_schema::observation::CanonicalObservationV2::retained_byte_len)
+            .sum();
+        let mut exact = super::CanonicalCollector {
+            limit: total,
+            ..super::CanonicalCollector::default()
+        };
+        let mut short = super::CanonicalCollector {
+            limit: total - 1,
+            ..super::CanonicalCollector::default()
+        };
+        let mut fits = true;
+        let mut overflows = false;
+        for observation in batch.observations {
+            fits &= exact.push(observation.clone()).is_ok();
+            overflows |= short.push(observation).is_err();
+        }
+        assert!(fits && overflows);
+    }
+
     fn options() -> AcquisitionOptions {
         AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap())
     }
@@ -1175,6 +1321,14 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(expected.len(), 8);
         assert_eq!(expected, registered);
+        // Hook-journal identities are host-fed: no registered source is one.
+        for client in ClientId::ALL {
+            assert!(
+                registered
+                    .iter()
+                    .all(|(_, source_id, _)| *source_id != client.hook_journal_source_id())
+            );
+        }
         let directory = tempdir().unwrap();
         for (client, source_id, kind) in registered {
             // An existing directory is unreadable as any supported source format.
@@ -1193,6 +1347,138 @@ mod tests {
                 acquisition_error(super::acquire_source(&source, options())),
                 expected
             );
+        }
+    }
+
+    const JOURNAL_WINDOW: &str = concat!(
+        r#"{"type":"user","sessionId":"synthetic-window","uuid":"u1","timestamp":"2026-11-04T00:00:00.001Z","message":{"role":"user","content":"synthetic prompt"}}"#,
+        "\n",
+        r#"{"type":"assistant","sessionId":"synthetic-window","uuid":"a1","timestamp":"2026-11-04T00:00:00.002Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        "\n",
+    );
+
+    fn journal_source(client: ClientId, source_id: &str, path: &std::path::Path) -> Source {
+        Source {
+            client,
+            kind: SourceKind::Jsonl,
+            source_id: source_id.to_owned(),
+            path: path.to_owned(),
+        }
+    }
+
+    /// The rule covers every client, including one with no registered source.
+    #[test]
+    fn every_clients_hook_journal_is_outside_the_registry() {
+        let registered = crate::clients::supported_clients();
+        for client in ClientId::ALL {
+            let id = client.hook_journal_source_id();
+            assert!(id.ends_with(".hooks"));
+            assert!(
+                registered
+                    .iter()
+                    .flat_map(|client| client.sources)
+                    .all(|source| source.id != id)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "hook-journal")]
+    fn hook_journal_pairs_acquire_and_carry_their_own_identity() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("window.jsonl");
+        std::fs::write(&path, JOURNAL_WINDOW).unwrap();
+        let session = super::acquire_source(
+            &journal_source(ClientId::Claude, "claude.projects", &path),
+            options(),
+        )
+        .unwrap();
+        assert!(!session.observations.is_empty());
+        for &client in ClientId::ALL {
+            let source_id = client.hook_journal_source_id();
+            let source = journal_source(client, source_id, &path);
+            let acquired = super::acquire_source(&source, options()).unwrap();
+            assert_eq!(acquired.observations.len(), session.observations.len());
+            for observation in &acquired.observations {
+                assert_eq!(observation.source().adapter_id(), source_id);
+                assert_eq!(
+                    observation.source().adapter_type(),
+                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE
+                );
+            }
+            // Only identity differs from the session reading of the same window.
+            for (hook, reference) in acquired.observations.iter().zip(&session.observations) {
+                assert_eq!(hook.body(), reference.body());
+                assert_eq!(hook.kind(), reference.kind());
+                assert_eq!(hook.stage(), reference.stage());
+                assert_eq!(hook.occurred_at(), reference.occurred_at());
+                assert_eq!(hook.sequence(), reference.sequence());
+                assert_eq!(hook.session_id(), reference.session_id());
+                assert_eq!(hook.correlation(), reference.correlation());
+                assert_eq!(hook.facets(), reference.facets());
+                assert_eq!(hook.fact_metadata(), reference.fact_metadata());
+                assert_eq!(hook.retained_byte_len(), reference.retained_byte_len());
+            }
+            // The same window under another identity is another source: no
+            // observation is shared.
+            for other in &session.observations {
+                assert!(
+                    acquired
+                        .observations
+                        .iter()
+                        .all(|o| o.observation_id() != other.observation_id())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hook_journal_pairs_refuse_other_clients_kinds_and_bounded_reads() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("window.jsonl");
+        std::fs::write(&path, JOURNAL_WINDOW).unwrap();
+        let compiled = cfg!(feature = "hook-journal");
+        for &client in ClientId::ALL {
+            let source_id = client.hook_journal_source_id();
+            for &other in ClientId::ALL.iter().filter(|other| **other != client) {
+                let cross = journal_source(other, source_id, &path);
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&cross, options())),
+                    AcquisitionError::UnsupportedSourceIdentity
+                );
+            }
+            let mut source = journal_source(client, source_id, &path);
+            let bounded = super::acquire_source_bounded(
+                directory.path(),
+                &source,
+                options(),
+                super::DirectReadLimits::default(),
+            );
+            assert_eq!(
+                acquisition_error(bounded),
+                AcquisitionError::UnsupportedSourceIdentity
+            );
+            if !compiled {
+                // An uncompiled capability: refused before any source I/O.
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&source, options())),
+                    AcquisitionError::CapabilityNotCompiled
+                );
+                continue;
+            }
+            for kind in [
+                SourceKind::Json,
+                SourceKind::ArchivedJsonl,
+                SourceKind::HeadlessJsonl,
+                SourceKind::Sqlite,
+                SourceKind::CopilotProcessLog,
+            ] {
+                source.kind = kind;
+                assert_eq!(
+                    acquisition_error(super::acquire_source(&source, options())),
+                    AcquisitionError::SourceKindMismatch
+                );
+            }
         }
     }
 
@@ -1370,6 +1656,7 @@ mod tests {
                 };
                 assert_eq!(
                     acquisition_error(super::acquire_source_bounded(
+                        directory.path(),
                         &source,
                         options(),
                         super::DirectReadLimits::default()
@@ -1670,7 +1957,7 @@ mod tests {
             let acquired = super::acquire_source(&source, options()).unwrap();
             let replay = super::acquire_source(&source, options()).unwrap();
             let reference = super::project_copilot_native_events(
-                super::extract_copilot_native_events(&source).unwrap(),
+                crate::sources::copilot::native::extract_copilot_native_events(&source).unwrap(),
                 &super::CopilotCanonicalOptions::new(options().observed_at),
             )
             .unwrap();

@@ -1349,6 +1349,13 @@ fn decide_as(
     input: Value,
 ) -> (String, Vec<String>) {
     let id = format!("call_{n}");
+    let call = ToolCall {
+        tool_use_id: Some(id.clone()),
+        tool_name: tool.to_owned(),
+        input,
+    };
+    // A harness with no registered adapter is evaluated after its normalization.
+    let (harness, call) = common::evaluable(harness, call);
     let ctx = Context {
         harness,
         hook_event: "PreToolUse".into(),
@@ -1360,11 +1367,6 @@ fn decide_as(
         // Compare policy verdicts, not a harness's ask -> deny substitution.
         can_ask: true,
         cwd: Some("/home/synthetic/run/work".into()),
-    };
-    let call = ToolCall {
-        tool_use_id: Some(id.clone()),
-        tool_name: tool.to_owned(),
-        input,
     };
     h.runtime.handle(&ctx, Event::ToolRequested(call));
     let decision = h.decision_for(&id);
@@ -3197,6 +3199,7 @@ fn evaluate_with(
     };
     engine
         .evaluate(
+            telltale_core::hooks::harness::Harness::ClaudeCode,
             window,
             &[],
             &[line],

@@ -117,6 +117,18 @@ impl RetentionBudget {
         }
     }
 
+    /// A budget with the same bounds and none of this one's spending. For work a
+    /// declared operation adds to a reading: it must not consume what the
+    /// source would have had without the declaration.
+    pub(crate) fn detached(&self) -> Self {
+        Self {
+            items: 0,
+            bytes: 0,
+            work_bytes: Arc::default(),
+            bounds: self.bounds,
+        }
+    }
+
     #[allow(deprecated, reason = "try_update is unavailable on the embedding MSRV")]
     pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ProcessingError> {
         if self
@@ -377,6 +389,11 @@ fn evaluate_source_inner(
         (ClientId::OpenClaw, "openclaw.agents") => "openclaw",
         (ClientId::Qwen, "qwen.projects") => "qwen",
         (ClientId::Copilot, "copilot.process_log") => "copilot",
+        // A client's hook journal: host-fed, never discovered.
+        #[cfg(feature = "hook-journal")]
+        (client, source_id) if client.owns_hook_journal(source_id) => {
+            ClientId::HOOK_JOURNAL_ADAPTER_TYPE
+        }
         _ => return Err(ProcessingError::InvalidSource),
     };
     if let Some(instance) = input.source_instance {

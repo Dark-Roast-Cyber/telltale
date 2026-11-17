@@ -17,13 +17,16 @@ include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**", "/tes
 [features]
 default = []
 opencode-sqlite = ["dep:rusqlite"]
+# Hook-journal identities (`claude.hooks`, `codex.hooks`, `copilot.hooks`): host-fed
+# sources that read the journal encoding of `telltale-core`'s hooks. Never discovered.
+hook-journal = []
 
 [dependencies]
 hex.workspace = true
 telltale-schema.workspace = true
 telltale-discover.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 serde_yaml.workspace = true
 sha2.workspace = true
 time.workspace = true

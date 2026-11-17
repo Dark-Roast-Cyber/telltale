@@ -8,10 +8,17 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::ClientId;
+use crate::hooks::harness::{
+    Adapter, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
+};
+use crate::hooks::harnesses::{copilot_cli, payload};
 use crate::hooks::runtime::{Completion, Context, Event, Response, SettledCall, ToolCall};
 use crate::hooks::state::Verdict;
 
 pub const HARNESS: &str = "claude-code";
+/// The top-level payload key that names the hook event.
+pub const EVENT_KEY: &str = "hook_event_name";
 /// The pre-execution hook event: the only enforcement point.
 pub const PRE_TOOL_USE: &str = "PreToolUse";
 /// A hook `ask` is put to the user, and declined in headless `-p` (verified
@@ -87,53 +94,7 @@ pub fn parse(bytes: &[u8]) -> Result<HookInput, ParseError> {
 /// Whether an unparseable payload names the PreToolUse event. Claude Code
 /// writes `hook_event_name` before `tool_input`, so the prefix suffices.
 pub fn looks_like_pre_tool_use(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(64 * 1024)];
-    let text = String::from_utf8_lossy(head);
-    let key = "\"hook_event_name\"";
-    text.match_indices(key).any(|(at, _)| {
-        let rest = text[at + key.len()..].trim_start();
-        rest.strip_prefix(':')
-            .map(str::trim_start)
-            .is_some_and(|value| value.starts_with("\"PreToolUse\""))
-    })
-}
-
-/// Text a tool result contributed, in the shape Telltale's `tool_result`
-/// target reads. Bash results join stdout and stderr; Read results use the
-/// file content; anything else is compact JSON.
-pub fn result_text(response: &Value) -> String {
-    match response {
-        Value::String(text) => text.clone(),
-        Value::Object(map) => {
-            if map.contains_key("stdout") || map.contains_key("stderr") {
-                let stdout = map.get("stdout").and_then(Value::as_str).unwrap_or("");
-                let stderr = map.get("stderr").and_then(Value::as_str).unwrap_or("");
-                return match (stdout.is_empty(), stderr.is_empty()) {
-                    (_, true) => stdout.to_owned(),
-                    (true, false) => stderr.to_owned(),
-                    (false, false) => format!("{stdout}\n{stderr}"),
-                };
-            }
-            if let Some(content) = map
-                .get("file")
-                .and_then(|file| file.get("content"))
-                .and_then(Value::as_str)
-            {
-                return content.to_owned();
-            }
-            if let Some(Value::Array(parts)) = map.get("content") {
-                let text: Vec<&str> = parts
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(Value::as_str))
-                    .collect();
-                if !text.is_empty() {
-                    return text.join("\n");
-                }
-            }
-            response.to_string()
-        }
-        other => other.to_string(),
-    }
+    payload::names_event_as(bytes, EVENT_KEY, PRE_TOOL_USE)
 }
 
 fn tool_call(input: &HookInput) -> Result<ToolCall, ParseError> {
@@ -167,7 +128,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
             result_text: input
                 .tool_response
                 .as_ref()
-                .map(result_text)
+                .map(payload::tool_response_text)
                 .unwrap_or_default(),
             duration_ms: input.duration_ms,
         },
@@ -192,7 +153,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
                     result_text: call
                         .tool_response
                         .as_ref()
-                        .map(result_text)
+                        .map(payload::tool_response_text)
                         .unwrap_or_default(),
                 })
                 .collect(),
@@ -310,6 +271,75 @@ pub fn settings_fragment(command: &str, fail_closed: bool) -> Value {
     })
 }
 
+/// One payload from the Claude Code entry point.
+///
+/// Copilot CLI also runs a trusted repository's `.claude/settings.json`
+/// hooks, with its own payloads. Those arrive here and go to the Copilot CLI
+/// adapter, so they are labeled, correlated and rendered as Copilot's
+/// (`copilot_cli::is_copilot_payload`).
+fn parse_payload(bytes: &[u8]) -> Parsed {
+    if copilot_cli::is_copilot_payload(bytes) {
+        return (copilot_cli::ADAPTER.parse)(bytes);
+    }
+    match parse(bytes) {
+        Err(error) => Parsed::Invalid(error.code()),
+        Ok(input) => match to_event(&input) {
+            Ok((ctx, event)) => Parsed::Event(ctx, event),
+            Err(error) => Parsed::Unusable {
+                hook_event: input.hook_event_name,
+                code: error.code(),
+            },
+        },
+    }
+}
+
+/// [`render`], except for a routed Copilot payload (see [`parse_payload`]),
+/// which keeps its native event name. Copilot honors Claude Code's output on
+/// its PascalCase events, and its camelCase names never collide with Claude
+/// Code's.
+fn render_payload(hook_event: &str, response: &Response) -> Option<Value> {
+    if copilot_cli::is_camel_case_event(hook_event) {
+        return copilot_cli::render(hook_event, response);
+    }
+    render(hook_event, response)
+}
+
+fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'static str> {
+    Ok(InstallOutput {
+        document: settings_fragment(command, fail_closed),
+        notes: None,
+    })
+}
+
+/// The registry's descriptor of this adapter.
+pub const ADAPTER: Adapter = Adapter {
+    name: HARNESS,
+    client: ClientId::Claude,
+    display_name: "Claude Code",
+    // The second name is a routed Copilot payload's (see `parse_payload`).
+    pre_tool_use: &[PRE_TOOL_USE, copilot_cli::PRE_TOOL_USE],
+    event_keys: &[EVENT_KEY],
+    can_ask: CAN_ASK,
+    parse: parse_payload,
+    render: render_payload,
+    looks_like_pre_tool_use,
+    install: Install {
+        usage:
+            "  telltale hooks claude-code settings [--fail-closed] [COMMAND]
+                                                  print the Claude Code hooks settings fragment;
+                                                  --fail-closed blocks tool calls if the hook fails",
+        output: install_output,
+    },
+    // Exit 2 is the only block that does not need the event, but on a Stop it
+    // still prompts: the known residual for this harness.
+    nameless_block: NamelessBlock::Exit(2),
+    // The evaluation encoding is Claude Code's own (ADR 0002).
+    normalization: Normalization::Identity,
+    home: None,
+    rules: HostRules::Shared,
+    launchers: &["claude"],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,14 +347,17 @@ mod tests {
     #[test]
     fn bash_results_join_streams() {
         let response = json!({"stdout": "out", "stderr": "err", "interrupted": false});
-        assert_eq!(result_text(&response), "out\nerr");
-        assert_eq!(result_text(&json!({"stdout": "", "stderr": ""})), "");
+        assert_eq!(payload::tool_response_text(&response), "out\nerr");
+        assert_eq!(
+            payload::tool_response_text(&json!({"stdout": "", "stderr": ""})),
+            ""
+        );
     }
 
     #[test]
     fn read_results_use_file_content() {
         let response = json!({"type": "text", "file": {"filePath": "/x", "content": "hello\n"}});
-        assert_eq!(result_text(&response), "hello\n");
+        assert_eq!(payload::tool_response_text(&response), "hello\n");
     }
 
     /// Shape from the Claude Code hooks reference (not yet captured here: the

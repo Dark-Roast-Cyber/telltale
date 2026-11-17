@@ -24,6 +24,8 @@ mod chain_link_tests;
 #[cfg(test)]
 mod cloud_credential_tests;
 #[cfg(test)]
+mod declared_operation_tests;
+#[cfg(test)]
 mod download_link_tests;
 pub mod event3;
 mod http;
@@ -42,6 +44,11 @@ pub mod session;
 #[cfg(test)]
 mod shell_reading_tests;
 mod shell_text;
+#[cfg(all(test, feature = "source-io"))]
+mod source_declaration_tests;
+mod tool_arguments;
+#[cfg(test)]
+mod tool_reading_tests;
 mod types;
 #[cfg(test)]
 mod written_path_tests;

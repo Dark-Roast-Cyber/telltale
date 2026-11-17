@@ -1,6 +1,6 @@
 # GitHub Copilot CLI: hook contract
 
-Status: **adapter implemented** (`crates/telltale/src/hooks/copilot_cli.rs`) against
+Status: **adapter implemented** (`crates/telltale/src/hooks/harnesses/copilot_cli.rs`) against
 `@github/copilot` **1.0.105** (Linux x86-64). Evidence:
 
 - Contract: stub hooks and a scripted model, `crates/telltale/tests/hooks/fixtures/copilot-cli/1.0.105/`
@@ -115,7 +115,7 @@ turn ID, no permission mode, and **no per-call ID** in any hook payload.
 | Disable | Trusted repo `.github/copilot/settings.json` `disableAllHooks: true` disables user hooks (an agent can write this file). Untrusted folder: ignored | E2E |
 | Lockdown | Policy hooks in `/etc/github-copilot/policy.d` | Docs |
 
-## Adapter (`crates/telltale/src/hooks/copilot_cli.rs`)
+## Adapter (`crates/telltale/src/hooks/harnesses/copilot_cli.rs`)
 
 | Concern | Behavior | Evidence |
 | --- | --- | --- |

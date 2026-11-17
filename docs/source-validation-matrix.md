@@ -9,7 +9,10 @@ required coverage gates below have fixture-backed proof; live validation is an
 additional, bounded signal rather than broad source-store coverage.
 
 The static registry and exact-identity acquisition router support these eight
-identities. There are no hidden candidate or compatibility registrations.
+identities. There are no hidden candidate or compatibility registrations. The
+hook-journal identities of `telltale hooks` (`<client name>.hooks` for every
+client, for example `claude.hooks`) are a separate, host-fed kind: behind the `hook-journal`
+feature, never discovered, listed or catalogued, and outside this denominator.
 
 ## Legend
 

@@ -19,7 +19,8 @@
 //!   list, so reads of private keys by path go undetected.
 //!
 //! Each rule applies only to the tool names and shapes captured for one
-//! harness (tests/fixtures); Claude Code and unknown harnesses are the
+//! harness (tests/fixtures) and is declared by that harness's adapter
+//! (`Adapter::normalization`); Claude Code and unknown harnesses are the
 //! identity, and so is any tool or shape a rule does not name (MCP tools,
 //! shell tools). The helpers move values to the keys Telltale's Claude
 //! adapter understands, rename two read tools, and copy the file targets a
@@ -39,69 +40,33 @@
 
 use serde_json::{Map, Value};
 
+use crate::hooks::harness::Normalization;
+use crate::hooks::harnesses;
 use crate::hooks::runtime::ToolCall;
 
-/// `Context::harness` names the rules below are keyed by.
-pub const COPILOT_CLI: &str = "copilot-cli";
-pub const CODEX_CLI: &str = "codex-cli";
-pub const OPENCODE: &str = "opencode";
-
-/// One harness's captured native shapes that need normalization.
-struct Rules {
+/// One harness's captured native shapes that need normalization. Each
+/// adapter declares its own (`harnesses/<name>.rs`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Rules {
     /// Patch tools: name, whether a raw-string input is the patch, and the
     /// object key that carries it.
-    patch_tools: &'static [(&'static str, bool, Option<&'static str>)],
+    pub patch_tools: &'static [(&'static str, bool, Option<&'static str>)],
     /// Tools whose authored-content keys are renamed.
-    key_tools: &'static [&'static str],
+    pub key_tools: &'static [&'static str],
     /// Native authored-content keys and the Claude keys Telltale routes them
     /// by. `content`/`new_string` are authored content; `old_string` is
     /// replaced text, which Telltale ignores (as for Claude `Edit`).
-    keys: &'static [(&'static str, &'static str)],
+    pub keys: &'static [(&'static str, &'static str)],
     /// Native read tools Telltale's read-tool list does not know; it decides
     /// "this call reads the path" from the tool name.
-    tool_names: &'static [(&'static str, &'static str)],
+    pub tool_names: &'static [(&'static str, &'static str)],
 }
 
-/// Copilot CLI 1.0.105: camelCase `apply_patch`/`create`/`edit`/`view`/`rg`,
-/// PascalCase `Edit` (raw-string patch or Copilot keys) and `Write`.
-const COPILOT_RULES: Rules = Rules {
-    patch_tools: &[("apply_patch", true, None), ("Edit", true, None)],
-    key_tools: &["create", "edit", "Write", "Edit"],
-    keys: &[
-        ("file_text", "content"),
-        ("new_str", "new_string"),
-        ("old_str", "old_string"),
-    ],
-    tool_names: &[("view", "Read"), ("rg", "Grep")],
-};
-
-/// Codex CLI 0.166.0: `apply_patch` `{"command": patch}` (a freeform raw
-/// string is the same tool's other form).
-const CODEX_RULES: Rules = Rules {
-    patch_tools: &[("apply_patch", true, Some("command"))],
-    key_tools: &[],
-    keys: &[],
-    tool_names: &[],
-};
-
-/// OpenCode 1.19.5 `apply_patch` and 2.2.5 `patch` (`{"patchText": patch}`),
-/// `edit` and `multiedit` (`edits[]`) with camelCase keys.
-const OPENCODE_RULES: Rules = Rules {
-    patch_tools: &[
-        ("apply_patch", false, Some("patchText")),
-        ("patch", false, Some("patchText")),
-    ],
-    key_tools: &["edit", "multiedit"],
-    keys: &[("newString", "new_string"), ("oldString", "old_string")],
-    tool_names: &[],
-};
-
+/// The rules for a `Context::harness` name, or `None` for the identity.
 fn rules(harness: &str) -> Option<&'static Rules> {
-    match harness {
-        COPILOT_CLI => Some(&COPILOT_RULES),
-        CODEX_CLI => Some(&CODEX_RULES),
-        OPENCODE => Some(&OPENCODE_RULES),
-        _ => None,
+    match harnesses::normalization(harness) {
+        Normalization::Rules(rules) => Some(rules),
+        Normalization::Identity => None,
     }
 }
 
@@ -376,6 +341,11 @@ fn rename_keys(map: Map<String, Value>, keys: &[(&str, &str)]) -> Map<String, Va
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::harnesses::{codex_cli, copilot_cli, opencode};
+
+    const COPILOT_CLI: &str = copilot_cli::HARNESS;
+    const CODEX_CLI: &str = codex_cli::HARNESS;
+    const OPENCODE: &str = opencode::NAME;
     use serde_json::json;
 
     /// Every string in `value`, recursively.

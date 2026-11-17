@@ -10,8 +10,17 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::hooks::harness::{Harness, Home};
 use crate::hooks::identity;
 use crate::rule_resolution::RulePackPaths;
+
+/// What every ID of a host self-protection rule, bundled or generated, starts
+/// with. With [`RuleContent::self_protection`] on, the namespace is the
+/// host's: no user rule content may name an ID in it.
+pub const HOST_RULE_ID_PREFIX: &str = "tth.tamper.";
+
+/// The category of every host and generated rule.
+pub const HOST_RULE_CATEGORY: &str = "approval_bypass";
 
 /// Whether decisions are returned to the harness or only recorded.
 ///
@@ -123,6 +132,47 @@ impl Default for RuleContent {
 }
 
 impl RuleContent {
+    /// The first file of user rule content that names an ID in the host rules'
+    /// namespace (an override entry, or a rule or modifier in a rule document
+    /// or package), while self-protection is on. A file that does not parse is
+    /// not reported here: building the rules fails on it.
+    fn host_rule_claim(&self) -> Option<&Path> {
+        if !self.self_protection {
+            return None;
+        }
+        let read = |path: &Path| crate::hooks::state::read_operator_input(path).ok();
+        let reserved = |id: &str| id.starts_with(HOST_RULE_ID_PREFIX);
+        let in_set = |set: &telltale_rules::RuleSet| {
+            let rules = set.rules.iter().map(|rule| &rule.id);
+            let modifiers = set.modifiers.iter().map(|modifier| &modifier.id);
+            rules.chain(modifiers).any(|id| reserved(id))
+        };
+        let packs = &self.packs;
+        let documents = packs
+            .organization
+            .iter()
+            .chain(&packs.deployment)
+            .chain(&packs.local)
+            .find(|path| {
+                read(path)
+                    .and_then(|text| serde_yaml::from_str::<telltale_rules::RuleSet>(&text).ok())
+                    .is_some_and(|set| in_set(&set))
+            });
+        let packages = packs.packages.iter().find(|path| {
+            read(path)
+                .and_then(|text| telltale_rules::package::RulePackage::parse(&text).ok())
+                .is_some_and(|package| package.documents().iter().any(in_set))
+        });
+        let overrides = self.overrides.iter().find(|path| {
+            read(path)
+                .and_then(|text| {
+                    serde_yaml::from_str::<telltale_rules::RuleOverrideDocument>(&text).ok()
+                })
+                .is_some_and(|document| document.rule_ids().any(reserved))
+        });
+        documents.or(packages).or(overrides).map(PathBuf::as_path)
+    }
+
     /// Every rule, package, override and policy file.
     pub fn files(&self) -> impl Iterator<Item = &PathBuf> {
         let packs = &self.packs;
@@ -224,6 +274,10 @@ impl Default for Config {
 #[derive(Debug)]
 pub enum ConfigError {
     Invalid(&'static str),
+    /// A rule, package or override file names a host rule ID.
+    HostRuleClaimed(PathBuf),
+    /// The policy file would leave a host rule out of the rules.
+    PolicyDropsHostRule(PathBuf),
     NoStateDir,
 }
 
@@ -231,6 +285,16 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(what) => write!(f, "invalid config: {what}"),
+            Self::HostRuleClaimed(path) => write!(
+                f,
+                "invalid config: {} names a rule ID under {HOST_RULE_ID_PREFIX}*, which hooks reserves for its self-protection rules while hooks.self_protection_rules is on",
+                path.display()
+            ),
+            Self::PolicyDropsHostRule(path) => write!(
+                f,
+                "invalid config: the policy {} would turn off hooks self-protection rules, which stay on while hooks.self_protection_rules is on; a policy that selects by category must include {HOST_RULE_CATEGORY}, and one that selects by rule ID must list every {HOST_RULE_ID_PREFIX}* rule",
+                path.display()
+            ),
             Self::NoStateDir => write!(f, "no state directory: set {NO_STATE_DIR_HINT}"),
         }
     }
@@ -267,8 +331,8 @@ impl Config {
         config
     }
 
-    /// Values that constrain each other, checked before the configuration is
-    /// used.
+    /// Values that constrain each other, and rule content that may not exist
+    /// next to the host rules, checked before the configuration is used.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let t = &self.thresholds;
         if t.action_ask == 0 || t.action_deny == 0 {
@@ -286,6 +350,15 @@ impl Config {
         }
         if self.window.max_records == 0 || self.window.max_bytes == 0 {
             return Err(ConfigError::Invalid("window bounds must be positive"));
+        }
+        if let Some(path) = self.rules.host_rule_claim() {
+            return Err(ConfigError::HostRuleClaimed(path.to_owned()));
+        }
+        if self.rules.self_protection
+            && let Some(policy) = &self.rules.policy
+            && crate::hooks::engine::policy_drops_host_rule(policy, &self.protected_paths())
+        {
+            return Err(ConfigError::PolicyDropsHostRule(policy.clone()));
         }
         Ok(())
     }
@@ -361,7 +434,7 @@ impl Config {
         part("config", format!("{self:?}").as_bytes());
         // Every input to Engine::new, including environment-derived paths
         // (XDG_STATE_HOME, HOME, XDG_RUNTIME_DIR; LOCALAPPDATA, USERPROFILE on
-        // Windows; CODEX_HOME, COPILOT_HOME).
+        // Windows; each harness's home variable).
         let state = self.resolved_state_dir().ok();
         let telemetry = self.resolved_telemetry_path().ok();
         let socket = self.resolved_socket_path().ok();
@@ -440,10 +513,13 @@ pub fn current_uid() -> u32 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessHome {
     pub variable: &'static str,
+    /// Pattern text for the hook files below the home (`harness::Home`).
+    pub hook_files: &'static str,
     pub path: PathBuf,
 }
 
-/// `CODEX_HOME` and `COPILOT_HOME` as the hook sees them. A harness moved there
+/// Every adapter's relocatable config home (`Adapter::home`) as the hook sees
+/// it. A harness moved there
 /// loads its hooks from that directory, and static rules can only know the
 /// variable's name and the default directory, so the engine generates rules
 /// for these literal paths. A hook inherits these from the harness, so this
@@ -453,7 +529,14 @@ pub struct HarnessHome {
 /// canonicalizes `CODEX_HOME`).
 pub fn harness_homes() -> Vec<HarnessHome> {
     let mut homes = Vec::new();
-    for variable in ["CODEX_HOME", "COPILOT_HOME"] {
+    let declared = Harness::ALL
+        .iter()
+        .filter_map(|harness| harness.adapter().home);
+    for Home {
+        variable,
+        hook_files,
+    } in declared
+    {
         let Some(path) = env_path(variable) else {
             continue;
         };
@@ -470,11 +553,13 @@ pub fn harness_homes() -> Vec<HarnessHome> {
         }
         homes.push(HarnessHome {
             variable,
+            hook_files,
             path: path.clone(),
         });
         if let Some(canonical) = canonical.filter(|canonical| *canonical != path) {
             homes.push(HarnessHome {
                 variable,
+                hook_files,
                 path: canonical,
             });
         }

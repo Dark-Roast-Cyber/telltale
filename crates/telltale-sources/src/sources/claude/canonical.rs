@@ -13,6 +13,8 @@ use telltale_schema::observation::{
 
 use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory};
 
+use crate::tool_operation::declare;
+
 use super::native::{
     ClaudeContentBlock, ClaudeNativeRecord, is_claude_metadata_discriminator,
     is_known_claude_discriminator,
@@ -22,6 +24,8 @@ use super::native::{
 pub(crate) struct ClaudeCanonicalOptions {
     pub(crate) observed_at: ObservedAt,
     pub(crate) scale: telltale_schema::observation::SourceScale,
+    /// The adapter type and source ID stamped on every observation.
+    pub(crate) adapter: (&'static str, &'static str),
 }
 
 impl ClaudeCanonicalOptions {
@@ -29,6 +33,16 @@ impl ClaudeCanonicalOptions {
         Self {
             observed_at,
             scale: telltale_schema::observation::SourceScale::FLOOR,
+            adapter: ("claude_code", "claude.projects"),
+        }
+    }
+
+    /// Stamps the identity the source was acquired under: the hook journal
+    /// of any client is read here, so it carries its own.
+    pub(crate) fn with_adapter(self, adapter_type: &'static str, source_id: &'static str) -> Self {
+        Self {
+            adapter: (adapter_type, source_id),
+            ..self
         }
     }
 
@@ -499,7 +513,7 @@ fn tool_body(block: &ClaudeContentBlock) -> Result<ToolBody, ClaudeCanonicalErro
                 paths.push(("tool.arguments", FactProvenance::Reported));
             }
             Ok(ToolBody {
-                body,
+                body: declare(super::tools::TOOLS, body),
                 facts: paths,
                 resource_path: facet,
             })
@@ -582,8 +596,8 @@ fn common_builder(
 ) -> Result<ObservationBuilder, ClaudeCanonicalError> {
     let mut source_provenance = SourceProvenance::new(
         IngestionMode::SessionStore,
-        "claude_code",
-        "claude.projects",
+        options.adapter.0,
+        options.adapter.1,
         Fidelity::PartialStructured,
     )?
     .with_source_sequence(record.source_sequence);

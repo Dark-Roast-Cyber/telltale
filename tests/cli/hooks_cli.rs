@@ -289,6 +289,255 @@ fn misconfiguration_reason_carries_no_paths() {
     );
 }
 
+/// An override file for `config` naming `rule_id`, in `overrides.d`.
+fn write_override(config: &std::path::Path, rule_id: &str, change: &str) -> std::path::PathBuf {
+    let path = config.join("overrides.d").join("override.yaml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "version: 1\noverrides:\n  - rule_id: {rule_id}\n    {change}\n    reason: synthetic reason text\n"
+        ),
+    )
+    .unwrap();
+    path
+}
+
+/// What `telltale rules test` finds in a one-call session of `command`, with
+/// `config` as the only config root.
+fn scanner_matches(config: &std::path::Path, command: &str) -> Vec<Value> {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = dir.path().join("session.jsonl");
+    let event = json!({
+        "type": "event_msg",
+        "session_id": "synthetic-session",
+        "timestamp": "2026-04-03T05:00:01Z",
+        "payload": {"type": "tool_call", "tool_name": "tool", "command": command, "message": "Fixture."}
+    });
+    std::fs::write(&fixture, format!("{event}\n")).unwrap();
+    let mut scan = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    scan.args(["rules", "test", "--config-dir"])
+        .arg(config)
+        .arg(&fixture);
+    for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
+        scan.env(var, "/nonexistent-home-for-test");
+    }
+    let out = scan.env_remove("XDG_CONFIG_HOME").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&out.stdout).unwrap();
+    summary["matches"].as_array().unwrap().clone()
+}
+
+/// The decision a hook returns for a Bash `command` under `config`.
+fn hook_decision(config: &std::path::Path, command: &str) -> Option<String> {
+    let state = tempfile::tempdir().unwrap();
+    let env = [("TELLTALE_HOOKS_STATE_DIR", state.path())];
+    let (code, stdout, stderr) = run_in(Some(config), &pre(command), &env, &[]);
+    assert_eq!(code, 0, "{stderr}");
+    let output: Value = serde_json::from_str(stdout.trim()).ok()?;
+    output["hookSpecificOutput"]["permissionDecision"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// Hooks honor the config root's rule content as the scanner does: an override
+/// that quiets one rule changes the hook's verdict for a call and the
+/// scanner's result for the same call in a session.
+#[test]
+fn an_override_in_a_config_root_changes_the_hook_and_the_scanner_the_same_way() {
+    const CALL: &str = "cat ~/.aws/credentials";
+    const RULE: &str = "credential.cloud_harvest";
+    let enforce = "hooks:\n  mode: enforce\n";
+    let plain_dir = tempfile::tempdir().unwrap();
+    let plain = common::config_root(plain_dir.path(), enforce);
+    let quiet_dir = tempfile::tempdir().unwrap();
+    let quiet = common::config_root(quiet_dir.path(), enforce);
+    write_override(&quiet, RULE, "enabled: false");
+
+    assert_eq!(hook_decision(&plain, CALL).as_deref(), Some("ask"));
+    let found = scanner_matches(&plain, CALL);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["rule_ids"], json!([RULE]));
+
+    assert_eq!(hook_decision(&quiet, CALL), None);
+    assert!(scanner_matches(&quiet, CALL).is_empty());
+}
+
+/// Rule content that names a hooks self-protection rule is invalid
+/// configuration: enforcement that was asked for fails closed for tool calls,
+/// whatever `on_error` says, and `check` reports it without the file's content.
+#[test]
+fn user_rule_content_that_names_a_self_protection_rule_is_invalid_configuration() {
+    for change in ["enabled: false", "score: 5"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = common::config_root(
+            dir.path(),
+            "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n",
+        );
+        let file = write_override(&config, "tth.tamper.hook_settings_write", change);
+        let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+
+        for command in ["ls", "rm -f ~/.claude/settings.json"] {
+            let (code, stdout, stderr) = run_in(Some(&config), &pre(command), &env, &[]);
+            assert_eq!(code, 0, "{stderr}");
+            let output: Value = serde_json::from_str(stdout.trim()).unwrap();
+            assert_eq!(
+                output["hookSpecificOutput"]["permissionDecision"], "deny",
+                "{change}: {command}"
+            );
+            assert!(stdout.contains("misconfigured"), "{stdout}");
+            assert!(!stdout.contains("override.yaml"), "{stdout}");
+        }
+
+        let out = isolated()
+            .arg("check")
+            .arg("--config-dir")
+            .arg(&config)
+            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("tth.tamper."), "{stderr}");
+        assert!(stderr.contains(&*file.display().to_string()), "{stderr}");
+        assert!(!stderr.contains("synthetic reason text"), "{stderr}");
+        assert!(!stderr.contains("hook_settings_write"), "{stderr}");
+    }
+}
+
+/// Without a request for enforcement the same configuration is detect-only:
+/// nothing is returned, the failure is recorded, and the host rules still
+/// detect (on the defaults the hook falls back to).
+#[test]
+fn a_detect_only_hook_with_such_content_records_it_and_keeps_the_host_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: observe\n");
+    write_override(&config, "tth.tamper.hook_settings_write", "enabled: false");
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+    let (code, stdout, stderr) = run_in(
+        Some(&config),
+        &pre("rm -f ~/.claude/settings.json"),
+        &env,
+        &[],
+    );
+    assert_eq!((code, stdout.as_str()), (0, ""), "{stderr}");
+    assert!(stderr.contains("detect-only"), "{stderr}");
+    let telemetry = std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap();
+    let records: Vec<Value> = telemetry
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        records
+            .iter()
+            .any(|r| r["kind"] == "error" && r["error_code"] == "config_invalid"),
+        "{telemetry}"
+    );
+    let decision = records.iter().find(|r| r["kind"] == "decision").unwrap();
+    assert_eq!(decision["decision"]["verdict"], "deny");
+    assert_eq!(decision["decision"]["returned"], false);
+}
+
+/// A policy file for `config`, in `policies.d`.
+fn write_policy(config: &std::path::Path, policy: &str) -> std::path::PathBuf {
+    let path = config.join("policies.d").join("policy.yaml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, policy).unwrap();
+    path
+}
+
+/// Policies under which a self-protection rule would not stay enabled.
+const POLICIES_THAT_DROP_HOST_RULES: &[&str] = &[
+    "version: 1\ndisabled_rules: [tth.tamper.hook_settings_write]\n",
+    "version: 1\ndisabled_categories: [approval_bypass]\n",
+    "version: 1\nenabled_rules: [network.download]\n",
+    "version: 1\nenabled_categories: [network]\n",
+];
+
+/// A policy is rule content like the rest: one that would turn a
+/// self-protection rule off is invalid configuration, and `check` names its
+/// file and nothing of what it says.
+#[test]
+fn a_policy_that_would_turn_off_a_self_protection_rule_is_invalid_configuration() {
+    for policy in POLICIES_THAT_DROP_HOST_RULES {
+        let dir = tempfile::tempdir().unwrap();
+        let config = common::config_root(
+            dir.path(),
+            "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n",
+        );
+        let file = write_policy(&config, policy);
+        let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+        let (code, stdout, stderr) = run_in(Some(&config), &pre("ls"), &env, &[]);
+        assert_eq!(code, 0, "{policy}: {stderr}");
+        assert!(stdout.contains("\"deny\""), "{policy}: {stdout}");
+        assert!(stdout.contains("misconfigured"), "{policy}: {stdout}");
+
+        let out = isolated()
+            .arg("check")
+            .arg("--config-dir")
+            .arg(&config)
+            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{policy}: {stderr}");
+        assert!(stderr.contains(&*file.display().to_string()), "{stderr}");
+        assert!(!stderr.contains("network.download"), "{stderr}");
+
+        // Without a request for enforcement: detect-only, recorded, and the
+        // self-protection rules still detect.
+        let dir = tempfile::tempdir().unwrap();
+        let config = common::config_root(dir.path(), "hooks:\n  mode: observe\n");
+        write_policy(&config, policy);
+        let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+        let (code, stdout, stderr) = run_in(
+            Some(&config),
+            &pre("rm -f ~/.claude/settings.json"),
+            &env,
+            &[],
+        );
+        assert_eq!((code, stdout.as_str()), (0, ""), "{policy}: {stderr}");
+        let telemetry = std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap();
+        let records: Vec<Value> = telemetry
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(
+            records
+                .iter()
+                .any(|r| r["kind"] == "error" && r["error_code"] == "config_invalid"),
+            "{policy}: {telemetry}"
+        );
+        let decision = records.iter().find(|r| r["kind"] == "decision").unwrap();
+        assert_eq!(decision["decision"]["verdict"], "deny", "{policy}");
+    }
+}
+
+/// A policy that leaves the self-protection rules alone loads, and changes the
+/// hook's verdict and the scanner's result the same way.
+#[test]
+fn a_policy_that_leaves_the_self_protection_rules_alone_changes_the_hook_and_the_scanner() {
+    const CALL: &str = "cat ~/.aws/credentials";
+    let enforce = "hooks:\n  mode: enforce\n";
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), enforce);
+    write_policy(
+        &config,
+        "version: 1\ndisabled_rules: [credential.cloud_harvest]\n",
+    );
+    assert_eq!(hook_decision(&config, CALL), None);
+    assert!(scanner_matches(&config, CALL).is_empty());
+    // The self-protection rules are still on under it.
+    assert_eq!(
+        hook_decision(&config, "rm -f ~/.claude/settings.json").as_deref(),
+        Some("deny")
+    );
+}
+
 /// With no explicit paths, settings come from Telltale's default user config
 /// root and state from the platform's conventional location.
 #[test]
@@ -873,5 +1122,68 @@ fn settings_refuses_an_unknown_flag_on_every_entry_point() {
         let expected = if entry_point == "codex-cli" { 1 } else { 0 };
         assert_eq!(code, Some(expected), "{entry_point}");
         assert!(!stderr.contains("usage:"), "{entry_point}");
+    }
+}
+
+/// The CLI takes its harness list from the registry: `harnesses` prints it,
+/// the usage text has a `hook` and a `settings` line for each entry, and
+/// every entry prints a settings document.
+#[test]
+fn the_cli_lists_and_serves_every_registered_harness() {
+    use telltale_core::hooks::harness::Harness;
+    let run = |args: &[&str]| {
+        let out = isolated().args(args).output().unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+    let (code, listing) = run(&["harnesses"]);
+    assert_eq!(code, Some(0));
+    let (code, usage) = run(&["--help"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(listing.lines().count(), Harness::ALL.len());
+    for harness in Harness::ALL {
+        let adapter = harness.adapter();
+        let name = adapter.name;
+        assert!(
+            listing.lines().any(|line| {
+                line.split_once(' ').is_some_and(|(first, rest)| {
+                    first == name && rest.trim() == adapter.display_name
+                })
+            }),
+            "{name}: {listing}"
+        );
+        assert!(
+            usage.contains(&format!("\n  telltale hooks {name} hook ")),
+            "{name}"
+        );
+        assert!(
+            usage.contains(&format!("\n  telltale hooks {name} settings ")),
+            "{name}"
+        );
+        let (code, document) = run(&[name, "settings"]);
+        assert_eq!(code, Some(0), "{name}");
+        let document: Value = serde_json::from_str(&document).unwrap();
+        assert!(document["hooks"].is_object(), "{name}");
+    }
+}
+
+/// A registered adapter is an "Implemented" row of the capability matrix.
+#[test]
+fn every_registered_harness_is_implemented_in_the_capability_matrix() {
+    use telltale_core::hooks::harness::Harness;
+    let matrix = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/hooks/capability-matrix.md"),
+    )
+    .unwrap();
+    for harness in Harness::ALL {
+        let display_name = harness.adapter().display_name;
+        let row = matrix
+            .lines()
+            .find(|line| line.starts_with(&format!("| {display_name} |")))
+            .unwrap_or_else(|| panic!("no row for {display_name}"));
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        assert_eq!(cells.get(3), Some(&"Implemented"), "{row}");
     }
 }

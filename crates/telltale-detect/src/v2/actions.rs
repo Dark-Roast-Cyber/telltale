@@ -1,6 +1,7 @@
 //! Action interpretation beside the frozen session compatibility view. No I/O.
 use super::Severity;
 use super::session::{ProcessingError, RetentionBudget};
+use super::tool_arguments::{self, ArgumentReading};
 use crate::process_chain::{statement_spans, tokenize};
 use regex::Regex;
 use serde::Serialize;
@@ -567,6 +568,7 @@ fn frame(hash: &mut Sha256, bytes: &[u8]) {
 }
 
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct ActionView {
     fields: BTreeMap<&'static str, String>,
     commands: Vec<Vec<String>>,
@@ -603,6 +605,17 @@ struct ActionView {
     /// Where in `file_path` the files input redirections open are. These are read
     /// whatever else the call does, and say nothing of its other words.
     opened_paths: Range<usize>,
+    /// The fields and `recorded_paths` of this call read without its declared
+    /// operation, when they differ: the replay identity covers what it covered
+    /// before declarations existed, so a declaration never changes it.
+    replay_basis: Option<Box<ReplayBasis>>,
+}
+
+/// What the replay identity reads of a call.
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct ReplayBasis {
+    fields: BTreeMap<&'static str, String>,
+    recorded_paths: Option<usize>,
 }
 impl ActionView {
     fn put(&mut self, field: &'static str, text: String) {
@@ -671,10 +684,128 @@ fn string(value: &JsonValue) -> Option<&str> {
     }
 }
 
+/// The action view of one observation. A call with a declared operation is
+/// read without it, on `budget`, exactly as a call with no declaration is. When
+/// the declaration can add to that reading, the call is read again with it, on
+/// a detached budget, so the declaration neither spends the source's work nor
+/// makes a read fail that succeeded without it; if that read fails, the call
+/// keeps the first. Most declared calls hold in their arguments all that their
+/// declaration names, and are read once.
 fn view(
     observation: &CanonicalObservationV2,
     budget: &mut RetentionBudget,
 ) -> Result<ActionView, ProcessingError> {
+    let base = read_view(observation, budget, false)?;
+    let ObservationBody::Tool(tool) = observation.body() else {
+        return Ok(base);
+    };
+    let Some(operation) = tool.operation() else {
+        return Ok(base);
+    };
+    if declaration_adds(observation, tool, operation, budget) {
+        return Ok(declared_view(observation, budget, base));
+    }
+    Ok(base)
+}
+
+/// Whether reading a call with its declaration can differ from reading it
+/// without. The second reading is a function of the argument reading, which the
+/// declaration only appends to, and of two flags its kind can change, so a
+/// declaration that changes none of these leaves the whole view as it was. Any
+/// doubt, including a failed reading, answers yes.
+fn declaration_adds(
+    observation: &CanonicalObservationV2,
+    tool: &ToolObservation,
+    operation: &ToolOperation,
+    budget: &RetentionBudget,
+) -> bool {
+    if tool_arguments::reads_paths(tool, true) != tool_arguments::reads_paths(tool, false)
+        || tool_arguments::writes_by_kind(tool, true) != tool_arguments::writes_by_kind(tool, false)
+    {
+        return true;
+    }
+    if !operation.written_paths().is_empty()
+        && tool_arguments::tool_written_paths(tool, true)
+            != tool_arguments::tool_written_paths(tool, false)
+    {
+        return true;
+    }
+    if operation.commands().is_empty()
+        && operation.read_paths().is_empty()
+        && operation.written_paths().is_empty()
+        && operation.urls().is_empty()
+    {
+        return false;
+    }
+    read_arguments(observation, tool, &mut budget.detached())
+        .map_or(true, |mut reading| reading.declare(operation))
+}
+
+/// The view of a call read with its declaration, on a detached budget, which
+/// keeps the replay identity of the reading without it, `base`, when the two
+/// differ. A failed reading leaves `base`.
+fn declared_view(
+    observation: &CanonicalObservationV2,
+    budget: &RetentionBudget,
+    base: ActionView,
+) -> ActionView {
+    match read_view(observation, &mut budget.detached(), true) {
+        Ok(mut declared) => {
+            if declared.fields != base.fields || declared.recorded_paths != base.recorded_paths {
+                declared.replay_basis = Some(Box::new(ReplayBasis {
+                    fields: base.fields,
+                    recorded_paths: base.recorded_paths,
+                }));
+            }
+            declared
+        }
+        Err(_) => base,
+    }
+}
+
+/// What the keys of a call's arguments say, or its command text where it has
+/// no argument object.
+fn read_arguments(
+    observation: &CanonicalObservationV2,
+    tool: &ToolObservation,
+    budget: &mut RetentionBudget,
+) -> Result<ArgumentReading, ProcessingError> {
+    let mut reading = ArgumentReading::default();
+    match tool.arguments() {
+        Some(JsonValue::Object(input)) => reading.read(input),
+        Some(JsonValue::String(text)) => {
+            // Some native envelopes carry an encoded object as a string.
+            budget.charge(text.len())?;
+            if let Some((input, skipped)) = tool_arguments::decoded_argument_object(text) {
+                reading.read(&input);
+                reading.read_skipped(&skipped);
+            } else {
+                reading.command.push_str(text);
+            }
+        }
+        _ => {
+            let resolution = super::SelectorRegistry::new().try_resolve(
+                super::SelectorId::parse("command.text").unwrap(),
+                observation,
+                budget,
+            )?;
+            if let Some(JsonValue::String(text)) = resolution.value() {
+                reading.command.push_str(text);
+            } else if let Some(text) = tool.searchable_arguments() {
+                reading.command.push_str(text);
+            }
+        }
+    }
+    Ok(reading)
+}
+
+fn read_view(
+    observation: &CanonicalObservationV2,
+    budget: &mut RetentionBudget,
+    declared: bool,
+) -> Result<ActionView, ProcessingError> {
+    #[cfg(test)]
+    READINGS.with(|count| count.set(count.get() + 1));
     let mut out = ActionView::default();
     if observation.source().ingestion_mode() == IngestionMode::Import {
         return Ok(out);
@@ -733,40 +864,22 @@ fn view(
             if let Some(name) = tool.name() {
                 out.put("tool_name", name.to_owned());
             }
-            out.reads_paths = tool.name().is_some_and(|name| {
-                matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "read" | "read_file" | "readfile" | "view_file" | "glob" | "list" | "grep"
-                )
-            });
-            for path in super::selector::tool_written_paths(tool.name(), tool.arguments()) {
+            out.reads_paths = tool_arguments::reads_paths(tool, declared);
+            for path in tool_arguments::tool_written_paths(tool, declared) {
                 out.put("written_path", path);
             }
-            let mut command = String::new();
-            match tool.arguments() {
-                Some(JsonValue::Object(input)) => structured_input(input, &mut out, &mut command),
-                Some(JsonValue::String(text)) => {
-                    // Some native envelopes carry an encoded object as a string.
-                    budget.charge(text.len())?;
-                    if let Some((input, skipped)) = super::selector::decoded_argument_object(text) {
-                        structured_input(&input, &mut out, &mut command);
-                        skipped_input(&skipped, &mut out, &mut command);
-                    } else {
-                        command.push_str(text);
-                    }
-                }
-                _ => {
-                    let resolution = super::SelectorRegistry::new().try_resolve(
-                        super::SelectorId::parse("command.text").unwrap(),
-                        observation,
-                        budget,
-                    )?;
-                    if let Some(JsonValue::String(text)) = resolution.value() {
-                        command.push_str(text);
-                    } else if let Some(text) = tool.searchable_arguments() {
-                        command.push_str(text);
-                    }
-                }
+            let mut reading = read_arguments(observation, tool, budget)?;
+            if let Some(operation) = tool.operation().filter(|_| declared) {
+                reading.declare(operation);
+            }
+            let ArgumentReading {
+                mut command,
+                argv,
+                facts,
+            } = reading;
+            out.argv = argv;
+            for (field, text) in facts {
+                out.put(field, text);
             }
             budget.charge(command.len())?;
             if tool
@@ -931,6 +1044,97 @@ fn view(
     Ok(out)
 }
 
+// How many times `read_view` ran on this thread, for tests.
+#[cfg(test)]
+thread_local! {
+    static READINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many readings one observation's view takes.
+#[cfg(test)]
+pub(super) fn view_readings(observation: &CanonicalObservationV2) -> usize {
+    let before = READINGS.with(std::cell::Cell::get);
+    view(observation, &mut RetentionBudget::new()).expect("within budget");
+    READINGS.with(std::cell::Cell::get) - before
+}
+
+/// Asserts that the view of one observation is what reading it twice, without
+/// its declaration and then with it, gives, in every fact, flag, replay basis
+/// and amount of work spent.
+#[cfg(test)]
+pub(super) fn assert_one_reading_matches_two(observation: &CanonicalObservationV2, label: &str) {
+    use std::sync::atomic::Ordering;
+    let mut once = RetentionBudget::new();
+    let single = view(observation, &mut once).expect("within budget");
+    let mut twice = RetentionBudget::new();
+    let base = read_view(observation, &mut twice, false).expect("within budget");
+    let double = match observation.body() {
+        ObservationBody::Tool(tool) if tool.operation().is_some() => {
+            declared_view(observation, &twice, base)
+        }
+        _ => base,
+    };
+    assert_eq!(single, double, "{label}");
+    assert_eq!(
+        once.work_bytes.load(Ordering::Relaxed),
+        twice.work_bytes.load(Ordering::Relaxed),
+        "{label}: work spent"
+    );
+}
+
+/// The facts the action view reads from one observation, for tests that pin
+/// the reading: each field, then the flags that are set.
+#[cfg(test)]
+pub(super) fn view_facts(observation: &CanonicalObservationV2) -> String {
+    let view = view(observation, &mut RetentionBudget::new()).expect("within budget");
+    let mut facts: Vec<String> = view
+        .fields
+        .iter()
+        .map(|(field, text)| format!("{field}={text:?}"))
+        .collect();
+    if view.argv {
+        facts.push("argv".to_owned());
+    }
+    if view.reads_paths {
+        facts.push("reads_paths".to_owned());
+    }
+    facts.join(" ")
+}
+
+/// The fields and flags the action view reads from one observation, for tests
+/// that compare two readings of a call.
+#[cfg(test)]
+pub(super) fn view_reading(
+    observation: &CanonicalObservationV2,
+) -> (BTreeMap<&'static str, String>, bool) {
+    let view = view(observation, &mut RetentionBudget::new()).expect("within budget");
+    (view.fields, view.reads_paths)
+}
+
+/// The work an observation's view spends from a budget that already holds
+/// `used` bytes of work, and its fields; `None` when the view fails.
+#[cfg(test)]
+pub(super) fn view_work(
+    observation: &CanonicalObservationV2,
+    used: usize,
+) -> Option<(usize, BTreeMap<&'static str, String>)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut budget = RetentionBudget::with_work(
+        std::sync::Arc::new(AtomicUsize::new(used)),
+        telltale_schema::observation::SourceScale::FLOOR,
+    );
+    let view = view(observation, &mut budget).ok()?;
+    Some((budget.work_bytes.load(Ordering::Relaxed), view.fields))
+}
+
+/// The replay identity of one observation read on its own, for tests.
+#[cfg(test)]
+pub(super) fn replay_identity(observation: &CanonicalObservationV2) -> Option<String> {
+    let mut budget = RetentionBudget::new();
+    let view = view(observation, &mut budget).expect("within budget");
+    replay(observation, &view, &mut budget).expect("within budget")
+}
+
 /// Read only literal arguments of the supported script-tool API. Arbitrary
 /// JavaScript is not executed, flattened, or treated as shell input.
 fn script_actions(
@@ -1020,164 +1224,6 @@ fn script_literal(
         }
     }
     Ok(None)
-}
-
-fn is_command_argument_key(key: &str) -> bool {
-    matches!(key, "command" | "cmd" | "commandLine" | "command_line")
-}
-
-fn is_authored_argument_key(key: &str) -> bool {
-    matches!(key, "content" | "new_string" | "new_source")
-}
-
-fn is_path_argument_key(key: &str) -> bool {
-    matches!(
-        key,
-        "file_path"
-            | "filePath"
-            | "path"
-            | "paths"
-            | "notebook_path"
-            | "file"
-            | "filename"
-            | "target_file"
-            | "glob"
-            | "pattern"
-    )
-}
-
-/// Encoded-argument members skipped by value-bound admission. Members with a
-/// known role are routed exactly as admitted members are, from a transient value
-/// used only for this view (its bytes were charged before decoding), so replaced
-/// `old_string` text never becomes command text. Other members, and members too
-/// deep to parse, stay searchable as command text unless their key is ignored.
-fn skipped_input(skipped: &[(String, String)], out: &mut ActionView, command: &mut String) {
-    for (key, raw) in skipped {
-        if is_ignored_argument_key(key) {
-            continue;
-        }
-        let routed = is_command_argument_key(key)
-            || is_authored_argument_key(key)
-            || is_path_argument_key(key)
-            || key == "edits"
-            || super::selector::is_url_argument_key(key);
-        match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(value) if routed => {
-                let member = BTreeMap::from([(key.clone(), transient_value(&value))]);
-                structured_input(&member, out, command);
-            }
-            _ => {
-                command.push_str(raw);
-                command.push('\n');
-            }
-        }
-    }
-}
-
-/// Unbounded copy for routing only; never retained or emitted as observation
-/// data. Depth is limited by the JSON parser that produced `value`.
-fn transient_value(value: &serde_json::Value) -> JsonValue {
-    match value {
-        serde_json::Value::Null => JsonValue::Null,
-        serde_json::Value::Bool(value) => JsonValue::Bool(*value),
-        serde_json::Value::Number(number) => number
-            .as_i64()
-            .map(JsonValue::Integer)
-            .or_else(|| number.as_u64().map(JsonValue::Unsigned))
-            .unwrap_or_else(|| JsonValue::Number(number.as_f64().unwrap_or_default())),
-        serde_json::Value::String(text) => JsonValue::String(text.clone()),
-        serde_json::Value::Array(items) => {
-            JsonValue::Array(items.iter().map(transient_value).collect())
-        }
-        serde_json::Value::Object(members) => JsonValue::Object(
-            members
-                .iter()
-                .map(|(key, value)| (key.clone(), transient_value(value)))
-                .collect(),
-        ),
-    }
-}
-
-/// Argument keys whose values are prose or replaced text, never action facts.
-fn is_ignored_argument_key(key: &str) -> bool {
-    matches!(
-        key,
-        "old_string"
-            | "prompt"
-            | "description"
-            | "todos"
-            | "plan"
-            | "questions"
-            | "summary"
-            | "title"
-            | "message"
-            | "reason"
-            | "tldr"
-            | "caption"
-            | "activeForm"
-            | "subject"
-    )
-}
-
-fn structured_input(
-    input: &BTreeMap<String, JsonValue>,
-    out: &mut ActionView,
-    command: &mut String,
-) {
-    for (key, value) in input {
-        match key.as_str() {
-            key if is_command_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    command.push_str(v);
-                    command.push('\n');
-                }
-                if let JsonValue::Array(items) = value {
-                    out.argv = true;
-                    for v in items.iter().filter_map(string) {
-                        command.push_str(v);
-                        command.push(' ');
-                    }
-                }
-            }
-            key if is_authored_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    out.put("authored_content", v.to_owned());
-                }
-            }
-            "edits" => {
-                if let JsonValue::Array(edits) = value {
-                    for edit in edits {
-                        if let JsonValue::Object(edit) = edit
-                            && let Some(v) = edit.get("new_string").and_then(string)
-                        {
-                            out.put("authored_content", v.to_owned());
-                        }
-                    }
-                }
-            }
-            key if is_ignored_argument_key(key) => {}
-            key if super::selector::is_url_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    out.put("url", v.to_owned());
-                }
-            }
-            key if is_path_argument_key(key) => {
-                if let Some(v) = string(value) {
-                    out.put("file_path", v.to_owned());
-                }
-                if let JsonValue::Array(items) = value {
-                    for v in items.iter().filter_map(string) {
-                        out.put("file_path", v.to_owned());
-                    }
-                }
-            }
-            _ => {
-                if let Some(v) = string(value) {
-                    out.put("arguments", v.to_owned());
-                }
-            }
-        }
-    }
 }
 
 /// A stage's parameters that can be paths.
@@ -1953,8 +1999,13 @@ pub(crate) fn evaluate(
     let mut work_bytes = 0usize;
     for observation in observations {
         let extracted = view(observation, budget)?;
+        // The bound counts the call as it reads without its declaration.
+        let counted = extracted
+            .replay_basis
+            .as_ref()
+            .map_or(&extracted.fields, |basis| &basis.fields);
         work_bytes = work_bytes
-            .checked_add(extracted.fields.values().map(String::len).sum::<usize>())
+            .checked_add(counted.values().map(String::len).sum::<usize>())
             .ok_or(ProcessingError::Bounds)?;
         if work_bytes > budget.bounds.compatibility_bytes {
             return Err(ProcessingError::Bounds);
@@ -3068,7 +3119,11 @@ fn replay(
     let Some(time) = observation.occurred_at() else {
         return Ok(None);
     };
-    if view.fields.is_empty() {
+    let (fields, recorded_paths) = match &view.replay_basis {
+        Some(basis) => (&basis.fields, basis.recorded_paths),
+        None => (&view.fields, view.recorded_paths),
+    };
+    if fields.is_empty() {
         return Ok(None);
     }
     let mut hash = Sha256::new();
@@ -3089,9 +3144,9 @@ fn replay(
         budget.charge(value.len())?;
         frame(&mut hash, value.as_bytes());
     }
-    for (field, value) in &view.fields {
+    for (field, value) in fields {
         // What the reader found further inside the call's stages stays out of this.
-        let value = match view.recorded_paths {
+        let value = match recorded_paths {
             Some(recorded) if *field == "file_path" => &value[..recorded],
             _ => value.as_str(),
         };
