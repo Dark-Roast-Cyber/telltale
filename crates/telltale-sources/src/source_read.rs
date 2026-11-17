@@ -249,9 +249,10 @@ pub(crate) fn bounded_file_bytes(
 
 /// `bounded_file_bytes` for a source coordinate opened under the trust anchors
 /// of the discovery `root` it belongs to (`telltale-discover`'s
-/// `open_source_file`): no link at or below the anchor is followed, at the file
-/// or any ancestor, even if a pathname is replaced during the open. A refused
-/// link is not a regular source.
+/// `open_source_file`): the anchor is resolved once, and no link below it is
+/// followed, at the file or any ancestor, even if a pathname is replaced during
+/// the open. A path under no anchor is walked strictly from the filesystem root.
+/// A refused link is not a regular source.
 pub(crate) fn confined_file_bytes(
     root: &std::path::Path,
     path: &std::path::Path,

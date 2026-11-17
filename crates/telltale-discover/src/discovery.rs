@@ -950,9 +950,9 @@ fn trust_anchors(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Open a source coordinate for reading under the trust anchors that bounded
-/// discovery of `root` uses: the anchor is resolved once, and no link at or
-/// below it (or anywhere, for a path under no anchor) is followed, including
-/// the file itself. The open walks directory handles, so replacing an ancestor
+/// discovery of `root` uses: the anchor is resolved once (aliases at or above
+/// it are accepted), and no link below it (or anywhere, for a path under no
+/// anchor) is followed, including the file itself. The open walks directory handles, so replacing an ancestor
 /// pathname with a link while it runs cannot redirect it. `path` keeps the
 /// caller's spelling and may be any coordinate, discovered or caller-supplied.
 /// Returns `None` when a component is absent. The caller checks that the

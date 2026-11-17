@@ -80,7 +80,9 @@
   caller-supplied known sources, instead of reopening the path by name: a link
   in the file or any parent directory below the root reports
   `non_regular_source` (previously a linked parent was followed, and a linked
-  file was `source_unreadable` on Unix).
+  file was `source_unreadable` on Unix). A known source outside the root is
+  walked strictly from the filesystem root, so a link anywhere in its path
+  (for example macOS `/var` or a linked `/tmp`) is now refused as well.
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and
