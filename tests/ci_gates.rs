@@ -119,7 +119,8 @@ printf '%s\n' "$*" >> "$RECORD"
 printf '%s\n' "${TMPDIR-platform-default}" >> "$TEMP_RECORD"
 if test "$1" = tree; then
     case "$*" in
-        *"--features hooks"*) printf 'toml v0.0.0\ntelltale-core v0.0.0 features=default,hooks\n' ;;
+        *"--features hooks"*) printf 'telltale-core v0.0.0 features=default,hooks\n' ;;
+        *) printf 'telltale-core v0.0.0 features=\n' ;;
     esac
     case "$*" in
         *opencode-sqlite*) printf 'telltale-sources v0.0.0 features=opencode-sqlite\n' ;;
@@ -203,7 +204,8 @@ set -eu
 printf '%s %s\n' "${RUSTUP_TOOLCHAIN-unset}" "$1" >> "$RECORD"
 if test "$1" = tree; then
     case "$*" in
-        *"--features hooks"*) printf 'toml v0.0.0\ntelltale-core v0.0.0 features=default,hooks\n' ;;
+        *"--features hooks"*) printf 'telltale-core v0.0.0 features=default,hooks\n' ;;
+        *) printf 'telltale-core v0.0.0 features=\n' ;;
     esac
     case "$*" in
         *opencode-sqlite*) printf 'telltale-sources v0.0.0 features=opencode-sqlite\n' ;;
