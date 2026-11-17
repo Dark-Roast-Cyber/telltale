@@ -3,6 +3,7 @@ members = [
     "crates/telltale-schema",
     "crates/telltale-inference",
     "crates/telltale-rules",
+    "crates/telltale-discover",
     "crates/telltale-sources",
     "crates/telltale-detect",
     "crates/telltale",
@@ -12,6 +13,7 @@ default-members = [
     "crates/telltale-schema",
     "crates/telltale-inference",
     "crates/telltale-rules",
+    "crates/telltale-discover",
     "crates/telltale-sources",
     "crates/telltale-detect",
     "crates/telltale",
@@ -49,6 +51,7 @@ uuid = { version = "1.11", features = ["v4"] }
 telltale-schema = { path = "crates/telltale-schema", version = "=0.7.2" }
 telltale-inference = { path = "crates/telltale-inference", version = "=0.7.2" }
 telltale-rules = { path = "crates/telltale-rules", version = "=0.7.2" }
+telltale-discover = { path = "crates/telltale-discover", version = "=0.7.2" }
 telltale-sources = { path = "crates/telltale-sources", version = "=0.7.2" }
 telltale-detect = { path = "crates/telltale-detect", version = "=0.7.2" }
 telltale-core = { path = "crates/telltale", version = "=0.7.2", default-features = false }
@@ -89,6 +92,7 @@ hooks = ["telltale-core/hooks"]
 [dependencies]
 telltale-schema.workspace = true
 telltale-rules.workspace = true
+telltale-discover.workspace = true
 telltale-sources = { workspace = true, features = ["opencode-sqlite"] }
 telltale-detect.workspace = true
 telltale-core = { workspace = true, features = ["opencode-sqlite"] }
