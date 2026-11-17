@@ -197,7 +197,7 @@ fn session_file_failures_inside_evaluation_apply_the_strict_policy() {
     // and an error record. (Config::load refuses such a file up front; the
     // test harness bypasses load, which is the TOCTOU case.)
     let mut h = Harness::with(|c| {
-        c.telltale.rules = vec![std::path::PathBuf::from("/nonexistent/tth/rules.yaml")];
+        c.rules.packs.deployment = vec![std::path::PathBuf::from("/nonexistent/tth/rules.yaml")];
     });
     assert_eq!(verdict(&h.pre_bash("toolu_e", EXFIL)), Some("ask"));
     let decision = h.decision_for("toolu_e");
@@ -214,7 +214,7 @@ fn session_file_failures_inside_evaluation_apply_the_strict_policy() {
     let dir = tempfile::tempdir().unwrap();
     let broken = dir.path().join("broken.yaml");
     std::fs::write(&broken, "version: 1\nrules: [ { id: x, regex: '(' } ]\n").unwrap();
-    let mut h = Harness::with(|c| c.telltale.rules = vec![broken.clone()]);
+    let mut h = Harness::with(|c| c.rules.packs.deployment = vec![broken.clone()]);
     let output = h.pre_bash("toolu_b", EXFIL);
     assert_eq!(verdict(&output), Some("ask"));
     let reason = output.unwrap()["hookSpecificOutput"]["permissionDecisionReason"]
@@ -231,88 +231,32 @@ fn session_file_failures_inside_evaluation_apply_the_strict_policy() {
     assert_eq!(error_codes(&h), vec!["pipeline_build_failed"]);
     let mut h = Harness::with(|c| {
         c.on_unevaluable = telltale_core::hooks::config::OnError::Deny;
-        c.telltale.rules = vec![broken.clone()];
+        c.rules.packs.deployment = vec![broken.clone()];
     });
     assert_eq!(verdict(&h.pre_bash("toolu_b2", EXFIL)), Some("deny"));
 }
 
-/// Operator inputs (config, rules) may be symlinks: dotfile managers, Nix
-/// and MDM place them that way. The target must be a regular file.
+/// Operator rule files may be symlinks: dotfile managers, Nix and MDM place
+/// them that way. The target must be a regular file. (Config folders and
+/// settings files are discovered by the CLI, which follows symlinks the same
+/// way: tests/cli/hooks_cli.rs.)
 #[cfg(unix)]
 #[test]
-fn symlinked_config_and_rule_files_are_followed_to_regular_targets() {
-    use telltale_core::hooks::config::Config;
+fn symlinked_rule_files_are_followed_to_regular_targets() {
     let dir = tempfile::tempdir().unwrap();
     let markers = common::marker_rules();
     let rules_link = dir.path().join("rules.yaml");
     std::os::unix::fs::symlink(&markers, &rules_link).unwrap();
 
-    // Detection content behind a symlink is loaded and enforced.
-    let mut h = Harness::with(|c| c.telltale.rules = vec![rules_link.clone()]);
+    // Detection content behind a symlink is loaded and enforced, and the
+    // file it names is protected.
+    let mut h = Harness::with(|c| c.rules.packs.deployment = vec![rules_link.clone()]);
     assert_eq!(
         verdict(&h.pre_bash("toolu_m", "echo TTH_E2E_DENY_MARKER")),
         Some("deny")
     );
     assert!(error_codes(&h).is_empty());
-
-    // A symlinked config loads, and validates the symlinked rule file.
-    let real = dir.path().join("real-config.toml");
-    std::fs::write(
-        &real,
-        format!(
-            "[telltale]\nrules = [{:?}]\n",
-            rules_link.display().to_string()
-        ),
-    )
-    .unwrap();
-    let link = dir.path().join("config.toml");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
-    let config = Config::from_file(&link).expect("symlinked config loads");
-    assert_eq!(config.telltale.rules, vec![rules_link.clone()]);
-    assert!(config.protected_paths().contains(&rules_link));
-}
-
-/// A referenced rule, package or policy file that is missing or not a regular
-/// file makes the configuration invalid at load time (calls are then denied,
-/// the documented loud path) rather than running without that content.
-#[test]
-fn unusable_rule_files_make_the_config_invalid() {
-    use telltale_core::hooks::config::Config;
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config.toml");
-    let load = |body: String| {
-        std::fs::write(&config_path, body).unwrap();
-        Config::from_file(&config_path)
-    };
-    let rules = |path: &std::path::Path| {
-        format!("[telltale]\nrules = [{:?}]\n", path.display().to_string())
-    };
-    let missing = dir.path().join("missing.yaml");
-    let error = load(rules(&missing)).unwrap_err();
-    assert!(error.to_string().contains("referenced file"), "{error}");
-    let directory = dir.path().join("rules-dir");
-    std::fs::create_dir(&directory).unwrap();
-    assert!(load(rules(&directory)).is_err());
-    #[cfg(unix)]
-    {
-        if fifo_supported() {
-            let fifo = dir.path().join("rules.fifo");
-            plant_fifo(&fifo);
-            assert!(load(rules(&fifo)).is_err());
-        }
-    }
-    // Packages and policy are validated the same way.
-    assert!(
-        load(format!(
-            "[telltale]\npolicy = {:?}\n",
-            missing.display().to_string()
-        ))
-        .is_err()
-    );
-    // A present regular file passes.
-    let present = dir.path().join("present.yaml");
-    std::fs::write(&present, "version: 1\nrules: []\n").unwrap();
-    assert!(load(rules(&present)).is_ok());
+    assert!(h.runtime.config().protected_paths().contains(&rules_link));
 }
 
 /// A FIFO or symlink planted where a session file goes must neither stall
@@ -417,15 +361,15 @@ fn planted_fifos_and_symlinks_never_stall_or_redirect() {
     assert!(error_codes(&h).is_empty());
 }
 
-/// The other files the hook opens (audit, second review): telemetry, the
-/// configuration file, rule files (pipeline build and fingerprint). A FIFO at
-/// any of them must be refused promptly rather than waited on. Unix only.
+/// The other files the hook opens (audit, second review): telemetry and rule
+/// files (pipeline build and fingerprint). A FIFO at any of them must be
+/// refused promptly rather than waited on. (Settings files: the CLI's
+/// discovery refuses anything but a regular file.) Unix only.
 #[cfg(unix)]
 #[test]
-fn planted_fifos_at_telemetry_config_and_rule_paths_never_stall() {
+fn planted_fifos_at_telemetry_and_rule_paths_never_stall() {
     use std::sync::mpsc;
     use std::time::Duration;
-    use telltale_core::hooks::config::Config;
 
     if !fifo_supported() {
         return;
@@ -457,18 +401,6 @@ fn planted_fifos_at_telemetry_config_and_rule_paths_never_stall() {
     );
     assert_eq!(outcome, "Some(\"deny\")/true");
 
-    // Configuration: refused like an unreadable config.
-    let outcome = bounded(
-        "config",
-        Box::new(|| {
-            let dir = tempfile::tempdir().unwrap();
-            let config = dir.path().join("config.toml");
-            plant_fifo(&config);
-            format!("{}", Config::from_file(&config).is_err())
-        }),
-    );
-    assert_eq!(outcome, "true");
-
     // A rule file: the pipeline build fails (strict policy, since the config
     // validated it at load) and the fingerprint treats it as unreadable;
     // neither waits.
@@ -478,7 +410,7 @@ fn planted_fifos_at_telemetry_config_and_rule_paths_never_stall() {
             let dir = tempfile::tempdir().unwrap();
             let rules = dir.path().join("rules.yaml");
             plant_fifo(&rules);
-            let mut h = Harness::with(|c| c.telltale.rules = vec![rules.clone()]);
+            let mut h = Harness::with(|c| c.rules.packs.deployment = vec![rules.clone()]);
             let out = h.pre_bash("toolu_1", "ls");
             let decision = h.decision_for("toolu_1");
             let fingerprint = h.runtime.config().fingerprint();

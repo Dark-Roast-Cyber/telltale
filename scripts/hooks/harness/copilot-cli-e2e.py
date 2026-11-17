@@ -62,7 +62,7 @@ def tee(log, argv):
 if len(sys.argv) > 2 and sys.argv[1] == "tee":
     sys.exit(tee(sys.argv[2], sys.argv[3:]))
 
-from capture_common import Run, tool_results_seen_by_model  # noqa: E402
+from capture_common import Run, tool_results_seen_by_model, write_telltale_config  # noqa: E402
 
 MCP = os.path.join(HERE, "mock-mcp.py")
 BIN = os.environ.get("COPILOT_BIN", "copilot")
@@ -88,10 +88,8 @@ def hook_command(run, entry="copilot-cli"):
 def prepare(run, fmt, command, timeout, claude_settings, config, top_config=""):
     subprocess.run(["git", "init", "-q", run.work], check=True)
     sock = os.path.join(SOCKETS, f"tth-e2e-{os.getpid()}-{run.name}.sock")
-    with open(os.path.join(run.dir, "tth-config.toml"), "w") as f:
-        f.write(config if config is not None else
-                f'mode = "enforce"\n{top_config}[telltale]\nrules = ["{MARKERS}"]\n\n[evaluator]\nenabled = {EVALUATOR}\n'
-                f'idle_timeout_secs = 120\nsocket = "{sock}"\n')
+    write_telltale_config(run.home, f"  mode: enforce\n{top_config}  evaluator:\n    enabled: {EVALUATOR}\n"
+                          f'    idle_timeout_secs: 120\n    socket: "{sock}"\n', rules=[MARKERS], text=config)
     if claude_settings:
         fragment = json.loads(subprocess.check_output([TTH, "hooks", "claude-code", "settings", hook_command(run, "claude-code")]))
         os.makedirs(os.path.join(run.work, ".claude"))
@@ -120,8 +118,7 @@ def copilot_env(run):
                         COPILOT_PROVIDER_BASE_URL=f"http://127.0.0.1:{run.port}/v1",
                         COPILOT_MODEL=os.environ.get("E2E_MODEL", "gpt-5.4"), COPILOT_PROVIDER_API_KEY="mock",
                         COPILOT_AUTO_UPDATE="false", COPILOT_OFFLINE="true",
-                        TELLTALE_HOOKS_STATE_DIR=os.path.join(run.dir, "tth-state"),
-                        TELLTALE_HOOKS_CONFIG=os.path.join(run.dir, "tth-config.toml"))
+                        TELLTALE_HOOKS_STATE_DIR=os.path.join(run.dir, "tth-state"))
 
 
 def argv_for(run, flags):
@@ -309,7 +306,7 @@ PADDED = lambda size: [{"tool_calls": [{"name": "bash", "arguments": {  # noqa: 
 DOWN, ENTER, ESC = b"\x1b[B", b"\r", b"\x1b"
 TRUST = ("--allow-all-tools", "--trust-folder")
 UNEVALUABLE, OVERSIZED = 2_000_000, 33 * 1024 * 1024
-ALLOW_UNEVALUABLE = 'on_unevaluable = "allow"\n'
+ALLOW_UNEVALUABLE = "  on_unevaluable: allow\n"
 # Input that failed the whole Telltale source: does the real harness forward
 # it to the hook, and does a later deny-level command still get its rule verdict?
 # `status`, `failure_code` and `limits` of each decision answer both; the canary
@@ -387,10 +384,10 @@ SCENARIOS = {
     # Failure handling.
     "fail-missing": lambda: scenario("fail-missing", CANARY("ls"), "absent", command="/nonexistent/telltale"),
     "fail-exit1": lambda: scenario("fail-exit1", CANARY("ls"), "absent", command="sh -c 'exit 1'"),
-    "fail-config": lambda: scenario("fail-config", CANARY("ls"), "absent", config='mode = "enforce"\nthis is = not [valid toml\n',
+    "fail-config": lambda: scenario("fail-config", CANARY("ls"), "absent", config="version: 1\nhooks:\n  mode: enforce\n  this is: not [valid yaml\n",
                                     note="invalid hooks config denies tool calls (payload-less flat form)"),
     "fail-config-pascal": lambda: scenario("fail-config-pascal", CANARY("ls"), "absent", fmt="pascal",
-                                           config='mode = "enforce"\nthis is = not [valid toml\n'),
+                                           config="version: 1\nhooks:\n  mode: enforce\n  this is: not [valid yaml\n"),
     "timeout": lambda: scenario("timeout", CANARY(DENY), "present", timeout=2,
                                 command=f"sh -c 'sleep 5; exec {TTH} hooks copilot-cli hook'",
                                 note="residual: a hook that times out lets the call run"),
