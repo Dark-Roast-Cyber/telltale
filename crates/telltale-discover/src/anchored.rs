@@ -194,8 +194,8 @@ impl Node {
 
 /// Open the file at `path` for reading. Its parent is reached exactly as by
 /// `Node::open`; the last component is then opened relative to that parent
-/// handle without following a link, so no link at or below the selected anchor
-/// is followed, even if a pathname is replaced concurrently. The caller checks
+/// handle without following a link, so no link below the selected anchor (or
+/// anywhere, with no anchor) is followed, even if a pathname is replaced concurrently. The caller checks
 /// the opened object's type (a directory or FIFO opens, nonblocking). `None`
 /// when a component is absent.
 pub(crate) fn open_file(path: &Path, anchors: &[PathBuf]) -> Result<Option<std::fs::File>, Error> {

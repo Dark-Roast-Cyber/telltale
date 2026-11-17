@@ -410,9 +410,12 @@ pub(crate) struct DirectRead<'a> {
 ///
 /// `root` is the discovery root the source belongs to, as passed to bounded
 /// discovery (`.` for the environment). The file is opened under the same trust
-/// anchors: no link at or below the approved root is followed, at the file or
-/// any ancestor, whether the coordinate was discovered or supplied by the
-/// caller. A refused link is `non_regular_source`. The source path itself is
+/// anchors, whether the coordinate was discovered or supplied by the caller:
+/// the approved root is resolved once (aliases at or above it are accepted),
+/// and no link below it is followed, at the file or any ancestor. A coordinate
+/// outside every approved root is walked strictly from the filesystem root, so
+/// no link anywhere in its path is followed. A refused link is
+/// `non_regular_source`. The source path itself is
 /// never rewritten, so its identity is unchanged.
 pub fn acquire_source_bounded(
     root: &Path,
