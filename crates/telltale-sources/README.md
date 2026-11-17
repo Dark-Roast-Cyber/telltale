@@ -24,6 +24,13 @@ takes the discovery root the source belongs to and opens the file under the
 same trust anchor as bounded discovery: the root is resolved once, and no link
 below it is followed (a path outside it is walked strictly from the filesystem
 root).
+`acquisition::acquire_resolved_source` is the production read for a path the
+caller has already canonicalized, as the shared scan runtime does for each
+source: it walks that path from the filesystem root through directory handles
+and opens the file without following a link or blocking, so a link or
+replacement made after resolution is refused (`source_read`) instead of
+redirecting the read. `acquire_source` keeps opening by name and following
+links, and OpenCode SQLite is read by name in both.
 Bounded direct acquisition rejects OpenCode before I/O. There is no native
 export helper, spawning path, or export configuration: OpenCode investigation
 is deferred until a genuinely read-only capability exists. See the core crate's

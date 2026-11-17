@@ -3,6 +3,11 @@
 //! Source modules own canonical semantics. Progress is operational metadata, not
 //! canonical evidence or persisted scanner state. Production runtime cutover is
 //! separate from this API; acquisition performs no detection or event delivery.
+//!
+//! File reads come in three modes: `acquire_source` opens the path by name,
+//! `acquire_resolved_source` walks an already-canonical path without following a
+//! link (the shared scan runtime), and `acquire_source_bounded` opens under a
+//! discovery root's trust anchors for investigation.
 
 pub use crate::source_read::BoundedReadError;
 use crate::source_read::SourceReadError;
@@ -27,7 +32,7 @@ use crate::sources::codex::native::extract_codex_native_records_with_limits;
 use crate::sources::copilot::canonical::{
     CopilotCanonicalError, CopilotCanonicalOptions, project_copilot_native_events,
 };
-use crate::sources::copilot::native::extract_copilot_native_events;
+use crate::sources::copilot::native::extract_copilot_native_events_with;
 use crate::sources::openclaw::canonical::{
     OpenClawCanonicalError, OpenClawCanonicalOptions, project_openclaw_native_records,
 };
@@ -364,7 +369,24 @@ pub fn acquire_source(
     source: &Source,
     options: AcquisitionOptions,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
-    acquire_source_impl(source, options, None)
+    acquire_source_impl(source, options, SourceAccess::ByName)
+}
+
+/// Acquire a source whose path is already resolved: a canonical path, as from
+/// `std::fs::canonicalize`, which no link names. Same limits, semantics and
+/// errors as [`acquire_source`], but the file is opened by walking that path
+/// from the filesystem root through directory handles without following any
+/// link, and without blocking. A link, FIFO or replacement that appears after
+/// the path was resolved is an unreadable source (`source_read`) rather than
+/// being followed, so the bytes read belong to the resolved file. A path that
+/// still contains a link is refused the same way: resolve it first.
+/// OpenCode SQLite is unchanged: SQLite resolves links and opens its journal
+/// files by name.
+pub fn acquire_resolved_source(
+    source: &Source,
+    options: AcquisitionOptions,
+) -> Result<AcquisitionBatch, AcquisitionError> {
+    acquire_source_impl(source, options, SourceAccess::Resolved)
 }
 
 /// Finite direct JSONL read controls for on-demand investigation. These do not
@@ -405,6 +427,26 @@ pub(crate) struct DirectRead<'a> {
     pub(crate) limits: DirectReadLimits,
 }
 
+/// How a JSONL or log source coordinate is opened.
+#[derive(Clone, Copy)]
+pub(crate) enum SourceAccess<'a> {
+    /// Production read by name: links are followed, as for any `File::open`.
+    ByName,
+    /// Production read of an already-resolved path, walked without links.
+    Resolved,
+    /// Bounded investigation read under a discovery root.
+    Direct(DirectRead<'a>),
+}
+
+impl SourceAccess<'_> {
+    pub(crate) fn limits(self) -> Option<DirectReadLimits> {
+        match self {
+            Self::Direct(direct) => Some(direct.limits),
+            Self::ByName | Self::Resolved => None,
+        }
+    }
+}
+
 /// Same authoritative dispatcher and native mapping, with a bounded direct-file
 /// reader. Non-JSONL identities fail before I/O; OpenCode investigation is deferred.
 ///
@@ -428,15 +470,19 @@ pub fn acquire_source_bounded(
             BoundedReadError::LimitExceeded,
         ));
     }
-    acquire_source_impl(source, options, Some(DirectRead { root, limits }))
+    acquire_source_impl(
+        source,
+        options,
+        SourceAccess::Direct(DirectRead { root, limits }),
+    )
 }
 
 fn acquire_source_impl(
     source: &Source,
     options: AcquisitionOptions,
-    direct: Option<DirectRead<'_>>,
+    access: SourceAccess<'_>,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
-    let limits = direct.map(|direct| direct.limits);
+    let limits = access.limits();
     let expected_kind = match (source.client, source.source_id.as_str()) {
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
@@ -464,7 +510,7 @@ fn acquire_source_impl(
     let mut source_scale = SourceScale::FLOOR;
     let observations = match source.client {
         ClientId::Claude => {
-            let (records, bytes) = extract_claude_native_records_with_limits(source, direct)
+            let (records, bytes) = extract_claude_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
@@ -549,7 +595,7 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::Codex => {
-            let (records, bytes) = extract_codex_native_records_with_limits(source, direct)
+            let (records, bytes) = extract_codex_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
@@ -634,7 +680,7 @@ fn acquire_source_impl(
                 .collect()
         }
         ClientId::OpenClaw => {
-            let (records, bytes) = extract_openclaw_native_records_with_limits(source, direct)
+            let (records, bytes) = extract_openclaw_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
@@ -656,7 +702,7 @@ fn acquire_source_impl(
             .map_err(map_openclaw_error)?
         }
         ClientId::Qwen => {
-            let (records, bytes) = extract_qwen_native_records_with_limits(source, direct)
+            let (records, bytes) = extract_qwen_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
@@ -678,12 +724,15 @@ fn acquire_source_impl(
             .map_err(map_qwen_error)?
         }
         ClientId::Copilot => {
-            let events = extract_copilot_native_events(source).map_err(|error| match error {
-                SourceReadError::Bounded(reason @ BoundedReadError::LimitExceeded) => {
-                    AcquisitionError::BoundedSourceRead(reason)
-                }
-                _ => AcquisitionError::SourceRead,
-            })?;
+            let events =
+                extract_copilot_native_events_with(source, access).map_err(
+                    |error| match error {
+                        SourceReadError::Bounded(reason @ BoundedReadError::LimitExceeded) => {
+                            AcquisitionError::BoundedSourceRead(reason)
+                        }
+                        _ => AcquisitionError::SourceRead,
+                    },
+                )?;
             use crate::sources::copilot::native::CopilotNativeEvent;
             use telltale_schema::record::RecordKind;
             for event in &events {
@@ -1691,7 +1740,7 @@ mod tests {
             let acquired = super::acquire_source(&source, options()).unwrap();
             let replay = super::acquire_source(&source, options()).unwrap();
             let reference = super::project_copilot_native_events(
-                super::extract_copilot_native_events(&source).unwrap(),
+                crate::sources::copilot::native::extract_copilot_native_events(&source).unwrap(),
                 &super::CopilotCanonicalOptions::new(options().observed_at),
             )
             .unwrap();
