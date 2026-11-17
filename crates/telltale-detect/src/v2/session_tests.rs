@@ -1686,6 +1686,93 @@ fn duplicate_observations_and_mismatched_sources_fail_before_evaluation() {
     ));
 }
 
+/// A hook-journal identity is accepted only for its own client, only with the
+/// feature, and only for observations stamped with that identity.
+#[test]
+fn hook_journal_identities_follow_the_feature_and_their_own_client() {
+    let plan = plan(0);
+    let observations = [observation("one", Some("session"), None, 1)];
+    for (client, source_id) in [
+        (ClientId::Claude, "claude.hooks"),
+        (ClientId::Codex, "codex.hooks"),
+        (ClientId::Copilot, "copilot.hooks"),
+    ] {
+        let input = |client, source_id| CanonicalSourceInput {
+            client,
+            source_id,
+            source_instance: None,
+            observations: &observations,
+        };
+        // The observation says `claude.projects`, which is not this identity.
+        assert!(matches!(
+            evaluate_source(input(client, source_id), &plan, None),
+            Err(ProcessingError::InvalidSource)
+        ));
+        let other = if client == ClientId::Claude {
+            ClientId::Codex
+        } else {
+            ClientId::Claude
+        };
+        assert!(matches!(
+            evaluate_source(input(other, source_id), &plan, None),
+            Err(ProcessingError::InvalidSource)
+        ));
+        #[cfg(feature = "hook-journal")]
+        {
+            let stamped = [stamped_observation(client, source_id)];
+            evaluate_source(
+                CanonicalSourceInput {
+                    client,
+                    source_id,
+                    source_instance: None,
+                    observations: &stamped,
+                },
+                &plan,
+                None,
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[cfg(feature = "hook-journal")]
+fn stamped_observation(client: ClientId, source_id: &str) -> CanonicalObservationV2 {
+    let adapter_type = match client {
+        ClientId::Claude => "claude_code",
+        ClientId::Codex => "codex",
+        _ => "copilot",
+    };
+    CanonicalObservationV2::builder(
+        ObservationBody::Message(
+            MessageObservation::new(MessageRole::User)
+                .with_content(JsonValue::string("ordinary synthetic text")),
+        ),
+        ObservationStage::MessageObserved,
+        ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            adapter_type,
+            source_id,
+            Fidelity::FullNative,
+        )
+        .unwrap()
+        .with_native_id("one")
+        .unwrap(),
+    )
+    .sequence(1)
+    .session_id(CorrelationId::source_reported("session").unwrap())
+    .fact_metadata(
+        "message.role",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+    )
+    .fact_metadata(
+        "message.content",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+    )
+    .build()
+    .unwrap()
+}
+
 #[test]
 fn collapsed_process_variants_keep_truthful_correlation_step_evidence() {
     let rules = telltale_rules::process_chain::load_process_chain_rules(r#"

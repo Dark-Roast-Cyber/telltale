@@ -14,6 +14,14 @@ pub(crate) mod tools;
 
 pub(crate) use install::INSTALL;
 
+/// The hook-journal identity of this client: not a registered source, only
+/// known to acquisition.
+pub(crate) const HOOK_JOURNAL: super::HookJournal = super::HookJournal {
+    client: telltale_schema::clients::ClientId::Copilot,
+    source_id: "copilot.hooks",
+    adapter_type: "copilot",
+};
+
 pub(crate) const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "copilot.process_log",
     kind: SourceKind::CopilotProcessLog,
