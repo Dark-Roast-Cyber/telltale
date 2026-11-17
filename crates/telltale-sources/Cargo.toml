@@ -3,7 +3,7 @@ name = "telltale-sources"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Telltale session-store discovery, per-agent source adapters, canonical acquisition, and install inventory"
+description = "Telltale source registry, native adapters, canonical acquisition, and compatibility inventory"
 license.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -21,6 +21,7 @@ opencode-sqlite = ["dep:rusqlite"]
 [dependencies]
 hex.workspace = true
 telltale-schema.workspace = true
+telltale-discover.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

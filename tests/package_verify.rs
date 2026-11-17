@@ -85,6 +85,7 @@ package)
     case "$manifest" in
         */crates/telltale-schema/Cargo.toml) package=telltale-schema ;;
         */crates/telltale-rules/Cargo.toml) package=telltale-rules ;;
+        */crates/telltale-discover/Cargo.toml) package=telltale-discover ;;
         */crates/telltale-sources/Cargo.toml) package=telltale-sources ;;
         */crates/telltale-detect/Cargo.toml) package=telltale-detect ;;
         */crates/telltale/Cargo.toml) package=telltale-core ;;
@@ -112,6 +113,11 @@ package)
                 ;;
         esac
         printf '%s\n' '{"git":{"sha1":"0123456789012345678901234567890123456789"}}' > "$package_root/.cargo_vcs_info.json"
+    elif test "$package" = telltale-discover; then
+        mkdir -p "$package_root/data"
+        : > "$package_root/data/TOKSCALE-LICENSE-MIT"
+        : > "$package_root/data/TOKSCALE-PROVENANCE.md"
+        : > "$package_root/data/tokscale-registry.tsv"
     elif test "$package" = telltale-schema; then
         mkdir -p "$package_root/data"
         : > "$package_root/data/event-3.0.schema.json"
@@ -125,6 +131,12 @@ test|check)
 run)
     for argument in "$@"; do
         case "$argument" in
+            */empty-root)
+                test "$(CDPATH= cd -- "$argument" && pwd -P)" = "$argument" || {
+                    echo "synthetic inventory root must have physical ancestors" >&2
+                    exit 1
+                }
+                ;;
             */core-assignment-consumer/Cargo.toml)
                 expected_root="${argument%/core-assignment-consumer/Cargo.toml}/protected-assignment-store"
                 test "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT" = "$expected_root"
@@ -314,11 +326,27 @@ fn package_verifier_reuses_relative_caller_target_without_removing_it() {
     assert!(output.status.success(), "{}", output_text(&output));
 }
 
+#[test]
+fn package_verifier_normalizes_only_its_own_symlinked_scratch_root() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = run_package_verifier_with_temp_layout(root, "success", false, true);
+    assert!(output.status.success(), "{}", output_text(&output));
+}
+
 fn run_package_verifier(root: &Path, case: &str) -> Output {
     run_package_verifier_with_target(root, case, false)
 }
 
 fn run_package_verifier_with_target(root: &Path, case: &str, relative: bool) -> Output {
+    run_package_verifier_with_temp_layout(root, case, relative, false)
+}
+
+fn run_package_verifier_with_temp_layout(
+    root: &Path,
+    case: &str,
+    relative: bool,
+    symlink_temp: bool,
+) -> Output {
     let fixture = tempdir().expect("fake cargo fixture directory");
     let metadata = Command::new(env!("CARGO"))
         .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
@@ -344,6 +372,12 @@ fn run_package_verifier_with_target(root: &Path, case: &str, relative: bool) -> 
     } else {
         &target
     };
+    let scratch = fixture.path().join("scratch");
+    fs::create_dir(&scratch).expect("scratch directory");
+    let scratch_link = fixture.path().join("scratch-link");
+    if symlink_temp {
+        std::os::unix::fs::symlink(&scratch, &scratch_link).expect("scratch alias");
+    }
     let output = Command::new(root.join("scripts/package-verify"))
         .current_dir(if relative { fixture.path() } else { root })
         .env("CARGO", &cargo)
@@ -352,6 +386,14 @@ fn run_package_verifier_with_target(root: &Path, case: &str, relative: bool) -> 
         .env("FAKE_WORKSPACE_METADATA", metadata_path)
         .env("FAKE_PACKAGE_VERIFY_CASE", case)
         .env("FAKE_ASSIGNMENT_STORE_RECORD", &assignment_record)
+        .env(
+            "TMPDIR",
+            if symlink_temp {
+                &scratch_link
+            } else {
+                &scratch
+            },
+        )
         .output()
         .expect("run package verifier");
     assert_eq!(

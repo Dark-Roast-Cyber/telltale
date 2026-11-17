@@ -6,6 +6,13 @@ not this project; Telltale's embedding facade is packaged as `telltale-core`.
 Telltale Core is licensed under the Apache License 2.0. The root `LICENSE`
 file applies to the open-source core in this repository.
 
+The experimental `telltale-discover` crate adopts MIT-licensed Tokscale core
+catalog metadata, not its frontend. Its packaged
+[provenance](../crates/telltale-discover/data/TOKSCALE-PROVENANCE.md) and
+[MIT notice](../crates/telltale-discover/data/TOKSCALE-LICENSE-MIT) identify the
+exact source and modifications. Standalone binaries retain that notice through
+`telltale discover --licenses`, which inspects no host data.
+
 ## Apache-2.0 Core Boundary
 
 The open-source core includes the local batch scanner and the files needed to

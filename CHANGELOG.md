@@ -10,7 +10,7 @@
 
 - **Embedding MSRV rises to Rust 1.89.** The embedding crates' `rust-version`
   (`telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect` and
-  `telltale-core`) moves from 1.88 to 1.89. This follows the
+  `telltale-core`, plus the new `telltale-discover`) moves from 1.88 to 1.89. This follows the
   [versioning policy](docs/versioning.md) for a minor line: it belongs to the
   next planned minor release (0.8.0), not a patch.
 - **`telltale-core` has a new default feature, `hooks`.** It adds
@@ -55,6 +55,22 @@
 
 ### Changes
 
+- Add experimental `telltale-discover` and `telltale discover`: bounded,
+  metadata-only data-location inventory for the pinned 61-entry Tokscale core
+  catalog, independent of detection support. Installation assessment and usage
+  counting remain unimplemented; the new inventory backend is Unix-only. Its
+  separate `telltale.inventory/v1` output does not change Event 3.0 or scanner
+  state. Existing supported-source discovery imports keep their interfaces
+  through adapters to the new shared crate. See the
+  [inventory guide](crates/telltale-discover/README.md) for limits and attribution.
+- Fix bounded on-demand source discovery following a symbolic link, junction or
+  mid-walk replacement in an ancestor of a candidate path, which could list
+  files outside the approved root. Bounded discovery and OpenCode store checks
+  now walk directory handles on Unix and Windows and refuse every link below
+  the root they start from. That root (an explicit root or the home directory)
+  is resolved once, so administrator aliases such as a linked `/home` keep
+  working; a link at a tool store such as `~/.codex`, or at or above a relocated
+  store, is refused. Returned source paths keep their original spelling.
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and
