@@ -1489,6 +1489,58 @@ fn a_segment_rule_reads_the_code_with_its_quotes() {
     assert!(!fires("echo 'a; fetch b'"));
 }
 
+/// A recorded-exclusion rule also selects from the command with its quotes read
+/// away, and judges its exclusion on the recorded text. A separator or quote that a
+/// quoted string holds is bare in that reading, so a quoted message stays excluded,
+/// while a live separator after a quote-split word is still selected, because the
+/// recorded text is then no excluded command.
+#[test]
+fn a_recorded_exclusion_rule_reads_quote_free_text_and_judges_the_exclusion_on_the_recorded_text() {
+    fn custom(scope: &str) -> String {
+        format!(
+            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: custom.remove\n    category: custom\n    severity: low\n    score: 10\n    detection:\n      selection:\n        command: '(?:^|[;&|\\n])\\s*rm\\s+\\S*secret'\n      exclude:\n        command: '^git +commit +-m +(?:\"[^\"]*\"|\\x27[^\\x27]*\\x27)$'\n{scope}      condition: selection\n    tags: [custom]\n    explanation: synthetic\nmodifiers: []\n"
+        )
+    }
+    let fires_under = |scope: &str, command: &str| {
+        let document = custom(scope);
+        let rules = telltale_rules::load_rule_set_from_documents(&[&document], None).unwrap();
+        let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+        Reader { plan: &plan }
+            .rules(command)
+            .contains("custom.remove")
+    };
+    let fires = |command: &str| fires_under("      scope: recorded_exclusion\n", command);
+    // A quoted separator is quoted: the message is excluded, in either quote.
+    assert!(!fires("git commit -m \"x; rm secret\""));
+    assert!(!fires("git commit -m 'x; rm secret'"));
+    assert!(!fires("git commit -m \"x\\ny; rm secret\""));
+    assert!(!fires("git commit -m \"x\n; rm secret\""));
+    // A live separator is not, however the word after it is spelled.
+    assert!(fires("rm secret"));
+    assert!(fires("git commit -m x; rm secret"));
+    assert!(fires("git commit -m x; \"r\"m secret"));
+    assert!(fires("git commit -m 'x'; r'm' secret"));
+    assert!(fires("git commit -m \"x\"; \"r\"m secret"));
+    assert!(fires("git commit -m \"x\" && \"r\"m secret"));
+    assert!(fires("git commit -m \"x; rm secret\"; \"r\"m secret"));
+    assert!(fires("git commit -m 'x\\'; \"r\"m secret"));
+    assert!(fires("\"r\"m secret"));
+    assert!(fires("\"r\"m \"sec\"ret"));
+    // A quote-split word inside the segment holding the match is read too.
+    assert!(fires("rm 'sec'ret"));
+    assert!(fires("true\nrm \"sec\"\"ret\""));
+    // Nothing else about the excluded segment is excused.
+    assert!(fires("git commit -m \"x\" \"y; rm secret\""));
+    // Field and segment scope read as before: field scope vetoes on the quote-free
+    // reading's exclusion, segment scope reads the code with its quotes.
+    assert!(fires_under("", "git commit -m \"x; rm secret\""));
+    assert!(!fires_under(
+        "      scope: segment\n",
+        "git commit -m \"x; rm secret\""
+    ));
+    assert!(!fires_under("      scope: segment\n", "\"r\"m secret"));
+}
+
 /// A download reaches a shell through every command of its pipeline, whatever
 /// other pipes the call holds. A pipeline ends at its separator.
 #[test]

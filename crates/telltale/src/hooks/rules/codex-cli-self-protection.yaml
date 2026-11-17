@@ -55,6 +55,7 @@ rules:
         command: '(?s){{COMMAND_START}}(?:{{POSIX_WRITERS}}{{SEGMENT}}|{{INTERPRETERS}}.*)(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -71,6 +72,7 @@ rules:
         command: '(?s){{COMMAND_START}}{{WINDOWS_WRITERS}}{{SEGMENT}}(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -87,6 +89,7 @@ rules:
         command: '(?s)(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$)))).*{{COMMAND_START}}(?:{{POSIX_WRITERS}}|{{WINDOWS_WRITERS}}|{{INTERPRETERS}})'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -103,6 +106,7 @@ rules:
         command: '(?s){{REDIRECT_TO}}{{REDIRECT_SKIP}}(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -119,6 +123,7 @@ rules:
         command: '(?s){{COMMAND_START}}git\s+(?:-\S+\s+\S+\s+)*(?:rm|mv)\s{{SEGMENT}}(?:(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -135,6 +140,7 @@ rules:
         command: '(?s)(?:\.codex|CODEX_HOME|[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)\b.*(?:(?:{{COMMAND_START}}(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b).*(?:\bhooks\.json|\bconfig\.toml|\brequirements\.toml|\bmanaged_config\.toml|\.rules\b|\brules(?:[\\/]\*?)?(?:[\s"'']|$))|{{REDIRECT_TO}}{{REDIRECT_SKIP}}(?:\bhooks\.json|\bconfig\.toml|\brequirements\.toml|\bmanaged_config\.toml|\.rules\b|\brules(?:[\\/]\*?)?(?:[\s"'']|$)))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -151,6 +157,7 @@ rules:
         command: '(?s)(?:\.codex|CODEX_HOME|[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)\b.*(?:\bhooks\.json|\bconfig\.toml|\brequirements\.toml|\bmanaged_config\.toml|\.rules\b|\brules(?:[\\/]\*?)?(?:[\s"'']|$)).*(?:{{COMMAND_START}}(?:rm|mv|cp|sed|tee|truncate|shred|unlink|ln|del|erase|move|copy|Remove-Item|Move-Item|Set-Content|Out-File)\s|\s-delete\b)'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
@@ -179,6 +186,7 @@ rules:
         command: '(?:\.codex|CODEX_HOME)[}%"'']*(?:[\\/]+\.)*[\\/]+(?:(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$))|(?:[^\s;&|"'']*[\\/])?hooks\.json)|(?:[\\/]etc[\\/]+codex|PROGRA(?:mData|~[0-9])[%}]?[\\/]+OpenAI[\\/]+Codex)["'']?(?:[\\/]+\.)*[\\/]+(?:requirements\.toml|managed_config\.toml|(?:hooks\.json|(?:[^\\/\s;&|"'']+\.)?config\.toml|rules(?:[\\/\s"''`;&|)]|$)))'
       exclude:
         command: '{{HARMLESS}}'
+      scope: recorded_exclusion
       condition: selection
     tags: [self-protection, hooks, defense-evasion]
     explanation: >-
