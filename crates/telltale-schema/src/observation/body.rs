@@ -74,6 +74,15 @@ impl ObservationBody {
             Self::Tool(mut body) => {
                 body.arguments = body.arguments.map(JsonValue::canonicalize).transpose()?;
                 body.result = body.result.map(JsonValue::canonicalize).transpose()?;
+                if let Some(operation) = body.operation.take() {
+                    let available = body
+                        .arguments
+                        .as_ref()
+                        .map(JsonValue::encoded_byte_len)
+                        .transpose()?
+                        .unwrap_or(0);
+                    body.operation = Some(operation.canonicalize(available));
+                }
                 Ok(Self::Tool(body))
             }
             body => Ok(body),
@@ -441,6 +450,7 @@ pub struct ToolObservation {
     reported_status: Option<super::ToolStatus>,
     is_error: Option<bool>,
     exit_code: Option<i64>,
+    operation: Option<ToolOperation>,
 }
 
 impl ToolObservation {
@@ -454,6 +464,7 @@ impl ToolObservation {
             reported_status: None,
             is_error: None,
             exit_code: None,
+            operation: None,
         }
     }
 
@@ -495,6 +506,11 @@ impl ToolObservation {
         self.exit_code = Some(value);
         self
     }
+    /// The operation the source's own tool table declares for this call.
+    pub fn with_operation(mut self, value: ToolOperation) -> Self {
+        self.operation = Some(value);
+        self
+    }
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
@@ -520,7 +536,15 @@ impl ToolObservation {
     pub fn exit_code(&self) -> Option<i64> {
         self.exit_code
     }
+    pub fn operation(&self) -> Option<&ToolOperation> {
+        self.operation.as_ref()
+    }
 
+    /// The declared operation is derived from the source's tool table, not
+    /// reported by the harness, so it is no semantic field: it takes no part in
+    /// the observation's identity, its fact metadata or its retained bytes
+    /// (see [`ToolOperation::canonicalize`] for the bound that makes the last
+    /// safe).
     fn semantic_fields(&self) -> Vec<(String, JsonValue)> {
         let mut fields = Vec::new();
         push_string(&mut fields, "tool.name", &self.name);
@@ -555,6 +579,136 @@ impl ToolObservation {
 impl Default for ToolObservation {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What a tool does, in the shared vocabulary of decision O7. MCP calls keep
+/// their own tool type and are not a kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Shell,
+    FileRead,
+    FileWrite,
+    Web,
+    Delegate,
+    Other,
+}
+
+impl ToolKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::FileRead => "file_read",
+            Self::FileWrite => "file_write",
+            Self::Web => "web",
+            Self::Delegate => "delegate",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// What a source's own tool table says one tool call does: its kind and the
+/// operands the call names. A call can carry several operands, such as a patch
+/// that writes many files. Operands are text copied from the call's arguments,
+/// never fresh observations of process, file or network activity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolOperation {
+    kind: ToolKind,
+    commands: Vec<String>,
+    written_paths: Vec<String>,
+    read_paths: Vec<String>,
+    urls: Vec<String>,
+}
+
+impl ToolOperation {
+    pub fn new(kind: ToolKind) -> Self {
+        Self {
+            kind,
+            commands: Vec::new(),
+            written_paths: Vec::new(),
+            read_paths: Vec::new(),
+            urls: Vec::new(),
+        }
+    }
+
+    /// Operands add in call order; an empty or repeated operand adds nothing.
+    pub fn with_command(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.commands, value.into());
+        self
+    }
+    pub fn with_written_path(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.written_paths, value.into());
+        self
+    }
+    pub fn with_read_path(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.read_paths, value.into());
+        self
+    }
+    pub fn with_url(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.urls, value.into());
+        self
+    }
+
+    pub fn kind(&self) -> ToolKind {
+        self.kind
+    }
+    pub fn commands(&self) -> &[String] {
+        &self.commands
+    }
+    pub fn written_paths(&self) -> &[String] {
+        &self.written_paths
+    }
+    pub fn read_paths(&self) -> &[String] {
+        &self.read_paths
+    }
+    pub fn urls(&self) -> &[String] {
+        &self.urls
+    }
+
+    /// Operands in the arguments' own normal form, with repeats removed. The
+    /// operands are copies of text the arguments already hold and the
+    /// observation's retained bytes count only once, so their total never
+    /// exceeds `argument_bytes`, the encoded size of those arguments: past
+    /// that, the call keeps its kind and drops its operands.
+    pub(crate) fn canonicalize(mut self, argument_bytes: usize) -> Self {
+        for operands in [
+            &mut self.commands,
+            &mut self.written_paths,
+            &mut self.read_paths,
+            &mut self.urls,
+        ] {
+            let mut normal = Vec::with_capacity(operands.len());
+            for operand in operands.drain(..) {
+                push_operand(&mut normal, super::value::nfc(&operand));
+            }
+            *operands = normal;
+        }
+        if self.operand_bytes() > argument_bytes {
+            self.commands.clear();
+            self.written_paths.clear();
+            self.read_paths.clear();
+            self.urls.clear();
+        }
+        self
+    }
+
+    fn operand_bytes(&self) -> usize {
+        [
+            &self.commands,
+            &self.written_paths,
+            &self.read_paths,
+            &self.urls,
+        ]
+        .into_iter()
+        .flatten()
+        .map(String::len)
+        .sum()
+    }
+}
+
+fn push_operand(operands: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !operands.contains(&value) {
+        operands.push(value);
     }
 }
 

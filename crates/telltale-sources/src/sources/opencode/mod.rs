@@ -16,6 +16,7 @@ pub(crate) mod native;
 pub(crate) mod session_message;
 #[cfg(feature = "opencode-sqlite")]
 pub(crate) mod session_message_canonical;
+pub(crate) mod tools;
 
 #[cfg(all(test, feature = "opencode-sqlite"))]
 mod tests;

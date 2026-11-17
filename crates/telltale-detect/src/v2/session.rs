@@ -117,6 +117,18 @@ impl RetentionBudget {
         }
     }
 
+    /// A budget with the same bounds and none of this one's spending. For work a
+    /// declared operation adds to a reading: it must not consume what the
+    /// source would have had without the declaration.
+    pub(crate) fn detached(&self) -> Self {
+        Self {
+            items: 0,
+            bytes: 0,
+            work_bytes: Arc::default(),
+            bounds: self.bounds,
+        }
+    }
+
     #[allow(deprecated, reason = "try_update is unavailable on the embedding MSRV")]
     pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ProcessingError> {
         if self

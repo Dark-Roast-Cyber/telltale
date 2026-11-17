@@ -135,8 +135,8 @@ fn line(name: &str, arguments: Value) -> String {
     let ObservationBody::Tool(tool) = observation.body() else {
         unreachable!("a tool observation");
     };
-    let urls = super::tool_arguments::tool_argument_urls(tool.arguments());
-    let written = super::tool_arguments::tool_written_paths(tool.name(), tool.arguments());
+    let urls = super::tool_arguments::tool_argument_urls(tool, true);
+    let written = super::tool_arguments::tool_written_paths(tool, true);
     format!(
         "{name} {arguments} => {} | urls={urls:?} written={written:?}\n",
         super::actions::view_facts(&observation)

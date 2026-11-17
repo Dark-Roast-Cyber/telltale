@@ -76,6 +76,13 @@
 
 ### Changes
 
+- Sources now declare what their built-in tools do. Each source names the kind
+  of a tool it knows (shell, file read, file write, web, delegate) and where
+  its command, path and URL arguments are, and detection reads those together
+  with the arguments it already read. Patch-style writes and some file tools
+  now yield written-path and read-path facts, so existing path rules can match
+  more calls; nothing that matched before stops matching. Observation
+  identity, replay identity, retention and Event 3.0 output are unchanged.
 - Add experimental `telltale-discover` and `telltale discover`: bounded,
   metadata-only data-location inventory for the pinned 61-entry Tokscale core
   catalog, independent of detection support. Installation assessment and usage
