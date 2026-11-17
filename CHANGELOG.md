@@ -21,8 +21,8 @@
   ways). `telltale-cli` has the same default feature, `hooks`; build with
   `--no-default-features` to leave the command and its dependencies out.
 - **New command: `telltale hooks`.** `telltale hooks {claude-code,codex-cli,copilot-cli}
-  {hook,settings}`, `telltale hooks codex-cli execpolicy`, `telltale hooks serve`,
-  `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
+  {hook,settings}`, `telltale hooks codex-cli execpolicy`, `telltale hooks harnesses`,
+  `telltale hooks serve`, `telltale hooks check` and `telltale hooks version` evaluate harness tool calls
   before they run and reach a verdict of allow, ask or deny. It does nothing until a harness
   is configured to call it, and the scanner and watch commands are unchanged.
   Its self-protection rules cover the hook, rule and managed-configuration files

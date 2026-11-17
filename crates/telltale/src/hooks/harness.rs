@@ -1,16 +1,19 @@
 //! Harness registry: the one place that maps a harness name to its adapter.
 //!
-//! The CLI driver (`telltale hooks <harness> hook`) and the long-lived
-//! evaluator dispatch through `Harness`, so they hold no adapter-specific
-//! code. Adding a harness means one adapter module, one variant here, and its
-//! match arms (docs/architecture.md, "Runtime contract for adapters").
+//! Everything about one harness's hook protocol is in its adapter module under
+//! `harnesses/`, which exports one [`Adapter`] descriptor. The CLI driver
+//! (`telltale hooks <harness> hook`), the evaluator, normalization, the
+//! generated self-protection rules and the install output all read that
+//! descriptor through [`Harness::adapter`], so they hold no adapter-specific
+//! code. Adding a harness means one adapter module, one variant here and one
+//! arm in `adapter` (docs/hooks/architecture.md, "Adding an adapter"); the
+//! compiler asks for every descriptor field.
 
 use serde_json::Value;
 
-use crate::hooks::claude_code;
-use crate::hooks::codex_cli;
 use crate::hooks::config::OnError;
-use crate::hooks::copilot_cli;
+use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli};
+use crate::hooks::normalize::Rules;
 use crate::hooks::runtime::{Context, Event, Response};
 use crate::hooks::state::Verdict;
 
@@ -39,19 +42,130 @@ pub enum Parsed {
     Invalid(&'static str),
 }
 
+/// Everything the rest of hooks needs to know about one harness. Fixed data
+/// and function pointers only, so a descriptor is a `const` and a missing
+/// field does not compile.
+pub struct Adapter {
+    /// The name used on the command line, on the evaluator wire protocol and
+    /// in `Context::harness`: `<product>-<cli>`.
+    pub name: &'static str,
+    /// The product name, for listings and messages.
+    pub display_name: &'static str,
+    /// The pre-execution (enforcement) event names this entry point receives.
+    /// The first answers a tool call whose payload could not be read.
+    pub pre_tool_use: &'static [&'static str],
+    /// The top-level payload keys that name the hook event.
+    pub event_keys: &'static [&'static str],
+    /// Whether a returned `ask` is put to a human on this harness in every
+    /// run mode. This serves the payload-less path, which knows no run mode,
+    /// so it must be `false` for a harness where *any* run mode auto-approves
+    /// or ignores an ask. The adapter sets `Context::can_ask` per event from
+    /// the same value and may only refine it to `true` for a run mode
+    /// verified to prompt or refuse.
+    pub can_ask: bool,
+    /// Native hook stdin to a runtime event.
+    pub parse: fn(&[u8]) -> Parsed,
+    /// Native stdout JSON for a response to `hook_event`, or `None` to print
+    /// nothing. Never renders a pre-execution `allow`.
+    pub render: fn(&str, &Response) -> Option<Value>,
+    /// Whether a payload that could not be parsed still names the
+    /// pre-execution event, so it gets a verdict rather than a non-blocking
+    /// error the harness would treat as allow.
+    pub looks_like_pre_tool_use: fn(&[u8]) -> bool,
+    /// What `telltale hooks <name> settings` prints.
+    pub install: Install,
+    /// What blocks a tool call when the payload names no event and the
+    /// operator chose `on_error: deny`.
+    pub nameless_block: NamelessBlock,
+    /// How this harness's tool calls reach the evaluation encoding.
+    pub normalization: Normalization,
+    /// The environment variable that relocates the harness's config home, if
+    /// it has one.
+    pub home: Option<Home>,
+    /// Where the rules that protect this harness's own hook files live.
+    pub rules: HostRules,
+    /// The program names an agent launches this harness by.
+    pub launchers: &'static [&'static str],
+}
+
+/// The install output of one harness.
+pub struct Install {
+    /// The `settings` lines of `telltale hooks --help`.
+    pub usage: &'static str,
+    /// The settings document for `command`. `Err` is why nothing can be
+    /// printed for this request (a `--fail-closed` the harness cannot honor).
+    pub output: fn(command: &str, fail_closed: bool) -> Result<InstallOutput, &'static str>,
+}
+
+/// A settings or hooks-file document, and notes for the operator's terminal.
+pub struct InstallOutput {
+    pub document: Value,
+    pub notes: Option<&'static str>,
+}
+
+/// The answer to an unreadable payload that names no event, which could be a
+/// tool call. It must block one without turning a stop event into a prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamelessBlock {
+    /// A deny on stdout, for a harness that honors it on a pre-execution
+    /// event and rejects it as invalid output on every other event.
+    DenyOnStdout,
+    /// This exit status and nothing on stdout.
+    Exit(i32),
+}
+
+/// How a harness's tool calls are reshaped for the evaluation encoding
+/// (`normalize`). Every adapter chooses one.
+#[derive(Clone, Copy)]
+pub enum Normalization {
+    /// The harness's tools already have the evaluation encoding's names and
+    /// argument keys.
+    Identity,
+    /// The harness's captured native shapes that need reshaping.
+    Rules(&'static Rules),
+}
+
+/// A harness's relocatable config home. A harness moved there loads its hooks
+/// from that directory, and static rules can only know the variable's name
+/// and the default directory, so the engine generates rules for the resolved
+/// path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Home {
+    /// The environment variable, as the hook inherits it from the harness.
+    pub variable: &'static str,
+    /// Pattern text for the hook files below the home, the same names as the
+    /// harness's static rules. `{{NAME_END}}` stands for the end of a name.
+    pub hook_files: &'static str,
+}
+
+/// Where the rules that detect an agent disabling this harness's hooks live.
+#[derive(Clone, Copy)]
+pub enum HostRules {
+    /// In the shared self-protection document.
+    Shared,
+    /// In a rules document of the adapter's own (file name, template), loaded
+    /// with the shared one.
+    Document(&'static str, &'static str),
+}
+
 impl Harness {
     /// Every harness in this build.
     pub const ALL: &'static [Harness] =
-        &[Harness::ClaudeCode, Harness::CodexCli, Harness::CopilotCli];
+        &[Harness::ClaudeCode, Harness::CopilotCli, Harness::CodexCli];
+
+    /// The harness's descriptor: the only match on a harness.
+    pub const fn adapter(self) -> &'static Adapter {
+        match self {
+            Self::ClaudeCode => &claude_code::ADAPTER,
+            Self::CodexCli => &codex_cli::ADAPTER,
+            Self::CopilotCli => &copilot_cli::ADAPTER,
+        }
+    }
 
     /// The name used on the command line, on the evaluator wire protocol and
     /// in `Context::harness`.
     pub fn name(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => claude_code::HARNESS,
-            Self::CodexCli => codex_cli::HARNESS,
-            Self::CopilotCli => copilot_cli::HARNESS,
-        }
+        self.adapter().name
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
@@ -62,99 +176,32 @@ impl Harness {
     }
 
     /// Native hook stdin to a runtime event.
-    ///
-    /// Copilot CLI also runs a trusted repository's `.claude/settings.json`
-    /// hooks, with its own payloads: the Claude Code entry point hands those
-    /// to the Copilot CLI adapter, so they are labeled, correlated and
-    /// rendered as Copilot's (`copilot_cli::is_copilot_payload`).
     pub fn parse(self, bytes: &[u8]) -> Parsed {
-        match self {
-            Self::ClaudeCode if copilot_cli::is_copilot_payload(bytes) => {
-                Self::CopilotCli.parse(bytes)
-            }
-            Self::ClaudeCode => match claude_code::parse(bytes) {
-                Err(error) => Parsed::Invalid(error.code()),
-                Ok(input) => match claude_code::to_event(&input) {
-                    Ok((ctx, event)) => Parsed::Event(ctx, event),
-                    Err(error) => Parsed::Unusable {
-                        hook_event: input.hook_event_name,
-                        code: error.code(),
-                    },
-                },
-            },
-            Self::CodexCli => match codex_cli::parse(bytes) {
-                Err(error) => Parsed::Invalid(error.code()),
-                Ok(input) => match codex_cli::to_event(&input) {
-                    Ok((ctx, event)) => Parsed::Event(ctx, event),
-                    Err(error) => Parsed::Unusable {
-                        hook_event: input.hook_event_name,
-                        code: error.code(),
-                    },
-                },
-            },
-            Self::CopilotCli => match copilot_cli::parse(bytes) {
-                Err(error) => Parsed::Invalid(error.code()),
-                Ok(input) => match copilot_cli::to_event(&input) {
-                    Ok((ctx, event)) => Parsed::Event(ctx, event),
-                    Err(error) => Parsed::Unusable {
-                        hook_event: input.hook_event(),
-                        code: error.code(),
-                    },
-                },
-            },
-        }
+        (self.adapter().parse)(bytes)
     }
 
     /// Native stdout JSON for a response, or `None` to print nothing. Never
     /// renders a pre-execution `allow`.
     pub fn render(self, hook_event: &str, response: &Response) -> Option<Value> {
-        match self {
-            // A routed Copilot payload (see `parse`) keeps its native event
-            // name. Copilot honors Claude Code's output on its PascalCase
-            // events, and its camelCase names never collide with Claude Code's.
-            Self::ClaudeCode if copilot_cli::is_camel_case_event(hook_event) => {
-                copilot_cli::render(hook_event, response)
-            }
-            Self::ClaudeCode => claude_code::render(hook_event, response),
-            Self::CodexCli => codex_cli::render(hook_event, response),
-            Self::CopilotCli => copilot_cli::render(hook_event, response),
-        }
+        (self.adapter().render)(hook_event, response)
     }
 
     /// Whether `hook_event` is the harness's pre-execution enforcement point.
     pub fn is_pre_tool_use(self, hook_event: &str) -> bool {
-        match self {
-            Self::ClaudeCode => {
-                hook_event == claude_code::PRE_TOOL_USE || hook_event == copilot_cli::PRE_TOOL_USE
-            }
-            Self::CodexCli => hook_event == codex_cli::PRE_TOOL_USE,
-            Self::CopilotCli => copilot_cli::is_pre_tool_use(hook_event),
-        }
+        self.adapter().pre_tool_use.contains(&hook_event)
     }
 
     /// Whether a payload that could not be parsed still names the
     /// pre-execution event, so it gets a verdict rather than a non-blocking
     /// error the harness would treat as allow.
     pub fn looks_like_pre_tool_use(self, bytes: &[u8]) -> bool {
-        match self {
-            Self::ClaudeCode => claude_code::looks_like_pre_tool_use(bytes),
-            Self::CodexCli => codex_cli::looks_like_pre_tool_use(bytes),
-            Self::CopilotCli => copilot_cli::looks_like_pre_tool_use(bytes),
-        }
+        (self.adapter().looks_like_pre_tool_use)(bytes)
     }
 
     /// Whether a returned `ask` is put to a human on this harness in every
-    /// run mode. This serves the payload-less path, which knows no run mode,
-    /// so it must be `false` for a harness where *any* run mode auto-approves
-    /// or ignores an ask (OpenCode v2 `--auto`, Codex). The adapter sets
-    /// `Context::can_ask` per event from the same constant and may only
-    /// refine it to `true` for a run mode verified to prompt or refuse.
+    /// run mode ([`Adapter::can_ask`]).
     pub fn can_ask(self) -> bool {
-        match self {
-            Self::ClaudeCode => claude_code::CAN_ASK,
-            Self::CodexCli => codex_cli::CAN_ASK,
-            Self::CopilotCli => copilot_cli::CAN_ASK,
-        }
+        self.adapter().can_ask
     }
 
     /// Native stdout answering a pre-execution event with a policy verdict
@@ -162,17 +209,12 @@ impl Harness {
     /// `ask` on a harness that cannot ask is rendered as `deny`
     /// (`Response::decision`).
     pub fn render_verdict(self, policy: OnError, reason: &str) -> Option<Value> {
-        let hook_event = match self {
-            Self::ClaudeCode => claude_code::PRE_TOOL_USE,
-            Self::CodexCli => codex_cli::PRE_TOOL_USE,
-            Self::CopilotCli => copilot_cli::PRE_TOOL_USE,
-        };
-        self.render_event_verdict(hook_event, policy, reason)
+        self.render_event_verdict(self.adapter().pre_tool_use[0], policy, reason)
     }
 
     /// [`Self::render_verdict`] for a pre-execution event whose name is known,
-    /// so a Copilot camelCase event that reached the Claude Code entry point
-    /// gets the form Copilot honors.
+    /// so an entry point that receives two dialects answers in the one the
+    /// payload used.
     pub fn render_event_verdict(
         self,
         hook_event: &str,
@@ -192,10 +234,18 @@ impl Harness {
 }
 
 /// Whether an unparseable payload names its event: a complete, non-empty string
-/// in a top-level `hook_event_name` or `hookName`, in the prefix that
-/// `looks_like_pre_tool_use` also reads. Only the top level counts, because a
-/// tool input is agent-controlled and may nest a key of the same name.
+/// in a top-level event key, in the prefix that `looks_like_pre_tool_use` also
+/// reads. The keys are those of every registered harness
+/// ([`Adapter::event_keys`]), because one harness's payloads can arrive at
+/// another's entry point. Only the top level counts, because a tool input is
+/// agent-controlled and may nest a key of the same name.
 pub fn names_event(bytes: &[u8]) -> bool {
+    let is_event_key = |key: &[u8]| {
+        Harness::ALL
+            .iter()
+            .flat_map(|harness| harness.adapter().event_keys)
+            .any(|name| name.as_bytes() == key)
+    };
     let head = &bytes[..bytes.len().min(64 * 1024)];
     // The quote closing the string opened at `open`, if the prefix holds it.
     let close = |open: usize| {
@@ -219,7 +269,7 @@ pub fn names_event(bytes: &[u8]) -> bool {
                     return false;
                 };
                 let key = &head[at + 1..end];
-                if depth == 1 && (key == b"hook_event_name" || key == b"hookName") {
+                if depth == 1 && is_event_key(key) {
                     let value = head[end + 1..]
                         .trim_ascii_start()
                         .strip_prefix(b":")
@@ -247,50 +297,72 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Normalization is keyed by `Context::harness`, which adapters set to
-    /// `Harness::name()`. Every registry variant must map to the
-    /// `normalize` constant for its harness (or to `None` when the harness
-    /// is the identity), so a rename on either side cannot silently stop
-    /// normalization. The match is exhaustive: a new variant fails to
-    /// compile until it is classified here.
+    /// Every descriptor is complete, and the registry's lookups by name
+    /// (`from_name`, normalization, relocated homes) reach the adapter that
+    /// declared the value.
     #[test]
-    fn registry_names_match_normalize_constants() {
+    fn every_adapter_is_registered_under_its_own_name() {
+        use crate::hooks::harnesses;
         use crate::hooks::normalize;
         use crate::hooks::runtime::ToolCall;
+        let mut names = std::collections::BTreeSet::new();
+        let mut variables = std::collections::BTreeSet::new();
         for harness in Harness::ALL {
-            let constant: Option<&str> = match harness {
-                Harness::ClaudeCode => None,
-                Harness::CodexCli => Some(normalize::CODEX_CLI),
-                Harness::CopilotCli => Some(normalize::COPILOT_CLI),
+            let adapter = harness.adapter();
+            let name = adapter.name;
+            assert!(names.insert(name), "{name} is registered twice");
+            assert!(!adapter.display_name.is_empty(), "{name}");
+            assert!(!adapter.pre_tool_use.is_empty(), "{name}");
+            assert!(!adapter.event_keys.is_empty(), "{name}");
+            assert!(!adapter.launchers.is_empty(), "{name}");
+            assert!(
+                adapter
+                    .install
+                    .usage
+                    .contains(&format!("telltale hooks {name} settings")),
+                "{name}"
+            );
+            if let Some(home) = adapter.home {
+                assert!(variables.insert(home.variable), "{}", home.variable);
+            }
+            // The runtime normalizes by `Context::harness`: the name must
+            // reach this adapter's own choice.
+            let patch = ToolCall {
+                tool_use_id: None,
+                tool_name: "apply_patch".into(),
+                input: json!({"command": "*** Begin Patch\n*** Add File: x\n+1\n*** End Patch\n"}),
             };
-            match constant {
-                Some(constant) => assert_eq!(harness.name(), constant),
-                None => {
-                    let call = ToolCall {
-                        tool_use_id: None,
-                        tool_name: "apply_patch".into(),
-                        input: json!({"command": "*** Begin Patch\n*** Add File: x\n+1\n*** End Patch\n"}),
-                    };
-                    assert_eq!(
-                        normalize::tool_call(harness.name(), call.clone()),
-                        call,
-                        "{} is not the identity",
-                        harness.name()
-                    );
+            match (adapter.normalization, harnesses::normalization(name)) {
+                (Normalization::Identity, Normalization::Identity) => assert_eq!(
+                    normalize::tool_call(name, patch.clone()),
+                    patch,
+                    "{name} is not the identity"
+                ),
+                (Normalization::Rules(declared), Normalization::Rules(applied)) => {
+                    assert!(std::ptr::eq(declared, applied), "{name}");
                 }
+                _ => panic!("{name}: the runtime applies another normalization"),
             }
         }
-        // Every normalize constant names a harness that is, or will be, in
-        // the registry under exactly that name (checked above once added).
-        for constant in [
-            normalize::COPILOT_CLI,
-            normalize::CODEX_CLI,
-            normalize::OPENCODE,
-        ] {
-            if let Some(harness) = Harness::from_name(constant) {
-                assert_eq!(harness.name(), constant);
+        // Shapes captured ahead of an adapter are keyed by a name no
+        // registered adapter has.
+        assert!(!names.contains(harnesses::opencode::NAME));
+    }
+
+    #[test]
+    fn unreadable_payloads_name_their_event_by_any_registered_key() {
+        for harness in Harness::ALL {
+            for key in harness.adapter().event_keys {
+                let named = format!(r#"{{"session":"s","{key}":"Stop","x":{{"#);
+                assert!(names_event(named.as_bytes()), "{key}");
+                // The same key inside a tool input is the agent's.
+                let nested = format!(r#"{{"tool_input":{{"{key}":"Stop"}},"x":{{"#);
+                assert!(!names_event(nested.as_bytes()), "{key}");
+                let empty = format!(r#"{{"{key}":"","x":{{"#);
+                assert!(!names_event(empty.as_bytes()), "{key}");
             }
         }
+        assert!(!names_event(br#"{"event":"Stop","x":{"#));
     }
 
     #[test]
