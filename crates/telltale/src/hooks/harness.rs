@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 
+use crate::ClientId;
 use crate::hooks::config::OnError;
 use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli};
 use crate::hooks::normalize::Rules;
@@ -51,6 +52,13 @@ pub struct Adapter {
     pub name: &'static str,
     /// The product name, for listings and messages.
     pub display_name: &'static str,
+    /// The Telltale client this harness is: the client of every Telltale
+    /// record of its calls.
+    pub client: ClientId,
+    /// The hook-journal source ID its evaluation windows are scanned under
+    /// (`<client>.hooks`). Host-fed, never discovered: acquisition and detection
+    /// accept it for `client` only (ADR 0002 addendum).
+    pub hook_source: &'static str,
     /// The pre-execution (enforcement) event names this entry point receives.
     /// The first answers a tool call whose payload could not be read.
     pub pre_tool_use: &'static [&'static str],
@@ -347,6 +355,19 @@ mod tests {
         // Shapes captured ahead of an adapter are keyed by a name no
         // registered adapter has.
         assert!(!names.contains(harnesses::opencode::NAME));
+    }
+
+    #[test]
+    fn every_adapter_names_its_own_hook_journal_identity() {
+        let mut sources = std::collections::BTreeSet::new();
+        for harness in Harness::ALL {
+            let adapter = harness.adapter();
+            assert_eq!(
+                adapter.hook_source,
+                format!("{}.hooks", adapter.client.as_str())
+            );
+            assert!(sources.insert(adapter.hook_source), "{}", adapter.name);
+        }
     }
 
     #[test]

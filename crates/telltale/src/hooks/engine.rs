@@ -3,7 +3,8 @@
 //!
 //! Telltale has no API for evaluating a single pending action, so the hook
 //! writes a bounded window of native Claude Code JSONL (history plus the
-//! pending call) and scans it as a `claude.projects` source, the pattern
+//! pending call) and scans it as the hook-journal source of the harness the
+//! call belongs to (`Adapter::client`, `Adapter::hook_source`), the pattern
 //! docs/embedding.md prescribes for synthetic sources. Findings for the
 //! pending call are the action findings anchored at its unique source time.
 
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::{
-    AcquisitionError, ActionRecordV1, ClientId, DetailedEvaluationOptions, EvaluationCompletion,
+    AcquisitionError, ActionRecordV1, DetailedEvaluationOptions, EvaluationCompletion,
     ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
@@ -327,6 +328,7 @@ impl Engine {
     /// stop at [`PIECE_SCAN_LIMIT`] instead.
     pub fn evaluate(
         &self,
+        harness: Harness,
         window_path: &Path,
         history: &[Line],
         pending: &[Line],
@@ -338,7 +340,7 @@ impl Engine {
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
         let mut failure_code = None;
         if budget.admits(whole_bytes) {
-            let whole = self.scan(window_path, history.iter().chain(pending), focus)?;
+            let whole = self.scan(harness, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
             if !whole.source_failed {
                 return Ok(Evaluation {
@@ -348,13 +350,16 @@ impl Engine {
             }
             failure_code = whole.failure_code;
         }
-        let mut best = self.scan(window_path, pending.iter(), focus)?;
+        let mut best = self.scan(harness, window_path, pending.iter(), focus)?;
         budget.observe(pending_bytes, best.scan_ms);
         let mut kept = vec![false; history.len()];
         if best.source_failed && pending.len() > 1 {
-            best = self.scan_each(window_path, pending, focus, || budget.pieces_in_time())?;
+            best = self.scan_each(harness, window_path, pending, focus, || {
+                budget.pieces_in_time()
+            })?;
         } else if best.status != EvalStatus::NotEvaluated {
             let window = Window {
+                harness,
                 path: window_path,
                 history,
                 sizes: &sizes,
@@ -422,7 +427,12 @@ impl Engine {
                 .iter()
                 .zip(kept.iter())
                 .filter_map(|(line, kept)| kept.then_some(line));
-            let scan = self.scan(window.path, lines.chain(window.pending), window.focus)?;
+            let scan = self.scan(
+                window.harness,
+                window.path,
+                lines.chain(window.pending),
+                window.focus,
+            )?;
             budget.observe(bytes, scan.scan_ms);
             if scan.source_failed {
                 for &n in lines_in_block {
@@ -450,6 +460,7 @@ impl Engine {
     /// the record says so.
     fn scan_each(
         &self,
+        harness: Harness,
         window_path: &Path,
         pending: &[Line],
         focus: &[Focus],
@@ -464,6 +475,7 @@ impl Engine {
                 break;
             }
             let scan = self.scan(
+                harness,
                 window_path,
                 std::iter::once(line),
                 std::slice::from_ref(one),
@@ -488,14 +500,16 @@ impl Engine {
         &self.generated
     }
 
-    /// Evaluate `lines` as one Claude Code source, the focus lines among them.
+    /// Evaluate `lines` as one hook-journal source of `harness`, the focus lines
+    /// among them.
     fn scan<'a>(
         &self,
+        harness: Harness,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
         focus: &[Focus],
     ) -> Result<Evaluation, EngineError> {
-        let (scan, scan_ms) = self.scan_window(window_path, lines)?;
+        let (scan, scan_ms) = self.scan_window(harness, window_path, lines)?;
         if let Some(failure) = scan.failure() {
             return Ok(Evaluation {
                 failure_code: Some(failure.code().to_owned()),
@@ -511,13 +525,14 @@ impl Engine {
         Ok(evaluation_of(&scan, focus, scan_ms))
     }
 
-    /// Write `lines` to `window_path` and scan them as one Claude Code source,
-    /// returning its result and how long the scan took. The caller holds the
-    /// session lock, so the stable path keeps Telltale's source-bound identities
+    /// Write `lines` to `window_path` and scan them as one hook-journal source of
+    /// `harness` (its client and `Adapter::hook_source`), returning its result
+    /// and how long the scan took. The caller holds the session lock, so the stable path keeps Telltale's source-bound identities
     /// stable across a session. The window holds raw tool input, so it is removed
     /// as soon as the scan returns.
     fn scan_window<'a>(
         &self,
+        harness: Harness,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
     ) -> Result<(SourceScan, u64), EngineError> {
@@ -530,10 +545,11 @@ impl Engine {
                 file.write_all(text.as_bytes())
             })
             .map_err(EngineError::Window)?;
+        let adapter = harness.adapter();
         let source = Source {
-            client: ClientId::Claude,
+            client: adapter.client,
             kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_owned(),
+            source_id: adapter.hook_source.to_owned(),
             path: window_path.to_owned(),
         };
         let started = Instant::now();
@@ -695,6 +711,7 @@ impl RecoveryBudget {
 
 /// What a recovery scan is made of.
 struct Window<'a> {
+    harness: Harness,
     path: &'a Path,
     history: &'a [Line],
     sizes: &'a [usize],
@@ -1660,6 +1677,7 @@ mod recovery_tests {
         let mut budget = budget_used(used, 0.0);
         let evaluation = engine
             .evaluate(
+                Harness::ClaudeCode,
                 &dir.path().join("window.jsonl"),
                 &[],
                 &lines,
@@ -1676,11 +1694,17 @@ mod recovery_tests {
         let (dir, engine) = engine();
         let mut left = 1;
         let evaluation = engine
-            .scan_each(&dir.path().join("window.jsonl"), &lines, &focus, || {
-                let in_time = left > 0;
-                left = 0;
-                in_time
-            })
+            .scan_each(
+                Harness::ClaudeCode,
+                &dir.path().join("window.jsonl"),
+                &lines,
+                &focus,
+                || {
+                    let in_time = left > 0;
+                    left = 0;
+                    in_time
+                },
+            )
             .unwrap();
         (evaluation, lines.len())
     }

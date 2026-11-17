@@ -48,7 +48,7 @@ and not a sandbox. It is one enforcement point among several; see the
 | `copilot_cli` | Parse Copilot CLI hook payloads in both dialects (1.0.105 contract), with synthetic correlation keys and `agentStop` settlement; render the flat `permissionDecision` / `additionalContext`; generate the hook file. Also receives Copilot payloads sent to the Claude Code entry point by a repository `.claude/settings.json`. Never renders `allow`. |
 | `runtime` | Harness-neutral events: `ToolRequested` (the only enforcement point), `ToolFinished`, `BatchSettled`, `UserPrompt`, `PermissionPrompt`, session and subagent lifecycle. Infallible: failures become `error` records plus `on_error`. |
 | `gate` | The one place an answer is released to the harness. Detect-only unless the configuration was read and says `hooks.mode: enforce`: then nothing is written to stdout and the exit status is 0, whatever the rest of the hook built ([ADR 0008](adr/0008-detect-only-by-default.md)). |
-| `journal` | Per-session append-only native Claude Code JSONL of what hooks reported. Bounded tail reads. |
+| `journal` | Per-session append-only native Claude Code JSONL of what hooks reported, scanned under the harness's own hook-journal identity. Bounded tail reads. |
 | `engine` | The only Telltale touchpoint: `Pipeline` build (bundled core + community + host rules), `scan_sources_detailed`, focus selection, quarantine/visibility handling. |
 | `policy` | Host promotion thresholds (Telltale's contract assigns these to the host). |
 | `state` | Session directory (hashed ID), advisory lock, cumulative score, denied/asked counts, pending decisions for outcome correlation. |
@@ -110,9 +110,12 @@ A new harness adapter (OpenCode, Cursor, ...) must:
    pre-execution `allow`).
 6. Ship authentic captured payload fixtures with provenance and a real
    enforcement test using the canary method (`scripts/hooks/harness/`).
-7. Record harness identity in `Context::harness`; the journal encoding is
-   Claude Code JSONL today, so Telltale records say `client: "claude"`
-   for every harness (see ADR 0002, open question).
+7. Record harness identity in `Context::harness`. The journal encoding is
+   Claude Code JSONL, but the engine scans each window under the identity
+   of the harness named there: its adapter's `client` and `hook_source`, so
+   Telltale records carry that harness's client and a `<client>.hooks` source
+   ID (ADR 0002, addendum of 2026-11-17). A name with no registered adapter is
+   not evaluated and takes `on_error`.
 8. Do not reshape tool inputs. Report them as the harness sent them. The
    runtime applies `normalize::tool_call(ctx.harness, call)` once, at the
    start of `tool_requested`, to the evaluation encoding only: the pending
@@ -134,6 +137,11 @@ a harness means:
    `Response` to the harness's stdout JSON, and the descriptor. The compiler
    asks for every field:
    - `name` (`<product>-<cli>`, also `Context::harness`) and `display_name`.
+   - `client` and `hook_source`: the harness's Telltale client and the
+     `<client>.hooks` identity its evaluation windows are scanned under. The
+     identity must exist in `telltale-sources` and `telltale-detect` (behind
+     `hook-journal`, never in the source registry); a test accepts every
+     registered adapter's pair through acquisition.
    - `pre_tool_use`: the pre-execution event names. The first answers a call
      whose payload could not be read.
    - `event_keys`: the top-level payload keys that name the hook event. An

@@ -905,6 +905,7 @@ impl Runtime {
 
     fn evaluate(
         &mut self,
+        ctx: &Context,
         session: &SessionHandle,
         pending: Vec<Line>,
         focus: &[Focus],
@@ -916,11 +917,19 @@ impl Runtime {
             Err(_) => return (Err("journal_read_failed"), 0, false),
         };
         let window_path = session.window_path();
-        let result = match self.engine() {
-            Ok(engine) => engine
-                .evaluate(&window_path, &tail.lines, &pending, focus, budget)
+        // The evaluation runs under the identity of the harness the event
+        // belongs to, by the name its adapter put in the context (a Copilot CLI
+        // payload at the Claude Code entry point names Copilot CLI). A name no
+        // adapter is registered for is not evaluated: it takes the error path.
+        let result = match (
+            crate::hooks::harness::Harness::from_name(ctx.harness),
+            self.engine(),
+        ) {
+            (None, _) => Err("harness_unregistered"),
+            (Some(harness), Ok(engine)) => engine
+                .evaluate(harness, &window_path, &tail.lines, &pending, focus, budget)
                 .map_err(|error| error.code()),
-            Err(code) => Err(code),
+            (Some(_), Err(code)) => Err(code),
         };
         // What was actually scanned: recovery from a failed source can leave
         // history out (`Engine::evaluate`).
@@ -1062,6 +1071,7 @@ impl Runtime {
         };
         let mut budget = RecoveryBudget::start();
         let (mut result, mut window_records, mut window_truncated) = self.evaluate(
+            ctx,
             session,
             vec![pending],
             std::slice::from_ref(&focus),
@@ -1125,7 +1135,7 @@ impl Runtime {
                 native_id: variant_id,
             });
         }
-        self.evaluate(session, lines, &focuses, budget)
+        self.evaluate(ctx, session, lines, &focuses, budget)
     }
 
     /// The evaluation's telemetry, with every limit on what it could see.
@@ -1498,6 +1508,7 @@ impl Runtime {
             native_id: uuid,
         };
         let evaluated = self.evaluate(
+            ctx,
             session,
             vec![line.clone()],
             std::slice::from_ref(&focus),

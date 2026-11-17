@@ -78,7 +78,11 @@ Default features:
   this crate that writes files (per-session journals and telemetry JSONL) and can
   start a long-lived local evaluator, and it adds `regex` and `serde_json` to the
   dependency graph. It takes its configuration as typed values; the CLI reads
-  the `hooks:` settings section. A host that only reads sessions opts out:
+  the `hooks:` settings section. It also enables the `hook-journal` feature of
+  `telltale-sources` and `telltale-detect`, which compiles the host-fed
+  hook-journal identities (`claude.hooks`, `codex.hooks`, `copilot.hooks`); they
+  are never discovered or listed, and without them acquisition reports
+  `CapabilityNotCompiled`. A host that only reads sessions opts out:
   `telltale-core = { ..., default-features = false }`.
 
 Default-off features:

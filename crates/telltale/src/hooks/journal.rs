@@ -1,6 +1,7 @@
 //! Per-session journal of what the harness reported through hooks, written in
-//! Claude Code's native session JSONL shape so Telltale's own `claude.projects`
-//! adapter evaluates it (docs/adr/0002-pending-action-evaluation.md).
+//! Claude Code's native session JSONL shape so Telltale's Claude Code reader
+//! evaluates it, under the hook-journal identity of the harness the calls
+//! belong to (docs/hooks/adr/0002-pending-action-evaluation.md).
 //!
 //! Why not read the harness transcript: at `PreToolUse` time Claude Code
 //! 2.1.318 has not yet written the pending `tool_use` to `transcript_path`

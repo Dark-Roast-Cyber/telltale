@@ -22,6 +22,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::ClientId;
 use crate::hooks::harness::{
     Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
 };
@@ -453,6 +454,8 @@ pub const NORMALIZATION: Rules = Rules {
 /// The registry's descriptor of this adapter.
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
+    client: ClientId::Codex,
+    hook_source: "codex.hooks",
     display_name: "OpenAI Codex CLI",
     pre_tool_use: &[PRE_TOOL_USE],
     event_keys: &[EVENT_KEY],

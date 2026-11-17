@@ -14,6 +14,8 @@ mod common;
 mod deny_reason;
 #[path = "hooks/harness_contract.rs"]
 mod harness_contract;
+#[path = "hooks/harness_identity.rs"]
+mod harness_identity;
 #[path = "hooks/journal_id_safety.rs"]
 mod journal_id_safety;
 #[path = "hooks/normalize_parity.rs"]
