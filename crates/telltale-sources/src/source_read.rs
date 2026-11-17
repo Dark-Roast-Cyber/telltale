@@ -126,32 +126,39 @@ impl SourceReadError {
 
 #[cfg(test)]
 pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, SourceReadError> {
-    read_jsonl_values_with_limits(source, None).map(|(values, _)| values)
+    read_jsonl_values_with_limits(source, crate::acquisition::SourceAccess::ByName)
+        .map(|(values, _)| values)
 }
 
 /// The values and the number of bytes read, which scale the source's bounds.
 pub(crate) fn read_jsonl_values_with_limits(
     source: &Source,
-    direct: Option<crate::acquisition::DirectRead<'_>>,
+    access: crate::acquisition::SourceAccess<'_>,
 ) -> Result<(Vec<Value>, usize), SourceReadError> {
-    if let Some(crate::acquisition::DirectRead { root, limits }) = direct {
-        let bytes = confined_file_bytes(root, &source.path, limits.bytes)
-            .map_err(SourceReadError::Bounded)?;
-        check_json_depth(&bytes, limits.json_depth)
-            .map_err(|_| SourceReadError::Bounded(BoundedReadError::LimitExceeded))?;
-        let mut values = Vec::new();
-        for line in bytes
-            .split(|b| *b == b'\n')
-            .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
-        {
-            if values.len() == limits.records {
-                return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+    use crate::acquisition::{DirectRead, SourceAccess};
+    match access {
+        SourceAccess::Direct(DirectRead { root, limits }) => {
+            let bytes = confined_file_bytes(root, &source.path, limits.bytes)
+                .map_err(SourceReadError::Bounded)?;
+            check_json_depth(&bytes, limits.json_depth)
+                .map_err(|_| SourceReadError::Bounded(BoundedReadError::LimitExceeded))?;
+            let mut values = Vec::new();
+            for line in bytes
+                .split(|b| *b == b'\n')
+                .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+            {
+                if values.len() == limits.records {
+                    return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+                }
+                values.push(serde_json::from_slice(line)?);
             }
-            values.push(serde_json::from_slice(line)?);
+            Ok((values, bytes.len()))
         }
-        return Ok((values, bytes.len()));
+        SourceAccess::Resolved => {
+            read_production_jsonl(open_resolved(&source.path).map_err(SourceReadError::Bounded)?)
+        }
+        SourceAccess::ByName => read_production_jsonl(fs::File::open(&source.path)?),
     }
-    read_production_jsonl(fs::File::open(&source.path)?)
 }
 
 pub(crate) const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
@@ -269,6 +276,36 @@ pub(crate) fn confined_file_bytes(
         Err(_) => return Err(BoundedReadError::Unreadable),
     };
     bounded_bytes(file, cap)
+}
+
+/// An already-resolved (canonical) path opened without following any link or
+/// blocking (`telltale-discover`'s `open_resolved_file`), checked to be a
+/// regular file. A link anywhere in the path, including one swapped in after
+/// resolution, is not a regular source.
+fn open_resolved(path: &std::path::Path) -> Result<fs::File, BoundedReadError> {
+    use telltale_discover::discovery::{BoundedDiscoveryError, open_resolved_file};
+    let file = match open_resolved_file(path) {
+        Ok(Some(file)) => file,
+        Ok(None) => return Err(BoundedReadError::Missing),
+        Err(BoundedDiscoveryError::SymlinkRoot) => return Err(BoundedReadError::NonRegularSource),
+        Err(BoundedDiscoveryError::PermissionDenied) => {
+            return Err(BoundedReadError::PermissionDenied);
+        }
+        Err(_) => return Err(BoundedReadError::Unreadable),
+    };
+    let metadata = file.metadata().map_err(BoundedReadError::from_io)?;
+    if !metadata.is_file() {
+        return Err(BoundedReadError::NonRegularSource);
+    }
+    Ok(file)
+}
+
+/// `bounded_file_bytes` for an already-resolved path (see `open_resolved`).
+pub(crate) fn resolved_file_bytes(
+    path: &std::path::Path,
+    cap: usize,
+) -> Result<Vec<u8>, BoundedReadError> {
+    bounded_bytes(open_resolved(path)?, cap)
 }
 
 fn bounded_bytes(file: fs::File, cap: usize) -> Result<Vec<u8>, BoundedReadError> {

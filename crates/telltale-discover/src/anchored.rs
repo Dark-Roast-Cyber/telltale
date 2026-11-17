@@ -6,7 +6,8 @@
 //! Root establishment has a separate finite component bound. Entry accounting
 //! belongs to the caller; inventory's syscall budget is deliberately unrelated.
 //! Paths returned by discovery remain coordinates, not acquisition capabilities:
-//! a reader reopens one with `open_file` under the same anchors.
+//! a reader reopens one with `open_file` under the same anchors, or, for a path
+//! it already canonicalized, with no anchors (strict from the filesystem root).
 
 use super::discovery::BoundedDiscoveryError as Error;
 use std::ffi::{OsStr, OsString};

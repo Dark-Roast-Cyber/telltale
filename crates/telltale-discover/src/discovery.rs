@@ -964,6 +964,16 @@ pub fn open_source_file(
     crate::anchored::open_file(path, &trust_anchors(root))
 }
 
+/// Open an already-resolved file (a canonical path, as from
+/// `std::fs::canonicalize`) for reading. The path is walked strictly from the
+/// filesystem root through directory handles, so a link or replacement made
+/// after the path was resolved is refused rather than followed, even while the
+/// open runs. The leaf opens without blocking; the caller checks that it is a
+/// regular file. `None` when a component is absent.
+pub fn open_resolved_file(path: &Path) -> Result<Option<fs::File>, BoundedDiscoveryError> {
+    crate::anchored::open_file(path, &[])
+}
+
 fn bounded_opencode_paths(
     root: &Path,
     client: ClientId,

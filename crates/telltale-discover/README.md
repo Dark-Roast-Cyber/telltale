@@ -28,7 +28,10 @@ Returned source paths keep the caller's spelling; they are coordinates, not
 opened capabilities. `open_source_file(root, path)` reopens one for a reader
 under the same anchors, walking the same directory handles and opening the
 file itself without following a link; `telltale-sources` bounded acquisition
-reads through it. Other readers must apply their own protection.
+reads through it. `open_resolved_file(path)` is the same walk for an
+already-canonical path, strict from the filesystem root, for a reader that
+resolved the path itself and must read that file; the shared scan runtime
+uses it. Other readers must apply their own protection.
 
 ## Inventory without token counts
 

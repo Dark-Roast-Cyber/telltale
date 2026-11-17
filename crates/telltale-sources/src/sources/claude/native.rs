@@ -52,14 +52,15 @@ pub(crate) struct ClaudeNativeRecord {
 pub(crate) fn extract_claude_native_records(
     source: &Source,
 ) -> Result<Vec<ClaudeNativeRecord>, SourceReadError> {
-    extract_claude_native_records_with_limits(source, None).map(|(records, _)| records)
+    extract_claude_native_records_with_limits(source, crate::acquisition::SourceAccess::ByName)
+        .map(|(records, _)| records)
 }
 
 pub(crate) fn extract_claude_native_records_with_limits(
     source: &Source,
-    direct: Option<crate::acquisition::DirectRead<'_>>,
+    access: crate::acquisition::SourceAccess<'_>,
 ) -> Result<(Vec<ClaudeNativeRecord>, usize), SourceReadError> {
-    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, direct)?;
+    let (values, bytes) = crate::source_read::read_jsonl_values_with_limits(source, access)?;
     let mut records = Vec::with_capacity(values.len());
 
     for (source_sequence, value) in values.into_iter().enumerate() {
