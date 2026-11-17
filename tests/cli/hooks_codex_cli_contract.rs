@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use common::Harness;
 use serde_json::{Value, json};
-use telltale_core::hooks::codex_cli;
 use telltale_core::hooks::harness::{Harness as Registry, Parsed};
+use telltale_core::hooks::harnesses::codex_cli;
 use telltale_core::hooks::runtime::{CANNOT_ASK_NOTE, Completion, Event};
 
 fn fixtures() -> PathBuf {
@@ -202,7 +202,7 @@ fn a_deny_renders_the_form_codex_honored() {
         "subagent.jsonl",
         "lifecycle-failures.jsonl",
     ] {
-        let mut h = Harness::with(|c| c.telltale.rules = vec![rules.clone()]);
+        let mut h = Harness::with(|c| c.rules.packs.deployment = vec![rules.clone()]);
         for (stub, payload) in capture(name) {
             let out = send(&mut h, &payload);
             if payload["hook_event_name"] == "PreToolUse" && stub == "deny-hso" {
@@ -281,7 +281,7 @@ fn stop_and_subagent_stop_settle_only_their_own_agent_and_turn() {
         .unwrap();
 
     // As captured: SubagentStop, then the parent's Stop.
-    let mut h = Harness::with(|c| c.telltale.rules = vec![rules.clone()]);
+    let mut h = Harness::with(|c| c.rules.packs.deployment = vec![rules.clone()]);
     for payload in &lines {
         send(&mut h, payload);
     }
@@ -301,7 +301,7 @@ fn stop_and_subagent_stop_settle_only_their_own_agent_and_turn() {
     );
 
     // Parent's Stop first: the child's call stays pending until its own stop.
-    let mut h = Harness::with(|c| c.telltale.rules = vec![rules.clone()]);
+    let mut h = Harness::with(|c| c.rules.packs.deployment = vec![rules.clone()]);
     for payload in lines
         .iter()
         .take_while(|p| p["hook_event_name"] != "SubagentStop")
@@ -371,7 +371,7 @@ fn post_events_map_to_outcomes_and_stop_settles_the_rest() {
     // missing binary and the canary's parallel sibling completed.
     let rules_dir = tempfile::tempdir().unwrap();
     let rules = canary_rules(rules_dir.path());
-    let mut h = Harness::with(|c| c.telltale.rules = vec![rules.clone()]);
+    let mut h = Harness::with(|c| c.rules.packs.deployment = vec![rules.clone()]);
     let lines = capture("lifecycle-failures.jsonl");
     for (_, payload) in &lines {
         send(&mut h, payload);
@@ -416,7 +416,7 @@ fn failure_and_rule_captures_replay_without_output() {
 /// Codex's `tool_use_id` comes from the model. Telltale rejects a native ID
 /// with `/`, `\`, `..` or a line break and fails the whole journal source,
 /// which would make that call and every later one in the session unevaluable,
-/// and with `on_unevaluable = "allow"` would let a later `curl | sh` through.
+/// and with `on_unevaluable: allow` would let a later `curl | sh` through.
 /// The composite key encodes everything outside `[A-Za-z0-9_-]`, so hostile
 /// IDs are still evaluated normally, and a later risky call is still caught.
 #[test]
@@ -489,11 +489,13 @@ fn binary(args: &[&str], stdin: &[u8], state: &Path) -> (i32, String, String) {
     for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
         command.env(var, "/nonexistent-home-for-test");
     }
+    command.args(args);
+    if args.get(1) == Some(&"hook") {
+        command.arg("--config-dir").arg(common::enforce_config());
+    }
     let mut child = command
-        .args(args)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_STATE_HOME")
-        .env("TELLTALE_HOOKS_CONFIG", common::enforce_config())
         .env("TELLTALE_HOOKS_EVALUATOR", "0")
         .env("TELLTALE_HOOKS_STATE_DIR", state)
         .stdin(Stdio::piped())

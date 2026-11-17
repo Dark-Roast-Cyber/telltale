@@ -85,7 +85,10 @@ mod unsupported {
     }
 
     /// Never starts anything; `false` means no attempt was made.
-    pub fn spawn_detached(_state_dir: &Path) -> std::io::Result<bool> {
+    pub fn spawn_detached(
+        _state_dir: &Path,
+        _serve_args: &[std::ffi::OsString],
+    ) -> std::io::Result<bool> {
         Ok(false)
     }
 
@@ -111,7 +114,7 @@ mod unsupported {
                 ClientOutcome::NotDelivered(UNSUPPORTED_PLATFORM)
             );
             let state = dir.path().join("state");
-            assert!(!spawn_detached(&state).unwrap());
+            assert!(!spawn_detached(&state, &[]).unwrap());
             assert!(!state.exists(), "nothing created");
             assert!(matches!(
                 serve(Config::default()),
