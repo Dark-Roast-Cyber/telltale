@@ -1526,9 +1526,7 @@ fn assert_release_publication_gates(workflow: &serde_yaml::Value) {
 }
 
 fn assert_windows_ci_gates(workflow: &serde_yaml::Value) {
-    let steps = workflow_steps(workflow, "windows");
-    let helper = workflow_step_index(steps, "run", "tests\\release_windows_zip.ps1");
-    let verifier_tests = workflow_step_index(steps, "run", "tests\\verify_windows_runtime.ps1");
+    let steps = workflow_steps(workflow, "windows-tests");
     let clippy = workflow_step_index(steps, "run", "cargo clippy");
     let clippy_args = workflow_run(steps, clippy)
         .split_whitespace()
@@ -1546,39 +1544,116 @@ fn assert_windows_ci_gates(workflow: &serde_yaml::Value) {
     assert_eq!(
         steps
             .iter()
-            .filter(|step| step["run"] == "cargo test")
+            .filter(|step| step["run"] == "cargo test --locked -- --skip self_protection_corpus::")
             .count(),
         1,
-        "one full Rust suite step"
+        "one Rust suite step outside the separately required corpus lane"
     );
     let tests = steps
         .iter()
-        .position(|step| step["run"] == "cargo test")
-        .expect("full Rust suite");
+        .position(|step| step["run"] == "cargo test --locked -- --skip self_protection_corpus::")
+        .expect("Rust suite outside corpus");
+    assert!(clippy < tests);
+    for index in [clippy, tests] {
+        assert_default_success_gate(&steps[index]);
+    }
+    let corpus = workflow_steps(workflow, "windows-corpus");
+    let corpus_test = workflow_step_index(corpus, "run", "cargo test");
+    assert_eq!(
+        corpus[corpus_test]["run"],
+        "cargo test --locked -p telltale-core --features opencode-sqlite --test hooks self_protection_corpus::"
+    );
+    assert_default_success_gate(&corpus[corpus_test]);
+
+    let steps = workflow_steps(workflow, "windows-release");
+    let helper = workflow_step_index(steps, "run", "tests\\release_windows_zip.ps1");
+    let verifier_tests = workflow_step_index(steps, "run", "tests\\verify_windows_runtime.ps1");
     let build = workflow_step_index(
         steps,
         "run",
         "cargo build --locked --release --target x86_64-pc-windows-msvc",
     );
     let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
+    let host = workflow_step_index(steps, "run", "windows_host_verification.ps1");
     let smoke = workflow_step_index(steps, "run", "telltale.exe --version");
-    assert!(helper < clippy && verifier_tests < clippy && clippy < tests);
-    assert!(tests < build && build < runtime && runtime < smoke);
-    for index in [helper, verifier_tests, clippy, tests, build, runtime, smoke] {
+    let lifecycle = workflow_step_index(steps, "run", "windows_lifecycle.ps1");
+    assert!(helper < build && verifier_tests < build);
+    assert!(build < runtime && runtime < host && host < smoke && smoke < lifecycle);
+    for index in [
+        helper,
+        verifier_tests,
+        build,
+        runtime,
+        host,
+        smoke,
+        lifecycle,
+    ] {
         assert_default_success_gate(&steps[index]);
     }
-    for index in [helper, verifier_tests, build, runtime, smoke] {
+    for index in [
+        helper,
+        verifier_tests,
+        build,
+        runtime,
+        host,
+        smoke,
+        lifecycle,
+    ] {
         assert_eq!(steps[index]["shell"], "pwsh");
     }
-    assert!(
-        workflow_run(steps, build).contains("$env:RUSTFLAGS = '-C target-feature=+crt-static'")
+    assert_eq!(
+        workflow["jobs"]["windows-release"]["env"]["RUSTFLAGS"],
+        "-C target-feature=+crt-static"
     );
+    for flag_var in [
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+    ] {
+        assert!(
+            workflow["jobs"]["windows-release"]["env"][flag_var].is_null(),
+            "job env must not shadow RUSTFLAGS with {flag_var}"
+        );
+    }
+    for flag_var in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+    ] {
+        assert!(
+            steps[build]["env"][flag_var].is_null(),
+            "release build step must inherit job RUSTFLAGS without overriding {flag_var}"
+        );
+        assert!(
+            !workflow_run(steps, build).contains(flag_var),
+            "release build step must not reassign {flag_var} inline"
+        );
+    }
     assert!(
         workflow_run(steps, runtime)
             .contains("-BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe")
     );
+    let host_run = workflow_run(steps, host);
+    for required in [
+        ".\\tests\\build_windows_development.ps1",
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\build_windows_development.ps1",
+        ".\\tests\\windows_host_verification.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe",
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\windows_host_verification.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe",
+    ] {
+        assert!(
+            host_run.contains(required),
+            "missing PowerShell host verification command: {required}"
+        );
+    }
+    assert_eq!(host_run.matches("build_windows_development.ps1").count(), 2);
+    assert_eq!(host_run.matches("windows_host_verification.ps1").count(), 2);
     assert!(workflow_run(steps, smoke).contains("$LASTEXITCODE -ne 0"));
     assert!(workflow_run(steps, smoke).contains("throw"));
+    let lifecycle_run = workflow_run(steps, lifecycle);
+    assert!(
+        lifecycle_run
+            .contains("-BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe")
+    );
+    assert!(lifecycle_run.contains("-TestScheduledTask"));
 }
 
 fn assert_release_archive_gates(workflow: &serde_yaml::Value) {
@@ -1796,6 +1871,71 @@ fn windows_ci_runs_release_zip_helper_runtime_gate_and_rust_suite() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn windows_aggregate_requires_every_lane_to_succeed() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
+    let aggregate = &workflow["jobs"]["windows"];
+    assert_eq!(aggregate["name"], "Windows (x86_64-pc-windows-msvc)");
+    assert_eq!(
+        aggregate["needs"],
+        serde_yaml::to_value([
+            "scope",
+            "windows-tests",
+            "windows-corpus",
+            "windows-release",
+        ])
+        .unwrap()
+    );
+    assert_eq!(
+        aggregate["if"],
+        "always() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true')"
+    );
+    let steps = workflow_steps(&workflow, "windows");
+    let index = workflow_step_index(steps, "run", "SCOPE_RESULT");
+    assert_default_success_gate(&steps[index]);
+    assert_eq!(steps[index]["shell"], "bash");
+    let names = [
+        "SCOPE_RESULT",
+        "TEST_RESULT",
+        "CORPUS_RESULT",
+        "RELEASE_RESULT",
+    ];
+    for (name, job) in names.iter().zip([
+        "scope",
+        "windows-tests",
+        "windows-corpus",
+        "windows-release",
+    ]) {
+        assert_eq!(
+            steps[index]["env"][*name],
+            format!("${{{{ needs.{job}.result }}}}")
+        );
+    }
+    let script = workflow_run(steps, index);
+    for failed in 0..=names.len() {
+        for result in ["failure", "cancelled", "skipped", ""] {
+            let mut command = Command::new("bash");
+            command.args(["-euo", "pipefail", "-c", script]);
+            for (i, name) in names.iter().enumerate() {
+                command.env(name, if i == failed { result } else { "success" });
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.success(),
+                failed == names.len(),
+                "lane {failed}: {result}"
+            );
+        }
+    }
+    assert_eq!(workflow["concurrency"]["cancel-in-progress"], true);
+    assert_eq!(
+        workflow["concurrency"]["group"],
+        "ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+    );
+}
+
 #[test]
 fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
     let workflow = fs::read_to_string(".github/workflows/ci.yml")
@@ -1809,7 +1949,12 @@ fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
     let fmt = workflow_steps(&yaml, "fmt");
     let index = workflow_step_index(fmt, "run", "make --silent fmt");
     assert_default_success_gate(&fmt[index]);
-    for platform in ["windows", "macos"] {
+    for platform in [
+        "windows-tests",
+        "windows-corpus",
+        "windows-release",
+        "macos",
+    ] {
         for step in yaml["jobs"][platform]["steps"]
             .as_sequence()
             .expect("native platform steps")
@@ -1821,6 +1966,91 @@ fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn ci_dependency_caches_keep_configuration_identity_and_one_writer() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
+    let groups = [
+        ("clippy", "linux-engine", false),
+        ("test", "linux-engine", true),
+        ("package-verify", "linux-engine", false),
+        ("source-preflight", "linux-engine", false),
+        ("windows-tests", "windows-engine", true),
+        ("windows-corpus", "windows-engine", false),
+        ("windows-release", "windows-release", true),
+        ("macos", "macos-engine", true),
+    ];
+    let mut writers = BTreeMap::new();
+    for (job, group, saves) in groups {
+        let steps = workflow_steps(&workflow, job);
+        let toolchain = workflow_step_index(steps, "uses", "dtolnay/rust-toolchain");
+        let cache = workflow_step_index(steps, "uses", "Swatinem/rust-cache");
+        assert!(toolchain < cache);
+        let config = &steps[cache]["with"];
+        let feature_key = if job == "windows-release" {
+            "hooks-opencode-sqlite-crt-static"
+        } else {
+            "hooks-opencode-sqlite-protected-assignment"
+        };
+        assert_eq!(config["shared-key"], format!("{group}-{feature_key}"));
+        // This action ignores `key` when `shared-key` is set.
+        assert!(config["key"].is_null());
+        assert_eq!(config["cache-bin"], false);
+        assert_ne!(config["add-rust-environment-hash-key"], false);
+        assert_ne!(config["cache-workspace-crates"], true);
+        assert_ne!(config["cache-on-failure"], true);
+        assert_eq!(config["save-if"] != false, saves);
+        let key = config["shared-key"].as_str().unwrap();
+        assert!(key.contains("hooks-opencode-sqlite"));
+        assert!(key.contains(if job == "windows-release" {
+            "crt-static"
+        } else {
+            "protected-assignment"
+        }));
+        if saves {
+            *writers.entry(group).or_insert(0) += 1;
+        }
+    }
+    assert!(writers.values().all(|count| *count == 1));
+    let msrv_steps = workflow_steps(&workflow, "embedding-msrv");
+    let msrv_install = workflow_step_index(msrv_steps, "run", "rustup toolchain install");
+    let msrv_cache = workflow_step_index(msrv_steps, "uses", "Swatinem/rust-cache");
+    let msrv_check =
+        workflow_step_index(msrv_steps, "run", "scripts/embedding-contract-check --msrv");
+    assert!(msrv_install < msrv_cache && msrv_cache < msrv_check);
+    assert!(workflow_run(msrv_steps, msrv_install).contains("RUSTUP_TOOLCHAIN="));
+    assert_eq!(
+        msrv_steps[msrv_cache]["with"]["workspaces"],
+        "tests/embedding-consumer -> ../../target/embedding-msrv-check"
+    );
+    assert_eq!(msrv_steps[msrv_cache]["with"]["cache-bin"], false);
+    // Unpruned `actions/cache` over `target/` previously saved ~8 GB per branch
+    // across `embedding-msrv`, `package-verify`, and `source-preflight`,
+    // evicting every platform's test cache from GitHub's 10 GB pool.
+    for (job, def) in workflow["jobs"].as_mapping().unwrap() {
+        for step in def["steps"].as_sequence().unwrap() {
+            if step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.starts_with("actions/cache@"))
+            {
+                let path = step["with"]["path"].as_str().unwrap_or_default();
+                assert!(
+                    !path.lines().any(|line| line.trim() == "target"),
+                    "{}: raw actions/cache must not archive unpruned target/",
+                    job.as_str().unwrap()
+                );
+            }
+        }
+    }
+    for (a, b) in [("clippy", "test"), ("windows-tests", "windows-corpus")] {
+        let config = |job| {
+            let steps = workflow_steps(&workflow, job);
+            &steps[workflow_step_index(steps, "uses", "Swatinem/rust-cache")]["with"]["shared-key"]
+        };
+        assert_eq!(config(a), config(b));
     }
 }
 
@@ -2078,6 +2308,21 @@ fn ci_scope_reduces_only_draft_and_documentation_only_pull_requests() {
         let id = id.as_str().expect("job id");
         if always.contains(&id) {
             assert!(job["if"].is_null(), "{id} must run for every event");
+        } else if id == "windows" {
+            assert_eq!(
+                job["needs"],
+                serde_yaml::to_value([
+                    "scope",
+                    "windows-tests",
+                    "windows-corpus",
+                    "windows-release"
+                ])
+                .unwrap()
+            );
+            assert_eq!(
+                job["if"],
+                "always() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true')"
+            );
         } else {
             assert_eq!(job["needs"], "scope", "{id}");
             assert_eq!(job["if"], "needs.scope.outputs.full == 'true'", "{id}");
@@ -2161,7 +2406,7 @@ fn assert_validator_bootstrap_jobs(workflow: &serde_yaml::Value, jobs: &[(&str, 
         };
         assert_eq!(steps[setup]["if"], condition, "{job}");
         let script = workflow_run(steps, setup);
-        let python = if job == "windows" {
+        let python = if job.starts_with("windows-") {
             "python3"
         } else {
             "\"${RUNNER_TEMP}/telltale-schema-venv/bin/python\""
@@ -2176,7 +2421,7 @@ fn assert_validator_bootstrap_jobs(workflow: &serde_yaml::Value, jobs: &[(&str, 
             script.contains(&format!("{python} scripts/validate-event-jsonl --help")),
             "{job}: probe the actual driver"
         );
-        if job != "windows" {
+        if !job.starts_with("windows-") {
             assert!(
                 script.contains("python3 -m venv \"${RUNNER_TEMP}/telltale-schema-venv\""),
                 "{job}: isolate from externally managed Python"
@@ -2210,12 +2455,13 @@ fn assert_ci_validator_bootstrap(workflow: &serde_yaml::Value) {
         workflow,
         &[
             ("test", &["ci-linux-test", "cargo test"]),
-            ("windows", &["cargo test", "windows_lifecycle.ps1"]),
+            ("windows-tests", &["cargo test"]),
+            ("windows-release", &["windows_lifecycle.ps1"]),
             ("macos", &["cargo test"]),
             ("source-preflight", &["release-preflight"]),
         ],
     );
-    let windows = workflow_steps(workflow, "windows");
+    let windows = workflow_steps(workflow, "windows-release");
     let lifecycle = workflow_step_index(windows, "run", "windows_lifecycle.ps1");
     assert!(
         workflow_run(windows, lifecycle).contains("-Python python3"),
@@ -2534,7 +2780,13 @@ fn ci_validator_bootstrap_precedes_consumers_and_rejects_bypasses() {
     let workflow: serde_yaml::Value =
         serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
     assert_ci_validator_bootstrap(&workflow);
-    for job in ["test", "windows", "macos", "source-preflight"] {
+    for job in [
+        "test",
+        "windows-tests",
+        "windows-release",
+        "macos",
+        "source-preflight",
+    ] {
         for fault in [
             "missing",
             "late",
@@ -2588,7 +2840,8 @@ fn ci_validator_bootstrap_propagates_install_and_probe_failures() {
     let release = serde_yaml::from_str(&read_release_workflow()).unwrap();
     for (workflow, job) in [
         (&ci, "test"),
-        (&ci, "windows"),
+        (&ci, "windows-tests"),
+        (&ci, "windows-release"),
         (&ci, "macos"),
         (&ci, "source-preflight"),
         (&release, "preflight"),
@@ -2627,7 +2880,7 @@ fn ci_validator_bootstrap_propagates_install_and_probe_failures() {
             );
             assert_eq!(after.exists(), install == 0 && probe == 0, "{job}");
             let mut expected = Vec::new();
-            if job != "windows" {
+            if !job.starts_with("windows-") {
                 expected.push(format!(
                     "-m venv {}",
                     temp.path().join("telltale-schema-venv").display()
@@ -2645,7 +2898,7 @@ fn ci_validator_bootstrap_propagates_install_and_probe_failures() {
                 expected,
                 "{job}"
             );
-            if job != "windows" && install == 0 && probe == 0 {
+            if !job.starts_with("windows-") && install == 0 && probe == 0 {
                 assert_eq!(
                     fs::read_to_string(temp.path().join("github-path"))
                         .unwrap()
@@ -2975,32 +3228,72 @@ fn release_workflow_archive_and_preflight_gates_reject_bypass_mutations() {
 fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
     let ci: serde_yaml::Value =
         serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
-    let steps = workflow_steps(&ci, "windows");
+    let steps = workflow_steps(&ci, "windows-release");
     let helper = workflow_step_index(steps, "run", "tests\\release_windows_zip.ps1");
-    let clippy = workflow_step_index(steps, "run", "cargo clippy");
+    let build = workflow_step_index(steps, "run", "cargo build");
+    let rust = workflow_steps(&ci, "windows-tests");
+    let clippy = workflow_step_index(rust, "run", "cargo clippy");
     let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
+    let host = workflow_step_index(steps, "run", "windows_host_verification.ps1");
+    let lifecycle = workflow_step_index(steps, "run", "windows_lifecycle.ps1");
     for fault in [
         "missing-helper",
         "late-helper",
         "wrong-shell",
         "ignored-runtime",
         "conditional-runtime",
+        "step-rustflags-override",
+        "inline-rustflags-override",
+        "single-powershell-host",
+        "ignored-host",
+        "ignored-lifecycle",
+        "conditional-lifecycle",
         "missing-all-targets",
         "missing-deny-warnings",
     ] {
         let mut bad = ci.clone();
-        let steps = bad["jobs"]["windows"]["steps"].as_sequence_mut().unwrap();
+        let job = if fault == "missing-all-targets" || fault == "missing-deny-warnings" {
+            "windows-tests"
+        } else {
+            "windows-release"
+        };
+        let steps = bad["jobs"][job]["steps"].as_sequence_mut().unwrap();
         match fault {
             "missing-helper" => {
                 steps.remove(helper);
             }
-            "late-helper" => steps.swap(helper, clippy),
+            "late-helper" => steps.swap(helper, build),
             "wrong-shell" => steps[helper]["shell"] = serde_yaml::to_value("bash").unwrap(),
             "ignored-runtime" => {
                 steps[runtime]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
             }
             "conditional-runtime" => {
                 steps[runtime]["if"] = serde_yaml::to_value("always()").unwrap()
+            }
+            "step-rustflags-override" => {
+                steps[build]["env"] =
+                    serde_yaml::to_value(BTreeMap::from([("RUSTFLAGS", "")])).unwrap()
+            }
+            "inline-rustflags-override" => {
+                steps[build]["run"] = serde_yaml::to_value(
+                    "$env:RUSTFLAGS = ''\ncargo build --locked --release --target x86_64-pc-windows-msvc",
+                )
+                .unwrap()
+            }
+            "single-powershell-host" => {
+                steps[host]["run"] = serde_yaml::to_value(
+                    ".\\tests\\build_windows_development.ps1\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\build_windows_development.ps1\n.\\tests\\windows_host_verification.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe",
+                )
+                .unwrap()
+            }
+            "ignored-host" => {
+                steps[host]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "ignored-lifecycle" => {
+                steps[lifecycle]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "conditional-lifecycle" => {
+                steps[lifecycle]["if"] = serde_yaml::to_value("always()").unwrap()
             }
             "missing-all-targets" => {
                 steps[clippy]["run"] = serde_yaml::to_value("cargo clippy -- -D warnings").unwrap()
