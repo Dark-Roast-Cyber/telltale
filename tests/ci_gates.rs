@@ -127,6 +127,13 @@ if test "$1" = tree; then
         *) printf 'telltale-sources v0.0.0 features=\n' ;;
     esac
     case "$*" in
+        *"--features hooks"*)
+            printf 'telltale-sources v0.0.0 features=hook-journal\n'
+            printf 'telltale-detect v0.0.0 features=hook-journal\n'
+            ;;
+        *) printf 'telltale-detect v0.0.0 features=\n' ;;
+    esac
+    case "$*" in
         *opencode-sqlite*|*protected-assignment*) printf 'rusqlite v0.32.1\nlibsqlite3-sys v0.30.1\n' ;;
         *--prune*) : ;;
         *sqlx-sqlite*) printf 'libsqlite3-sys v0.30.1\n' ;;
@@ -212,6 +219,13 @@ if test "$1" = tree; then
         *) printf 'telltale-sources v0.0.0 features=\n' ;;
     esac
     case "$*" in
+        *"--features hooks"*)
+            printf 'telltale-sources v0.0.0 features=hook-journal\n'
+            printf 'telltale-detect v0.0.0 features=hook-journal\n'
+            ;;
+        *) printf 'telltale-detect v0.0.0 features=\n' ;;
+    esac
+    case "$*" in
         *opencode-sqlite*|*protected-assignment*) printf 'rusqlite v0.32.1\nlibsqlite3-sys v0.30.1\n' ;;
         *--prune*) : ;;
         *sqlx-sqlite*) printf 'libsqlite3-sys v0.30.1\n' ;;
@@ -283,7 +297,7 @@ fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
             "test --locked -p telltale-discover --quiet",
             "test --locked -p telltale-core --lib --quiet",
             "test --locked -p telltale-sources --lib --quiet",
-            "test --locked -p telltale-sources --features opencode-sqlite --lib --quiet",
+            "test --locked -p telltale-sources --features opencode-sqlite,hook-journal --lib --quiet",
             "test --locked --quiet --no-default-features --lib --test cli --test ci_gates",
             "test --locked -p telltale-core --no-default-features --lib --quiet",
         ]
