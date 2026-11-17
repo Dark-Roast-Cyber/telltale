@@ -1,12 +1,17 @@
 //! Shared helpers: drive the runtime with authentic Claude Code payloads.
 #![allow(dead_code)]
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use telltale_core::hooks::claude_code;
 use telltale_core::hooks::config::{Config, Mode};
 use telltale_core::hooks::runtime::Runtime;
+
+#[path = "telemetry_reader.rs"]
+mod telemetry_reader;
+use telemetry_reader::TelemetryReader;
 
 /// Test data (fixtures, marker rules) of the hooks suites. This module is
 /// included by `telltale-core`'s own tests and by the CLI's binary-level tests,
@@ -66,6 +71,7 @@ pub struct Harness {
     pub dir: tempfile::TempDir,
     pub runtime: Runtime,
     pub session_id: String,
+    telemetry_reader: RefCell<TelemetryReader>,
 }
 
 impl Harness {
@@ -88,6 +94,7 @@ impl Harness {
             dir,
             runtime: Runtime::new(config),
             session_id: "synthetic-session-0001".into(),
+            telemetry_reader: RefCell::default(),
         }
     }
 
@@ -159,16 +166,16 @@ impl Harness {
     }
 
     pub fn decision_for(&self, tool_use_id: &str) -> Value {
-        self.records("decision")
-            .into_iter()
-            .find(|r| r["action"]["tool_use_id"] == tool_use_id)
+        self.telemetry_reader
+            .borrow_mut()
+            .record_for(&self.telemetry_path(), "decision", tool_use_id)
             .unwrap_or_else(|| panic!("no decision for {tool_use_id}"))
     }
 
     pub fn outcome_for(&self, tool_use_id: &str) -> Value {
-        self.records("outcome")
-            .into_iter()
-            .find(|r| r["action"]["tool_use_id"] == tool_use_id)
+        self.telemetry_reader
+            .borrow_mut()
+            .record_for(&self.telemetry_path(), "outcome", tool_use_id)
             .unwrap_or_else(|| panic!("no outcome for {tool_use_id}"))
     }
 }
