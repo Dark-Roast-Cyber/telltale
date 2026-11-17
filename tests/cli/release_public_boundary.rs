@@ -1574,23 +1574,61 @@ fn assert_windows_ci_gates(workflow: &serde_yaml::Value) {
         "cargo build --locked --release --target x86_64-pc-windows-msvc",
     );
     let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
+    let host = workflow_step_index(steps, "run", "windows_host_verification.ps1");
     let smoke = workflow_step_index(steps, "run", "telltale.exe --version");
     assert!(helper < build && verifier_tests < build);
-    assert!(build < runtime && runtime < smoke);
-    for index in [helper, verifier_tests, build, runtime, smoke] {
+    assert!(build < runtime && runtime < host && host < smoke);
+    for index in [helper, verifier_tests, build, runtime, host, smoke] {
         assert_default_success_gate(&steps[index]);
     }
-    for index in [helper, verifier_tests, build, runtime, smoke] {
+    for index in [helper, verifier_tests, build, runtime, host, smoke] {
         assert_eq!(steps[index]["shell"], "pwsh");
     }
     assert_eq!(
         workflow["jobs"]["windows-release"]["env"]["RUSTFLAGS"],
         "-C target-feature=+crt-static"
     );
+    for flag_var in [
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+    ] {
+        assert!(
+            workflow["jobs"]["windows-release"]["env"][flag_var].is_null(),
+            "job env must not shadow RUSTFLAGS with {flag_var}"
+        );
+    }
+    for flag_var in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+    ] {
+        assert!(
+            steps[build]["env"][flag_var].is_null(),
+            "release build step must inherit job RUSTFLAGS without overriding {flag_var}"
+        );
+        assert!(
+            !workflow_run(steps, build).contains(flag_var),
+            "release build step must not reassign {flag_var} inline"
+        );
+    }
     assert!(
         workflow_run(steps, runtime)
             .contains("-BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe")
     );
+    let host_run = workflow_run(steps, host);
+    for required in [
+        ".\\tests\\build_windows_development.ps1",
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\build_windows_development.ps1",
+        ".\\tests\\windows_host_verification.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe",
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\windows_host_verification.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe",
+    ] {
+        assert!(
+            host_run.contains(required),
+            "missing PowerShell host verification command: {required}"
+        );
+    }
+    assert_eq!(host_run.matches("build_windows_development.ps1").count(), 2);
+    assert_eq!(host_run.matches("windows_host_verification.ps1").count(), 2);
     assert!(workflow_run(steps, smoke).contains("$LASTEXITCODE -ne 0"));
     assert!(workflow_run(steps, smoke).contains("throw"));
 }
@@ -3141,12 +3179,17 @@ fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
     let rust = workflow_steps(&ci, "windows-tests");
     let clippy = workflow_step_index(rust, "run", "cargo clippy");
     let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
+    let host = workflow_step_index(steps, "run", "windows_host_verification.ps1");
     for fault in [
         "missing-helper",
         "late-helper",
         "wrong-shell",
         "ignored-runtime",
         "conditional-runtime",
+        "step-rustflags-override",
+        "inline-rustflags-override",
+        "single-powershell-host",
+        "ignored-host",
         "missing-all-targets",
         "missing-deny-warnings",
     ] {
@@ -3168,6 +3211,25 @@ fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
             }
             "conditional-runtime" => {
                 steps[runtime]["if"] = serde_yaml::to_value("always()").unwrap()
+            }
+            "step-rustflags-override" => {
+                steps[build]["env"] =
+                    serde_yaml::to_value(BTreeMap::from([("RUSTFLAGS", "")])).unwrap()
+            }
+            "inline-rustflags-override" => {
+                steps[build]["run"] = serde_yaml::to_value(
+                    "$env:RUSTFLAGS = ''\ncargo build --locked --release --target x86_64-pc-windows-msvc",
+                )
+                .unwrap()
+            }
+            "single-powershell-host" => {
+                steps[host]["run"] = serde_yaml::to_value(
+                    ".\\tests\\build_windows_development.ps1\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\tests\\build_windows_development.ps1\n.\\tests\\windows_host_verification.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe",
+                )
+                .unwrap()
+            }
+            "ignored-host" => {
+                steps[host]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
             }
             "missing-all-targets" => {
                 steps[clippy]["run"] = serde_yaml::to_value("cargo clippy -- -D warnings").unwrap()
