@@ -12,42 +12,39 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use telltale_core::hooks::claude_code;
-use telltale_core::hooks::codex_cli;
 use telltale_core::hooks::config::{Config, OnError, RuleContent};
-use telltale_core::hooks::copilot_cli;
 use telltale_core::hooks::engine::Engine;
 use telltale_core::hooks::evaluator;
 #[cfg(unix)]
 use telltale_core::hooks::evaluator::ClientOutcome;
 use telltale_core::hooks::gate::{Answer, DETECT_ONLY_DEADLINE, Gate};
-use telltale_core::hooks::harness::{Harness, Parsed, names_event};
+use telltale_core::hooks::harness::{Harness, NamelessBlock, Parsed, names_event};
+use telltale_core::hooks::harnesses::codex_cli;
 use telltale_core::hooks::identity;
 use telltale_core::hooks::runtime::{Context, Event, Runtime};
 
 /// Hook payloads larger than this are refused rather than buffered.
 const MAX_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
 
-const USAGE: &str = "\
-usage:
-  telltale hooks claude-code hook                 handle one Claude Code hook (stdin -> stdout)
-  telltale hooks claude-code settings [--fail-closed] [COMMAND]
-                                                  print the Claude Code hooks settings fragment;
-                                                  --fail-closed blocks tool calls if the hook fails
-  telltale hooks codex-cli hook                   handle one Codex CLI hook (stdin -> stdout)
-  telltale hooks codex-cli settings [COMMAND]     print $CODEX_HOME/hooks.json (install and trust steps
-                                                  on stderr); Codex has no fail-closed option, so
-                                                  --fail-closed is refused
-  telltale hooks codex-cli execpolicy             print Codex exec-policy rules that refuse nested Codex
+/// The usage text: each registered harness's `hook` and `settings` lines
+/// (`Adapter::install`), then the commands that belong to no adapter.
+fn usage() -> String {
+    let mut text = String::from("usage:\n");
+    for harness in Harness::ALL {
+        let adapter = harness.adapter();
+        let hook = format!("  telltale hooks {} hook", adapter.name);
+        text.push_str(&format!(
+            "{hook:<50}handle one {} hook (stdin -> stdout)\n{}\n",
+            adapter.display_name, adapter.install.usage
+        ));
+    }
+    text.push_str(COMMON_USAGE);
+    text
+}
+
+const COMMON_USAGE: &str = "  telltale hooks codex-cli execpolicy             print Codex exec-policy rules that refuse nested Codex
                                                   launches natively, even if the hook fails
-  telltale hooks copilot-cli hook                 handle one GitHub Copilot CLI hook (stdin -> stdout)
-  telltale hooks copilot-cli settings [--fail-closed] [COMMAND]
-                                                  print the Copilot CLI hook file (for example
-                                                  ~/.copilot/hooks/telltale-hooks.json); Copilot
-                                                  always fails closed on a crash or missing binary
-                                                  and open on a timeout, so --fail-closed changes nothing;
-                                                  on Windows COMMAND runs under PowerShell, so quote a
-                                                  path with spaces as '& \"C:\\...\\telltale.exe\" hooks ...'
+  telltale hooks harnesses                        list the harnesses this build has an adapter for
   telltale hooks serve                            run the long-lived evaluator (normally autostarted;
                                                   Linux and macOS only, elsewhere hooks evaluate in-process)
   telltale hooks check                            validate config and build the Telltale pipeline
@@ -72,34 +69,45 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["-h"] | ["--help"] | ["help"] => {
-            println!("{USAGE}");
+            println!("{}", usage());
             0
         }
-        ["claude-code", "settings", rest @ ..] => print_settings(Harness::ClaudeCode, rest),
-        ["copilot-cli", "settings", rest @ ..] => print_settings(Harness::CopilotCli, rest),
-        ["codex-cli", "settings", rest @ ..] => print_settings(Harness::CodexCli, rest),
-        ["codex-cli", "execpolicy"] => {
+        ["harnesses"] => {
+            for harness in Harness::ALL {
+                let adapter = harness.adapter();
+                println!("{:<14}{}", adapter.name, adapter.display_name);
+            }
+            0
+        }
+        [name, "execpolicy"] if *name == codex_cli::HARNESS => {
             print!("{}", codex_cli::execpolicy_rules());
             0
         }
+        [name, "settings", rest @ ..] => match Harness::from_name(name) {
+            Some(harness) => print_settings(harness, rest),
+            None => {
+                eprintln!("{}", usage());
+                64
+            }
+        },
         [name, "hook", flags @ ..] => match (Harness::from_name(name), config_dirs(flags)) {
             (Some(harness), Some(dirs)) => hook(harness, &dirs),
             _ => {
-                eprintln!("{USAGE}");
+                eprintln!("{}", usage());
                 64
             }
         },
         ["check", flags @ ..] => match config_dirs(flags) {
             Some(dirs) => check(&dirs),
             None => {
-                eprintln!("{USAGE}");
+                eprintln!("{}", usage());
                 64
             }
         },
         ["serve", flags @ ..] => match config_dirs(flags) {
             Some(dirs) => serve(&dirs),
             None => {
-                eprintln!("{USAGE}");
+                eprintln!("{}", usage());
                 64
             }
         },
@@ -113,7 +121,7 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
             0
         }
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             64
         }
     }
@@ -125,7 +133,7 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
     // A mistyped flag must not silently print a hook with weaker enforcement, or
     // become a hook command that can never run.
     if flags.iter().any(|flag| *flag != "--fail-closed") {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage());
         return 64;
     }
     let fail_closed = !flags.is_empty();
@@ -134,29 +142,22 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
         [] => default.as_str(),
         [command] => command,
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             return 64;
         }
     };
-    let fragment = match harness {
-        Harness::ClaudeCode => claude_code::settings_fragment(command, fail_closed),
-        // Codex cannot fail closed, so `--fail-closed` prints nothing and fails
-        // rather than pretending. Install and trust notes go to stderr.
-        Harness::CodexCli => {
-            if fail_closed {
-                eprintln!("{}", codex_cli::NO_FAIL_CLOSED);
-                return 1;
+    // An adapter that cannot honor the request prints nothing and fails rather
+    // than pretending. Install and trust notes go to stderr.
+    let fragment = match (harness.adapter().install.output)(command, fail_closed) {
+        Ok(output) => {
+            if let Some(notes) = output.notes {
+                eprintln!("{notes}");
             }
-            eprintln!("{}", codex_cli::INSTALL_NOTES);
-            codex_cli::hooks_file(command)
+            output.document
         }
-        Harness::CopilotCli => {
-            if fail_closed {
-                eprintln!(
-                    "telltale hooks: Copilot CLI already blocks a tool call when its hook crashes, exits non-zero or is missing, and always lets it run when the hook times out; --fail-closed changes nothing."
-                );
-            }
-            copilot_cli::hooks_file(command)
+        Err(refusal) => {
+            eprintln!("{refusal}");
+            return 1;
         }
     };
     println!(
@@ -570,18 +571,12 @@ fn invalid_payload_answer(
     }
     // No event name: this could be a tool call, so block one without
     // making a prompt of anything else.
-    match harness {
-        // A deny on stdout is honored on a PreToolUse and rejected as
-        // invalid output on every other event (E2E `damaged-*-nameless`).
-        Harness::CodexCli => Answer::output(harness.render_verdict(
+    match harness.adapter().nameless_block {
+        NamelessBlock::DenyOnStdout => Answer::output(harness.render_verdict(
             OnError::Deny,
             "Telltale Hooks could not read this hook payload and fails closed.",
         )),
-        // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
-        Harness::CopilotCli => Answer::exit(1),
-        // The only block that does not need the event, but on a Stop it
-        // still prompts: the known residual for this harness.
-        Harness::ClaudeCode => Answer::exit(2),
+        NamelessBlock::Exit(status) => Answer::exit(status),
     }
 }
 
