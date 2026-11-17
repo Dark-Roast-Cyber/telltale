@@ -737,8 +737,11 @@ fn long_message_source_batch_retention_failure_is_atomic() {
         // not a quarantined unit, so no batch/accounting/progress escapes.
         let error = match client {
             ClientId::Claude => {
-                let (records, _) =
-                    extract_claude_native_records_with_limits(&source, None).unwrap();
+                let (records, _) = extract_claude_native_records_with_limits(
+                    &source,
+                    crate::acquisition::SourceAccess::ByName,
+                )
+                .unwrap();
                 map_claude_error(
                     project_claude_native_records(
                         &records,
@@ -748,7 +751,11 @@ fn long_message_source_batch_retention_failure_is_atomic() {
                 )
             }
             _ => {
-                let (records, _) = extract_codex_native_records_with_limits(&source, None).unwrap();
+                let (records, _) = extract_codex_native_records_with_limits(
+                    &source,
+                    crate::acquisition::SourceAccess::ByName,
+                )
+                .unwrap();
                 map_codex_error(
                     project_codex_native_records(
                         &records,

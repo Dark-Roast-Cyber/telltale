@@ -17,7 +17,7 @@ use telltale_schema::observation::{CorrelationId, CorrelationOrigin, ObservedAt}
 use telltale_sources::acquisition::{
     AcquisitionBatch, AcquisitionError, AcquisitionOptions, AcquisitionProgress,
     OpenCodeSqliteReadOptions, QuarantinedUnit, SourceAccounting, acquire_opencode_sqlite,
-    acquire_source,
+    acquire_resolved_source,
 };
 
 pub struct SourceResult {
@@ -112,6 +112,10 @@ impl SourceFailure {
 }
 
 /// One resolved regular-file coordinate; unchanged canonical correlation domain.
+/// The path is canonical, so the read that follows opens exactly it without
+/// following a link (`acquire_resolved_source`): a link or replacement made
+/// after this point is refused instead of redirecting the read away from the
+/// file whose path was hashed into the identity.
 fn verified_source(source: &Source) -> Result<(Source, CorrelationId), ProcessingError> {
     let path = source
         .path
@@ -185,13 +189,35 @@ fn process_source_inner(
         acquisition: None,
         processing: Some(error),
     })?;
+    process_verified(
+        source,
+        &resolved,
+        &instance,
+        observed_at,
+        sqlite,
+        context,
+        detailed,
+    )
+}
+
+/// Everything after `verified_source`, which is a seam for tests that change
+/// the filesystem between resolving a coordinate and reading it.
+fn process_verified(
+    source: &Source,
+    resolved: &Source,
+    instance: &CorrelationId,
+    observed_at: ObservedAt,
+    sqlite: Option<OpenCodeSqliteReadOptions>,
+    context: SourceContext<'_>,
+    detailed: Option<&telltale_detect::v2::DetailedEvaluationOptions>,
+) -> Result<SourceResult, SourceFailure> {
     let mut sqlite = sqlite;
     let mut previous_window = None;
     loop {
         let options = AcquisitionOptions::new(observed_at.clone());
         let batch = match sqlite {
-            Some(bounds) => acquire_opencode_sqlite(&resolved, options, bounds),
-            None => acquire_source(&resolved, options),
+            Some(bounds) => acquire_opencode_sqlite(resolved, options, bounds),
+            None => acquire_resolved_source(resolved, options),
         }
         .map_err(|error| SourceFailure {
             stage: FailureStage::Acquisition,
@@ -214,9 +240,8 @@ fn process_source_inner(
         let units = window.map(|_| window_units(&batch.observations));
         let work = EvaluationWorkBudget::for_source(batch.source_scale);
         let capacity = std::cell::Cell::new(false);
-        let result = finish_batch_with_work(
-            source, &instance, batch, context, detailed, &work, &capacity,
-        );
+        let result =
+            finish_batch_with_work(source, instance, batch, context, detailed, &work, &capacity);
         let over_capacity = result.as_ref().is_err_and(|failure| {
             matches!(
                 failure.stage,
@@ -242,7 +267,7 @@ fn process_source_inner(
         // selection is re-read and evaluated without them.
         else if let (true, Some(bounds), Some(units)) = (over_capacity, sqlite, units) {
             let mut batch = acquire_opencode_sqlite(
-                &resolved,
+                resolved,
                 AcquisitionOptions::new(observed_at.clone()),
                 bounds,
             )
@@ -256,7 +281,7 @@ fn process_source_inner(
             batch.quarantined.extend(units);
             return finish_batch_with_work(
                 source,
-                &instance,
+                instance,
                 batch,
                 context,
                 detailed,

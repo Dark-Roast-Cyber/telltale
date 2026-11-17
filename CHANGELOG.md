@@ -13,6 +13,16 @@
   `telltale-core`, plus the new `telltale-discover`) moves from 1.88 to 1.89. This follows the
   [versioning policy](docs/versioning.md) for a minor line: it belongs to the
   next planned minor release (0.8.0), not a patch.
+- **`telltale_sources::acquisition::acquire_source_bounded` takes the discovery
+  root first.** Pass the root the source was discovered under (`.` for the
+  environment), as for `discover_sources_bounded`; the file is opened under
+  that root's approved anchor without following links. Production
+  `acquire_source` is unchanged.
+- **New: `telltale_sources::acquisition::acquire_resolved_source` and
+  `telltale_discover::discovery::open_resolved_file`.** Additive; no existing
+  signature changes. They read an already-canonical path without following a
+  link, and `acquire_source` still opens by name and follows links. Embedders
+  that resolve a path themselves can use the new entry points.
 - **`telltale-core` has a new default feature, `hooks`.** It adds
   `telltale_core::hooks`, the pre-execution hooks runtime that was a separate
   project, together with `regex` and `serde_json` in the default
@@ -77,6 +87,25 @@
   is resolved once, so administrator aliases such as a linked `/home` keep
   working; a link at a tool store such as `~/.codex`, or at or above a relocated
   store, is refused. Returned source paths keep their original spelling.
+  Session investigation now reads each source the same way, including
+  caller-supplied known sources, instead of reopening the path by name: a link
+  in the file or any parent directory below the root reports
+  `non_regular_source` (previously a linked parent was followed, and a linked
+  file was `source_unreadable` on Unix). A known source outside the root is
+  walked strictly from the filesystem root, so a link anywhere in its path
+  (for example macOS `/var` or a linked `/tmp`) is now refused as well.
+- Scan, watch and embedded source processing now read the file whose path was
+  resolved. The shared runtime canonicalizes a source path to build its
+  identity, and the read used to reopen that path by name: a directory below
+  the resolved point swapped for a link, or the file replaced, in between
+  redirected the read to another file, and a FIFO swapped in blocked it. The
+  read now walks the canonical path from the filesystem root through directory
+  handles, opens the file without blocking and requires a regular file, so a
+  link or replacement made after resolution is refused as an unreadable
+  source. Nothing that is scanned changes: a symlinked store root or source
+  file is still resolved and read, and source identities, correlation
+  instances, Event 3.0 paths, cursors and state are unchanged. OpenCode SQLite
+  is not covered (SQLite resolves links and opens its journal files by name).
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and

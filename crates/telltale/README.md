@@ -127,6 +127,13 @@ depth at 64. Limits can only be lowered. Incomplete
 discovery fails closed; read/parse/limit/provider failures expose no raw errors.
 Direct reads validate a regular opened file and bound bytes including growth;
 they are not filesystem snapshots or hard wall-clock bounds on OS file I/O.
+Every direct read, of a discovered or a known source, opens the file through
+directory handles from the discovery root, which is resolved once as in
+discovery (aliases at or above it are accepted): no symbolic link, junction or
+other reparse point below it is followed, in the file or any parent directory,
+even if one is swapped in during the open. A known source outside the root is
+walked strictly from the filesystem root, so a link anywhere in its path, such
+as macOS `/var`, is refused. Source paths and their hashes keep the configured spelling.
 
 ### Context windows
 
@@ -147,8 +154,8 @@ as a fallback to make an unavailable result succeed.
 | `SourceUnavailable` | `read_only_provider_unavailable` | OpenCode is deferred. Keep Event3 as the evidence; wait for a separately accepted read-only provider. This is not a missing-store, permission, or busy diagnosis. |
 | `SourceUnavailable` | `source_missing` | The exact correlated path was absent at the read attempt (often a known source that moved/disappeared). Check local retention/location; no alternate-path lookup occurs. |
 | `SourceUnavailable` | `source_permission_denied` | The OS reported permission denial. Check the caller's intended access locally without broadening permissions automatically. |
-| `SourceUnavailable` | `source_unreadable` | Other read/open failure, including an unclassified rejected symlink. Check source type and local filesystem availability; no busy/access diagnosis is inferred. |
-| `SourceUnavailable` | `non_regular_source` | The opened object was not an accepted regular file. Check the configured source; pipes/devices/reparse points are not investigation inputs. |
+| `SourceUnavailable` | `source_unreadable` | Other read/open failure. Check source type and local filesystem availability; no busy/access diagnosis is inferred. |
+| `SourceUnavailable` | `non_regular_source` | The opened object was not an accepted regular file, or the file or a parent directory is a link (below the discovery root, or anywhere in the path of a known source outside it). Check the configured source; pipes/devices/links/reparse points are not investigation inputs. |
 | `SourceUnavailable` | `source_limit_exceeded` | Bytes, input/observation records, JSON depth, or acquisition/accounting capacity exceeded a bound. Use Event3; smaller caller limits may be restored only up to the documented maxima. |
 | `SourceUnavailable` | `malformed_source` | JSON, native envelope, attestation, or canonical mapping/validation failed. Check local source integrity and supported layout; there is no parser fallback or partial timeline. |
 | `SessionUnavailable` | `exact_session_absent` | The acquired source did not attest the exact terminal session identity. Check retention; never substitute a similarly named session. |

@@ -277,6 +277,7 @@ fn investigation_context_mixed_native_blocks_never_export_results() {
     );
     let source = codex(other.path(), &payload);
     let acquired = telltale_sources::acquisition::acquire_source_bounded(
+        other.path(),
         &source,
         telltale_sources::acquisition::AcquisitionOptions::new(
             telltale_schema::observation::ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
@@ -504,6 +505,7 @@ fn investigation_context_duplicate_native_coordinates_are_ambiguous() {
     fs::write(&source.path, payload).unwrap();
     let input = event(&source, "synthetic-session");
     let batch = acquire_source_bounded(
+        dir.path(),
         &source,
         AcquisitionOptions::new(
             telltale_schema::observation::ObservedAt::new(input.common().observed_at.clone())
@@ -908,6 +910,66 @@ fn investigation_discovery_failure_is_not_source_loss() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn investigation_reads_never_follow_links_below_the_root() {
+    use std::os::unix::fs::symlink;
+    let dir = tempdir();
+    let root = dir.path().join("root");
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(root.join("codex/sessions")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("synthetic.jsonl"), JSONL).unwrap();
+    symlink(&outside, root.join("linked")).unwrap();
+    symlink(
+        outside.join("synthetic.jsonl"),
+        root.join("codex/sessions/leaf.jsonl"),
+    )
+    .unwrap();
+    let known = |path: std::path::PathBuf| Source {
+        client: ClientId::Codex,
+        kind: SourceKind::Jsonl,
+        source_id: "codex.sessions".into(),
+        path,
+    };
+    // A caller-supplied coordinate reached through a linked ancestor, or that
+    // is itself a link, is not read: discovery would not have returned it.
+    for path in [
+        root.join("linked/synthetic.jsonl"),
+        root.join("linked/../linked/synthetic.jsonl"),
+        root.join("codex/sessions/leaf.jsonl"),
+    ] {
+        let source = known(path.clone());
+        let mut config = InvestigationConfig::new(&root);
+        config.known_sources.push(source.clone());
+        assert_eq!(
+            SessionInvestigator::new(config).investigate(&event(&source, "synthetic-session")),
+            InvestigationResult::SourceUnavailable(SourceUnavailableReason::NonRegularSource),
+            "{}",
+            path.display()
+        );
+    }
+    // A link-free known coordinate outside the root is still read, as before.
+    let source = known(outside.join("synthetic.jsonl"));
+    let mut config = InvestigationConfig::new(&root);
+    config.known_sources.push(source.clone());
+    assert!(matches!(
+        SessionInvestigator::new(config).investigate(&event(&source, "synthetic-session")),
+        InvestigationResult::Found(_)
+    ));
+    // The approved root itself is resolved once: a linked root still reads,
+    // and the coordinate keeps the caller's spelling.
+    let alias = dir.path().join("alias");
+    symlink(&root, &alias).unwrap();
+    let source = codex(&alias, JSONL);
+    assert!(source.path.starts_with(&alias));
+    assert!(matches!(
+        SessionInvestigator::new(InvestigationConfig::new(&alias))
+            .investigate(&event(&source, "synthetic-session")),
+        InvestigationResult::Found(_)
+    ));
+}
+
 #[test]
 fn investigation_anchors_are_only_recorded_and_current_indexes() {
     let dir = tempdir();
@@ -1150,7 +1212,7 @@ fn investigation_opencode_deferred_probe() {
         telltale_schema::observation::ObservedAt::new("2026-01-01T00:00:00Z").unwrap(),
     );
     assert!(matches!(
-        acquire_source_bounded(&source, options, DirectReadLimits::default()),
+        acquire_source_bounded(&root, &source, options, DirectReadLimits::default()),
         Err(AcquisitionError::UnsupportedSourceIdentity)
     ));
     // Deferred means no discovery/source access, even when the configured root

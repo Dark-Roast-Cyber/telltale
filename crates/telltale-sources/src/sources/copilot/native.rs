@@ -3,13 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::acquisition::{AcquisitionError, SessionMetadata};
+use crate::acquisition::{AcquisitionError, SessionMetadata, SourceAccess};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 
 use crate::source_read::{
     BoundedReadError, PRODUCTION_NATIVE_UNITS, PRODUCTION_RECORD_BYTES, PRODUCTION_SOURCE_BYTES,
-    SourceReadError, bounded_file_bytes,
+    SourceReadError, bounded_file_bytes, resolved_file_bytes,
 };
 use telltale_schema::clients::ClientId;
 use telltale_schema::source::Source;
@@ -65,11 +65,22 @@ fn copilot_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> 
     )
 }
 
+#[cfg(test)]
 pub(crate) fn extract_copilot_native_events(
     source: &Source,
 ) -> Result<Vec<CopilotNativeEvent>, SourceReadError> {
-    let bytes = bounded_file_bytes(&source.path, PRODUCTION_SOURCE_BYTES)
-        .map_err(SourceReadError::Bounded)?;
+    extract_copilot_native_events_with(source, SourceAccess::ByName)
+}
+
+pub(crate) fn extract_copilot_native_events_with(
+    source: &Source,
+    access: SourceAccess<'_>,
+) -> Result<Vec<CopilotNativeEvent>, SourceReadError> {
+    let bytes = match access {
+        SourceAccess::Resolved => resolved_file_bytes(&source.path, PRODUCTION_SOURCE_BYTES),
+        _ => bounded_file_bytes(&source.path, PRODUCTION_SOURCE_BYTES),
+    }
+    .map_err(SourceReadError::Bounded)?;
     let raw = std::str::from_utf8(&bytes)
         .map_err(|_| SourceReadError::Bounded(BoundedReadError::MalformedSource))?;
     let mut events = Vec::new();
