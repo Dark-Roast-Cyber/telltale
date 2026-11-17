@@ -346,8 +346,10 @@ mod tests {
                     patch,
                     "{name} is not the identity"
                 ),
+                // By value: an adapter's rules are a constant, and a constant
+                // has no one address.
                 (Normalization::Rules(declared), Normalization::Rules(applied)) => {
-                    assert!(std::ptr::eq(declared, applied), "{name}");
+                    assert_eq!(declared, applied, "{name}");
                 }
                 _ => panic!("{name}: the runtime applies another normalization"),
             }
