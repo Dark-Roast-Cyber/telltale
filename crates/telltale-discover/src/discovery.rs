@@ -949,6 +949,31 @@ fn trust_anchors(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Open a source coordinate for reading under the trust anchors that bounded
+/// discovery of `root` uses: the anchor is resolved once (aliases at or above
+/// it are accepted), and no link below it (or anywhere, for a path under no
+/// anchor) is followed, including the file itself. The open walks directory handles, so replacing an ancestor
+/// pathname with a link while it runs cannot redirect it. `path` keeps the
+/// caller's spelling and may be any coordinate, discovered or caller-supplied.
+/// Returns `None` when a component is absent. The caller checks that the
+/// opened object is a regular file; a FIFO opens without blocking.
+pub fn open_source_file(
+    root: &Path,
+    path: &Path,
+) -> Result<Option<fs::File>, BoundedDiscoveryError> {
+    crate::anchored::open_file(path, &trust_anchors(root))
+}
+
+/// Open an already-resolved file (a canonical path, as from
+/// `std::fs::canonicalize`) for reading. The path is walked strictly from the
+/// filesystem root through directory handles, so a link or replacement made
+/// after the path was resolved is refused rather than followed, even while the
+/// open runs. The leaf opens without blocking; the caller checks that it is a
+/// regular file. `None` when a component is absent.
+pub fn open_resolved_file(path: &Path) -> Result<Option<fs::File>, BoundedDiscoveryError> {
+    crate::anchored::open_file(path, &[])
+}
+
 fn bounded_opencode_paths(
     root: &Path,
     client: ClientId,
