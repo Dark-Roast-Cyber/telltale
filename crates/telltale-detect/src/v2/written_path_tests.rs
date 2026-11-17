@@ -26,19 +26,41 @@ pub(super) fn shell(id: &str, command: &str) -> CanonicalObservationV2 {
     )
 }
 
+/// A tool call whose source declared its operation.
+pub(super) fn declared_tool(
+    id: &str,
+    name: &str,
+    arguments: serde_json::Value,
+    operation: ToolOperation,
+) -> CanonicalObservationV2 {
+    call_with(id, name, arguments, None, Some(operation))
+}
+
 fn call(
     id: &str,
     name: &str,
     arguments: serde_json::Value,
     command: Option<&str>,
 ) -> CanonicalObservationV2 {
+    call_with(id, name, arguments, command, None)
+}
+
+fn call_with(
+    id: &str,
+    name: &str,
+    arguments: serde_json::Value,
+    command: Option<&str>,
+    operation: Option<ToolOperation>,
+) -> CanonicalObservationV2 {
+    let mut tool = ToolObservation::new()
+        .with_name(name)
+        .unwrap()
+        .with_arguments(JsonValue::try_from_source_value(&arguments).unwrap());
+    if let Some(operation) = operation {
+        tool = tool.with_operation(operation);
+    }
     let mut builder = CanonicalObservationV2::builder(
-        ObservationBody::Tool(
-            ToolObservation::new()
-                .with_name(name)
-                .unwrap()
-                .with_arguments(JsonValue::try_from_source_value(&arguments).unwrap()),
-        ),
+        ObservationBody::Tool(tool),
         ObservationStage::ToolRequested,
         ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
         SourceProvenance::new(

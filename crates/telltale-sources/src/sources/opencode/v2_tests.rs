@@ -2322,3 +2322,65 @@ fn oversized_selections_roll_through_windows_until_drained() {
         ))
     );
 }
+
+/// Both v2 mapping sites declare operations from the shared OpenCode table:
+/// the tool content parts (file tools name their file `path`) and the user
+/// shell message, whose command is the bare command text.
+#[test]
+fn v2_tool_parts_and_shell_messages_declare_their_operations() {
+    use telltale_schema::observation::ToolKind;
+    let store = Store::v2();
+    store.message(
+        "msg_tools",
+        1,
+        T0 + 1,
+        assistant(
+            json!([
+                completed_tool("call_write", "write", json!({"path": "/synthetic/w.txt", "content": "x"}), "ok", T0),
+                completed_tool("call_read", "read", json!({"path": "/synthetic/r.txt"}), "ok", T0 + 10),
+                completed_tool("call_patch", "patch", json!({"patchText": "*** Begin Patch\n*** Add File: /synthetic/p.txt\n+x\n*** End Patch"}), "ok", T0 + 20),
+                completed_tool("call_bash", "bash", json!({"command": "echo declared"}), "ok", T0 + 30),
+            ]),
+            T0,
+        ),
+    );
+    store.message(
+        "msg_shell",
+        2,
+        T0 + 2,
+        json!({"type": "shell", "shellID": "sh_declared", "command": "echo bare", "status": "running", "time": {"created": T0}}),
+    );
+    let batch = store.acquire_default();
+    let operations: Vec<_> = batch
+        .observations
+        .iter()
+        .filter_map(|observation| match observation.body() {
+            ObservationBody::Tool(tool) => tool.operation(),
+            _ => None,
+        })
+        .collect();
+    let has = |kind: ToolKind,
+               pick: fn(&telltale_schema::observation::ToolOperation) -> &[String],
+               value: &str| {
+        operations
+            .iter()
+            .any(|operation| operation.kind() == kind && pick(operation) == [value])
+    };
+    assert!(has(
+        ToolKind::FileWrite,
+        |o| o.written_paths(),
+        "/synthetic/w.txt"
+    ));
+    assert!(has(
+        ToolKind::FileRead,
+        |o| o.read_paths(),
+        "/synthetic/r.txt"
+    ));
+    assert!(has(
+        ToolKind::FileWrite,
+        |o| o.written_paths(),
+        "/synthetic/p.txt"
+    ));
+    assert!(has(ToolKind::Shell, |o| o.commands(), "echo declared"));
+    assert!(has(ToolKind::Shell, |o| o.commands(), "echo bare"));
+}

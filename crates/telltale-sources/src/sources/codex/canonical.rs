@@ -9,10 +9,13 @@ use telltale_schema::observation::{
     CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds, FactMetadata,
     FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
     ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
-    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
+    SemanticFacet, SourceProvenance, SourceTimestamp, ToolKind, ToolObservation, ToolOperation,
+    ToolStatus,
 };
 
 use telltale_schema::observation::CanonicalBoundContext;
+
+use crate::tool_operation::declare;
 
 use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
@@ -682,6 +685,15 @@ fn emit_tool(
         ));
     }
 
+    // Completed commands and file changes carry no tool name; their records
+    // say what they are. Their operands are in the facets and the result.
+    let body = if fields.completed_command {
+        body.with_operation(ToolOperation::new(ToolKind::Shell))
+    } else if fields.completed_file_change {
+        body.with_operation(ToolOperation::new(ToolKind::FileWrite))
+    } else {
+        declare(super::tools::TOOLS, body)
+    };
     let mut builder = common_builder(
         record,
         options,

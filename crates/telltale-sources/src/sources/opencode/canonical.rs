@@ -12,6 +12,8 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
+use crate::tool_operation::declare;
+
 use super::native::{
     OpenCodeMessageContext, OpenCodeMessageNativeRecord, OpenCodeSqliteNativeRecord,
     OpenCodeTextPartNativeRecord, OpenCodeToolPartNativeRecord, OpenCodeToolState,
@@ -479,7 +481,7 @@ fn emit_tool_observation(
         source_id,
         context,
         occurrence_time,
-        ObservationBody::Tool(body),
+        ObservationBody::Tool(declare(super::tools::TOOLS, body)),
         stage,
         observed_at,
     )?;

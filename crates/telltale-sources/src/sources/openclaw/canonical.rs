@@ -11,6 +11,8 @@ use telltale_schema::observation::{
     SourceTimestamp, ToolObservation,
 };
 
+use crate::tool_operation::declare;
+
 use super::native::{
     OpenClawContentBlock, OpenClawNativeRecord, OpenClawToolFields, is_known_openclaw_discriminator,
 };
@@ -546,7 +548,7 @@ fn emit_tool(
     let mut builder = common_builder(
         record,
         options,
-        ObservationBody::Tool(body),
+        ObservationBody::Tool(declare(super::tools::TOOLS, body)),
         stage,
         tool_correlation(fields.call_id.as_deref())?,
         *child_ordinal,

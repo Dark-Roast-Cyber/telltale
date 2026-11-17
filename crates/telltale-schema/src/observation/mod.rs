@@ -31,7 +31,7 @@ pub use body::{
     BrowserObservation, ContentPart, FileObservation, InferenceMetrics, InferenceObservation,
     McpObservation, MessageObservation, NetworkObservation, ObservationBody, OtherObservation,
     ProcessObservation, RuntimeObservation, SessionObservation, ToolDefinitionObservation,
-    ToolObservation,
+    ToolKind, ToolObservation, ToolOperation,
 };
 pub use identity::{
     ASSIGNMENT_COMMITMENT_PREFIX, ASSIGNMENT_COMPARISON_DOMAIN, AssignmentStore, IdentityBasis,

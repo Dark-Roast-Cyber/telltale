@@ -2414,3 +2414,77 @@ fn parsed_command_facets_remain_tool_observation_facets() {
 
     assert_eq!(observation.kind(), ObservationFamily::Tool);
 }
+
+fn declared_tool(
+    arguments: Option<serde_json::Value>,
+    operation: Option<ToolOperation>,
+) -> CanonicalObservationV2 {
+    let mut tool = ToolObservation::new().with_name("write").unwrap();
+    let mut paths = vec!["tool.name"];
+    if let Some(arguments) = arguments {
+        tool = tool.with_arguments(JsonValue::try_from_source_value(&arguments).unwrap());
+        paths.push("tool.arguments");
+    }
+    if let Some(operation) = operation {
+        tool = tool.with_operation(operation);
+    }
+    build(
+        ObservationBody::Tool(tool),
+        ObservationStage::ToolRequested,
+        &paths,
+    )
+}
+
+fn operation_of(observation: &CanonicalObservationV2) -> &ToolOperation {
+    let ObservationBody::Tool(tool) = observation.body() else {
+        panic!("a tool observation")
+    };
+    tool.operation().expect("declared")
+}
+
+#[test]
+fn a_declared_operation_changes_neither_identity_nor_retained_bytes() {
+    let arguments = serde_json::json!({"file_path": "/p/a", "content": "synthetic"});
+    let bare = declared_tool(Some(arguments.clone()), None);
+    let declared = declared_tool(
+        Some(arguments),
+        Some(ToolOperation::new(ToolKind::FileWrite).with_written_path("/p/a")),
+    );
+    assert_eq!(bare.observation_id(), declared.observation_id());
+    assert_eq!(bare.retained_byte_len(), declared.retained_byte_len());
+    assert_eq!(operation_of(&declared).written_paths(), ["/p/a"]);
+}
+
+#[test]
+fn operands_take_the_arguments_normal_form_and_never_exceed_them() {
+    // An NFD path becomes the NFC path the arguments hold, and repeats merge.
+    let nfd = "/p/e\u{301}";
+    let nfc = "/p/\u{e9}";
+    let declared = declared_tool(
+        Some(serde_json::json!({"file_path": nfd})),
+        Some(
+            ToolOperation::new(ToolKind::FileWrite)
+                .with_written_path(nfd)
+                .with_written_path(nfc),
+        ),
+    );
+    assert_eq!(operation_of(&declared).written_paths(), [nfc]);
+
+    // Operands that would outweigh the arguments they were read from are
+    // dropped; the kind stays.
+    for (arguments, operand) in [
+        (
+            Some(serde_json::json!({"p": "a"})),
+            "/a/path/much/longer/than/the/arguments",
+        ),
+        (None, "/p/a"),
+    ] {
+        let declared = declared_tool(
+            arguments,
+            Some(ToolOperation::new(ToolKind::FileWrite).with_written_path(operand)),
+        );
+        let operation = operation_of(&declared);
+        assert_eq!(operation.kind(), ToolKind::FileWrite);
+        assert!(operation.written_paths().is_empty());
+    }
+}
