@@ -745,7 +745,7 @@ impl SelectorRegistry {
             // selector, also reads command text as URL).
             SelectorId::CompatUrl => match observation.body() {
                 ObservationBody::Tool(tool) => {
-                    let urls = tool_argument_urls(tool.arguments());
+                    let urls = tool_argument_urls(tool, true);
                     if urls.is_empty() {
                         absent(selector, required_capability)
                     } else {
@@ -763,7 +763,7 @@ impl SelectorRegistry {
             // stays a `file_path` fact; shell writes remain command text.
             SelectorId::CompatWrittenPath => match observation.body() {
                 ObservationBody::Tool(tool) => {
-                    let paths = tool_written_paths(tool.name(), tool.arguments());
+                    let paths = tool_written_paths(tool, true);
                     if paths.is_empty() {
                         absent(selector, required_capability)
                     } else {

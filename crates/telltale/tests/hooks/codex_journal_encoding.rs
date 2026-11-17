@@ -206,9 +206,13 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
     for (name, claude, codex) in &table {
         eprintln!("{name}: claude {claude:?} | codex {codex:?}");
     }
-    // Every case reaches the same detections and scores in both encodings.
+    // Every case reaches the same detections and scores in both encodings,
+    // except a patch's written path, which only the Codex source's own tool
+    // table derives (asserted below).
     for (name, claude, codex) in &table {
-        assert_eq!(claude, codex, "{name}");
+        if *name != "patch to hook config" {
+            assert_eq!(claude, codex, "{name}");
+        }
     }
     let get = |name: &str| table.iter().find(|row| row.0 == name).unwrap().1.clone();
     assert!(get("exfiltrate credentials").1 >= 90);
@@ -225,15 +229,31 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
             .iter()
             .any(|r| r.starts_with("tth.tamper.codex_hook_"))
     );
-    // Neither encoding derives a patch's written path, so hook
-    // self-protection (`written_path`) does not fire for a patch to the
-    // Codex hook config: only the command-text reference rule (ask). The
-    // Claude journal plus the runtime's input normalization  moves the
-    // targets into a path key and denies; the Codex encoding has no such
-    // lever short of an upstream change.
+    // The Claude journal encoding derives no written path for a patch, so
+    // hook self-protection (`written_path`) does not fire there: only the
+    // command-text reference rule (ask). This is a property of these two
+    // encodings, not of the hooks runtime: the runtime normalises a patch's
+    // targets into a path key before evaluating, and denies this call (see
+    // tests/cli/hooks_codex_cli_contract.rs). The Codex source declares which
+    // files a patch names, so the Codex encoding also reaches the write rule
+    // and denies.
+    let (_, claude, codex) = table
+        .iter()
+        .find(|row| row.0 == "patch to hook config")
+        .unwrap();
     assert_eq!(
-        get("patch to hook config"),
-        (vec!["tth.tamper.codex_hook_reference".to_owned()], 60)
+        claude,
+        &(vec!["tth.tamper.codex_hook_reference".to_owned()], 60)
+    );
+    assert_eq!(
+        codex,
+        &(
+            vec![
+                "tth.tamper.codex_hook_reference".to_owned(),
+                "tth.tamper.codex_hook_write".to_owned()
+            ],
+            150
+        )
     );
     // Telltale's shell reading also reads a patch body (the `command` key) as
     // shell text, so patch prose that quotes a download-and-pipe line scores in

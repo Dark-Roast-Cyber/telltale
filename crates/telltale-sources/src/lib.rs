@@ -15,6 +15,35 @@ pub mod paths;
 pub mod projects;
 pub(crate) mod source_read;
 pub mod sources;
+pub(crate) mod tool_operation;
+
+/// Every built-in tool each source declares, as `(client, tool name, kind)`.
+/// For tests that check the tables against the name lists detection keeps as
+/// its fallback.
+#[doc(hidden)]
+pub fn declared_tool_kinds() -> Vec<(
+    telltale_schema::clients::ClientId,
+    &'static str,
+    telltale_schema::observation::ToolKind,
+)> {
+    use sources::{claude, codex, copilot, openclaw, opencode, qwen};
+    use telltale_schema::clients::ClientId;
+    [
+        (ClientId::Claude, claude::tools::TOOLS),
+        (ClientId::Codex, codex::tools::TOOLS),
+        (ClientId::Copilot, copilot::tools::TOOLS),
+        (ClientId::OpenClaw, openclaw::tools::TOOLS),
+        (ClientId::OpenCode, opencode::tools::TOOLS),
+        (ClientId::Qwen, qwen::tools::TOOLS),
+    ]
+    .into_iter()
+    .flat_map(|(client, table)| {
+        table
+            .iter()
+            .map(move |spec| (client, spec.name(), spec.kind()))
+    })
+    .collect()
+}
 
 #[cfg(test)]
 pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {

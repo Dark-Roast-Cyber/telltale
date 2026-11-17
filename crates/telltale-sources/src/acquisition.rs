@@ -1174,6 +1174,58 @@ mod tests {
 
     const OBSERVED_AT: &str = "2026-09-18T12:00:00Z";
 
+    /// A call's declared operation spends no retention: the observations of a
+    /// source that fit its limit exactly, as acquired with their declarations,
+    /// still fit it and one byte less does not.
+    #[test]
+    fn declared_operations_leave_the_retention_limit_where_it_was() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("limit.jsonl");
+        let content = serde_json::json!({"type":"assistant","sessionId":"limit","message":{
+            "role":"assistant","content":[{"type":"tool_use","id":"call-0","name":"Write",
+            "input":{"file_path":"/synthetic/w.txt","content":"synthetic"}}]}});
+        std::fs::write(&path, content.to_string()).unwrap();
+        let batch = super::acquire_source(
+            &Source {
+                client: ClientId::Claude,
+                kind: SourceKind::Jsonl,
+                source_id: "claude.projects".to_owned(),
+                path,
+            },
+            options(),
+        )
+        .unwrap();
+        let declared = batch
+            .observations
+            .iter()
+            .filter(|observation| match observation.body() {
+                ObservationBody::Tool(tool) => tool.operation().is_some(),
+                _ => false,
+            })
+            .count();
+        assert_eq!(declared, 1);
+        let total: usize = batch
+            .observations
+            .iter()
+            .map(telltale_schema::observation::CanonicalObservationV2::retained_byte_len)
+            .sum();
+        let mut exact = super::CanonicalCollector {
+            limit: total,
+            ..super::CanonicalCollector::default()
+        };
+        let mut short = super::CanonicalCollector {
+            limit: total - 1,
+            ..super::CanonicalCollector::default()
+        };
+        let mut fits = true;
+        let mut overflows = false;
+        for observation in batch.observations {
+            fits &= exact.push(observation.clone()).is_ok();
+            overflows |= short.push(observation).is_err();
+        }
+        assert!(fits && overflows);
+    }
+
     fn options() -> AcquisitionOptions {
         AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap())
     }

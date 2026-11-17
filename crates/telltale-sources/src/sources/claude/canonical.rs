@@ -13,6 +13,8 @@ use telltale_schema::observation::{
 
 use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory};
 
+use crate::tool_operation::declare;
+
 use super::native::{
     ClaudeContentBlock, ClaudeNativeRecord, is_claude_metadata_discriminator,
     is_known_claude_discriminator,
@@ -499,7 +501,7 @@ fn tool_body(block: &ClaudeContentBlock) -> Result<ToolBody, ClaudeCanonicalErro
                 paths.push(("tool.arguments", FactProvenance::Reported));
             }
             Ok(ToolBody {
-                body,
+                body: declare(super::tools::TOOLS, body),
                 facts: paths,
                 resource_path: facet,
             })
