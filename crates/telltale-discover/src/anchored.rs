@@ -75,11 +75,6 @@ fn remainder_within<'a>(anchor: &Path, path: &'a Path) -> Option<&'a Path> {
     Some(rest)
 }
 
-/// Whether `path` stays lexically inside `anchor`; either may be relative.
-pub(crate) fn within(anchor: &Path, path: &Path) -> bool {
-    matches!((absolute(anchor), absolute(path)), (Ok(anchor), Ok(path)) if remainder_within(&anchor, &path).is_some())
-}
-
 impl Node {
     /// Open `path` without following any link. A caller-approved anchor that
     /// lexically contains the whole path is resolved to its real location once
@@ -258,9 +253,9 @@ mod tests {
             Ok(None)
         );
         assert_eq!(open(&home.join("missing"), anchor), Ok(None));
-        assert!(within(&home, &home.join("a/../b")));
-        assert!(!within(&home, &home.join("../b")));
-        assert!(!within(&home.join("a"), &home));
+        assert!(remainder_within(&home, &home.join("a/../b")).is_some());
+        assert!(remainder_within(&home, &home.join("../b")).is_none());
+        assert!(remainder_within(&home.join("a"), &home).is_none());
     }
 
     #[test]
