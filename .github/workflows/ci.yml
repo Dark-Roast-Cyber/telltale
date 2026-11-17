@@ -107,6 +107,11 @@ jobs:
           "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
           printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - name: Run Linux tests and contract checks
+        env:
+          # Workspace crates stay unoptimized locally for incremental builds,
+          # while CI builds non-incrementally once and runs 73,000+ corpus
+          # scans. Keep debug=1, debug-assertions, and overflow-checks enabled.
+          CARGO_PROFILE_DEV_OPT_LEVEL: '2'
         run: make --silent CARGO_LOCKED=--locked ci-linux-test
       - name: Test protected assignment opt-in
         run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests
@@ -201,11 +206,13 @@ jobs:
           python3 -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
           python3 scripts/validate-event-jsonl --help >/dev/null
       - name: Compile protected assignment opt-in and fail-closed tests
-        run: cargo check --locked -p telltale-core --features protected-assignment --tests --target x86_64-pc-windows-msvc
+        run: cargo check --locked -p telltale-core --features protected-assignment --tests
       - name: Test protected assignment unsupported-platform boundary
         run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test workspace outside the corpus lane
+        env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: '2'
         run: 'cargo test --locked -- --skip self_protection_corpus::'
 
   windows-corpus:
@@ -225,6 +232,8 @@ jobs:
           cache-bin: false
           save-if: false
       - name: Test the complete Hooks corpus
+        env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: '2'
         run: 'cargo test --locked -p telltale-core --features opencode-sqlite --test hooks self_protection_corpus::'
 
   windows-release:
@@ -305,7 +314,9 @@ jobs:
           "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
           printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: '2'
+        run: cargo test
       - name: Test protected assignment unsupported-platform boundary
         run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
       - name: Build staged native binaries
