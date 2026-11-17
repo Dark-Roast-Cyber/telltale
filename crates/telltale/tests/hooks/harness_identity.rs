@@ -94,7 +94,12 @@ fn assert_identity(records: &[Value], harness: Harness) {
             "{}",
             adapter.name
         );
-        assert_eq!(record["source_id"], adapter.hook_source, "{}", adapter.name);
+        assert_eq!(
+            record["source_id"],
+            adapter.client.hook_journal_source_id(),
+            "{}",
+            adapter.name
+        );
     }
 }
 
@@ -143,14 +148,17 @@ fn every_adapter_identity_is_accepted_by_acquisition_for_its_own_client_only() {
     for &harness in Harness::ALL {
         let adapter = harness.adapter();
         let batch = telltale_sources::acquisition::acquire_source(
-            &source(adapter.client, adapter.hook_source),
+            &source(adapter.client, adapter.client.hook_journal_source_id()),
             options(),
         )
         .unwrap_or_else(|error| panic!("{}: {error}", adapter.name));
         assert!(!batch.observations.is_empty());
         for other in Harness::ALL.iter().filter(|other| **other != harness) {
             let cross = telltale_sources::acquisition::acquire_source(
-                &source(adapter.client, other.adapter().hook_source),
+                &source(
+                    adapter.client,
+                    other.adapter().client.hook_journal_source_id(),
+                ),
                 options(),
             );
             assert_eq!(
@@ -314,11 +322,11 @@ fn a_window_scans_alike_under_every_identity() {
     );
     for &harness in Harness::ALL {
         let adapter = harness.adapter();
-        let hooked = scan(adapter.client, adapter.hook_source);
+        let hooked = scan(adapter.client, adapter.client.hook_journal_source_id());
         assert_eq!(masked(&hooked), expected, "{}", adapter.name);
         for record in hooked.action_records() {
             assert_eq!(record.client, adapter.client.as_str());
-            assert_eq!(record.source_id, adapter.hook_source);
+            assert_eq!(record.source_id, adapter.client.hook_journal_source_id());
         }
         for event in &hooked.events {
             assert_eq!(event.client, adapter.client.as_str(), "{}", adapter.name);

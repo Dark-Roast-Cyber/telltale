@@ -23,6 +23,14 @@ macro_rules! client_ids {
                     $(Self::$variant => $name),+
                 }
             }
+
+            /// The source ID of this client's hook journal: `<client name>.hooks`.
+            /// See [`ClientId::HOOK_JOURNAL_ADAPTER_TYPE`].
+            pub const fn hook_journal_source_id(self) -> &'static str {
+                match self {
+                    $(Self::$variant => concat!($name, ".hooks")),+
+                }
+            }
         }
     };
 }
@@ -37,6 +45,23 @@ client_ids! {
 }
 
 impl ClientId {
+    /// The adapter type of every hook journal, whichever client's hooks wrote it.
+    ///
+    /// A hook journal is the file a host's hooks write for Telltale to scan
+    /// (the journal encoding of `telltale-core`'s hooks). The pair
+    /// `(client, client.hook_journal_source_id())` is that client's hook-journal
+    /// identity, for every client: host-fed, never in a source registry, so
+    /// never discovered or listed. Acquisition and detection accept it for its own
+    /// client only (behind their `hook-journal` features), which makes exact
+    /// `(ClientId, source_id)` ownership the check; the type says only what
+    /// kind of source it is.
+    pub const HOOK_JOURNAL_ADAPTER_TYPE: &'static str = "hook_journal";
+
+    /// Whether `source_id` is this client's hook-journal source ID.
+    pub fn owns_hook_journal(self, source_id: &str) -> bool {
+        source_id == self.hook_journal_source_id()
+    }
+
     /// The client named exactly `name` (case-sensitive, no aliases).
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
@@ -82,5 +107,20 @@ mod tests {
         for name in ["", "Claude", "claude-code", "gemini", " codex"] {
             assert_eq!(ClientId::from_name(name), None, "{name:?}");
         }
+    }
+
+    /// The rule covers every client, with no table to keep in step: the hook
+    /// journal of a client is `<name>.hooks`, owned by that client alone.
+    #[test]
+    fn every_client_has_its_own_hook_journal_source_id() {
+        for client in ClientId::ALL {
+            let id = client.hook_journal_source_id();
+            assert_eq!(id, format!("{}.hooks", client.as_str()));
+            for other in ClientId::ALL {
+                assert_eq!(other.owns_hook_journal(id), other == client, "{id}");
+            }
+        }
+        assert!(!ClientId::Claude.owns_hook_journal("claude.hooks.x"));
+        assert!(!ClientId::Claude.owns_hook_journal("Claude.hooks"));
     }
 }

@@ -1686,62 +1686,51 @@ fn duplicate_observations_and_mismatched_sources_fail_before_evaluation() {
     ));
 }
 
-/// A hook-journal identity is accepted only for its own client, only with the
-/// feature, and only for observations stamped with that identity.
+/// Every client has a hook-journal identity, by one rule and no table. It is
+/// accepted only with the feature, only for its own client, and only for
+/// observations stamped with it.
 #[test]
-fn hook_journal_identities_follow_the_feature_and_their_own_client() {
+fn every_clients_hook_journal_follows_the_feature_and_its_own_client() {
     let plan = plan(0);
     let observations = [observation("one", Some("session"), None, 1)];
-    for (client, source_id) in [
-        (ClientId::Claude, "claude.hooks"),
-        (ClientId::Codex, "codex.hooks"),
-        (ClientId::Copilot, "copilot.hooks"),
-    ] {
-        let input = |client, source_id| CanonicalSourceInput {
-            client,
-            source_id,
-            source_instance: None,
-            observations: &observations,
-        };
+    let input = |client, source_id| CanonicalSourceInput {
+        client,
+        source_id,
+        source_instance: None,
+        observations: &observations,
+    };
+    for (index, &client) in ClientId::ALL.iter().enumerate() {
+        let source_id = client.hook_journal_source_id();
         // The observation says `claude.projects`, which is not this identity.
         assert!(matches!(
             evaluate_source(input(client, source_id), &plan, None),
             Err(ProcessingError::InvalidSource)
         ));
-        let other = if client == ClientId::Claude {
-            ClientId::Codex
-        } else {
-            ClientId::Claude
-        };
+        let other = ClientId::ALL[(index + 1) % ClientId::ALL.len()];
         assert!(matches!(
             evaluate_source(input(other, source_id), &plan, None),
             Err(ProcessingError::InvalidSource)
         ));
         #[cfg(feature = "hook-journal")]
         {
-            let stamped = [stamped_observation(client, source_id)];
-            evaluate_source(
-                CanonicalSourceInput {
-                    client,
-                    source_id,
-                    source_instance: None,
-                    observations: &stamped,
-                },
-                &plan,
-                None,
-            )
-            .unwrap();
+            let stamped = [stamped_observation(source_id)];
+            let accepted = |client, source_id| CanonicalSourceInput {
+                client,
+                source_id,
+                source_instance: None,
+                observations: &stamped,
+            };
+            evaluate_source(accepted(client, source_id), &plan, None).unwrap();
+            assert!(matches!(
+                evaluate_source(accepted(other, source_id), &plan, None),
+                Err(ProcessingError::InvalidSource)
+            ));
         }
     }
 }
 
 #[cfg(feature = "hook-journal")]
-fn stamped_observation(client: ClientId, source_id: &str) -> CanonicalObservationV2 {
-    let adapter_type = match client {
-        ClientId::Claude => "claude_code",
-        ClientId::Codex => "codex",
-        _ => "copilot",
-    };
+fn stamped_observation(source_id: &str) -> CanonicalObservationV2 {
     CanonicalObservationV2::builder(
         ObservationBody::Message(
             MessageObservation::new(MessageRole::User)
@@ -1751,7 +1740,7 @@ fn stamped_observation(client: ClientId, source_id: &str) -> CanonicalObservatio
         ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
         SourceProvenance::new(
             IngestionMode::SessionStore,
-            adapter_type,
+            ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
             source_id,
             Fidelity::FullNative,
         )

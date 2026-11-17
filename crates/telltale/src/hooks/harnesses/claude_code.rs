@@ -315,7 +315,6 @@ fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'s
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
     client: ClientId::Claude,
-    hook_source: "claude.hooks",
     display_name: "Claude Code",
     // The second name is a routed Copilot payload's (see `parse_payload`).
     pre_tool_use: &[PRE_TOOL_USE, copilot_cli::PRE_TOOL_USE],

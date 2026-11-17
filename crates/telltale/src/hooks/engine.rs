@@ -4,7 +4,7 @@
 //! Telltale has no API for evaluating a single pending action, so the hook
 //! writes a bounded window of native Claude Code JSONL (history plus the
 //! pending call) and scans it as the hook-journal source of the harness the
-//! call belongs to (`Adapter::client`, `Adapter::hook_source`), the pattern
+//! call belongs to (`Adapter::client`, `ClientId::hook_journal_source_id`), the pattern
 //! docs/embedding.md prescribes for synthetic sources. Findings for the
 //! pending call are the action findings anchored at its unique source time.
 
@@ -528,7 +528,7 @@ impl Engine {
     }
 
     /// Write `lines` to `window_path` and scan them as one hook-journal source of
-    /// `harness` (its client and `Adapter::hook_source`), returning its result
+    /// `harness` (its client and `ClientId::hook_journal_source_id`), returning its result
     /// and how long the scan took. The caller holds the session lock, so the stable path keeps Telltale's source-bound identities
     /// stable across a session. The window holds raw tool input, so it is removed
     /// as soon as the scan returns.
@@ -551,7 +551,7 @@ impl Engine {
         let source = Source {
             client: adapter.client,
             kind: SourceKind::Jsonl,
-            source_id: adapter.hook_source.to_owned(),
+            source_id: adapter.client.hook_journal_source_id().to_owned(),
             path: window_path.to_owned(),
         };
         let started = Instant::now();

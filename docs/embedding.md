@@ -80,8 +80,8 @@ Default features:
   dependency graph. It takes its configuration as typed values; the CLI reads
   the `hooks:` settings section. It also enables the `hook-journal` feature of
   `telltale-sources` and `telltale-detect`, which compiles the host-fed
-  hook-journal identities (`claude.hooks`, `codex.hooks`, `copilot.hooks`); they
-  are never discovered or listed, and without them acquisition reports
+  hook-journal identity of every client (`<client name>.hooks`, for example
+  `claude.hooks`); they are never discovered or listed, and without them acquisition reports
   `CapabilityNotCompiled`. A host that only reads sessions opts out:
   `telltale-core = { ..., default-features = false }`.
 

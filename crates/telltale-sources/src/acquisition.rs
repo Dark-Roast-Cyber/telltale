@@ -484,25 +484,24 @@ fn acquire_source_impl(
     access: SourceAccess<'_>,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
     let limits = access.limits();
-    // A hook-journal identity reads as the journal's client does, under its own
-    // identity. Hooks only ever read a window by name, never bounded.
-    let hook_journal = crate::sources::HOOK_JOURNALS
-        .iter()
-        .find(|journal| journal.client == source.client && journal.source_id == source.source_id);
-    if hook_journal.is_some() {
+    // The hook-journal identity of a client (`ClientId::hook_journal_source_id`)
+    // reads as the journal of any client does, under its own identity. Hooks
+    // only ever read a window by name, never bounded.
+    let hook_journal = source.client.owns_hook_journal(&source.source_id);
+    if hook_journal {
         if limits.is_some() {
             return Err(AcquisitionError::UnsupportedSourceIdentity);
         }
         #[cfg(not(feature = "hook-journal"))]
         return Err(AcquisitionError::CapabilityNotCompiled);
     }
-    let reader = if hook_journal.is_some() {
+    let reader = if hook_journal {
         ClientId::Claude
     } else {
         source.client
     };
     let expected_kind = match (source.client, source.source_id.as_str()) {
-        _ if hook_journal.is_some() => SourceKind::Jsonl,
+        _ if hook_journal => SourceKind::Jsonl,
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
         | (ClientId::OpenClaw, "openclaw.agents")
@@ -543,9 +542,13 @@ fn acquire_source_impl(
             }
             let canonical =
                 ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale);
-            let canonical = match hook_journal {
-                Some(journal) => canonical.with_adapter(journal.adapter_type, journal.source_id),
-                None => canonical,
+            let canonical = if hook_journal {
+                canonical.with_adapter(
+                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
+                    source.client.hook_journal_source_id(),
+                )
+            } else {
+                canonical
             };
             let projection =
                 project_claude_native_records(&records, &canonical).map_err(map_claude_error)?;
@@ -1319,11 +1322,11 @@ mod tests {
         assert_eq!(expected.len(), 8);
         assert_eq!(expected, registered);
         // Hook-journal identities are host-fed: no registered source is one.
-        for journal in crate::sources::HOOK_JOURNALS {
+        for client in ClientId::ALL {
             assert!(
                 registered
                     .iter()
-                    .all(|(_, source_id, _)| *source_id != journal.source_id)
+                    .all(|(_, source_id, _)| *source_id != client.hook_journal_source_id())
             );
         }
         let directory = tempdir().unwrap();
@@ -1363,17 +1366,18 @@ mod tests {
         }
     }
 
+    /// The rule covers every client, including one with no registered source.
     #[test]
-    fn hook_journal_identities_are_not_registered_sources() {
-        assert_eq!(crate::sources::HOOK_JOURNALS.len(), 3);
+    fn every_clients_hook_journal_is_outside_the_registry() {
         let registered = crate::clients::supported_clients();
-        for journal in crate::sources::HOOK_JOURNALS {
-            assert!(journal.source_id.ends_with(".hooks"));
+        for client in ClientId::ALL {
+            let id = client.hook_journal_source_id();
+            assert!(id.ends_with(".hooks"));
             assert!(
                 registered
                     .iter()
                     .flat_map(|client| client.sources)
-                    .all(|source| source.id != journal.source_id)
+                    .all(|source| source.id != id)
             );
         }
     }
@@ -1390,13 +1394,17 @@ mod tests {
         )
         .unwrap();
         assert!(!session.observations.is_empty());
-        for journal in crate::sources::HOOK_JOURNALS {
-            let source = journal_source(journal.client, journal.source_id, &path);
+        for &client in ClientId::ALL {
+            let source_id = client.hook_journal_source_id();
+            let source = journal_source(client, source_id, &path);
             let acquired = super::acquire_source(&source, options()).unwrap();
             assert_eq!(acquired.observations.len(), session.observations.len());
             for observation in &acquired.observations {
-                assert_eq!(observation.source().adapter_id(), journal.source_id);
-                assert_eq!(observation.source().adapter_type(), journal.adapter_type);
+                assert_eq!(observation.source().adapter_id(), source_id);
+                assert_eq!(
+                    observation.source().adapter_type(),
+                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE
+                );
             }
             // Only identity differs from the session reading of the same window.
             for (hook, reference) in acquired.observations.iter().zip(&session.observations) {
@@ -1430,18 +1438,16 @@ mod tests {
         let path = directory.path().join("window.jsonl");
         std::fs::write(&path, JOURNAL_WINDOW).unwrap();
         let compiled = cfg!(feature = "hook-journal");
-        for journal in crate::sources::HOOK_JOURNALS {
-            for client in crate::clients::supported_clients() {
-                if client.id == journal.client {
-                    continue;
-                }
-                let cross = journal_source(client.id, journal.source_id, &path);
+        for &client in ClientId::ALL {
+            let source_id = client.hook_journal_source_id();
+            for &other in ClientId::ALL.iter().filter(|other| **other != client) {
+                let cross = journal_source(other, source_id, &path);
                 assert_eq!(
                     acquisition_error(super::acquire_source(&cross, options())),
                     AcquisitionError::UnsupportedSourceIdentity
                 );
             }
-            let mut source = journal_source(journal.client, journal.source_id, &path);
+            let mut source = journal_source(client, source_id, &path);
             let bounded = super::acquire_source_bounded(
                 directory.path(),
                 &source,

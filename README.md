@@ -61,7 +61,7 @@ The [Source Validation Matrix](docs/source-validation-matrix.md) is canonical
 for public source-support claims. The built-in denominator is eight exact source
 identities across six agent families: Claude Code, Codex, OpenCode, OpenClaw,
 Qwen, and GitHub Copilot. The hook-journal identities of `telltale hooks`
-(`claude.hooks`, `codex.hooks`, `copilot.hooks`) are host-fed, never discovered
+(`<client name>.hooks` for every client) are host-fed, never discovered
 or listed, and are not session sources. Current client-level status is:
 
 - **Fixture-backed plus bounded live validation**: Codex, OpenCode, Claude Code,

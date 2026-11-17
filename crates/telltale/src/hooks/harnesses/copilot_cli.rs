@@ -398,7 +398,6 @@ pub const NORMALIZATION: Rules = Rules {
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
     client: ClientId::Copilot,
-    hook_source: "copilot.hooks",
     display_name: "GitHub Copilot CLI",
     pre_tool_use: &[PRE_TOOL_USE, PASCAL_PRE_TOOL_USE],
     event_keys: &[PASCAL_EVENT_KEY, CAMEL_EVENT_KEY],
