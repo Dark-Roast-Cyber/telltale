@@ -84,7 +84,7 @@ fn journal_lines(h: &Harness) -> Vec<Value> {
 /// Telltale reject the source: that call and every later call in the window
 /// came back `not_evaluated` (`canonical_acquisition_failed`), which the
 /// default policy turned into an ask (a deny on a harness that cannot ask)
-/// and `on_unevaluable = "allow"` turned into a silent allow of the exfil.
+/// and `on_unevaluable: allow` turned into a silent allow of the exfil.
 /// A 4,096-byte key was quarantined alone (`unbounded_value`).
 #[test]
 fn a_crafted_call_id_neither_escapes_evaluation_nor_blinds_later_calls() {

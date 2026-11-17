@@ -27,10 +27,21 @@ pub fn fixtures(relative: &str) -> PathBuf {
     data_dir().join("fixtures").join(relative)
 }
 
-/// A configuration that only says `mode = "enforce"`, for binary-level tests
-/// of what a hook returns: with no configuration a hook is detect-only.
+/// A config root (`--config-dir`) whose settings only say `hooks.mode:
+/// enforce`, for binary-level tests of what a hook returns: with no
+/// configuration a hook is detect-only.
 pub fn enforce_config() -> PathBuf {
-    data_dir().join("enforce.toml")
+    data_dir().join("enforce")
+}
+
+/// A config root under `parent` with one settings file, `hooks.yaml`, holding
+/// `version: 1` and then `body`. Returns the root, for `--config-dir`.
+pub fn config_root(parent: &Path, body: &str) -> PathBuf {
+    let root = parent.join("config");
+    let settings = root.join("settings.d");
+    std::fs::create_dir_all(&settings).unwrap();
+    std::fs::write(settings.join("hooks.yaml"), format!("version: 1\n{body}")).unwrap();
+    root
 }
 
 /// Marker rules that the real-harness scripts and these tests share.

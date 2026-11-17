@@ -1,5 +1,5 @@
 //! Deny-reason disclosure: by default reasons name the basis,
-//! thresholds and matched rule IDs; `reason_detail = "minimal"` keeps only
+//! thresholds and matched rule IDs; `reason_detail: minimal` keeps only
 //! the verdict kind and the record ID, so an adversarial agent cannot learn
 //! which rule to work around while operators can still look the record up.
 

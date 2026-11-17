@@ -462,7 +462,7 @@ impl Runtime {
     /// Build the Telltale pipeline on first use only: lifecycle events never pay for it.
     fn engine(&mut self) -> Result<&Engine, &'static str> {
         if self.engine.is_none() && self.engine_error.is_none() {
-            match Engine::new(&self.config.telltale, &self.config.protected_paths()) {
+            match Engine::new(&self.config.rules, &self.config.protected_paths()) {
                 Ok(engine) => self.engine = Some(engine),
                 Err(error) => self.engine_error = Some(error.code()),
             }
@@ -1942,7 +1942,7 @@ mod tests {
             ..Config::default()
         };
         edit(&mut config);
-        assert!(config.referenced_files().next().is_none());
+        assert!(config.rules.files().next().is_none());
         let mut runtime = Runtime::new(config);
         runtime.engine_error = Some("pipeline_build_failed");
         let ctx = Context {
