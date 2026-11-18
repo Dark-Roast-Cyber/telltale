@@ -136,7 +136,7 @@ Additional scenarios: `failure-missing`, `failure-invalid`, `failure-hang`,
 `detect-failure-missing`. Lost-reply records are not proof of receipt.
 
 `node --test tests/hooks_opencode_plugin.test.mjs` exercises real child
-processes for framing, limits, capacity, reaping and occurrence IDs, with a
+processes for framing, limits, capacity, queueing, reaping and occurrence IDs, with a
 synthetic executable substituted at the external boundary. It is regression
 coverage, **not** live harness qualification.
 

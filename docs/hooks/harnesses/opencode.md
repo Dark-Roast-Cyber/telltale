@@ -133,9 +133,22 @@ Empty output, nonzero exit, an invalid reply and a lost reply are transport
 failures, not no-ops. The reply carries `mode` and `protocol`; a non-null
 output must be a nonblank deny in enforce mode.
 
-Defaults: 15 s child timeout (maximum 30 s), 64 KiB reply (maximum 1 MiB),
-1 MiB request, four concurrent children (maximum 16), no waiting queue.
-Capacity overflow takes the failure policy immediately. Caller deadline and
+The factory's limits are operator configuration, for an operator editing the
+wrapper and for an embedder that ships its own. A value outside its bounds
+fails when the plugin is created.
+
+| Option | Default | Bounds | Meaning |
+| --- | --- | --- | --- |
+| `timeoutMs` | 15000 | 1 to 30000 | Deadline for one callback: waiting for a slot plus the child |
+| `maxConcurrent` | 4 | 1 to 16 | Children running at once |
+| `maxQueued` | 32 | 0 to 256 | Callbacks that may wait for a slot; `0` disables waiting |
+| `maxReplyBytes` | 65536 | 1 to 1048576 | Largest reply accepted |
+
+A request is limited to 1 MiB. A callback that finds every slot busy waits
+its turn, oldest first, and is forwarded when a slot frees. A callback that
+finds the queue full, or whose deadline passes while it waits, takes the
+failure policy and is never forwarded. The diagnostic line names the failure
+class (`capacity`, `timeout` and so on) and nothing else. Caller deadline and
 child reaping are separate: a timeout closes the plugin's streams and returns
 the failure policy without waiting for inherited pipe handles to close.
 The capacity slot remains occupied until the caller has settled **and** the

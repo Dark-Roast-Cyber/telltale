@@ -171,6 +171,7 @@ test("a deadline does not release capacity while the child remains unreaped", { 
     const pid = Number(fs.readFileSync(pidfile))
     assert.equal(realKill(pid, 0), true, "the child must still be live in this regression")
     await assert.rejects(before(event), /hook unavailable/)
+    // The second call waited in the queue until its own deadline.
     assert.equal(fs.readFileSync(launches, "utf8"), "x", "deadline freed an unreaped slot")
     fs.writeFileSync(release, "")
     await waitFor(() => assert.throws(() => realKill(pid, 0), { code: "ESRCH" }))
@@ -180,12 +181,51 @@ test("a deadline does not release capacity while the child remains unreaped", { 
   }
 })
 
-test("capacity is bounded without a waiting queue", async t => {
-  const before = await callback({ executable: executable(t, "setInterval(()=>{},1000)"),
-    mode: "enforce", timeoutMs: 200, maxConcurrent: 1 })
-  const first = assert.rejects(before(event), /hook unavailable/)
-  await assert.rejects(before(event), /hook unavailable/)
+test("with no queue, a call over capacity takes the failure policy without waiting", async t => {
+  const file = executable(t, "")
+  const launched = file + ".launched"
+  fs.writeFileSync(file, `#!${process.execPath}
+    require('fs').writeFileSync(${JSON.stringify(launched)},'');setInterval(()=>{},1000)`)
+  const before = await callback({ executable: file,
+    mode: "enforce", timeoutMs: 1000, maxConcurrent: 1, maxQueued: 0 })
+  const first = before(event).catch(() => "first")
+  await waitFor(() => assert.ok(fs.existsSync(launched)))
+  const second = before(event).catch(() => "second")
+  assert.equal(await Promise.race([first, second]), "second")
   await first
+})
+
+test("calls over capacity wait for a slot and are all forwarded, one at a time", async t => {
+  const file = executable(t, "")
+  const running = file + ".running", log = file + ".log"
+  fs.writeFileSync(file, `#!${process.execPath}
+    const fs=require('fs');
+    fs.appendFileSync(${JSON.stringify(log)},fs.existsSync(${JSON.stringify(running)})?'overlap ':'x');
+    fs.writeFileSync(${JSON.stringify(running)},'');
+    process.stdin.resume();process.stdin.on('end',()=>setTimeout(()=>{
+      fs.rmSync(${JSON.stringify(running)});
+      console.log(JSON.stringify({protocol:'telltale.hook-reply.v1',mode:'enforce',output:null}));
+    },100));
+  `)
+  const before = await callback({ executable: file, mode: "enforce", maxConcurrent: 1, maxQueued: 2 })
+  assert.deepEqual(await Promise.all([before(event), before(event), before(event)]),
+    [undefined, undefined, undefined])
+  assert.equal(fs.readFileSync(log, "utf8"), "xxx")
+})
+
+test("a call beyond the queue takes the failure policy without waiting", async t => {
+  const before = await callback({ executable: executable(t, "setInterval(()=>{},1000)"),
+    mode: "enforce", timeoutMs: 500, maxConcurrent: 1, maxQueued: 1 })
+  const running = before(event).catch(() => "running")
+  const queued = before(event).catch(() => "queued")
+  const beyond = before(event).catch(() => "beyond")
+  assert.equal(await Promise.race([running, queued, beyond]), "beyond")
+  await Promise.all([running, queued])
+})
+
+test("a queue size outside its bounds is refused when the plugin is created", () => {
+  assert.throws(() => createPlugin({ executable: "/synthetic/telltale", configDirs: ["/synthetic/config"],
+    maxQueued: 257 }), /invalid operator plugin configuration/)
 })
 
 test("detect-only never throws on missing executable or malformed reply", async t => {
