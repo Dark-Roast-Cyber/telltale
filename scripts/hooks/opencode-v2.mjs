@@ -4,6 +4,11 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { isAbsolute } from "node:path"
 
+const FAILURE_CLASSES = ["capacity", "timeout", "input_size", "spawn", "stdin", "stdout",
+  "exit", "reply_size", "reply_invalid"]
+const failureClass = error =>
+  FAILURE_CLASSES.includes(error?.message) ? error.message : "internal"
+
 export function createPlugin({
   executable,
   configDirs,
@@ -12,6 +17,7 @@ export function createPlugin({
   timeoutMs = 15000,
   maxReplyBytes = 65536,
   maxConcurrent = 4,
+  maxQueued = 32,
 }) {
   // These are operator-owned settings, never tool input or model arguments.
   if (!isAbsolute(executable ?? "") || !Array.isArray(configDirs) || !configDirs.length ||
@@ -19,19 +25,52 @@ export function createPlugin({
       !["enforce", "detect_only"].includes(mode) || !["deny", "noop"].includes(onError) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000 ||
       !Number.isInteger(maxReplyBytes) || maxReplyBytes < 1 || maxReplyBytes > 1048576 ||
-      !Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 16)
+      !Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 16 ||
+      !Number.isInteger(maxQueued) || maxQueued < 0 || maxQueued > 256)
     throw new Error("Telltale: invalid operator plugin configuration")
 
   let active = 0
+  const waiting = [] // Callbacks waiting for a child slot, oldest first.
+
+  // Hold a child slot, waiting behind earlier callbacks when all are busy.
+  // The wait counts against the callback's own deadline.
+  function slot(deadline) {
+    if (active < maxConcurrent) {
+      active++
+      return Promise.resolve()
+    }
+    if (waiting.length >= maxQueued) return Promise.reject(new Error("capacity"))
+    return new Promise((resolve, reject) => {
+      const entry = { resolve }
+      entry.timer = setTimeout(() => {
+        waiting.splice(waiting.indexOf(entry), 1)
+        reject(new Error("timeout"))
+      }, deadline - performance.now())
+      waiting.push(entry)
+    })
+  }
+  // Pass a freed slot to the oldest waiting callback, or give it back.
+  function free() {
+    const next = waiting.shift()
+    if (!next) active--
+    else {
+      clearTimeout(next.timer)
+      next.resolve()
+    }
+  }
   const args = ["hooks", "opencode", "hook", "--json-reply",
     ...(mode === "detect_only" ? ["--detect-only"] : []),
     ...configDirs.flatMap(p => ["--config-dir", p])]
 
   async function request(payload) {
-    if (active >= maxConcurrent) throw new Error("capacity")
     const input = JSON.stringify(payload)
     if (Buffer.byteLength(input) > 1048576) throw new Error("input_size")
-    active++
+    const deadline = performance.now() + timeoutMs
+    await slot(deadline)
+    if (performance.now() >= deadline) {
+      free()
+      throw new Error("timeout")
+    }
     return await new Promise((resolve, reject) => {
       let child, timer, size = 0, chunks = []
       let settled = false, reaped = false, released = false, cleaned = false
@@ -39,7 +78,7 @@ export function createPlugin({
         // A returned timeout is not evidence that its child has stopped.
         if (settled && reaped && !released) {
           released = true
-          active--
+          free()
         }
       }
       const cleanup = stop => {
@@ -78,7 +117,7 @@ export function createPlugin({
         finish("spawn")
         return
       }
-      timer = setTimeout(() => finish("timeout"), timeoutMs)
+      timer = setTimeout(() => finish("timeout"), deadline - performance.now())
       child.once("exit", () => {
         reaped = true
         release()
@@ -124,9 +163,10 @@ export function createPlugin({
             occurrence: `tth-occ-${randomUUID()}`,
             cwd: ctx.location.directory, event,
           })
-        } catch {
-          // No arguments, paths, stdout or exception details in diagnostics.
-          console.error("Telltale: hook transport failed; apply configured plugin failure policy")
+        } catch (error) {
+          // A fixed failure class only: no arguments, paths, stdout or
+          // exception details in diagnostics.
+          console.error(`Telltale: hook transport failed (${failureClass(error)}); apply configured plugin failure policy`)
           if (mode === "enforce" && onError === "deny")
             throw new Error("Telltale: hook unavailable; tool call denied")
           return

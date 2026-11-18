@@ -56,6 +56,21 @@ qualification or evidence of cleaning up detached descendants.
 Independent mutations removing the known-exited guard or releasing capacity
 before reaping each failed exactly its corresponding regression.
 
+### Plugin with a waiting queue
+
+The plugin later gained a bounded waiting queue (`maxQueued`, default 32), so
+a callback that finds every child slot busy waits within its own deadline
+before it takes the failure policy. Plugin SHA-256:
+`a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c`.
+Executable unchanged.
+
+All 17 scenarios in the M2 table below were rerun against this plugin on the
+installed **2.3.2**, standalone, and passed; summary rows with `phase: queue`
+record them. They were **not** rerun on the 2.2.5 pin, which was not available
+to that run. No scenario fills the queue under a real harness: waiting, the
+queue bound and the `maxQueued: 0` behaviour are covered by the
+substituted-executable process tests only.
+
 ## M1 — command hooks
 
 | Harness | Actual version | Pair | Result | Limits |
@@ -127,7 +142,7 @@ No persisted replay cache or restart-stable occurrence identity is claimed.
 | `cargo test --locked -p telltale-core --test hooks harness_identity` | Exit 0; 5 passed after adding the new adapter's captured payload to the test table |
 | `cargo test --locked -p telltale-core --test hooks normalize_parity` | Exit 0; 10 passed |
 | `make clippy` | Exit 0; default and no-default-feature targets |
-| `make hooks-plugin-check` | Exit 0 on corrected plugin; 7 qualification and 13 subprocess tests |
+| `make hooks-plugin-check` | Exit 0 on corrected plugin; 7 qualification and 13 subprocess tests (16 subprocess tests with the queue) |
 | `make hooks-progress-update` | Exit 0; 2 generator tests |
 | `make release-public-docs-check` | Exit 0 |
 | `make CARGO_LOCKED=--locked ci-linux-test` | Exit 0; 5,870 passing test executions across feature variants, 32 ignored; Event 3.0, provenance and LocalEventFeed checks passed |
