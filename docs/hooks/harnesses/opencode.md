@@ -75,10 +75,12 @@ Start with `execute.before` on one pinned v2 release. The plugin owns the
 native callback: forward its event to the installed `telltale hooks` process,
 throw on denial and leave native permissions untouched on pass. Do not add a
 second decision point at `permission.evaluate` or promise interactive `ask`:
-v2 auto mode can approve it. The Rust adapter owns parsing, ask capability,
-normalization and rendering. Reuse `hooks/harnesses/opencode.rs` for captured
-tool shapes and the existing evaluator for policy and journaling; do not
-evaluate rules or persist raw arguments in JavaScript.
+v2 auto mode can approve it. The Rust adapter owns parsing, ask capability
+and rendering. The existing evaluator owns policy and journaling; do not
+evaluate rules or persist raw arguments in JavaScript. Calls are journaled
+as sent (`filePath`/`path`, `patchText`): the OpenCode tool table declares
+the patch headers as written paths and reads `patchText` as authored
+content.
 
 **Occurrence identity.** An ordinary tool's `(sessionID, id)` can link its
 before and terminal events. In [the Code Mode capture](../../../crates/telltale/tests/hooks/fixtures/opencode/2.2.5/mcp-codemode.jsonl)

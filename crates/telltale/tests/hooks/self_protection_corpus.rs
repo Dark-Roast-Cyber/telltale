@@ -1217,8 +1217,8 @@ fn benign_harness_commands_are_not_denied() {
     );
 }
 
-/// The harness name selects the real normalization; the path keys Telltale
-/// reads are the ones each harness's captured shape normalizes to.
+/// The harness name selects the harness's own tool table; the path keys
+/// Telltale reads are the ones each harness's captured shape names.
 struct Shape {
     harness: &'static str,
     tool: &'static str,
@@ -1337,7 +1337,7 @@ const SHAPES: &[Shape] = &[
     },
 ];
 
-/// One decision under `harness`, normalized by the runtime as in production.
+/// One decision under `harness`, evaluated in the shape the harness reported.
 fn decide_as(
     h: &mut Harness,
     n: usize,
@@ -1351,8 +1351,26 @@ fn decide_as(
         tool_name: tool.to_owned(),
         input,
     };
-    // A harness with no registered adapter is evaluated after its normalization.
-    let (harness, call) = common::evaluable(harness, call);
+    // A harness with no registered adapter is not evaluated by the runtime:
+    // the engine reads the call under that client. No finding is an allow, and
+    // a score at least that of Claude Code's own denied write is a deny.
+    if telltale_core::hooks::harness::Harness::from_name(harness).is_none() {
+        let client = telltale_core::ClientId::from_name(harness).unwrap();
+        let (score, rules) = common::engine_detection(client, &[(tool, call.input)]);
+        let denied = common::engine_detection(
+            telltale_core::ClientId::Claude,
+            &[(
+                "Write",
+                json!({"file_path": "/home/synthetic/.claude/settings.json", "content": "{}"}),
+            )],
+        );
+        let verdict = match () {
+            () if rules.is_empty() => "allow",
+            () if score >= denied.0 => "deny",
+            () => "ask",
+        };
+        return (verdict.to_owned(), rules);
+    }
     let ctx = Context {
         harness,
         hook_event: "PreToolUse".into(),
@@ -3189,7 +3207,7 @@ fn evaluate_with(
     };
     engine
         .evaluate(
-            telltale_core::hooks::harness::Harness::ClaudeCode,
+            telltale_core::ClientId::Claude,
             window,
             &[],
             &[line],
