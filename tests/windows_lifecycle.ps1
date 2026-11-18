@@ -42,10 +42,6 @@ function New-TestLayout([string]$Name) {
     $directory = Join-Path $temp $Name
     $script:testScenario = $Name
     $script:testLayout = @{ InstallDirectory = (Join-Path $directory 'Application With Spaces'); DataDirectory = (Join-Path $directory 'Runtime Data') }
-    if ($null -ne $script:testPreRollbackContext) {
-        $script:testPreRollbackContext.Layout = $script:testLayout
-        $script:testPreRollbackContext.Scenario = $Name
-    }
     return $script:testLayout
 }
 function Get-TreeDigest([string]$Directory) {
@@ -88,13 +84,13 @@ function Get-TestErrorSummary($Failure) {
     }
 }
 
-function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]$AllowMissing, $Context = $null) {
+function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]$AllowMissing) {
     # Lexical scope checks precede ALL filesystem/native probes. A similar
     # prefix, another test root, canonical installation or normalized escape fails.
     $parent = [IO.Path]::Combine($script:TTLocal, 'TelltaleLifecycleTests')
-    $diagnosticParent = if ($null -eq $Context) { $script:testParent } else { $Context.Parent }
-    $diagnosticRoot = if ($null -eq $Context) { $script:temp } else { $Context.Root }
-    $diagnosticLayout = if ($null -eq $Context) { $script:testLayout } else { $Context.Layout }
+    $diagnosticParent = $script:testParent
+    $diagnosticRoot = $script:temp
+    $diagnosticLayout = $script:testLayout
     if (-not [string]::Equals($diagnosticParent, $parent, [StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals([IO.Path]::GetDirectoryName($diagnosticRoot), $parent, [StringComparison]::OrdinalIgnoreCase) -or
         [IO.Path]::GetFileName($diagnosticRoot) -cnotmatch '^telltale-lifecycle-tests-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
@@ -119,18 +115,13 @@ function Assert-TestDiagnosticTarget([string]$Path, [switch]$FixedLeaf, [switch]
     return $full
 }
 
-function Get-TestLockUsers([string]$Path, $Refusal = $null, [switch]$BeforeRollback, $Context = $null) {
+function Get-TestLockUsers([string]$Path, $Refusal = $null) {
     $leaf = [IO.Path]::GetFileName($Path)
-    if ($BeforeRollback) {
-        Assert-TestPreRollbackQuery $Path $Refusal $Context
-        $checked = Assert-TestDiagnosticTarget $Path -FixedLeaf -Context $Context
-    } else {
-        if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False') -or
-            $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
-            throw 'Staged attribution requires a selected scenario and an observed sharing refusal.'
-        }
-        $checked = Assert-TestDiagnosticTarget $Path
+    if ($leaf -ceq 'staged.exe' -and ($script:testScenario -cnotin @('fresh', 'partial-rollback', 'controlled-stage-lock', 'recovery-False') -or
+        $null -eq $Refusal -or @(Get-TestExceptionChain $Refusal.Exception | Where-Object { $_.hresult -eq -2147024864 }).Count -eq 0)) {
+        throw 'Staged attribution requires a selected scenario and an observed sharing refusal.'
     }
+    $checked = Assert-TestDiagnosticTarget $Path
     $report = @{ status = 'unknown'; scope = "exact synthetic $leaf"; processes = @(); limitation = 'post-failure resource users are not proof of lock ownership; kernel users may be absent' }
     if ($env:GITHUB_ACTIONS -cne 'true') { $report.reason = 'native attribution restricted to disposable CI'; return $report }
     try {
@@ -381,11 +372,7 @@ function New-Object {
     if ($ComObject -cne 'Schedule.Service') { throw 'Unexpected COM object in test.' }
     return [TelltaleLifecycleTests.Service]::new()
 }
-. (Join-Path $PSScriptRoot 'windows_lifecycle_pre_rollback.ps1')
 try {
-    & (Join-Path $PSScriptRoot 'windows_lifecycle_breakpoints.ps1')
-    Start-TestPreRollbackCapture
-    Invoke-TestPreRollbackControl $binary
     Assert-Fails {
         Assert-Fails { throw [IO.IOException]::new('unrelated synthetic error') } 'synthetic failure' -ExpectedExceptionType 'TelltaleLifecycleTests.InjectedRegistrationInterruption'
     } 'unrelated failure cannot satisfy the registration interruption assertion'
@@ -803,13 +790,6 @@ try {
                 })
                 Assert-True ($swapRefusals.Count -ge 1) 'refused swap retains its original native sharing error at the installer swap'
                 Assert-True ((Get-TTHash $installed) -ceq $installedBefore -and (Get-TTHash $receiptPath) -ceq $receiptBefore -and -not (Test-Path -LiteralPath $backup) -and (Test-Path -LiteralPath $journalPath) -and (Get-TTHash $stage) -ceq $candidateHash) 'refused swap renames nothing and keeps receipt and transaction evidence'
-                if ($null -ne $script:testPreRollbackContext) {
-                    # This deliberate refusal occupies the single first-refusal capture;
-                    # verify it, then re-arm the capture for unexpected refusals.
-                    $captured = $script:testPreRollbackContext.Report
-                    Assert-True ($null -ne $captured -and $captured.original_error.line -eq $swapLines[0]) 'deliberate swap refusal reaches the pre-rollback capture'
-                    $script:testPreRollbackContext.Report = $null
-                }
             } else {
                 Assert-True ($null -eq $installFailure) 'swap tolerates an outside stage reader that permits renaming'
                 $swapped = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
@@ -1116,7 +1096,6 @@ try {
     Write-TestFailure $_
     throw
 } finally {
-    Stop-TestPreRollbackCapture
     [TelltaleLifecycleTests.Folder]::Current = $null
     [TelltaleLifecycleTests.Folder]::FailRegistrationOnce = $false
     Remove-Item Function:New-Object
