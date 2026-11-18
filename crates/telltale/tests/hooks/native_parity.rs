@@ -11,10 +11,8 @@
 //!
 //! The native result must equal the reference (verdict and rule IDs). The
 //! benign twins pin the other direction: code that only mentions risky commands
-//! is no more than the reference makes of it. A harness whose adapter is not
-//! registered (OpenCode) is not evaluated by the runtime, so its calls are
-//! evaluated by the engine under the OpenCode client and compared with the
-//! Claude reference evaluated the same way (rule IDs and action score).
+//! is no more than the reference makes of it. OpenCode's 1.19.5 and 2.2.5
+//! shapes go through its registered adapter name, as the v2 pilot sends them.
 //! Detections come from the self-protection rules and bundled Telltale
 //! content, not model behavior. Paths are harness-reported strings evaluated
 //! by Telltale, never opened, so the cases run unchanged on every OS.
@@ -23,7 +21,6 @@ use crate::common;
 
 use common::Harness;
 use serde_json::{Value, json};
-use telltale_core::ClientId;
 use telltale_core::hooks::harnesses::{codex_cli, copilot_cli, opencode};
 use telltale_core::hooks::runtime::{Context, Event, ToolCall};
 
@@ -53,7 +50,7 @@ impl std::fmt::Display for Outcome {
 type Call = (&'static str, Value);
 
 /// The `Context::harness` name behind a variant label such as
-/// `copilot-cli-pascal`, or the label itself for a harness with no adapter.
+/// `copilot-cli-pascal` or `opencode-v2`, or the label itself.
 fn harness_of(label: &'static str) -> &'static str {
     [copilot_cli::HARNESS, codex_cli::HARNESS, opencode::NAME]
         .into_iter()
@@ -99,16 +96,6 @@ fn evaluate(label: &'static str, calls: &[Call]) -> Outcome {
     }
 }
 
-/// The detection of the last of `calls` read as the hook journal of `client`:
-/// its action score and rule IDs, as the engine finds them.
-fn detect(client: ClientId, calls: &[Call]) -> Outcome {
-    let (score, rules) = common::engine_detection(client, calls);
-    Outcome {
-        verdict: format!("score {score}"),
-        rules,
-    }
-}
-
 fn outcome(verdict: &str, rules: &[&str]) -> Outcome {
     Outcome {
         verdict: verdict.to_owned(),
@@ -130,22 +117,14 @@ fn native(harness: &'static str, calls: Vec<Call>) -> Native {
 fn case(name: &str, reference: Vec<Call>, expected: Outcome, variants: Vec<Native>) {
     let claude = evaluate("claude-code", &reference);
     assert_eq!(claude, expected, "{name}: Claude reference changed");
-    let engine_reference = detect(ClientId::Claude, &reference);
     let mut failures = Vec::new();
     for variant in variants {
-        let (native, reference) = if variant.harness.starts_with(opencode::NAME) {
-            (
-                detect(ClientId::OpenCode, &variant.calls),
-                engine_reference.clone(),
-            )
-        } else {
-            (evaluate(variant.harness, &variant.calls), claude.clone())
-        };
+        let native = evaluate(variant.harness, &variant.calls);
         println!(
-            "{name} | {} | native: {native} | reference: {reference}",
+            "{name} | {} | native: {native} | reference: {claude}",
             variant.harness
         );
-        if native != reference {
+        if native != claude {
             failures.push(format!("{}: native {native}", variant.harness));
         }
     }
