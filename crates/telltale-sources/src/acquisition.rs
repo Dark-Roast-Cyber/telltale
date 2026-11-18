@@ -61,7 +61,7 @@ use accounting::AccountingBuilder;
 pub(crate) use accounting::session_identity;
 pub use accounting::{
     AccountingCoverage, AttestedValue, MAX_ATTESTED_SESSIONS, NativeCounts, RecordCounts,
-    SessionAccounting, SessionMetadata, SourceAccounting, ToolUsage,
+    SessionAccounting, SessionMetadata, SourceAccounting, ToolTableCounts, ToolUsage,
 };
 pub use contributions::{ActivityContributions, MAX_CONTRIBUTION_KEYS};
 
@@ -819,15 +819,17 @@ fn acquire_source_impl(
             BoundedReadError::LimitExceeded,
         ));
     }
+    let mut accounting = accounting.finish(if quarantined.is_empty() {
+        AccountingCoverage::CompleteSource
+    } else {
+        AccountingCoverage::PartialSource
+    });
+    accounting.tool_table = crate::tool_operation::count(reader, &observations);
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,
         // Quarantined units were counted as records but not as activity.
-        accounting: accounting.finish(if quarantined.is_empty() {
-            AccountingCoverage::CompleteSource
-        } else {
-            AccountingCoverage::PartialSource
-        }),
+        accounting,
         quarantined,
         message_overlap_from: None,
         source_scale,
@@ -1093,6 +1095,10 @@ pub fn acquire_opencode_sqlite(
             }
         };
 
+        // A coherent selected snapshot is still not whole-database
+        // replacement coverage, even without a lower bound.
+        let mut accounting = accounting.finish(AccountingCoverage::PartialSource);
+        accounting.tool_table = crate::tool_operation::count(ClientId::OpenCode, &observations);
         Ok(AcquisitionBatch {
             observations,
             progress,
@@ -1100,9 +1106,7 @@ pub fn acquire_opencode_sqlite(
             message_overlap_from,
             // OpenCode reads bounded windows; its bounds stay at the floor.
             source_scale: SourceScale::FLOOR,
-            // A coherent selected snapshot is still not whole-database
-            // replacement coverage, even without a lower bound.
-            accounting: accounting.finish(AccountingCoverage::PartialSource),
+            accounting,
         })
     }
 }

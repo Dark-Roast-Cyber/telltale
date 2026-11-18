@@ -16,6 +16,8 @@ They are synthetic conformance evidence, not live-host validation; see the
 - `harnesses.json`: one entry per upstream harness, with the repository, the
   researched release tag, its full commit, the date it was checked, and the tag
   pattern used by `scripts/check-harness-drift`.
+- `tools.json`: one entry per upstream harness with its recorded built-in tool
+  list (see below).
 - `cases/<client>/<case>.json`: one case per shape.
 
 ## Case fields
@@ -70,6 +72,25 @@ observations with no content, zero when absent).
 3. Run the case once with a deliberately wrong `expect` to see the recorded
    outcome in the failure message, then set `status` from the upstream facts
    (does the harness really write this?) and `expect` from the outcome.
+
+## Recorded tool lists
+
+`tools.json` records each harness's built-in tools so a new upstream tool
+cannot go unclassified unnoticed. `recorded_tool_lists_match_the_source_tables`
+(offline) fails when a recorded tool has no row in that source's table
+(`crates/telltale-sources/src/sources/<agent>/tools.rs`), when a row's kind or
+operand keys differ from the record, when a tool of kind `other` has no
+reason, and, for a complete list, when a table row is neither recorded nor
+marked an older name with a reason.
+
+An entry's `evidence` is `source` (each tool cites a line of the harness
+source at its pinned commit), `documentation` (a published reference that is
+not tied to the pin; the entry says so), `not_published` or `unrecorded`
+(no list is recorded and the table rows are kept as they are). `complete` says
+whether the list names every built-in tool the evidence covers. Record only
+what the evidence shows: an operand key that upstream does not confirm stays
+out of `operands`. At a new tag, re-read the tool definitions, update the list
+and add the table rows in the same change.
 
 Use `scripts/check-harness-drift` to verify each pin and list newer upstream
 releases; a newer release is a prompt to re-read the cited code and add cases,
