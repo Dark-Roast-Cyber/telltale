@@ -259,7 +259,10 @@ pub(crate) fn bounded_file_bytes(
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if file.metadata().map_err(BoundedReadError::from_io)?.file_attributes()
+        if file
+            .metadata()
+            .map_err(BoundedReadError::from_io)?
+            .file_attributes()
             & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
             != 0
         {
