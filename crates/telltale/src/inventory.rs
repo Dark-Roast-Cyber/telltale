@@ -11,7 +11,7 @@
 //! Snapshots contain signal presence and path hashes, not raw paths. The
 //! context itself contains paths; it is caller configuration, not safe telemetry.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{Event, Source};
 
@@ -55,10 +55,24 @@ pub struct McpScan {
 /// One bounded scan-local acquisition supplies inventory and usage inference.
 #[doc(hidden)]
 pub fn discover_mcp_scan(root: &Path) -> McpScan {
+    let workspaces = if root.is_dir() {
+        vec![root.to_path_buf()]
+    } else {
+        Vec::new()
+    };
+    discover_mcp_scan_with_workspaces(root, &workspaces)
+}
+
+/// Scan-local acquisition with workspace traversal explicitly scoped by the
+/// caller, independently of the root used to locate user configuration files.
+#[doc(hidden)]
+pub fn discover_mcp_scan_with_workspaces(root: &Path, workspace_roots: &[PathBuf]) -> McpScan {
     use telltale_detect::mcp::{project_mcp_inventory, project_mcp_inventory_error};
 
     let mut scan = McpScan::default();
-    for config in telltale_sources::mcp::acquire_mcp_inventory(root) {
+    for config in
+        telltale_sources::mcp::acquire_mcp_inventory_with_workspaces(root, workspace_roots)
+    {
         match config.servers {
             Ok(servers) => {
                 scan.events.extend(
