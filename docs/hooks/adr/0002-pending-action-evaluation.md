@@ -308,7 +308,10 @@ call carries no object, are authored content only when the text is a patch;
 otherwise the key keeps its structural reading, so a command in a patch key is
 still a command. A declaration is the first place that removes a reading, so
 the limits are part of the decision: no pattern or default roles; a name an MCP
-server gives its tools is never declared; the written paths a patch names are
+server gives its tools is never declared, nor is a call a session log records
+under an MCP server's namespace; a call under any other namespace gets the
+row's kind and operands and no role, because another tool may carry a built-in
+tool's name there; the written paths a patch names are
 unchanged. The roles are read by both consumers of a call, the action reading
 that hooks evaluate and the session selectors that a scan evaluates, so a call
 with roles reads as its Claude Code `Write` or `Edit` equivalent in both: its

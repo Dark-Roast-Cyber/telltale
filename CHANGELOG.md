@@ -23,7 +23,9 @@
   selectors and the action reading of authored content still do, as for the
   Claude Code call. Text that is no patch, and every key no row names, read as
   before. Copilot `rg` is a file read. Undeclared calls and MCP tools read as
-  before. Scan detections for patches, file writes and edits of those clients
+  before, and so do the arguments of a Codex call recorded under a namespace: an
+  MCP server's namespace is never declared, and any other namespace gets the
+  row's kind and operands with no argument role. Scan detections for patches, file writes and edits of those clients
   that only contain or mention commands now match the Claude Code results;
   output shapes are unchanged.
 - **`telltale hooks` records carry the real harness identity.** The Telltale
