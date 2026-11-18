@@ -135,6 +135,27 @@ fn a_command_in_a_patch_tool_call_is_still_a_command() {
     assert!(found.contains("exfil.outbound_upload"), "{found:?}");
 }
 
+/// A tool another server or extension registers under a namespace may share a
+/// built-in tool's name. Its arguments get no role: they read as they did
+/// before rows named roles.
+#[test]
+fn a_namespaced_tool_with_a_built_in_name_gets_no_role() {
+    for namespace in ["mcp__synthetic__files", "synthetic_extension"] {
+        for (form, mut payload) in patch_calls(&add_file(TEST_LINE)) {
+            payload["namespace"] = Value::String(namespace.to_owned());
+            let found = codex(payload);
+            assert!(
+                found.contains("credential.cloud_harvest"),
+                "{namespace} {form}: {found:?}"
+            );
+            assert!(
+                found.contains("exfil.outbound_upload"),
+                "{namespace} {form}: {found:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn text_around_a_patch_is_not_a_patch() {
     let text = format!("{}{SHELL}\n", add_file("x = 1"));

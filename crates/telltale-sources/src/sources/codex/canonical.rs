@@ -15,7 +15,7 @@ use telltale_schema::observation::{
 
 use telltale_schema::observation::CanonicalBoundContext;
 
-use crate::tool_operation::declare;
+use crate::tool_operation::declare_in;
 
 use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
@@ -692,7 +692,7 @@ fn emit_tool(
     } else if fields.completed_file_change {
         body.with_operation(ToolOperation::new(ToolKind::FileWrite))
     } else {
-        declare(super::tools::TOOLS, body)
+        declare_in(super::tools::TOOLS, body, fields.namespace.as_deref())
     };
     let mut builder = common_builder(
         record,

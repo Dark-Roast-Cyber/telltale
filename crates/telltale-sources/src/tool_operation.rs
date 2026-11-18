@@ -139,7 +139,10 @@ impl ToolSpec {
                 || !self.urls.is_empty() && operation.urls().is_empty())
     }
 
-    fn operation(&self, arguments: Option<&JsonValue>) -> ToolOperation {
+    /// The row read against a call's arguments. `roles` is false for a call the
+    /// row may not be the tool of: it keeps the kind and operands, which only add
+    /// readings, and gets no argument role, which replaces one.
+    fn operation(&self, arguments: Option<&JsonValue>, roles: bool) -> ToolOperation {
         let members = Members::of(arguments);
         let mut operation = ToolOperation::new(self.kind);
         for key in self.commands {
@@ -173,14 +176,17 @@ impl ToolSpec {
                 }
             }
             // A patch is authored content; text that is none keeps its reading.
-            for key in keys {
+            for key in keys.iter().filter(|_| roles) {
                 if members.text(key).is_some_and(|text| is_patch(&text)) {
                     operation = operation.with_authored_key(*key);
                 }
             }
-            if members.raw().is_some_and(is_patch) {
+            if roles && members.raw().is_some_and(is_patch) {
                 operation = operation.with_authored_text();
             }
+        }
+        if !roles {
+            return operation;
         }
         for key in self.authored.iter().filter(|key| members.has(key)) {
             operation = operation.with_authored_key(*key);
@@ -196,11 +202,27 @@ impl ToolSpec {
 /// read against the arguments already on the body. A tool with no row stays
 /// undeclared.
 pub(crate) fn declare(table: &[ToolSpec], body: ToolObservation) -> ToolObservation {
+    declare_in(table, body, None)
+}
+
+/// [`declare`] for a call whose record may name the namespace the tool belongs
+/// to. A namespace an MCP server's tools carry is never declared, whatever the
+/// tool is called. Under any other namespace the name may be a built-in tool or
+/// another tool with its name, so the call gets the row's kind and operands and
+/// no argument role.
+pub(crate) fn declare_in(
+    table: &[ToolSpec],
+    body: ToolObservation,
+    namespace: Option<&str>,
+) -> ToolObservation {
+    if namespace.is_some_and(mcp_shaped) {
+        return body;
+    }
     let operation = body
         .name()
         .filter(|name| !mcp_shaped(name))
         .and_then(|name| table.iter().find(|spec| spec.name == name))
-        .map(|spec| spec.operation(body.arguments()));
+        .map(|spec| spec.operation(body.arguments(), namespace.is_none()));
     match operation {
         Some(operation) => body.with_operation(operation),
         None => body,
@@ -674,6 +696,34 @@ mod tests {
             );
             assert!(!operation.authored_text(), "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_namespaced_call_gets_a_kind_and_operands_and_no_role() {
+        let patch = "*** Begin Patch\n*** Add File: /p/a.rs\n+x\n*** End Patch\n";
+        let call = || tool("apply_patch", serde_json::json!({"input": patch}));
+        let table = codex::tools::TOOLS;
+        let bare = declare_in(table, call(), None);
+        assert!(bare.operation().unwrap().has_roles());
+        // An MCP server's namespace: the row is not this tool's.
+        assert!(
+            declare_in(table, call(), Some("mcp__srv__files"))
+                .operation()
+                .is_none()
+        );
+        // Any other namespace: the kind and the written paths, and no role.
+        let other = declare_in(table, call(), Some("extension"));
+        let operation = other.operation().unwrap();
+        assert_eq!(operation.kind(), bare.operation().unwrap().kind());
+        assert_eq!(operation.written_paths(), ["/p/a.rs".to_owned()]);
+        assert!(!operation.has_roles());
+        // A built-in tool that carries a namespace keeps its kind.
+        let delegate = declare_in(
+            table,
+            tool("spawn_agent", serde_json::json!({"message": "m"})),
+            Some("collaboration"),
+        );
+        assert_eq!(delegate.operation().unwrap().kind(), ToolKind::Delegate);
     }
 
     #[test]
