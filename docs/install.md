@@ -418,9 +418,42 @@ default. Operators can add local YAML and rule packages without repeating every
 path by creating a local config root. Existing default
 roots are checked in deterministic order:
 
-- `/etc/telltale`
+- `/etc/telltale`; on Windows `%ProgramData%\telltale` (see below)
 - `$XDG_CONFIG_HOME/telltale`, or `$HOME/.config/telltale` when
   `XDG_CONFIG_HOME` is not set
+
+### Windows system config root
+
+On Windows the system root is `telltale` in the `ProgramData` known folder,
+resolved through Windows rather than a literal drive. Unlike `/etc`, any user
+can create a folder in `ProgramData`, and a folder created there inherits a
+grant that lets `Users` add files. So Telltale reads the system root only when
+the root, each of its config folders and each file it reads:
+
+- are owned by Administrators, SYSTEM or TrustedInstaller;
+- grant write, append, write-attributes, delete, delete-child,
+  change-permissions or take-ownership rights to no one else (inherit-only and
+  deny entries are ignored);
+- and are not symbolic links or junctions.
+
+Otherwise every command that loads configuration (`scan`, `watch`, `config`,
+`hooks`) fails and names the path and the principal, also when the root is
+passed with `--config-dir`. Create the root from an elevated prompt, give it
+to Administrators, remove every other permission, and grant read access to
+users (on a root that already exists, skip the first command):
+
+```powershell
+New-Item -ItemType Directory "$env:ProgramData\telltale"
+icacls "$env:ProgramData\telltale" /setowner *S-1-5-32-544
+icacls "$env:ProgramData\telltale" /reset
+icacls "$env:ProgramData\telltale" /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
+```
+
+Creating the root this way also stops another user from creating it first,
+which would make Telltale refuse to load. Earlier releases read `\etc\telltale`
+on the current drive, which any user can create. That folder is no longer read:
+while it exists, configuration loading fails until it is moved to
+`%ProgramData%\telltale` or removed.
 
 Supported directories for this phase are:
 
