@@ -617,7 +617,7 @@ SCENARIOS = {
         canary_name=".codex/hooks.json",
         expect="absent",
         hook="deny",
-        note="real apply_patch to a Codex hook file denied after runtime normalization",
+        note="real apply_patch to a Codex hook file denied through the Codex tool table",
     ),
     "patch-allow": lambda: scenario(
         "patch-allow",

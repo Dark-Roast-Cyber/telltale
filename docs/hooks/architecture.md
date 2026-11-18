@@ -43,9 +43,9 @@ and not a sandbox. It is one enforcement point among several; see the
 
 | Module | Responsibility |
 | --- | --- |
-| `harness` | Registry: `enum Harness` maps a harness name to its adapter's descriptor (`Adapter`: names, events, parse, render, install output, normalization, config home, rules). The CLI driver, the evaluator, normalization and the engine read only the descriptor. |
+| `harness` | Registry: `enum Harness` maps a harness name to its adapter's descriptor (`Adapter`: names, events, parse, render, install output, Telltale client, config home, rules). The CLI driver, the evaluator and the engine read only the descriptor; the client selects the tool table its calls are read with. |
 | `harnesses/` | One module per harness, each exporting its `ADAPTER`; `payload` holds what adapters share. |
-| `opencode` | v2 request-only pilot. The JavaScript plugin forwards `execute.before` with a fresh occurrence ID; Rust owns parsing, normalization and deny rendering. No terminal forwarding or inferred settlement. Explicit manual plugin install; command-hook settings are refused. |
+| `opencode` | v2 request-only pilot. The JavaScript plugin forwards `execute.before` with a fresh occurrence ID; Rust owns parsing and deny rendering; calls are read with the OpenCode tool table. No terminal forwarding or inferred settlement. Explicit manual plugin install; command-hook settings are refused. |
 | `claude_code` | Parse Claude Code hook payloads (2.1.318 contract, unknown fields ignored); render `permissionDecision` / `additionalContext`; generate the settings fragment. Never renders `allow`. |
 | `copilot_cli` | Parse Copilot CLI hook payloads in both dialects (1.0.105 contract), with synthetic correlation keys and `agentStop` settlement; render the flat `permissionDecision` / `additionalContext`; generate the hook file. Also receives Copilot payloads sent to the Claude Code entry point by a repository `.claude/settings.json`. Never renders `allow`. |
 | `runtime` | Harness-neutral events: `ToolRequested` (the only enforcement point), `ToolFinished`, `BatchSettled`, `UserPrompt`, `PermissionPrompt`, session and subagent lifecycle. Infallible: failures become `error` records plus `on_error`. |

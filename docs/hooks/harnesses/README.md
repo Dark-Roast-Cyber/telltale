@@ -103,13 +103,14 @@ silently (open) and a hung hook hangs the session (no timeout).
 `--deny-tool`, and OpenCode v2's evaluate allow overrides native ask rules
 (both E2E).
 
-### 5. The Claude Code JSONL journal encoding loses information
+### 5. The Claude Code JSONL journal encoding lost information
 
 `crates/telltale/src/hooks/journal.rs` writes each call as a Claude `tool_use` with the input
-unchanged, and Telltale evaluates it through its Claude adapter. Detection v2
-routes by **argument key**, not by tool name (Src, pinned
-`telltale-core` 0249eaf: `telltale-inference/src/mapping.rs`,
-`telltale-detect/src/v2/{actions,selector}.rs`):
+unchanged. Telltale used to read every hook journal through its Claude
+adapter, and Detection v2 routes by **argument key**, not by tool name (Src,
+pinned `telltale-core` 0249eaf: `telltale-inference/src/mapping.rs`,
+`telltale-detect/src/v2/{actions,selector}.rs`). These were the gaps, each
+with what closed it:
 
 - **argv-array commands.** The `command.text` facet is emitted only when
   `command`/`cmd` is a string. An argv array gets joined into action command
@@ -147,17 +148,17 @@ routes by **argument key**, not by tool name (Src, pinned
   `permissionRequest` shape need translation. Copilot's PascalCase payloads
   look like Claude's but keep Copilot argument keys.
 
-**Status.** The runtime applies `normalize` (`crates/telltale/src/hooks/normalize.rs`) to the
-evaluation encoding of each call, keyed by harness and tool name. Adapters
-do not call it. `crates/telltale/tests/hooks/normalize_parity.rs` shows each harness's native
-shape, the normalized shape and the Claude reference side by side. Of 39
-variants, 25 differ natively and all 39 match once normalized. Already at
-parity without normalization:
+**Status.** Closed by native evaluation (ADR 0002, addendum of 2026-11-17,
+native evaluation). The hook journal of each client is read with that
+client's own tool table, so a call keeps the shape its harness sent.
+`crates/telltale/tests/hooks/native_parity.rs` sends each harness's captured
+shapes and the Claude Code reference through the runtime and requires the same
+verdict and rule IDs, benign twins included. These were already at parity
+before the tool tables changed:
 
 - `path`/`filePath` write keys
 - download-then-execute across calls
 - argv commands (in probes)
 
-The upstream fix is requested in
-a recorded upstream request;
-see ADR 0002, "Addendum: interim input normalization".
+ADR 0002 keeps the interim normalization that came before as a superseded
+addendum.
