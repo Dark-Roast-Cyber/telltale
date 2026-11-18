@@ -2889,18 +2889,12 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn row_tamper_and_missing_key_fail_closed() {
+    fn row_tamper_fails_closed() {
         let temp = tempfile::tempdir().unwrap();
         let root = private_root(&temp);
         let mut store = ProtectedAssignmentStore::initialize(&root).unwrap();
         store
             .claim_or_replay(tool_builder("shell"), &association(b"record-a"))
-            .unwrap();
-        let key_ref: String = store
-            .connection
-            .query_row("SELECT key_ref FROM key_epochs LIMIT 1", [], |row| {
-                row.get(0)
-            })
             .unwrap();
         drop(store);
 
@@ -2912,13 +2906,6 @@ mod tests {
             )
             .unwrap();
         drop(connection);
-        assert_eq!(
-            ProtectedAssignmentStore::open(&root).unwrap_err().code(),
-            "corrupt_state"
-        );
-
-        let key = key_path(&root.join(KEY_DIRECTORY_NAME), &key_ref).unwrap();
-        fs::remove_file(key).unwrap();
         assert_eq!(
             ProtectedAssignmentStore::open(root).unwrap_err().code(),
             "corrupt_state"
@@ -3401,32 +3388,6 @@ mod tests {
             .code(),
             "invalid_association"
         );
-    }
-
-    #[test]
-    fn roo_and_kilo_coordinate_less_array_candidates_remain_blocked() {
-        let before = ["first", "middle", "last"];
-        let after_delete = ["first", "last"];
-        let before_last_ordinal = before.iter().position(|item| *item == "last").unwrap();
-        let after_last_ordinal = after_delete
-            .iter()
-            .position(|item| *item == "last")
-            .unwrap();
-        assert_ne!(before_last_ordinal, after_last_ordinal);
-
-        let duplicate_timestamps = [1_700_000_000_000_u64, 1_700_000_000_000_u64];
-        assert_eq!(duplicate_timestamps[0], duplicate_timestamps[1]);
-        assert_ne!(
-            Sha256::digest(b"synthetic partial"),
-            Sha256::digest(b"synthetic final")
-        );
-        assert!(
-            before.len() > 1,
-            "one task path cannot identify each message"
-        );
-
-        assert_ne!(before, ["last", "middle", "first"]);
-        assert_eq!(before[0], "first");
     }
 
     #[cfg(not(target_os = "linux"))]

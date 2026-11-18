@@ -458,10 +458,21 @@ mod tests {
                 keep: 5,
             },
         );
+        let rotated = || -> Vec<_> {
+            std::fs::read_dir(log_path.parent().expect("parent"))
+                .expect("read dir")
+                .filter_map(Result::ok)
+                .filter(|e| {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    name.starts_with("telltale-events-") && name.ends_with(".jsonl")
+                })
+                .collect()
+        };
         emit_events(&sink, std::slice::from_ref(&big_event)).expect("first emit");
         // First emit should not rotate (file is new, under threshold).
         assert!(log_path.exists());
-        assert!(!log_path.with_file_name("telltale-events-").exists());
+        assert!(rotated().is_empty(), "the first emit rotated a new file");
 
         // Write more events to exceed 100 bytes.
         emit_events(&sink, std::slice::from_ref(&big_event)).expect("second emit");
@@ -470,20 +481,8 @@ mod tests {
         // By now the file should have been rotated at least once.
         // The active file should still exist with fresh content.
         assert!(log_path.exists());
-
-        // At least one rotated file should exist.
-        let parent = log_path.parent().expect("parent");
-        let rotated: Vec<_> = std::fs::read_dir(parent)
-            .expect("read dir")
-            .filter_map(Result::ok)
-            .filter(|e| {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                name.starts_with("telltale-events-") && name.ends_with(".jsonl")
-            })
-            .collect();
         assert!(
-            !rotated.is_empty(),
+            !rotated().is_empty(),
             "expected at least one rotated file after exceeding max size"
         );
     }
@@ -598,12 +597,8 @@ mod tests {
         )
         .emit(&[])
         .expect("empty batch");
-        assert!(!log_path.exists());
-        assert!(
-            !log_path
-                .with_file_name("telltale-events-2026-01-01.jsonl")
-                .exists()
-        );
+        // Nothing is written, not even the log directory or a lock file.
+        assert!(!log_path.parent().expect("parent").exists());
     }
 
     #[cfg(target_os = "linux")]

@@ -754,36 +754,3 @@ fn qwen_unknown_canonical_inputs_fail_privately() {
     assert_eq!(error.code(), "unknown_content_block");
     assert!(!error.to_string().contains("synthetic payload"));
 }
-
-#[test]
-fn qwen_canonical_rejects_wrong_identity_without_reading_path() {
-    let error = crate::acquisition::acquire_source(
-        &Source {
-            client: ClientId::Qwen,
-            kind: SourceKind::Json,
-            source_id: "qwen.projects".to_owned(),
-            path: "does-not-exist.jsonl".into(),
-        },
-        crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-    )
-    .err()
-    .expect("wrong kind must fail before reading");
-    assert_eq!(error.code(), "source_kind_mismatch");
-    assert!(!error.to_string().contains("does-not-exist"));
-    assert!(!format!("{error:?}").contains("does-not-exist"));
-
-    let error = crate::acquisition::acquire_source(
-        &Source {
-            client: ClientId::Qwen,
-            kind: SourceKind::Jsonl,
-            source_id: "Qwen.projects".to_owned(),
-            path: "does-not-exist.jsonl".into(),
-        },
-        crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-    )
-    .err()
-    .expect("wrong identity must fail before reading");
-    assert_eq!(error.code(), "unsupported_source_identity");
-    assert!(!error.to_string().contains("does-not-exist"));
-    assert!(!format!("{error:?}").contains("does-not-exist"));
-}

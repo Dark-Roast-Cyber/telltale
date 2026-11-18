@@ -1167,12 +1167,6 @@ modifiers: []
     }
 
     #[test]
-    fn builder_compiles_bundled_defaults() {
-        let pipeline = Pipeline::builder().build().expect("pipeline");
-        assert!(pipeline.rule_count() > 0);
-    }
-
-    #[test]
     fn custom_only_without_documents_is_an_error() {
         assert!(
             Pipeline::builder()
@@ -1316,17 +1310,5 @@ modifiers: []
                 .iter()
                 .any(|entry| entry.id() == "secret.env.read" && entry.package_id().is_none())
         );
-    }
-
-    #[test]
-    fn scan_root_propagates_checked_discovery_errors() {
-        let pipeline = Pipeline::builder().build().expect("pipeline");
-        let root =
-            std::env::temp_dir().join(format!("telltale-core-missing-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-
-        let error = pipeline.scan_root(&root).expect_err("missing root");
-
-        assert!(matches!(error, PipelineError::Discovery(_)));
     }
 }

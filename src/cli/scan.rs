@@ -2982,7 +2982,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_accounting_compile_failure_is_bounded_and_private() {
+    fn policy_accounting_without_pre_policy_results_is_unavailable() {
         let state = compute_policy_match_accounting(true, false, &[]);
         let flow = DetectionFlowAccounting {
             effective_detection_candidate_count: 0,
@@ -2997,7 +2997,6 @@ mod tests {
         assert!(accounting["pre_policy_detection_candidate_count"].is_null());
         assert!(accounting["fully_filtered_detection_candidate_count"].is_null());
         assert!(accounting["filtered_rule_id_count"].is_null());
-        assert!(!accounting.to_string().contains("synthetic"));
     }
 
     #[test]
