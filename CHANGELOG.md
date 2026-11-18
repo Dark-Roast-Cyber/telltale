@@ -23,6 +23,16 @@
   acquisition reports `CapabilityNotCompiled` for them. A harness name with no
   registered adapter is no longer evaluated and takes the `on_error` path.
   Verdicts, scores and rule IDs are unchanged.
+- **Windows: the system config root is `%ProgramData%\telltale`, and only
+  administrators may change it.** It was the literal `\etc\telltale` on the
+  current drive, which any user can create. The root now comes from the
+  `ProgramData` known folder. It, its config folders and every file read from
+  it must be owned by, and writable only by, Administrators, SYSTEM or
+  TrustedInstaller, and not be links; otherwise configuration loading fails
+  for `scan`, `watch`, `config` and `hooks`, also with `--config-dir`. An
+  existing `\etc\telltale` also fails the load until it is moved or removed. The bundled
+  hooks self-protection rules cover the new spelling. See
+  [install.md](docs/install.md#windows-system-config-root). Unix is unchanged. (#206)
 - **Embedding MSRV rises to Rust 1.89.** The embedding crates' `rust-version`
   (`telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect` and
   `telltale-core`, plus the new `telltale-discover`) moves from 1.88 to 1.89. This follows the

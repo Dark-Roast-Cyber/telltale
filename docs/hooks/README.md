@@ -194,7 +194,9 @@ when the agent is the adversary, keep the configuration where the agent cannot
 write it. Put it in a root-owned config root such as `/etc/telltale` and name
 that root in the hook command (`telltale hooks claude-code hook --config-dir
 /etc/telltale`), so the user's own root, which would otherwise win, is not
-read. The self-protection rules detect writes to the config roots in both
+read. On Windows the system root is `%ProgramData%\telltale`, and it is read
+only when Administrators, SYSTEM and TrustedInstaller alone can change it
+([install.md](../install.md#windows-system-config-root)). The self-protection rules detect writes to the config roots in both
 modes, including the target of a root, folder or file that is a symlink.
 
 ## Configuration
@@ -252,8 +254,8 @@ tool calls until it is fixed, and any other hook is detect-only on the defaults
 with a `config_invalid` record. Turn the rules off with
 `hooks.self_protection_rules: false` to manage them yourself.
 
-The config roots are `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
-`~/.config/telltale`; a later root wins per key. `--config-dir DIR` on
+The config roots are `/etc/telltale` (Windows: `%ProgramData%\telltale`), then
+`$XDG_CONFIG_HOME/telltale` or `~/.config/telltale`; a later root wins per key. `--config-dir DIR` on
 `hook`, `check` and `serve` (repeatable) replaces them, and an autostarted
 evaluator gets the same folders. A `hooks:` section is accepted and ignored by
 a build without the hooks feature.

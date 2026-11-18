@@ -251,7 +251,8 @@ The crate builds and its tests run on Linux, macOS and Windows (CI matrix).
 
 | | Linux, macOS | Windows |
 | --- | --- | --- |
-| Config roots (`settings.d` `hooks:` section, rule folders) | `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or `~/.config/telltale`; `--config-dir` replaces them | The same: `\etc\telltale` on the current drive, then `$XDG_CONFIG_HOME\telltale` or `$HOME\.config\telltale` |
+| Config roots (`settings.d` `hooks:` section, rule folders) | `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or `~/.config/telltale`; `--config-dir` replaces them | `%ProgramData%\telltale` (the `ProgramData` known folder, on any system drive), then `$XDG_CONFIG_HOME\telltale` or `$HOME\.config\telltale`; `--config-dir` replaces them |
+| System config root trust | `/etc` is writable only by root | The system root, its folders and every file read from it must be owned by, and writable only by, Administrators, SYSTEM or TrustedInstaller, and not be links; otherwise the load fails, also when the root is named with `--config-dir`. The `\etc\telltale` root of earlier releases is refused ([install.md](../install.md#windows-system-config-root)) |
 | State default | `$XDG_STATE_HOME/telltale/hooks`, else `~/.local/state/telltale/hooks` | `%LOCALAPPDATA%\telltale\hooks` |
 | State directory permissions | `0700` | Inherited ACL (no explicit hardening) |
 | Long-lived evaluator | Unix socket, autostarted | None: the client reports `evaluator_unsupported_platform`, nothing is autostarted, and every hook evaluates in-process |
