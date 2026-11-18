@@ -11,6 +11,7 @@
 use std::ffi::OsString;
 use std::fs::File;
 use std::io;
+use std::mem::MaybeUninit;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
@@ -191,11 +192,13 @@ fn check(path: &Path, trusted: &[Vec<u8>], owners: usize) -> io::Result<Result<(
     // SAFETY: a non-null DACL from GetSecurityInfo.
     let count = unsafe { (*descriptor.dacl).AceCount };
     for index in 0..u32::from(count) {
-        let mut ace = null_mut();
+        let mut ace = MaybeUninit::uninit();
         // SAFETY: index is below the ACL's own count.
-        if unsafe { GetAce(descriptor.dacl, index, &mut ace) } == 0 {
+        if unsafe { GetAce(descriptor.dacl, index, ace.as_mut_ptr()) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: GetAce succeeded and wrote the ACE's address.
+        let ace = unsafe { ace.assume_init() };
         // SAFETY: every ACE starts with a header.
         let header = unsafe { &*ace.cast::<ACE_HEADER>() };
         if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 {
@@ -232,11 +235,9 @@ struct Descriptor {
 
 impl Descriptor {
     fn of(file: &File) -> io::Result<Self> {
-        let mut this = Self {
-            owner: null_mut(),
-            dacl: null_mut(),
-            descriptor: null_mut(),
-        };
+        let mut owner = MaybeUninit::uninit();
+        let mut dacl = MaybeUninit::uninit();
+        let mut descriptor = MaybeUninit::uninit();
         // SAFETY: a live handle with READ_CONTROL and writable outputs; the
         // descriptor is freed in Drop.
         let result = unsafe {
@@ -244,17 +245,25 @@ impl Descriptor {
                 file.as_raw_handle(),
                 SE_FILE_OBJECT,
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-                &mut this.owner,
+                owner.as_mut_ptr(),
                 null_mut(),
-                &mut this.dacl,
+                dacl.as_mut_ptr(),
                 null_mut(),
-                &mut this.descriptor,
+                descriptor.as_mut_ptr(),
             )
         };
         if result != ERROR_SUCCESS {
             return Err(io::Error::from_raw_os_error(result as i32));
         }
-        Ok(this)
+        // SAFETY: on success GetSecurityInfo wrote all three outputs; the
+        // owner and DACL may still be null, which `check` tests.
+        Ok(unsafe {
+            Self {
+                owner: owner.assume_init(),
+                dacl: dacl.assume_init(),
+                descriptor: descriptor.assume_init(),
+            }
+        })
     }
 }
 
