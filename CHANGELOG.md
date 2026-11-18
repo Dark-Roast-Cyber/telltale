@@ -133,6 +133,14 @@
   file is still resolved and read, and source identities, correlation
   instances, Event 3.0 paths, cursors and state are unchanged. OpenCode SQLite
   is not covered (SQLite resolves links and opens its journal files by name).
+- Windows: source discovery and anchored source reads refuse only reparse
+  points that name another object (symbolic links, junctions, mount points).
+  Any other reparse point, such as a cloud-sync placeholder exposed to the
+  process or a deduplicated file, was refused as a link; it is now discovered,
+  and read or traversed through the filter that owns its tag, so its bytes are
+  what any program reads. A tag no installed filter owns is refused as
+  unreadable, as Windows refuses it for every program. The unconfined reader
+  (MCP configuration, Copilot) still refuses every reparse point. (#219)
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and
