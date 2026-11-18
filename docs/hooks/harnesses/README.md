@@ -8,7 +8,7 @@ payload looks like, and which decisions the harness actually honors.
 | Claude Code | [claude-code.md](claude-code.md) | 2.1.318 | Implemented |
 | GitHub Copilot CLI | [copilot-cli.md](copilot-cli.md) | 1.0.105 | Implemented; real-model run pending |
 | OpenAI Codex CLI | [codex-cli.md](codex-cli.md) | 0.166.0 | Implemented; scripted-model E2E, real-model run pending |
-| OpenCode | [opencode.md](opencode.md) | 1.19.5 (v1 API), 2.2.5 (v2 API) | Not started |
+| OpenCode v2 | [opencode.md](opencode.md) | 2.2.5 | Request-only pilot; manual install, no settlement or service qualification |
 
 The [capability matrix](../capability-matrix.md) also lists the harnesses that
 have no contract page yet (Cursor, Gemini CLI, OpenClaw, Hermes Agent). The
@@ -77,7 +77,9 @@ a hook-denied call.
 Runtime need: a `TurnSettled` event (no call list). Calls still pending at
 that point become `not_executed` only when this hook returned `deny`;
 otherwise they become `unknown` (another hook, a native rule, or a failure
-may have stopped them). OpenCode can settle each call directly.
+may have stopped them). OpenCode's reused Code Mode IDs do not independently
+identify inner terminal occurrences; the v2 pilot forwards requests only and
+does not infer settlement from outer success or a generic error.
 
 ### 4. Deny forms that work
 
