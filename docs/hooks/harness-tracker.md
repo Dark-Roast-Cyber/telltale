@@ -43,7 +43,7 @@ It does not make support claims. The adapters in a build are the registry in
 
 The bars count checklist cells. Verify the written gate against linked run
 reports before declaring a milestone reached. Unassigned harnesses (`—`) are
-survey candidates and do not count toward the bars. M3 to M5 are a working
+survey candidates and do not count toward the bars. M3 to M6 are a working
 proposal in priority order, not a commitment.
 
 | Milestone | Name | Reached when |
@@ -53,6 +53,7 @@ proposal in priority order, not a commitment.
 | M3 | Adapter reuse | VS Code Copilot agent mode, Qwen Code and Factory Droid each have a capture and a linked control/deny report, through an existing adapter where the captured contract matches |
 | M4 | Own-contract command hooks | Cursor, Gemini CLI, Antigravity and Cline each have a contract page, an adapter and a linked control/deny report |
 | M5 | Plugin harnesses | OpenCode v2 passes its gates as a managed install; Kilo and Pi are enforced through a forwarding plugin with linked reports |
+| M6 | Vendor agents, second wave | Grok Build, Mistral Vibe, Kimi CLI, Qoder, CodeBuddy and Trae each have an adapter, or reuse one, with a capture and a linked control/deny report |
 
 [progress.html](progress.html) shows these as one bar. It is generated from
 the two tables in this section and the next; see [How to update](#how-to-update).
@@ -101,40 +102,51 @@ found, whatever the source.
 | Aider | — | — | Unverified | todo | todo | todo | todo | todo | todo | — | Find primary evidence |
 | Warp | `warp` | — | None released | done | n/a | n/a | n/a | n/a | n/a | — | Recheck when hooks ship |
 | Roo Code | `roocode` | — | Unverified | todo | todo | todo | todo | todo | todo | — | Verify lifecycle status |
-| Aside | `aside` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| BB | `bb` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Cherry Studio | `cherrystudio` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| CodeBuddy | `codebuddy` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Codebuff | `codebuff` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Command Code | `commandcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| DeepSeek Harness | `dsh` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Freebuff | `freebuff` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Fx | `fx` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Gajae-Code | `gjc` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Grok Build | `grok` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Hindsight | `hindsight` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Jcode | `jcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Kilo Code | `kilocode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Kimchi | `kimchi` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Kimi CLI | `kimi` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| LM Studio | `lmstudio` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| MiMo Code | `micode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| MiniMax Code | `mcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Mistral Vibe | `vibe` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Muse Code | `muse` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Mux | `mux` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Oh My Pi | `omp` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| OpenCodeReview | `opencodereview` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Prime Agent | `prime-agent` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Proma | `proma` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Qoder | `qoder` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Reasonix | `reasonix` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Senpi (OmO Native) | `senpi` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Trae | `trae` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Unsloth | `unsloth` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| WorkBuddy | `workbuddy` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| Xiaomi MiMo AI | `micode-desktop` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
-| ZCode | `zcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Aside | `aside` | — | Not a coding harness (browser agent) | done | n/a | n/a | n/a | n/a | n/a | — | None |
+| BB | `bb` | — | Not a harness (runs other agents' CLIs) | done | n/a | n/a | n/a | n/a | n/a | — | None; the wrapped agent's hooks apply |
+| Cherry Studio | `cherrystudio` | — | Unverified (embeds other agent runtimes) | wip | todo | todo | todo | todo | todo | — | Find whether settings-file hooks load |
+| CodeBuddy | `codebuddy` | M6 | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| Codebuff | `codebuff` | — | None documented | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Command Code | `commandcode` | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| DeepSeek Harness | `dsh` | — | In-process plugin; command-hook bridges | done | todo | todo | todo | todo | todo | — | On demand |
+| Freebuff | `freebuff` | — | None documented (Codebuff codebase) | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Fx | `fx` | — | None exposed | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Gajae-Code | `gjc` | — | In-process hook module (Pi extension API) | done | todo | todo | todo | todo | todo | — | After Pi |
+| Grok Build | `grok` | M6 | Command and HTTP hooks | done | todo | todo | todo | todo | todo | — | Contract page and capture |
+| Hindsight | `hindsight` | — | Not a harness (memory server) | done | n/a | n/a | n/a | n/a | n/a | — | None |
+| Jcode | `jcode` | — | Command hook | done | todo | todo | todo | todo | todo | — | On demand |
+| Kilo Code extension | `kilocode` | — | In-process plugin (OpenCode API) | done | todo | todo | todo | todo | todo | — | After Kilo; confirm the older extension |
+| Kimchi | `kimchi` | — | Shell-tool command hook; Pi packages | done | todo | todo | todo | todo | todo | — | On demand |
+| Kimi CLI | `kimi` | M6 | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| LM Studio | `lmstudio` | — | Not a coding harness (model runner) | done | n/a | n/a | n/a | n/a | n/a | — | None |
+| MiMo Code | `micode` | — | In-process plugin (OpenCode API) | done | todo | todo | todo | todo | todo | — | After Kilo |
+| MiniMax Code | `mcode` | — | Command hook in plugins, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Mistral Vibe | `vibe` | M6 | Command hook | done | todo | todo | todo | todo | todo | — | Contract page and capture |
+| Muse Code | `muse` | — | Command hook | wip | todo | todo | todo | todo | todo | — | Find the decision contract |
+| Mux (Xum) | `mux` | — | Command hook; plugin hooks | done | todo | todo | todo | todo | todo | — | On demand |
+| Oh My Pi | `omp` | — | In-process extension (Pi API) | done | todo | todo | todo | todo | todo | — | After Pi |
+| OpenCodeReview | `opencodereview` | — | None documented (review tools only) | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Prime Agent | `prime-agent` | — | None documented | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Proma | `proma` | — | None documented | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Qoder | `qoder` | M6 | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| Reasonix | `reasonix` | — | Command hook | done | todo | todo | todo | todo | todo | — | On demand |
+| Senpi | `senpi` | — | In-process extension (Pi API) | done | todo | todo | todo | todo | todo | — | After Pi |
+| Trae | `trae` | M6 | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| Unsloth | `unsloth` | — | Not a coding harness (model training) | done | n/a | n/a | n/a | n/a | n/a | — | None |
+| WorkBuddy | `workbuddy` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey; vendor pages were not readable |
+| Xiaomi MiMo AI | `micode-desktop` | — | Unverified (MiMo Code engine) | wip | todo | todo | todo | todo | todo | — | Confirm plugin loading in the desktop build |
+| ZCode | `zcode` | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Open Interpreter | — | — | Command hook, Codex-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Firebender | — | — | Command hook | done | todo | todo | todo | todo | todo | — | On demand |
+| gptme | — | — | In-process Python hook | done | todo | todo | todo | todo | todo | — | On demand |
+| Snowflake Cortex Code | — | — | SDK callback | wip | todo | todo | todo | todo | todo | — | Find whether it runs tools locally and loads hooks from a file |
+| Trae Agent | — | — | None documented | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Plandex | — | — | None for users | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| JetBrains AI Assistant | — | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Amazon Q Developer | — | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey; compare with Kiro |
+| Replit Agent | — | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Tabnine | — | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| SWE-agent | — | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
 
 ### Shared work
 
@@ -470,6 +482,43 @@ Checked 2026-11-17.
 - Notes: preview. Shares the Copilot harness with Copilot CLI; default since
   VS Code 1.143.
 
+### Second survey batch
+
+Checked 2026-11-17 in one pass over vendor documentation and source, not
+cross-checked by a second reader and not run. "Not recorded" means the pass
+did not establish it.
+
+| Harness | Links | Configuration | Blocks by | Failure default | Payload | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| CodeBuddy | [hooks](https://www.workbuddy.ai/docs/cli/hooks), [Tencent Cloud](https://intl.cloud.tencent.com/document/product/1256/77296) | `~/.codebuddy/settings.json`, `<project>/.codebuddy/settings.json`, `.codebuddy/settings.local.json`; plugin `hooks/hooks.json` | Exit 2; `permissionDecision` deny, ask, allow | Not recorded | Claude-shaped | Docs |
+| Command Code | [hooks reference](https://commandcode.ai/docs/hooks/reference) | `~/.commandcode/settings.json`, `.commandcode/settings.json` | Exit 2; `permissionDecision` deny | Not recorded | Claude-shaped; own tool names such as `shell_command` | Docs |
+| DeepSeek Harness | [tool pipeline](https://github.com/deepseek-ai/DeepSeek-Harness/blob/HEAD/docs/tool-execution-pipeline.md), [configuration](https://github.com/deepseek-ai/DeepSeek-Harness/blob/HEAD/docs/config-catalog.md) | Plugin configuration | A plugin on `tools/pre-execute` returns deny or ask; experimental bridge plugins run Claude-format and Codex-format command hooks | Not recorded | Own plugin API | Src |
+| Gajae-Code | [hooks](https://github.com/Yeachan-Heo/gajae-code/blob/HEAD/docs/hooks.md) | `~/.gjc/agent/hooks/pre/` | Handler returns `{ block: true, reason }`; a thrown error also blocks | No timeout | Pi extension API, Oh My Pi variant | Src |
+| Grok Build | [hooks](https://docs.x.ai/build/features/hooks), [user guide](https://github.com/xai-org/grok-build/blob/HEAD/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md) | `~/.grok/hooks/*.json`, `<project>/.grok/hooks/*.json`, `~/.grok/config.toml`; managed `/etc/grok/requirements.toml`; also reads Claude Code and Cursor hook files | Exit 2; `permissionDecision` allow, deny, ask, defer | Open on timeout or crash; default timeout 5 s | Own camelCase (`hookEventName`, `sessionId`, `toolName`, `toolInput`) | Docs/Src |
+| Jcode | [hooks](https://github.com/1jehuang/jcode/blob/HEAD/docs/HOOKS.md) | `~/.jcode/config.toml` `[hooks]`; `JCODE_HOOK_PRE_TOOL` | Exit 2; `permissionDecision` deny; ask also blocks | Open on other failures; 5 s | Own: tool input on stdin, `JCODE_HOOK_*` environment | Src |
+| Kilo Code extension | [plugins](https://kilo.ai/docs/automate/extending/plugins) | `~/.config/kilo/plugin/`, `.kilo/plugin/` | A thrown error in `tool.execute.before` | Not recorded | OpenCode plugin API, shared with Kilo | Docs |
+| Kimchi | [hooks](https://github.com/getkimchi/kimchi/blob/HEAD/docs/hooks.md) | `~/.config/kimchi/harness/hooks/bash/*.sh`, `.kimchi/hooks/bash/*.sh` | Shell tool only: exit 2 or `{"decision":"block"}`. Also Pi packages and an opt-in Claude Code hook adapter | Open on other failures | Own for the shell hooks; Pi extension API | Src |
+| Kimi CLI | [hooks](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html), [earlier CLI](https://github.com/MoonshotAI/kimi-cli/blob/HEAD/docs/en/customization/hooks.md) | `~/.kimi-code/config.toml` `[[hooks]]`; earlier CLI `~/.kimi/config.toml` | Exit 2; `permissionDecision` deny | Open on error or timeout; 30 s | Claude-shaped, with `tool_call_id` | Docs/Src |
+| MiniMax Code | [hooks](https://github.com/MiniMax-AI/minimax-code/blob/HEAD/docs/hooks.md) | Plugin manifest `.minimax-plugin/plugin.json` | `permissionDecision` allow, deny, ask, defer | Timeout 1 to 10 s | Claude-shaped; lowercase tool names | Src |
+| MiMo Code | [plugin API](https://github.com/XiaomiMiMo/MiMo-Code/blob/HEAD/packages/plugin/src/index.ts) | `~/.config/mimocode`, `.mimocode/`, `MIMOCODE_CONFIG_DIR` | A thrown error in `tool.execute.before`, by OpenCode's semantics | Not recorded | OpenCode plugin API | Src |
+| Muse Code | [extending](https://dev.meta.ai/docs/muse-code/extending), [configuration](https://dev.meta.ai/docs/muse-code/configuration) | `<project>/.muse/hooks.json`; `hooks` in `~/.config/muse/settings.json`; a managed path | Documented as able to block; the decision contract is not on the public pages | Not recorded | Not recorded | Docs, partial |
+| Mux (renamed Xum) | [tool hooks](https://github.com/coder/mux/blob/HEAD/docs/hooks/tools.mdx), [plugin hooks](https://github.com/coder/mux/blob/HEAD/docs/hooks/plugins.mdx) | `.xum/tool_pre`, `~/.xum/tool_pre`; `~/.xum/plugins` | `tool_pre`: any non-zero exit. Plugin hooks: `permissionDecision` deny | `tool_pre` timeout 10 s | Own (`XUM_TOOL`, `XUM_TOOL_INPUT_PATH`) | Src |
+| Oh My Pi | [hooks](https://github.com/can1357/oh-my-pi/blob/HEAD/docs/hooks.md) | `.omp/hooks/pre/`, `~/.omp/agent/hooks/pre/` | Handler returns `{ block: true, reason }` | Not recorded | Pi extension API, own variant | Src |
+| Qoder | [CLI hooks](https://docs.qoder.com/cli/hooks), [reference](https://docs.qoder.com/cli/hooks-reference), [IDE hooks](https://docs.qoder.com/extensions/hooks), [Lingma edition](https://help.aliyun.com/en/lingma/guide-for-using-hooks) | `~/.qoder/settings.json`, `.qoder/settings.json`, `.qoder/settings.local.json`; Lingma uses `.lingma/` | Exit 2; `permissionDecision` deny, ask, allow | Not recorded | Claude-shaped | Docs |
+| Reasonix | [extensions](https://github.com/esengine/DeepSeek-Reasonix/blob/HEAD/docs/EXTENSIONS.md) | `.reasonix/settings.json` | Exit 2, or a timeout, on gating events | Blocks on timeout | Own camelCase (`toolName`, `toolArgs`) | Src |
+| Senpi | [extensions](https://github.com/code-yeongyu/senpi/blob/HEAD/packages/coding-agent/docs/extensions.md) | `~/.senpi/agent/extensions/*.ts`, `.senpi/extensions/*.ts` | Handler returns `{ block: true }` | Not recorded | Pi extension API | Src |
+| Trae | [hook reference](https://docs.trae.ai/ide/hook-configuration-reference) | `~/.trae/hooks.json`, `<project>/.trae/hooks.json` | Exit 2; `permissionDecision` | Not recorded | Claude-shaped with additions (`workspace_roots`); tool names such as `RunCommand` | Docs |
+| Mistral Vibe | [hooks](https://docs.mistral.ai/vibe/code/cli/hooks) | `~/.vibe/hooks.toml`, `./.vibe/hooks.toml` | Exit 0 with `{"decision":"deny"}` | A failed hook is a warning unless `strict = true` | Own, near Claude field names | Docs |
+| ZCode | [hooks](https://zcode.z.ai/cn/docs/hooks) | `~/.zcode/cli/config.json` with `hooks.enabled`; plugin `hooks/hooks.json` | Exit 2; `permissionDecision` deny | Not recorded | Claude-shaped | Docs |
+| Open Interpreter | [hooks](https://github.com/openinterpreter/open-interpreter/blob/HEAD/docs/hooks.md) | `~/.openinterpreter/hooks.json`, `~/.openinterpreter/config.toml` | `permissionDecision` deny | Not recorded | Codex-shaped | Src |
+| Firebender | [hooks](https://docs.firebender.com/multi-agent/hooks.md) | `.firebender/hooks.json`, `~/.firebender/hooks.json` | Exit 2; `decision` deny | Not recorded | Own camelCase events | Docs |
+| gptme | [hooks](https://gptme.org/docs/hooks.html) | Registered in Python; no file form | `TOOL_EXECUTE_PRE` handler denies | Not recorded | Own Python API | Docs |
+
+Families in this batch: Kilo Code extension and MiMo Code use the OpenCode
+plugin API; Gajae-Code, Oh My Pi, Senpi and Kimchi build on Pi; CodeBuddy,
+Qoder, Command Code, ZCode, Kimi CLI, MiniMax Code and Trae are Claude-shaped
+with their own configuration files and, in places, tool names.
+
 ### No usable hook
 
 | Harness | State | Link |
@@ -477,6 +526,21 @@ Checked 2026-11-17.
 | Continue CLI | Hook code ships; the pre-tool event is not fired | [pull request](https://github.com/continuedev/continue/pull/11029) |
 | Zed agent | Tool permission rules only | [tool permissions](https://zed.dev/docs/ai/tool-permissions) |
 | Warp | Hooks specified, not released | [repository](https://github.com/warpdotdev/warp) (`specs/agent-hooks/architecture.md`) |
+| Codebuff, Freebuff | One codebase; the SDK observes events and cannot stop a tool | [SDK](https://www.codebuff.com/docs/advanced/sdk) |
+| Fx | Hook points are internal; SDK hooks only observe | [docs](https://fx.sh/docs), [observer hooks](https://github.com/vercel-labs/fx/blob/HEAD/sdk/semantic-observer-hooks.md) |
+| Proma | The application's own permission callback only | [repository](https://github.com/proma-ai/Proma) |
+| Plandex | Server-internal lifecycle hooks only | [source](https://github.com/plandex-ai/plandex/blob/HEAD/app/server/hooks/hooks.go) |
+| OpenCodeReview | A fixed set of review tools; no hook in the README | [repository](https://github.com/alibaba/open-code-review) |
+| Prime Agent | No hook in the README or file listing | [repository](https://github.com/PrimeIntellect-ai/prime-agent) |
+| Trae Agent | No hook in the README or file listing; distinct from the Trae IDE | [repository](https://github.com/bytedance/trae-agent) |
+
+Catalog clients that are not coding harnesses, judged from the site or README
+only: Aside, a [browser agent](https://aside.com/); BB, which
+[runs other agents' CLIs](https://github.com/get-bb/bb/blob/HEAD/docs/provider-bridge-protocol.md),
+so the wrapped agent's hooks apply; Hindsight, a
+[memory server](https://github.com/vectorize-io/hindsight); LM Studio, a model
+runner whose [plugins](https://lmstudio.ai/docs/typescript/plugins) add tools;
+and Unsloth, [model training and inference](https://github.com/unslothai/unsloth).
 
 Aider's hook status and Roo Code's lifecycle status lack primary citations
 in this survey; neither is a verified negative.
@@ -504,6 +568,16 @@ harness's entry.
 - Devin: which files still carry Windsurf-format hooks.
 - Amp: a plugin handler that throws or hangs.
 - Junie: hooks in the IDE plugin.
+- Muse Code: the decision contract and the payload.
+- Cherry Studio: whether hooks in its private agent configuration load
+  ([runtime notes](https://github.com/CherryHQ/cherry-studio/blob/HEAD/packages/agent-runtime-claude-code/README.md)).
+- Xiaomi MiMo AI: whether the desktop build loads plugins
+  ([design note](https://github.com/XiaomiMiMo/MiMo-Code/blob/HEAD/docs/compose/spec/plugin-host-sdk.md)).
+- Snowflake Cortex Code: whether it runs tools locally and loads hooks from a
+  file ([SDK hooks](https://docs.snowflake.com/en/user-guide/cortex-code-agent-sdk/hooks)).
+- WorkBuddy: no readable vendor page on hooks was found.
+- Mux: whether installs from before the rename still read the old paths.
+- Kilo Code extension: whether the older extension has any hook.
 
 ## Log
 
@@ -517,3 +591,4 @@ harness's entry.
 - 2026-11-17: corrected the plugin deadline/reaping defect found in parent review; caller settlement no longer waits for inherited pipe closure, never signals a known-exited group, and keeps unreaped children counted. Old timeout qualification withdrawn. Corrected-plugin 2.2.5 matrix (17 cases) and installed 2.3.2 pairs (4 cases) passed; two focused process regressions fail on the old artifact and pass on the correction. Current digest and evidence are in the integrated report.
 - 2026-11-17: the OpenCode v2 plugin gained a configurable waiting queue; all 17 pilot scenarios were rerun against it on installed 2.3.2 (E2E, standalone, scripted model), not on the 2.2.5 pin.
 - 2026-11-17: added the Catalog column and a row for every client in the pinned client catalog, 34 of them unsurveyed; added milestones M3 to M5 and the managed-install row for OpenCode v2; the progress page gained coverage counts.
+- 2026-11-17: second survey batch: the 34 catalog clients not yet covered and 11 harnesses the catalog does not list. Of the 34, 20 have a mechanism that can block a tool call (one with its contract not public), 6 have none, 5 are not coding harnesses and 3 are undetermined. One pass, Docs/Src, not cross-checked; all links checked. Added milestone M6.
