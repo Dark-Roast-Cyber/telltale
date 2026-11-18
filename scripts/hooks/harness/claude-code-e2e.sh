@@ -27,7 +27,7 @@
 #          only writes its usual transcript for the disposable working directory.
 set -euo pipefail
 
-repo=$(cd "$(dirname "$0")/../.." && pwd)
+repo=$(cd "$(dirname "$0")/../../.." && pwd)
 bin=${TTH_BIN:-$repo/target/release/telltale}
 root=${E2E_ROOT:-$(mktemp -d)}
 model=${E2E_MODEL:-claude-sonnet-5-5}
@@ -109,7 +109,7 @@ run_claude() { # $1 name, $2 prompt, rest: extra claude args
     SSL_CERT_FILE="${SSL_CERT_FILE:-/root/.ccr/ca-bundle.crt}" \
     CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST="${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST:-}" ${E2E_EXTRA_ENV:-} \
     bash -c 'cd "$0" && if [ -n "${E2E_SETTINGS:-}" ]; then set -- "$@" --setting-sources project --settings "$E2E_SETTINGS"; fi && exec claude -p "$1" --output-format json --model "$2" --max-turns 6 "${@:3}"' \
-    "$r/work" "$prompt" "$model" "$@" < /dev/null > "$r/result.json" 2> "$r/stderr.txt" || true
+    "$r/work" "$prompt" "$model" "$@" < /dev/null > "$r/result.json" 2> "$r/stderr.txt" || echo "$?" > "$r/launch-failed"
 }
 
 setup() { # $1 name
@@ -195,13 +195,27 @@ elif name.startswith("noexec"):
                               else "upstream_of_hook" if not decisions else "other")
 elif name.startswith("fail") or name.startswith("timeout"):
     summary["attribution"] = "harness_hook_failure_policy"  # hook replaced by a crashing or stalling command
-elif returned and honored:
+elif any(o["outcome"].get("decision_record_id") == d["record_id"] for d in returned for o in honored):
     summary["attribution"] = "hook"
 elif not decisions:
     summary["attribution"] = "upstream_of_hook"  # model refusal or classifier: no tool call reached the hook
 else:
     summary["attribution"] = "other"
 summary["evidence_of_hook_enforcement"] = summary["attribution"] == "hook"
+if name == "deny":
+    receipts = result.get("permission_denials") or []
+    summary["pass"] = not present and any(
+        d["action"]["tool_name"] == "Bash" and d["decision"]["verdict"] == "deny"
+        and "tth.e2e.deny_marker" in d["decision"]["rule_ids"]
+        and any(r.get("tool_use_id") == d["action"].get("tool_use_id")
+                and r.get("tool_use_id") and canary in (r.get("tool_input") or {}).get("command", "")
+                for r in receipts)
+        and any(o["outcome"].get("decision_record_id") == d["record_id"]
+                and o["outcome"]["result"] == "not_executed"
+                and o["outcome"]["enforcement"] == "honored" for o in honored)
+        for d in returned)
+if not result or os.path.exists(os.path.join(run, "launch-failed")):
+    summary["pass"] = False
 print(json.dumps(summary))
 EOF
   # Retire this run's evaluator (SIGTERM removes its socket and pid file).
@@ -280,9 +294,9 @@ for s in "${selected[@]}"; do
     mcp-deny)   mcp_scenario mcp-deny canary-mcp-deny absent 'TTH_E2E_DENY_MARKER' ;;
     # Timeout boundary: the real hook runs, but only after the hook `timeout` (1 s) has passed.
     # The decision it eventually records is a deny; whether the call ran shows what a late deny is worth.
-    timeout-open) E2E_HOOK_OVERRIDE="sh -c 'sleep 4; exec $bin claude-code hook'" E2E_PRE_TIMEOUT=1 \
+    timeout-open) E2E_HOOK_OVERRIDE="sh -c 'sleep 4; exec $bin hooks claude-code hook'" E2E_PRE_TIMEOUT=1 \
                scenario timeout-open canary-timeout-open present 'touch canary-timeout-open && echo TTH_E2E_DENY_MARKER' ;;
-    timeout-block) E2E_HOOK_OVERRIDE="sh -c 'sleep 4; exec $bin claude-code hook'" E2E_PRE_TIMEOUT=1 E2E_ON_FAILURE=hook \
+    timeout-block) E2E_HOOK_OVERRIDE="sh -c 'sleep 4; exec $bin hooks claude-code hook'" E2E_PRE_TIMEOUT=1 E2E_ON_FAILURE=hook \
                scenario timeout-block canary-timeout-block absent 'touch canary-timeout-block && echo TTH_E2E_DENY_MARKER' ;;
     # `defer` (headless only): the hook answers defer; the turn must end with stop_reason tool_deferred.
     defer)
@@ -319,3 +333,10 @@ for s in "${selected[@]}"; do
   esac
 done
 echo "results: $root/summary.jsonl" >&2
+# The qualification pair fails closed on missing or inconclusive evidence.
+python3 - "$root/summary.jsonl" <<'EOF'
+import json, sys
+with open(sys.argv[1]) as summaries:
+    sys.exit(any(not row["pass"] for row in map(json.loads, summaries)
+                 if row["scenario"] in ("benign", "deny")))
+EOF

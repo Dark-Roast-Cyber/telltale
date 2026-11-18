@@ -20,6 +20,7 @@ Env:   COPILOT_BIN (default: copilot on PATH), TTH_BIN (default: target/release/
        E2E_SOCKET_DIR (default: the temp dir; Unix socket paths must stay short)
 Output: <root>/<scenario>/{summary.json, hook-io.jsonl, tth-state/telemetry.jsonl, ...} and <root>/summary.jsonl
 """
+
 import fcntl
 import json
 import os
@@ -48,12 +49,30 @@ def tee(log, argv):
         payload = json.loads(raw)
     except ValueError:
         payload = {}
-    event = payload.get("hook_event_name") or payload.get("hookName") or (
-        "tool:" + str(payload.get("toolName")) + (":post" if "toolResult" in payload or "error" in payload else "")
-        if "toolName" in payload else "lifecycle")
+    event = (
+        payload.get("hook_event_name")
+        or payload.get("hookName")
+        or (
+            "tool:"
+            + str(payload.get("toolName"))
+            + (":post" if "toolResult" in payload or "error" in payload else "")
+            if "toolName" in payload
+            else "lifecycle"
+        )
+    )
     with open(log, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"event": event, "payload": payload, "stdout": p.stdout.decode(errors="replace"),
-                            "stderr": p.stderr.decode(errors="replace")[-400:], "exit": p.returncode}) + "\n")
+        f.write(
+            json.dumps(
+                {
+                    "event": event,
+                    "payload": payload,
+                    "stdout": p.stdout.decode(errors="replace"),
+                    "stderr": p.stderr.decode(errors="replace")[-400:],
+                    "exit": p.returncode,
+                }
+            )
+            + "\n"
+        )
     sys.stdout.buffer.write(p.stdout)
     sys.stderr.buffer.write(p.stderr)
     return p.returncode
@@ -70,11 +89,24 @@ TTH = os.environ.get("TTH_BIN", os.path.join(REPO, "target", "release", "telltal
 ROOT = os.environ.get("E2E_ROOT") or tempfile.mkdtemp(prefix="copilot-e2e-")
 EVALUATOR = os.environ.get("E2E_EVALUATOR", "true")
 SOCKETS = os.environ.get("E2E_SOCKET_DIR") or tempfile.gettempdir()
-MARKERS = os.path.join(REPO, "crates", "telltale", "tests", "hooks", "e2e-marker-rules.yaml")
-PASCAL = {"preToolUse": "PreToolUse", "postToolUse": "PostToolUse", "postToolUseFailure": "PostToolUseFailure",
-          "agentStop": "Stop", "subagentStop": "SubagentStop", "userPromptSubmitted": "UserPromptSubmit",
-          "sessionStart": "SessionStart", "sessionEnd": "SessionEnd"}
-DENY, ASK, RESULT = "echo TTH_E2E_DENY_MARKER", "echo TTH_E2E_ASK_MARKER", "printf 'TTH_E2E_RESULT_%s' MARKER"
+MARKERS = os.path.join(
+    REPO, "crates", "telltale", "tests", "hooks", "e2e-marker-rules.yaml"
+)
+PASCAL = {
+    "preToolUse": "PreToolUse",
+    "postToolUse": "PostToolUse",
+    "postToolUseFailure": "PostToolUseFailure",
+    "agentStop": "Stop",
+    "subagentStop": "SubagentStop",
+    "userPromptSubmitted": "UserPromptSubmit",
+    "sessionStart": "SessionStart",
+    "sessionEnd": "SessionEnd",
+}
+DENY, ASK, RESULT = (
+    "echo TTH_E2E_DENY_MARKER",
+    "echo TTH_E2E_ASK_MARKER",
+    "printf 'TTH_E2E_RESULT_%s' MARKER",
+)
 
 
 def bash(cmd):
@@ -88,21 +120,42 @@ def hook_command(run, entry="copilot-cli"):
 def prepare(run, fmt, command, timeout, claude_settings, config, top_config=""):
     subprocess.run(["git", "init", "-q", run.work], check=True)
     sock = os.path.join(SOCKETS, f"tth-e2e-{os.getpid()}-{run.name}.sock")
-    write_telltale_config(run.home, f"  mode: enforce\n{top_config}  evaluator:\n    enabled: {EVALUATOR}\n"
-                          f'    idle_timeout_secs: 120\n    socket: "{sock}"\n', rules=[MARKERS], text=config)
+    write_telltale_config(
+        run.home,
+        f"  mode: enforce\n{top_config}  evaluator:\n    enabled: {EVALUATOR}\n"
+        f'    idle_timeout_secs: 120\n    socket: "{sock}"\n',
+        rules=[MARKERS],
+        text=config,
+    )
     if claude_settings:
-        fragment = json.loads(subprocess.check_output([TTH, "hooks", "claude-code", "settings", hook_command(run, "claude-code")]))
+        fragment = json.loads(
+            subprocess.check_output(
+                [
+                    TTH,
+                    "hooks",
+                    "claude-code",
+                    "settings",
+                    hook_command(run, "claude-code"),
+                ]
+            )
+        )
         os.makedirs(os.path.join(run.work, ".claude"))
         with open(os.path.join(run.work, ".claude", "settings.json"), "w") as f:
             json.dump(fragment, f, indent=1)
         return
-    hooks = json.loads(subprocess.check_output([TTH, "hooks", "copilot-cli", "settings", hook_command(run)]))
+    hooks = json.loads(
+        subprocess.check_output(
+            [TTH, "hooks", "copilot-cli", "settings", hook_command(run)]
+        )
+    )
     if command:
         hooks["hooks"]["preToolUse"][0]["command"] = command
     if timeout:
         hooks["hooks"]["preToolUse"][0]["timeoutSec"] = timeout
     if fmt == "pascal":
-        hooks["hooks"] = {PASCAL[k]: v for k, v in hooks["hooks"].items() if k in PASCAL}
+        hooks["hooks"] = {
+            PASCAL[k]: v for k, v in hooks["hooks"].items() if k in PASCAL
+        }
     d = os.path.join(copilot_home(run), "hooks")
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "telltale-hooks.json"), "w") as f:
@@ -114,22 +167,47 @@ def copilot_home(run):
 
 
 def copilot_env(run):
-    return run.base_env(COPILOT_HOME=copilot_home(run),
-                        COPILOT_PROVIDER_BASE_URL=f"http://127.0.0.1:{run.port}/v1",
-                        COPILOT_MODEL=os.environ.get("E2E_MODEL", "gpt-5.4"), COPILOT_PROVIDER_API_KEY="mock",
-                        COPILOT_AUTO_UPDATE="false", COPILOT_OFFLINE="true",
-                        TELLTALE_HOOKS_STATE_DIR=os.path.join(run.dir, "tth-state"))
+    return run.base_env(
+        COPILOT_HOME=copilot_home(run),
+        COPILOT_PROVIDER_BASE_URL=f"http://127.0.0.1:{run.port}/v1",
+        COPILOT_MODEL=os.environ.get("E2E_MODEL", "gpt-5.4"),
+        COPILOT_PROVIDER_API_KEY="mock",
+        COPILOT_AUTO_UPDATE="false",
+        COPILOT_OFFLINE="true",
+        TELLTALE_HOOKS_STATE_DIR=os.path.join(run.dir, "tth-state"),
+    )
 
 
 def argv_for(run, flags):
-    mcp = json.dumps({"mcpServers": {"tthmock": {"type": "local", "command": sys.executable,
-                                                 "args": ["-I", MCP], "tools": ["*"]}}})
-    return ["--no-auto-update", "--disable-builtin-mcps", "--log-level", "all",
-            "--log-dir", os.path.join(run.dir, "logs"), "--additional-mcp-config", mcp, *flags]
+    mcp = json.dumps(
+        {
+            "mcpServers": {
+                "tthmock": {
+                    "type": "local",
+                    "command": sys.executable,
+                    "args": ["-I", MCP],
+                    "tools": ["*"],
+                }
+            }
+        }
+    )
+    return [
+        "--no-auto-update",
+        "--disable-builtin-mcps",
+        "--log-level",
+        "all",
+        "--log-dir",
+        os.path.join(run.dir, "logs"),
+        "--additional-mcp-config",
+        mcp,
+        *flags,
+    ]
 
 
 HOOK_PROMPT = "Hook permission request"
-ANSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]")
+ANSI = re.compile(
+    rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]"
+)
 
 
 class Pty:
@@ -192,7 +270,10 @@ def interactive(run, prompt, flags, answer):
         while time.time() < deadline:
             p.pump(0.5)
             text = p.text()
-            if re.search(r"(?i)trust the files|do you trust", text) and "trust" not in notes:
+            if (
+                re.search(r"(?i)trust the files|do you trust", text)
+                and "trust" not in notes
+            ):
                 notes["trust"] = True
                 p.send(b"\r")
                 continue
@@ -220,16 +301,41 @@ def read_jsonl(path):
     return [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
 
 
-def scenario(name, steps, expect, *, fmt="camel", flags=("--allow-all-tools",), command=None, timeout=None,
-             claude_settings=False, config=None, top_config="", answer=None, child=None, note="",
-             home_name=None, rule=None, intact=None):
+def scenario(
+    name,
+    steps,
+    expect,
+    *,
+    fmt="camel",
+    flags=("--allow-all-tools",),
+    command=None,
+    timeout=None,
+    claude_settings=False,
+    config=None,
+    top_config="",
+    answer=None,
+    child=None,
+    note="",
+    home_name=None,
+    rule=None,
+    intact=None,
+):
+    from qualification import executable_identity
+
+    identity = {
+        "harness": executable_identity(BIN),
+        "telltale": executable_identity(TTH),
+    }
     run = Run(ROOT, name)
     if home_name:
         run.home_name = home_name
     marker = f"TTHE2E-{name}"
     prepare(run, fmt, command, timeout, claude_settings, config, top_config)
-    resolve = lambda obj: json.loads(json.dumps(obj).replace("@CANARY@", f"touch {run.canary()}")  # noqa: E731
-                                     .replace("@COPILOT_HOME@", copilot_home(run)))
+    resolve = lambda obj: json.loads(
+        json.dumps(obj)
+        .replace("@CANARY@", f"touch {run.canary()}")  # noqa: E731
+        .replace("@COPILOT_HOME@", copilot_home(run))
+    )
     conversations = [{"match": marker, "steps": resolve(steps)}]
     if child:
         conversations.insert(0, {"match": f"TTHCHILD-{name}", "steps": resolve(child)})
@@ -252,42 +358,89 @@ def scenario(name, steps, expect, *, fmt="camel", flags=("--allow-all-tools",), 
     present = os.path.exists(run.canary())
     records = read_jsonl(os.path.join(run.dir, "tth-state", "telemetry.jsonl"))
     io = read_jsonl(os.path.join(run.dir, "hook-io.jsonl"))
-    seen = [str(text)[:300] for text in tool_results_seen_by_model(run).values()]
+    receipts = tool_results_seen_by_model(run)
+    seen = [str(text)[:300] for text in receipts.values()]
     summary = {
-        "scenario": name, "canary": "present" if present else "absent", "expected": expect,
-        "pass": present == (expect == "present"), "note": note,
-        "decisions": [{"harness": d["harness"]["name"], "event": d["harness"]["hook_event"],
-                       "tool": d["action"]["tool_name"], "agent_id": d["session"]["agent_id"],
-                       "verdict": d["decision"]["verdict"], "returned": d["decision"]["returned"],
-                       "returned_verdict": d["decision"].get("returned_verdict"),
-                       "basis": d["decision"]["basis"], "status": d["evaluation"]["status"],
-                       "failure_code": d["evaluation"]["failure_code"],
-                       "limits": d["evaluation"]["visibility_limits"],
-                       "rules": d["decision"]["rule_ids"], "evaluator": d["evaluation"]["evaluator"],
-                       "fallback": d["evaluation"].get("evaluator_fallback")}
-                      for d in records if d["kind"] == "decision"],
-        "outcomes": [{"tool": o["action"]["tool_name"], "result": o["outcome"]["result"],
-                      "enforcement": o["outcome"]["enforcement"], "by": o["outcome"]["established_by"]}
-                     for o in records if o["kind"] == "outcome"],
+        "identity": identity,
+        "scenario": name,
+        "canary": "present" if present else "absent",
+        "expected": expect,
+        "pass": present == (expect == "present"),
+        "note": note,
+        "decisions": [
+            {
+                "harness": d["harness"]["name"],
+                "event": d["harness"]["hook_event"],
+                "tool": d["action"]["tool_name"],
+                "agent_id": d["session"]["agent_id"],
+                "verdict": d["decision"]["verdict"],
+                "returned": d["decision"]["returned"],
+                "returned_verdict": d["decision"].get("returned_verdict"),
+                "basis": d["decision"]["basis"],
+                "status": d["evaluation"]["status"],
+                "failure_code": d["evaluation"]["failure_code"],
+                "limits": d["evaluation"]["visibility_limits"],
+                "rules": d["decision"]["rule_ids"],
+                "evaluator": d["evaluation"]["evaluator"],
+                "fallback": d["evaluation"].get("evaluator_fallback"),
+            }
+            for d in records
+            if d["kind"] == "decision"
+        ],
+        "outcomes": [
+            {
+                "tool": o["action"]["tool_name"],
+                "result": o["outcome"]["result"],
+                "enforcement": o["outcome"]["enforcement"],
+                "by": o["outcome"]["established_by"],
+            }
+            for o in records
+            if o["kind"] == "outcome"
+        ],
         "errors": [e.get("error_code") for e in records if e["kind"] == "error"],
-        "hook_output": [{"event": i["event"], "stdout": i["stdout"].strip()[:200], "exit": i["exit"]}
-                        for i in io if i["stdout"].strip() or i["exit"] != 0],
+        "hook_output": [
+            {
+                "event": i["event"],
+                "stdout": i["stdout"].strip()[:200],
+                "exit": i["exit"],
+            }
+            for i in io
+            if i["stdout"].strip() or i["exit"] != 0
+        ],
         "hook_invocations": len(io),
-        "model_saw": [s for s in seen if "TTH" in s or "Denied" in s or "Telltale" in s][:4],
+        "model_saw": [
+            s for s in seen if "TTH" in s or "Denied" in s or "Telltale" in s
+        ][:4],
         "exit": getattr(run, "exit", None),
     }
     # Self-protection scenarios: the rule that decided, and the file it protects.
-    fired = [r for d in summary["decisions"] if d["verdict"] == "deny" for r in d["rules"]]
+    fired = [
+        r for d in summary["decisions"] if d["verdict"] == "deny" for r in d["rules"]
+    ]
     if rule:
         summary["rule"] = rule
         summary["pass"] = summary["pass"] and any(r.startswith(rule) for r in fired)
     if rule is False:  # benign control: no opinion on the call
-        summary["pass"] = summary["pass"] and all(d["verdict"] == "allow" for d in summary["decisions"])
+        summary["pass"] = summary["pass"] and all(
+            d["verdict"] == "allow" for d in summary["decisions"]
+        )
     if intact:
         summary["intact"] = os.path.exists(os.path.join(copilot_home(run), intact))
         summary["pass"] = summary["pass"] and summary["intact"]
     if notes:
-        summary["interactive"] = {"prompted": notes.get("prompted"), "trust_dialog": notes.get("trust", False)}
+        summary["interactive"] = {
+            "prompted": notes.get("prompted"),
+            "trust_dialog": notes.get("trust", False),
+        }
+    if name in ("benign", "deny"):
+        from qualification import command_pair_evidence
+
+        summary["qualification"] = command_pair_evidence(
+            records, io, receipts, run.canary(), denied=name == "deny"
+        )
+        summary["pass"] = (
+            summary["pass"] and run.exit == 0 and summary["qualification"]["matched"]
+        )
     line = json.dumps(summary)
     print(line, flush=True)
     with open(os.path.join(run.dir, "summary.json"), "w") as f:
@@ -298,11 +451,36 @@ def scenario(name, steps, expect, *, fmt="camel", flags=("--allow-all-tools",), 
 
 
 CANARY = lambda cmd: [{"tool_calls": [bash(f"@CANARY@ && {cmd}")]}, {"text": "done"}]  # noqa: E731
-TASK = lambda name: [{"tool_calls": [{"name": "task", "arguments": {  # noqa: E731
-    "description": "child step", "agent_type": "task", "name": "child",
-    "prompt": f"TTHCHILD-{name}: run the scripted step."}}]}, {"text": "done"}]
-PADDED = lambda size: [{"tool_calls": [{"name": "bash", "arguments": {  # noqa: E731
-    "command": "@CANARY@ && ls", "description": "p" * size}}]}, {"text": "done"}]
+TASK = lambda name: [
+    {
+        "tool_calls": [
+            {
+                "name": "task",
+                "arguments": {  # noqa: E731
+                    "description": "child step",
+                    "agent_type": "task",
+                    "name": "child",
+                    "prompt": f"TTHCHILD-{name}: run the scripted step.",
+                },
+            }
+        ]
+    },
+    {"text": "done"},
+]
+PADDED = lambda size: [
+    {
+        "tool_calls": [
+            {
+                "name": "bash",
+                "arguments": {  # noqa: E731
+                    "command": "@CANARY@ && ls",
+                    "description": "p" * size,
+                },
+            }
+        ]
+    },
+    {"text": "done"},
+]
 DOWN, ENTER, ESC = b"\x1b[B", b"\r", b"\x1b"
 TRUST = ("--allow-all-tools", "--trust-folder")
 UNEVALUABLE, OVERSIZED = 2_000_000, 33 * 1024 * 1024
@@ -313,103 +491,262 @@ ALLOW_UNEVALUABLE = "  on_unevaluable: allow\n"
 # alone cannot, because in -p a refused ask leaves it absent too.
 COLLIDING = {"é": "composed", "é": "decomposed"}
 LATER_DENY = [{"tool_calls": [bash(f"@CANARY@ && {DENY}")]}, {"text": "done"}]
-NFC_BASH = [{"tool_calls": [{"name": "bash", "arguments": {
-    "command": "ls", "description": "e2e step", **COLLIDING}}]}, *LATER_DENY]
-NFC_MCP = [{"tool_calls": [{"name": "tthmock-echo", "arguments": {"text": "hi", **COLLIDING}}]}, *LATER_DENY]
-FLOOD = [{"tool_calls": [bash("echo " + " ".join(f"http://{i:x}-{seed:x}.test" for i in range(225)))]}
-         for seed in range(22)] + LATER_DENY
+NFC_BASH = [
+    {
+        "tool_calls": [
+            {
+                "name": "bash",
+                "arguments": {"command": "ls", "description": "e2e step", **COLLIDING},
+            }
+        ]
+    },
+    *LATER_DENY,
+]
+NFC_MCP = [
+    {
+        "tool_calls": [
+            {"name": "tthmock-echo", "arguments": {"text": "hi", **COLLIDING}}
+        ]
+    },
+    *LATER_DENY,
+]
+FLOOD = [
+    {
+        "tool_calls": [
+            bash("echo " + " ".join(f"http://{i:x}-{seed:x}.test" for i in range(225)))
+        ]
+    }
+    for seed in range(22)
+] + LATER_DENY
 
 SCENARIOS = {
-    "poison-nfc-bash": lambda: scenario("poison-nfc-bash", NFC_BASH, "absent", note="NFC-colliding keys on bash"),
-    "poison-nfc-mcp": lambda: scenario("poison-nfc-mcp", NFC_MCP, "absent", note="NFC-colliding keys on an MCP tool"),
-    "poison-nfc-pascal": lambda: scenario("poison-nfc-pascal", NFC_BASH, "absent", fmt="pascal",
-                                          note="NFC-colliding keys, PascalCase events"),
-    "poison-nfc-claude-settings": lambda: scenario("poison-nfc-claude-settings", NFC_BASH, "absent", claude_settings=True,
-                                                   flags=TRUST, note="NFC-colliding keys, .claude/settings.json route"),
-    "poison-flood": lambda: scenario("poison-flood", FLOOD, "absent",
-                                     note="22 commands of 225 distinct hosts, each near the 4,096-byte string bound"),
-    "poison-flood-claude-settings": lambda: scenario("poison-flood-claude-settings", FLOOD, "absent", claude_settings=True,
-                                                     flags=TRUST, note="the flood, .claude/settings.json route"),
+    "poison-nfc-bash": lambda: scenario(
+        "poison-nfc-bash", NFC_BASH, "absent", note="NFC-colliding keys on bash"
+    ),
+    "poison-nfc-mcp": lambda: scenario(
+        "poison-nfc-mcp", NFC_MCP, "absent", note="NFC-colliding keys on an MCP tool"
+    ),
+    "poison-nfc-pascal": lambda: scenario(
+        "poison-nfc-pascal",
+        NFC_BASH,
+        "absent",
+        fmt="pascal",
+        note="NFC-colliding keys, PascalCase events",
+    ),
+    "poison-nfc-claude-settings": lambda: scenario(
+        "poison-nfc-claude-settings",
+        NFC_BASH,
+        "absent",
+        claude_settings=True,
+        flags=TRUST,
+        note="NFC-colliding keys, .claude/settings.json route",
+    ),
+    "poison-flood": lambda: scenario(
+        "poison-flood",
+        FLOOD,
+        "absent",
+        note="22 commands of 225 distinct hosts, each near the 4,096-byte string bound",
+    ),
+    "poison-flood-claude-settings": lambda: scenario(
+        "poison-flood-claude-settings",
+        FLOOD,
+        "absent",
+        claude_settings=True,
+        flags=TRUST,
+        note="the flood, .claude/settings.json route",
+    ),
     "benign": lambda: scenario("benign", CANARY("ls"), "present"),
     "deny": lambda: scenario("deny", CANARY(DENY), "absent"),
-    "deny-pascal": lambda: scenario("deny-pascal", CANARY(DENY), "absent", fmt="pascal"),
-    "deny-subagent": lambda: scenario("deny-subagent", TASK("deny-subagent"), "absent", child=CANARY(DENY)),
-    "deny-yolo": lambda: scenario("deny-yolo", CANARY(DENY), "absent", flags=("--yolo",)),
-    "deny-autopilot": lambda: scenario("deny-autopilot", CANARY(DENY), "absent",
-                                       flags=("--allow-all-tools", "--autopilot")),
+    "deny-pascal": lambda: scenario(
+        "deny-pascal", CANARY(DENY), "absent", fmt="pascal"
+    ),
+    "deny-subagent": lambda: scenario(
+        "deny-subagent", TASK("deny-subagent"), "absent", child=CANARY(DENY)
+    ),
+    "deny-yolo": lambda: scenario(
+        "deny-yolo", CANARY(DENY), "absent", flags=("--yolo",)
+    ),
+    "deny-autopilot": lambda: scenario(
+        "deny-autopilot",
+        CANARY(DENY),
+        "absent",
+        flags=("--allow-all-tools", "--autopilot"),
+    ),
     "ask": lambda: scenario("ask", CANARY(ASK), "absent", note="-p --allow-all-tools"),
     "ask-yolo": lambda: scenario("ask-yolo", CANARY(ASK), "absent", flags=("--yolo",)),
-    "ask-autopilot": lambda: scenario("ask-autopilot", CANARY(ASK), "absent",
-                                      flags=("--allow-all-tools", "--autopilot")),
+    "ask-autopilot": lambda: scenario(
+        "ask-autopilot",
+        CANARY(ASK),
+        "absent",
+        flags=("--allow-all-tools", "--autopilot"),
+    ),
     # Interactive: the hook's ask is put to the user; deny it, then approve it.
-    "ask-interactive-deny": lambda: scenario("ask-interactive-deny", CANARY(ASK), "absent", answer=ESC,
-                                             note="interactive, --allow-all-tools, user declines"),
-    "ask-interactive-approve": lambda: scenario("ask-interactive-approve", CANARY(ASK), "present", answer=ENTER,
-                                                note="interactive, --allow-all-tools, user approves"),
-    "ask-interactive-yolo": lambda: scenario("ask-interactive-yolo", CANARY(ASK), "absent", flags=("--yolo",),
-                                             answer=ESC, note="interactive, --yolo, user declines"),
+    "ask-interactive-deny": lambda: scenario(
+        "ask-interactive-deny",
+        CANARY(ASK),
+        "absent",
+        answer=ESC,
+        note="interactive, --allow-all-tools, user declines",
+    ),
+    "ask-interactive-approve": lambda: scenario(
+        "ask-interactive-approve",
+        CANARY(ASK),
+        "present",
+        answer=ENTER,
+        note="interactive, --allow-all-tools, user approves",
+    ),
+    "ask-interactive-yolo": lambda: scenario(
+        "ask-interactive-yolo",
+        CANARY(ASK),
+        "absent",
+        flags=("--yolo",),
+        answer=ESC,
+        note="interactive, --yolo, user declines",
+    ),
     # Silence never loosens Copilot's own permissions.
-    "denytool": lambda: scenario("denytool", CANARY("ls"), "absent", flags=("--allow-all-tools", "--deny-tool=shell"),
-                                 note="benign call, --deny-tool=shell: Copilot's deny holds"),
+    "denytool": lambda: scenario(
+        "denytool",
+        CANARY("ls"),
+        "absent",
+        flags=("--allow-all-tools", "--deny-tool=shell"),
+        note="benign call, --deny-tool=shell: Copilot's deny holds",
+    ),
     # A repository .claude/settings.json Claude Code install runs under Copilot.
-    "claude-settings": lambda: scenario("claude-settings", CANARY(DENY), "absent", claude_settings=True,
-                                        flags=("--allow-all-tools", "--trust-folder")),
+    "claude-settings": lambda: scenario(
+        "claude-settings",
+        CANARY(DENY),
+        "absent",
+        claude_settings=True,
+        flags=("--allow-all-tools", "--trust-folder"),
+    ),
     # Its ask is Claude's hookSpecificOutput form on a PascalCase event.
-    "claude-settings-ask": lambda: scenario("claude-settings-ask", CANARY(ASK), "absent", claude_settings=True,
-                                            flags=TRUST, note="-p, Claude-form ask"),
+    "claude-settings-ask": lambda: scenario(
+        "claude-settings-ask",
+        CANARY(ASK),
+        "absent",
+        claude_settings=True,
+        flags=TRUST,
+        note="-p, Claude-form ask",
+    ),
     "claude-settings-ask-interactive-deny": lambda: scenario(
-        "claude-settings-ask-interactive-deny", CANARY(ASK), "absent", claude_settings=True, answer=ESC,
-        note="interactive, Claude-form ask, user declines"),
+        "claude-settings-ask-interactive-deny",
+        CANARY(ASK),
+        "absent",
+        claude_settings=True,
+        answer=ESC,
+        note="interactive, Claude-form ask, user declines",
+    ),
     "claude-settings-ask-interactive-approve": lambda: scenario(
-        "claude-settings-ask-interactive-approve", CANARY(ASK), "present", claude_settings=True, answer=ENTER,
-        note="interactive, Claude-form ask, user approves"),
+        "claude-settings-ask-interactive-approve",
+        CANARY(ASK),
+        "present",
+        claude_settings=True,
+        answer=ENTER,
+        note="interactive, Claude-form ask, user approves",
+    ),
     # Default on_unevaluable on that route, reached by real payloads. Input past
     # the projection budget is evaluated and asks; input past the payload limit
     # is answered without being parsed. The controls set on_unevaluable = allow:
     # the same call then runs, so Copilot itself does not refuse its size.
     "claude-settings-unevaluable": lambda: scenario(
-        "claude-settings-unevaluable", PADDED(UNEVALUABLE), "absent", claude_settings=True, flags=TRUST,
-        note="default on_unevaluable, input past the projection budget"),
+        "claude-settings-unevaluable",
+        PADDED(UNEVALUABLE),
+        "absent",
+        claude_settings=True,
+        flags=TRUST,
+        note="default on_unevaluable, input past the projection budget",
+    ),
     "claude-settings-unevaluable-control": lambda: scenario(
-        "claude-settings-unevaluable-control", PADDED(UNEVALUABLE), "present", claude_settings=True, flags=TRUST,
-        top_config=ALLOW_UNEVALUABLE, note="control: same call, on_unevaluable = allow"),
+        "claude-settings-unevaluable-control",
+        PADDED(UNEVALUABLE),
+        "present",
+        claude_settings=True,
+        flags=TRUST,
+        top_config=ALLOW_UNEVALUABLE,
+        note="control: same call, on_unevaluable = allow",
+    ),
     "claude-settings-oversized": lambda: scenario(
-        "claude-settings-oversized", PADDED(OVERSIZED), "absent", claude_settings=True, flags=TRUST,
-        note="default on_unevaluable, payload past the 32 MiB limit"),
+        "claude-settings-oversized",
+        PADDED(OVERSIZED),
+        "absent",
+        claude_settings=True,
+        flags=TRUST,
+        note="default on_unevaluable, payload past the 32 MiB limit",
+    ),
     "claude-settings-oversized-control": lambda: scenario(
-        "claude-settings-oversized-control", PADDED(OVERSIZED), "present", claude_settings=True, flags=TRUST,
-        top_config=ALLOW_UNEVALUABLE, note="control: same call, on_unevaluable = allow"),
+        "claude-settings-oversized-control",
+        PADDED(OVERSIZED),
+        "present",
+        claude_settings=True,
+        flags=TRUST,
+        top_config=ALLOW_UNEVALUABLE,
+        note="control: same call, on_unevaluable = allow",
+    ),
     # Advisory context on a flagged result (postToolUse additionalContext).
     "result-context": lambda: scenario("result-context", CANARY(RESULT), "present"),
     # Failure handling.
-    "fail-missing": lambda: scenario("fail-missing", CANARY("ls"), "absent", command="/nonexistent/telltale"),
-    "fail-exit1": lambda: scenario("fail-exit1", CANARY("ls"), "absent", command="sh -c 'exit 1'"),
-    "fail-config": lambda: scenario("fail-config", CANARY("ls"), "absent", config="version: 1\nhooks:\n  mode: enforce\n  this is: not [valid yaml\n",
-                                    note="invalid hooks config denies tool calls (payload-less flat form)"),
-    "fail-config-pascal": lambda: scenario("fail-config-pascal", CANARY("ls"), "absent", fmt="pascal",
-                                           config="version: 1\nhooks:\n  mode: enforce\n  this is: not [valid yaml\n"),
-    "timeout": lambda: scenario("timeout", CANARY(DENY), "present", timeout=2,
-                                command=f"sh -c 'sleep 5; exec {TTH} hooks copilot-cli hook'",
-                                note="residual: a hook that times out lets the call run"),
+    "fail-missing": lambda: scenario(
+        "fail-missing", CANARY("ls"), "absent", command="/nonexistent/telltale"
+    ),
+    "fail-exit1": lambda: scenario(
+        "fail-exit1", CANARY("ls"), "absent", command="sh -c 'exit 1'"
+    ),
+    "fail-config": lambda: scenario(
+        "fail-config",
+        CANARY("ls"),
+        "absent",
+        config="version: 1\nhooks:\n  mode: enforce\n  this is: not [valid yaml\n",
+        note="invalid hooks config denies tool calls (payload-less flat form)",
+    ),
+    "fail-config-pascal": lambda: scenario(
+        "fail-config-pascal",
+        CANARY("ls"),
+        "absent",
+        fmt="pascal",
+        config="version: 1\nhooks:\n  mode: enforce\n  this is: not [valid yaml\n",
+    ),
+    "timeout": lambda: scenario(
+        "timeout",
+        CANARY(DENY),
+        "present",
+        timeout=2,
+        command=f"sh -c 'sleep 5; exec {TTH} hooks copilot-cli hook'",
+        note="residual: a hook that times out lets the call run",
+    ),
     # Self-protection. The canary precedes the tamper command, so it shows nothing ran; --yolo
     # turns off Copilot's own path check, which would refuse a path outside the work directory anyway.
     "tamper-hook-file": lambda: scenario(
-        "tamper-hook-file", CANARY("rm -f @COPILOT_HOME@/hooks/telltale-hooks.json"), "absent",
-        flags=("--yolo",), rule="tth.tamper.copilot_hook_", intact="hooks/telltale-hooks.json",
-        note="agent removes its hook file: denied by rule content, file intact"),
-    "tamper-custom-home": lambda: scenario(
-        "tamper-custom-home", CANARY("rm -f @COPILOT_HOME@/hooks/telltale-hooks.json"), "absent",
-        flags=("--yolo",), home_name="agents/custom-home", rule="tth.tamper.harness_home_",
+        "tamper-hook-file",
+        CANARY("rm -f @COPILOT_HOME@/hooks/telltale-hooks.json"),
+        "absent",
+        flags=("--yolo",),
+        rule="tth.tamper.copilot_hook_",
         intact="hooks/telltale-hooks.json",
-        note="COPILOT_HOME has no .copilot in it: only the rule generated from the hook's environment knows it"),
+        note="agent removes its hook file: denied by rule content, file intact",
+    ),
+    "tamper-custom-home": lambda: scenario(
+        "tamper-custom-home",
+        CANARY("rm -f @COPILOT_HOME@/hooks/telltale-hooks.json"),
+        "absent",
+        flags=("--yolo",),
+        home_name="agents/custom-home",
+        rule="tth.tamper.harness_home_",
+        intact="hooks/telltale-hooks.json",
+        note="COPILOT_HOME has no .copilot in it: only the rule generated from the hook's environment knows it",
+    ),
     "tamper-benign": lambda: scenario(
-        "tamper-benign", CANARY("rm -rf @COPILOT_HOME@/logs/old"), "present", flags=("--yolo",), rule=False,
-        note="control: a writer under the home that does not touch hook files runs"),
+        "tamper-benign",
+        CANARY("rm -rf @COPILOT_HOME@/logs/old"),
+        "present",
+        flags=("--yolo",),
+        rule=False,
+        note="control: a writer under the home that does not touch hook files runs",
+    ),
 }
 
 if __name__ == "__main__":
     if not os.access(TTH, os.X_OK):
         sys.exit(f"build first: cargo build --release ({TTH})")
     print(f"# root: {ROOT}", file=sys.stderr)
-    for n in sys.argv[1:] or list(SCENARIOS):
-        SCENARIOS[n]()
+    results = [SCENARIOS[n]() for n in sys.argv[1:] or list(SCENARIOS)]
+    sys.exit(0 if all(s["pass"] for s in results) else 1)
