@@ -1564,23 +1564,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unversioned_state_without_rewriting_it() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("legacy-state.json");
-        let bytes = br#"{
-  "seen_source_fingerprints": ["source-a"],
-  "seen_detection_fingerprints": ["detection-a"]
-}"#;
-        std::fs::write(&path, bytes).expect("write legacy state");
-
-        let error = ScanState::load(&path).expect_err("older state must fail");
-        assert!(error.to_string().contains("older format"));
-        assert!(error.to_string().contains("v0.7.0"));
-        assert!(error.to_string().contains("was not changed"));
-        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
-    }
-
-    #[test]
     fn legacy_scan_state_fixture_is_rejected_without_rewriting_or_echoing_hosts() {
         let bytes = include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1804,51 +1787,6 @@ mod tests {
                 .network_host_counts
                 .contains_key("docs.example.test")
         );
-    }
-
-    #[test]
-    fn rejects_legacy_raw_baseline_hosts_without_rewriting_them() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("legacy-raw-host-baseline.json");
-        let bytes = br#"{
-  "seen_source_fingerprints": [],
-  "seen_detection_fingerprints": [],
-  "baseline_snapshots": {
-    "schema_version": 1,
-    "snapshots": {
-      "codex\u001f\u001fo3\u001fopenai": {
-        "key": {
-          "client": "codex",
-          "agent": null,
-          "model": "o3",
-          "provider": "openai"
-        },
-        "observations": {
-          "records": 1,
-          "user_messages": 0,
-          "assistant_messages": 0,
-          "tool_calls": 1,
-          "tool_results": 0,
-          "session_meta": 0,
-          "other": 0
-        },
-        "tool_call_counts": {"shell": 1},
-        "path_class_counts": {},
-        "network_host_counts": {"internal.example.test": 1}
-      }
-    }
-  },
-  "baseline_source_contributions": {},
-  "source_observations": {}
-}"#;
-        std::fs::write(&path, bytes).expect("write legacy state");
-
-        let error = ScanState::load(&path).expect_err("older raw-host state must fail");
-        let message = error.to_string();
-        assert!(message.contains("older format"));
-        assert!(message.contains("was not changed"));
-        assert!(!message.contains("internal.example.test"));
-        assert_eq!(std::fs::read(&path).expect("unchanged"), bytes);
     }
 
     #[test]

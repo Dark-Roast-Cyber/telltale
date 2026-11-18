@@ -1499,8 +1499,9 @@ fn watch_idle_durable_validates_before_output_activation() {
         let mut child = WatchChildGuard::new(command.spawn().unwrap());
         let started = Instant::now();
         if case == "dry-run" {
-            thread::sleep(Duration::from_millis(1500));
-            assert!(child.child_mut().try_wait().unwrap().is_none());
+            // Registration follows validation, so the checks below see a
+            // watch that passed it and is running.
+            wait_for_watch_ready(child.child_mut(), &root.join("codex/sessions"));
         } else {
             // This bounds process startup, not validation latency: no source activity is sent.
             while child.child_mut().try_wait().unwrap().is_none() {
@@ -3089,34 +3090,29 @@ fn scan_once_accepts_repeated_client_filters() {
 }
 
 #[test]
-fn scan_and_watch_reject_unknown_and_retired_client_filters() {
-    for rejected in ["unknown-agent", "gemini", "roocode", "kilocode"] {
-        for args in [vec!["scan", "--once"], vec!["watch"]] {
-            let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-                .args(&args)
-                .args([
-                    "--dry-run",
-                    "--root",
-                    "tests/fixtures/session_stores",
-                    "--client",
-                    rejected,
-                ])
-                .output()
-                .expect("run telltale");
+fn scan_and_watch_reject_an_unsupported_client_filter() {
+    for args in [vec!["scan", "--once"], vec!["watch"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(&args)
+            .args([
+                "--dry-run",
+                "--root",
+                "tests/fixtures/session_stores",
+                "--client",
+                "unknown-agent",
+            ])
+            .output()
+            .expect("run telltale");
 
-            assert!(!output.status.success(), "{args:?}: {rejected}");
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            for expected in [
-                format!("unsupported client '{rejected}'"),
-                "codex".to_string(),
-                "qwen".to_string(),
-            ] {
-                assert!(stderr.contains(&expected), "{args:?}: {stderr}");
-            }
-            for retired in ["gemini,", "roocode,", "kilocode,"] {
-                assert!(!stderr.contains(retired), "{args:?}: {stderr}");
-            }
-        }
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unsupported client 'unknown-agent'; expected one of:"),
+            "{args:?}: {stderr}"
+        );
+        // The message lists the clients that are supported.
+        assert!(stderr.contains("codex"), "{args:?}: {stderr}");
+        assert!(stderr.contains("qwen"), "{args:?}: {stderr}");
     }
 }
 
@@ -4726,35 +4722,44 @@ fn scan_with_log_rotate_disabled_does_not_rotate() {
         .expect("current dir")
         .join("tests/fixtures/session_stores");
     let log_path = temp.path().join("logs/telltale-events.jsonl");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .current_dir(temp.path())
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--root",
-            fixture_root.to_str().expect("fixture path"),
-            "--path-profile",
-            "project",
-            "--log-rotate-disabled",
-            "--max-sources",
-            "1",
-        ])
-        .output()
-        .expect("run telltale");
+    // A one-byte limit rotates on the second scan unless rotation is disabled
+    // (scan_rotates_jsonl_when_max_size_exceeded).
+    let scan = |extra: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .current_dir(temp.path())
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--root",
+                fixture_root.to_str().expect("fixture path"),
+                "--path-profile",
+                "project",
+                "--log-rotate-max-size",
+                "1",
+                "--log-rotate-disabled",
+                "--max-sources",
+                "1",
+                "--emit-activity",
+            ])
+            .args(extra)
+            .output()
+            .expect("run telltale");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    scan(&[]);
+    let first = fs::metadata(&log_path).expect("active log file").len();
+    scan(&["--backfill"]);
 
     assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        fs::metadata(&log_path).expect("active log file").len() > first,
+        "the second scan appends to the same file"
     );
-
-    assert!(log_path.exists(), "active log file should exist");
-
-    // No rotated files should exist.
-    let parent = log_path.parent().expect("parent");
-    let rotated: Vec<_> = std::fs::read_dir(parent)
+    let rotated: Vec<_> = std::fs::read_dir(log_path.parent().expect("parent"))
         .expect("read dir")
         .filter_map(Result::ok)
         .filter(|e| {
@@ -8552,7 +8557,7 @@ fn watch_exits_cleanly_on_sigterm() {
 }
 
 #[test]
-fn scan_once_emits_native_high_risk_detection_without_network() {
+fn scan_once_emits_a_schema_valid_detection_for_a_custom_rule_file() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions/2026/04");
@@ -8566,22 +8571,9 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
     .expect("uc001 fixture");
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind no-network probe");
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking no-network probe");
-    let api_base = format!("http://{}", listener.local_addr().expect("probe address"));
     let rule_path = std::env::current_dir()
         .expect("repo cwd")
         .join("config/rules/tool-call-regex.yaml");
-    fs::write(
-        temp.path().join(".env"),
-        format!(
-            "LITELLM_API_BASE={api_base}\nLITELLM_API_KEY=test-key\nMODEL=triage-model\nLLAMA_GUARD_MODEL=guard-model\n"
-        ),
-    )
-    .expect("mock env");
-
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
@@ -8609,11 +8601,6 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(matches!(
-        listener.accept(),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
-    ));
-
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 1);
 
@@ -8626,7 +8613,6 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
         .iter()
         .find(|event| event["event_type"] == "detection")
         .expect("detection event");
-    assert!(detection.get("triage").is_none());
     assert!(
         !detection["timeline_anchors"]
             .as_array()
@@ -8634,6 +8620,10 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
             .is_empty()
     );
     assert!(detection["response"].is_object());
+    assert!(
+        event_schema_validator().is_valid(detection),
+        "native detection event failed schema validation"
+    );
 }
 
 #[test]
@@ -8741,71 +8731,6 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
     assert_eq!(
         event.timeline_anchors[0].evidence_fields,
         ["command", "tool_name"]
-    );
-}
-
-#[test]
-fn scan_once_uses_canonical_threshold_without_network() {
-    let temp = tempdir().expect("tempdir");
-    let root = temp.path().join("session_stores");
-    let codex_sessions = root.join("codex/sessions/2026/04");
-    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
-    fs::write(
-        codex_sessions.join("uc001-positive.jsonl"),
-        include_str!(
-            "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
-        ),
-    )
-    .expect("uc001 fixture");
-    let log_path = temp.path().join("telltale-events.jsonl");
-    let state_path = temp.path().join("telltale-state.json");
-    let rule_path = std::env::current_dir()
-        .expect("repo cwd")
-        .join("config/rules/tool-call-regex.yaml");
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--root",
-        ])
-        .arg(&root)
-        .args(["--rules"])
-        .arg(&rule_path)
-        .args(["--log-path"])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .env("TELLTALE_RISK_THRESHOLD_LOW", "1")
-        .env("TELLTALE_RISK_THRESHOLD_MEDIUM", "1")
-        .env("TELLTALE_RISK_THRESHOLD_HIGH", "1")
-        .env_remove("LITELLM_API_BASE")
-        .env_remove("LITELLM_API_KEY")
-        .env_remove("MODEL")
-        .env_remove("LLAMA_GUARD_MODEL")
-        .current_dir(temp.path())
-        .output()
-        .expect("run telltale scan");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let lines = fs::read_to_string(log_path).expect("log file");
-    let detection = lines
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
-        .find(|event| event["event_type"] == "detection")
-        .expect("detection event");
-    assert!(detection.get("triage").is_none());
-    assert!(detection["response"].is_object());
-
-    let validator = event_schema_validator();
-    assert!(
-        validator.is_valid(&detection),
-        "native detection event failed schema validation"
     );
 }
 

@@ -272,15 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn load_project_configs_uses_defaults_when_empty() {
+    fn load_default_projects_returns_every_default_that_exists() {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         fs::create_dir_all(&home).expect("home dir");
         fs::create_dir_all(home.join("github")).expect("github dir");
         fs::create_dir_all(home.join("projects")).expect("projects dir");
-        // This test verifies the logic, but we can't easily test load_project_configs
-        // without setting HOME globally. The function is tested indirectly through
-        // load_default_projects_with_home above.
         let projects = load_default_projects_with_home(Some(&home));
         assert_eq!(projects.len(), 2);
     }

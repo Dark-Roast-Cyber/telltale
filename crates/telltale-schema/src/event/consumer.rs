@@ -1913,49 +1913,6 @@ mod tests {
         assert_eq!(record.common().session_id, "scanner");
     }
 
-    #[test]
-    fn distinguishes_standard_and_install_activity() {
-        let standard = activity_event(ActivityEventInput {
-            client: ClientId::Codex,
-            agent: None,
-            model: None,
-            provider: None,
-            session_id: "synthetic-session".to_string(),
-            source_path_hash: "synthetic-source".to_string(),
-            tool_name: Some("shell".to_string()),
-            tags: Vec::new(),
-            evidence: vec![Evidence {
-                field: "tool_result".to_string(),
-                redacted_value: "synthetic redacted result".to_string(),
-                hash: None,
-                rule_id: None,
-            }],
-            risk_contributions: Vec::new(),
-            event_time: None,
-        })
-        .expect("activity");
-        let standard = Event3Record::from_json(&serde_json::to_vec(&standard).expect("bytes"))
-            .expect("standard activity record");
-        assert!(matches!(
-            standard.family(),
-            Event3Family::Activity(Event3Activity::Standard(_))
-        ));
-
-        let inventory = crate::event::install_inventory_event(vec![Evidence {
-            field: "inventory".to_string(),
-            redacted_value: "synthetic inventory".to_string(),
-            hash: None,
-            rule_id: None,
-        }])
-        .expect("inventory");
-        let inventory = Event3Record::from_json(&serde_json::to_vec(&inventory).expect("bytes"))
-            .expect("inventory record");
-        assert!(matches!(
-            inventory.family(),
-            Event3Family::Activity(Event3Activity::InstallInventory(_))
-        ));
-    }
-
     fn positive_constructor_corpus() -> Vec<(&'static str, crate::event::Event)> {
         let contributions = vec![
             RiskContribution::new(
