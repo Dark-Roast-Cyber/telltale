@@ -147,17 +147,10 @@ routes by **argument key**, not by tool name (Src, pinned
   `permissionRequest` shape need translation. Copilot's PascalCase payloads
   look like Claude's but keep Copilot argument keys.
 
-**Status.** The runtime applies `normalize` (`crates/telltale/src/hooks/normalize.rs`) to the
-evaluation encoding of each call, keyed by harness and tool name. Adapters
-do not call it. `crates/telltale/tests/hooks/normalize_parity.rs` shows each harness's native
-shape, the normalized shape and the Claude reference side by side. Of 39
-variants, 25 differ natively and all 39 match once normalized. Already at
-parity without normalization:
-
-- `path`/`filePath` write keys
-- download-then-execute across calls
-- argv commands (in probes)
-
-The upstream fix is requested in
-a recorded upstream request;
-see ADR 0002, "Addendum: interim input normalization".
+**Status.** Resolved. The runtime journals each call as the harness sent it,
+and the hook journal is read with that harness's own tool table
+(`crates/telltale-sources/src/sources/<agent>/tools.rs`), which declares patch
+targets, authored and replaced keys and read tools. There is no normalization
+step. `crates/telltale/tests/hooks/native_parity.rs` pins each harness's
+captured native shapes to the Claude Code reference, with benign twins. See
+ADR 0002, "Addendum (2026-11-17): native evaluation".
