@@ -37,6 +37,7 @@ pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "assistant_context",
     "command",
     "file_path",
+    "tool_kind",
     "tool_name",
     "tool_result",
     "url",
@@ -1585,6 +1586,9 @@ mod modifier_link_tests;
 
 #[cfg(test)]
 mod bundled_shell_execution;
+
+#[cfg(test)]
+mod bundled_target_lint;
 
 #[cfg(test)]
 mod segment_scope_tests;

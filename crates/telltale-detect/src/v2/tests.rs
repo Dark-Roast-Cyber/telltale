@@ -422,6 +422,7 @@ fn all_compatibility_names_are_registered() {
         "assistant_context",
         "command",
         "file_path",
+        "tool_kind",
         "tool_name",
         "tool_result",
         "url",
@@ -435,7 +436,7 @@ fn all_compatibility_names_are_registered() {
 
 #[test]
 fn selector_registry_has_only_contract_backed_names() {
-    assert_eq!(SelectorId::all().len(), 57);
+    assert_eq!(SelectorId::all().len(), 58);
     let counts = SelectorId::all()
         .iter()
         .map(|name| name.split('.').next().expect("selector group"))
@@ -448,7 +449,7 @@ fn selector_registry_has_only_contract_backed_names() {
         BTreeMap::from([
             ("browser", 3),
             ("command", 1),
-            ("compat", 9),
+            ("compat", 10),
             ("inference", 5),
             ("mcp", 4),
             ("message", 3),
@@ -478,7 +479,7 @@ fn selector_registry_has_only_contract_backed_names() {
     assert_eq!(
         backing_counts,
         BTreeMap::from([
-            (SelectorBacking::Compatibility, 9),
+            (SelectorBacking::Compatibility, 10),
             (SelectorBacking::Derived, 7),
             (SelectorBacking::Direct, 2),
             (SelectorBacking::GovernedFacet, 2),
@@ -1425,7 +1426,8 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
             ("assistant_context", 8),
             ("command", 20),
             ("file_path", 3),
-            ("tool_name", 2),
+            ("tool_kind", 1),
+            ("tool_name", 1),
             ("tool_result", 8),
             ("url", 3),
             ("written_path", 2),

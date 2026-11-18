@@ -8712,8 +8712,8 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
     .collect::<Vec<_>>();
     expected_evidence.extend([
         (
-            "tool_name",
-            Some("37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2"),
+            "tool_kind",
+            Some("ce635c4eabff5e4f56dba8fb1e39ca235530aa2b6b18533eef1af3862016c577"),
             Some("execution.shell"),
         ),
         (
@@ -8730,7 +8730,7 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
     assert_eq!(event.timeline_anchors[0].rule_ids, event.rule_ids);
     assert_eq!(
         event.timeline_anchors[0].evidence_fields,
-        ["command", "tool_name"]
+        ["command", "tool_kind"]
     );
 }
 

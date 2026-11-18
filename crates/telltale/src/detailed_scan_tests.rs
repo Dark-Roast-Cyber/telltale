@@ -615,7 +615,7 @@ fn action_identities_are_pinned_to_their_algorithm_versions() {
             startup.native_profile_version(),
             startup.replay_algorithm_version(),
         ),
-        (3, 6, 1)
+        (3, 7, 1)
     );
     // Identities exclude paths: two roots must produce the same values.
     let mut seen = Vec::new();
@@ -644,7 +644,7 @@ fn action_identities_are_pinned_to_their_algorithm_versions() {
     assert_eq!(semantic, startup.identity());
     assert_eq!(
         semantic,
-        "semantic:v1:sha256:ec4178113c0f4fc3ac5da795e6324a6e9049335829655650afffcf6817b3aed7"
+        "semantic:v1:sha256:590f225324a8084a5cc8a2c9bb7cf0447fa1b37ba01a7dcd0a98572f7749125c"
     );
     assert_eq!(
         coordinate,
