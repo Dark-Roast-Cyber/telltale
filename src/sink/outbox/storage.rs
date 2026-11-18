@@ -611,9 +611,6 @@ pub(super) fn storage_message(message: impl Into<String>) -> Box<dyn std::error:
 
 #[cfg(test)]
 mod platform_tests {
-    #[cfg(windows)]
-    use std::fs;
-
     use tempfile::tempdir;
 
     use super::{
