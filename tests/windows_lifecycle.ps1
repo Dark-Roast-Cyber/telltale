@@ -953,6 +953,7 @@ try {
     $script:testLayout = $null
     $oldXdg = $env:XDG_CONFIG_HOME
     $oldHome = $env:HOME
+    $oldProfile = $env:USERPROFILE
     try {
         $env:XDG_CONFIG_HOME = Join-Path $temp 'synthetic-xdg'
         $env:HOME = Join-Path $temp 'synthetic-home'
@@ -971,10 +972,19 @@ try {
         Set-TTCreatedOwner $homeFile
         Assert-True (@(Get-TTConfigurationFiles).Count -eq 1) 'HOME configuration fallback'
         $env:HOME = $null
-        Assert-True (@(Get-TTConfigurationFiles).Count -eq 0) 'absent runtime variables select no USERPROFILE configuration'
+        $env:USERPROFILE = Join-Path $temp 'synthetic-profile'
+        Assert-True (@(Get-TTConfigurationFiles).Count -eq 0) 'USERPROFILE fallback ignores HOME configuration'
+        $profileFile = Join-Path $env:USERPROFILE '.config/telltale/settings.d/90-synthetic.yaml'
+        New-TTDirectory (Join-Path $env:USERPROFILE '.config/telltale')
+        New-TTDirectory (Split-Path -Parent $profileFile)
+        [IO.File]::WriteAllText($profileFile, 'version: 1')
+        Set-TTCreatedOwner $profileFile
+        Assert-True ((@(Get-TTConfigurationFiles) -join '') -ceq $profileFile.Replace('/', '\')) 'USERPROFILE configuration fallback includes settings.d like the runtime'
+        $env:USERPROFILE = $null
+        Assert-True (@(Get-TTConfigurationFiles).Count -eq 0) 'absent runtime variables select no configuration'
         $env:XDG_CONFIG_HOME = '..\agent-store'
         Assert-Fails { Get-TTConfigurationFiles } 'relative configuration root rejected'
-    } finally { $env:XDG_CONFIG_HOME = $oldXdg; $env:HOME = $oldHome }
+    } finally { $env:XDG_CONFIG_HOME = $oldXdg; $env:HOME = $oldHome; $env:USERPROFILE = $oldProfile }
 
     # Interrupted writes are confined to invocation scratch outside the install;
     # only an atomic move exposes a complete stage or metadata member.
