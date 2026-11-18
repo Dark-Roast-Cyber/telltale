@@ -5,6 +5,10 @@
 //! fails when the committed page drifts from the tracker, so the page changes
 //! in the same commit as the tracker. Regenerate with
 //! `TELLTALE_UPDATE_HOOKS_PROGRESS=1 cargo test --locked --test hooks_progress`.
+//!
+//! The tracker also has to name every client in the pinned client catalog
+//! (`crates/telltale-discover/data/tokscale-registry.tsv`), so a catalog update
+//! that adds a client fails here until the tracker has a row for it.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -13,10 +17,12 @@ use std::path::{Path, PathBuf};
 const UPDATE_ENV: &str = "TELLTALE_UPDATE_HOOKS_PROGRESS";
 const TRACKER: &str = "docs/hooks/harness-tracker.md";
 const PAGE: &str = "docs/hooks/progress.html";
+const CATALOG: &str = "crates/telltale-discover/data/tokscale-registry.tsv";
 
 const MILESTONE_HEADER: [&str; 3] = ["Milestone", "Name", "Reached when"];
-const PROGRESS_HEADER: [&str; 11] = [
+const PROGRESS_HEADER: [&str; 12] = [
     "Harness",
+    "Catalog",
     "Milestone",
     "Mechanism",
     "Survey",
@@ -29,9 +35,14 @@ const PROGRESS_HEADER: [&str; 11] = [
     "Next",
 ];
 /// The stage columns of the Progress table.
-const STAGES: std::ops::Range<usize> = 3..9;
-/// The Milestone cell of a harness that belongs to none.
-const BACKLOG: &str = "—";
+const STAGES: std::ops::Range<usize> = 4..10;
+/// Positions within a harness's stages.
+const SURVEY: usize = 0;
+const ADAPTER: usize = 3;
+const E2E: usize = 4;
+/// The Milestone cell of a harness that belongs to none, and the Catalog cell
+/// of a harness the catalog does not list.
+const NONE: &str = "—";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
@@ -71,6 +82,8 @@ struct Milestone {
 
 struct Harness {
     name: String,
+    /// The catalog client IDs this row accounts for.
+    catalog: Vec<String>,
     milestone: Option<String>,
     mechanism: String,
     stages: Vec<Stage>,
@@ -178,7 +191,12 @@ fn parse_tracker(text: &str) -> Tracker {
                 "{TRACKER}: malformed progress row {row:?}"
             );
             let name = row[0].clone();
-            let milestone = (row[1] != BACKLOG).then(|| row[1].clone());
+            let catalog = row[1]
+                .split(',')
+                .map(|id| id.trim().trim_matches('`').to_owned())
+                .filter(|id| id != NONE)
+                .collect();
+            let milestone = (row[2] != NONE).then(|| row[2].clone());
             if let Some(id) = &milestone {
                 assert!(
                     milestones.iter().any(|milestone| &milestone.id == id),
@@ -190,8 +208,9 @@ fn parse_tracker(text: &str) -> Tracker {
                     .iter()
                     .map(|cell| Stage::parse(cell, &name))
                     .collect(),
-                mechanism: row[2].clone(),
-                next: row[10].clone(),
+                mechanism: row[3].clone(),
+                next: row[11].clone(),
+                catalog,
                 milestone,
                 name,
             }
@@ -275,6 +294,9 @@ code{font-size:13px}
 .meters .track{height:8px}
 .meters .name{font-weight:600}
 .figure{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px 20px;margin-top:12px}
+.value{font-size:28px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.label{color:var(--ink2);font-size:13px}
 .scroll{overflow-x:auto}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{text-align:left;padding:6px 10px 6px 0;border-bottom:1px solid var(--hair);vertical-align:top}
@@ -353,6 +375,32 @@ fn render(tracker: &Tracker) -> String {
     }
     out.push_str("</div>\n</section>\n");
 
+    let count = |keep: fn(&Harness) -> bool| tracker.harnesses.iter().filter(|h| keep(h)).count();
+    let coverage = [
+        ("Tracked", tracker.harnesses.len()),
+        ("Surveyed", count(|h| h.stages[SURVEY] == Stage::Done)),
+        (
+            "Hook found",
+            count(|h| h.stages[SURVEY] == Stage::Done && h.stages[ADAPTER] != Stage::NotApplicable),
+        ),
+        ("Adapter", count(|h| h.stages[ADAPTER] == Stage::Done)),
+        ("E2E evidence", count(|h| h.stages[E2E] == Stage::Done)),
+    ];
+    out.push_str("<section>\n<h2>Coverage</h2>\n");
+    out.push_str(
+        "<p class=\"sub\">Every harness on the tracker, with or without a milestone. The tracker \
+         names every client in the pinned client catalog and others found separately; it is not \
+         a complete list of agents.</p>\n<div class=\"tiles\">\n",
+    );
+    for (label, value) in coverage {
+        writeln!(
+            out,
+            "<div><div class=\"value\">{value}</div><div class=\"label\">{label}</div></div>"
+        )
+        .unwrap();
+    }
+    out.push_str("</div>\n</section>\n");
+
     out.push_str("<section>\n<h2>Milestones</h2>\n<div class=\"meters\">\n");
     for (milestone, tally) in tracker.milestones.iter().zip(&tallies) {
         let figure = format!("{}%", tally.percent());
@@ -376,7 +424,10 @@ fn render(tracker: &Tracker) -> String {
     out.push_str("</div>\n</section>\n");
 
     out.push_str("<section>\n<h2>Harnesses</h2>\n<div class=\"scroll\">\n<table>\n<thead><tr>");
-    for column in &PROGRESS_HEADER[..9] {
+    for column in PROGRESS_HEADER
+        .iter()
+        .filter(|column| !["Catalog", "Pin", "Next"].contains(column))
+    {
         write!(out, "<th>{column}</th>").unwrap();
     }
     out.push_str("<th>Next</th></tr></thead>\n<tbody>\n");
@@ -438,10 +489,10 @@ fn a_stage_in_progress_counts_half_and_not_applicable_stages_are_left_out() {
 
 ## Progress
 
-| Harness | Milestone | Mechanism | Survey | Contract | Capture | Adapter | E2E | Documented | Pin | Next |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Example | M1 | Command hook | done | wip | todo | n/a | n/a | n/a | 1.0 | Capture |
-| Later | — | Command hook | done | done | done | done | done | done | 1.0 | None |
+| Harness | Catalog | Milestone | Mechanism | Survey | Contract | Capture | Adapter | E2E | Documented | Pin | Next |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Example | `example` | M1 | Command hook | done | wip | todo | n/a | n/a | n/a | 1.0 | Capture |
+| Later | — | — | Command hook | done | done | done | done | done | done | 1.0 | None |
 
 ## Log
 
@@ -451,4 +502,71 @@ fn a_stage_in_progress_counts_half_and_not_applicable_stages_are_left_out() {
     let page = render(&parse_tracker(tracker));
 
     assert!(page.contains("<p class=\"hero\">50%</p>"), "{page}");
+}
+
+/// Coverage counts every harness on the tracker, with or without a milestone:
+/// here three tracked, two surveyed, one of those with a hook, and that one
+/// has an adapter and E2E evidence.
+#[test]
+fn coverage_counts_every_harness_whether_or_not_it_has_a_milestone() {
+    let tracker = "\
+## Milestones
+
+| Milestone | Name | Reached when |
+| --- | --- | --- |
+| M1 | First | The example harness is enforced |
+
+## Progress
+
+| Harness | Catalog | Milestone | Mechanism | Survey | Contract | Capture | Adapter | E2E | Documented | Pin | Next |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Enforced | `enforced` | M1 | Command hook | done | done | done | done | done | done | 1.0 | None |
+| Hookless | `hookless` | — | None | done | n/a | n/a | n/a | n/a | n/a | — | Recheck |
+| Unknown | — | — | Unverified | todo | todo | todo | todo | todo | todo | — | Survey |
+
+## Log
+
+- 2026-01-02: example.
+";
+
+    let page = render(&parse_tracker(tracker));
+
+    assert!(
+        page.contains(
+            "<div><div class=\"value\">3</div><div class=\"label\">Tracked</div></div>\n\
+             <div><div class=\"value\">2</div><div class=\"label\">Surveyed</div></div>\n\
+             <div><div class=\"value\">1</div><div class=\"label\">Hook found</div></div>\n\
+             <div><div class=\"value\">1</div><div class=\"label\">Adapter</div></div>\n\
+             <div><div class=\"value\">1</div><div class=\"label\">E2E evidence</div></div>\n"
+        ),
+        "{page}"
+    );
+}
+
+/// The tracker accounts for every client in the pinned client catalog, once,
+/// and names no client the catalog does not have. A catalog update that adds
+/// a client fails here until the tracker has a row for it.
+#[test]
+fn the_tracker_names_every_catalog_client_once() {
+    let catalog = fs::read_to_string(repo_path(CATALOG)).expect("read the client catalog");
+    let mut expected = catalog
+        .lines()
+        .skip(1)
+        .map(|line| {
+            line.split('\t')
+                .nth(2)
+                .expect("catalog id column")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    expected.sort();
+    let tracker = fs::read_to_string(repo_path(TRACKER)).expect("read the harness tracker");
+    let mut tracked = parse_tracker(&tracker)
+        .harnesses
+        .into_iter()
+        .flat_map(|harness| harness.catalog)
+        .collect::<Vec<_>>();
+    tracked.sort();
+
+    assert_eq!(tracked, expected);
 }
