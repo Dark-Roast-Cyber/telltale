@@ -203,6 +203,11 @@ upstream-formats-check:
 catalog-update:
 	TELLTALE_UPDATE_CATALOG=1 cargo test $(CARGO_LOCKED) --quiet --test catalog
 
+## Regenerate docs/hooks/progress.html from docs/hooks/harness-tracker.md
+.PHONY: hooks-progress-update
+hooks-progress-update:
+	TELLTALE_UPDATE_HOOKS_PROGRESS=1 cargo test $(CARGO_LOCKED) --quiet --test hooks_progress
+
 ## Verify upstream harness pins and list newer upstream releases (uses the GitHub API)
 harness-drift-check:
 	@python3 scripts/check-harness-drift

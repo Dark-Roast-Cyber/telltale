@@ -277,6 +277,9 @@ State and telemetry default to `$XDG_STATE_HOME/telltale/hooks/` or
 - [Architecture](architecture.md) and [decisions](adr/)
 - [Hooks threat model](../security/hooks-threat-model.md)
 - [Harness capability matrix](capability-matrix.md)
+- [Harness tracker](harness-tracker.md): links, configuration paths and adapter
+  progress for every harness, implemented or not. `progress.html` beside it is
+  the generated milestone view; open it in a browser
 - [Real-harness tests](harness-testing.md)
 
 ## Development
