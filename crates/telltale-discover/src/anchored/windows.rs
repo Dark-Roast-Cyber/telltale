@@ -10,7 +10,8 @@
 //! to the filter that owns its tag, which the reparse-point open bypasses. Such
 //! an object is reopened through that filter, relative to the same parent and
 //! with `OBJ_DONT_REPARSE`, before it is read or traversed. A tag that no
-//! filter owns is refused by that reopen, as Windows refuses every program.
+//! filter owns cannot be opened by any program, so its object is not followed,
+//! like a link: a walk skips it and a read reports it as non-regular.
 
 use super::{Error, Kind, Node, OsStr, OsString, Path, io_error};
 use std::fs::File;
@@ -25,8 +26,9 @@ use windows_sys::Wdk::Storage::FileSystem::{
     FileDirectoryInformation, NtCreateFile, NtQueryDirectoryFile,
 };
 use windows_sys::Win32::Foundation::{
-    HANDLE, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE, RtlNtStatusToDosError, STATUS_NO_MORE_FILES,
-    STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING,
+    HANDLE, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE, RtlNtStatusToDosError,
+    STATUS_IO_REPARSE_TAG_NOT_HANDLED, STATUS_NO_MORE_FILES, STATUS_REPARSE_POINT_ENCOUNTERED,
+    UNICODE_STRING,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -92,7 +94,9 @@ fn open_handle(parent: Option<&Directory>, name: &OsStr, access: u32) -> io::Res
         OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
     ) {
         Ok(filtered) => filtered,
-        Err(STATUS_REPARSE_POINT_ENCOUNTERED) => return Ok((Kind::Link, file)),
+        Err(STATUS_REPARSE_POINT_ENCOUNTERED | STATUS_IO_REPARSE_TAG_NOT_HANDLED) => {
+            return Ok((Kind::Link, file));
+        }
         Err(status) => return Err(nt_error(status)),
     };
     let again = file_information(&filtered)?;
@@ -403,19 +407,21 @@ mod tests {
         // Discovery sees a non-surrogate reparse point as the file it is.
         assert_eq!(kind(&opaque), Ok(Some(Kind::File)));
         // Reading it goes through its tag's filter. No filter owns this tag,
-        // so Windows refuses the open, as it does for every program; the raw
-        // stream behind the reparse point is never returned as content.
-        assert_eq!(read(&opaque), Err(Error::Traversal));
-        // A directory is traversed only through its filter, too.
+        // so no program can open it: it is not followed, like a link, and the
+        // raw stream behind the reparse point is never returned as content.
+        assert_eq!(read(&opaque), Err(Error::SymlinkRoot));
+        // A directory is traversed only through its filter, too; a walk skips
+        // one no filter owns rather than failing.
         assert_eq!(
             kind(&opaque_dir.join("inside.jsonl")),
-            Err(Error::Traversal)
+            Err(Error::SymlinkRoot)
         );
         // Any name surrogate stays a link, whatever its owner.
         let parent = Node::open(&root, &[]).unwrap().unwrap();
         let child = |name: &str| parent.child(OsStr::new(name)).map(|n| n.map(|n| n.kind));
         assert_eq!(child("surrogate.jsonl"), Ok(Some(Kind::Link)));
         assert_eq!(child("opaque.jsonl"), Ok(Some(Kind::File)));
+        assert_eq!(child("opaque-dir"), Ok(Some(Kind::Link)));
         assert_eq!(kind(&surrogate), Err(Error::SymlinkRoot));
         assert_eq!(read(&surrogate), Err(Error::SymlinkRoot));
     }
