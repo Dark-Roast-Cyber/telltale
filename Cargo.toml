@@ -122,8 +122,12 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
     "Win32_System_IO",
+    "Win32_UI_Shell",
 ] }
 
 [[bench]]

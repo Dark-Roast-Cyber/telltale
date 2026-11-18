@@ -6,6 +6,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+mod windows;
+
+#[cfg(not(windows))]
 const SYSTEM_CONFIG_ROOT: &str = "/etc/telltale";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -105,6 +109,10 @@ fn active_config_roots(
     } else {
         explicit_roots.to_vec()
     };
+    #[cfg(windows)]
+    if optional {
+        refuse_legacy_system_root()?;
+    }
     let mut roots = Vec::new();
     for root in candidates {
         let Some(metadata) = config_metadata(&root, optional)? else {
@@ -113,9 +121,67 @@ fn active_config_roots(
         if !metadata.is_dir() {
             return Err("local config root is not a directory".into());
         }
+        trust_system_path(&root, &root)?;
         roots.push(root);
     }
     Ok(roots)
+}
+
+/// Before 0.8 the Windows system root was the literal `\etc\telltale` on the
+/// current drive, which any user can create. Refuse it rather than silently
+/// stop reading an operator's configuration.
+#[cfg(windows)]
+fn refuse_legacy_system_root() -> Result<(), Box<dyn std::error::Error>> {
+    let legacy = Path::new(r"\etc\telltale");
+    match fs::symlink_metadata(legacy) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        _ if system_config_root().is_some_and(|root| same_directory(legacy, &root)) => Ok(()),
+        _ => Err(concat!(
+            r"\etc\telltale is no longer a config root; move it to %ProgramData%\telltale",
+            " (writable only by Administrators, SYSTEM and TrustedInstaller) or remove it"
+        )
+        .into()),
+    }
+}
+
+/// The system config root: `/etc/telltale`, or on Windows `telltale` in the
+/// `ProgramData` known folder (`None` only if Windows cannot resolve it).
+fn system_config_root() -> Option<PathBuf> {
+    #[cfg(windows)]
+    return windows::program_data().map(|root| root.join("telltale"));
+    #[cfg(not(windows))]
+    Some(PathBuf::from(SYSTEM_CONFIG_ROOT))
+}
+
+#[cfg(windows)]
+fn same_directory(a: &Path, b: &Path) -> bool {
+    a == b || matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
+}
+
+/// On Windows, `path` read from the system root (however it is named) must be
+/// owned by and writable only by Administrators, SYSTEM or TrustedInstaller,
+/// and not be a link; anything else fails the load. `/etc` gives a Unix root
+/// that guarantee by default, so Unix is not checked.
+fn trust_system_path(root: &Path, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    if system_config_root().is_some_and(|system| same_directory(root, &system)) {
+        return match windows::administrator_only(path) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(untrusted)) => Err(format!(
+                "system config path {} {untrusted}; only Administrators, SYSTEM and TrustedInstaller may own or change the system config root",
+                path.display()
+            )
+            .into()),
+            Err(error) => Err(format!(
+                "system config path {} could not be checked: {:?}",
+                path.display(),
+                error.kind()
+            )
+            .into()),
+        };
+    }
+    let _ = (root, path);
+    Ok(())
 }
 
 fn config_metadata(path: &Path, optional: bool) -> io::Result<Option<fs::Metadata>> {
@@ -158,7 +224,7 @@ pub(crate) fn config_roots(explicit_roots: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn default_config_roots() -> Vec<PathBuf> {
-    let mut roots = vec![PathBuf::from(SYSTEM_CONFIG_ROOT)];
+    let mut roots: Vec<PathBuf> = system_config_root().into_iter().collect();
     if let Some(user_root) = user_config_root() {
         roots.push(user_root);
     }
@@ -194,10 +260,12 @@ fn discover_yaml_files(
             .collect::<Result<Vec<_>, _>>()?;
         files.retain(|path| is_yaml_file(path));
         files.sort();
+        trust_system_path(root, &dir)?;
         for path in &files {
             if !config_metadata(path, false)?.is_some_and(|metadata| metadata.is_file()) {
                 return Err("local config YAML entry is not a regular file".into());
             }
+            trust_system_path(root, path)?;
         }
         discovered.extend(files);
     }
@@ -603,5 +671,26 @@ mod tests {
                 .expect("resolve allowlist"),
             Some(Path::new("explicit-allowlist.yaml").to_path_buf())
         );
+    }
+
+    /// Only paths read from the system root are checked, however that root
+    /// is named; a user-created folder there fails the load.
+    #[cfg(windows)]
+    #[test]
+    fn only_the_system_root_must_be_administrator_only() {
+        let system = super::system_config_root().expect("ProgramData resolves");
+        assert!(system.ends_with(r"ProgramData\telltale"));
+        let temp = tempdir().expect("tempdir");
+        super::trust_system_path(temp.path(), temp.path()).expect("not the system root");
+        let error = super::trust_system_path(&system, temp.path())
+            .expect_err("a user-owned folder is not trusted");
+        let message = error.to_string();
+        assert!(
+            message.contains("Administrators, SYSTEM and TrustedInstaller"),
+            "{message}"
+        );
+        let missing = super::trust_system_path(&system, &temp.path().join("missing"))
+            .expect_err("an unreadable path is not trusted");
+        assert!(missing.to_string().contains("NotFound"), "{missing}");
     }
 }
