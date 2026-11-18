@@ -235,6 +235,10 @@ fn decode_production_record(
 
 // Validate the opened object, not a pathname precheck. Nonblocking open avoids
 // hanging on a replacement FIFO; no-follow rejects symlinks at the final component.
+// On Windows that open bypasses the filter that owns any other reparse point
+// (such as a cloud placeholder), so its raw bytes are not the file's content:
+// every reparse point is refused here. The confined and resolved readers reopen
+// such a file through its filter instead (see `telltale-discover`'s walk).
 pub(crate) fn bounded_file_bytes(
     path: &std::path::Path,
     cap: usize,
@@ -251,7 +255,18 @@ pub(crate) fn bounded_file_bytes(
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    bounded_bytes(options.open(path).map_err(BoundedReadError::from_io)?, cap)
+    let file = options.open(path).map_err(BoundedReadError::from_io)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if file.metadata().map_err(BoundedReadError::from_io)?.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(BoundedReadError::NonRegularSource);
+        }
+    }
+    bounded_bytes(file, cap)
 }
 
 /// `bounded_file_bytes` for a source coordinate opened under the trust anchors
@@ -315,16 +330,6 @@ fn bounded_bytes(file: fs::File, cap: usize) -> Result<Vec<u8>, BoundedReadError
     }
     if metadata.len() > cap as u64 {
         return Err(BoundedReadError::LimitExceeded);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes()
-            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-            != 0
-        {
-            return Err(BoundedReadError::NonRegularSource);
-        }
     }
     let mut bytes = Vec::new();
     file.take(cap as u64 + 1)
