@@ -43,10 +43,12 @@ const TRUSTED: &[&str] = &[
 const TRUSTED_OWNERS: usize = 3;
 
 /// Rights that change an object's content, name, existence, owner or ACL, or
-/// a directory's entries. Attribute and extended-attribute writes are not.
+/// a directory's entries. Attribute writes count because they can set a
+/// reparse point; extended-attribute writes are not read and do not.
 const WRITE_RIGHTS: u32 = 0x0000_0002 // FILE_WRITE_DATA, FILE_ADD_FILE
     | 0x0000_0004 // FILE_APPEND_DATA, FILE_ADD_SUBDIRECTORY
     | 0x0000_0040 // FILE_DELETE_CHILD
+    | 0x0000_0100 // FILE_WRITE_ATTRIBUTES
     | 0x0001_0000 // DELETE
     | 0x0004_0000 // WRITE_DAC
     | 0x0008_0000 // WRITE_OWNER
@@ -175,6 +177,9 @@ fn check(path: &Path, trusted: &[Vec<u8>], owners: usize) -> io::Result<Result<(
         return Ok(Err(Untrusted::Link));
     }
     let descriptor = Descriptor::of(&file)?;
+    if descriptor.owner.is_null() {
+        return Ok(Err(Untrusted::Owner));
+    }
     // SAFETY: owner and DACL point into the descriptor, which `descriptor` keeps alive.
     let owner = unsafe { sid_slice(descriptor.owner) };
     if !trusted[..owners].iter().any(|sid| sid == owner) {
@@ -288,6 +293,12 @@ mod tests {
         assert!(output.status.success(), "{output:?}");
     }
 
+    /// The ACL as icacls prints it, for assertion messages.
+    fn acl(path: &Path) -> String {
+        let output = Command::new("icacls").arg(path).output().unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
     #[test]
     fn program_data_is_the_known_folder() {
         let path = program_data().unwrap();
@@ -342,6 +353,7 @@ mod tests {
         let root = temp.path().join("telltale");
         std::fs::create_dir(&root).unwrap();
         icacls(&root, &["/setowner", "*S-1-5-32-544"]);
+        icacls(&root, &["/reset"]);
         icacls(
             &root,
             &[
@@ -355,8 +367,8 @@ mod tests {
         let file = root.join("settings.yaml");
         std::fs::write(&file, b"version: 1\n").unwrap();
         icacls(&file, &["/setowner", "*S-1-5-32-544"]);
-        assert_eq!(administrator_only(&root).unwrap(), Ok(()));
-        assert_eq!(administrator_only(&file).unwrap(), Ok(()));
+        assert_eq!(administrator_only(&root).unwrap(), Ok(()), "{}", acl(&root));
+        assert_eq!(administrator_only(&file).unwrap(), Ok(()), "{}", acl(&file));
         // A user-writable file in it is still refused.
         icacls(&file, &["/grant", "*S-1-5-32-545:(M)"]);
         assert_eq!(
@@ -376,7 +388,11 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let file = root.join("settings.yaml");
         std::fs::write(&file, b"version: 1\n").unwrap();
+        // Elevated, new objects are owned by Administrators instead.
+        let owner = format!("*{user}");
         let grant = format!("*{user}:(OI)(CI)F");
+        icacls(&root, &["/setowner", &owner]);
+        icacls(&root, &["/reset"]);
         icacls(
             &root,
             &[
@@ -387,10 +403,11 @@ mod tests {
                 "*S-1-5-32-545:(OI)(CI)RX",
             ],
         );
+        icacls(&file, &["/setowner", &owner]);
         icacls(&file, &["/reset"]);
         let check = |path: &Path| check(path, &trusted, 1).unwrap();
-        assert_eq!(check(&root), Ok(()));
-        assert_eq!(check(&file), Ok(()));
+        assert_eq!(check(&root), Ok(()), "{}", acl(&root));
+        assert_eq!(check(&file), Ok(()), "{}", acl(&file));
 
         // Users may add files: the folder's content can change.
         icacls(&root, &["/grant", "*S-1-5-32-545:(AD,WD)"]);
@@ -416,12 +433,19 @@ mod tests {
         // Deny entries never make an object trusted.
         icacls(&file, &["/deny", "*S-1-1-0:(WD,AD)"]);
         assert_eq!(check(&file), Err(Untrusted::Writable("S-1-1-0".into())));
-        // Attribute writes do not change what is read.
+        // Extended-attribute writes do not change what is read...
         icacls(&file, &["/reset"]);
         icacls(&root, &["/remove:g", "*S-1-1-0"]);
         icacls(&file, &["/reset"]);
-        icacls(&file, &["/grant", "*S-1-5-32-545:(WA,WEA)"]);
+        icacls(&file, &["/grant", "*S-1-5-32-545:(WEA)"]);
         assert_eq!(check(&file), Ok(()));
+        // ...but attribute writes can turn the file into a link.
+        icacls(&file, &["/grant", "*S-1-5-32-545:(WA)"]);
+        assert_eq!(
+            check(&file),
+            Err(Untrusted::Writable("S-1-5-32-545".into()))
+        );
+        icacls(&file, &["/reset"]);
         // The owner must be trusted: SYSTEM alone is not an owner here.
         assert_eq!(
             super::check(&file, &trusted[1..], 1).unwrap(),

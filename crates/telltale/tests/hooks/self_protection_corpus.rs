@@ -644,6 +644,8 @@ const MANAGED_WINDOWS: &[&str] = &[
     r"C:\ProgramData\telltale\settings.d\hooks.yaml",
     r"%ProgramData%\telltale\policies.d\policy.yaml",
     r"$env:ProgramData\telltale\rules.d\site.yaml",
+    r"%ALLUSERSPROFILE%\telltale\overrides.d\local.yaml",
+    r"${env:ALLUSERSPROFILE}\telltale\settings.d\hooks.yaml",
     r"C:\Program Files\telltale-hooks\telltale-hooks.exe",
     r"C:\Program Files\telltale-hooks",
     r"C:\Program Files\telltale\telltale.exe",
