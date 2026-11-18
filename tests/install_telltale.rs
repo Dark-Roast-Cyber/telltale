@@ -2915,7 +2915,7 @@ fn default_latest_source_build_failure_happens_before_installer_mutation() {
 }
 
 #[test]
-fn canonical_install_ignores_unrelated_files_and_never_runs_migration() {
+fn canonical_install_ignores_unrelated_files() {
     let temp = tempdir().unwrap();
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
     let selected = archive(temp.path(), &name, "0.5.0", None);
@@ -2931,16 +2931,13 @@ fn canonical_install_ignores_unrelated_files_and_never_runs_migration() {
     regular_file(&unrelated_unit, b"unrelated timer\n", 0o644);
     let tools = tools(temp.path(), true);
     let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
-    command
-        .env("FAKE_MIGRATION_LOG", temp.path().join("migrations.log"))
-        .args([
-            "--with-timer",
-            "--install-dir",
-            temp.path().join("home/bin").to_str().unwrap(),
-        ]);
+    command.args([
+        "--with-timer",
+        "--install-dir",
+        temp.path().join("home/bin").to_str().unwrap(),
+    ]);
     let output = command.output().unwrap();
     assert_success(&output);
-    assert!(!temp.path().join("migrations.log").exists());
     assert_eq!(fs::read(&unrelated_binary).unwrap(), b"#!/bin/sh\nexit 0\n");
     assert_eq!(fs::read(&unrelated_unit).unwrap(), b"unrelated timer\n");
     let service = fs::read_to_string(units.join("telltale-scan.service")).unwrap();

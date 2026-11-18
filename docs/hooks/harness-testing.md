@@ -67,6 +67,13 @@ as deny, allow, the fail-open residuals (crash, timeout, missing binary,
 untrusted) and the exec-policy backstop
 (`results/2026-11-04-codex-cli-0.166.0.md`).
 
+Each scenario in this script and in the Copilot CLI one states what it expects
+of the hook (`hook=`: `deny`, `ask`, `allow` or `silent`) and passes only if the
+recorded decisions show it. The canary alone does not show it: the harness can
+refuse a call itself, and a call that was never attempted leaves no canary
+either. `--recheck SUMMARY.jsonl` judges a recorded summary by the current
+expectations without running a harness.
+
 The `damaged-*` scenarios put a wrapper in front of the hook that damages one
 event's stdin, and pass only if the damage happened. They check a damaged tool
 call is still answered, and a damaged `Stop` costs no extra model request.

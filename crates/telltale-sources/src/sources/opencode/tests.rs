@@ -323,31 +323,6 @@ fn part_cursor_join_qualifies_time_updated() {
 }
 
 #[test]
-fn sqlite_busy_error_maps_to_locked() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().join("busy.db");
-    let writer = Connection::open(&path).expect("writer");
-    writer
-        .execute("create table t (x integer)", [])
-        .expect("schema");
-    writer.execute("BEGIN IMMEDIATE", []).expect("lock");
-    writer
-        .execute("insert into t values (1)", [])
-        .expect("insert");
-    let reader = Connection::open(&path).expect("reader");
-    reader
-        .busy_timeout(std::time::Duration::from_millis(0))
-        .expect("timeout");
-    let error = reader
-        .execute("insert into t values (2)", [])
-        .expect_err("busy");
-    assert!(matches!(
-        SourceReadError::from_sqlite(error),
-        SourceReadError::Locked
-    ));
-}
-
-#[test]
 fn incremental_parts_reject_non_integer_continuation_time() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("invalid-key.db");

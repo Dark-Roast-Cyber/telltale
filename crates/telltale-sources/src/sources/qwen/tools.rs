@@ -1,14 +1,89 @@
 //! Qwen Code's built-in tools: their kind and where their operands sit in the
 //! arguments. See `tool_operation` for how a table is read.
 
-use telltale_schema::observation::ToolKind::{FileRead, FileWrite, Shell};
+use telltale_schema::observation::ToolKind::{Delegate, FileRead, FileWrite, Other, Shell, Web};
 
 use crate::tool_operation::ToolSpec;
 
 pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("run_shell_command", Shell).commands(&["command"]),
+    ToolSpec::new("monitor", Shell).commands(&["command"]),
     ToolSpec::new("read_file", FileRead).read(&["absolute_path", "file_path", "path"]),
-    ToolSpec::new("glob", FileRead).read(&["path"]),
+    // The search root is optional: a search names none to search the project.
+    ToolSpec::new("glob", FileRead).read(&["path"]).optional(),
+    ToolSpec::new("grep_search", FileRead)
+        .read(&["path"])
+        .optional(),
+    ToolSpec::new("list_directory", FileRead).read(&["path"]),
     ToolSpec::new("write_file", FileWrite).written(&["file_path", "path"]),
+    ToolSpec::new("edit", FileWrite).written(&["file_path", "path"]),
+    ToolSpec::new("notebook_edit", FileWrite).written(&["notebook_path"]),
+    ToolSpec::new("web_fetch", Web).urls(&["url"]),
+    // A search carries a query, not a URL.
+    ToolSpec::new("web_search", Web),
+    ToolSpec::new("agent", Delegate),
+    ToolSpec::new("send_message", Delegate),
+    ToolSpec::new("create_sub_session", Delegate),
+    ToolSpec::new("workflow", Delegate),
+    // Earlier names of tools above, still written by earlier releases.
     ToolSpec::new("replace", FileWrite).written(&["file_path", "path"]),
+    ToolSpec::new("search_file_content", FileRead)
+        .read(&["path"])
+        .optional(),
+    ToolSpec::new("task", Delegate),
+    ToolSpec::new("exec", Other),
+    ToolSpec::new("zoom_image", Other),
+    ToolSpec::new("todo_write", Other),
+    ToolSpec::new("save_memory", Other),
+    ToolSpec::new("manage_memory", Other),
+    ToolSpec::new("search_memory", Other),
+    ToolSpec::new("skill", Other),
+    ToolSpec::new("exit_plan_mode", Other),
+    ToolSpec::new("enter_plan_mode", Other),
+    ToolSpec::new("image_gen", Other),
+    ToolSpec::new("lsp", Other),
+    ToolSpec::new("ask_user_question", Other),
+    ToolSpec::new("cron_create", Other),
+    ToolSpec::new("cron_list", Other),
+    ToolSpec::new("cron_delete", Other),
+    ToolSpec::new("loop_wakeup", Other),
+    ToolSpec::new("list_agents", Other),
+    ToolSpec::new("task_stop", Other),
+    ToolSpec::new("task_create", Other),
+    ToolSpec::new("task_update", Other),
+    ToolSpec::new("task_list", Other),
+    ToolSpec::new("team_create", Other),
+    ToolSpec::new("team_delete", Other),
+    ToolSpec::new("team_plan_approval", Other),
+    ToolSpec::new("request_shutdown", Other),
+    ToolSpec::new("structured_output", Other),
+    ToolSpec::new("tool_call", Other),
+    ToolSpec::new("tool_search", Other),
+    ToolSpec::new("read_mcp_resource", Other),
+    ToolSpec::new("advisor", Other),
+    ToolSpec::new("enter_worktree", Other),
+    ToolSpec::new("exit_worktree", Other),
+    ToolSpec::new("artifact", Other),
+    ToolSpec::new("record_artifact", Other),
+    ToolSpec::new("record_source", Other),
+    ToolSpec::new("report_findings", Other),
+    ToolSpec::new("get_goal", Other),
+    ToolSpec::new("update_goal", Other),
+    ToolSpec::new("propose_goal", Other),
+    ToolSpec::new("display_image", Other),
+    ToolSpec::new("omni_downsample_image", Other),
+    ToolSpec::new("omni_downscale_video", Other),
+    ToolSpec::new("omni_downsample_audio", Other),
+    ToolSpec::new("omni_extract_keyframes", Other),
+    ToolSpec::new("omni_extract_audio", Other),
+    ToolSpec::new("omni_clip_video", Other),
+    ToolSpec::new("omni_convert_image", Other),
+    ToolSpec::new("omni_transcribe_audio", Other),
+    ToolSpec::new("omni_clip_image", Other),
+    ToolSpec::new("omni_clip_audio", Other),
+    ToolSpec::new("omni_caption_image", Other),
+    ToolSpec::new("omni_caption_audio", Other),
+    ToolSpec::new("omni_ocr_image", Other),
+    ToolSpec::new("omni_understand_video_segments", Other),
+    ToolSpec::new("omni_recall_media_memory", Other),
 ];

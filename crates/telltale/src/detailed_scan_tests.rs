@@ -381,6 +381,7 @@ fn pipeline_errors_have_typed_sources_and_safe_rendering() {
     assert!(matches!(error, PipelineError::Compilation(_)));
     assert!(std::error::Error::source(&error).is_some());
     assert_eq!(format!("{error:?}"), "pipeline_compilation_failed");
+    assert_eq!(error.to_string(), "pipeline_compilation_failed");
     let error = Pipeline::builder()
         .build()
         .unwrap()

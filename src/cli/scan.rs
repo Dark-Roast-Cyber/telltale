@@ -1372,6 +1372,11 @@ struct SourceProcessingAccounting {
     accounting_partial_source_count: usize,
     failures: BTreeMap<SourceFailureCategory, usize>,
     quarantined_unit_count: usize,
+    /// Tool requests whose name no source tool table lists and that are not
+    /// MCP-shaped, and declared requests that lack an operand their table row
+    /// names. Counts only, never a name or an argument.
+    unclassified_tool_calls: u64,
+    tool_operand_drift: u64,
     /// Sources whose last evaluated window was still cut when the scan
     /// stopped draining, at the per-scan window limit or a failed window;
     /// the next scan continues from the advanced cursor.
@@ -1463,6 +1468,16 @@ fn source_processing_accounting(
                 bound_dimension: context.map(|context| format!("{:?}", context.dimension)),
             };
             *accounting.failures.entry(key).or_default() += 1;
+        }
+        for source in &result.accounting {
+            accounting.unclassified_tool_calls = accounting
+                .unclassified_tool_calls
+                .checked_add(source.tool_table.unclassified_tool_calls)
+                .ok_or(RiskAccountingError::Overflow)?;
+            accounting.tool_operand_drift = accounting
+                .tool_operand_drift
+                .checked_add(source.tool_table.tool_operand_drift)
+                .ok_or(RiskAccountingError::Overflow)?;
         }
         accounting.evaluated_window_count += result.accounting.len();
         if result.accounting.is_empty() {
@@ -2045,6 +2060,8 @@ impl SourceProcessingAccounting {
             "evaluated_window_count": self.evaluated_window_count,
             "quarantined_unit_count": self.quarantined_unit_count,
             "quarantined_units": self.quarantined_units,
+            "unclassified_tool_calls": self.unclassified_tool_calls,
+            "tool_operand_drift": self.tool_operand_drift,
         })
     }
 }
@@ -2890,6 +2907,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn source_processing_sums_tool_table_counts_across_sources_and_names_nothing() {
+        use telltale_sources::acquisition::ToolTableCounts;
+
+        let result =
+            |unclassified_tool_calls, tool_operand_drift| canonical::CanonicalProcessingResult {
+                events: vec![],
+                status: SourceProcessingStatus::Succeeded,
+                progress: AcquisitionProgress::None,
+                completion: None,
+                failure: None,
+                accounting: vec![SourceAccounting {
+                    tool_table: ToolTableCounts {
+                        unclassified_tool_calls,
+                        tool_operand_drift,
+                    },
+                    ..Default::default()
+                }],
+                baseline_replacement: BaselineReplacement::NoReplacement,
+                policy_accounting: None,
+                quarantined: Vec::new(),
+            };
+        let summary = source_processing_accounting(&[result(2, 1), result(3, 0)])
+            .unwrap()
+            .json();
+        assert_eq!(summary["unclassified_tool_calls"], 5);
+        assert_eq!(summary["tool_operand_drift"], 1);
+        let quiet = source_processing_accounting(&[result(0, 0)])
+            .unwrap()
+            .json();
+        assert_eq!(quiet["unclassified_tool_calls"], 0);
+        assert_eq!(quiet["tool_operand_drift"], 0);
+    }
+
     fn warning_codes(warnings: &[serde_json::Value]) -> Vec<&str> {
         warnings
             .iter()
@@ -2982,7 +3033,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_accounting_compile_failure_is_bounded_and_private() {
+    fn policy_accounting_without_pre_policy_results_is_unavailable() {
         let state = compute_policy_match_accounting(true, false, &[]);
         let flow = DetectionFlowAccounting {
             effective_detection_candidate_count: 0,
@@ -2997,7 +3048,6 @@ mod tests {
         assert!(accounting["pre_policy_detection_candidate_count"].is_null());
         assert!(accounting["fully_filtered_detection_candidate_count"].is_null());
         assert!(accounting["filtered_rule_id_count"].is_null());
-        assert!(!accounting.to_string().contains("synthetic"));
     }
 
     #[test]

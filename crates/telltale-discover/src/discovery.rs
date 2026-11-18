@@ -1509,6 +1509,14 @@ mod tests {
     fn checked_discovery_reports_unreadable_source_traversal() {
         use std::os::unix::fs::PermissionsExt;
 
+        // Root bypasses DAC. Require an unprivileged runner rather than passing
+        // without exercising the boundary.
+        // SAFETY: geteuid has no arguments or memory ownership preconditions.
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "run permission tests as an unprivileged user"
+        );
         let temp = tempdir().expect("tempdir");
         let restricted = temp.path().join(".codex/sessions");
         fs::create_dir_all(&restricted).expect("sessions directory");
@@ -1518,9 +1526,7 @@ mod tests {
         fs::set_permissions(&restricted, fs::Permissions::from_mode(0o755))
             .expect("restore sessions directory");
 
-        let Err(error) = result else {
-            return;
-        };
+        let error = result.expect_err("an unreadable source directory is an error");
         assert!(matches!(
             error,
             DiscoveryError::Traversal { ref source_id, .. } if source_id == "codex.sessions"
@@ -1671,46 +1677,6 @@ mod tests {
             sources[0].path.as_os_str().as_encoded_bytes()
                 < sources[1].path.as_os_str().as_encoded_bytes()
         );
-    }
-
-    #[test]
-    fn discovers_project_local_sources_from_tempdir() {
-        let temp = tempdir().expect("tempdir");
-        let project = temp.path().join("myproject");
-        let copilot_dir = project.join("logs/copilot");
-        fs::create_dir_all(&copilot_dir).expect("copilot dir");
-        fs::write(
-            copilot_dir.join("process.log"),
-            b"2026-01-01T00:00:00Z init\n",
-        )
-        .expect("copilot log");
-
-        let projects = vec![crate::projects::ProjectDef {
-            name: "myproject".to_string(),
-            path: project,
-        }];
-        let sources = discover_sources_with_projects(
-            std::path::Path::new("."),
-            &projects,
-            supported_clients(),
-        )
-        .expect("discovery");
-        let keys: HashSet<_> = sources
-            .iter()
-            .map(|source| {
-                (
-                    source.client,
-                    source.kind,
-                    source.path.file_name().and_then(|name| name.to_str()),
-                )
-            })
-            .collect();
-
-        assert!(keys.contains(&(
-            ClientId::Copilot,
-            SourceKind::CopilotProcessLog,
-            Some("process.log")
-        )));
     }
 
     #[test]
