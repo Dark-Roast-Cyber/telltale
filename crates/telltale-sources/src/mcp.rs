@@ -379,8 +379,23 @@ pub struct McpConfigInventory {
 /// Acquire scan inventory once, including bounded workspace discovery.
 /// Unlike `collect_mcp_inventory`, this preserves the Event3/usage TOML policy.
 pub fn acquire_mcp_inventory(root: &Path) -> Vec<McpConfigInventory> {
+    let workspaces = if root.is_dir() {
+        vec![root.to_path_buf()]
+    } else {
+        Vec::new()
+    };
+    acquire_mcp_inventory_with_workspaces(root, &workspaces)
+}
+
+/// Acquire known configuration files under `root`, walking only the workspace
+/// roots selected by the caller. In particular, a home-directory scan root is
+/// not itself authorization to enumerate personal directories for MCP files.
+pub fn acquire_mcp_inventory_with_workspaces(
+    root: &Path,
+    workspace_roots: &[PathBuf],
+) -> Vec<McpConfigInventory> {
     let mut result = Vec::new();
-    let (configs, discovery_error) = discover_mcp_configs(root);
+    let (configs, discovery_error) = discover_mcp_configs_in_workspaces(root, workspace_roots);
     if let Some(reason) = discovery_error {
         result.push(McpConfigInventory {
             source: Source {
@@ -433,7 +448,15 @@ struct DiscoveredMcpConfig {
     format: ConfigFormat,
 }
 
+#[cfg(test)]
 fn discover_mcp_configs(root: &Path) -> (Vec<DiscoveredMcpConfig>, Option<&'static str>) {
+    discover_mcp_configs_in_workspaces(root, &[root.to_path_buf()])
+}
+
+fn discover_mcp_configs_in_workspaces(
+    root: &Path,
+    workspace_roots: &[PathBuf],
+) -> (Vec<DiscoveredMcpConfig>, Option<&'static str>) {
     let mut configs = MCP_CONFIGS
         .iter()
         .filter_map(|definition| {
@@ -450,19 +473,25 @@ fn discover_mcp_configs(root: &Path) -> (Vec<DiscoveredMcpConfig>, Option<&'stat
         .collect::<Vec<_>>();
     let fixed_count = configs.len();
     let mut discovery_error = None;
-    if root.is_dir() {
+    let mut workspace_roots = workspace_roots.to_vec();
+    workspace_roots.sort();
+    workspace_roots.dedup();
+    let mut visited_entries = 0;
+    'workspaces: for workspace_root in workspace_roots {
         // Count every visited entry, including errors and irrelevant files. Do
-        // not sort directory entries: WalkDir sorting would allocate before the cap.
-        for (index, entry) in WalkDir::new(root).max_depth(4).into_iter().enumerate() {
-            if index == 10_000 {
+        // not sort directory entries: WalkDir sorting would allocate before the
+        // shared cap. Never fall back to walking the home/session scan root.
+        for entry in WalkDir::new(workspace_root).max_depth(4) {
+            if visited_entries == 10_000 {
                 discovery_error = Some("mcp_traversal_limit_exceeded");
-                break;
+                break 'workspaces;
             }
+            visited_entries += 1;
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => {
                     discovery_error = Some("mcp_discovery_unreadable");
-                    break;
+                    break 'workspaces;
                 }
             };
             if entry.file_name() != ".mcp.json" {
@@ -473,7 +502,7 @@ fn discover_mcp_configs(root: &Path) -> (Vec<DiscoveredMcpConfig>, Option<&'stat
             }
             if configs.len() == 64 {
                 discovery_error = Some("mcp_inventory_limit_exceeded");
-                break;
+                break 'workspaces;
             }
             configs.push(DiscoveredMcpConfig {
                 client: ClientId::Claude,
@@ -1083,6 +1112,88 @@ fn host_from_url(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_inventory_walks_only_selected_workspaces() {
+        let home = tempdir().unwrap();
+        fs::create_dir(home.path().join(".codex")).unwrap();
+        fs::write(
+            home.path().join(".codex/config.toml"),
+            "[mcp_servers.fixed]\ncommand = 'synthetic'\n",
+        )
+        .unwrap();
+        for name in ["Music", "Pictures", "Library", "unconfigured-project"] {
+            let directory = home.path().join(name);
+            fs::create_dir(&directory).unwrap();
+            fs::write(
+                directory.join(".mcp.json"),
+                r#"{"mcpServers":{"unselected":{"command":"synthetic"}}}"#,
+            )
+            .unwrap();
+        }
+        let workspace = home.path().join("selected-project");
+        fs::create_dir_all(workspace.join("nested")).unwrap();
+        fs::write(
+            workspace.join("nested/.mcp.json"),
+            r#"{"mcpServers":{"selected":{"command":"synthetic"}}}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(home.path().join("Music"), workspace.join("media-link"))
+            .unwrap();
+
+        let fixed = super::acquire_mcp_inventory_with_workspaces(home.path(), &[]);
+        assert_eq!(fixed.len(), 1);
+        assert_eq!(fixed[0].servers.as_ref().unwrap()[0].server_name, "fixed");
+        let scoped = super::acquire_mcp_inventory_with_workspaces(
+            home.path(),
+            &[workspace.clone(), workspace],
+        );
+        let mut servers = scoped
+            .iter()
+            .flat_map(|config| config.servers.as_ref().unwrap())
+            .map(|server| server.server_name.as_str())
+            .collect::<Vec<_>>();
+        servers.sort_unstable();
+        assert_eq!(servers, ["fixed", "selected"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_inventory_does_not_enumerate_unselected_private_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempdir().unwrap();
+        fs::write(home.path().join(".mcp.json"), "{}").unwrap();
+        let music = home.path().join("Music");
+        fs::create_dir(&music).unwrap();
+        fs::set_permissions(&music, fs::Permissions::from_mode(0o000)).unwrap();
+        let (configs, error) = super::discover_mcp_configs_in_workspaces(home.path(), &[]);
+        fs::set_permissions(music, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(error, None);
+    }
+
+    #[test]
+    fn scoped_inventory_shares_workspace_candidate_limit_and_keeps_fixed_paths() {
+        let home = tempdir().unwrap();
+        fs::write(
+            home.path().join(".mcp.json"),
+            r#"{"mcpServers":{"fixed":{"command":"synthetic"}}}"#,
+        )
+        .unwrap();
+        let workspaces = [home.path().join("a"), home.path().join("b")];
+        for workspace in &workspaces {
+            for index in 0..32 {
+                let project = workspace.join(format!("project-{index}"));
+                fs::create_dir_all(&project).unwrap();
+                fs::write(project.join(".mcp.json"), "{}").unwrap();
+            }
+        }
+        let result = super::acquire_mcp_inventory_with_workspaces(home.path(), &workspaces);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].servers, Err("mcp_inventory_limit_exceeded"));
+        assert_eq!(result[1].servers.as_ref().unwrap()[0].server_name, "fixed");
+    }
+
     #[test]
     fn scan_server_limit_rejects_whole_config_without_charging_later_capacity() {
         let root = tempdir().unwrap();

@@ -35,7 +35,7 @@ use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
 use crate::sink::{DeliveryErrorClass, SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
-use telltale_core::inventory::discover_mcp_scan;
+use telltale_core::inventory::discover_mcp_scan_with_workspaces;
 use telltale_detect::v2::PolicyMatchAccounting;
 use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::clients::{ClientId, SourceKind};
@@ -288,8 +288,8 @@ fn run_scan_for_platform(
 ) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
     validate_scan_execution_paths(config.execution, is_windows)?;
     let scan_started = Instant::now();
-    let (mut sources, targeted, source_discovery) = match targets {
-        ScanTargets::Targeted { sources, discovery } => (sources, true, discovery),
+    let (mut sources, targeted, source_discovery, workspace_roots) = match targets {
+        ScanTargets::Targeted { sources, discovery } => (sources, true, discovery, Vec::new()),
         ScanTargets::Full => {
             let (project_configs, project_configuration) = load_project_configuration(
                 config.execution.root,
@@ -302,7 +302,11 @@ fn run_scan_for_platform(
                 &project_configs,
                 &project_configuration,
             );
-            (sources, false, discovery)
+            let workspace_roots = project_configs
+                .into_iter()
+                .map(|project| project.path)
+                .collect::<Vec<_>>();
+            (sources, false, discovery, workspace_roots)
         }
     };
     if targeted && let Some(max_sources) = config.max_sources {
@@ -379,7 +383,7 @@ fn run_scan_for_platform(
     let process_chain_rules = load_process_chain_rules_if_enabled(config.execution.process_chain);
     let process_config = ProcessChainConfig::default();
     let mcp_scan = if config.execution.emit_activity && !targeted {
-        discover_mcp_scan(config.execution.root)
+        discover_mcp_scan_with_workspaces(config.execution.root, &workspace_roots)
     } else {
         Default::default()
     };

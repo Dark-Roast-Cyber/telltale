@@ -1351,26 +1351,6 @@ fn decide_as(
         tool_name: tool.to_owned(),
         input,
     };
-    // A harness with no registered adapter is not evaluated by the runtime:
-    // the engine reads the call under that client. No finding is an allow, and
-    // a score at least that of Claude Code's own denied write is a deny.
-    if telltale_core::hooks::harness::Harness::from_name(harness).is_none() {
-        let client = telltale_core::ClientId::from_name(harness).unwrap();
-        let (score, rules) = common::engine_detection(client, &[(tool, call.input)]);
-        let denied = common::engine_detection(
-            telltale_core::ClientId::Claude,
-            &[(
-                "Write",
-                json!({"file_path": "/home/synthetic/.claude/settings.json", "content": "{}"}),
-            )],
-        );
-        let verdict = match () {
-            () if rules.is_empty() => "allow",
-            () if score >= denied.0 => "deny",
-            () => "ask",
-        };
-        return (verdict.to_owned(), rules);
-    }
     let ctx = Context {
         harness,
         hook_event: "PreToolUse".into(),
@@ -1399,7 +1379,7 @@ fn decide_as(
 /// Every path, POSIX and Windows, through the patch and tool-write shape of
 /// every harness: the written path is what the rules must see.
 #[test]
-fn harness_hook_paths_are_denied_through_normalized_writes() {
+fn harness_hook_paths_are_denied_through_every_native_write_shape() {
     let mut h = Harness::new();
     let mut failures = Vec::new();
     let mut n = 0;
@@ -1417,7 +1397,7 @@ fn harness_hook_paths_are_denied_through_normalized_writes() {
             }
         }
     }
-    println!("{n} normalized write cases");
+    println!("{n} native write cases");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

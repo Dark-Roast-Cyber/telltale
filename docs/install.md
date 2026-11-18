@@ -395,6 +395,22 @@ sources scanned after that filtering:
 cargo run --bin telltale -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
 ```
 
+In source builds after `v0.7.2`, `--emit-activity` checks known user MCP
+configuration files under `--root`, but does not recursively search that root
+for workspace `.mcp.json` files. Workspace MCP discovery uses only the project
+roots selected by `--project-config` or `TELLTALE_PROJECT_CONFIG`. With the
+default `--root .` and no project configuration, it uses the existing default
+project directories (`~/github` and `~/projects`, when present). With an explicit
+home root and no project configuration, no workspace directories are walked.
+The same scope applies to full scans in `watch` mode.
+
+This keeps a home-root service scan from entering personal Music, Pictures or
+Library directories just to find workspace MCP configuration. To include a
+workspace, name its project directory in a project configuration file; do not
+grant Apple Music or Photos access to work around MCP discovery. Published
+`v0.7.2` archives retain the earlier broad traversal behavior; updating the
+source does not change those immutable binaries.
+
 Telltale writes append-only JSONL by default so the output can be reviewed
 locally or shipped to a SIEM. The default `user` path profile writes telemetry
 under the operating-system-standard per-user location, such as
