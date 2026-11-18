@@ -4,6 +4,12 @@ Pinned and verified against Claude Code **2.1.318** (Linux x86-64). Evidence:
 captured payloads in `crates/telltale/tests/hooks/fixtures/claude-code/2.1.318/`, binary strings,
 and real headless runs in `docs/hooks/e2e/`.
 
+**Integrated qualification, 2026-11-17 (E2E):** installed **2.1.327** passed
+the ordinary Bash control/marker-deny pair through `telltale hooks`, using an
+isolated scripted Messages provider, not a live account or model. This is
+separate evidence from the 2.1.318 capture and historical real-model runs;
+it does not requalify all modes ([report](../e2e/2026-11-17-integrated-pilot.md)).
+
 ## Events handled
 
 | Hook event | Runtime event | What telltale-hooks does |

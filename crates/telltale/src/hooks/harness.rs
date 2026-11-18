@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::ClientId;
 use crate::hooks::config::OnError;
-use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli};
+use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli, opencode};
 use crate::hooks::runtime::{Context, Event, Response};
 use crate::hooks::state::Verdict;
 
@@ -23,6 +23,7 @@ pub enum Harness {
     ClaudeCode,
     CodexCli,
     CopilotCli,
+    OpenCode,
 }
 
 /// A native hook payload as the adapter understood it.
@@ -142,8 +143,12 @@ pub enum HostRules {
 
 impl Harness {
     /// Every harness in this build.
-    pub const ALL: &'static [Harness] =
-        &[Harness::ClaudeCode, Harness::CopilotCli, Harness::CodexCli];
+    pub const ALL: &'static [Harness] = &[
+        Harness::ClaudeCode,
+        Harness::CopilotCli,
+        Harness::CodexCli,
+        Harness::OpenCode,
+    ];
 
     /// The harness's descriptor: the only match on a harness.
     pub const fn adapter(self) -> &'static Adapter {
@@ -151,6 +156,7 @@ impl Harness {
             Self::ClaudeCode => &claude_code::ADAPTER,
             Self::CodexCli => &codex_cli::ADAPTER,
             Self::CopilotCli => &copilot_cli::ADAPTER,
+            Self::OpenCode => &opencode::ADAPTER,
         }
     }
 
@@ -294,7 +300,6 @@ mod tests {
     /// declared the value.
     #[test]
     fn every_adapter_is_registered_under_its_own_name() {
-        use crate::hooks::harnesses;
         let mut names = std::collections::BTreeSet::new();
         let mut variables = std::collections::BTreeSet::new();
         for harness in Harness::ALL {
@@ -316,9 +321,6 @@ mod tests {
                 assert!(variables.insert(home.variable), "{}", home.variable);
             }
         }
-        // Shapes captured ahead of an adapter are keyed by a name no
-        // registered adapter has.
-        assert!(!names.contains(harnesses::opencode::NAME));
     }
 
     #[test]
@@ -346,7 +348,7 @@ mod tests {
         assert_eq!(Harness::from_name("copilot-cli"), Some(Harness::CopilotCli));
         assert_eq!(Harness::from_name("Claude-Code"), None);
         assert_eq!(Harness::from_name("codex-cli"), Some(Harness::CodexCli));
-        assert_eq!(Harness::from_name("opencode"), None);
+        assert_eq!(Harness::from_name("opencode"), Some(Harness::OpenCode));
         assert_eq!(Harness::from_name(""), None);
     }
 

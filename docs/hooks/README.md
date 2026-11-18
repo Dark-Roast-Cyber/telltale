@@ -49,14 +49,17 @@ version` prints the inputs and the digest.
 
 | | |
 | --- | --- |
-| Harnesses | Claude Code (2.1.318), GitHub Copilot CLI (1.0.105), OpenAI Codex CLI (0.166.0; fails open by design, see below) |
+| Harnesses | Claude Code (2.1.318), GitHub Copilot CLI (1.0.105), OpenAI Codex CLI (0.166.0; fails open by design, see below). OpenCode v2 (2.2.5) is a request-only pilot with a manual plugin install: [contract](harnesses/opencode.md) |
 | Codex evidence | **Linux only, scripted model; real-model run pending.** Deny (main agent, subagent, `apply_patch`, autostarted evaluator) and ask-as-deny, on the real Codex binary. Also under the documented install: trusted through the real TUI, `codex exec` with no bypass flag. Hook failures fail open: [results](e2e/2026-11-04-codex-cli-0.166.0.md) |
 | Real enforcement verified | Claude Code: deny (default and `bypassPermissions` modes, subagents), ask (headless declines), self-protection, download-then-execute chain, fail-open/fail-closed behavior: [results](e2e/2026-11-04-claude-code-2.1.318.md). Copilot CLI (scripted model): deny (default, `--yolo`, autopilot, PascalCase, subagents), ask (prompts interactively, refused in `-p`), fail-closed: [results](e2e/2026-11-04-copilot-cli-1.0.105.md) |
 | Latency | PreToolUse p50 19 ms in a short window and 44 to about 190 ms in a full one, depending on what it holds, with the autostarted long-lived evaluator; ~690 ms in-process fallback ([ADR 0003](adr/0003-process-model.md)) |
 
-The reports in [`e2e/`](e2e/) are historical: they were run against the
-standalone `telltale-hooks` binary before the move into Telltale, and no real
-harness has been run against `telltale hooks` yet.
+The November 4 reports in [`e2e/`](e2e/) are historical: they used the
+standalone `telltale-hooks` binary. The
+[integrated qualification](e2e/2026-11-17-integrated-pilot.md) records new
+scripted-model controls/denials for the integrated executable. The
+[OpenCode v2 pilot](harnesses/opencode.md#install-the-pilot) has a separate,
+manual plugin install and deliberately leaves outcomes unknown.
 
 ## Quick start (Claude Code)
 
@@ -276,6 +279,9 @@ State and telemetry default to `$XDG_STATE_HOME/telltale/hooks/` or
 - [Architecture](architecture.md) and [decisions](adr/)
 - [Hooks threat model](../security/hooks-threat-model.md)
 - [Harness capability matrix](capability-matrix.md)
+- [Harness tracker](harness-tracker.md): links, configuration paths and adapter
+  progress for every harness, implemented or not. `progress.html` beside it is
+  the generated milestone view; open it in a browser
 - [Real-harness tests](harness-testing.md)
 
 ## Development

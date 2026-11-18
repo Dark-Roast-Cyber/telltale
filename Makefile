@@ -26,6 +26,7 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-discover telltale-source
 
 .PHONY: version-consistency-check
 .PHONY: session-investigation-check
+.PHONY: hooks-plugin-check
 .PHONY: embedding-contract-check embedding-msrv-check embedding-lock-update
 
 ## Check read-only session investigation using only synthetic source fixtures
@@ -34,6 +35,11 @@ session-investigation-check:
 	cargo test --locked -p telltale-sources acquisition --lib
 	cargo test --locked -p telltale-sources --features opencode-sqlite acquisition --lib
 	git diff --check
+
+## Focused subprocess-plugin and qualification regressions (no live models)
+hooks-plugin-check:
+	uv run --no-project python tests/hooks_qualification_test.py
+	node --test tests/hooks_opencode_plugin.test.mjs
 
 ## Show this help
 help:
@@ -196,6 +202,11 @@ upstream-formats-check:
 ## Regenerate docs/catalog from the source registry and the Rule v1 validator
 catalog-update:
 	TELLTALE_UPDATE_CATALOG=1 cargo test $(CARGO_LOCKED) --quiet --test catalog
+
+## Regenerate docs/hooks/progress.html from docs/hooks/harness-tracker.md
+.PHONY: hooks-progress-update
+hooks-progress-update:
+	TELLTALE_UPDATE_HOOKS_PROGRESS=1 cargo test $(CARGO_LOCKED) --quiet --test hooks_progress
 
 ## Verify upstream harness pins and list newer upstream releases (uses the GitHub API)
 harness-drift-check:

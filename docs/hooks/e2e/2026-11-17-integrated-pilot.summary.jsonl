@@ -1,0 +1,77 @@
+{"harness":"claude-code","version":"2.1.327","scenario":"benign","pass":true,"canary":"present","settlement":"completed; same decision"}
+{"harness":"claude-code","version":"2.1.327","scenario":"deny","pass":true,"canary":"absent","marker_receipts":1,"settlement":"not_executed; honored; same decision"}
+{"harness":"copilot-cli","version":"1.0.105","scenario":"benign","pass":true,"canary":"present","settlement":"completed; same decision"}
+{"harness":"copilot-cli","version":"1.0.105","scenario":"deny","pass":true,"canary":"absent","marker_receipts":1,"settlement":"not_executed; honored; same decision"}
+{"harness":"codex-cli","version":"0.166.0","scenario":"allow","pass":true,"canary":"present","settlement":"completed; same decision"}
+{"harness":"codex-cli","version":"0.166.0","scenario":"deny","pass":true,"canary":"absent","marker_receipts":1,"settlement":"not_executed; honored; same decision"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"ordinary-control","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"ordinary-deny","pass":true,"canary":"absent","marker_receipts":1,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"nested-control","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"nested-deny","pass":true,"canary":"absent","marker_receipts":1,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"nested-repeat-deny","pass":true,"canary":"absent","marker_receipts":3,"distinct_occurrences":3,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"parallel","pass":true,"canary":"absent","sibling_canary":"present","marker_receipts":1,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"detect-only","pass":true,"canary":"present","returned":false,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"init-broken","pass":true,"canary":"present","startup":"fail-open","outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"failure-missing","pass":true,"canary":"absent","marker_receipts":0,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"failure-invalid","pass":true,"canary":"absent","marker_receipts":0,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"failure-hang","pass":true,"canary":"absent","marker_receipts":0,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"failure-lost","pass":true,"canary":"absent","recorded_marker_decisions":1,"marker_receipts":0,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"failure-noop","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"detect-failure-hang","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"detect-failure-missing","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"native-deny","pass":true,"canary":"absent","marker_receipts":0,"outcomes":0}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"native-ask","pass":true,"canary":"absent","auto":false,"marker_receipts":0,"outcomes":0}
+{"harness":"opencode","version":"2.3.2","mode":"standalone","scenario":"ordinary-control","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.3.2","mode":"standalone","scenario":"ordinary-deny","pass":true,"canary":"absent","marker_receipts":1,"outcomes":0}
+{"harness":"opencode","version":"2.3.2","mode":"standalone","scenario":"nested-control","pass":true,"canary":"present","outcomes":0}
+{"harness":"opencode","version":"2.3.2","mode":"standalone","scenario":"nested-deny","pass":true,"canary":"absent","marker_receipts":1,"outcomes":0}
+{"harness":"claude-code","version":"2.1.327","scenario":"benign","pass":true,"canary":"present","phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"claude-code","version":"2.1.327","scenario":"deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"copilot-cli","version":"1.0.105","scenario":"benign","pass":true,"canary":"present","phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"copilot-cli","version":"1.0.105","scenario":"deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"codex-cli","version":"0.166.0","scenario":"allow","pass":true,"canary":"present","phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"codex-cli","version":"0.166.0","scenario":"deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"ordinary-control","pass":true,"canary":"present","outcomes":0,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"ordinary-deny","pass":true,"canary":"absent","marker_receipts":1,"outcomes":0,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"nested-control","pass":true,"canary":"present","outcomes":0,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"nested-deny","pass":true,"canary":"absent","marker_receipts":1,"outcomes":0,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"detect-only","pass":true,"canary":"present","returned":false,"outcomes":0,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","mode":"standalone","scenario":"init-broken","pass":true,"canary":"present","input":"deny-level marker","startup":"fail-open","outcomes":0,"phase":"final-head","build_sha256":"7e405fcb4cafdc22c7d9be173b6340fc2aabaee5e2c5e338b3ad282a629e4256"}
+{"harness":"opencode","version":"2.2.5","scenario":"ordinary-control","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"ordinary-deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"nested-control","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"nested-deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"nested-repeat-deny","pass":true,"canary":"absent","marker_receipts":3,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"parallel","pass":true,"canary":"absent","marker_receipts":1,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"detect-only","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"init-broken","pass":true,"canary":"present","startup":"fail-open","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"failure-missing","pass":true,"canary":"absent","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"failure-invalid","pass":true,"canary":"absent","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"failure-hang","pass":true,"canary":"absent","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"failure-lost","pass":true,"canary":"absent","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"failure-noop","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"detect-failure-hang","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"detect-failure-missing","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"native-deny","pass":true,"canary":"absent","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.2.5","scenario":"native-ask","pass":true,"canary":"absent","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.3.2","scenario":"ordinary-control","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.3.2","scenario":"ordinary-deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.3.2","scenario":"nested-control","pass":true,"canary":"present","marker_receipts":0,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.3.2","scenario":"nested-deny","pass":true,"canary":"absent","marker_receipts":1,"phase":"deadline-fix","plugin_sha256":"10726f47d1ed7f05fd0a1929ca99e36dfefeb48c6120df27bd3d1504accae709"}
+{"harness":"opencode","version":"2.3.2","scenario":"ordinary-control","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"ordinary-deny","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"nested-control","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"nested-deny","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"nested-repeat-deny","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"parallel","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"detect-only","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"init-broken","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"failure-missing","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"failure-invalid","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"failure-hang","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"failure-lost","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"failure-noop","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"detect-failure-hang","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"detect-failure-missing","pass":true,"canary":"present","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"native-deny","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
+{"harness":"opencode","version":"2.3.2","scenario":"native-ask","pass":true,"canary":"absent","phase":"queue","plugin_sha256":"a3e441fb3b54228089dd32f06de0cf5f05dde55280b0e81f435d35dd063bc31c"}
