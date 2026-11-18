@@ -431,19 +431,21 @@ grant that lets `Users` add files. So Telltale reads the system root only when
 the root, each of its config folders and each file it reads:
 
 - are owned by Administrators, SYSTEM or TrustedInstaller;
-- grant write, append, delete, delete-child, change-permissions or
-  take-ownership rights to no one else (inherit-only and deny entries are
-  ignored);
+- grant write, append, write-attributes, delete, delete-child,
+  change-permissions or take-ownership rights to no one else (inherit-only and
+  deny entries are ignored);
 - and are not symbolic links or junctions.
 
 Otherwise every command that loads configuration (`scan`, `watch`, `config`,
 `hooks`) fails and names the path and the principal, also when the root is
-passed with `--config-dir`. Create the root from an elevated prompt, remove
-inherited permissions, and grant read access to users:
+passed with `--config-dir`. Create the root from an elevated prompt, give it
+to Administrators, remove every other permission, and grant read access to
+users (on a root that already exists, skip the first command):
 
 ```powershell
 New-Item -ItemType Directory "$env:ProgramData\telltale"
 icacls "$env:ProgramData\telltale" /setowner *S-1-5-32-544
+icacls "$env:ProgramData\telltale" /reset
 icacls "$env:ProgramData\telltale" /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
 ```
 
