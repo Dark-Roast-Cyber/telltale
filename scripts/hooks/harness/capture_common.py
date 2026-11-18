@@ -5,6 +5,7 @@ home and working directory, a scripted mock model (mock-model.py) on a loopback
 port, and a stub hook that records every payload. The canary file is ground
 truth: it exists only if the harness executed the canary command.
 """
+
 import json
 import os
 import shutil
@@ -15,8 +16,17 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 STUB = os.path.join(HERE, "stubs", "stub-hook.py")
 MOCK = os.path.join(HERE, "mock-model.py")
-PASS_ENV = ("PATH", "LANG", "TERM", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-            "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS")
+PASS_ENV = (
+    "PATH",
+    "LANG",
+    "TERM",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "SSL_CERT_FILE",
+    "NODE_EXTRA_CA_CERTS",
+)
 
 
 def write_telltale_config(home, hooks, rules=(), text=None):
@@ -53,12 +63,14 @@ class Run:
     def canary(self, name="canary.txt"):
         return os.path.join(self.work, name)
 
-    def start_mock(self, script):
+    def start_mock(self, script, server=MOCK):
         path = os.path.join(self.dir, "mock-script.json")
         with open(path, "w") as f:
             json.dump(script, f, indent=1)
         port_file = os.path.join(self.dir, "mock.port")
-        self.mock = subprocess.Popen([sys.executable, "-I", MOCK, path, self.model_log, port_file])
+        self.mock = subprocess.Popen(
+            [sys.executable, "-I", server, path, self.model_log, port_file]
+        )
         for _ in range(100):
             if os.path.exists(port_file) and open(port_file).read().strip():
                 self.port = int(open(port_file).read())
@@ -73,22 +85,40 @@ class Run:
 
     def base_env(self, **extra):
         env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
-        no_proxy = ",".join(filter(None, [os.environ.get("NO_PROXY", ""), "127.0.0.1", "localhost"]))
-        env.update(HOME=self.home, TMPDIR=os.path.join(self.dir, "tmp"), NO_PROXY=no_proxy, no_proxy=no_proxy,
-                   REC_LOG=self.rec_log, XDG_CONFIG_HOME=os.path.join(self.home, ".config"),
-                   XDG_DATA_HOME=os.path.join(self.home, ".local", "share"),
-                   XDG_STATE_HOME=os.path.join(self.home, ".local", "state"),
-                   XDG_CACHE_HOME=os.path.join(self.home, ".cache"))
+        no_proxy = ",".join(
+            filter(None, [os.environ.get("NO_PROXY", ""), "127.0.0.1", "localhost"])
+        )
+        env.update(
+            HOME=self.home,
+            TMPDIR=os.path.join(self.dir, "tmp"),
+            NO_PROXY=no_proxy,
+            no_proxy=no_proxy,
+            REC_LOG=self.rec_log,
+            XDG_CONFIG_HOME=os.path.join(self.home, ".config"),
+            XDG_DATA_HOME=os.path.join(self.home, ".local", "share"),
+            XDG_STATE_HOME=os.path.join(self.home, ".local", "state"),
+            XDG_CACHE_HOME=os.path.join(self.home, ".cache"),
+        )
         os.makedirs(env["TMPDIR"], exist_ok=True)
         env.update({k: str(v) for k, v in extra.items()})
         return env
 
     def run(self, argv, env, timeout=180, stdin=subprocess.DEVNULL):
         t0 = time.time()
-        with open(os.path.join(self.dir, "stdout.txt"), "w") as out, \
-                open(os.path.join(self.dir, "stderr.txt"), "w") as err:
+        with (
+            open(os.path.join(self.dir, "stdout.txt"), "w") as out,
+            open(os.path.join(self.dir, "stderr.txt"), "w") as err,
+        ):
             try:
-                p = subprocess.run(argv, cwd=self.work, env=env, stdout=out, stderr=err, timeout=timeout, stdin=stdin)
+                p = subprocess.run(
+                    argv,
+                    cwd=self.work,
+                    env=env,
+                    stdout=out,
+                    stderr=err,
+                    timeout=timeout,
+                    stdin=stdin,
+                )
                 code = p.returncode
             except subprocess.TimeoutExpired:
                 code = "timeout"
@@ -111,8 +141,16 @@ class Run:
         verdict = ""
         if expect:
             verdict = "PASS" if (present == (expect == "present")) else "FAIL"
-        line = {"scenario": self.name, "canary": "present" if present else "absent", "expect": expect,
-                "verdict": verdict, "exit": self.exit, "secs": self.elapsed, "events": events, "note": note}
+        line = {
+            "scenario": self.name,
+            "canary": "present" if present else "absent",
+            "expect": expect,
+            "verdict": verdict,
+            "exit": self.exit,
+            "secs": self.elapsed,
+            "events": events,
+            "note": note,
+        }
         with open(os.path.join(self.dir, "summary.json"), "w") as f:
             json.dump(line, f, indent=1)
         print(json.dumps(line))
@@ -156,7 +194,9 @@ def recheck(path, declared):
         ok = hook_verdict_ok(summary["decisions"], declared[name])
         failed += not ok
         verdicts = [d["verdict"] for d in summary["decisions"]]
-        print(f"{name}: hook {declared[name]}, recorded {verdicts}: {'ok' if ok else 'MISMATCH'}")
+        print(
+            f"{name}: hook {declared[name]}, recorded {verdicts}: {'ok' if ok else 'MISMATCH'}"
+        )
     return failed
 
 
@@ -168,7 +208,12 @@ def tool_results_seen_by_model(run):
         for item in body.get("messages") or []:
             if isinstance(item, dict) and item.get("role") == "tool":
                 seen[item.get("tool_call_id")] = item.get("content")
-        for item in body.get("input") or [] if isinstance(body.get("input"), list) else []:
-            if isinstance(item, dict) and item.get("type") in ("function_call_output", "custom_tool_call_output"):
+        for item in (
+            body.get("input") or [] if isinstance(body.get("input"), list) else []
+        ):
+            if isinstance(item, dict) and item.get("type") in (
+                "function_call_output",
+                "custom_tool_call_output",
+            ):
                 seen[item.get("call_id")] = item.get("output")
     return seen

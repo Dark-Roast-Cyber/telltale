@@ -1146,9 +1146,17 @@ fn the_cli_lists_and_serves_every_registered_harness() {
             "{name}"
         );
         let (code, document) = run(&[name, "settings"]);
-        assert_eq!(code, Some(0), "{name}");
-        let document: Value = serde_json::from_str(&document).unwrap();
-        assert!(document["hooks"].is_object(), "{name}");
+        match (adapter.install.output)(&format!("telltale hooks {name} hook"), false) {
+            Ok(expected) => {
+                assert_eq!(code, Some(0), "{name}");
+                let document: Value = serde_json::from_str(&document).unwrap();
+                assert_eq!(document, expected.document, "{name}");
+            }
+            Err(_) => {
+                assert_eq!(code, Some(1), "{name}");
+                assert!(document.is_empty(), "{name}");
+            }
+        }
     }
 }
 

@@ -6,6 +6,24 @@ confirmed in the shipped binary; **Docs/Src** = from official docs or pinned
 source via desk research (full report);
 **3P** = third-party only; **?** = unknown.
 
+[Integrated qualification, 2026-11-17](e2e/2026-11-17-integrated-pilot.md)
+adds narrow scripted-model command pairs for Claude **2.1.327**, Copilot
+**1.0.105**, Codex **0.166.0**, and standalone OpenCode **2.2.5**. These are
+not wholesale requalification of the historical mode tables below.
+
+### OpenCode v2 request-only pilot
+
+The [manual plugin install](harnesses/opencode.md#install-the-pilot) forwards
+only `execute.before`. E2E at **2.2.5**, Linux standalone, scripted model:
+ordinary and inner MCP controls/denials, three concurrent identical inner
+requests with distinct occurrence IDs, a runnable sibling, detect-only,
+missing/invalid/hung/lost subprocess replies and explicit failure no-op.
+Initialization failure still permits the call (upstream fail-open).
+Service mode, complete artifact self-protection, automatic installation and
+terminal settlement are **not qualified**. No outcome is inferred from an
+outer success or a returned decision. Process-only stress/reaping tests are
+regressions, not harness qualification.
+
 ## Implementation status
 
 | Harness | Version pinned | Adapter | Real enforcement tests |
@@ -13,7 +31,7 @@ source via desk research (full report);
 | Claude Code | 2.1.318 | Implemented | Yes ([results](e2e/2026-11-04-claude-code-2.1.318.md)) |
 | GitHub Copilot CLI | 1.0.105 | Implemented | Yes, scripted model ([results](e2e/2026-11-04-copilot-cli-1.0.105.md)); real-model run pending () |
 | OpenAI Codex CLI | 0.166.0 (rust-v0.166.0) | Implemented | Yes, scripted model; real-model run pending ([results](e2e/2026-11-04-codex-cli-0.166.0.md)) |
-| OpenCode | 1.19.5 / 2.2.5 | Not started | Plugin contract only: capture plugins, scripted model ([contract](harnesses/opencode.md)) |
+| OpenCode v2 (request-only pilot) | 2.2.5 | Implemented | Standalone pilot; settlement and service qualification remain limited ([contract](harnesses/opencode.md)) |
 | Cursor | unpinned | Not started | — |
 | Gemini CLI | 0.66.0 | Not started | — |
 | OpenClaw | 2026.10.10 | Not started | — |

@@ -10,6 +10,12 @@ verified: a real model, macOS, Windows. The contract below was verified against
 hooks and a scripted model on a custom Responses-API provider. Evidence:
 `crates/telltale/tests/hooks/fixtures/codex-cli/0.166.0/` and `scripts/hooks/harness/capture-codex.py`.
 
+Integrated executable (E2E, 2026-11-17): **0.166.0** passed the ordinary
+control/deny pair with a scripted Responses provider, in-process evaluation
+and `--dangerously-bypass-hook-trust`. Same-call receipts and outcomes joined
+([report](../e2e/2026-11-17-integrated-pilot.md)). This does not requalify the
+historical trust-picker, subagent or failure-mode matrix.
+
 ## Configuration and scope
 
 | Layer | Location | Trusted without review? |
