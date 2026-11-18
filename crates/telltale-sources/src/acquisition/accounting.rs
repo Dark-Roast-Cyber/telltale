@@ -237,6 +237,16 @@ pub enum AccountingCoverage {
     PartialSource,
 }
 
+/// How this batch's tool requests met the source's tool table. Counts only:
+/// no tool name, argument or path.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct ToolTableCounts {
+    /// Requests whose tool name has no table row and is not MCP-shaped.
+    pub unclassified_tool_calls: u64,
+    /// Declared requests whose row names an operand the call does not carry.
+    pub tool_operand_drift: u64,
+}
+
 /// Facts about this acquired batch only, never a cumulative session snapshot.
 /// Counts outside canonical session scope remain explicitly unscoped.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -244,6 +254,7 @@ pub struct SourceAccounting {
     pub coverage: AccountingCoverage,
     pub sessions: Vec<SessionAccounting>,
     pub unscoped: NativeCounts,
+    pub tool_table: ToolTableCounts,
 }
 
 #[derive(Default)]
@@ -376,6 +387,7 @@ impl AccountingBuilder {
             coverage,
             sessions: self.sessions.into_values().collect(),
             unscoped: self.unscoped,
+            tool_table: ToolTableCounts::default(),
         }
     }
 }

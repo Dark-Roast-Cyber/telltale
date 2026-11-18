@@ -91,6 +91,18 @@
 
 ### Changes
 
+- **Unknown tools are counted, and each harness's tool list is checked against
+  its table.** The scan summary's `source_processing` gains two optional
+  counts, `unclassified_tool_calls` (tool requests whose name no source tool
+  table lists and that are not MCP-shaped) and `tool_operand_drift` (declared
+  requests whose table row names an operand the call does not carry). They are
+  counts only and change no observation, identity, verdict, score or Event 3.0
+  output. `tests/upstream_formats/tools.json` records each harness's built-in
+  tools at its pin (or from its published documentation where the source is not
+  published), and an offline test fails when a recorded tool has no table row.
+  The tool tables gain the rows this evidence supports for Claude Code, Codex,
+  OpenClaw, OpenCode and Qwen Code; a declaration still only adds facts.
+
 - Sources now declare what their built-in tools do. Each source names the kind
   of a tool it knows (shell, file read, file write, web, delegate) and where
   its command, path and URL arguments are, and detection reads those together
