@@ -17,30 +17,42 @@ pub(crate) mod source_read;
 pub mod sources;
 pub(crate) mod tool_operation;
 
-/// Every built-in tool each source declares, as `(client, tool name, kind)`.
-/// For tests that check the tables against the name lists detection keeps as
-/// its fallback.
+/// One built-in tool a source's table declares, for tests that check the
+/// tables against recorded upstream tool lists and against the name lists
+/// detection keeps as its fallback.
 #[doc(hidden)]
-pub fn declared_tool_kinds() -> Vec<(
-    telltale_schema::clients::ClientId,
-    &'static str,
-    telltale_schema::observation::ToolKind,
-)> {
-    use sources::{claude, codex, copilot, openclaw, opencode, qwen};
+pub struct DeclaredTool {
+    pub client: telltale_schema::clients::ClientId,
+    pub name: &'static str,
+    pub kind: telltale_schema::observation::ToolKind,
+    /// Argument keys the row reads, by category: `command`, `written`, `read`,
+    /// `url` and `patch`.
+    pub operand_keys: Vec<(&'static str, &'static [&'static str])>,
+}
+
+/// Every built-in tool each source declares.
+#[doc(hidden)]
+pub fn declared_tools() -> Vec<DeclaredTool> {
     use telltale_schema::clients::ClientId;
     [
-        (ClientId::Claude, claude::tools::TOOLS),
-        (ClientId::Codex, codex::tools::TOOLS),
-        (ClientId::Copilot, copilot::tools::TOOLS),
-        (ClientId::OpenClaw, openclaw::tools::TOOLS),
-        (ClientId::OpenCode, opencode::tools::TOOLS),
-        (ClientId::Qwen, qwen::tools::TOOLS),
+        ClientId::Claude,
+        ClientId::Codex,
+        ClientId::Copilot,
+        ClientId::OpenClaw,
+        ClientId::OpenCode,
+        ClientId::Qwen,
     ]
     .into_iter()
-    .flat_map(|(client, table)| {
-        table
+    .flat_map(|client| {
+        tool_operation::table(client)
+            .unwrap_or_default()
             .iter()
-            .map(move |spec| (client, spec.name(), spec.kind()))
+            .map(move |spec| DeclaredTool {
+                client,
+                name: spec.name(),
+                kind: spec.kind(),
+                operand_keys: spec.operand_keys().into_iter().collect(),
+            })
     })
     .collect()
 }
