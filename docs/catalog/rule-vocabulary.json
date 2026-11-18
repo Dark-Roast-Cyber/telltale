@@ -95,6 +95,7 @@
     "assistant_context",
     "command",
     "file_path",
+    "tool_kind",
     "tool_name",
     "tool_result",
     "url",

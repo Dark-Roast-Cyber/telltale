@@ -52,6 +52,8 @@ mod shell_text;
 mod source_declaration_tests;
 mod tool_arguments;
 #[cfg(test)]
+mod tool_kind_tests;
+#[cfg(test)]
 mod tool_reading_tests;
 mod types;
 #[cfg(test)]

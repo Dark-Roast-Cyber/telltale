@@ -8,6 +8,28 @@
 
 ### Compatibility and operator impact
 
+- **Rule v1 has a `tool_kind` target, and `execution.shell` selects it.** The
+  target (`compat.v1.tool_kind`, the tenth compatibility view) is what a call
+  does: `shell`, `file_read`, `file_write`, `web`, `delegate` or `other`, from
+  the declaration of the source's tool table, and for an undeclared call from
+  the native file-write, file-read and shell tool names (any letter case); any
+  other undeclared call has no kind. Session selectors and the action view read
+  the same value; a record that names no tool, such as a Codex completed
+  command, has no kind. `execution.shell` now selects `tool_kind: '^shell$'` in place
+  of a list of shell tool names, so a declared shell tool of any harness
+  earns the same shell-execution credit, and its `command` and `arguments`
+  selections are unchanged. Names that matched before still match. The rule
+  and its effective rule fingerprint change; rules that use the new target do
+  not load in earlier releases. Bundled rules select on kinds and operands, and
+  a test fails on a bundled rule that selects `tool_name` unless it is exempt
+  with a reason (`tool.injection.shape`, which reads the name as text).
+  `tool_name` stays available to custom rules. Event 3.0 and the action record
+  keep their shapes. The evidence item of `execution.shell` for a kind match now
+  reads `tool_kind` with the kind word (`shell`) in place of `tool_name` with the
+  tool's name; the event's own `tool_name` field is unchanged. The native action
+  profile is now 7, which adds the target to the action view: semantic
+  identities change and replay identities do not.
+
 - **Hooks and scans read a declared call in its native shape, and declared tool
   rows say how some arguments are read.** `telltale hooks` no longer reshapes
   Copilot CLI, Codex CLI or OpenCode tool calls into Claude Code's names and
