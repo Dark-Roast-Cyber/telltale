@@ -113,6 +113,11 @@ jobs:
           # scans. Keep debug=1, debug-assertions, and overflow-checks enabled.
           CARGO_PROFILE_DEV_OPT_LEVEL: '2'
         run: make --silent CARGO_LOCKED=--locked ci-linux-test
+      # The runner image's Python and Node; no harness or model is run.
+      - name: Test the hooks plugin and qualification rules
+        run: |
+          python3 tests/hooks_qualification_test.py
+          node --test tests/hooks_opencode_plugin.test.mjs
       - name: Test protected assignment opt-in
         run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests
 
