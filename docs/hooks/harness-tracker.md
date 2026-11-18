@@ -35,7 +35,7 @@ It does not make support claims. The adapters in a build are the registry in
 | Survey | Hook mechanism, configuration paths and links are recorded here from primary sources |
 | Contract | `harnesses/<name>.md` describes configuration, the pre-execution payload and the decisions the harness honors |
 | Capture | Payloads are captured from the real harness binary at a pinned version, with a scripted model where the harness allows one |
-| Adapter | An adapter module is registered and its parse, render and normalization tests pass |
+| Adapter | An adapter module is registered, its parse and render tests pass, and its client's tool table declares the harness's built-in tools |
 | E2E | A pinned real harness using the integrated `telltale hooks` install runs the permitted control, then returns the marker denial without executing the denied twin. Record build revision, harness version, platform, model mode and tested tool path ([method](harness-testing.md)). |
 | Documented | Quick start, capability matrix and contract page describe the shipped behavior |
 
@@ -594,3 +594,4 @@ harness's entry.
 - 2026-11-17: second survey batch: the 34 catalog clients not yet covered and 11 harnesses the catalog does not list. Of the 34, 20 have a mechanism that can block a tool call (one with its contract not public), 6 have none, 5 are not coding harnesses and 3 are undetermined. One pass, Docs/Src, not cross-checked; all links checked. Added milestone M6.
 - 2026-11-17: merged main's driver change (each scenario states the hook decision it expects) with the same-call join; the merged Codex and Copilot drivers passed their pairs on installed 0.167.0 and 1.0.105 (E2E, scripted models). The join now hashes tool arguments as the harness sent them.
 - 2026-11-18: merged main's change that evaluates each hook call through its client's tool table; the OpenCode pilot uses OpenCode's table and all 17 of its scenarios passed again on installed 2.3.2 (E2E, scripted model).
+- 2026-11-18: the Adapter stage no longer names normalization tests: since #225 a harness's built-in tools are declared in its client's tool table. The native parity test now sends OpenCode's captured shapes through its registered adapter name.
