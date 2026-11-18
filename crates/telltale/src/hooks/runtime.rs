@@ -927,7 +927,14 @@ impl Runtime {
         ) {
             (None, _) => Err("harness_unregistered"),
             (Some(harness), Ok(engine)) => engine
-                .evaluate(harness, &window_path, &tail.lines, &pending, focus, budget)
+                .evaluate(
+                    harness.adapter().client,
+                    &window_path,
+                    &tail.lines,
+                    &pending,
+                    focus,
+                    budget,
+                )
                 .map_err(|error| error.code()),
             (Some(_), Err(code)) => Err(code),
         };
@@ -978,19 +985,16 @@ impl Runtime {
     fn tool_requested(&mut self, ctx: &Context, call: &ToolCall) -> Result<Response, &'static str> {
         let mut session = self.open(ctx)?;
         let id = RequestIdentity::next(&mut session, call);
-        // The evaluation encoding (ADR 0002 addendum): the pending line, the
-        // projection input and the journaled history use the normalized
-        // shape; telemetry, the ledger, reasons and outcomes keep `call` as
-        // the harness reported it. Identity for Claude Code.
-        let encoded = crate::hooks::normalize::tool_call(ctx.harness, call.clone());
-        let evaluated = self.evaluate_request(ctx, &mut session, &id, &encoded);
+        // The call is evaluated as the harness reported it (ADR 0002): the
+        // journal reader declares it with that harness's own tool table.
+        let evaluated = self.evaluate_request(ctx, &mut session, &id, call);
         // The evaluator's client has stopped waiting and will evaluate this call
         // itself. Nothing has been recorded yet, and nothing is.
         if self.answer_by.is_some_and(|by| now_ms() > by) {
             return Err(ANSWER_TOO_LATE);
         }
-        let name_malformed = crate::hooks::journal::tool_name_is_malformed(&encoded.tool_name);
-        let evaluation_info = self.request_evaluation_info(&evaluated, &encoded, name_malformed);
+        let name_malformed = crate::hooks::journal::tool_name_is_malformed(&call.tool_name);
+        let evaluation_info = self.request_evaluation_info(&evaluated, call, name_malformed);
         let strict_failure = self.report_evaluation_failure(ctx, call, &evaluated.result);
         let mut decision = self.decide_request(
             ctx,
@@ -1001,13 +1005,7 @@ impl Runtime {
             strict_failure,
         );
         apply_decision(&mut session, &decision);
-        self.journal_request(
-            ctx,
-            &session,
-            &id,
-            &encoded,
-            evaluated.projection.as_deref(),
-        )?;
+        self.journal_request(ctx, &session, &id, call, evaluated.projection.as_deref())?;
         session.state.remember(
             &id.journal_id,
             PendingDecision {
@@ -1054,15 +1052,15 @@ impl Runtime {
         ctx: &Context,
         session: &mut SessionHandle,
         id: &RequestIdentity,
-        encoded: &ToolCall,
+        call: &ToolCall,
     ) -> RequestEvaluation {
         let pending = Line::tool_use(
             &ctx.session_id,
             &id.uuid,
             &id.timestamp,
             &id.journal_id,
-            &encoded.tool_name,
-            &encoded.input,
+            &call.tool_name,
+            &call.input,
         );
         let focus = Focus {
             occurred_at: id.timestamp.clone(),
@@ -1088,11 +1086,11 @@ impl Runtime {
             && first.status == EvalStatus::NotEvaluated
         {
             projection_limit = first.failure_code.clone();
-            if let Some(projected) = crate::hooks::projection::project(&encoded.input) {
+            if let Some(projected) = crate::hooks::projection::project(&call.input) {
                 let variants = projected.variants;
                 separated = projected.separated;
                 (result, window_records, window_truncated) =
-                    self.evaluate_projected(ctx, session, id, encoded, &variants, &mut budget);
+                    self.evaluate_projected(ctx, session, id, call, &variants, &mut budget);
                 projection = Some(variants);
             }
         }
@@ -1112,7 +1110,7 @@ impl Runtime {
         ctx: &Context,
         session: &mut SessionHandle,
         id: &RequestIdentity,
-        encoded: &ToolCall,
+        call: &ToolCall,
         variants: &[Value],
         budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
@@ -1126,7 +1124,7 @@ impl Runtime {
                 &variant_id,
                 &at,
                 &id.journal_id,
-                &encoded.tool_name,
+                &call.tool_name,
                 variant,
             ));
             focuses.push(Focus {
@@ -1142,7 +1140,7 @@ impl Runtime {
     fn request_evaluation_info(
         &self,
         evaluated: &RequestEvaluation,
-        encoded: &ToolCall,
+        call: &ToolCall,
         name_malformed: bool,
     ) -> EvaluationInfo {
         let mut evaluation_info = self.evaluation_info(
@@ -1164,7 +1162,7 @@ impl Runtime {
                 .push("pending_input_separated".to_owned());
         }
 
-        if crate::hooks::journal::input_keys_collide(&encoded.input) {
+        if crate::hooks::journal::input_keys_collide(&call.input) {
             evaluation_info
                 .visibility_limits
                 .push("input_keys_rewritten".to_owned());
@@ -1321,7 +1319,7 @@ impl Runtime {
         ctx: &Context,
         session: &SessionHandle,
         id: &RequestIdentity,
-        encoded: &ToolCall,
+        call: &ToolCall,
         projection: Option<&[Value]>,
     ) -> Result<(), &'static str> {
         // Attempts stay in history whatever the verdict: a denied download
@@ -1331,7 +1329,7 @@ impl Runtime {
         let history_input = match projection {
             Some(variants) => variants[0].clone(),
             None => bound_value(
-                &encoded.input,
+                &call.input,
                 HISTORY_STRING_BYTES.min(self.config.window.max_result_bytes),
             ),
         };
@@ -1340,7 +1338,7 @@ impl Runtime {
             &id.uuid,
             &id.timestamp,
             &id.journal_id,
-            &encoded.tool_name,
+            &call.tool_name,
             &history_input,
         );
         session

@@ -207,10 +207,10 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
         eprintln!("{name}: claude {claude:?} | codex {codex:?}");
     }
     // Every case reaches the same detections and scores in both encodings,
-    // except a patch's written path, which only the Codex source's own tool
-    // table derives (asserted below).
+    // except a patch: only the Codex source's own tool table derives its written
+    // paths and reads its text as authored content (both asserted below).
     for (name, claude, codex) in &table {
-        if *name != "patch to hook config" {
+        if !name.contains("patch") {
             assert_eq!(claude, codex, "{name}");
         }
     }
@@ -232,11 +232,12 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
     // The Claude journal encoding derives no written path for a patch, so
     // hook self-protection (`written_path`) does not fire there: only the
     // command-text reference rule (ask). This is a property of these two
-    // encodings, not of the hooks runtime: the runtime normalises a patch's
-    // targets into a path key before evaluating, and denies this call (see
-    // tests/cli/hooks_codex_cli_contract.rs). The Codex source declares which
+    // encodings, not of the hooks runtime: the runtime evaluates the native call
+    // through Codex's tool table, which declares the patch's targets, and denies
+    // this call (see tests/cli/hooks_codex_cli_contract.rs). The Codex source declares which
     // files a patch names, so the Codex encoding also reaches the write rule
-    // and denies.
+    // and denies. The patch text is authored content there, not command text,
+    // so the command-text reference rule no longer adds to the write rule.
     let (_, claude, codex) = table
         .iter()
         .find(|row| row.0 == "patch to hook config")
@@ -245,20 +246,12 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
         claude,
         &(vec!["tth.tamper.codex_hook_reference".to_owned()], 60)
     );
-    assert_eq!(
-        codex,
-        &(
-            vec![
-                "tth.tamper.codex_hook_reference".to_owned(),
-                "tth.tamper.codex_hook_write".to_owned()
-            ],
-            150
-        )
-    );
-    // Telltale's shell reading also reads a patch body (the `command` key) as
-    // shell text, so patch prose that quotes a download-and-pipe line scores in
-    // both encodings. The runtime's input normalization keeps such a patch out
-    // of shell reading: the hook stays silent on it (tests/cli/hooks_codex_cli_contract.rs).
+    assert_eq!(codex, &(vec!["tth.tamper.codex_hook_write".to_owned()], 90));
+    // The Claude journal encoding has no notion of a patch: its shell reading
+    // reads the patch body (the `command` key) as shell text, so patch prose that
+    // quotes a download-and-pipe line scores there. The Codex source's own tool
+    // table reads a patch as authored content, so the Codex encoding stays
+    // silent on it, as the hook does (tests/cli/hooks_codex_cli_contract.rs).
     assert_eq!(
         get("benign patch with shell-looking code"),
         (
@@ -270,4 +263,9 @@ fn codex_native_encoding_matches_the_claude_journal_on_codex_calls() {
             85
         )
     );
+    let benign = table
+        .iter()
+        .find(|row| row.0 == "benign patch with shell-looking code")
+        .unwrap();
+    assert_eq!(benign.2, (Vec::<String>::new(), 0));
 }

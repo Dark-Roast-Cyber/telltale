@@ -13,7 +13,7 @@ use telltale_schema::observation::{
 
 use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory};
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{ToolSpec, declare, table};
 
 use super::native::{
     ClaudeContentBlock, ClaudeNativeRecord, is_claude_metadata_discriminator,
@@ -26,6 +26,8 @@ pub(crate) struct ClaudeCanonicalOptions {
     pub(crate) scale: telltale_schema::observation::SourceScale,
     /// The adapter type and source ID stamped on every observation.
     pub(crate) adapter: (&'static str, &'static str),
+    /// The tool table that declares each tool call.
+    pub(crate) tools: &'static [ToolSpec],
 }
 
 impl ClaudeCanonicalOptions {
@@ -34,6 +36,7 @@ impl ClaudeCanonicalOptions {
             observed_at,
             scale: telltale_schema::observation::SourceScale::FLOOR,
             adapter: ("claude_code", "claude.projects"),
+            tools: super::tools::TOOLS,
         }
     }
 
@@ -42,6 +45,16 @@ impl ClaudeCanonicalOptions {
     pub(crate) fn with_adapter(self, adapter_type: &'static str, source_id: &'static str) -> Self {
         Self {
             adapter: (adapter_type, source_id),
+            ..self
+        }
+    }
+
+    /// Declares tool calls with the table of `client`'s harness: a hook journal
+    /// holds the calls of the client whose hooks wrote it, in the shape that
+    /// harness reported them. A client with no table declares nothing.
+    pub(crate) fn with_tool_table(self, client: telltale_schema::clients::ClientId) -> Self {
+        Self {
+            tools: table(client).unwrap_or(&[]),
             ..self
         }
     }
@@ -447,7 +460,7 @@ fn emit_tool(
         body,
         facts,
         resource_path,
-    } = tool_body(block)?;
+    } = tool_body(block, options)?;
     let mut builder = common_builder(
         record,
         options,
@@ -495,7 +508,10 @@ struct ToolBody {
     resource_path: Option<String>,
 }
 
-fn tool_body(block: &ClaudeContentBlock) -> Result<ToolBody, ClaudeCanonicalError> {
+fn tool_body(
+    block: &ClaudeContentBlock,
+    options: &ClaudeCanonicalOptions,
+) -> Result<ToolBody, ClaudeCanonicalError> {
     match block {
         ClaudeContentBlock::ToolUse { id: _, name, input } => {
             let name = name
@@ -513,7 +529,7 @@ fn tool_body(block: &ClaudeContentBlock) -> Result<ToolBody, ClaudeCanonicalErro
                 paths.push(("tool.arguments", FactProvenance::Reported));
             }
             Ok(ToolBody {
-                body: declare(super::tools::TOOLS, body),
+                body: declare(options.tools, body),
                 facts: paths,
                 resource_path: facet,
             })

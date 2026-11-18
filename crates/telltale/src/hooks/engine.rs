@@ -2,8 +2,8 @@
 //! (`Pipeline::scan_sources_detailed`, `SourceScan`, `ActionRecordV1`).
 //!
 //! Telltale has no API for evaluating a single pending action, so the hook
-//! writes a bounded window of native Claude Code JSONL (history plus the
-//! pending call) and scans it as the hook-journal source of the harness the
+//! writes a bounded window of JSONL in Claude Code's record encoding (history
+//! plus the pending call, each in the shape its harness reported) and scans it as the hook-journal source of the client the
 //! call belongs to (`Adapter::client`, `ClientId::hook_journal_source_id`), the pattern
 //! docs/embedding.md prescribes for synthetic sources. Findings for the
 //! pending call are the action findings anchored at its unique source time.
@@ -19,6 +19,7 @@ use crate::{
 
 use telltale_rules::RuleDefinition;
 
+use crate::ClientId;
 use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
 use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
@@ -330,7 +331,7 @@ impl Engine {
     /// stop at [`PIECE_SCAN_LIMIT`] instead.
     pub fn evaluate(
         &self,
-        harness: Harness,
+        client: ClientId,
         window_path: &Path,
         history: &[Line],
         pending: &[Line],
@@ -342,7 +343,7 @@ impl Engine {
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
         let mut failure_code = None;
         if budget.admits(whole_bytes) {
-            let whole = self.scan(harness, window_path, history.iter().chain(pending), focus)?;
+            let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
             if !whole.source_failed {
                 return Ok(Evaluation {
@@ -352,16 +353,16 @@ impl Engine {
             }
             failure_code = whole.failure_code;
         }
-        let mut best = self.scan(harness, window_path, pending.iter(), focus)?;
+        let mut best = self.scan(client, window_path, pending.iter(), focus)?;
         budget.observe(pending_bytes, best.scan_ms);
         let mut kept = vec![false; history.len()];
         if best.source_failed && pending.len() > 1 {
-            best = self.scan_each(harness, window_path, pending, focus, || {
+            best = self.scan_each(client, window_path, pending, focus, || {
                 budget.pieces_in_time()
             })?;
         } else if best.status != EvalStatus::NotEvaluated {
             let window = Window {
-                harness,
+                client,
                 path: window_path,
                 history,
                 sizes: &sizes,
@@ -430,7 +431,7 @@ impl Engine {
                 .zip(kept.iter())
                 .filter_map(|(line, kept)| kept.then_some(line));
             let scan = self.scan(
-                window.harness,
+                window.client,
                 window.path,
                 lines.chain(window.pending),
                 window.focus,
@@ -462,7 +463,7 @@ impl Engine {
     /// the record says so.
     fn scan_each(
         &self,
-        harness: Harness,
+        client: ClientId,
         window_path: &Path,
         pending: &[Line],
         focus: &[Focus],
@@ -477,7 +478,7 @@ impl Engine {
                 break;
             }
             let scan = self.scan(
-                harness,
+                client,
                 window_path,
                 std::iter::once(line),
                 std::slice::from_ref(one),
@@ -506,12 +507,12 @@ impl Engine {
     /// among them.
     fn scan<'a>(
         &self,
-        harness: Harness,
+        client: ClientId,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
         focus: &[Focus],
     ) -> Result<Evaluation, EngineError> {
-        let (scan, scan_ms) = self.scan_window(harness, window_path, lines)?;
+        let (scan, scan_ms) = self.scan_window(client, window_path, lines)?;
         if let Some(failure) = scan.failure() {
             return Ok(Evaluation {
                 failure_code: Some(failure.code().to_owned()),
@@ -534,7 +535,7 @@ impl Engine {
     /// as soon as the scan returns.
     fn scan_window<'a>(
         &self,
-        harness: Harness,
+        client: ClientId,
         window_path: &Path,
         lines: impl Iterator<Item = &'a Line>,
     ) -> Result<(SourceScan, u64), EngineError> {
@@ -547,11 +548,10 @@ impl Engine {
                 file.write_all(text.as_bytes())
             })
             .map_err(EngineError::Window)?;
-        let adapter = harness.adapter();
         let source = Source {
-            client: adapter.client,
+            client,
             kind: SourceKind::Jsonl,
-            source_id: adapter.client.hook_journal_source_id().to_owned(),
+            source_id: client.hook_journal_source_id().to_owned(),
             path: window_path.to_owned(),
         };
         let started = Instant::now();
@@ -713,7 +713,7 @@ impl RecoveryBudget {
 
 /// What a recovery scan is made of.
 struct Window<'a> {
-    harness: Harness,
+    client: ClientId,
     path: &'a Path,
     history: &'a [Line],
     sizes: &'a [usize],
@@ -1808,7 +1808,7 @@ mod recovery_tests {
         let mut budget = budget_used(used, 0.0);
         let evaluation = engine
             .evaluate(
-                Harness::ClaudeCode,
+                ClientId::Claude,
                 &dir.path().join("window.jsonl"),
                 &[],
                 &lines,
@@ -1826,7 +1826,7 @@ mod recovery_tests {
         let mut left = 1;
         let evaluation = engine
             .scan_each(
-                Harness::ClaudeCode,
+                ClientId::Claude,
                 &dir.path().join("window.jsonl"),
                 &lines,
                 &focus,

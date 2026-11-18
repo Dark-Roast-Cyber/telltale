@@ -137,7 +137,7 @@ turn ID, no permission mode, and **no per-call ID** in any hook payload.
 | Unrecognized payload | Valid JSON that names no event and matches none could be a `preToolUse` whose fields changed, so it exits 1 with nothing on stdout: Copilot blocks a `preToolUse` on that, and other events continue. This also applies to a nameless event that the hook file does not register, such as a camelCase `errorOccurred` | Contract tests; exit behavior E2E (`fail-exit1`, `fail-config`) |
 | Unusable payload | A `preToolUse` missing fields, or truncated, gets the stricter of `on_error` and `on_unevaluable` on stdout (exit 0), including through the Claude Code entry point. Any other unreadable payload exits 1, whatever `on_error` says. Residual: a truncated, nameless payload at the Claude Code entry point exits 2 under `on_error: deny`, and exit 2 on a stop event is untested here | Contract tests (`tests/cli/hooks_unreadable_payloads.rs`); the answer forms E2E |
 | Hook timeout | 60 s for tool events, 30 s for lifecycle events (Copilot's default is 30 s). Worst case is the evaluator's request deadline (10 s by default) or a cold in-process pipeline build (about 0.7 s) | Docs, E2E |
-| Input shapes | Passed through as reported (raw-string `apply_patch`, `file_text`, `view`); the runtime normalizes for evaluation | Capture |
+| Input shapes | Passed through as reported (raw-string `apply_patch`, `file_text`, `view`); evaluated in that shape through Copilot's tool table | Capture |
 
 ### Residual: a hook timeout lets the call run
 

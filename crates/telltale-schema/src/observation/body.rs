@@ -611,6 +611,12 @@ impl ToolKind {
 /// operands the call names. A call can carry several operands, such as a patch
 /// that writes many files. Operands are text copied from the call's arguments,
 /// never fresh observations of process, file or network activity.
+///
+/// A declaration also says how some arguments are read: the keys whose text is
+/// content the call authors, the keys whose text is replaced text, and whether
+/// the argument text of a call with no argument object is authored content.
+/// These roles, like the operands, are internal to detection: outside
+/// observation identity, replay identity, retained bytes and Event 3.0.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOperation {
     kind: ToolKind,
@@ -618,6 +624,9 @@ pub struct ToolOperation {
     written_paths: Vec<String>,
     read_paths: Vec<String>,
     urls: Vec<String>,
+    authored_keys: Vec<String>,
+    replaced_keys: Vec<String>,
+    authored_text: bool,
 }
 
 impl ToolOperation {
@@ -628,6 +637,9 @@ impl ToolOperation {
             written_paths: Vec::new(),
             read_paths: Vec::new(),
             urls: Vec::new(),
+            authored_keys: Vec::new(),
+            replaced_keys: Vec::new(),
+            authored_text: false,
         }
     }
 
@@ -648,6 +660,21 @@ impl ToolOperation {
         push_operand(&mut self.urls, value.into());
         self
     }
+    /// An argument key whose text is content the call authors.
+    pub fn with_authored_key(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.authored_keys, value.into());
+        self
+    }
+    /// An argument key whose text is replaced text, never an action fact.
+    pub fn with_replaced_key(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.replaced_keys, value.into());
+        self
+    }
+    /// The argument text of a call with no argument object is authored content.
+    pub fn with_authored_text(mut self) -> Self {
+        self.authored_text = true;
+        self
+    }
 
     pub fn kind(&self) -> ToolKind {
         self.kind
@@ -663,6 +690,19 @@ impl ToolOperation {
     }
     pub fn urls(&self) -> &[String] {
         &self.urls
+    }
+    pub fn authored_keys(&self) -> &[String] {
+        &self.authored_keys
+    }
+    pub fn replaced_keys(&self) -> &[String] {
+        &self.replaced_keys
+    }
+    pub fn authored_text(&self) -> bool {
+        self.authored_text
+    }
+    /// Whether the declaration says how any argument is read.
+    pub fn has_roles(&self) -> bool {
+        !self.authored_keys.is_empty() || !self.replaced_keys.is_empty() || self.authored_text
     }
 
     /// Operands in the arguments' own normal form, with repeats removed. The

@@ -730,6 +730,10 @@ fn declaration_adds(
     {
         return true;
     }
+    // A role changes how a member is read, whatever operands the call names.
+    if operation.has_roles() {
+        return true;
+    }
     if operation.commands().is_empty()
         && operation.read_paths().is_empty()
         && operation.written_paths().is_empty()
@@ -737,7 +741,7 @@ fn declaration_adds(
     {
         return false;
     }
-    read_arguments(observation, tool, &mut budget.detached())
+    read_arguments(observation, tool, &mut budget.detached(), false)
         .map_or(true, |mut reading| reading.declare(operation))
 }
 
@@ -764,13 +768,16 @@ fn declared_view(
 }
 
 /// What the keys of a call's arguments say, or its command text where it has
-/// no argument object.
+/// no argument object. With `declared`, the argument roles of the call's
+/// declaration come before what a key says.
 fn read_arguments(
     observation: &CanonicalObservationV2,
     tool: &ToolObservation,
     budget: &mut RetentionBudget,
+    declared: bool,
 ) -> Result<ArgumentReading, ProcessingError> {
-    let mut reading = ArgumentReading::default();
+    let operation = tool.operation().filter(|_| declared);
+    let mut reading = ArgumentReading::declared(operation);
     match tool.arguments() {
         Some(JsonValue::Object(input)) => reading.read(input),
         Some(JsonValue::String(text)) => {
@@ -779,6 +786,8 @@ fn read_arguments(
             if let Some((input, skipped)) = tool_arguments::decoded_argument_object(text) {
                 reading.read(&input);
                 reading.read_skipped(&skipped);
+            } else if operation.is_some_and(ToolOperation::authored_text) {
+                reading.facts.push(("authored_content", text.clone()));
             } else {
                 reading.command.push_str(text);
             }
@@ -868,7 +877,7 @@ fn read_view(
             for path in tool_arguments::tool_written_paths(tool, declared) {
                 out.put("written_path", path);
             }
-            let mut reading = read_arguments(observation, tool, budget)?;
+            let mut reading = read_arguments(observation, tool, budget, declared)?;
             if let Some(operation) = tool.operation().filter(|_| declared) {
                 reading.declare(operation);
             }
@@ -876,6 +885,7 @@ fn read_view(
                 mut command,
                 argv,
                 facts,
+                ..
             } = reading;
             out.argv = argv;
             for (field, text) in facts {

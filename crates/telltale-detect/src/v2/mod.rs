@@ -26,6 +26,10 @@ mod cloud_credential_tests;
 #[cfg(test)]
 mod declared_operation_tests;
 #[cfg(test)]
+pub(crate) mod declared_role_selector_tests;
+#[cfg(test)]
+mod declared_role_tests;
+#[cfg(test)]
 mod download_link_tests;
 pub mod event3;
 mod http;

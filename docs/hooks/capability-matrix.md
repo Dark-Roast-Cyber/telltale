@@ -87,7 +87,7 @@ Unless a row names another path, hooks were trusted with
 | Adapter deny enforced, bypass flag | Yes (`hookSpecificOutput` deny, non-empty reason), main agent and subagent | E2E |
 | Adapter deny enforced, documented install | Yes: hooks trusted through the real TUI startup review in a pty, then `codex exec` with no bypass flag. The `/hooks` browser and a turn inside the TUI were not exercised | E2E (`trusted`) |
 | Deny served by the autostarted evaluator | Yes, once it is up; the first hook autostarts it and falls back in-process | E2E (`deny-evaluator`) |
-| `apply_patch` deny | Yes: a patch writing `.codex/hooks.json` is denied after runtime normalization and the file is not created; a benign patch applies | E2E (`patch-deny`, `patch-allow`) |
+| `apply_patch` deny | Yes: a patch writing `.codex/hooks.json` is denied through native evaluation and the file is not created; a benign patch applies | E2E (`patch-deny`, `patch-allow`) |
 | Policy `ask` | Returned as deny (Codex cannot ask; a returned ask would run) | E2E |
 | Allow | Nothing printed, call runs | E2E |
 | Correlation | `session:agent:turn:tool_use_id`, escaped; settled by PostToolUse, `Stop`, `SubagentStop` | E2E, Capture |

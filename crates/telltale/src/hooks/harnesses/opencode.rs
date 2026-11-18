@@ -2,30 +2,19 @@
 //! for each callback, not a hash of the input or the reused Code Mode ID.
 //! No terminal notifications are accepted: captured inner calls have no
 //! independently identifiable terminal event. Pending outcomes remain unknown.
-//! Captured native shapes: tests/hooks/fixtures/opencode/2.2.5.
+//! Calls are evaluated as OpenCode sent them, through the OpenCode tool table
+//! of `telltale-sources` (`Adapter::client`). Captured native shapes:
+//! tests/hooks/fixtures/opencode/2.2.5.
 
 use crate::ClientId;
-use crate::hooks::harness::{Adapter, HostRules, Install, NamelessBlock, Normalization, Parsed};
-use crate::hooks::normalize::Rules;
+use crate::hooks::harness::{Adapter, HostRules, Install, NamelessBlock, Parsed};
 use crate::hooks::runtime::{Context, Event, Response, ToolCall};
 use crate::hooks::state::Verdict;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// The `Context::harness` name the adapter will use.
+/// The `Context::harness` name of this adapter.
 pub const NAME: &str = "opencode";
-
-/// OpenCode 1.19.5 `apply_patch` and 2.2.5 `patch` (`{"patchText": patch}`),
-/// `edit` and `multiedit` (`edits[]`) with camelCase keys.
-pub const NORMALIZATION: Rules = Rules {
-    patch_tools: &[
-        ("apply_patch", false, Some("patchText")),
-        ("patch", false, Some("patchText")),
-    ],
-    key_tools: &["edit", "multiedit"],
-    keys: &[("newString", "new_string"), ("oldString", "old_string")],
-    tool_names: &[],
-};
 
 pub const ADAPTER: Adapter = Adapter {
     name: NAME,
@@ -48,7 +37,6 @@ pub const ADAPTER: Adapter = Adapter {
         },
     },
     nameless_block: NamelessBlock::Exit(1),
-    normalization: Normalization::Rules(&NORMALIZATION),
     home: None,
     rules: HostRules::Shared,
     launchers: &["opencode"],
