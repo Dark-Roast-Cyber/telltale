@@ -628,6 +628,12 @@
         "operands": {
           "written": [
             "path"
+          ],
+          "authored": [
+            "newString"
+          ],
+          "replaced": [
+            "oldString"
           ]
         }
       },

@@ -20,8 +20,8 @@ mod harness_identity;
 mod host_rule_integrity;
 #[path = "hooks/journal_id_safety.rs"]
 mod journal_id_safety;
-#[path = "hooks/normalize_parity.rs"]
-mod normalize_parity;
+#[path = "hooks/native_parity.rs"]
+mod native_parity;
 #[path = "hooks/scenarios.rs"]
 mod scenarios;
 #[path = "hooks/self_protection_corpus.rs"]

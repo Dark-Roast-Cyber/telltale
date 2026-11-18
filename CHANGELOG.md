@@ -8,6 +8,26 @@
 
 ### Compatibility and operator impact
 
+- **Hooks and scans read a declared call in its native shape, and declared tool
+  rows say how some arguments are read.** `telltale hooks` no longer reshapes
+  Copilot CLI, Codex CLI or OpenCode tool calls into Claude Code's names and
+  keys; the hook-journal reader declares each call with its own harness's tool
+  table. A table row may now name the argument keys that hold authored content
+  or replaced text (Copilot `file_text`, `new_str`, `old_str`; OpenCode
+  `newString`, `oldString`). A patch is authored content when the text is a
+  patch, and written paths from its headers are unchanged. A hook and a session
+  scan both read such a call as its Claude Code `Write` or `Edit` equivalent:
+  its authored and replaced text is no command, argument, URL or command-derived
+  path text, and the argument and command selectors, including the `arguments`
+  and `command` rule targets, no longer read it. The typed whole-value argument
+  selectors and the action reading of authored content still do, as for the
+  Claude Code call. Text that is no patch, and every key no row names, read as
+  before. Copilot `rg` is a file read. Undeclared calls and MCP tools read as
+  before, and so do the arguments of a Codex call recorded under a namespace: an
+  MCP server's namespace is never declared, and any other namespace gets the
+  row's kind and operands with no argument role. Scan detections for patches, file writes and edits of those clients
+  that only contain or mention commands now match the Claude Code results;
+  output shapes are unchanged.
 - **`telltale hooks` records carry the real harness identity.** The Telltale
   records in hooks telemetry (`telltale[]`) name the harness's own client and
   hook-journal source (`claude`/`claude.hooks`, `codex`/`codex.hooks`,

@@ -419,12 +419,17 @@ fn command_candidates(observation: &CanonicalObservationV2) -> Vec<&str> {
     let mut seen = BTreeSet::new();
     let mut candidates = Vec::new();
 
+    // A call whose declaration gives its arguments a role has no argument text
+    // to read as a command line, and no command where its command member has one.
+    let by_role = super::tool_arguments::reads_by_role(tool);
+    let command_by_role = super::tool_arguments::command_member_has_role(tool);
     add_candidate(
         &mut seen,
         &mut candidates,
         observation
             .facets()
             .get("command.text")
+            .filter(|_| !command_by_role)
             .and_then(|facet| match facet.value() {
                 JsonValue::String(value) => Some(value.as_str()),
                 _ => None,
@@ -434,17 +439,18 @@ fn command_candidates(observation: &CanonicalObservationV2) -> Vec<&str> {
         &mut seen,
         &mut candidates,
         tool.searchable_arguments().filter(|_| {
-            observation
-                .fact_metadata()
-                .get("tool.searchable_arguments")
-                .is_some_and(|metadata| metadata.provenance() == FactProvenance::Reported)
+            !by_role
+                && observation
+                    .fact_metadata()
+                    .get("tool.searchable_arguments")
+                    .is_some_and(|metadata| metadata.provenance() == FactProvenance::Reported)
         }),
     );
     add_candidate(
         &mut seen,
         &mut candidates,
         match tool.arguments() {
-            Some(JsonValue::String(value)) => Some(value.as_str()),
+            Some(JsonValue::String(value)) if !by_role => Some(value.as_str()),
             _ => None,
         },
     );
@@ -840,6 +846,45 @@ mod tests {
             .iter()
             .find(|result| result.detector().id() == id)
             .unwrap_or_else(|| panic!("missing {id}"))
+    }
+
+    #[test]
+    fn a_declared_role_keeps_authored_text_out_of_the_command_candidates() {
+        use crate::v2::declared_role_selector_tests::Call;
+        use serde_json::{Value, json};
+        use telltale_schema::observation::{ToolKind, ToolOperation};
+
+        let text = "cmd.exe /c whoami";
+        let encoded = json!({"command": text}).to_string();
+        let candidates = |operation| {
+            let observation = Call {
+                name: "apply_patch",
+                arguments: Value::String(encoded.clone()),
+                searchable: Some(&encoded),
+                command: Some(text),
+                operation,
+            }
+            .observation();
+            command_candidates(&observation)
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        // With no role the facet and the argument text are command lines.
+        assert_eq!(candidates(None), [text.to_owned(), encoded.clone()]);
+        let write = ToolOperation::new(ToolKind::FileWrite);
+        assert_eq!(
+            candidates(Some(write.clone())),
+            [text.to_owned(), encoded.clone()]
+        );
+        // The command member holds authored text: no candidate, as for the
+        // Claude `Write` reference, whose arguments are an object.
+        assert!(candidates(Some(write.clone().with_authored_key("command"))).is_empty());
+        // Another member is authored: the command facet remains a candidate.
+        assert_eq!(
+            candidates(Some(write.with_authored_key("file_text"))),
+            [text.to_owned()]
+        );
     }
 
     #[test]

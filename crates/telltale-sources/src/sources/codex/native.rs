@@ -41,6 +41,9 @@ pub(crate) enum CodexContentBlock {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CodexToolFields {
     pub(crate) name: Option<String>,
+    /// The namespace a call record gives its tool: an MCP server's or an
+    /// extension's tools carry one, and so do some built-in tools.
+    pub(crate) namespace: Option<String>,
     pub(crate) arguments: Option<Value>,
     pub(crate) call_id: Option<String>,
     pub(crate) result: Option<Value>,
@@ -1411,6 +1414,10 @@ fn codex_tool_fields(value: &Value) -> CodexToolFields {
         name: nested_string_field(value, "tool_name")
             .or_else(|| nested_string_field(value, "tool"))
             .or_else(|| nested_string_field(value, "name")),
+        namespace: value
+            .get("namespace")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         arguments: arguments.cloned(),
         call_id: value
             .get("call_id")
