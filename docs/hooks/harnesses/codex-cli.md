@@ -104,7 +104,7 @@ user; they belong to managed deployment.
 
 | Codex event | Runtime event | Notes |
 | --- | --- | --- |
-| `PreToolUse` | `ToolRequested` | Input reported as Codex sent it (`apply_patch {"command": patch}` included); the runtime normalizes the evaluation encoding (`normalize::CODEX_CLI`, ADR 0002 addendum) |
+| `PreToolUse` | `ToolRequested` | Input reported as Codex sent it (`apply_patch {"command": patch}` included); evaluated in that shape through Codex's tool table (ADR 0002 addendum) |
 | `PostToolUse` | `ToolFinished` | `Completed`, because Codex reports no exit code for shell calls; `Failed` only for an MCP `isError: true` or an `apply_patch` result headed `Exit code: N` (N other than 0) |
 | `Stop` | `TurnSettled` | Main agent (no `agent_id`), scoped to its `turn_id` |
 | `SubagentStop` | `TurnSettled` | Carries the subagent's `agent_id` and `turn_id`, so a parent `Stop` never settles a subagent's calls and a subagent's calls are still settled. **Differs from Claude Code:** no `subagent_stop` lifecycle record is written. It shows only as `established_by: SubagentStop` on outcomes it settles, so a subagent that ends with nothing pending leaves no record of stopping |

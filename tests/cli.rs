@@ -734,6 +734,8 @@ fn health_constructor_normalizes_blank_policy_names_for_schema() {
 mod claude_code_current_format;
 #[path = "cli/codex_current_format.rs"]
 mod codex_current_format;
+#[path = "cli/declared_role_scan.rs"]
+mod declared_role_scan;
 #[path = "cli/export.rs"]
 mod export;
 #[path = "cli/migration.rs"]

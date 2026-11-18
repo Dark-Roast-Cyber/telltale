@@ -9,9 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::ClientId;
-use crate::hooks::harness::{
-    Adapter, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
-};
+use crate::hooks::harness::{Adapter, HostRules, Install, InstallOutput, NamelessBlock, Parsed};
 use crate::hooks::harnesses::{copilot_cli, payload};
 use crate::hooks::runtime::{Completion, Context, Event, Response, SettledCall, ToolCall};
 use crate::hooks::state::Verdict;
@@ -334,7 +332,6 @@ pub const ADAPTER: Adapter = Adapter {
     // still prompts: the known residual for this harness.
     nameless_block: NamelessBlock::Exit(2),
     // The evaluation encoding is Claude Code's own (ADR 0002).
-    normalization: Normalization::Identity,
     home: None,
     rules: HostRules::Shared,
     launchers: &["claude"],

@@ -54,7 +54,7 @@ the same session correlate with the parent's earlier calls.
   first-class "evaluate host-supplied canonical activity" facade would remove
   the temp file; it stays open (see that addendum).
 - The encoding also loses detection facts for other harnesses' input
-  shapes. Parity tests (`crates/telltale/tests/hooks/normalize_parity.rs`) proved this, and it
+  shapes. Parity tests (`crates/telltale/tests/hooks/native_parity.rs`) showed this, and it
   is requested upstream as
   a recorded upstream request:
   a Supported way to evaluate pending actions in harness-native shapes,
@@ -62,7 +62,8 @@ the same session correlate with the parent's earlier calls.
 
 ## Addendum (2026-11-04): interim input normalization
 
-Status: Accepted. Exit criterion: a recorded upstream request (or equivalent) lands in a
+Status: Superseded by the addendum of 2026-11-17 (native evaluation); kept as the
+record of the interim design. Exit criterion: a recorded upstream request (or equivalent) lands in a
 pinned Telltale revision.
 
 Telltale's Claude adapter routes tool arguments by key, and read detection
@@ -150,7 +151,7 @@ hook configuration (`tth.tamper.hook_settings_reference`, 60: ask, where
 Claude `Edit` is denied), and a benign patch (no detection).
 
 Decision: Codex calls use the existing Claude Code JSONL journal, and the
-runtime's normalization (addendum above, `normalize::CODEX_CLI`) closes the
+runtime's evaluation of the native call (addendum of 2026-11-17) closes the
 patch gap: through the adapter, a patch to the Codex hook file is denied
 (`tests/cli/hooks_codex_cli_contract.rs`). The rollout encoding gains no detection, has no lever for a
 patch's `written_path` either, and would add a second journal writer whose
@@ -276,7 +277,8 @@ changes is the identity the window is scanned under.
 - Relabeling a record after evaluation was rejected: it would pair a client with
   a source that is not its own and break exact `(ClientId, source_id)`
   ownership, which acquisition and detection both check.
-- The evaluation encoding and `normalize.rs` are unchanged. They go per tool
+- The evaluation encoding and `normalize.rs` are unchanged (superseded: the
+  addendum of 2026-11-17 removed `normalize.rs`). They go per tool
   family when a client's own tool table reaches parity with what normalization
   reshapes, as before; this addendum does not move that date.
 - The record identity of Codex and Copilot calls changes once, from the Claude
@@ -285,3 +287,52 @@ changes is the identity the window is scanned under.
 - Adding a harness therefore needs its hooks adapter and, if its client is new,
   its `ClientId` value, and nothing in `telltale-sources` or `telltale-detect`.
 - A facade that evaluates host-supplied activity without a file stays open.
+
+## Addendum (2026-11-17): native evaluation; the interim normalization is gone
+
+Status: Accepted. Supersedes the addendum of 2026-11-04 (interim input
+normalization) and the line of the 2026-11-17 identity addendum that kept it.
+
+The runtime no longer reshapes a harness's tool call. It journals the call with
+the harness's own tool name and input, and the journal reader of
+`(client, "<client>.hooks")` declares each call with that client's tool table
+(`telltale-sources`), as it does for the client's own session files. Claude
+Code hooks keep Claude's table.
+
+What made the normalization unnecessary: a table row may now say how a named
+argument is read. Only the keys a row names get a role: authored content (text
+the call writes, such as Copilot `file_text` and `new_str` or OpenCode
+`newString`), or replaced text (Copilot `old_str`, OpenCode `oldString`), which
+is no action fact. A patch key, and the argument text of a patch tool whose
+call carries no object, are authored content only when the text is a patch;
+otherwise the key keeps its structural reading, so a command in a patch key is
+still a command. A declaration is the first place that removes a reading, so
+the limits are part of the decision: no pattern or default roles; a name an MCP
+server gives its tools is never declared; the written paths a patch names are
+unchanged. The roles are read by both consumers of a call, the action reading
+that hooks evaluate and the session selectors that a scan evaluates, so a call
+with roles reads as its Claude Code `Write` or `Edit` equivalent in both: its
+argument text is no text for `compat.v1.arguments` and `tool.arguments.text`,
+the command facet is no command where the member it was copied from has a role,
+and process-chain command lines do not read it. The typed `tool.arguments` and
+`tool.searchable_arguments` selectors keep the whole value, as they do for the
+Claude Code call, which also keeps authored content in the action reading.
+Copilot `rg` is a search with an optional root, like `grep`, so
+its row is a file read.
+
+`native_parity.rs` pins every native variant of the captured shapes (Copilot
+CLI, Codex CLI, OpenCode 1.19.5 and 2.2.5) to the Claude Code reference, with
+the benign twins. OpenCode has no hooks adapter yet, so its variants are
+evaluated by the engine under the OpenCode client and compared with the Claude
+reference evaluated the same way.
+
+Consequences:
+
+- `Telltale[]` records, the pending line and the journaled history describe the
+  native call, as telemetry `action` already did.
+- `hooks/normalize.rs`, `Adapter::normalization` and the per-adapter
+  normalization constants are deleted. Adding a harness no longer declares
+  shapes in its adapter; its built-in tools go in its source's tool table.
+- `Engine::evaluate` takes the `ClientId` of the journal it scans instead of a
+  registered `Harness`, so a client without an adapter can be evaluated in
+  tests.

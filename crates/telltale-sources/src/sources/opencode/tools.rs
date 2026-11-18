@@ -18,8 +18,15 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("grep", FileRead).read(&["path"]).optional(),
     ToolSpec::new("list", FileRead).read(&["path"]).optional(),
     ToolSpec::new("write", FileWrite).written(&["filePath", "path"]),
-    ToolSpec::new("edit", FileWrite).written(&["filePath", "path"]),
-    ToolSpec::new("multiedit", FileWrite).written(&["filePath", "path"]),
+    // The text an edit writes is authored content; the text it replaces is not.
+    ToolSpec::new("edit", FileWrite)
+        .written(&["filePath", "path"])
+        .authored(&["newString"])
+        .replaced(&["oldString"]),
+    ToolSpec::new("multiedit", FileWrite)
+        .written(&["filePath", "path"])
+        .authored(&["newString"])
+        .replaced(&["oldString"]),
     ToolSpec::new("patch", FileWrite).patch(&["patchText"]),
     ToolSpec::new("apply_patch", FileWrite).patch(&["patchText"]),
     ToolSpec::new("webfetch", Web).urls(&["url"]),

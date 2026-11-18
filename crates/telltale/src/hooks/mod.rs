@@ -5,8 +5,7 @@
 //! Layout: harness adapters (`harnesses/`, one module and one descriptor per
 //! harness), selected through the `harness` registry, translate native hook
 //! payloads into harness-neutral `runtime` events. Harness knowledge stays in
-//! the adapters: everything else reads the descriptor. `normalize` reshapes
-//! non-Claude tool inputs for the evaluation encoding (ADR 0002). The runtime journals what the
+//! the adapters: everything else reads the descriptor. The runtime journals what the
 //! harness reported (`journal`, `state`), evaluates it with Telltale
 //! (`engine`), applies host promotion policy (`policy`) and writes
 //! telemetry envelopes around Telltale's own records (`telemetry`).
@@ -27,7 +26,6 @@ pub mod harness;
 pub mod harnesses;
 pub mod identity;
 pub mod journal;
-pub mod normalize;
 pub mod policy;
 pub mod projection;
 pub mod runtime;
