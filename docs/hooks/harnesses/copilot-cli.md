@@ -10,6 +10,11 @@ Status: **adapter implemented** (`crates/telltale/src/hooks/harnesses/copilot_cl
   scripted model, `scripts/hooks/harness/copilot-cli-e2e.py`, results in
   [docs/hooks/e2e/2026-11-04-copilot-cli-1.0.105.md](../e2e/2026-11-04-copilot-cli-1.0.105.md).
 - A real-model run is pending (it needs the user's Copilot auth; ).
+- Integrated executable (E2E, 2026-11-17): **1.0.105**, scripted model,
+  ordinary control/deny pair, in-process evaluation and native generated hook
+  file. Same-call receipts and outcomes joined
+  ([report](../e2e/2026-11-17-integrated-pilot.md)); other modes above remain
+  historical evidence.
 
 The docs reference is github/docs `content/copilot/reference/hooks-reference`.
 

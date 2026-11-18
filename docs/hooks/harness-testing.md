@@ -115,6 +115,31 @@ COPILOT_BIN=/path/to/copilot scripts/hooks/harness/copilot-cli-e2e.py [scenario 
 
 ## Hook contract captures (Copilot CLI, Codex CLI, OpenCode)
 
+Integrated command-hook qualification: run Codex `allow deny`, Copilot
+`benign deny`, and Claude `benign deny` as pairs against the same executable.
+Codex and Copilot now join the native attempted input hash/tool, returned
+marker record ID, model receipt and outcome's decision record ID. An absent
+canary or a failed launch alone cannot pass. Both drivers return nonzero for
+failed qualification. Receipt files remain private; publish content-free
+summaries only.
+
+### OpenCode v2 pilot
+
+`scripts/hooks/harness/opencode-v2-e2e.py` installs the real plugin factory in
+isolated HOME/XDG roots and runs the pinned binary with `--standalone` and a
+scripted loopback provider, never the managed service. Set `OPENCODE_V2_BIN`,
+`TTH_BIN` and a private `E2E_ROOT`. Its default scenarios pair ordinary and
+inner MCP controls/denials, repeat concurrent identical inner calls, allow a
+parallel sibling, exercise detect-only and break plugin initialization.
+Additional scenarios: `failure-missing`, `failure-invalid`, `failure-hang`,
+`failure-lost`, `failure-noop`, `detect-failure-hang`,
+`detect-failure-missing`. Lost-reply records are not proof of receipt.
+
+`node --test tests/hooks_opencode_plugin.test.mjs` exercises real child
+processes for framing, limits, capacity, reaping and occurrence IDs, with a
+synthetic executable substituted at the external boundary. It is regression
+coverage, **not** live harness qualification.
+
 Capture tooling, not adapters. It runs the real harness binaries against a
 scripted model, so it needs no credentials and spends no model tokens. Stub
 hooks record each payload and apply a configured decision to a canary call,
