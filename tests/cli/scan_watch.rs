@@ -4364,6 +4364,86 @@ rules:
 }
 
 #[test]
+fn scan_activity_limits_workspace_mcp_discovery_to_project_configuration() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("selected-project");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(project.join("nested")).unwrap();
+    for (directory, name) in [
+        (home.clone(), "home-fixed"),
+        (home.join("Music"), "personal-music"),
+        (home.join("Pictures"), "personal-pictures"),
+        (home.join("Library"), "personal-library"),
+        (home.join("unconfigured-project"), "unconfigured"),
+        (project.clone(), "project-root"),
+        (project.join("nested"), "project-nested"),
+    ] {
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(".mcp.json"),
+            serde_json::json!({"mcpServers": {name: {"command": "synthetic-mcp"}}}).to_string(),
+        )
+        .unwrap();
+    }
+    let project_config = temp.path().join("projects.yaml");
+    fs::write(
+        &project_config,
+        format!(
+            "projects:\n  - name: selected\n    path: '{}'\n",
+            project.display()
+        ),
+    )
+    .unwrap();
+
+    for configured in [false, true] {
+        let log = temp.path().join(format!("events-{configured}.jsonl"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .args([
+                "scan",
+                "--once",
+                "--emit-activity",
+                "--no-local-config",
+                "--install-inventory-disabled",
+                "--root",
+            ])
+            .arg(&home)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(temp.path().join(format!("state-{configured}.json")));
+        for key in ["SystemRoot", "windir"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        if configured {
+            command.arg("--project-config").arg(&project_config);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["activity_count"], if configured { 3 } else { 1 });
+        let events = fs::read_to_string(log).unwrap();
+        assert!(events.contains("mcp::home-fixed"));
+        assert_eq!(events.contains("mcp::project-root"), configured);
+        assert_eq!(events.contains("mcp::project-nested"), configured);
+        for excluded in [
+            "personal-music",
+            "personal-pictures",
+            "personal-library",
+            "unconfigured",
+        ] {
+            assert!(!events.contains(excluded));
+        }
+    }
+}
+
+#[test]
 fn scan_once_activity_includes_static_mcp_inventory_events() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("home");

@@ -673,15 +673,16 @@ fn native_ctx(harness: &'static str) -> Context {
     }
 }
 
-/// The runtime normalizes the evaluation encoding itself: a native patch to
-/// the hook settings is denied under every registered harness, while telemetry
+/// A native patch to the hook settings is denied under every registered harness
+/// that has a patch tool, read with its client's tool table, and telemetry
 /// describes the call exactly as the harness sent it.
 #[test]
 fn native_patches_are_denied_and_reported_as_sent() {
     let small = settings_patch(0);
-    let cases: [(&'static str, &str, Value); 2] = [
+    let cases: [(&'static str, &str, Value); 3] = [
         ("codex-cli", "apply_patch", json!({"command": small})),
         ("copilot-cli", "apply_patch", json!(small)),
+        ("opencode", "patch", json!({"patchText": small})),
     ];
     for (harness, tool, input) in cases {
         let mut h = Harness::new();
@@ -710,8 +711,8 @@ fn native_patches_are_denied_and_reported_as_sent() {
             telltale_core::hooks::telemetry::sha256_hex(input.to_string().as_bytes()),
             "{harness}"
         );
-        // Telltale's own records come from the normalized encoding: the path
-        // rule fired although the native shape carries no path key.
+        // Telltale's own records describe the native call: the path rule
+        // fired from the patch headers although the shape carries no path key.
         assert!(
             !record["telltale"].as_array().unwrap().is_empty(),
             "{harness}: {record:#}"
@@ -720,10 +721,10 @@ fn native_patches_are_denied_and_reported_as_sent() {
     }
 }
 
-/// Past Telltale's per-value bound, the normalized Codex patch is evaluated
-/// through the projection and still denied.
+/// Past Telltale's per-value bound, a native Codex patch is evaluated through
+/// the projection and still denied.
 #[test]
-fn a_large_codex_patch_is_denied_via_the_projection_of_the_normalized_input() {
+fn a_large_codex_patch_is_denied_via_the_projection_of_its_native_input() {
     let mut h = Harness::new();
     let call = ToolCall {
         tool_use_id: Some("big".into()),

@@ -53,12 +53,10 @@ the same session correlate with the parent's earlier calls.
   each record carries its own harness's identity (addendum of 2026-11-17).* A
   first-class "evaluate host-supplied canonical activity" facade would remove
   the temp file; it stays open (see that addendum).
-- The encoding also loses detection facts for other harnesses' input
-  shapes. Parity tests (`crates/telltale/tests/hooks/native_parity.rs`) showed this, and it
-  is requested upstream as
-  a recorded upstream request:
-  a Supported way to evaluate pending actions in harness-native shapes,
-  or the narrower fixes. Until then, see the addendum below.
+- The encoding also lost detection facts for other harnesses' input
+  shapes, which parity tests showed. *Superseded: each call is read with its
+  own client's tool table (addendum of 2026-11-17, native evaluation), and
+  `crates/telltale/tests/hooks/native_parity.rs` pins the result.*
 
 ## Addendum (2026-11-04): interim input normalization
 
@@ -325,9 +323,9 @@ its row is a file read.
 
 `native_parity.rs` pins every native variant of the captured shapes (Copilot
 CLI, Codex CLI, OpenCode 1.19.5 and 2.2.5) to the Claude Code reference, with
-the benign twins. OpenCode has no hooks adapter yet, so its variants are
-evaluated by the engine under the OpenCode client and compared with the Claude
-reference evaluated the same way.
+the benign twins. OpenCode's variants go through the runtime under its adapter
+name, `opencode` (the v2 request-only pilot, added after this addendum), like
+the other harnesses.
 
 Consequences:
 
@@ -337,5 +335,5 @@ Consequences:
   normalization constants are deleted. Adding a harness no longer declares
   shapes in its adapter; its built-in tools go in its source's tool table.
 - `Engine::evaluate` takes the `ClientId` of the journal it scans instead of a
-  registered `Harness`, so a client without an adapter can be evaluated in
-  tests.
+  registered `Harness`: the client, not the adapter, chooses the journal
+  identity and the tool table.
