@@ -2,6 +2,7 @@
 //! resolution of rule, policy and allowlist paths. Setting values and their
 //! precedence live in `settings`.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -232,13 +233,31 @@ fn default_config_roots() -> Vec<PathBuf> {
 }
 
 fn user_config_root() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
+    // Windows rarely sets HOME; USERPROFILE is where Git Bash and similar shells point it.
+    let profile = if cfg!(windows) {
+        std::env::var_os("USERPROFILE")
+    } else {
+        None
+    };
+    user_config_root_from(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+        profile,
+    )
+}
+
+fn user_config_root_from(
+    xdg_config_home: Option<OsString>,
+    home: Option<OsString>,
+    windows_profile: Option<OsString>,
+) -> Option<PathBuf> {
+    let set = |value: Option<OsString>| value.filter(|value| !value.is_empty());
+    set(xdg_config_home)
         .map(|value| PathBuf::from(value).join("telltale"))
         .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|value| !value.is_empty())
-                .map(|value| PathBuf::from(value).join(".config/telltale"))
+            set(home)
+                .or_else(|| set(windows_profile))
+                .map(|value| PathBuf::from(value).join(".config").join("telltale"))
         })
 }
 
@@ -319,6 +338,38 @@ mod tests {
     fn write(path: &Path) {
         fs::create_dir_all(path.parent().expect("parent dir")).expect("create parent");
         fs::write(path, "---\n").expect("write file");
+    }
+
+    #[test]
+    fn user_config_root_prefers_xdg_then_home_then_windows_profile() {
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+        let root = |xdg: Option<&str>, home: Option<&str>, profile: Option<&str>| {
+            super::user_config_root_from(
+                xdg.map(OsString::from),
+                home.map(OsString::from),
+                profile.map(OsString::from),
+            )
+        };
+        let dot_config = |base: &str| PathBuf::from(base).join(".config").join("telltale");
+        assert_eq!(
+            root(Some("xdg"), Some("home"), Some("profile")),
+            Some(PathBuf::from("xdg").join("telltale"))
+        );
+        assert_eq!(
+            root(Some(""), Some("home"), Some("profile")),
+            Some(dot_config("home"))
+        );
+        assert_eq!(
+            root(None, Some(""), Some("profile")),
+            Some(dot_config("profile"))
+        );
+        assert_eq!(
+            root(None, None, Some("profile")),
+            Some(dot_config("profile"))
+        );
+        assert_eq!(root(None, None, Some("")), None);
+        assert_eq!(root(None, None, None), None);
     }
 
     #[test]
