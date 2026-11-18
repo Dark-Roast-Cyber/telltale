@@ -274,11 +274,27 @@ mod tests {
     #[test]
     fn load_default_projects_returns_every_default_that_exists() {
         let temp = tempdir().expect("tempdir");
-        let home = temp.path().join("home");
+        let home = temp
+            .path()
+            .canonicalize()
+            .expect("canonical tempdir")
+            .join("home");
         fs::create_dir_all(&home).expect("home dir");
         fs::create_dir_all(home.join("github")).expect("github dir");
         fs::create_dir_all(home.join("projects")).expect("projects dir");
         let projects = load_default_projects_with_home(Some(&home));
-        assert_eq!(projects.len(), 2);
+        assert_eq!(
+            projects,
+            vec![
+                ProjectDef {
+                    name: "github".to_string(),
+                    path: home.join("github"),
+                },
+                ProjectDef {
+                    name: "projects".to_string(),
+                    path: home.join("projects"),
+                },
+            ]
+        );
     }
 }
