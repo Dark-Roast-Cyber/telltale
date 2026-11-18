@@ -12,9 +12,9 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("Read", FileRead).read(&["path"]),
     // Searches by pattern: no file is read by name, so kind other.
     ToolSpec::new("rg", Other),
-    ToolSpec::new("grep", FileRead).read(&["path"]),
-    ToolSpec::new("Grep", FileRead).read(&["path"]),
-    ToolSpec::new("glob", FileRead).read(&["path"]),
+    ToolSpec::new("grep", FileRead).read(&["path"]).optional(),
+    ToolSpec::new("Grep", FileRead).read(&["path"]).optional(),
+    ToolSpec::new("glob", FileRead).read(&["path"]).optional(),
     ToolSpec::new("create", FileWrite).written(&["path"]),
     ToolSpec::new("Write", FileWrite).written(&["path"]),
     // `Edit` takes the file keys or, from some clients, a bare patch.

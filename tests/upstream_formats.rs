@@ -22,6 +22,7 @@ use telltale_sources::clients::{ClientDef, ClientSourceDef, supported_clients};
 
 const CASES: &str = "tests/upstream_formats/cases";
 const HARNESSES: &str = "tests/upstream_formats/harnesses.json";
+const TOOLS: &str = "tests/upstream_formats/tools.json";
 const OBSERVED_AT: &str = "2026-10-13T00:00:00Z";
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
@@ -657,4 +658,168 @@ fn every_harness_is_pinned_and_has_cases() {
             "{key}: add at least one case for this harness"
         );
     }
+}
+
+/// The built-in tools of one harness as recorded from upstream.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedTools {
+    /// `source` (read at the pin), `documentation` (published reference, not
+    /// tied to the pin), `not_published` or `unrecorded`.
+    evidence: String,
+    /// Whether `tools` lists every built-in tool the evidence names. Only a
+    /// complete list can show a table row that upstream no longer has.
+    #[serde(default)]
+    complete: bool,
+    scope: String,
+    #[serde(default)]
+    references: Vec<String>,
+    #[serde(default)]
+    tools: Vec<RecordedTool>,
+    /// Tool names kept in the table that the recorded list does not contain.
+    #[serde(default)]
+    older_names: Vec<OlderName>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedTool {
+    name: String,
+    /// A link into the harness repository at its pinned commit, with a line.
+    #[serde(default)]
+    upstream: Option<String>,
+    kind: String,
+    /// Operand argument keys by category: `command`, `written`, `read`, `url`
+    /// and `patch`. Every key recorded here must be read by the table row.
+    #[serde(default)]
+    operands: BTreeMap<String, Vec<String>>,
+    /// Required for kind `other`: why the tool has no operand to declare.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OlderName {
+    name: String,
+    reason: String,
+}
+
+/// A new upstream tool with no table row would be read as unclassified, and a
+/// table row upstream no longer has would be stale. Compares the recorded tool
+/// lists with the source tables, offline.
+#[test]
+fn recorded_tool_lists_match_the_source_tables() {
+    let harnesses = load_harnesses();
+    let text = fs::read_to_string(repo_path(TOOLS)).expect("tool list manifest");
+    let recorded: BTreeMap<String, RecordedTools> =
+        serde_json::from_str(&text).expect("tool list manifest JSON");
+    let declared = telltale_sources::declared_tools();
+    let mut failures = Vec::new();
+    assert_eq!(
+        harnesses.keys().collect::<Vec<_>>(),
+        recorded.keys().collect::<Vec<_>>(),
+        "every pinned harness needs a tool list entry, even when none is published"
+    );
+    for (key, harness) in &harnesses {
+        let list = &recorded[key];
+        assert!(!list.scope.is_empty(), "{key}: scope");
+        let rows: BTreeMap<&str, &telltale_sources::DeclaredTool> = declared
+            .iter()
+            .filter(|tool| tool.client.as_str() == harness.client)
+            .map(|tool| (tool.name, tool))
+            .collect();
+        match list.evidence.as_str() {
+            "source" => {
+                if let Some(tool) = list.tools.iter().find(|tool| {
+                    !tool
+                        .upstream
+                        .as_deref()
+                        .is_some_and(|url| cites_pinned_harness(url, harness) && url.contains("#L"))
+                }) {
+                    failures.push(format!(
+                        "{key}: {} must cite a line of the pinned harness source",
+                        tool.name
+                    ));
+                }
+            }
+            "documentation" => {
+                if list.references.is_empty() {
+                    failures.push(format!("{key}: documentation evidence needs references"));
+                }
+            }
+            "not_published" | "unrecorded" => {
+                if !list.tools.is_empty() {
+                    failures.push(format!("{key}: {} evidence lists no tools", list.evidence));
+                }
+                continue;
+            }
+            other => failures.push(format!("{key}: unknown evidence {other}")),
+        }
+        let mut names = BTreeSet::new();
+        for tool in &list.tools {
+            if !names.insert(tool.name.as_str()) {
+                failures.push(format!("{key}: {} is recorded twice", tool.name));
+            }
+            let Some(row) = rows.get(tool.name.as_str()) else {
+                failures.push(format!(
+                    "{key}: {} is a built-in tool with no table row; add one (kind other needs a reason)",
+                    tool.name
+                ));
+                continue;
+            };
+            if row.kind.as_str() != tool.kind {
+                failures.push(format!(
+                    "{key}: {} is recorded as {} but the table says {}",
+                    tool.name,
+                    tool.kind,
+                    row.kind.as_str()
+                ));
+            }
+            if tool.kind == "other" && tool.reason.as_deref().is_none_or(str::is_empty) {
+                failures.push(format!("{key}: {} is other without a reason", tool.name));
+            }
+            for (category, keys) in &tool.operands {
+                let read = row
+                    .operand_keys
+                    .iter()
+                    .find(|(name, _)| name == category)
+                    .map(|(_, keys)| *keys);
+                for operand in keys {
+                    if !read.is_some_and(|read| read.contains(&operand.as_str())) {
+                        failures.push(format!(
+                            "{key}: {} records {category} operand `{operand}` that the table row does not read",
+                            tool.name
+                        ));
+                    }
+                }
+            }
+        }
+        let older: BTreeSet<&str> = list
+            .older_names
+            .iter()
+            .map(|old| old.name.as_str())
+            .collect();
+        for old in &list.older_names {
+            if old.reason.is_empty() {
+                failures.push(format!("{key}: older name {} needs a reason", old.name));
+            }
+            if names.contains(old.name.as_str()) {
+                failures.push(format!("{key}: {} is recorded and marked older", old.name));
+            }
+            if !rows.contains_key(old.name.as_str()) {
+                failures.push(format!("{key}: older name {} has no table row", old.name));
+            }
+        }
+        if list.complete {
+            for name in rows.keys() {
+                if !names.contains(name) && !older.contains(name) {
+                    failures.push(format!(
+                        "{key}: table row {name} is not in the recorded list; record it or mark it as an older name with a reason"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

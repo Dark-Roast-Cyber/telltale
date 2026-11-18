@@ -1,0 +1,1234 @@
+{
+  "claude-code": {
+    "evidence": "documentation",
+    "complete": true,
+    "scope": "Tools listed in the published tools reference, read on 2026-11-17. The reference is not tied to the pinned release: it can list tools newer than the pin, and operand keys are those of the published hook input reference. The source is not published.",
+    "references": [
+      "https://code.claude.com/docs/en/tools-reference",
+      "https://code.claude.com/docs/en/hooks#pretooluse-input"
+    ],
+    "tools": [
+      {
+        "name": "Bash",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "PowerShell",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "Read",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "name": "Glob",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "Grep",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "Write",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "name": "Edit",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "name": "NotebookEdit",
+        "kind": "file_write"
+      },
+      {
+        "name": "WebFetch",
+        "kind": "web",
+        "operands": {
+          "url": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "WebSearch",
+        "kind": "web"
+      },
+      {
+        "name": "Agent",
+        "kind": "delegate"
+      },
+      {
+        "name": "SendMessage",
+        "kind": "delegate"
+      },
+      {
+        "name": "Workflow",
+        "kind": "delegate"
+      },
+      {
+        "name": "Artifact",
+        "kind": "other",
+        "reason": "operand keys are not published"
+      },
+      {
+        "name": "AskUserQuestion",
+        "kind": "other",
+        "reason": "asks the user a question; no operand"
+      },
+      {
+        "name": "CronCreate",
+        "kind": "other",
+        "reason": "schedules a prompt; no file, command or URL operand"
+      },
+      {
+        "name": "CronDelete",
+        "kind": "other",
+        "reason": "cancels a scheduled prompt; no operand"
+      },
+      {
+        "name": "CronList",
+        "kind": "other",
+        "reason": "lists scheduled prompts; no operand"
+      },
+      {
+        "name": "EndConversation",
+        "kind": "other",
+        "reason": "ends the session; no operand"
+      },
+      {
+        "name": "EnterPlanMode",
+        "kind": "other",
+        "reason": "switches mode; no operand"
+      },
+      {
+        "name": "EnterWorktree",
+        "kind": "other",
+        "reason": "operand keys are not published"
+      },
+      {
+        "name": "ExitPlanMode",
+        "kind": "other",
+        "reason": "presents a plan; no operand"
+      },
+      {
+        "name": "ExitWorktree",
+        "kind": "other",
+        "reason": "switches working directory; no operand"
+      },
+      {
+        "name": "ListAgents",
+        "kind": "other",
+        "reason": "lists agents; no operand"
+      },
+      {
+        "name": "ListMcpResourcesTool",
+        "kind": "other",
+        "reason": "addresses MCP resources, not files or URLs"
+      },
+      {
+        "name": "LSP",
+        "kind": "other",
+        "reason": "operand keys are not published"
+      },
+      {
+        "name": "Monitor",
+        "kind": "other",
+        "reason": "operand keys are not published"
+      },
+      {
+        "name": "PushNotification",
+        "kind": "other",
+        "reason": "notifies the user; no operand"
+      },
+      {
+        "name": "ReadMcpResourceTool",
+        "kind": "other",
+        "reason": "addresses an MCP resource, not a file or URL"
+      },
+      {
+        "name": "RemoteTrigger",
+        "kind": "other",
+        "reason": "manages cloud scheduled tasks; no file, command or URL operand"
+      },
+      {
+        "name": "ReportFindings",
+        "kind": "other",
+        "reason": "reports review findings; no operand"
+      },
+      {
+        "name": "ScheduleWakeup",
+        "kind": "other",
+        "reason": "schedules the next loop iteration; no operand"
+      },
+      {
+        "name": "SendFeedback",
+        "kind": "other",
+        "reason": "drafts a feedback report; no operand"
+      },
+      {
+        "name": "SendUserFile",
+        "kind": "other",
+        "reason": "operand keys are not published"
+      },
+      {
+        "name": "ShareOnboardingGuide",
+        "kind": "other",
+        "reason": "uploads a guide; no operand"
+      },
+      {
+        "name": "Skill",
+        "kind": "other",
+        "reason": "runs a skill by name; no operand"
+      },
+      {
+        "name": "SubagentHandback",
+        "kind": "other",
+        "reason": "returns a sub-agent report; no operand"
+      },
+      {
+        "name": "TaskCreate",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no operand"
+      },
+      {
+        "name": "TaskGet",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no operand"
+      },
+      {
+        "name": "TaskList",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no operand"
+      },
+      {
+        "name": "TaskStop",
+        "kind": "other",
+        "reason": "stops a background task; no operand"
+      },
+      {
+        "name": "TaskUpdate",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no operand"
+      },
+      {
+        "name": "TodoWrite",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no operand"
+      },
+      {
+        "name": "ToolSearch",
+        "kind": "other",
+        "reason": "loads deferred tools; no operand"
+      },
+      {
+        "name": "WaitForMcpServers",
+        "kind": "other",
+        "reason": "waits for MCP servers; no operand"
+      }
+    ],
+    "older_names": [
+      {
+        "name": "TaskOutput",
+        "reason": "removed in v2.1.277, before the pin; kept for transcripts written by earlier releases"
+      },
+      {
+        "name": "Task",
+        "reason": "earlier name of Agent; kept for transcripts written by earlier releases"
+      },
+      {
+        "name": "NotebookRead",
+        "reason": "earlier tool; kept for transcripts written by earlier releases"
+      },
+      {
+        "name": "MultiEdit",
+        "reason": "earlier tool; kept for transcripts written by earlier releases"
+      },
+      {
+        "name": "LS",
+        "reason": "earlier tool; kept for transcripts written by earlier releases"
+      }
+    ]
+  },
+  "codex": {
+    "evidence": "source",
+    "complete": true,
+    "scope": "Model-visible tools of the core tool handlers, the code-mode protocol and the hosted tools at the pin. Extension crates under codex-rs/ext register their own namespaced tools and are not listed.",
+    "tools": [
+      {
+        "name": "exec_command",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs#L113",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "cmd"
+          ]
+        }
+      },
+      {
+        "name": "write_stdin",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs#L41",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "apply_patch",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/apply_patch.rs#L286",
+        "kind": "file_write",
+        "operands": {
+          "patch": [
+            "input"
+          ]
+        }
+      },
+      {
+        "name": "view_image",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/view_image.rs#L74",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "update_plan",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/plan.rs#L50",
+        "kind": "other",
+        "reason": "plan bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "request_permissions",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/request_permissions.rs#L32",
+        "kind": "other",
+        "reason": "asks the user for permissions; no operand"
+      },
+      {
+        "name": "request_user_input",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/request_user_input_spec.rs#L9",
+        "kind": "other",
+        "reason": "asks the user a question; no operand"
+      },
+      {
+        "name": "request_user_input_async",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/request_user_input_async.rs#L22",
+        "kind": "other",
+        "reason": "asks the user a question; no operand"
+      },
+      {
+        "name": "send_message_to_user_async",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/send_message_to_user_async.rs#L21",
+        "kind": "other",
+        "reason": "messages the user; no operand"
+      },
+      {
+        "name": "get_context_remaining",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/get_context_remaining_spec.rs#L8",
+        "kind": "other",
+        "reason": "reports the remaining context; no operand"
+      },
+      {
+        "name": "new_context",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/new_context_window_spec.rs#L6",
+        "kind": "other",
+        "reason": "starts a new context window; no operand"
+      },
+      {
+        "name": "curr_time",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/current_time.rs#L25",
+        "kind": "other",
+        "reason": "reads the clock; no operand"
+      },
+      {
+        "name": "sleep",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/sleep.rs#L27",
+        "kind": "other",
+        "reason": "waits; no operand"
+      },
+      {
+        "name": "tool_search",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tools/src/tool_discovery.rs#L6",
+        "kind": "other",
+        "reason": "searches the tool catalogue; no operand"
+      },
+      {
+        "name": "list_available_plugins_to_install",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tools/src/tool_discovery.rs#L8",
+        "kind": "other",
+        "reason": "lists installable plugins; no operand"
+      },
+      {
+        "name": "request_plugin_install",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tools/src/tool_discovery.rs#L9",
+        "kind": "other",
+        "reason": "asks the user to install a plugin; no file, command or URL operand"
+      },
+      {
+        "name": "list_mcp_resources",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/mcp_resource/list_mcp_resources.rs#L25",
+        "kind": "other",
+        "reason": "addresses MCP resources, not files or URLs"
+      },
+      {
+        "name": "list_mcp_resource_templates",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/mcp_resource/list_mcp_resource_templates.rs#L25",
+        "kind": "other",
+        "reason": "addresses MCP resources, not files or URLs"
+      },
+      {
+        "name": "read_mcp_resource",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/mcp_resource/read_mcp_resource.rs#L28",
+        "kind": "other",
+        "reason": "addresses an MCP resource, not a file or URL"
+      },
+      {
+        "name": "spawn_agent",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs#L31",
+        "kind": "delegate"
+      },
+      {
+        "name": "send_input",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs#L13",
+        "kind": "delegate"
+      },
+      {
+        "name": "resume_agent",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs#L11",
+        "kind": "delegate"
+      },
+      {
+        "name": "wait_agent",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents/wait.rs#L33",
+        "kind": "other",
+        "reason": "waits for a sub-agent that already runs; hands no work over"
+      },
+      {
+        "name": "close_agent",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs#L9",
+        "kind": "other",
+        "reason": "closes a sub-agent; hands no work over"
+      },
+      {
+        "name": "send_message",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents_v2/send_message.rs#L13",
+        "kind": "delegate"
+      },
+      {
+        "name": "followup_task",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents_v2/followup_task.rs#L13",
+        "kind": "delegate"
+      },
+      {
+        "name": "interrupt_agent",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents_v2/interrupt_agent.rs#L12",
+        "kind": "other",
+        "reason": "interrupts a sub-agent; hands no work over"
+      },
+      {
+        "name": "list_agents",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/multi_agents_v2/list_agents.rs#L10",
+        "kind": "other",
+        "reason": "lists sub-agents; hands no work over"
+      },
+      {
+        "name": "wait_for_environment",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/wait_for_environment.rs#L19",
+        "kind": "other",
+        "reason": "waits for an environment; no operand"
+      },
+      {
+        "name": "exec",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/code-mode-protocol/src/lib.rs#L54",
+        "kind": "other",
+        "reason": "runs a script that calls other tools; no operand is declared for it"
+      },
+      {
+        "name": "wait",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/code-mode-protocol/src/lib.rs#L55",
+        "kind": "other",
+        "reason": "waits for a running code-mode script; no operand"
+      },
+      {
+        "name": "web_search",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tools/src/tool_spec.rs#L39",
+        "kind": "web",
+        "operands": {
+          "url": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "imagegen",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/spec_plan.rs#L104",
+        "kind": "other",
+        "reason": "generates an image; no file, command or URL operand"
+      },
+      {
+        "name": "test_sync_tool",
+        "upstream": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/test_sync.rs#L65",
+        "kind": "other",
+        "reason": "internal synchronisation test tool; no operand"
+      }
+    ],
+    "older_names": [
+      {
+        "name": "shell",
+        "reason": "not registered at the pin; kept for rollouts written by earlier releases"
+      },
+      {
+        "name": "shell_command",
+        "reason": "not registered at the pin (the name is only reserved); kept for rollouts written by earlier releases"
+      },
+      {
+        "name": "multi_tool_use.parallel",
+        "reason": "not registered at the pin; kept for rollouts written by earlier releases"
+      }
+    ]
+  },
+  "copilot-cli": {
+    "evidence": "not_published",
+    "scope": "The source is not published and the changelog at the pin names only a few tools, so no list is recorded. The table rows are kept as they are."
+  },
+  "openclaw": {
+    "evidence": "source",
+    "complete": false,
+    "scope": "Only the tools whose definitions were read at the pin are listed: the shell, patch and web tools. The rest of the tool set is not recorded yet, and the table rows for it are kept as they are.",
+    "tools": [
+      {
+        "name": "exec",
+        "upstream": "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/agents/bash-tools.exec-run.ts#L190",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "apply_patch",
+        "upstream": "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/agents/apply-patch.ts#L134",
+        "kind": "file_write",
+        "operands": {
+          "patch": [
+            "input"
+          ]
+        }
+      },
+      {
+        "name": "web_fetch",
+        "upstream": "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/agents/tools/web-fetch.ts#L815",
+        "kind": "web",
+        "operands": {
+          "url": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "web_search",
+        "upstream": "https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/agents/tools/web-search.ts#L100",
+        "kind": "web"
+      }
+    ]
+  },
+  "opencode": {
+    "evidence": "source",
+    "complete": true,
+    "scope": "Tools of the v2 core tool plugins at the pin, under their model-facing names (a namespaced tool is prefixed by its namespace). Earlier store formats name tools differently.",
+    "tools": [
+      {
+        "name": "shell",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/shell.ts#L23",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "read",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/read.ts#L15",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "glob",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/glob.ts#L15",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "grep",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/grep.ts#L15",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "write",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/write.ts#L20",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "edit",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/edit.ts#L22",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "patch",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/patch.ts#L19",
+        "kind": "file_write",
+        "operands": {
+          "patch": [
+            "patchText"
+          ]
+        }
+      },
+      {
+        "name": "webfetch",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/webfetch.ts#L12",
+        "kind": "web",
+        "operands": {
+          "url": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "websearch",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/websearch.ts#L12",
+        "kind": "web"
+      },
+      {
+        "name": "subagent",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/subagent.ts#L17",
+        "kind": "delegate"
+      },
+      {
+        "name": "question",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/question.ts#L10",
+        "kind": "other",
+        "reason": "asks the user a question; no file, command or URL operand"
+      },
+      {
+        "name": "todowrite",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/todo.ts#L11",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "skill",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/skill.ts#L10",
+        "kind": "other",
+        "reason": "runs a skill by name; no file, command or URL operand"
+      },
+      {
+        "name": "opencode_list_mcp_resources",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/mcp-resource.ts#L18",
+        "kind": "other",
+        "reason": "addresses MCP resources, not files or URLs"
+      },
+      {
+        "name": "opencode_read_mcp_resource",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/mcp-resource.ts#L50",
+        "kind": "other",
+        "reason": "addresses an MCP resource, not a file or URL"
+      },
+      {
+        "name": "opencode_session_rename",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/opencode.ts#L111",
+        "kind": "other",
+        "reason": "renames a session; no file, command or URL operand"
+      },
+      {
+        "name": "opencode_session_move",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/opencode.ts#L131",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "opencode_worktree_create",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/opencode.ts#L156",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "opencode_worktree_list",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/opencode.ts#L170",
+        "kind": "other",
+        "reason": "lists worktrees; no file, command or URL operand"
+      },
+      {
+        "name": "opencode_worktree_remove",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/opencode.ts#L182",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "opencode_models",
+        "upstream": "https://github.com/anomalyco/opencode/blob/a517687fde98a7329ada3ae644a01a9fc6c4e99e/packages/core/src/tool/plugin/opencode.ts#L220",
+        "kind": "other",
+        "reason": "lists models; no file, command or URL operand"
+      }
+    ],
+    "older_names": [
+      {
+        "name": "bash",
+        "reason": "not among the plugin tools at the pin; kept for stores written by earlier formats"
+      },
+      {
+        "name": "list",
+        "reason": "not among the plugin tools at the pin; kept for stores written by earlier formats"
+      },
+      {
+        "name": "multiedit",
+        "reason": "not among the plugin tools at the pin; kept for stores written by earlier formats"
+      },
+      {
+        "name": "apply_patch",
+        "reason": "not among the plugin tools at the pin; kept for stores written by earlier formats"
+      },
+      {
+        "name": "task",
+        "reason": "not among the plugin tools at the pin; kept for stores written by earlier formats"
+      },
+      {
+        "name": "execute",
+        "reason": "not among the plugin tools at the pin; kept for stores written by earlier formats"
+      }
+    ]
+  },
+  "qwen-code": {
+    "evidence": "source",
+    "complete": true,
+    "scope": "Every name in the ToolNames constants at the pin.",
+    "tools": [
+      {
+        "name": "run_shell_command",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L28",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "monitor",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L59",
+        "kind": "shell",
+        "operands": {
+          "command": [
+            "command"
+          ]
+        }
+      },
+      {
+        "name": "read_file",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L24",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "name": "glob",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L27",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "grep_search",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L26",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "list_directory",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L40",
+        "kind": "file_read",
+        "operands": {
+          "read": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "write_file",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L23",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "name": "edit",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L22",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "name": "notebook_edit",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L60",
+        "kind": "file_write",
+        "operands": {
+          "written": [
+            "notebook_path"
+          ]
+        }
+      },
+      {
+        "name": "web_fetch",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L37",
+        "kind": "web",
+        "operands": {
+          "url": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "web_search",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L38",
+        "kind": "web"
+      },
+      {
+        "name": "agent",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L33",
+        "kind": "delegate"
+      },
+      {
+        "name": "send_message",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L57",
+        "kind": "delegate"
+      },
+      {
+        "name": "create_sub_session",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L47",
+        "kind": "delegate"
+      },
+      {
+        "name": "workflow",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L67",
+        "kind": "delegate"
+      },
+      {
+        "name": "exec",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L21",
+        "kind": "other",
+        "reason": "runs a script that calls other tools; no operand is declared for it"
+      },
+      {
+        "name": "zoom_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L25",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "todo_write",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L29",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "save_memory",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L30",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "manage_memory",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L31",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "search_memory",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L32",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "skill",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L34",
+        "kind": "other",
+        "reason": "runs a skill by name; no file, command or URL operand"
+      },
+      {
+        "name": "exit_plan_mode",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L35",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "enter_plan_mode",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L36",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "image_gen",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L39",
+        "kind": "other",
+        "reason": "generates an image; no file, command or URL operand"
+      },
+      {
+        "name": "lsp",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L41",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "ask_user_question",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L42",
+        "kind": "other",
+        "reason": "asks the user a question; no file, command or URL operand"
+      },
+      {
+        "name": "cron_create",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L43",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "cron_list",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L44",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "cron_delete",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L45",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "loop_wakeup",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L46",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "list_agents",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L48",
+        "kind": "other",
+        "reason": "lists agents; hands no work over"
+      },
+      {
+        "name": "task_stop",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L49",
+        "kind": "other",
+        "reason": "stops a task; hands no work over"
+      },
+      {
+        "name": "task_create",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L50",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "task_update",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L51",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "task_list",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L52",
+        "kind": "other",
+        "reason": "task-list bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "team_create",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L53",
+        "kind": "other",
+        "reason": "team bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "team_delete",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L54",
+        "kind": "other",
+        "reason": "team bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "team_plan_approval",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L55",
+        "kind": "other",
+        "reason": "team bookkeeping; no file, command or URL operand"
+      },
+      {
+        "name": "request_shutdown",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L56",
+        "kind": "other",
+        "reason": "asks an agent to stop; hands no work over"
+      },
+      {
+        "name": "structured_output",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L58",
+        "kind": "other",
+        "reason": "returns structured output; no file, command or URL operand"
+      },
+      {
+        "name": "tool_call",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L61",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "tool_search",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L62",
+        "kind": "other",
+        "reason": "searches the tool catalogue; no file, command or URL operand"
+      },
+      {
+        "name": "read_mcp_resource",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L63",
+        "kind": "other",
+        "reason": "addresses an MCP resource, not a file or URL"
+      },
+      {
+        "name": "advisor",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L64",
+        "kind": "other",
+        "reason": "asks an advisor model; no file, command or URL operand"
+      },
+      {
+        "name": "enter_worktree",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L65",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "exit_worktree",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L66",
+        "kind": "other",
+        "reason": "switches working directory; no file, command or URL operand"
+      },
+      {
+        "name": "artifact",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L68",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "record_artifact",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L69",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "record_source",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L70",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "report_findings",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L71",
+        "kind": "other",
+        "reason": "reports review findings; no file, command or URL operand"
+      },
+      {
+        "name": "get_goal",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L72",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "update_goal",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L73",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "propose_goal",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L93",
+        "kind": "other",
+        "reason": "no file, command or URL operand"
+      },
+      {
+        "name": "display_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L94",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_downsample_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L76",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_downscale_video",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L77",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_downsample_audio",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L78",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_extract_keyframes",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L79",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_extract_audio",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L80",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_clip_video",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L81",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_convert_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L82",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_transcribe_audio",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L83",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_clip_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L84",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_clip_audio",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L85",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_caption_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L86",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_caption_audio",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L87",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_ocr_image",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L88",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_understand_video_segments",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L89",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      },
+      {
+        "name": "omni_recall_media_memory",
+        "upstream": "https://github.com/QwenLM/qwen-code/blob/c1a8218f38203e272e6e965778ed6a2795cfeed7/packages/core/src/tools/tool-names.ts#L92",
+        "kind": "other",
+        "reason": "operand keys not confirmed at the pin"
+      }
+    ],
+    "older_names": [
+      {
+        "name": "replace",
+        "reason": "legacy name of edit (ToolNamesMigration, tool-names.ts L191); kept for chat records written by earlier releases"
+      },
+      {
+        "name": "search_file_content",
+        "reason": "legacy name of grep_search (ToolNamesMigration, tool-names.ts L190); kept for chat records written by earlier releases"
+      },
+      {
+        "name": "task",
+        "reason": "legacy name of agent (ToolNamesMigration, tool-names.ts L192); kept for chat records written by earlier releases"
+      }
+    ]
+  }
+}
