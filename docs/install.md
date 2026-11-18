@@ -329,10 +329,11 @@ adoption. Unexpected files, owners, links or locks block purge; it never
 recursively deletes a shared directory. Partial failures return errors and retain
 retry metadata where possible. `-PurgeConfiguration` separately selects regular
 YAML files under the runtime's user configuration root: `$env:XDG_CONFIG_HOME\telltale`
-when set, otherwise `$env:HOME\.config\telltale` when HOME is set. With neither
-variable set, no user configuration is selected; USERPROFILE is not a fallback.
-Recognized tiers are `organization-rules.d`, `rules.d`, `ui-rules.d`, `overrides.d`,
-`policies.d`, `allowlists.d`, and `outputs.d`. Explicit/project configuration roots
+when set, otherwise `$env:HOME\.config\telltale` when HOME is set, otherwise
+`$env:USERPROFILE\.config\telltale`. With none of these set, no user configuration
+is selected. Recognized tiers are `rule-packages.d`, `organization-rules.d`, `rules.d`,
+`ui-rules.d`, `overrides.d`, `policies.d`, `allowlists.d`, `outputs.d`, and
+`settings.d`. Explicit/project configuration roots
 remain outside cleanup. Unsafe or relative environment-selected roots fail closed.
 All underlying Claude Code, Codex, OpenCode, Gemini and other coding-agent session
 stores remain untouched. Downstream embedding consumers' libraries, installation,
@@ -420,7 +421,9 @@ roots are checked in deterministic order:
 
 - `/etc/telltale`; on Windows `%ProgramData%\telltale` (see below)
 - `$XDG_CONFIG_HOME/telltale`, or `$HOME/.config/telltale` when
-  `XDG_CONFIG_HOME` is not set
+  `XDG_CONFIG_HOME` is not set. On Windows, where `HOME` is usually unset,
+  `%USERPROFILE%\.config\telltale` is the final fallback; it is the same
+  directory Git Bash resolves through `HOME`.
 
 ### Windows system config root
 

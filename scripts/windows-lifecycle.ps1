@@ -357,18 +357,19 @@ function Get-TTPathWithoutEntry($Value, [string]$Entry) {
 }
 
 function Get-TTConfigurationFiles {
-    # Match src/config.rs user_config_root; Windows USERPROFILE is not a fallback.
+    # Match src/config.rs user_config_root: XDG_CONFIG_HOME, then HOME, then USERPROFILE.
     $base = [Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')
     if ($base) { $root = Join-Path $base 'telltale' }
     else {
         $base = [Environment]::GetEnvironmentVariable('HOME')
+        if (-not $base) { $base = [Environment]::GetEnvironmentVariable('USERPROFILE') }
         if (-not $base) { return }
         $root = Join-Path $base '.config\telltale'
     }
     $root = Get-TTPath $root
     if (-not (Test-Path -LiteralPath $root)) { return }
     Assert-TTOwner $root
-    $tiers = @('organization-rules.d', 'rules.d', 'ui-rules.d', 'overrides.d', 'policies.d', 'allowlists.d', 'outputs.d')
+    $tiers = @('rule-packages.d', 'organization-rules.d', 'rules.d', 'ui-rules.d', 'overrides.d', 'policies.d', 'allowlists.d', 'outputs.d', 'settings.d')
     foreach ($directory in @(Get-ChildItem -LiteralPath $root -Force)) {
         Get-TTPath $directory.FullName | Out-Null
         if (-not $directory.PSIsContainer -or $directory.Name -cnotin $tiers) { throw 'Unrecognized user configuration; purge refused.' }
