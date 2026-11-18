@@ -86,6 +86,14 @@ payloads carry an object. The join hashed the parsed form and so refused to
 match a correct run; it now hashes the arguments as the harness sent them,
 which is what the hook records.
 
+Main then changed how every hook call is evaluated: calls keep the shape the
+harness sent and are read through that client's own tool table, in place of
+reshaping them into Claude Code's names and keys. The pilot adapter reaches
+OpenCode's table through its client identity and carries no reshaping rules
+of its own. On that merged tree all 17 OpenCode scenarios in the M2 table
+were rerun on the installed **2.3.2**, standalone, and passed. That is the
+current build's evidence for the pilot; the 2.2.5 pin was not rerun.
+
 ## M1 — command hooks
 
 | Harness | Actual version | Pair | Result | Limits |
