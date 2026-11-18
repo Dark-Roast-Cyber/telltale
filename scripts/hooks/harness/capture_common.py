@@ -119,6 +119,47 @@ class Run:
         return line
 
 
+HOOK_VERDICTS = ("deny", "ask", "allow", "silent")
+
+
+def hook_verdict_ok(decisions, hook):
+    """Whether the recorded decisions show what a scenario expects of the hook.
+
+    The canary cannot show that alone: the harness can stop a call too, and a
+    call that was never attempted leaves no canary either. `deny` and `ask`
+    need a decision with that verdict that the hook returned. `allow` needs a
+    decision, and every decision to be allow. `silent` needs no decision: the
+    hook did not run, or it answered without evaluating the call.
+    """
+    if hook not in HOOK_VERDICTS:
+        raise ValueError(f"hook must be one of {HOOK_VERDICTS}, not {hook!r}")
+    if hook == "silent":
+        return not decisions
+    if hook == "allow":
+        return bool(decisions) and all(d["verdict"] == "allow" for d in decisions)
+    return any(d["verdict"] == hook and d["returned"] for d in decisions)
+
+
+def recheck(path, declared):
+    """Judge recorded summaries (one JSON object per line) by what each scenario
+    expects of the hook today, without running a harness. Prints one line per
+    record and returns how many do not show the expected verdict."""
+    failed = 0
+    for line in open(path, encoding="utf-8"):
+        if not line.strip():
+            continue
+        summary = json.loads(line)
+        name = summary["scenario"]
+        if name not in declared:
+            print(f"{name}: not a current scenario")
+            continue
+        ok = hook_verdict_ok(summary["decisions"], declared[name])
+        failed += not ok
+        verdicts = [d["verdict"] for d in summary["decisions"]]
+        print(f"{name}: hook {declared[name]}, recorded {verdicts}: {'ok' if ok else 'MISMATCH'}")
+    return failed
+
+
 def tool_results_seen_by_model(run):
     """Tool outputs as the model saw them in its next request (chat or responses wire)."""
     seen = {}

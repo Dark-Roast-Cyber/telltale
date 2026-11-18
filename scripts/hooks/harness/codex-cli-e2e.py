@@ -16,6 +16,8 @@ The `damaged-*` scenarios put a wrapper in front of the hook that damages one ev
 stdin, which is the only way to make the real Codex hand the hook a bad payload.
 
 Usage:  scripts/hooks/harness/codex-cli-e2e.py [scenario ...]     (default: all)
+        scripts/hooks/harness/codex-cli-e2e.py --recheck SUMMARY.jsonl
+            (judge recorded results by today's expectations; runs nothing)
 Env:    CODEX_BIN (default: codex on PATH)
         TELLTALE_HOOKS_BIN (default: target/release/telltale)
         E2E_ROOT (default: scratch/codex-e2e in the repository; gitignored)
@@ -39,7 +41,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from capture_common import Run, tool_results_seen_by_model, write_telltale_config  # noqa: E402
+from capture_common import (Run, hook_verdict_ok, recheck, tool_results_seen_by_model,  # noqa: E402
+                            write_telltale_config)
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 # Resolved now: each scenario's PATH starts with a stand-in `codex`, and a bare name
@@ -116,10 +119,18 @@ def trust_with_picker(run, env, config_path, timeout=45):
             "reported_new": int(count.group(1)) if count else None, "trusted_recorded": trusted}
 
 
+# Set while `--recheck` collects what each scenario expects of the hook; no scenario runs then.
+DECLARED = None
+
+
 def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=None, execpolicy=False,
-             model="gpt-5.5", expect, note="", canary_name="canary.txt", evaluator=False, after_trust=None,
+             model="gpt-5.5", expect, hook, note="", canary_name="canary.txt", evaluator=False, after_trust=None,
              marker=None, damage=None, tth_settings="", expect_model_requests=None, mcp=False,
              home_name=".codex", rule=None, intact=None):
+    """`expect` is the canary; `hook` is what the hook must have decided (see `hook_verdict_ok`)."""
+    if DECLARED is not None:
+        DECLARED[name] = hook
+        return None
     run = Run(ROOT, name)
     codex_home = os.path.join(run.home, home_name)
     os.makedirs(codex_home)
@@ -240,12 +251,13 @@ def scenario(name, steps, *, hook_cmd=None, timeout=None, trust="bypass", child=
     damage_ok = not damage or os.path.exists(os.path.join(run.dir, "damaged"))
     # Self-protection scenarios: the rule that decided, and the file it protects.
     fired = [r for d in decisions if d["verdict"] == "deny" for r in d["rules"]]
-    rule_ok = (not rule or any(r.startswith(rule) for r in fired)) and (
-        rule is not False or all(d["verdict"] == "allow" for d in decisions))
+    rule_ok = not rule or any(r.startswith(rule) for r in fired)
+    # The canary alone does not show that the hook decided the call.
+    hook_ok = hook_verdict_ok(decisions, hook)
     intact_ok = not intact or os.path.exists(os.path.join(codex_home, intact))
-    summary = {"scenario": name, "canary": "present" if present else "absent", "expect": expect,
-               "verdict": "PASS" if (present == (expect == "present") and trust_ok and marker_ok and requests_ok
-                                     and damage_ok and rule_ok and intact_ok) else "FAIL",
+    summary = {"scenario": name, "canary": "present" if present else "absent", "expect": expect, "hook": hook,
+               "verdict": "PASS" if (present == (expect == "present") and hook_ok and trust_ok and marker_ok
+                                     and requests_ok and damage_ok and rule_ok and intact_ok) else "FAIL",
                "rule": rule, "intact": intact_ok if intact else None,
                "exit": run.exit,
                "secs": run.elapsed, "trust": trust, "trust_report": trust_report, "decisions": decisions,
@@ -337,68 +349,78 @@ RECORDED_HOOK = (f"{sys.executable} -I {os.path.join(HERE, 'copilot-cli-e2e.py')
 SCENARIOS = {
     "poison-nfc-exec": lambda: scenario("poison-nfc-exec", [
         {"tool_calls": [{"name": "exec_command", "arguments": {"cmd": "ls", **COLLIDING}}]}, *LATER_DENY],
-        hook_cmd=RECORDED_HOOK, expect="absent", note="NFC-colliding keys on exec_command"),
+        hook_cmd=RECORDED_HOOK, expect="absent", hook="deny", note="NFC-colliding keys on exec_command"),
     "poison-nfc-mcp": lambda: scenario("poison-nfc-mcp", [
         {"tool_calls": [{"name": "echo", "namespace": "mcp__tthmock", "arguments": {"text": "hi", **COLLIDING}}]},
-        *LATER_DENY], hook_cmd=RECORDED_HOOK, mcp=True, expect="absent", note="NFC-colliding keys on an MCP tool"),
+        *LATER_DENY], hook_cmd=RECORDED_HOOK, mcp=True, expect="absent", hook="deny",
+        note="NFC-colliding keys on an MCP tool"),
     "poison-flood": lambda: scenario("poison-flood", [
         *[{"tool_calls": [exec_call("echo " + " ".join(f"http://{i:x}-{seed:x}.test" for i in range(225)))]}
           for seed in range(22)], *LATER_DENY],
-        hook_cmd=RECORDED_HOOK, expect="absent",
+        hook_cmd=RECORDED_HOOK, expect="absent", hook="deny",
         note="22 commands of 225 distinct hosts, each under the 4,096-byte string bound"),
     # The documented install: no bypass flag anywhere.
-    "trusted": lambda: scenario("trusted", DENY_STEPS, trust="picker", expect="absent",
+    "trusted": lambda: scenario("trusted", DENY_STEPS, trust="picker", expect="absent", hook="deny",
                                 note="trusted through the real TUI picker, no bypass flag; deny honored"),
-    "trusted-reformat": lambda: scenario("trusted-reformat", DENY_STEPS, trust="picker", expect="absent",
+    "trusted-reformat": lambda: scenario("trusted-reformat", DENY_STEPS, trust="picker", expect="absent", hook="deny",
                                          after_trust=reformat_and_edit_another_handler,
                                          note="reformatted file, another handler edited: PreToolUse stays trusted"),
     "trusted-modified": lambda: scenario("trusted-modified", DENY_STEPS, trust="picker", expect="present",
+                                         hook="silent",
                                          after_trust=modify_pre_tool_use_command,
                                          note="RESIDUAL: editing the PreToolUse handler un-trusts it; the call runs"),
     "trusted-binary-swap": lambda: scenario("trusted-binary-swap", DENY_STEPS, trust="picker", expect="present",
+                                            hook="silent",
                                             hook_cmd="@COPY@ hooks codex-cli hook", after_trust=replace_trusted_binary,
                                             marker="replaced-binary-ran",
                                             note="RESIDUAL: replacing the program at a trusted path keeps trust; "
                                                  "marker true means the replacement ran"),
     "patch-deny": lambda: scenario("patch-deny", [{"tool_calls": [patch_call(PATCH_HOOKS)]}, {"text": "done"}],
-                                   canary_name=".codex/hooks.json", expect="absent",
+                                   canary_name=".codex/hooks.json", expect="absent", hook="deny",
                                    note="real apply_patch to a Codex hook file denied after runtime normalization"),
     "patch-allow": lambda: scenario("patch-allow", [{"tool_calls": [patch_call(PATCH_BENIGN)]}, {"text": "done"}],
-                                    canary_name="patched.txt", expect="present",
+                                    canary_name="patched.txt", expect="present", hook="allow",
                                     note="control: a benign real apply_patch applies; the hook prints nothing"),
     # The first hook autostarts the evaluator and falls back in-process; the deny must come from the evaluator.
     "deny-evaluator": lambda: scenario("deny-evaluator", [{"tool_calls": [exec_call("sleep 3")]}, *DENY_STEPS],
-                                       evaluator=True, expect="absent",
+                                       evaluator=True, expect="absent", hook="deny",
                                        note="default deployment: deny served by the autostarted evaluator"),
     # Codex runs a call on hook exit 1, so a PreToolUse the hook cannot use must get a verdict on stdout.
     "damaged-pre-default": lambda: scenario("damaged-pre-default", DENY_STEPS, damage=("PreToolUse", "drop-tool-name"),
-                                            expect="absent", note="default config: on_unevaluable ask, returned as deny"),
+                                            expect="absent", hook="silent",
+                                            note="default config: on_unevaluable ask, returned as deny"),
     "damaged-pre-allow": lambda: scenario("damaged-pre-allow", DENY_STEPS, damage=("PreToolUse", "drop-tool-name"),
-                                          tth_settings="  on_unevaluable: allow\n", expect="present",
+                                          tth_settings="  on_unevaluable: allow\n", expect="present", hook="silent",
                                           note="control: an operator who chose allow gets it"),
     "damaged-pre-nameless": lambda: scenario("damaged-pre-nameless", DENY_STEPS, damage=("PreToolUse", "cut-before-name"),
-                                             tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
+                                             tth_settings=ON_ERROR_DENY, expect="absent", hook="silent",
+                                             expect_model_requests=2,
                                              note="no event to read: the deny on stdout blocks the call"),
     # With on_error: deny, a bad Stop must not exit 2: Codex would make that a prompt to continue, every turn.
     "damaged-stop-named": lambda: scenario("damaged-stop-named", DENY_STEPS, damage=("Stop", "cut-after-name"),
-                                           tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
+                                           tth_settings=ON_ERROR_DENY, expect="absent", hook="deny",
+                                           expect_model_requests=2,
                                            note="no continuation prompt"),
     "damaged-stop-mistyped": lambda: scenario("damaged-stop-mistyped", DENY_STEPS, damage=("Stop", "mistype"),
-                                              tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
+                                              tth_settings=ON_ERROR_DENY, expect="absent", hook="deny",
+                                              expect_model_requests=2,
                                               note="no continuation prompt"),
     "damaged-stop-nameless": lambda: scenario("damaged-stop-nameless", DENY_STEPS, damage=("Stop", "cut-before-name"),
-                                              tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
+                                              tth_settings=ON_ERROR_DENY, expect="absent", hook="deny",
+                                              expect_model_requests=2,
                                               note="no continuation prompt"),
     # A renamed key on every event: the schema drift this path exists for.
     "damaged-all-renamed": lambda: scenario("damaged-all-renamed", DENY_STEPS, damage=("*", "rename-event-key"),
-                                            tth_settings=ON_ERROR_DENY, expect="absent", expect_model_requests=2,
+                                            tth_settings=ON_ERROR_DENY, expect="absent", hook="silent",
+                                            expect_model_requests=2,
                                             note="call blocked, no continuation prompt, the turn ends"),
     "deny": lambda: scenario("deny", [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}], expect="absent",
+                             hook="deny",
                              note="policy deny honored (main agent)"),
-    "ask": lambda: scenario("ask", [{"tool_calls": [exec_call(ASK)]}, {"text": "done"}], expect="absent",
+    "ask": lambda: scenario("ask", [{"tool_calls": [exec_call(ASK)]}, {"text": "done"}], expect="absent", hook="ask",
                             note="policy ask returned as deny; Codex would run a returned ask"),
     "allow": lambda: scenario("allow", [{"tool_calls": [exec_call("@CANARY@ && echo ok")]}, {"text": "done"}],
-                              expect="present", note="allowed call runs; the hook prints nothing"),
+                              expect="present", hook="allow", note="allowed call runs; the hook prints nothing"),
     # Subagent tools are offered to non-catalog model ids. The parent sleeps instead of
     # wait_agent because the mock cannot know the child's agent id in advance.
     "subagent-deny": lambda: scenario("subagent-deny", [
@@ -406,59 +428,68 @@ SCENARIOS = {
                          "arguments": {"message": "@CHILD@: run the scripted step."}}]},
         {"tool_calls": [exec_call("sleep 6")]}, {"text": "parent done"}],
         child=[{"tool_calls": [exec_call(DENY)]}, {"text": "child done"}], model="mock-model", expect="absent",
+        hook="deny",
         note="deny honored in a subagent; SubagentStop settles it"),
     "fail-missing": lambda: scenario("fail-missing", [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}],
                                      hook_cmd="/nonexistent/telltale hooks codex-cli hook", expect="present",
+                                     hook="silent",
                                      note="RESIDUAL: missing hook binary fails open"),
     "fail-timeout": lambda: scenario("fail-timeout", [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}],
                                      hook_cmd=f"sh -c 'sleep 6; exec {TTH} hooks codex-cli hook'", timeout=2,
-                                     expect="present", note="RESIDUAL: hook timeout fails open"),
+                                     expect="present", hook="silent", note="RESIDUAL: hook timeout fails open"),
     "fail-crash": lambda: scenario("fail-crash", [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}],
-                                   hook_cmd="sh -c 'kill -SEGV $$'", expect="present",
+                                   hook_cmd="sh -c 'kill -SEGV $$'", expect="present", hook="silent",
                                    note="RESIDUAL: hook crash fails open"),
     "untrusted": lambda: scenario("untrusted", [{"tool_calls": [exec_call(DENY)]}, {"text": "done"}],
-                                  trust="none", expect="present",
+                                  trust="none", expect="present", hook="silent",
                                   note="RESIDUAL: untrusted user hooks never run (install needs the trust step)"),
     "execpolicy-backstop": lambda: scenario("execpolicy-backstop", [
         {"tool_calls": [exec_call("@CANARY@ && codex exec hi")]}, {"text": "done"}],
-        hook_cmd="/nonexistent/telltale hooks codex-cli hook", execpolicy=True, expect="absent",
+        hook_cmd="/nonexistent/telltale hooks codex-cli hook", execpolicy=True, expect="absent", hook="silent",
         note="hook binary missing; exec policy still refuses the nested Codex launch"),
     # Self-protection, with a healthy hook. The canary precedes the tamper command, so it shows nothing ran.
     # `mv`, because Codex refuses `rm -f` by itself and that would prove nothing about the hook.
     "tamper-backstop": lambda: scenario("tamper-backstop", [
         {"tool_calls": [exec_call("@CANARY@ && mv @CODEX_HOME@/rules/telltale-hooks.rules @WORK@/moved.rules")]}, {"text": "done"}],
-        execpolicy=True, expect="absent", rule="tth.tamper.codex_hook_", intact="rules/telltale-hooks.rules",
+        execpolicy=True, expect="absent", hook="deny", rule="tth.tamper.codex_hook_",
+        intact="rules/telltale-hooks.rules",
         note="agent removes the exec-policy backstop: denied by rule content, file intact"),
     "tamper-hooks-file": lambda: scenario("tamper-hooks-file", [
         {"tool_calls": [exec_call("@CANARY@ && mv @CODEX_HOME@/hooks.json @WORK@/moved.json")]}, {"text": "done"}],
-        expect="absent", rule="tth.tamper.codex_hook_", intact="hooks.json",
+        expect="absent", hook="deny", rule="tth.tamper.codex_hook_", intact="hooks.json",
         note="agent removes its hook file: denied by rule content, file intact"),
     "tamper-disable-hooks": lambda: scenario("tamper-disable-hooks", [
         {"tool_calls": [exec_call("@CANARY@ && codex --disable hooks exec hi")]}, {"text": "done"}],
-        expect="absent", rule="tth.tamper.hookless_harness_launch",
+        expect="absent", hook="deny", rule="tth.tamper.hookless_harness_launch",
         note="no exec policy installed: the hook's rule alone refuses the hookless launch"),
     "tamper-home-relaunch": lambda: scenario("tamper-home-relaunch", [
         {"tool_calls": [exec_call("@CANARY@ && CODEX_HOME=/tmp/elsewhere codex exec hi")]}, {"text": "done"}],
-        execpolicy=True, expect="absent", rule="tth.tamper.harness_home_override",
+        execpolicy=True, expect="absent", hook="deny", rule="tth.tamper.harness_home_override",
         note="a launch the exec-policy backstop does not refuse natively, denied by the hook"),
     "tamper-custom-home": lambda: scenario("tamper-custom-home", [
         {"tool_calls": [exec_call("@CANARY@ && mv @CODEX_HOME@/hooks.json @WORK@/moved.json")]}, {"text": "done"}],
-        home_name="agents/custom-home", expect="absent", rule="tth.tamper.harness_home_", intact="hooks.json",
+        home_name="agents/custom-home", expect="absent", hook="deny", rule="tth.tamper.harness_home_",
+        intact="hooks.json",
         note="CODEX_HOME has no .codex in it: only the rule generated from the hook's environment knows it"),
     # The first hook autostarts the evaluator, so the second call shows the generated rule in the daemon.
     "tamper-custom-home-evaluator": lambda: scenario("tamper-custom-home-evaluator", [
         {"tool_calls": [exec_call("sleep 3")]},
         {"tool_calls": [exec_call("@CANARY@ && mv @CODEX_HOME@/hooks.json @WORK@/moved.json")]}, {"text": "done"}],
-        home_name="agents/custom-home", evaluator=True, expect="absent", rule="tth.tamper.harness_home_",
+        home_name="agents/custom-home", evaluator=True, expect="absent", hook="deny", rule="tth.tamper.harness_home_",
         intact="hooks.json", note="default deployment: the autostarted evaluator holds the generated rule"),
     "tamper-benign": lambda: scenario("tamper-benign", [
         {"tool_calls": [exec_call("@CANARY@ && cp /dev/null @CODEX_HOME@/sessions-note.txt")]}, {"text": "done"}],
-        expect="present", rule=False,
+        expect="present", hook="allow",
         note="control: a writer under the home that does not touch hook files runs"),
 }
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--recheck"]:
+        DECLARED = {}
+        for declare in SCENARIOS.values():
+            declare()
+        sys.exit(1 if recheck(sys.argv[2], DECLARED) else 0)
     if not os.access(TTH, os.X_OK):
         sys.exit(f"telltale binary not found at {TTH} (cargo build --release)")
     if shutil.which(CODEX) is None and not os.access(CODEX, os.X_OK):
