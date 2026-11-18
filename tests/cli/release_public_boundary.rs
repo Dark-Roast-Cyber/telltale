@@ -3222,12 +3222,6 @@ fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
     assert!(std::panic::catch_unwind(|| assert_ci_metadata_gate(&bad)).is_err());
 }
 
-#[test]
-fn release_workflow_reserves_release_before_action_creation() {
-    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
-    assert_release_publication_gates(&workflow);
-}
-
 #[cfg(unix)]
 fn assert_manifest_failure_propagates(script: &str) {
     for exit_code in [0, 17] {

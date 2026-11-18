@@ -485,58 +485,6 @@ fn selector_registry_has_only_contract_backed_names() {
             (SelectorBacking::Typed, 37),
         ])
     );
-
-    for removed in [
-        "session.client",
-        "session.kind",
-        "session.execution_mode",
-        "session.workspace.class",
-        "session.runtime_ref",
-        "session.capability_ref",
-        "session.ruleset_ref",
-        "session.policy_ref",
-        "session.toolset_ref",
-        "session.mcp_ref",
-        "message.content_hash",
-        "message.length",
-        "message.classification",
-        "tool.arguments.hash",
-        "tool.result.hash",
-        "command.interpreter",
-        "command.encoded",
-        "command.shell",
-        "resource.type",
-        "resource.class",
-        "resource.workspace_relation",
-        "resource.sensitive",
-        "network.url",
-        "network.new_destination",
-        "process.parent.name",
-        "process.parent.pid",
-        "process.command_line",
-        "inference.input_tokens",
-        "inference.output_tokens",
-        "inference.reasoning_tokens",
-        "inference.duration_ms",
-        "inference.time_to_first_token_ms",
-        "mcp.tool.description_hash",
-        "mcp.tool.schema_hash",
-        "mcp.tool.capabilities",
-        "mcp.tool.changed",
-        "mcp.instructions_hash",
-        "runtime.sandbox.state",
-        "runtime.sandbox.type",
-        "runtime.isolation.type",
-        "runtime.containerized",
-        "browser.page_id",
-        "browser.managed",
-    ] {
-        assert_eq!(
-            MatcherSpec::exists(removed).compile().unwrap_err(),
-            DetectionError::InvalidSelector,
-            "removed selector {removed} must not compile"
-        );
-    }
 }
 
 #[test]

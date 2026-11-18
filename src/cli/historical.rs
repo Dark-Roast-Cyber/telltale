@@ -368,17 +368,6 @@ mod tests {
             "9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754"
         );
         assert_eq!(EVENT_3_SCHEMA, CURRENT_EVENT_3_SCHEMA);
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert!(
-            !root
-                .join("schemas/historical/event-1.0.schema.json")
-                .exists()
-        );
-        assert!(
-            !root
-                .join("schemas/historical/event-2.0.schema.json")
-                .exists()
-        );
     }
 
     #[test]

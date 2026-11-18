@@ -114,7 +114,10 @@ impl Env {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        wait_for(|| std::os::unix::net::UnixStream::connect(self.socket()).is_ok());
+        // A connect succeeds as soon as the socket is bound. The evaluator
+        // answers only from its accept loop, which starts after it has written
+        // its pid file and taken over SIGTERM.
+        wait_for(|| answers(&self.socket()));
         Daemon(child)
     }
 
@@ -155,6 +158,19 @@ fn wait_for(mut condition: impl FnMut() -> bool) {
         assert!(start.elapsed() < Duration::from_secs(30), "timed out");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Whether the evaluator replies to a frame. `{}` is not a request, so the
+/// evaluator records nothing and answers `bad_request`.
+fn answers(socket: &Path) -> bool {
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(socket) else {
+        return false;
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let frame = [&2u32.to_be_bytes()[..], b"{}"].concat();
+    stream.write_all(&frame).is_ok() && stream.read_exact(&mut [0u8; 4]).is_ok()
 }
 
 /// Whether a process exists (`/proc` is Linux-only; signal 0 is portable).

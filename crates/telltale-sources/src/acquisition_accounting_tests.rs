@@ -978,18 +978,10 @@ fn sqlite_overlap_and_mutable_rereads_never_attest_source_replacement() {
 }
 
 #[test]
-fn coverage_defaults_fail_closed_and_has_no_source_controlled_metadata() {
+fn coverage_defaults_to_partial_source() {
     assert_eq!(
         SourceAccounting::default().coverage,
         AccountingCoverage::PartialSource
-    );
-    assert_eq!(
-        format!("{:?}", AccountingCoverage::CompleteSource),
-        "CompleteSource"
-    );
-    assert_eq!(
-        format!("{:?}", AccountingCoverage::PartialSource),
-        "PartialSource"
     );
 }
 

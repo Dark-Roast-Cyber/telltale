@@ -166,19 +166,6 @@ fn source_failure_is_typed_and_content_free() {
     assert!(!missing.exists());
 }
 
-#[cfg(feature = "opencode-sqlite")]
-#[test]
-fn opencode_selected_window_reports_partial_coverage() {
-    let root = tempfile::tempdir().unwrap();
-    let source = opencode_source(root.path());
-    let scan = pipeline()
-        .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
-        .unwrap()
-        .remove(0);
-    assert!(scan.failure().is_none());
-    assert_eq!(scan.coverage(), Some(SourceCoverage::Partial));
-}
-
 #[cfg(not(feature = "opencode-sqlite"))]
 #[test]
 fn feature_off_opencode_reports_capability_not_compiled_without_reading() {

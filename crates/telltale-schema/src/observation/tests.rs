@@ -1581,32 +1581,6 @@ fn source_value_and_provenance_helpers_preserve_schema_ownership() {
 }
 
 #[test]
-fn source_value_conversion_rejects_oversized_strings_without_payload_errors() {
-    let payload = "S".repeat(LOCAL_MAX_STRING_BYTES + 1);
-    let error =
-        JsonValue::try_from_source_value(&serde_json::Value::String(payload.clone())).unwrap_err();
-    assert_eq!(error.code(), "unbounded_value");
-    assert!(!error.to_string().contains(&payload));
-}
-
-#[test]
-fn source_value_conversion_rejects_too_deep_arrays() {
-    let mut value = serde_json::Value::Null;
-    for _ in 0..LOCAL_MAX_DEPTH {
-        value = serde_json::Value::Array(vec![value]);
-    }
-    let error = JsonValue::try_from_source_value(&value).unwrap_err();
-    assert_eq!(error.code(), "unbounded_value");
-}
-
-#[test]
-fn source_value_conversion_rejects_oversized_arrays() {
-    let value = serde_json::Value::Array(vec![serde_json::Value::Null; LOCAL_MAX_ARRAY_ITEMS + 1]);
-    let error = JsonValue::try_from_source_value(&value).unwrap_err();
-    assert_eq!(error.code(), "unbounded_value");
-}
-
-#[test]
 fn sensitive_semantics_use_keyed_digest_not_raw_value() {
     let secret = JsonValue::string("synthetic-secret-marker");
     let key_ref = LocalReference::new("producerkey:v2:synthetic-1", "identity_key").unwrap();

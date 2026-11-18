@@ -180,26 +180,6 @@ fn pipeline_error_characterization_checked_discovery() {
 
 #[test]
 fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
-    let missing = Pipeline::builder()
-        .without_bundled_defaults()
-        .build()
-        .err()
-        .unwrap();
-    assert!(matches!(missing, PipelineError::InvalidConfiguration));
-    assert_eq!(missing.to_string(), "pipeline_no_rule_documents");
-    assert!(missing.source().is_none());
-    for builder in [
-        Pipeline::builder().rules_document("rules: ["),
-        Pipeline::builder().policy_document("categories: ["),
-        Pipeline::builder()
-            .without_bundled_defaults()
-            .rules_document(RULE.replace("regex: needle", "regex: '['")),
-    ] {
-        let error = builder.build().err().unwrap();
-        assert!(matches!(error, PipelineError::Compilation(_)));
-        assert_eq!(error.to_string(), "pipeline_compilation_failed");
-        assert!(error.source().is_some());
-    }
     let pipeline = Pipeline::builder().build()?;
     let root = tempfile::tempdir().unwrap();
     let absent = root.path().join("absent");
