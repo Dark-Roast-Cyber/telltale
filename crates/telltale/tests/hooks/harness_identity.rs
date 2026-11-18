@@ -35,6 +35,12 @@ const CAPTURES: &[(Harness, &str, &str, &str)] = &[
         "deny-camel-hso.jsonl",
         "preToolUse",
     ),
+    (
+        Harness::OpenCode,
+        "opencode/2.2.5",
+        "lifecycle.jsonl",
+        "tool.execute.before",
+    ),
 ];
 
 /// The captured pre-execution payload of `harness`, its command replaced by one
@@ -61,11 +67,20 @@ fn pre_tool_use(harness: Harness) -> Vec<u8> {
         })
         .map(|(_, payload)| payload)
         .unwrap_or_else(|| panic!("no {event} capture in {file}"));
-    let args = ["tool_input", "toolArgs"]
+    let args = ["tool_input", "toolArgs", "input"]
         .into_iter()
         .find(|key| payload.get(key).is_some())
         .expect("a tool input");
     payload[args]["command"] = HARVEST.into();
+    if harness == Harness::OpenCode {
+        // The native payload is captured; the request-only transport envelope
+        // is synthesized exactly as the forwarding plugin supplies it.
+        payload = json!({
+            "protocol": "telltale.opencode-v2.v1", "hook_event": "execute.before",
+            "occurrence": "tth-occ-identity-test", "cwd": "/synthetic",
+            "event": payload,
+        });
+    }
     serde_json::to_vec(&payload).unwrap()
 }
 

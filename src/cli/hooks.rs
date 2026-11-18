@@ -54,6 +54,9 @@ hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
 config roots instead of the default ones (/etc/telltale, then $XDG_CONFIG_HOME/telltale
 or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
 content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan.
+hook also accepts --json-reply: frame the gated native output (including null)
+as telltale.hook-reply.v1 for subprocess adapters, not native command hooks.
+--detect-only can only restrict the loaded mode, never enable enforcement.
 
 environment:
   TELLTALE_HOOKS_STATE_DIR  per-session journals and state (hooks.state_dir), default:
@@ -90,8 +93,10 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
                 64
             }
         },
-        [name, "hook", flags @ ..] => match (Harness::from_name(name), config_dirs(flags)) {
-            (Some(harness), Some(dirs)) => hook(harness, &dirs),
+        [name, "hook", flags @ ..] => match (Harness::from_name(name), hook_flags(flags)) {
+            (Some(harness), Some((dirs, json_reply, detect_only))) => {
+                hook(harness, &dirs, json_reply, detect_only)
+            }
             _ => {
                 eprintln!("{}", usage());
                 64
@@ -183,6 +188,26 @@ fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
         dirs.push(PathBuf::from(dir));
     }
     Some(dirs)
+}
+
+/// Hook-only switches, without mistaking a config directory's spelling for
+/// a switch. The common parser still owns config-root validation.
+fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool)> {
+    let mut roots = Vec::new();
+    let (mut json_reply, mut detect_only) = (false, false);
+    let mut flags = flags.iter().copied();
+    while let Some(flag) = flags.next() {
+        match flag {
+            "--json-reply" => json_reply = true,
+            "--detect-only" => detect_only = true,
+            "--config-dir" => {
+                roots.push(flag);
+                roots.push(flags.next()?);
+            }
+            _ => roots.push(flag),
+        }
+    }
+    Some((config_dirs(&roots)?, json_reply, detect_only))
 }
 
 /// The folders of a config root that hooks read (src/config.rs discovery).
@@ -399,9 +424,18 @@ fn unreadable_call_policy(config: &Config) -> OnError {
 /// when the payload is unreadable, the configuration is broken or the code
 /// panics. Only `hooks.mode: enforce` in a configuration that was read lets
 /// an answer through.
-fn hook(harness: Harness, config_dirs: &[PathBuf]) -> i32 {
-    let loaded = load_config(config_dirs);
-    let gate = Gate::for_config(&loaded, || settings_declare_enforce(config_dirs));
+fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only: bool) -> i32 {
+    let loaded = load_config(config_dirs).map(|mut config| {
+        if detect_only {
+            config.mode = telltale_core::hooks::config::Mode::Observe;
+        }
+        config
+    });
+    let gate = if detect_only {
+        Gate::DetectOnly
+    } else {
+        Gate::for_config(&loaded, || settings_declare_enforce(config_dirs))
+    };
     if gate == Gate::DetectOnly {
         // Detached: the process exits when `hook` returns.
         std::thread::spawn(|| {
@@ -437,7 +471,22 @@ fn hook(harness: Harness, config_dirs: &[PathBuf]) -> i32 {
             Answer::exit(1)
         }
     });
-    deliver(gate.release(answer))
+    let answer = gate.release(answer);
+    if json_reply {
+        // Optional subprocess framing, AFTER the gate. A no-op is explicit;
+        // empty/truncated stdout is never a successful reply. Native command
+        // hooks keep their original stdout and exit semantics.
+        deliver(Answer {
+            output: Some(serde_json::json!({
+                "protocol": "telltale.hook-reply.v1",
+                "mode": gate.as_str(),
+                "output": answer.output,
+            })),
+            exit_code: answer.exit_code,
+        })
+    } else {
+        deliver(answer)
+    }
 }
 
 /// One hook payload from stdin, bounded: at most one byte past
@@ -706,7 +755,20 @@ fn serve(config_dirs: &[PathBuf]) -> i32 {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{config_dirs, declares_enforce, load_config};
+    use super::{config_dirs, declares_enforce, hook_flags, load_config};
+
+    #[test]
+    fn hook_switches_do_not_consume_a_config_directory_named_like_a_switch() {
+        assert_eq!(
+            hook_flags(&["--json-reply", "--config-dir", "--detect-only"]),
+            Some((vec![PathBuf::from("--detect-only")], true, false))
+        );
+        assert_eq!(
+            hook_flags(&["--detect-only", "--config-dir=root", "--json-reply"]),
+            Some((vec![PathBuf::from("root")], true, true))
+        );
+        assert_eq!(hook_flags(&["--json-reply", "--config-dir"]), None);
+    }
 
     #[test]
     fn config_dirs_reads_repeated_flags_and_refuses_anything_else() {

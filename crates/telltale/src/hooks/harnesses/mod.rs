@@ -18,12 +18,10 @@ pub mod opencode;
 pub mod payload;
 
 /// The normalization for a `Context::harness` name: the registered adapter's
-/// choice, or the shapes captured for a harness whose adapter is not
-/// registered yet. Any other name is the identity.
+/// choice. Any other name is the identity.
 pub fn normalization(name: &str) -> Normalization {
     match Harness::from_name(name) {
         Some(harness) => harness.adapter().normalization,
-        None if name == opencode::NAME => Normalization::Rules(&opencode::NORMALIZATION),
         None => Normalization::Identity,
     }
 }
