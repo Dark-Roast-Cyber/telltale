@@ -7,7 +7,9 @@ use telltale_schema::observation::{
     JsonValue, ObservationBody,
 };
 
-use super::tool_arguments::{tool_argument_urls, tool_written_paths};
+use super::tool_arguments::{
+    command_member_has_role, reads_by_role, tool_argument_urls, tool_written_paths,
+};
 use super::types::{DetectionError, metadata_for_path};
 
 const SELECTORS: &[&str] = &[
@@ -478,7 +480,9 @@ impl SelectorRegistry {
         observation: &CanonicalObservationV2,
     ) -> SelectorResolution {
         let required_capability = selector.required_capability();
-        if SelectorId::parse(selector.as_str()).ok() != Some(selector) {
+        if SelectorId::parse(selector.as_str()).ok() != Some(selector)
+            || reads_declared_role_text(selector, observation)
+        {
             return absent(selector, required_capability);
         }
         if matches!(
@@ -778,6 +782,27 @@ impl SelectorRegistry {
             },
             _ => absent(selector, required_capability),
         }
+    }
+}
+
+/// Whether `selector` would read, as argument or command text, what a call's
+/// declaration says is authored or replaced content. A call whose arguments are
+/// an object has no such text in these selectors: they read the text of a string
+/// and the command facet, and an object is neither. A declared call reads as it
+/// would in that shape, so these selectors do not see the content. The typed
+/// `tool.arguments` and `tool.searchable_arguments` selectors keep the whole value.
+fn reads_declared_role_text(selector: SelectorId, observation: &CanonicalObservationV2) -> bool {
+    let ObservationBody::Tool(tool) = observation.body() else {
+        return false;
+    };
+    match selector {
+        SelectorId::CompatArguments | SelectorId::GovernedFacet("tool.arguments.text") => {
+            reads_by_role(tool)
+        }
+        SelectorId::CompatCommand
+        | SelectorId::CommandText
+        | SelectorId::GovernedFacet("command.text") => command_member_has_role(tool),
+        _ => false,
     }
 }
 

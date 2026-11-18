@@ -16,18 +16,17 @@
 //!   [`execpolicy_rules`] for the native backstop that does not depend on
 //!   this hook running.
 //! - Tool inputs are reported as Codex sent them (`apply_patch`
-//!   `{"command": patch}` included); the runtime normalizes the evaluation
-//!   encoding (ADR 0002 addendum), keyed by [`HARNESS`].
+//!   `{"command": patch}` included) and evaluated in that shape through
+//!   Codex's own tool table (ADR 0002).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::ClientId;
 use crate::hooks::harness::{
-    Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
+    Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Parsed,
 };
 use crate::hooks::harnesses::payload;
-use crate::hooks::normalize::Rules;
 use crate::hooks::runtime::{Completion, Context, Event, Response, ToolCall, synthetic_call_id};
 use crate::hooks::state::Verdict;
 
@@ -442,15 +441,6 @@ fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'s
     })
 }
 
-/// Codex CLI 0.166.0: `apply_patch` `{"command": patch}` (a freeform raw
-/// string is the same tool's other form).
-pub const NORMALIZATION: Rules = Rules {
-    patch_tools: &[("apply_patch", true, Some("command"))],
-    key_tools: &[],
-    keys: &[],
-    tool_names: &[],
-};
-
 /// The registry's descriptor of this adapter.
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
@@ -471,7 +461,6 @@ pub const ADAPTER: Adapter = Adapter {
     // A deny on stdout is honored on a PreToolUse and rejected as invalid
     // output on every other event (E2E `damaged-*-nameless`).
     nameless_block: NamelessBlock::DenyOnStdout,
-    normalization: Normalization::Rules(&NORMALIZATION),
     // The same file names as the static rules in the document below.
     home: Some(Home {
         variable: "CODEX_HOME",

@@ -7,9 +7,15 @@
 //! those tables share: top-level argument members, argv arrays and the
 //! `*** Begin Patch` patch format.
 //!
-//! A declaration only adds to what detection reads from the arguments by
-//! shape; it never replaces that reading. A tool missing from a table is left
-//! undeclared, and so is a call whose arguments hold no operand.
+//! A declaration adds operands to what detection reads from the arguments by
+//! shape, and a row may also say how a named argument is read: as content the
+//! call authors, or as replaced text. Only the keys a row names get a role.
+//! A patch key, and the argument text of a patch tool whose call carries no
+//! object, are authored content only when the text is a patch (`is_patch`);
+//! otherwise the key keeps its structural reading, so a command in a patch
+//! key is still a command. A tool missing from a table is left undeclared, and
+//! so is a call whose arguments hold no operand. A name an MCP server gives
+//! its tools is never declared, whatever a table lists.
 
 use std::collections::BTreeMap;
 
@@ -37,6 +43,10 @@ pub(crate) struct ToolSpec {
     /// A patch tool: the argument keys that hold its patch text. The whole
     /// argument string is a patch as well when the call carries no object.
     patch: Option<&'static [&'static str]>,
+    /// Argument keys whose text is content the call authors.
+    authored: &'static [&'static str],
+    /// Argument keys whose text is replaced text, never an action fact.
+    replaced: &'static [&'static str],
     /// The call may legitimately name no operand, such as a search with no
     /// root: an empty operand is then no drift.
     optional: bool,
@@ -52,6 +62,8 @@ impl ToolSpec {
             read: &[],
             urls: &[],
             patch: None,
+            authored: &[],
+            replaced: &[],
             optional: false,
         }
     }
@@ -86,6 +98,16 @@ impl ToolSpec {
         self
     }
 
+    pub(crate) const fn authored(mut self, keys: &'static [&'static str]) -> Self {
+        self.authored = keys;
+        self
+    }
+
+    pub(crate) const fn replaced(mut self, keys: &'static [&'static str]) -> Self {
+        self.replaced = keys;
+        self
+    }
+
     pub(crate) fn name(&self) -> &'static str {
         self.name
     }
@@ -95,13 +117,15 @@ impl ToolSpec {
     }
 
     /// The operand keys this row reads, by category.
-    pub(crate) fn operand_keys(&self) -> [(&'static str, &'static [&'static str]); 5] {
+    pub(crate) fn operand_keys(&self) -> [(&'static str, &'static [&'static str]); 7] {
         [
             ("command", self.commands),
             ("written", self.written),
             ("read", self.read),
             ("url", self.urls),
             ("patch", self.patch.unwrap_or(&[])),
+            ("authored", self.authored),
+            ("replaced", self.replaced),
         ]
     }
 
@@ -148,6 +172,21 @@ impl ToolSpec {
                     operation = operation.with_written_path(path);
                 }
             }
+            // A patch is authored content; text that is none keeps its reading.
+            for key in keys {
+                if members.text(key).is_some_and(|text| is_patch(&text)) {
+                    operation = operation.with_authored_key(*key);
+                }
+            }
+            if members.raw().is_some_and(is_patch) {
+                operation = operation.with_authored_text();
+            }
+        }
+        for key in self.authored.iter().filter(|key| members.has(key)) {
+            operation = operation.with_authored_key(*key);
+        }
+        for key in self.replaced.iter().filter(|key| members.has(key)) {
+            operation = operation.with_replaced_key(*key);
         }
         operation
     }
@@ -159,6 +198,7 @@ impl ToolSpec {
 pub(crate) fn declare(table: &[ToolSpec], body: ToolObservation) -> ToolObservation {
     let operation = body
         .name()
+        .filter(|name| !mcp_shaped(name))
         .and_then(|name| table.iter().find(|spec| spec.name == name))
         .map(|spec| spec.operation(body.arguments()));
     match operation {
@@ -269,6 +309,15 @@ impl<'a> Members<'a> {
         }
     }
 
+    /// Whether the call's argument object has a member under `key`.
+    fn has(&self, key: &str) -> bool {
+        match self {
+            Self::Object(members) => members.contains_key(key),
+            Self::Decoded(members) => members.contains_key(key),
+            Self::None | Self::Raw(_) => false,
+        }
+    }
+
     /// The whole argument text of a call that carries no object.
     fn raw(&self) -> Option<&str> {
         match self {
@@ -319,6 +368,33 @@ impl<'a> Members<'a> {
     }
 }
 
+const BEGIN_PATCH: &str = "*** Begin Patch";
+const END_PATCH: &str = "*** End Patch";
+/// First lines Codex's lenient parser accepts before `*** Begin Patch`.
+const HEREDOC_MARKERS: &[&str] = &["<<EOF", "<<'EOF'", "<<\"EOF\""];
+
+/// Whether `text` is a patch by Codex's boundary check (0.166.0 lenient mode,
+/// `apply-patch/src/parser.rs`). After trimming, either the first line is
+/// `*** Begin Patch` and the last is `*** End Patch`, or the first line is
+/// exactly `<<EOF`, `<<'EOF'` or `<<"EOF"`, the last ends with `EOF`, and the
+/// lines just inside them are the two markers (compared trimmed). Text before
+/// the opening marker or after the closing one is not a patch, so no command
+/// text can hide around one.
+pub(crate) fn is_patch(text: &str) -> bool {
+    let mut lines = text.trim().lines();
+    let (Some(first), Some(last)) = (lines.next(), lines.next_back()) else {
+        return false;
+    };
+    if HEREDOC_MARKERS.contains(&first) {
+        let (Some(begin), Some(end)) = (lines.next(), lines.next_back()) else {
+            return false;
+        };
+        last.ends_with("EOF") && begin.trim() == BEGIN_PATCH && end.trim() == END_PATCH
+    } else {
+        first.trim() == BEGIN_PATCH && last.trim() == END_PATCH
+    }
+}
+
 /// File-operation headers of the `*** Begin Patch` format. `Move to` names the
 /// new path of an updated file.
 const PATCH_HEADERS: &[&str] = &[
@@ -332,7 +408,7 @@ const PATCH_HEADERS: &[&str] = &[
 /// the start of a line counts, so content lines, which start with a space, `+`
 /// or `-`, never do. Text without the `*** Begin Patch` line names nothing.
 fn patch_targets(text: &str) -> Vec<String> {
-    if !text.lines().any(|line| line.trim() == "*** Begin Patch") {
+    if !text.lines().any(|line| line.trim() == BEGIN_PATCH) {
         return Vec::new();
     }
     text.lines()
@@ -519,6 +595,122 @@ mod tests {
                     && operation.urls().is_empty(),
                 "{name}"
             );
+        }
+    }
+
+    const PATCH: &str = "*** Begin Patch\n*** Update File: /p/old\n+x\n*** End Patch\n";
+
+    #[test]
+    fn argument_roles_come_only_from_the_keys_a_row_names() {
+        let table = copilot::tools::TOOLS;
+        let operation = declared(
+            table,
+            tool(
+                "edit",
+                serde_json::json!({"path": "/p/a", "new_str": "n", "old_str": "o", "note": "x"}),
+            ),
+        );
+        assert_eq!(operation.authored_keys(), ["new_str"]);
+        assert_eq!(operation.replaced_keys(), ["old_str"]);
+        // A key no row names has no role, whatever it looks like, and neither
+        // has a row that names none.
+        let operation = declared(
+            table,
+            tool(
+                "edit",
+                serde_json::json!({"path": "/p/a", "newString": "n"}),
+            ),
+        );
+        assert!(!operation.has_roles());
+        let operation = declared(
+            claude::tools::TOOLS,
+            tool(
+                "Edit",
+                serde_json::json!({"file_path": "/p/a", "new_str": "n", "old_str": "o"}),
+            ),
+        );
+        assert!(!operation.has_roles());
+    }
+
+    #[test]
+    fn a_patch_key_is_authored_content_only_when_its_text_is_a_patch() {
+        let table = codex::tools::TOOLS;
+        let operation = declared(
+            table,
+            tool("apply_patch", serde_json::json!({"command": PATCH})),
+        );
+        assert_eq!(operation.authored_keys(), ["command"]);
+        assert_eq!(operation.written_paths(), ["/p/old"]);
+        let heredoc = format!("<<'EOF'\n{PATCH}EOF\n");
+        let operation = declared(
+            table,
+            tool("apply_patch", serde_json::json!({"command": heredoc})),
+        );
+        assert_eq!(operation.authored_keys(), ["command"]);
+        // A command, or text around a patch, keeps its structural reading.
+        for text in [
+            "ls /p".to_owned(),
+            format!("ls /p\n{PATCH}"),
+            format!("{PATCH}ls /p\n"),
+            "*** Begin Patch\n+x\n".to_owned(),
+        ] {
+            let operation = declared(
+                table,
+                tool("apply_patch", serde_json::json!({"command": text})),
+            );
+            assert!(!operation.has_roles(), "{text:?}");
+        }
+        // The same holds for the whole argument text of a call with no object.
+        let operation = declared(
+            copilot::tools::TOOLS,
+            tool("apply_patch", serde_json::json!(PATCH)),
+        );
+        assert!(operation.authored_text());
+        assert_eq!(operation.written_paths(), ["/p/old"]);
+        for text in ["rm -rf /p", &format!("rm -rf /p\n{PATCH}")] {
+            let operation = declared(
+                copilot::tools::TOOLS,
+                tool("apply_patch", serde_json::json!(text)),
+            );
+            assert!(!operation.authored_text(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_an_mcp_server_gives_its_tools_is_never_declared() {
+        let table = &[
+            ToolSpec::new("mcp__srv__edit", ToolKind::FileWrite)
+                .written(&["path"])
+                .authored(&["new_str"]),
+            ToolSpec::new("edit", ToolKind::FileWrite)
+                .written(&["path"])
+                .authored(&["new_str"]),
+        ];
+        let arguments = serde_json::json!({"path": "/p/a", "new_str": "n"});
+        assert!(
+            declare(table, tool("mcp__srv__edit", arguments.clone()))
+                .operation()
+                .is_none()
+        );
+        assert!(
+            declare(table, tool("MCP-srv.edit", arguments.clone()))
+                .operation()
+                .is_none()
+        );
+        assert!(declared(table, tool("edit", arguments.clone())).has_roles());
+        // A tool a harness names after a server and its tool is not the built-in.
+        for name in ["mcp__srv__apply_patch", "mcp__srv__edit"] {
+            for harness in [
+                copilot::tools::TOOLS,
+                codex::tools::TOOLS,
+                opencode::tools::TOOLS,
+            ] {
+                assert!(
+                    declare(harness, tool(name, arguments.clone()))
+                        .operation()
+                        .is_none()
+                );
+            }
         }
     }
 

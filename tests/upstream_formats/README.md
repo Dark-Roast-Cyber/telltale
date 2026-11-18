@@ -92,6 +92,12 @@ what the evidence shows: an operand key that upstream does not confirm stays
 out of `operands`. At a new tag, re-read the tool definitions, update the list
 and add the table rows in the same change.
 
+A row may name argument keys by role: `authored` (text the call writes,
+read as authored content) and `replaced` (text the call replaces, read as no
+action fact). Only keys the evidence shows get a role; a patch key is authored
+content only when its text is a patch. Record these under `operands` like the
+others.
+
 Use `scripts/check-harness-drift` to verify each pin and list newer upstream
 releases; a newer release is a prompt to re-read the cited code and add cases,
 not proof that anything changed.

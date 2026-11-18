@@ -543,10 +543,12 @@ fn acquire_source_impl(
             let canonical =
                 ClaudeCanonicalOptions::new(options.observed_at).with_scale(source_scale);
             let canonical = if hook_journal {
-                canonical.with_adapter(
-                    ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
-                    source.client.hook_journal_source_id(),
-                )
+                canonical
+                    .with_adapter(
+                        ClientId::HOOK_JOURNAL_ADAPTER_TYPE,
+                        source.client.hook_journal_source_id(),
+                    )
+                    .with_tool_table(source.client)
             } else {
                 canonical
             };
@@ -824,7 +826,7 @@ fn acquire_source_impl(
     } else {
         AccountingCoverage::PartialSource
     });
-    accounting.tool_table = crate::tool_operation::count(reader, &observations);
+    accounting.tool_table = crate::tool_operation::count(source.client, &observations);
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,
@@ -1412,7 +1414,24 @@ mod tests {
             }
             // Only identity differs from the session reading of the same window.
             for (hook, reference) in acquired.observations.iter().zip(&session.observations) {
-                assert_eq!(hook.body(), reference.body());
+                // A tool call is declared by its own client's table, not Claude's.
+                match reference.body() {
+                    ObservationBody::Tool(tool) if tool.operation().is_some() => {
+                        let mut undeclared = telltale_schema::observation::ToolObservation::new();
+                        if let Some(name) = tool.name() {
+                            undeclared = undeclared.with_name(name).unwrap();
+                        }
+                        if let Some(arguments) = tool.arguments() {
+                            undeclared = undeclared.with_arguments(arguments.clone());
+                        }
+                        let expected = crate::tool_operation::declare(
+                            crate::tool_operation::table(client).unwrap_or(&[]),
+                            undeclared,
+                        );
+                        assert_eq!(hook.body(), &ObservationBody::Tool(expected));
+                    }
+                    body => assert_eq!(hook.body(), body),
+                }
                 assert_eq!(hook.kind(), reference.kind());
                 assert_eq!(hook.stage(), reference.stage());
                 assert_eq!(hook.occurred_at(), reference.occurred_at());

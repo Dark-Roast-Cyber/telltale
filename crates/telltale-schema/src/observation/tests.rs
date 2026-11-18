@@ -2430,6 +2430,27 @@ fn a_declared_operation_changes_neither_identity_nor_retained_bytes() {
 }
 
 #[test]
+fn argument_roles_change_neither_identity_nor_retained_bytes() {
+    let arguments = serde_json::json!({"path": "/p/a", "new_str": "synthetic", "old_str": "x"});
+    let bare = declared_tool(Some(arguments.clone()), None);
+    let declared = declared_tool(
+        Some(arguments),
+        Some(
+            ToolOperation::new(ToolKind::FileWrite)
+                .with_authored_key("new_str")
+                .with_replaced_key("old_str")
+                .with_authored_text(),
+        ),
+    );
+    assert_eq!(bare.observation_id(), declared.observation_id());
+    assert_eq!(bare.retained_byte_len(), declared.retained_byte_len());
+    let operation = operation_of(&declared);
+    assert_eq!(operation.authored_keys(), ["new_str"]);
+    assert_eq!(operation.replaced_keys(), ["old_str"]);
+    assert!(operation.authored_text() && operation.has_roles());
+}
+
+#[test]
 fn operands_take_the_arguments_normal_form_and_never_exceed_them() {
     // An NFD path becomes the NFC path the arguments hold, and repeats merge.
     let nfd = "/p/e\u{301}";

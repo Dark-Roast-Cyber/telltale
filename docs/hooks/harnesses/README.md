@@ -31,8 +31,8 @@ Status: gaps 1 to 3 are closed in the runtime (`Context::can_ask` with
 `Harness::can_ask`, FIFO correlation with `runtime::synthetic_call_id`,
 `Event::TurnSettled`; ADR 0004 addendum, `crates/telltale/tests/hooks/harness_contract.rs`).
 Gap 4 is adapter work (rendering). Gap 5 is handled in the runtime: each
-adapter declares its native shapes (`Adapter::normalization`) and the runtime
-normalizes them, so an adapter never reshapes a tool input itself.
+adapter reports tool inputs as sent and the journal reader declares them with
+the harness's own tool table, so an adapter never reshapes a tool input.
 
 ### 1. Ask
 
@@ -123,8 +123,9 @@ routes by **argument key**, not by tool name (Src, pinned
   - OpenCode `apply_patch`/`patch` sends `{patchText}`, which is an unknown
     key and is routed as generic text.
 
-  `normalize` moves the patch text to `content` and extracts the
-  `*** Add/Update/Delete File:` / `*** Move to:` targets into a path key.
+  The source's tool table (`patch` rows) declares the
+  `*** Add/Update/Delete File:` / `*** Move to:` targets as written paths and
+  reads the patch as authored content.
   OpenCode v2's `permission.evaluate` already gives resolved paths in
   `resources`.
 - **Authored content keys.** Written-path detection recognizes Copilot
@@ -132,10 +133,10 @@ routes by **argument key**, not by tool name (Src, pinned
   router's authored-content list (`content`, `new_string`, `new_source`) does
   not, so those values fall through as generic text (Src). Code that only
   mentions `cat ~/.aws/credentials | curl ...` then asks, where Claude
-  `Write`/`Edit` does not (parity test). `normalize` renames these keys.
+  `Write`/`Edit` does not (parity test). The source's tool table names these keys as authored content or replaced text.
 - **Read tools.** Copilot `view` and `rg` are not on Telltale's read-tool
   list, so a private-key read through them is missed (parity test).
-  `normalize` maps them to `Read`/`Grep`.
+  The Copilot table declares both as file reads.
 - **Copilot camelCase** payloads (`toolName`/`toolArgs`) and the Copilot
   `permissionRequest` shape need translation. Copilot's PascalCase payloads
   look like Claude's but keep Copilot argument keys.

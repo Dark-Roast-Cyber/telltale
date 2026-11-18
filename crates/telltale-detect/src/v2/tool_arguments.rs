@@ -5,15 +5,29 @@
 //! module, so they agree on its facts. Nothing here knows a harness except the
 //! two tool-name lists ([`is_file_write_tool`], [`is_file_read_tool`]).
 //!
-//! A source declares the operation of each built-in tool it knows: a kind and
-//! operands (`ToolObservation::operation`). That declaration is read together
-//! with the structural reading and only adds to it, so no call loses a fact
-//! it has here. The name lists remain as the fallback for a call with no
+//! A source declares the operation of each built-in tool it knows: a kind,
+//! operands and, for a few arguments, a role (`ToolObservation::operation`).
+//! That declaration is read together with the structural reading. Operands only
+//! add to it. A role replaces the reading of one named argument: its text is
+//! authored content, or replaced text that is no action fact, instead of what
+//! its key says. A patch is authored content, so its lines are no command text.
+//! Only the keys the declaration names change, and no other call or key
+//! reads differently. The name lists remain as the fallback for a call with no
 //! declaration: a tool the source's table does not name, and observations a
-//! host supplies or imports. Hooks journal windows, whichever client's hooks wrote
-//! them, are read with the Claude reader and tool table, so a Claude tool in one
-//! is declared like any other. A declared call
-//! takes its kind from the declaration and not from its name.
+//! host supplies or imports. A hooks journal window is read with the tool table
+//! of the client whose hooks wrote it. A declared call takes its kind from the
+//! declaration and not from its name.
+//!
+//! A call with roles reads as its Claude Code `Write` or `Edit` equivalent in
+//! both consumers. The action view reads the members by role
+//! ([`ArgumentReading::declared`]). The session selectors have no argument text
+//! to read for such a call ([`reads_by_role`]: `compat.v1.arguments`,
+//! `tool.arguments.text` and the process-chain command lines), and no command
+//! facet where the member it came from has a role ([`command_member_has_role`]).
+//! For the Claude Code call, whose arguments are an object, those selectors have
+//! no text either. The typed `tool.arguments` and `tool.searchable_arguments`
+//! selectors, which return the arguments as reported, and the action view's
+//! authored content are unchanged and still see the text.
 //!
 //! `tool_reading_tests` pins the reading of every key and name below for calls
 //! with no declaration.
@@ -224,6 +238,27 @@ pub(crate) fn decoded_argument_object(text: &str) -> Option<DecodedArguments> {
     Some((admitted, skipped))
 }
 
+/// Whether a call's declaration gives any argument a role. The call's argument
+/// text is then no command text. For a call whose arguments are an object this is
+/// the reading every object gets: its members are read by key and the text selectors
+/// (`compat.v1.arguments`, `tool.arguments.text`) have no one text to read, so an
+/// encoded object or a patch held as the whole argument text is no such text either.
+pub(crate) fn reads_by_role(tool: &ToolObservation) -> bool {
+    tool.operation().is_some_and(ToolOperation::has_roles)
+}
+
+/// Whether the declaration gives a role to the member that holds a command, so
+/// that a command facet copied from it is authored or replaced text and no command.
+pub(crate) fn command_member_has_role(tool: &ToolObservation) -> bool {
+    tool.operation().is_some_and(|operation| {
+        operation
+            .authored_keys()
+            .iter()
+            .chain(operation.replaced_keys())
+            .any(|key| is_command_argument_key(key))
+    })
+}
+
 /// Top-level tool argument keys whose value is the command a call runs.
 fn is_command_argument_key(key: &str) -> bool {
     matches!(key, "command" | "cmd" | "commandLine" | "command_line")
@@ -283,9 +318,22 @@ pub(crate) struct ArgumentReading {
     /// `(field, text)` facts in the order read: `authored_content`, `url`,
     /// `file_path` and `arguments`.
     pub(crate) facts: Vec<(&'static str, String)>,
+    /// Keys a declaration reads as authored content, and as replaced text, and
+    /// whether the text of a call with no argument object is authored content.
+    authored: Vec<String>,
+    replaced: Vec<String>,
 }
 
 impl ArgumentReading {
+    /// A reading that follows the argument roles of a call's declaration.
+    pub(crate) fn declared(operation: Option<&ToolOperation>) -> Self {
+        operation.map_or_else(Self::default, |operation| Self {
+            authored: operation.authored_keys().to_vec(),
+            replaced: operation.replaced_keys().to_vec(),
+            ..Self::default()
+        })
+    }
+
     fn put(&mut self, field: &'static str, text: String) {
         self.facts.push((field, text));
     }
@@ -294,6 +342,13 @@ impl ArgumentReading {
     pub(crate) fn read(&mut self, input: &BTreeMap<String, JsonValue>) {
         for (key, value) in input {
             match key.as_str() {
+                // A declared role comes before what the key says.
+                key if self.authored.iter().any(|known| known == key) => {
+                    if let Some(v) = string(value) {
+                        self.put("authored_content", v.to_owned());
+                    }
+                }
+                key if self.replaced.iter().any(|known| known == key) => {}
                 key if is_command_argument_key(key) => {
                     if let Some(v) = string(value) {
                         self.command.push_str(v);
@@ -315,10 +370,14 @@ impl ArgumentReading {
                 "edits" => {
                     if let JsonValue::Array(edits) = value {
                         for edit in edits {
-                            if let JsonValue::Object(edit) = edit
-                                && let Some(v) = edit.get("new_string").and_then(string)
-                            {
-                                self.put("authored_content", v.to_owned());
+                            if let JsonValue::Object(edit) = edit {
+                                for key in std::iter::once("new_string")
+                                    .chain(self.authored.iter().map(String::as_str))
+                                {
+                                    if let Some(v) = edit.get(key).and_then(string) {
+                                        self.facts.push(("authored_content", v.to_owned()));
+                                    }
+                                }
                             }
                         }
                     }
@@ -393,10 +452,11 @@ impl ArgumentReading {
     /// deep to parse, stay searchable as command text unless their key is ignored.
     pub(crate) fn read_skipped(&mut self, skipped: &[(String, String)]) {
         for (key, raw) in skipped {
-            if is_ignored_argument_key(key) {
+            if self.replaced.contains(key) || is_ignored_argument_key(key) {
                 continue;
             }
-            let routed = is_command_argument_key(key)
+            let routed = self.authored.contains(key)
+                || is_command_argument_key(key)
                 || is_authored_argument_key(key)
                 || is_path_argument_key(key)
                 || key == "edits"
