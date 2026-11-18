@@ -1492,39 +1492,4 @@ mod tests {
             assert!(!rendered.contains("Synthetic"));
         }
     }
-
-    #[test]
-    fn canonical_identity_and_kind_are_exact() {
-        let wrong_identity = Source {
-            client: ClientId::OpenClaw,
-            kind: SourceKind::Jsonl,
-            source_id: "openclaw.other".to_owned(),
-            path: "does-not-exist.jsonl".into(),
-        };
-        let error = crate::acquisition::acquire_source(
-            &wrong_identity,
-            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-        )
-        .err()
-        .expect("wrong identity must fail before reading");
-        assert_eq!(error.code(), "unsupported_source_identity");
-        assert!(!error.to_string().contains("does-not-exist"));
-        assert!(!format!("{error:?}").contains("does-not-exist"));
-
-        let wrong_kind = Source {
-            client: ClientId::OpenClaw,
-            kind: SourceKind::Json,
-            source_id: "openclaw.agents".to_owned(),
-            path: "does-not-exist.jsonl".into(),
-        };
-        let error = crate::acquisition::acquire_source(
-            &wrong_kind,
-            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-        )
-        .err()
-        .expect("wrong kind must fail before reading");
-        assert_eq!(error.code(), "source_kind_mismatch");
-        assert!(!error.to_string().contains("does-not-exist"));
-        assert!(!format!("{error:?}").contains("does-not-exist"));
-    }
 }

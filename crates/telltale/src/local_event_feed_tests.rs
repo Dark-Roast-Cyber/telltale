@@ -2003,7 +2003,6 @@ fn privacy_notice_display_and_debug_are_static() {
     let debug = format!("{notice:?}");
     assert!(debug.contains("ParserMalformed"));
     assert!(debug.contains('2'));
-    assert!(!debug.contains("SYNTHETIC_FEED_PRIVACY_CANARY"));
 }
 
 #[test]

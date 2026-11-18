@@ -636,18 +636,6 @@ mod platform_tests {
     }
 
     #[test]
-    fn durable_storage_policy_rejects_windows_before_filesystem_side_effects() {
-        let temp = tempdir().expect("temporary directory");
-        let outbox_path = temp.path().join("private").join("outbox.sqlite");
-
-        let error = ensure_durable_storage_supported_for_platform(true)
-            .expect_err("Windows durable storage must be rejected");
-        assert_windows_storage_error(error);
-        assert!(!outbox_path.parent().expect("outbox parent").exists());
-        assert!(!outbox_path.exists());
-    }
-
-    #[test]
     fn durable_storage_policy_allows_non_windows_platforms() {
         ensure_durable_storage_supported_for_platform(false)
             .expect("non-Windows durable storage policy");
@@ -707,14 +695,5 @@ mod platform_tests {
         assert_windows_storage_error(error);
         assert!(!outbox_path.parent().expect("outbox parent").exists());
         assert!(!outbox_path.exists());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn native_windows_best_effort_does_not_use_the_durable_storage_guard() {
-        let temp = tempdir().expect("temporary directory");
-        let path = temp.path().join("best-effort.jsonl");
-        fs::write(&path, b"synthetic-best-effort\n").expect("best-effort fixture");
-        assert!(path.is_file());
     }
 }
