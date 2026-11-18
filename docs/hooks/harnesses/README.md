@@ -15,6 +15,10 @@ have no contract page yet (Cursor, Gemini CLI, OpenClaw, Hermes Agent). The
 adapters in a build are the registry in `crates/telltale/src/hooks/harness.rs`;
 `telltale hooks harnesses` prints them.
 
+The [harness tracker](../harness-tracker.md) records documentation links,
+configuration paths and adapter progress for every harness, including those
+with no contract page yet.
+
 Copilot, Codex and OpenCode were verified with stub hooks (or capture
 plugins) on the real harness binaries, driven by a scripted model
 (`scripts/hooks/harness/mock-model.py`). This needs no credentials and spends no
