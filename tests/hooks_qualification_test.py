@@ -101,6 +101,22 @@ class QualificationTests(unittest.TestCase):
         )
         self.assertTrue(result["matched"])
 
+    def test_arguments_sent_as_a_json_string_join_on_the_hash_of_that_string(self):
+        self.invocation["payload"]["toolArgs"] = (
+            '{"command": "touch /synthetic/canary"}'
+        )
+        self.decision["action"]["input_sha256"] = (
+            "c12f638317c7e861045c464f26bb13447bd19eba33768bca07b9edea3d098b99"
+        )
+        result = qualification.command_pair_evidence(
+            [self.decision, self.outcome],
+            [self.invocation],
+            {"call-one": "blocked record-one"},
+            "/synthetic/canary",
+            denied=True,
+        )
+        self.assertTrue(result["matched"])
+
     def test_missing_attempt_is_not_prevention(self):
         self.assertFalse(
             qualification.command_pair_evidence(
