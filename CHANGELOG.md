@@ -138,9 +138,10 @@
   Any other reparse point, such as a cloud-sync placeholder exposed to the
   process or a deduplicated file, was refused as a link; it is now discovered,
   and read or traversed through the filter that owns its tag, so its bytes are
-  what any program reads. A tag no installed filter owns is refused as
-  unreadable, as Windows refuses it for every program. The unconfined reader
-  (MCP configuration, Copilot) still refuses every reparse point. (#219)
+  what any program reads. A tag no installed filter owns, which no program
+  can open, is still not followed: discovery skips it and a read reports it
+  as a non-regular source. The unconfined reader (MCP configuration, Copilot)
+  still refuses every reparse point. (#219)
 - New rule scope `detection.scope: recorded_exclusion`. A rule with it selects from
   a tool call's command with its quotes removed, as field-scoped rules do, but
   judges its exclusion on the recorded command. Quoted commit, issue and
