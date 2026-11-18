@@ -17,6 +17,8 @@ It does not make support claims. The adapters in a build are the registry in
   regenerate the progress page with `make hooks-progress-update` and commit
   `progress.html` with it. `cargo test --test hooks_progress` fails while the
   page is stale. Never edit `progress.html` by hand.
+- Add a row for a harness as soon as it is known, with Survey `todo` and
+  Mechanism `Unsurveyed`. A row is not a support claim.
 - Record a fact in [Reference](#reference) with its evidence level and the
   date it was checked. Levels are the capability matrix's: **E2E**,
   **Capture**, **Bin**, **Docs/Src**, **3P** (third party only), **?**.
@@ -41,12 +43,16 @@ It does not make support claims. The adapters in a build are the registry in
 
 The bars count checklist cells. Verify the written gate against linked run
 reports before declaring a milestone reached. Unassigned harnesses (`—`) are
-survey candidates and do not count toward the bars.
+survey candidates and do not count toward the bars. M3 to M5 are a working
+proposal in priority order, not a commitment.
 
 | Milestone | Name | Reached when |
 | --- | --- | --- |
 | M1 | Integrated command hooks | Linked control/deny reports for Claude Code, Copilot CLI and Codex CLI using the integrated executable |
 | M2 | OpenCode v2 pilot | One pinned v2 install passes the ordinary-call, nested-call and failure gates in the OpenCode contract; report settlement limits |
+| M3 | Adapter reuse | VS Code Copilot agent mode, Qwen Code and Factory Droid each have a capture and a linked control/deny report, through an existing adapter where the captured contract matches |
+| M4 | Own-contract command hooks | Cursor, Gemini CLI, Antigravity and Cline each have a contract page, an adapter and a linked control/deny report |
+| M5 | Plugin harnesses | OpenCode v2 passes its gates as a managed install; Kilo and Pi are enforced through a forwarding plugin with linked reports |
 
 [progress.html](progress.html) shows these as one bar. It is generated from
 the two tables in this section and the next; see [How to update](#how-to-update).
@@ -56,36 +62,79 @@ the two tables in this section and the next; see [How to update](#how-to-update)
 Stage cells are `done`, `wip`, `todo` or `n/a`. "Pin" is the version the
 latest stage was done against.
 
-| Harness | Milestone | Mechanism | Survey | Contract | Capture | Adapter | E2E | Documented | Pin | Next |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | M1 | Command hook | done | done | done | done | done | done | 2.1.327 E2E; 2.1.318 capture | Broader mode qualification |
-| GitHub Copilot CLI | M1 | Command hook | done | done | done | done | done | done | 1.0.105 | Real-model run separately authorized |
-| OpenAI Codex CLI | M1 | Command hook | done | done | done | done | done | done | 0.166.0 | Real-model run separately authorized |
-| OpenCode v2 | M2 | In-process plugin | done | done | done | done | done | done | 2.2.5 | Request-only pilot; service and hardened install remain unqualified |
-| Kilo | — | In-process plugin (OpenCode API) | done | todo | todo | todo | todo | todo | — | Capture before considering reuse |
-| VS Code Copilot agent mode | — | Command hook (Copilot harness) | done | todo | todo | todo | todo | todo | — | Capture; compare with Copilot CLI |
-| Cursor | — | Command hook | done | todo | todo | todo | todo | todo | — | Contract page and capture |
-| Gemini CLI | — | Command hook | done | todo | todo | todo | todo | todo | 0.66.0 (survey) | Capture; settle exit-code behavior |
-| Factory Droid | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
-| Qwen Code | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
-| Cline | — | Command hook (file hooks) | done | todo | todo | todo | todo | todo | — | Capture extension and CLI payloads |
-| Pi | — | In-process extension | done | todo | todo | todo | todo | todo | — | Capture |
-| Goose | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
-| Antigravity | — | Command hook | done | todo | todo | todo | todo | todo | — | Capture |
-| Crush | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
-| Kiro | — | Command hook, Claude-shaped (CLI V3) | done | todo | todo | todo | todo | todo | — | On demand |
-| Junie CLI | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
-| Auggie CLI | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
-| Hermes Agent | — | Command hook; Python plugin | done | todo | todo | todo | todo | todo | 0.19.0 (survey) | On demand |
-| OpenHands | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
-| Devin Desktop and CLI | — | Command hook | done | todo | todo | todo | todo | todo | — | On demand |
-| Amp | — | In-process plugin | done | todo | todo | todo | todo | todo | — | On demand |
-| OpenClaw | — | In-process plugin | done | todo | todo | todo | todo | todo | 2026.10.10 (survey) | On demand |
-| Continue CLI | — | None usable | done | n/a | n/a | n/a | n/a | n/a | — | Recheck if the pre-tool event is wired |
-| Zed agent | — | Tool permissions | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
-| Aider | — | Unverified | todo | todo | todo | todo | todo | todo | — | Find primary evidence |
-| Warp | — | None released | done | n/a | n/a | n/a | n/a | n/a | — | Recheck when hooks ship |
-| Roo Code | — | Unverified | todo | todo | todo | todo | todo | todo | — | Verify lifecycle status |
+"Catalog" names the client IDs from the pinned client catalog
+(`crates/telltale-discover/data/tokscale-registry.tsv`) that a row accounts
+for; `—` means the catalog does not list the harness.
+`cargo test --test hooks_progress` fails while a catalog client has no row, so
+a catalog update brings its new clients here as unsurveyed rows. Neither the
+catalog nor this page is a complete list of agents: add a harness when one is
+found, whatever the source.
+
+| Harness | Catalog | Milestone | Mechanism | Survey | Contract | Capture | Adapter | E2E | Documented | Pin | Next |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | `claude` | M1 | Command hook | done | done | done | done | done | done | 2.1.327 E2E; 2.1.318 capture | Broader mode qualification |
+| GitHub Copilot CLI | `copilot` | M1 | Command hook | done | done | done | done | done | done | 1.0.105 | Real-model run separately authorized |
+| OpenAI Codex CLI | `codex` | M1 | Command hook | done | done | done | done | done | done | 0.166.0 | Real-model run separately authorized |
+| OpenCode v2 | `opencode` | M2 | In-process plugin | done | done | done | done | done | done | 2.2.5; queue plugin rerun on 2.3.2 | Request-only pilot; service and hardened install remain unqualified |
+| OpenCode v2 managed install | — | M5 | In-process plugin | done | todo | todo | n/a | todo | todo | — | Service mode, packaged install and a startup check from outside the plugin |
+| Kilo | `kilo` | M5 | In-process plugin (OpenCode API) | done | todo | todo | todo | todo | todo | — | Capture before considering reuse |
+| VS Code Copilot agent mode | — | M3 | Command hook (Copilot harness) | done | todo | todo | todo | todo | todo | — | Capture; compare with Copilot CLI |
+| Cursor | `cursor` | M4 | Command hook | done | todo | todo | todo | todo | todo | — | Contract page and capture |
+| Gemini CLI | `gemini` | M4 | Command hook | done | todo | todo | todo | todo | todo | 0.66.0 (survey) | Capture; settle exit-code behavior |
+| Factory Droid | `droid` | M3 | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| Qwen Code | `qwen` | M3 | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| Cline | `cline` | M4 | Command hook (file hooks) | done | todo | todo | todo | todo | todo | — | Capture extension and CLI payloads |
+| Pi | `pi` | M5 | In-process extension | done | todo | todo | todo | todo | todo | — | Capture |
+| Goose | `goose` | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | Capture |
+| Antigravity | `antigravity`, `antigravity-cli`, `antigravity-extension` | M4 | Command hook | done | todo | todo | todo | todo | todo | — | Capture |
+| Crush | `crush` | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Kiro | `kiro` | — | Command hook, Claude-shaped (CLI V3) | done | todo | todo | todo | todo | todo | — | On demand |
+| Junie CLI | `junie` | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Auggie CLI | `augment` | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Hermes Agent | `hermes` | — | Command hook; Python plugin | done | todo | todo | todo | todo | todo | 0.19.0 (survey) | On demand |
+| OpenHands | — | — | Command hook, Claude-shaped | done | todo | todo | todo | todo | todo | — | On demand |
+| Devin Desktop and CLI | `devin-cli`, `devin-desktop` | — | Command hook | done | todo | todo | todo | todo | todo | — | On demand |
+| Amp | `amp` | — | In-process plugin | done | todo | todo | todo | todo | todo | — | On demand |
+| OpenClaw | `openclaw` | — | In-process plugin | done | todo | todo | todo | todo | todo | 2026.10.10 (survey) | On demand |
+| Continue CLI | — | — | None usable | done | n/a | n/a | n/a | n/a | n/a | — | Recheck if the pre-tool event is wired |
+| Zed agent | `zed` | — | Tool permissions | done | n/a | n/a | n/a | n/a | n/a | — | Recheck yearly |
+| Aider | — | — | Unverified | todo | todo | todo | todo | todo | todo | — | Find primary evidence |
+| Warp | `warp` | — | None released | done | n/a | n/a | n/a | n/a | n/a | — | Recheck when hooks ship |
+| Roo Code | `roocode` | — | Unverified | todo | todo | todo | todo | todo | todo | — | Verify lifecycle status |
+| Aside | `aside` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| BB | `bb` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Cherry Studio | `cherrystudio` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| CodeBuddy | `codebuddy` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Codebuff | `codebuff` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Command Code | `commandcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| DeepSeek Harness | `dsh` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Freebuff | `freebuff` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Fx | `fx` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Gajae-Code | `gjc` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Grok Build | `grok` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Hindsight | `hindsight` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Jcode | `jcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Kilo Code | `kilocode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Kimchi | `kimchi` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Kimi CLI | `kimi` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| LM Studio | `lmstudio` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| MiMo Code | `micode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| MiniMax Code | `mcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Mistral Vibe | `vibe` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Muse Code | `muse` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Mux | `mux` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Oh My Pi | `omp` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| OpenCodeReview | `opencodereview` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Prime Agent | `prime-agent` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Proma | `proma` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Qoder | `qoder` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Reasonix | `reasonix` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Senpi (OmO Native) | `senpi` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Trae | `trae` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Unsloth | `unsloth` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| WorkBuddy | `workbuddy` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| Xiaomi MiMo AI | `micode-desktop` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
+| ZCode | `zcode` | — | Unsurveyed | todo | todo | todo | todo | todo | todo | — | Survey |
 
 ### Shared work
 
@@ -466,3 +515,5 @@ harness's entry.
 - 2026-11-17: M2 2.2.5 standalone request-only pilot passed ordinary/nested pairs, concurrent repeated inner denials, sibling control, detect-only and bounded transport-failure checks. Outcomes deliberately remain unknown; startup is fail-open and managed/service operation remains unqualified. See the integrated report for exact bounds and evidence.
 - 2026-11-17: installed OpenCode 2.3.2 also passed the ordinary/nested pairs (E2E, standalone, scripted model), separately from the 2.2.5 pin. Native deny and non-auto ask controls at 2.2.5 confirmed that a plugin no-op does not loosen permissions.
 - 2026-11-17: corrected the plugin deadline/reaping defect found in parent review; caller settlement no longer waits for inherited pipe closure, never signals a known-exited group, and keeps unreaped children counted. Old timeout qualification withdrawn. Corrected-plugin 2.2.5 matrix (17 cases) and installed 2.3.2 pairs (4 cases) passed; two focused process regressions fail on the old artifact and pass on the correction. Current digest and evidence are in the integrated report.
+- 2026-11-17: the OpenCode v2 plugin gained a configurable waiting queue; all 17 pilot scenarios were rerun against it on installed 2.3.2 (E2E, standalone, scripted model), not on the 2.2.5 pin.
+- 2026-11-17: added the Catalog column and a row for every client in the pinned client catalog, 34 of them unsurveyed; added milestones M3 to M5 and the managed-install row for OpenCode v2; the progress page gained coverage counts.
