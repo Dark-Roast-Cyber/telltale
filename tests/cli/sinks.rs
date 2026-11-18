@@ -2705,8 +2705,11 @@ fn sink_failure_episode_alerts_once_until_release_or_ack() {
             .arg(&log_path)
             .arg("--state-path")
             .arg(&state_path)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            // Nothing reads the watch's output while it runs, and its summary
+            // can exceed a pipe's capacity, which would block it before it
+            // exits. The assertions read the log, the outbox and the state.
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap(),
     );
