@@ -835,5 +835,8 @@ mod hooks_evaluator;
 #[path = "cli/hooks_generated_rule_paths.rs"]
 mod hooks_generated_rule_paths;
 #[cfg(feature = "hooks")]
+#[path = "cli/hooks_opencode_contract.rs"]
+mod hooks_opencode_contract;
+#[cfg(feature = "hooks")]
 #[path = "cli/hooks_unreadable_payloads.rs"]
 mod hooks_unreadable_payloads;

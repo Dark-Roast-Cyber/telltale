@@ -8,6 +8,11 @@
 
 ### Compatibility and operator impact
 
+- Add an experimental, manually installed OpenCode v2 request-only Hooks
+  plugin/adapter. Native permissions are never loosened; detect-only is the
+  default. Outcomes remain unknown; managed/service installation and complete
+  self-protection are not qualified. Add explicit subprocess reply framing and
+  a restrictive detect-only flag without changing native command-hook output.
 - **`telltale hooks` records carry the real harness identity.** The Telltale
   records in hooks telemetry (`telltale[]`) name the harness's own client and
   hook-journal source (`claude`/`claude.hooks`, `codex`/`codex.hooks`,

@@ -1,6 +1,7 @@
 # Architecture
 
-Status: first vertical slice (Claude Code), now three harnesses. Module paths below are relative to `crates/telltale/src/`. Decisions: [ADRs](adr/).
+Status: three command-hook adapters and an OpenCode v2 request-only pilot.
+Module paths below are relative to `crates/telltale/src/`. Decisions: [ADRs](adr/).
 
 ## Purpose and scope
 
@@ -43,7 +44,8 @@ and not a sandbox. It is one enforcement point among several; see the
 | Module | Responsibility |
 | --- | --- |
 | `harness` | Registry: `enum Harness` maps a harness name to its adapter's descriptor (`Adapter`: names, events, parse, render, install output, normalization, config home, rules). The CLI driver, the evaluator, normalization and the engine read only the descriptor. |
-| `harnesses/` | One module per harness, each exporting its `ADAPTER`; `payload` holds what adapters share, and `opencode` the tool shapes captured ahead of that adapter. The three rows below are its adapters. |
+| `harnesses/` | One module per harness, each exporting its `ADAPTER`; `payload` holds what adapters share. |
+| `opencode` | v2 request-only pilot. The JavaScript plugin forwards `execute.before` with a fresh occurrence ID; Rust owns parsing, normalization and deny rendering. No terminal forwarding or inferred settlement. Explicit manual plugin install; command-hook settings are refused. |
 | `claude_code` | Parse Claude Code hook payloads (2.1.318 contract, unknown fields ignored); render `permissionDecision` / `additionalContext`; generate the settings fragment. Never renders `allow`. |
 | `copilot_cli` | Parse Copilot CLI hook payloads in both dialects (1.0.105 contract), with synthetic correlation keys and `agentStop` settlement; render the flat `permissionDecision` / `additionalContext`; generate the hook file. Also receives Copilot payloads sent to the Claude Code entry point by a repository `.claude/settings.json`. Never renders `allow`. |
 | `runtime` | Harness-neutral events: `ToolRequested` (the only enforcement point), `ToolFinished`, `BatchSettled`, `UserPrompt`, `PermissionPrompt`, session and subagent lifecycle. Infallible: failures become `error` records plus `on_error`. |
@@ -86,9 +88,10 @@ A new harness adapter (OpenCode, Cursor, ...) must:
    call. Never fabricate execution; a
    requested call is only requested.
 2. Map post-execution reports to `Event::ToolFinished` with `Completed`,
-   `Failed` or `Interrupted` as the harness reports them. Map a settlement
-   that lists its calls (Claude Code `PostToolBatch`, OpenCode's per-call
-   tool state) to `Event::BatchSettled` (`not_executed`), and a turn end
+   `Failed` or `Interrupted` only with evidence the tool actually executed.
+   A generic error can also describe a pre-execution denial. Map a settlement
+   that establishes non-execution for identified pending calls (Claude Code
+   `PostToolBatch`) to `Event::BatchSettled` (`not_executed`), and a turn end
    without a call list (Copilot `agentStop`, Codex `Stop`) to
    `Event::TurnSettled`, scoped by the context's `agent_id` and, when the
    harness has turn IDs, `prompt_id` (`not_executed` only for calls this
@@ -212,6 +215,25 @@ execpolicy`) stays a CLI route of its own.
 Changes to `Event`, `Response` or `Context` (for example ask capability or
 turn settlement) are a separate shared-interface PR, not part of an adapter
 PR.
+
+### Subprocess plugin reply
+
+`hook --json-reply` is optional CLI framing, not a new runtime event, telemetry
+schema or evaluator protocol. It wraps the native answer **after** `Gate::release`
+as `{protocol: "telltale.hook-reply.v1", mode, output}`. `output: null` confirms a
+successful no-op; empty stdout is an unavailable reply. Existing native
+command-hook output is unchanged without the flag. `--detect-only` can only
+restrict loaded configuration and runtime accounting, including broken config;
+it cannot enable enforcement. The v2 pilot plugin uses both flags and has its
+own bounded subprocess/failure policy. Startup plugin load failure remains an
+upstream fail-open limit, not a CLI guarantee.
+
+The plugin's caller deadline is independent of stdio closure and child
+reaping. On failure it settles once, destroys its streams and attempts cleanup
+only for a direct child not known to have exited. A capacity slot is released
+only after both caller settlement and direct-child reaping. Delayed inherited
+pipes cannot extend the caller deadline or cause a signal to an old process
+group; failed cleanup cannot release a still-live slot.
 
 ## Trust and failure model
 
