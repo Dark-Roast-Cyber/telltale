@@ -38,7 +38,10 @@ def command_pair_evidence(records, invocations, receipts, canary, *, denied):
             event = "preToolUse"
         if event not in ("PreToolUse", "preToolUse"):
             continue
-        arguments = payload.get("tool_input", payload.get("toolArgs"))
+        # Telltale hashes the arguments as the harness sent them: a harness that
+        # sends them as a JSON string is hashed as that string.
+        native = payload.get("tool_input", payload.get("toolArgs"))
+        arguments = native
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
@@ -51,7 +54,7 @@ def command_pair_evidence(records, invocations, receipts, canary, *, denied):
             native_tool = payload.get("tool_name", payload.get("toolName"))
             digest = hashlib.sha256(
                 json.dumps(
-                    arguments, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+                    native, sort_keys=True, ensure_ascii=False, separators=(",", ":")
                 ).encode()
             ).hexdigest()
             if decision.get("action", {}).get("input_sha256") != digest or (

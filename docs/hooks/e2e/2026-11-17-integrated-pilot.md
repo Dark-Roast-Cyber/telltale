@@ -13,7 +13,7 @@ loopback-only model providers. Raw synthetic receipts remain private; the
   `7705b8cf02432b49443f2b8a1f9041dae09b699e889f3c2c8d42ab09ace6f2f2`.
 - Initial plugin `scripts/hooks/opencode-v2.mjs` SHA-256 (superseded):
   `c6cb246ffa41e1d9396a6715ad3007d6b7008f59f09630cfbc06e8b672c9b53e`.
-- Linux x86-64, kernel `7.2.15-200.fc44.x86_64`, development build.
+- Linux x86-64, development build.
 - The pinned Copilot/OpenCode platform packages were extracted locally with
   npm-registry SHA-512 integrity verification, not globally installed.
 
@@ -70,6 +70,21 @@ record them. They were **not** rerun on the 2.2.5 pin, which was not available
 to that run. No scenario fills the queue under a real harness: waiting, the
 queue bound and the `maxQueued: 0` behaviour are covered by the
 substituted-executable process tests only.
+
+### After merging main
+
+Main changed the Copilot CLI and Codex CLI drivers while this work was in
+progress: every scenario now states what it expects of the hook. The merged
+drivers keep that expectation and the same-call join. On the merged tree the
+installed Codex CLI **0.167.0** passed `allow deny` and the installed Copilot
+CLI **1.0.105** passed `benign deny`, scripted models, in-process evaluation.
+Codex 0.167.0 is not the pinned version; this confirms the merged drivers,
+not a new pin.
+
+That Copilot run sent its tool arguments as a JSON string where the captured
+payloads carry an object. The join hashed the parsed form and so refused to
+match a correct run; it now hashes the arguments as the harness sent them,
+which is what the hook records.
 
 ## M1 — command hooks
 
