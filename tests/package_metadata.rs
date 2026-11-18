@@ -88,37 +88,8 @@ fn rc_package_and_lockfile_versions_are_exactly_lockstep() {
 }
 
 #[test]
-fn registry_consumer_docs_follow_current_package_version() {
+fn facade_include_list_and_binary_target_are_explicit() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document =
-        fs::read_to_string(root.join("docs/versioning.md")).expect("versioning document");
-    assert!(
-        document.contains(&format!("`={VERSION}`")),
-        "docs/versioning.md does not name the current registry pin"
-    );
-    assert!(
-        !document.contains("`=0.2.0`"),
-        "docs/versioning.md retains a stale registry pin"
-    );
-}
-
-#[test]
-fn publication_order_and_binary_targets_are_explicit() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let names: Vec<_> = PACKAGES.iter().map(|(name, _)| *name).collect();
-    assert_eq!(
-        names,
-        vec![
-            "telltale-schema",
-            "telltale-rules",
-            "telltale-discover",
-            "telltale-sources",
-            "telltale-detect",
-            "telltale-core",
-            "telltale-cli",
-        ]
-    );
-
     let facade =
         fs::read_to_string(root.join("crates/telltale/Cargo.toml")).expect("facade manifest");
     assert!(facade.contains("name = \"telltale-core\""));

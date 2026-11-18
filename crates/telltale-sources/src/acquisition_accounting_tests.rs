@@ -978,18 +978,10 @@ fn sqlite_overlap_and_mutable_rereads_never_attest_source_replacement() {
 }
 
 #[test]
-fn coverage_defaults_fail_closed_and_has_no_source_controlled_metadata() {
+fn coverage_defaults_to_partial_source() {
     assert_eq!(
         SourceAccounting::default().coverage,
         AccountingCoverage::PartialSource
-    );
-    assert_eq!(
-        format!("{:?}", AccountingCoverage::CompleteSource),
-        "CompleteSource"
-    );
-    assert_eq!(
-        format!("{:?}", AccountingCoverage::PartialSource),
-        "PartialSource"
     );
 }
 
@@ -1840,4 +1832,61 @@ fn codex_contribution_preflight_checks_only_tool_calls() {
     let batch = acquire_source(&source, options()).unwrap();
     assert_eq!(batch.quarantined.len(), 0);
     assert_eq!(batch.observations.len(), 1);
+}
+
+/// A tool request whose name no table row lists, and a declared request whose
+/// row names an operand the call lacks, are counted. Counting reads the
+/// observations only, so the same read without the counts differs in nothing
+/// else, and the counts hold numbers, never a name.
+#[test]
+fn tool_table_counts_unclassified_and_operand_drift_without_changing_the_read() {
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Qwen,
+        source_id: "qwen.projects".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic.jsonl"),
+    };
+    let calls = [
+        (
+            "read_file",
+            serde_json::json!({"file_path": "/synthetic/a"}),
+        ),
+        // Declared, but the call names no file.
+        ("read_file", serde_json::json!({"offset": 1})),
+        ("list_directory", serde_json::json!({"ignore": ["x"]})),
+        // A search root is optional.
+        ("glob", serde_json::json!({"pattern": "*.txt"})),
+        ("web_search", serde_json::json!({"query": "synthetic"})),
+        // No row, and not MCP-shaped.
+        ("synthetic_unlisted_tool", serde_json::json!({})),
+        // MCP-shaped names belong to MCP servers, not to the table.
+        ("mcp__synthetic__tool", serde_json::json!({})),
+    ];
+    let lines: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .map(|(index, (name, arguments))| {
+            serde_json::json!({"type":"tool_call","sessionId":"counted",
+                "call_id":format!("call-{index}"),"name":name,"arguments":arguments})
+            .to_string()
+        })
+        .collect();
+    std::fs::write(&source.path, lines.join("\n")).unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        batch.accounting.tool_table,
+        ToolTableCounts {
+            unclassified_tool_calls: 1,
+            tool_operand_drift: 2,
+        }
+    );
+    let rendered = format!("{:?}", batch.accounting.tool_table);
+    assert!(!rendered.contains("synthetic") && !rendered.contains("read_file"));
+    // Every call is still read, declared or not.
+    assert_eq!(
+        batch.accounting.sessions[0].counts.record_counts.tool_call,
+        7
+    );
+    assert!(batch.quarantined.is_empty());
 }

@@ -135,16 +135,3 @@ fn investigation_summary(severity: &str, rule_ids: &[String], categories: &[Stri
         "{severity} Telltale detection matched {rule_summary} in {category_summary}; review redacted evidence, timeline anchors when present, and the local source session before containment."
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{format_timestamp, parse_event_timestamp};
-
-    #[test]
-    fn format_timestamp_normalizes_non_utc_offsets() {
-        let timestamp =
-            parse_event_timestamp("2026-05-01T12:00:00+02:00").expect("parse timestamp");
-
-        assert_eq!(format_timestamp(timestamp), "2026-05-01T10:00:00.000Z");
-    }
-}

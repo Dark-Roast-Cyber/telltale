@@ -242,6 +242,12 @@ otherwise ambiguous zero-detection result without exposing session content:
   cannot hold, such as a requested tool name with a line break),
   `oversized_native_cell` or `evaluation_capacity_exceeded`. These are coordinates only, never content. Quarantine makes
   `selected_source_coverage` `partial`.
+  `unclassified_tool_calls` counts tool requests whose name no source tool
+  table lists and that are not MCP-shaped, and `tool_operand_drift` counts
+  declared requests whose table row names an operand (a command, file or URL
+  argument) that the call does not carry. Both are plain counts across the
+  selected sources, never a tool name or argument, and neither changes a
+  verdict, score or event.
   Development builds after RC1 additionally report
   `evaluation_complete_source_count`, `visibility_limited_source_count`,
   `accounting_complete_source_count`, and `accounting_partial_source_count`.

@@ -816,6 +816,7 @@ fn metadata_origin_must_match_not_just_visible_session_id() {
                 }],
                 unscoped: Default::default(),
                 coverage: Default::default(),
+                tool_table: Default::default(),
             },
         },
         SourceContext {

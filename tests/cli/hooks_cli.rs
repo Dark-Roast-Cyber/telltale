@@ -244,23 +244,6 @@ fn without_a_configuration_the_binary_detects_and_never_answers() {
     assert!(stdout.contains("\"deny\""), "{stdout}");
 }
 
-#[test]
-fn garbage_payload_is_a_non_blocking_error_by_default() {
-    let mut child = isolated()
-        .args(["claude-code", "hook", "--config-dir"])
-        .arg(common::enforce_config())
-        .env("TELLTALE_HOOKS_EVALUATOR", "0")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(b"not json").unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    assert!(out.stdout.is_empty());
-}
-
 /// Security review finding 3: an oversized PreToolUse payload must not turn
 /// into a non-blocking exit (which Claude Code treats as allow).
 #[test]

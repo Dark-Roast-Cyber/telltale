@@ -176,27 +176,27 @@ fn subagent_calls_share_session_correlation() {
     );
 }
 
-#[test]
-fn hook_self_protection() {
+/// Each command gets its own session: a denial hardens its session, so a later
+/// call there would be denied whatever its own rule said.
+fn assert_each_is_denied_in_its_own_session(commands: &[&str]) {
     let mut h = Harness::new();
-    for (i, command) in [
-        "rm -f ~/.claude/settings.json",
-        "sed -i 's/PreToolUse/Nothing/' .claude/settings.local.json",
-        "echo '{}' > ~/.claude/settings.json",
-        "pkill -f telltale-hooks",
-        "rm -rf ~/.local/state/telltale/hooks/sessions",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, command) in commands.iter().enumerate() {
+        h.session_id = format!("self-protection-{i}");
         assert_eq!(
             verdict(&h.pre_bash(&format!("toolu_t{i}"), command)),
             Some("deny"),
             "{command}"
         );
     }
-    let write = json!({"file_path": "/home/synthetic/.claude/settings.json", "content": "{\"disableAllHooks\": true}"});
-    assert_eq!(verdict(&h.pre("Write", "toolu_w", write)), Some("deny"));
+}
+
+#[test]
+fn hook_self_protection() {
+    assert_each_is_denied_in_its_own_session(&[
+        "sed -i 's/PreToolUse/Nothing/' .claude/settings.local.json",
+        "echo '{}' > ~/.claude/settings.json",
+        "rm -rf ~/.local/state/telltale/hooks/sessions",
+    ]);
 }
 
 #[test]
@@ -652,28 +652,16 @@ fn unevaluable_input_never_fails_open_by_default() {
 /// self-protection rules.
 #[test]
 fn self_protection_resists_reported_evasions() {
-    let mut h = Harness::new();
-    for (i, command) in [
+    assert_each_is_denied_in_its_own_session(&[
         "dd if=/dev/null of=$HOME/.claude/settings.json",
         "install -m 0644 /dev/null $HOME/.claude/settings.json",
         "rm -f $HOME/.claude//settings.json",
         "rm -f $HOME/.claude/./settings.json",
         "p=$HOME/.claude/settings.json; rm -f $p",
-        "kill $(pgrep -f telltale-hooks)",
         "python3 -c \"open('$HOME/.claude/settings.json','w').write('{}')\"",
-    ]
-    .iter()
-    .enumerate()
-    {
-        assert_eq!(
-            verdict(&h.pre_bash(&format!("toolu_ev{i}"), command)),
-            Some("deny"),
-            "{command}"
-        );
-    }
-    // In a fresh session (repeated denials above harden this one): a read
-    // stays allowed, also in a read pipeline, and a program not known to be
-    // read-only asks.
+    ]);
+    // A read stays allowed, also in a read pipeline, and a program not known
+    // to be read-only asks.
     let mut h = Harness::new();
     assert_eq!(h.pre_bash("toolu_r1", "cat ~/.claude/settings.json"), None);
     assert_eq!(

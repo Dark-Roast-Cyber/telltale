@@ -238,14 +238,91 @@ fn each_file_source_gives_detection_its_write_read_and_shell_facts() {
 fn every_table_row_agrees_with_the_name_fallback() {
     use super::tool_arguments::{is_file_read_tool, is_file_write_tool};
     use telltale_schema::observation::ToolKind;
-    let rows = telltale_sources::declared_tool_kinds();
+    let rows = telltale_sources::declared_tools();
     assert!(!rows.is_empty());
-    for (client, name, kind) in rows {
+    for telltale_sources::DeclaredTool {
+        client, name, kind, ..
+    } in rows
+    {
         if is_file_write_tool(name) {
             assert_eq!(kind, ToolKind::FileWrite, "{client:?} {name}");
         }
         if is_file_read_tool(name) {
             assert_eq!(kind, ToolKind::FileRead, "{client:?} {name}");
         }
+    }
+}
+
+const URL: &str = "https://example.invalid/synthetic";
+
+/// Rows restored from the harnesses' own tool definitions give detection the
+/// facts their operands name, and a call that carries no such operand gives
+/// none: a declaration only adds facts.
+#[test]
+fn restored_rows_add_facts_only_when_the_call_carries_the_operand() {
+    let patch = format!("*** Begin Patch\n*** Add File: {WRITTEN}\n+synthetic\n*** End Patch");
+    let with_operands = [
+        (
+            ClientId::OpenClaw,
+            "openclaw.agents",
+            tool_calls([
+                ("exec", json!({"command":COMMAND})),
+                ("apply_patch", json!({"input":patch})),
+                ("web_fetch", json!({"url":URL})),
+            ]),
+        ),
+        (
+            ClientId::Qwen,
+            "qwen.projects",
+            tool_calls([
+                ("monitor", json!({"command":COMMAND})),
+                ("list_directory", json!({"path":READ})),
+                ("web_fetch", json!({"url":URL})),
+            ]),
+        ),
+    ];
+    for (client, source_id, contents) in with_operands {
+        let readings = requests(client, source_id, SourceKind::Jsonl, &contents);
+        assert!(has(&readings, "command", COMMAND), "{source_id}: command");
+        assert!(has(&readings, "url", URL), "{source_id}: url");
+        let wrote = has(&readings, "written_path", WRITTEN);
+        let read = has(&readings, "file_path", READ);
+        assert!(wrote || read, "{source_id}: file operand");
+    }
+    let without_operands = [
+        (
+            ClientId::OpenClaw,
+            "openclaw.agents",
+            tool_calls([
+                ("exec", json!({"title":"synthetic"})),
+                ("apply_patch", json!({"input":"no patch here"})),
+                ("web_fetch", json!({"extractMode":"text"})),
+            ]),
+        ),
+        (
+            ClientId::Qwen,
+            "qwen.projects",
+            tool_calls([
+                ("monitor", json!({"description":"synthetic"})),
+                ("list_directory", json!({"ignore":["x"]})),
+                ("web_fetch", json!({"prompt":"synthetic"})),
+            ]),
+        ),
+    ];
+    for (client, source_id, contents) in without_operands {
+        let readings = requests(client, source_id, SourceKind::Jsonl, &contents);
+        for field in ["command", "url", "written_path", "file_path"] {
+            assert!(
+                !has(&readings, field, "synthetic") && !has(&readings, field, "example.invalid"),
+                "{source_id}: {field}"
+            );
+        }
+        assert!(
+            readings
+                .iter()
+                .all(|(fields, _)| !fields.contains_key("written_path")
+                    && !fields.contains_key("url")),
+            "{source_id}: no operand, no fact"
+        );
     }
 }

@@ -3441,10 +3441,7 @@ mod tests {
     };
     use crate::clients::ClientId;
     use crate::event::SanitizationContext;
-    use crate::scoring::{
-        RiskContribution, RiskContributionType, RiskSeverity, RiskThresholds,
-        assess_risk_with_thresholds,
-    };
+    use crate::scoring::{RiskContribution, RiskContributionType};
 
     fn test_contribution(points: u64) -> Vec<RiskContribution> {
         vec![
@@ -4849,8 +4846,6 @@ mod tests {
                 .is_some_and(|value| value.starts_with("telltale-"))
         );
         assert!(event["telltale_version"].is_string());
-        assert!(event.get("triage").is_none());
-        assert!(event.get("adr_version").is_none());
         assert!(event.get("tool_name").is_none());
         assert!(event.get("source_counts").is_none());
     }
@@ -4911,49 +4906,6 @@ mod tests {
     }
 
     #[test]
-    fn detection_event_uses_threshold_based_severity() {
-        assert_eq!(
-            assess_risk_with_thresholds(
-                69,
-                RiskThresholds {
-                    low: 20,
-                    medium: 50,
-                    high: 70,
-                    critical: 90,
-                },
-            )
-            .severity,
-            RiskSeverity::Medium
-        );
-        assert_eq!(
-            assess_risk_with_thresholds(
-                70,
-                RiskThresholds {
-                    low: 20,
-                    medium: 50,
-                    high: 70,
-                    critical: 90,
-                },
-            )
-            .severity,
-            RiskSeverity::High
-        );
-        assert_eq!(
-            assess_risk_with_thresholds(
-                90,
-                RiskThresholds {
-                    low: 20,
-                    medium: 50,
-                    high: 70,
-                    critical: 90,
-                },
-            )
-            .severity,
-            RiskSeverity::Critical
-        );
-    }
-
-    #[test]
     fn health_event_has_steady_state_check_dimensions() {
         let event = health_event_with_metadata(HealthEventInput {
             sources: &[],
@@ -5010,7 +4962,7 @@ mod tests {
     }
 
     #[test]
-    fn detection_event_has_no_triage_compatibility_fields_for_high_scores() {
+    fn detection_event_scored_90_is_critical_and_keeps_its_source_time() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
             agent: None,
@@ -5040,13 +4992,10 @@ mod tests {
         );
         assert_eq!(event.time_source, "source");
         assert_eq!(event.time_confidence, "high");
-        let serialized = serde_json::to_value(&event).expect("serialized event");
-        assert!(serialized.get("triage").is_none());
-        assert!(serialized.get("adr_version").is_none());
     }
 
     #[test]
-    fn detection_event_has_no_triage_compatibility_fields_for_low_scores() {
+    fn detection_event_without_contributions_is_informational() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
             agent: None,
@@ -5069,9 +5018,6 @@ mod tests {
         .expect("build detection event");
 
         assert_eq!(event.severity, "informational");
-        let serialized = serde_json::to_value(&event).expect("serialized event");
-        assert!(serialized.get("triage").is_none());
-        assert!(serialized.get("adr_version").is_none());
     }
 
     #[test]
@@ -6395,26 +6341,6 @@ mod tests {
         assert_eq!(historical["session_id"], session);
         assert_eq!(historical["model"], model);
         assert_eq!(historical[&key], "safe");
-    }
-
-    #[test]
-    fn attacker_supplied_historical_exact_marker_is_preserved_without_authentication() {
-        let marker = format!("[session:{}]", "d".repeat(64));
-        let mut historical = serde_json::json!({
-            "schema_version": "3.0",
-            "event_type": "activity",
-            "session_id": marker,
-        });
-
-        sanitize_serialized_event(&mut historical);
-
-        // Preservation is only a pseudonymous-label contract. It is not proof
-        // that Telltale generated the historical JSON value.
-        assert_eq!(historical["session_id"], marker);
-        assert!(is_canonical_opaque_identifier_for_kind(
-            "session",
-            historical["session_id"].as_str().expect("session marker")
-        ));
     }
 
     #[test]

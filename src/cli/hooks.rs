@@ -51,8 +51,8 @@ const COMMON_USAGE: &str = "  telltale hooks codex-cli execpolicy             pr
   telltale hooks version                          print the version, Git hash and build revision
 
 hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
-config roots instead of the default ones (/etc/telltale, then $XDG_CONFIG_HOME/telltale
-or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
+config roots instead of the default ones (/etc/telltale, on Windows %ProgramData%\\telltale,
+then $XDG_CONFIG_HOME/telltale or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
 content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan.
 hook also accepts --json-reply: frame the gated native output (including null)
 as telltale.hook-reply.v1 for subprocess adapters, not native command hooks.

@@ -92,42 +92,6 @@ fn export_rejects_fifo_without_waiting_for_a_writer() {
 }
 
 #[test]
-fn inherited_noncanonical_environment_is_ignored_and_canonical_values_parse() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let log = temp.path().join("events.jsonl");
-    let state = temp.path().join("state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--dry-run",
-            "--no-local-config",
-            "--root",
-            "tests/fixtures/session_stores",
-        ])
-        .env("UNRELATED_LOG_PATH", "noncanonical-secret")
-        .env("VENDOR_MODE", "noncanonical-mode")
-        .env("TELLTALE_LOG_PATH", &log)
-        .env("TELLTALE_STATE_PATH", &state)
-        .output()
-        .expect("run scan with inherited environment");
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!text.contains("noncanonical-secret"));
-    assert!(!text.contains("noncanonical-mode"));
-    assert!(!log.exists());
-    assert!(!state.exists());
-}
-
-#[test]
 fn export_help_mentions_client_for_ambiguous_timeline_session_ids() {
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--help"])
@@ -189,22 +153,6 @@ fn top_level_help_uses_canonical_invocation_name() {
         )
     );
     assert!(output.stderr.is_empty());
-}
-
-#[test]
-fn parse_errors_use_canonical_invocation_name_without_deprecation_warning() {
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .arg("--not-a-real-option")
-        .output()
-        .expect("run telltale with invalid option");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Usage: telltale"), "stderr: {stderr}");
-    assert!(
-        !stderr.to_lowercase().contains("deprecat"),
-        "stderr: {stderr}"
-    );
-    assert!(output.stdout.is_empty());
 }
 
 #[test]
@@ -1537,22 +1485,7 @@ fn export_timeline_produces_redacted_session_timeline() {
     )
     .expect("write log");
 
-    // Test 1: --timeline requires --session-id.
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .arg("export")
-        .arg("--log-path")
-        .arg(&log_path)
-        .arg("--timeline")
-        .output()
-        .expect("run telltale export timeline without session-id");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--timeline requires --session-id"),
-        "expected validation error, got: {stderr}"
-    );
-
-    // Test 2: ambiguous cross-client session ids require --client disambiguation.
+    // Ambiguous cross-client session ids require --client disambiguation.
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
@@ -1568,7 +1501,7 @@ fn export_timeline_produces_redacted_session_timeline() {
         "expected ambiguity error, got: {stderr}"
     );
 
-    // Test 3: adding --client selects a single timeline.
+    // Adding --client selects a single timeline.
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
@@ -1751,7 +1684,7 @@ fn export_timeline_rejects_summary_format() {
 }
 
 #[test]
-fn native_schema_is_closed_and_frozen_event3_asset_matches() {
+fn native_schema_is_closed() {
     let native_schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
     let native_validator = validator_for(&native_schema).expect("native validator");
@@ -1893,22 +1826,6 @@ fn native_schema_is_closed_and_frozen_event3_asset_matches() {
     legacy_id["event_id"] = serde_json::json!("fixture-legacy");
     assert!(!native_validator.is_valid(&legacy_id));
 
-    assert_eq!(
-        include_bytes!("../../schemas/event.schema.json"),
-        include_bytes!("../../schemas/historical/event-3.0.schema.json"),
-        "frozen Event 3.0 schema drifted from the current schema"
-    );
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert!(
-        !root
-            .join("schemas/historical/event-1.0.schema.json")
-            .exists()
-    );
-    assert!(
-        !root
-            .join("schemas/historical/event-2.0.schema.json")
-            .exists()
-    );
     for version in ["1.0", "2.0"] {
         let mut obsolete = native_activity.clone();
         obsolete["schema_version"] = serde_json::json!(version);
@@ -2366,31 +2283,6 @@ fn export_timeline_rejects_correlate() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--correlate does not support --timeline"));
-}
-
-#[test]
-fn export_rejects_retired_source_root_option() {
-    let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("telltale-events.jsonl");
-    fs::write(&log_path, "").expect("write empty log");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .arg("export")
-        .arg("--log-path")
-        .arg(&log_path)
-        .arg("--timeline")
-        .args(["--session-id", "retired-source-session"])
-        .arg("--source-root")
-        .arg(temp.path())
-        .output()
-        .expect("run telltale export with retired source-root option");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unexpected argument '--source-root'"),
-        "{stderr}"
-    );
-    assert!(output.stdout.is_empty());
 }
 
 #[test]

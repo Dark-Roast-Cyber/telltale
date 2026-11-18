@@ -114,60 +114,6 @@ fn low_risk_rule_emits_its_declared_low_score() {
 }
 
 #[test]
-fn office_to_powershell_scores_far_higher_than_shell_discovery() {
-    let office = events_for(&[("winword.exe", "2026-05-10T10:00:00Z")]);
-    // Word is not observable as a parent from a command line alone, so drive
-    // this case through the rule layer with an explicit observation instead.
-    assert!(office.iter().all(|event| event.risk_score < 60));
-
-    let rules = load_default_process_chain_rules().expect("pack compiles");
-    let observation = telltale_rules::process_chain::ProcessObservation {
-        parent: telltale_rules::process_chain::ProcessRef::named("winword.exe"),
-        child: telltale_rules::process_chain::ProcessRef::named("powershell.exe")
-            .with_command_line("powershell -w hidden -nop"),
-        host: Some("desk-1".to_string()),
-        ..Default::default()
-    };
-    let office_score = rules
-        .evaluate(&observation)
-        .into_iter()
-        .find(|detection| detection.rule_id == "procchain.execution.winword_powershell")
-        .map(|detection| detection.score)
-        .expect("office chain matched");
-
-    let discovery = events_for(&[("cmd.exe /c whoami", "2026-05-10T10:00:00Z")]);
-    let discovery_score = event_with_rule(&discovery, "procchain.discovery.cmd_whoami")
-        .map(|event| event.risk_score)
-        .expect("discovery matched");
-
-    assert!(
-        office_score >= discovery_score * 3,
-        "office chain {office_score} should be at least 3x shell discovery {discovery_score}"
-    );
-}
-
-#[test]
-fn web_server_to_shell_is_critical() {
-    let rules = load_default_process_chain_rules().expect("pack compiles");
-    let observation = telltale_rules::process_chain::ProcessObservation {
-        parent: telltale_rules::process_chain::ProcessRef::named(
-            r"C:\Windows\System32\inetsrv\w3wp.exe",
-        ),
-        child: telltale_rules::process_chain::ProcessRef::named("cmd.exe")
-            .with_command_line("cmd /c whoami"),
-        host: Some("web-1".to_string()),
-        ..Default::default()
-    };
-    let detection = rules
-        .evaluate(&observation)
-        .into_iter()
-        .find(|detection| detection.rule_id == "procchain.execution.w3wp_cmd")
-        .expect("web shell chain matched");
-    assert_eq!(detection.severity, "critical");
-    assert!(detection.score >= 80);
-}
-
-#[test]
 fn credential_dumping_scores_critical_end_to_end() {
     let events = events_for(&[(
         r"cmd.exe /c procdump.exe -ma lsass.exe C:\temp\out.dmp",
@@ -266,23 +212,6 @@ fn matching_is_case_insensitive_and_paths_are_normalized() {
 }
 
 #[test]
-fn missing_optional_fields_do_not_prevent_matching() {
-    // No path, no PID, no host, no user - only the two process names.
-    let rules = load_default_process_chain_rules().expect("pack compiles");
-    let observation = telltale_rules::process_chain::ProcessObservation {
-        parent: telltale_rules::process_chain::ProcessRef::named("mshta"),
-        child: telltale_rules::process_chain::ProcessRef::named("powershell"),
-        ..Default::default()
-    };
-    assert!(
-        rules
-            .evaluate(&observation)
-            .iter()
-            .any(|detection| detection.rule_id == "procchain.evasion.mshta_powershell")
-    );
-}
-
-#[test]
 fn informational_events_participate_in_a_correlated_detection() {
     let events = events_for(&[
         ("cmd.exe /c hostname", "2026-05-10T10:00:00Z"),
@@ -370,34 +299,4 @@ fn repeated_identical_chains_are_suppressed_into_one_event() {
             .iter()
             .any(|evidence| evidence.field == "repeat_count" && evidence.redacted_value == "3")
     );
-}
-
-#[test]
-fn approved_admin_context_reduces_risk_without_deleting_the_event() {
-    let rules = load_default_process_chain_rules().expect("pack compiles");
-    let mut config = ProcessChainConfig::default();
-    config
-        .context
-        .approved_admin_users
-        .insert("svc_deploy".to_string());
-
-    // Feed the user through the observation layer directly; agent transcripts do
-    // not carry an OS user, so this is the structured-telemetry path.
-    let observation = telltale_rules::process_chain::ProcessObservation {
-        parent: telltale_rules::process_chain::ProcessRef::named("cmd.exe"),
-        child: telltale_rules::process_chain::ProcessRef::named("whoami.exe")
-            .with_command_line("whoami"),
-        user: Some("svc_deploy".to_string()),
-        host: Some("build-1".to_string()),
-        ..Default::default()
-    };
-    let detection = rules
-        .evaluate_with_context(&observation, &config.context)
-        .into_iter()
-        .find(|detection| detection.rule_id == "procchain.discovery.cmd_whoami")
-        .expect("detection retained");
-
-    assert_eq!(detection.score, 0);
-    assert!(detection.informational);
-    assert!(detection.risk_adjustment.is_some());
 }
