@@ -295,6 +295,21 @@ a visibility gap. The action view reads the same keys and also reads command
 text as `url`, so an action can match a URL rule that the session detection does
 not carry; `session_event_index()` is then `None`.
 
+### Rule v1 tool kind target
+
+The Rule v1 `tool_kind` target (`compat.v1.tool_kind`) is what a tool call does,
+whatever harness sent it: `shell`, `file_read`, `file_write`, `web`, `delegate`
+or `other`. A call takes the kind its source's tool table declares. A call with
+no declaration takes `file_write`, `file_read` or `shell` from the native tool
+names detection keeps as its fallback, in any letter case, and any other
+undeclared call has no kind: the target is absent, not `other`. A record
+that names no tool has no kind, whatever its declaration says. Session
+selectors and the action view give the same value. The kind is a rule target
+only, not an output field; a rule match on it shows `tool_kind` as the evidence
+field like any other target. Bundled rules select on kinds and operands, and
+select on `tool_name` only when the rule is about the tool name as text.
+`tool_name` stays available to custom rules.
+
 ### Action findings
 
 `ActionFinding` values are immutable and constructor-sanitized.
@@ -420,6 +435,9 @@ Three scores exist and must stay distinct: native finding risk
   identities change only for a call that holds a comment or a here-document, which
   this profile can record differently; what the reader finds further inside a stage
   is no part of one.
+  Native profile 7 adds the `tool_kind` target to the action view for rules that
+  select it; the bundled predicates read as in profile 6, and semantic
+  identities change from profile 6 while replay identities do not.
   Action semantics 3 adds the rule scope `recorded_exclusion`: a custom rule with
   it on `command` selects from the quote-free reading (and each inner command's)
   and judges its exclusion on the recorded text, so a separator or quote inside a

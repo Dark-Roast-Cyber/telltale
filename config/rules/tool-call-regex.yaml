@@ -63,7 +63,7 @@ rules:
     score: 15
     detection:
       selection:
-        tool_name: '^(shell|exec_command|shell_command|bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)$'
+        tool_kind: '^shell$'
         command: '(^|\b)(bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)\b|python\s+-c|node\s+-e|perl\s+-e|ruby\s+-e'
         arguments: '(^|\b)(bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)\b|python\s+-c|node\s+-e|perl\s+-e|ruby\s+-e'
       condition: selection

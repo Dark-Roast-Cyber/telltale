@@ -3,7 +3,8 @@
 //!
 //! The session selectors and the action view both read a call through this
 //! module, so they agree on its facts. Nothing here knows a harness except the
-//! two tool-name lists ([`is_file_write_tool`], [`is_file_read_tool`]).
+//! three tool-name lists ([`is_file_write_tool`], [`is_file_read_tool`],
+//! [`is_shell_tool`]).
 //!
 //! A source declares the operation of each built-in tool it knows: a kind,
 //! operands and, for a few arguments, a role (`ToolObservation::operation`).
@@ -91,6 +92,63 @@ pub(super) fn is_file_read_tool(name: &str) -> bool {
     )
 }
 
+/// Native shell tools by name: the tool runs the command its arguments carry.
+/// A name matches in any letter case, as the shell-execution rule's own name
+/// pattern did, which folds the long s (U+017F) to `s`.
+pub(super) fn is_shell_tool(name: &str) -> bool {
+    let folded: String = name
+        .chars()
+        .map(|c| {
+            if c == '\u{17f}' {
+                's'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    matches!(
+        folded.as_str(),
+        "shell"
+            | "exec_command"
+            | "shell_command"
+            | "bash"
+            | "sh"
+            | "zsh"
+            | "fish"
+            | "pwsh"
+            | "powershell"
+            | "cmd.exe"
+    )
+}
+
+/// What a call does: the kind its declaration gives, and for a call with none, or read without it, the kind its
+/// name gives in the lists above. A call of no declared kind and no listed name
+/// has no kind; it is not `other`.
+pub(crate) fn tool_kind(tool: &ToolObservation, declared: bool) -> Option<ToolKind> {
+    match tool.operation().filter(|_| declared) {
+        Some(operation) => Some(operation.kind()),
+        None => tool.name().and_then(|name| {
+            if is_file_write_tool(name) {
+                Some(ToolKind::FileWrite)
+            } else if is_file_read_tool(name) {
+                Some(ToolKind::FileRead)
+            } else if is_shell_tool(name) {
+                Some(ToolKind::Shell)
+            } else {
+                None
+            }
+        }),
+    }
+}
+
+/// The `tool_kind` target: the kind of the tool a record names. A record that
+/// names no tool has none, whatever its declaration says. Both consumers read it
+/// here.
+pub(crate) fn named_tool_kind(tool: &ToolObservation) -> Option<ToolKind> {
+    tool.name()?;
+    tool_kind(tool, true)
+}
+
 /// Top-level tool argument keys whose string value names one file.
 fn is_file_argument_key(key: &str) -> bool {
     matches!(
@@ -126,19 +184,13 @@ fn is_written_content_argument_key(key: &str) -> bool {
 /// Whether a call reads the files it is given by name: a declared file-read
 /// tool, or for a call with no declaration a native file-read tool by name.
 pub(crate) fn reads_paths(tool: &ToolObservation, declared: bool) -> bool {
-    match tool.operation().filter(|_| declared) {
-        Some(operation) => operation.kind() == ToolKind::FileRead,
-        None => tool.name().is_some_and(is_file_read_tool),
-    }
+    tool_kind(tool, declared) == Some(ToolKind::FileRead)
 }
 
 /// Whether a call is a file-write tool: by its declaration, and for a call
 /// with none, or read without it, by its name.
 pub(crate) fn writes_by_kind(tool: &ToolObservation, declared: bool) -> bool {
-    match tool.operation().filter(|_| declared) {
-        Some(operation) => operation.kind() == ToolKind::FileWrite,
-        None => tool.name().is_some_and(is_file_write_tool),
-    }
+    tool_kind(tool, declared) == Some(ToolKind::FileWrite)
 }
 
 /// File-keyed top-level non-empty string arguments of a call that writes them:
