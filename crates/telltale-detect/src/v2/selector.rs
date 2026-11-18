@@ -8,7 +8,7 @@ use telltale_schema::observation::{
 };
 
 use super::tool_arguments::{
-    command_member_has_role, reads_by_role, tool_argument_urls, tool_written_paths,
+    command_member_has_role, named_tool_kind, reads_by_role, tool_argument_urls, tool_written_paths,
 };
 use super::types::{DetectionError, metadata_for_path};
 
@@ -30,6 +30,7 @@ const SELECTORS: &[&str] = &[
     "compat.v1.assistant_context",
     "compat.v1.command",
     "compat.v1.file_path",
+    "compat.v1.tool_kind",
     "compat.v1.tool_name",
     "compat.v1.tool_result",
     "compat.v1.url",
@@ -105,6 +106,7 @@ const SELECTOR_BACKING: &[(&str, SelectorBacking)] = &[
     ),
     ("compat.v1.command", SelectorBacking::Compatibility),
     ("compat.v1.file_path", SelectorBacking::Compatibility),
+    ("compat.v1.tool_kind", SelectorBacking::Compatibility),
     ("compat.v1.tool_name", SelectorBacking::Compatibility),
     ("compat.v1.tool_result", SelectorBacking::Compatibility),
     ("compat.v1.url", SelectorBacking::Compatibility),
@@ -166,6 +168,7 @@ pub enum SelectorId {
     CompatAssistantContext,
     CompatCommand,
     CompatFilePath,
+    CompatToolKind,
     CompatToolName,
     CompatToolResult,
     CompatUrl,
@@ -194,6 +197,7 @@ impl SelectorId {
             "compat.v1.assistant_context" => Ok(Self::CompatAssistantContext),
             "compat.v1.command" => Ok(Self::CompatCommand),
             "compat.v1.file_path" => Ok(Self::CompatFilePath),
+            "compat.v1.tool_kind" => Ok(Self::CompatToolKind),
             "compat.v1.tool_name" => Ok(Self::CompatToolName),
             "compat.v1.tool_result" => Ok(Self::CompatToolResult),
             "compat.v1.url" => Ok(Self::CompatUrl),
@@ -227,6 +231,7 @@ impl SelectorId {
             Self::CompatAssistantContext => "compat.v1.assistant_context",
             Self::CompatCommand => "compat.v1.command",
             Self::CompatFilePath => "compat.v1.file_path",
+            Self::CompatToolKind => "compat.v1.tool_kind",
             Self::CompatToolName => "compat.v1.tool_name",
             Self::CompatToolResult => "compat.v1.tool_result",
             Self::CompatUrl => "compat.v1.url",
@@ -252,6 +257,7 @@ impl SelectorId {
             Self::CompatArguments
             | Self::CompatCommand
             | Self::CompatFilePath
+            | Self::CompatToolKind
             | Self::CompatToolName
             | Self::CompatToolResult
             | Self::CompatUrl
@@ -451,6 +457,7 @@ impl SelectorRegistry {
                 | SelectorId::CompatArguments
                 | SelectorId::CompatCommand
                 | SelectorId::CompatFilePath
+                | SelectorId::CompatToolKind
                 | SelectorId::CompatToolName
                 | SelectorId::CompatUrl
                 | SelectorId::CompatWrittenPath
@@ -491,6 +498,7 @@ impl SelectorRegistry {
                 | SelectorId::CompatAssistantContext
                 | SelectorId::CompatCommand
                 | SelectorId::CompatFilePath
+                | SelectorId::CompatToolKind
                 | SelectorId::CompatToolName
                 | SelectorId::CompatToolResult
                 | SelectorId::CompatUrl
@@ -728,6 +736,22 @@ impl SelectorRegistry {
                 resolved.selector = selector;
                 resolved
             }
+            // The v1 kind view is what the tool a record names does: the kind
+            // its source's tool table declares, else the kind of a native name.
+            // A record that names no tool, or a tool of neither, has no kind.
+            SelectorId::CompatToolKind => match observation.body() {
+                ObservationBody::Tool(tool) => named_tool_kind(tool).map_or_else(
+                    || absent(selector, required_capability),
+                    |kind| {
+                        derived_field(
+                            selector,
+                            JsonValue::string(kind.as_str()),
+                            required_capability,
+                        )
+                    },
+                ),
+                _ => absent(selector, required_capability),
+            },
             SelectorId::CompatCommand => {
                 let mut resolved =
                     Self::resolve_native(SelectorId::CommandText, observation, required_capability);

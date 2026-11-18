@@ -803,7 +803,7 @@ pub(super) fn evaluate_content_matcher(
 
 fn compat_selector(target: &str) -> Result<String, RuleV1CompileError> {
     match target {
-        "arguments" | "assistant_context" | "command" | "file_path" | "tool_name"
+        "arguments" | "assistant_context" | "command" | "file_path" | "tool_kind" | "tool_name"
         | "tool_result" | "url" | "user_context" | "written_path" => {
             Ok(format!("compat.v1.{target}"))
         }

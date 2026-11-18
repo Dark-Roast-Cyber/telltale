@@ -5,44 +5,42 @@ use super::load_default_rule_set;
 #[test]
 fn shell_execution_credit_is_independent_of_wrapper_text() {
     let rules = load_default_rule_set().unwrap();
+    // The rule selects the kind of the call, not a harness's tool name.
+    for command in ["printf synthetic", "bash -lc 'printf synthetic'"] {
+        let result = rules
+            .evaluate(&[("tool_kind", "shell"), ("command", command)])
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.rule_ids, ["execution.shell"], "{command}");
+        assert_eq!(
+            result.score, 15,
+            "credit is counted once even with a wrapper"
+        );
+    }
+    for kind in ["file_read", "file_write", "web", "delegate", "other"] {
+        assert!(
+            rules
+                .evaluate(&[("tool_kind", kind), ("command", "printf synthetic")])
+                .unwrap()
+                .is_none(),
+            "{kind}"
+        );
+    }
     for name in [
         "shell",
         "exec_command",
         "shell_command",
         "bash",
         "Bash",
-        "sh",
-        "zsh",
-        "fish",
-        "pwsh",
         "powershell",
         "cmd.exe",
-    ] {
-        for command in ["printf synthetic", "bash -lc 'printf synthetic'"] {
-            let result = rules
-                .evaluate(&[("tool_name", name), ("command", command)])
-                .unwrap()
-                .unwrap();
-            assert_eq!(result.rule_ids, ["execution.shell"], "{name}: {command}");
-            assert_eq!(
-                result.score, 15,
-                "credit is counted once even with a wrapper"
-            );
-        }
-    }
-    for name in [
-        "read_file",
-        "shell_help",
-        "exec_command_status",
-        "mcp__shell",
-        "bashful",
     ] {
         assert!(
             rules
                 .evaluate(&[("tool_name", name), ("command", "printf synthetic")])
                 .unwrap()
                 .is_none(),
-            "{name}"
+            "a tool name alone selects nothing: {name}"
         );
     }
     for command in [

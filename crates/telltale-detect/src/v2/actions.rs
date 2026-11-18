@@ -21,7 +21,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 6;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 7;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -591,6 +591,9 @@ struct ActionView {
     /// veto one through its exclusion.
     uncommented_command: String,
     reads_paths: bool,
+    /// What the call does, for the `tool_kind` target. It is no field: replay
+    /// identities, bounds and evidence of other targets never see it.
+    kind: Option<ToolKind>,
     /// Whether command text was joined from an argv array.
     argv: bool,
     /// Whether the command held a lone carriage return, which the shell reader
@@ -630,6 +633,9 @@ impl ActionView {
         }
     }
     fn text(&self, field: &str) -> &str {
+        if field == "tool_kind" {
+            return self.kind.map_or("", ToolKind::as_str);
+        }
         self.fields.get(field).map_or("", String::as_str)
     }
     /// The text rules over the whole `command` field read: the field with its
@@ -673,7 +679,11 @@ impl ActionView {
         Ok(readings)
     }
     fn fields(&self) -> Vec<(&str, &str)> {
-        self.fields.iter().map(|(k, v)| (*k, v.as_str())).collect()
+        self.fields
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .chain(self.kind.map(|kind| ("tool_kind", kind.as_str())))
+            .collect()
     }
 }
 fn string(value: &JsonValue) -> Option<&str> {
@@ -873,6 +883,9 @@ fn read_view(
             if let Some(name) = tool.name() {
                 out.put("tool_name", name.to_owned());
             }
+            // The kind reads the declaration in both readings: the reading flag
+            // only decides which facts the arguments add.
+            out.kind = tool_arguments::named_tool_kind(tool);
             out.reads_paths = tool_arguments::reads_paths(tool, declared);
             for path in tool_arguments::tool_written_paths(tool, declared) {
                 out.put("written_path", path);
@@ -1109,6 +1122,13 @@ pub(super) fn view_facts(observation: &CanonicalObservationV2) -> String {
         facts.push("reads_paths".to_owned());
     }
     facts.join(" ")
+}
+
+/// The `tool_kind` the action view reads from one observation, for tests.
+#[cfg(test)]
+pub(super) fn view_tool_kind(observation: &CanonicalObservationV2) -> Option<&'static str> {
+    let view = view(observation, &mut RetentionBudget::new()).expect("within budget");
+    view.kind.map(ToolKind::as_str)
 }
 
 /// The fields and flags the action view reads from one observation, for tests
