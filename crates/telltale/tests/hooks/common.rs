@@ -197,21 +197,53 @@ pub fn verdict(output: &Option<Value>) -> Option<&str> {
         .and_then(|o| o["hookSpecificOutput"]["permissionDecision"].as_str())
 }
 
-/// The harness name and call the runtime evaluates for a native `call` of
-/// `harness`. A harness without a registered adapter is not evaluated, so one
-/// whose shapes are only captured (no adapter yet) is evaluated as the
-/// runtime would after its normalization: normalized here, then sent under
-/// Claude Code, whose encoding is the identity.
-pub fn evaluable(
-    harness: &'static str,
-    call: telltale_core::hooks::runtime::ToolCall,
-) -> (&'static str, telltale_core::hooks::runtime::ToolCall) {
-    if telltale_core::hooks::harness::Harness::from_name(harness).is_some() {
-        (harness, call)
-    } else {
-        (
-            claude_code::HARNESS,
-            telltale_core::hooks::normalize::tool_call(harness, call),
+/// The action score and rule IDs the engine finds for the last of `calls`, read
+/// as the hook journal of `client` with its own tool table, whether or not the
+/// client has a hooks adapter. The calls before it are its history.
+pub fn engine_detection(
+    client: telltale_core::ClientId,
+    calls: &[(&str, Value)],
+) -> (u64, Vec<String>) {
+    use std::sync::OnceLock;
+    use telltale_core::ObservationStage;
+    use telltale_core::hooks::config::RuleContent;
+    use telltale_core::hooks::engine::{Engine, Focus, RecoveryBudget};
+    use telltale_core::hooks::journal::Line;
+    static ENGINE: OnceLock<Engine> = OnceLock::new();
+    let engine = ENGINE.get_or_init(|| Engine::new(&RuleContent::default(), &[]).unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let stamped: Vec<(Line, String)> = calls
+        .iter()
+        .enumerate()
+        .map(|(n, (tool, input))| {
+            let at = format!("2026-11-06T00:00:00.{n:03}Z");
+            let uuid = format!("uuid-{n}");
+            let id = format!("call_{n}");
+            let line = Line::tool_use("synthetic-session-0001", &uuid, &at, &id, tool, input);
+            (line, at)
+        })
+        .collect();
+    let (pending, at) = stamped.last().cloned().unwrap();
+    let history: Vec<Line> = stamped[..stamped.len() - 1]
+        .iter()
+        .map(|(line, _)| line.clone())
+        .collect();
+    let focus = Focus {
+        occurred_at: at,
+        stage: ObservationStage::ToolRequested,
+        native_id: format!("uuid-{}", calls.len() - 1),
+    };
+    let evaluation = engine
+        .evaluate(
+            client,
+            &dir.path().join("window.jsonl"),
+            &history,
+            &[pending],
+            &[focus],
+            &mut RecoveryBudget::start(),
         )
-    }
+        .unwrap();
+    let mut rules = evaluation.rule_ids();
+    rules.sort();
+    (evaluation.action_score(), rules)
 }

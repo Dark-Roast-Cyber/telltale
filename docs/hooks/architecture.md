@@ -55,7 +55,6 @@ and not a sandbox. It is one enforcement point among several; see the
 | `telemetry` | `telltale_hooks.record.v1` JSONL envelopes ([schema](../../schemas/telltale-hooks-record-v1.schema.json)). |
 | `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. Keeps short top-level values and the head of a command with every variant, and reports what it had to separate (`pending_input_separated`, floored at `on_unevaluable`). |
 | `codex_cli` | Parse Codex CLI 0.166.0 hook payloads; composite, escaped correlation key (`session:agent:turn:tool_use_id`); `Stop`/`SubagentStop` settle by `turn_id`; render only `hookSpecificOutput` deny (ask becomes deny, allow prints nothing); generate `hooks.json` and the exec-policy backstop rules. |
-| `normalize` | Interim input-shape normalization of the evaluation encoding (patch targets, authored-content keys, read-tool names), from the shapes each adapter declares. Applied by the runtime, not by adapters; ADR 0002. |
 | `evaluator` | Long-lived evaluator: Unix-socket protocol, trust checks, autostart, fallback rules (`evaluator/unix.rs`). Other platforms report `evaluator_unsupported_platform` and evaluate in-process. |
 | `rules/` | Host-owned Rule v1 content (hook self-protection), the shared document and each adapter's own (`Adapter::rules`), loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
 
@@ -117,19 +116,17 @@ A new harness adapter (OpenCode, Cursor, ...) must:
    so Telltale records carry that harness's client and source (ADR 0002, addendum of 2026-11-17). A name with no registered adapter is
    not evaluated and takes `on_error`.
 8. Do not reshape tool inputs. Report them as the harness sent them. The
-   runtime applies `normalize::tool_call(ctx.harness, call)` once, at the
-   start of `tool_requested`, to the evaluation encoding only: the pending
-   line, the projection input and the journaled history. Telemetry
-   `action`, the ledger, reasons and outcomes keep the reported call;
-   `telltale[]` records describe the normalized encoding (ADR 0002
-   addendum).
+   runtime journals each call in that native shape, and the journal reader
+   declares it with the harness's own tool table (`telltale-sources`,
+   `tool_operation::table`), so patch targets, authored-content keys and read
+   tools are read from the native call (ADR 0002, addendum of 2026-11-17).
 
 ### Adding an adapter
 
 Everything about one harness's hook protocol lives in its adapter module,
 `crates/telltale/src/hooks/harnesses/<name>.rs`, which exports one descriptor:
 `pub const ADAPTER: Adapter` (`crates/telltale/src/hooks/harness.rs`). The CLI
-driver (`src/cli/hooks.rs`), the evaluator, normalization and the generated
+driver (`src/cli/hooks.rs`), the evaluator and the generated
 self-protection rules read the descriptor; none of them names a harness. Adding
 a harness means:
 
@@ -163,10 +160,10 @@ a harness means:
    - `nameless_block`: what blocks a tool call when the payload names no
      event under `on_error: deny`. What it does on a stop event matters as
      much as what it does on a tool call.
-   - `normalization`: `Identity` only if the harness's tools already have the
-     evaluation encoding's names and argument keys; otherwise the captured
-     shapes that need reshaping, with parity cases and benign twins in
-     `crates/telltale/tests/hooks/normalize_parity.rs`.
+   - Tool shapes are not declared here: the harness's built-in tools belong
+     in its source's tool table (`crates/telltale-sources/src/sources/<agent>/tools.rs`),
+     with parity cases and benign twins in
+     `crates/telltale/tests/hooks/native_parity.rs`.
    - `home`: the environment variable that relocates the harness's config
      home, if it has one, and the pattern for the hook files below it. The
      engine generates rules for the resolved path.

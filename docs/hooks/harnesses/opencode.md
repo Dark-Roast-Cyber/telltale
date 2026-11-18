@@ -77,5 +77,6 @@ v2 fires `execute.before` even for tools that do not exist; the call then fails.
   startup self-check that can be observed from outside the process.
 - Key calls by `(sessionID, callID|id)`; v2 Code Mode inner calls need an
   extra discriminator (tool name + input hash).
-- Normalize `filePath`/`path` and `patchText` before journaling. `patchText`
-  has no path key, so extract paths from the patch headers.
+- Journal `filePath`/`path` and `patchText` as sent. The OpenCode tool table
+  declares the patch headers as written paths and reads `patchText` as
+  authored content.

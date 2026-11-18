@@ -690,7 +690,9 @@ struct RecordedTool {
     upstream: Option<String>,
     kind: String,
     /// Operand argument keys by category: `command`, `written`, `read`, `url`
-    /// and `patch`. Every key recorded here must be read by the table row.
+    /// and `patch`, then the argument roles `authored` (text the call writes)
+    /// and `replaced` (text it replaces). Every key recorded here must be read
+    /// by the table row.
     #[serde(default)]
     operands: BTreeMap<String, Vec<String>>,
     /// Required for kind `other`: why the tool has no operand to declare.

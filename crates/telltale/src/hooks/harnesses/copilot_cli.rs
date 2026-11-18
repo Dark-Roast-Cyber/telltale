@@ -19,17 +19,16 @@
 //! [`runtime::synthetic_call_id`] over the raw tool arguments, which post
 //! events repeat. Inside a subagent `sessionId` is the subagent's ID, so the
 //! session is `parentAgentId` when present and the subagent is `agent_id`.
-//! Tool names and inputs are passed through as reported; the runtime owns
-//! input normalization.
+//! Tool names and inputs are passed through as reported and evaluated in that
+//! shape through Copilot CLI's own tool table.
 
 use serde_json::{Map, Value, json};
 
 use crate::ClientId;
 use crate::hooks::harness::{
-    Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Normalization, Parsed,
+    Adapter, Home, HostRules, Install, InstallOutput, NamelessBlock, Parsed,
 };
 use crate::hooks::harnesses::payload;
-use crate::hooks::normalize::Rules;
 use crate::hooks::runtime::{self, Completion, Context, Event, Response, ToolCall};
 use crate::hooks::state::Verdict;
 
@@ -381,19 +380,6 @@ fn install_output(command: &str, fail_closed: bool) -> Result<InstallOutput, &'s
     })
 }
 
-/// Copilot CLI 1.0.105: camelCase `apply_patch`/`create`/`edit`/`view`/`rg`,
-/// PascalCase `Edit` (raw-string patch or Copilot keys) and `Write`.
-pub const NORMALIZATION: Rules = Rules {
-    patch_tools: &[("apply_patch", true, None), ("Edit", true, None)],
-    key_tools: &["create", "edit", "Write", "Edit"],
-    keys: &[
-        ("file_text", "content"),
-        ("new_str", "new_string"),
-        ("old_str", "old_string"),
-    ],
-    tool_names: &[("view", "Read"), ("rg", "Grep")],
-};
-
 /// The registry's descriptor of this adapter.
 pub const ADAPTER: Adapter = Adapter {
     name: HARNESS,
@@ -417,7 +403,6 @@ pub const ADAPTER: Adapter = Adapter {
     },
     // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
     nameless_block: NamelessBlock::Exit(1),
-    normalization: Normalization::Rules(&NORMALIZATION),
     // The same file names as the static rules in the document below.
     home: Some(Home {
         variable: "COPILOT_HOME",

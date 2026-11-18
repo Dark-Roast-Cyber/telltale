@@ -2,7 +2,7 @@
 //!
 //! Everything about one harness's hook protocol is in its adapter module under
 //! `harnesses/`, which exports one [`Adapter`] descriptor. The CLI driver
-//! (`telltale hooks <harness> hook`), the evaluator, normalization, the
+//! (`telltale hooks <harness> hook`), the evaluator, the
 //! generated self-protection rules and the install output all read that
 //! descriptor through [`Harness::adapter`], so they hold no adapter-specific
 //! code. Adding a harness means one adapter module, one variant here and one
@@ -14,7 +14,6 @@ use serde_json::Value;
 use crate::ClientId;
 use crate::hooks::config::OnError;
 use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli};
-use crate::hooks::normalize::Rules;
 use crate::hooks::runtime::{Context, Event, Response};
 use crate::hooks::state::Verdict;
 
@@ -83,8 +82,6 @@ pub struct Adapter {
     /// What blocks a tool call when the payload names no event and the
     /// operator chose `on_error: deny`.
     pub nameless_block: NamelessBlock,
-    /// How this harness's tool calls reach the evaluation encoding.
-    pub normalization: Normalization,
     /// The environment variable that relocates the harness's config home, if
     /// it has one.
     pub home: Option<Home>,
@@ -118,17 +115,6 @@ pub enum NamelessBlock {
     DenyOnStdout,
     /// This exit status and nothing on stdout.
     Exit(i32),
-}
-
-/// How a harness's tool calls are reshaped for the evaluation encoding
-/// (`normalize`). Every adapter chooses one.
-#[derive(Clone, Copy)]
-pub enum Normalization {
-    /// The harness's tools already have the evaluation encoding's names and
-    /// argument keys.
-    Identity,
-    /// The harness's captured native shapes that need reshaping.
-    Rules(&'static Rules),
 }
 
 /// A harness's relocatable config home. A harness moved there loads its hooks
@@ -304,13 +290,11 @@ mod tests {
     use serde_json::json;
 
     /// Every descriptor is complete, and the registry's lookups by name
-    /// (`from_name`, normalization, relocated homes) reach the adapter that
+    /// (`from_name`, relocated homes) reach the adapter that
     /// declared the value.
     #[test]
     fn every_adapter_is_registered_under_its_own_name() {
         use crate::hooks::harnesses;
-        use crate::hooks::normalize;
-        use crate::hooks::runtime::ToolCall;
         let mut names = std::collections::BTreeSet::new();
         let mut variables = std::collections::BTreeSet::new();
         for harness in Harness::ALL {
@@ -330,26 +314,6 @@ mod tests {
             );
             if let Some(home) = adapter.home {
                 assert!(variables.insert(home.variable), "{}", home.variable);
-            }
-            // The runtime normalizes by `Context::harness`: the name must
-            // reach this adapter's own choice.
-            let patch = ToolCall {
-                tool_use_id: None,
-                tool_name: "apply_patch".into(),
-                input: json!({"command": "*** Begin Patch\n*** Add File: x\n+1\n*** End Patch\n"}),
-            };
-            match (adapter.normalization, harnesses::normalization(name)) {
-                (Normalization::Identity, Normalization::Identity) => assert_eq!(
-                    normalize::tool_call(name, patch.clone()),
-                    patch,
-                    "{name} is not the identity"
-                ),
-                // By value: an adapter's rules are a constant, and a constant
-                // has no one address.
-                (Normalization::Rules(declared), Normalization::Rules(applied)) => {
-                    assert_eq!(declared, applied, "{name}");
-                }
-                _ => panic!("{name}: the runtime applies another normalization"),
             }
         }
         // Shapes captured ahead of an adapter are keyed by a name no
