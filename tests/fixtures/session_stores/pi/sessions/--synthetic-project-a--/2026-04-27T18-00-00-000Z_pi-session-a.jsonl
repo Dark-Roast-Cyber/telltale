@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"pi-session-a","timestamp":"2026-04-27T18:00:00.000Z","cwd":"/synthetic/project-a"}
+{"type":"thinking_level_change","id":"a0000001","parentId":null,"timestamp":"2026-04-27T18:00:00.100Z","thinkingLevel":"low"}
+{"type":"message","id":"a0000002","parentId":"a0000001","timestamp":"2026-04-27T18:00:00.200Z","message":{"role":"user","content":"Summarize the repository status without running tools.","timestamp":1777312800200}}
+{"type":"message","id":"a0000003","parentId":"a0000002","timestamp":"2026-04-27T18:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Synthetic reasoning.","thinkingSignature":"synthetic"},{"type":"text","text":"This is a benign Pi fixture response with no tool calls or sensitive access."}],"api":"openai-responses","provider":"synthetic-provider","model":"synthetic-model","stopReason":"stop","timestamp":1777312801000}}

@@ -1303,6 +1303,8 @@ mod tests {
             "artifact-autoreact-ledger",
             "artifact-comment-monitor",
             "continued-in",
+            "bridge-session",
+            "tools-used",
         ]
         .map(|kind| format!(r#"{{"type":"{kind}","sessionId":"s","content":"synthetic"}}"#))
         .to_vec();

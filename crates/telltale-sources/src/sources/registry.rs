@@ -5,7 +5,7 @@
 
 use crate::clients::ClientDef;
 use crate::install_inventory::AgentInstallDef;
-use crate::sources::{claude, codex, copilot, openclaw, opencode, qwen};
+use crate::sources::{claude, codex, copilot, openclaw, opencode, pi, qwen};
 use telltale_schema::clients::ClientId;
 
 const CLIENTS: &[ClientDef] = &[
@@ -39,6 +39,11 @@ const CLIENTS: &[ClientDef] = &[
         display_name: "GitHub Copilot",
         sources: copilot::SOURCES,
     },
+    ClientDef {
+        id: ClientId::Pi,
+        display_name: "Pi",
+        sources: pi::SOURCES,
+    },
 ];
 
 pub(crate) fn builtin_client_defs() -> &'static [ClientDef] {
@@ -55,6 +60,7 @@ const INSTALL_DEFS: &[AgentInstallDef] = &[
     qwen::INSTALL,
     opencode::INSTALL,
     copilot::INSTALL,
+    pi::INSTALL,
 ];
 
 pub(crate) fn builtin_install_defs() -> &'static [AgentInstallDef] {
@@ -119,6 +125,13 @@ mod tests {
                 extension_ids: &["github.copilot", "github.copilot-chat"],
                 global_storage_ids: &["github.copilot", "github.copilot-chat"],
             },
+            AgentInstallDef {
+                agent: "pi",
+                executables: &["pi"],
+                node_packages: &["@earendil-works/pi-coding-agent"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
         ];
 
         assert_eq!(builtin_install_defs(), expected);
@@ -146,7 +159,7 @@ mod tests {
     #[test]
     fn registry_matches_expected_snapshot() {
         let clients = builtin_client_defs();
-        assert_eq!(clients.len(), 6, "expected six built-in clients");
+        assert_eq!(clients.len(), 7, "expected seven built-in clients");
 
         assert_client(clients, 0, ClientId::Codex, "Codex", 3);
         assert_source(
@@ -244,6 +257,18 @@ mod tests {
             SourcePattern::Extension("log"),
             false,
             Some("logs/copilot"),
+        );
+        assert_client(clients, 6, ClientId::Pi, "Pi", 1);
+        assert_source(
+            clients[6].sources[0],
+            "pi.sessions",
+            SourceKind::Jsonl,
+            PathRoot::Home,
+            ".pi/agent/sessions",
+            "pi/sessions",
+            SourcePattern::Extension("jsonl"),
+            true,
+            None,
         );
     }
 

@@ -39,6 +39,14 @@ pub const ACTION_RECORD_V1_ID: &str = "telltale.action.v1";
 /// JSON Schema (Draft 2020-12) for action record v1, for non-Rust consumers.
 pub const ACTION_RECORD_V1_SCHEMA: &str = include_str!("../data/action-record-v1.schema.json");
 
+/// The clients action record v1 can name: its schema's closed `client` enum,
+/// frozen with the schema. A client added later has no v1 records; its action
+/// findings wait for a record version that names it.
+pub const ACTION_RECORD_V1_CLIENTS: &[crate::clients::ClientId] = {
+    use crate::clients::ClientId::*;
+    &[Codex, Claude, OpenClaw, Qwen, OpenCode, Copilot]
+};
+
 /// Maximum input accepted by [`ActionRecordV1::from_json`], the same bound as
 /// one serialized Event 3.0 object.
 pub const ACTION_RECORD_MAX_INPUT_BYTES: usize = EVENT3_MAX_INPUT_BYTES;

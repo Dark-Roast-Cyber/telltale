@@ -42,6 +42,7 @@ client_ids! {
     Qwen => "qwen",
     OpenCode => "opencode",
     Copilot => "copilot",
+    Pi => "pi",
 }
 
 impl ClientId {

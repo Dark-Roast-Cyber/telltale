@@ -155,6 +155,7 @@ pub enum Client {
     Qwen,
     Opencode,
     Copilot,
+    Pi,
 }
 
 impl Client {
@@ -166,6 +167,7 @@ impl Client {
             Self::Qwen => ClientId::Qwen,
             Self::Opencode => ClientId::OpenCode,
             Self::Copilot => ClientId::Copilot,
+            Self::Pi => ClientId::Pi,
         }
     }
 }
@@ -540,7 +542,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_derived_source_sets_match_the_eight_source_denominator() {
+    fn registry_derived_source_sets_match_the_nine_source_denominator() {
         let supported = supported_source_ids();
         let candidates = candidate_source_ids();
         assert_eq!(
@@ -553,6 +555,7 @@ mod tests {
                 "copilot.process_log".to_string(),
                 "openclaw.agents".to_string(),
                 "opencode.sqlite".to_string(),
+                "pi.sessions".to_string(),
                 "qwen.projects".to_string(),
             ])
         );

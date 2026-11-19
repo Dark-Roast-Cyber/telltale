@@ -23,12 +23,12 @@ feature, never discovered, listed or catalogued, and outside this denominator.
 
 ## Current acquisition and detection model
 
-All eight exact source identities have source-owned native extraction and
+All nine exact source identities have source-owned native extraction and
 Canonical Observation v2 adapters. Acquisition retains native accounting and
 operational progress; canonical observations feed Detection v2 in the shared
 scan/watch runtime. Synthetic adapter/conformance and detection/evaluation
 fixtures characterize the implemented formats, not current-format compatibility
-or broad live-host validation. OpenClaw and Qwen report ToolCall and UserContext
+or broad live-host validation. OpenClaw, Qwen and Pi report ToolCall and UserContext
 **Supported**, ToolExecution **Unknown**;
 Copilot reports ToolCall **Supported**, UserContext **Unsupported**, and
 ToolExecution **Unknown**.
@@ -45,6 +45,7 @@ ToolExecution **Unknown**.
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ⚠️ Existing fixtures only; current-format compatibility deferred beyond 0.7 | Known v0.25.1 text/tool/system gaps; workspace, process ID and exit code absent; ToolExecution unknown |
 | OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (legacy schema); bounded v2.0.28 shell-stage acquisition live-validated; v2 routine drain and full `--history all` pass live-validated after the request-side contribution fix, with oversized rows quarantined | Workspace conditional; process ID absent; exit code only for v2 shell commands and settled v2 `shell` tool calls; v2 tool-entry ToolExecution stays Unknown even when `executed: true` or a settled `shell` tool call emits an execution stage; v2 user shell commands report Supported; call ID/error state/parts conditional |
 | Copilot | `copilot.process_log` | ✅ project-local; ⚠️ CLI home | ✅ existing format | ✅ | ✅ | ⚠️ | ✅ | — | ✅ Existing-format fixtures + historical bounded project-local live validation; v1.0.96 default logs unqualified | Home/COPILOT_HOME discovery blocked on current default-level format evidence; events.jsonl and session-store.db not acquired; UC-001 capability-indeterminate: UserContext unsupported; content parts absent; tool results conditional; ToolExecution unknown |
+| Pi | `pi.sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ⚠️ Fixture-backed (session format v3, `@earendil-works/pi-coding-agent` 1.5.x); bounded live dry-run only | Workspace, agent and process ID absent; exit code only for user `!` commands; ToolExecution unknown; an `edit` whose nested `edits` text exceeds 4 KB is quarantined; no action records (v1 frozen); `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` relocation not discovered |
 
 ### OpenClaw compatibility boundary
 
@@ -86,7 +87,7 @@ Every new agent source must pass these required gates before being marked suppor
 2. **Native extraction and canonical acquisition**: a benign fixture is extracted and acquired without errors, with native accounting and progress checked.
 3. **Canonical tool call**: a tool-call fixture maps to the expected canonical observation.
 4. **Canonical tool result**: a tool-result fixture maps to the expected canonical observation.
-5. **Adapter conformance and detection**: fixture-backed canonical adapter coverage and Detection v2/evaluation coverage establish the exact `(ClientId, source_id, kind)`, facts, and deterministic signals. Every new source identity must include a UC-001 attack fixture with positive detection, or an explicit contract-backed capability gap that proves attack content survived acquisition and the expected indeterminate non-detection. A missing or empty fixture is not a visibility gap. `uc001_fixture_conformance_covers_every_supported_source_identity` in `tests/evaluation_corpus/main.rs` enforces all eight identities; run `cargo test --locked --test evaluation_corpus uc001_`.
+5. **Adapter conformance and detection**: fixture-backed canonical adapter coverage and Detection v2/evaluation coverage establish the exact `(ClientId, source_id, kind)`, facts, and deterministic signals. Every new source identity must include a UC-001 attack fixture with positive detection, or an explicit contract-backed capability gap that proves attack content survived acquisition and the expected indeterminate non-detection. A missing or empty fixture is not a visibility gap. `uc001_fixture_conformance_covers_every_supported_source_identity` in `tests/evaluation_corpus/main.rs` enforces all nine identities; run `cargo test --locked --test evaluation_corpus uc001_`.
 6. **Negative detection**: at least one genuinely observed benign source fixture has no UC-001 matches. Other benign signals, such as `execution.shell`, may remain; absence of UC-001 matches under unsupported capabilities is not an efficacy true negative.
 7. **Capability documentation**: known lossy, absent, or derived fields are recorded here and in [Agent Capability Profiles](agent-capability-profiles.md) when the source becomes user-visible.
 
@@ -95,13 +96,13 @@ support gate. Record it when safe and available, but do not scan large or
 sensitive real session stores just to satisfy fixture coverage.
 
 The UC-001 gate proves critical MCP injection plus controlled-domain egress in
-one session for seven identities (five client families). Copilot's attack tool
+one session for eight identities (six client families). Copilot's attack tool
 result is preserved, but both atomic rules require UserContext, which its
 adapter reports Unsupported. Both detectors are capability-indeterminate with
 `required_capability_unsupported`; the chain cannot fire and evaluation is
 VisibilityLimited. This is a tested visibility gap, not positive coverage or a
 benign outcome. The same gate acquires and evaluates benign inputs for all
-eight identities. `uc002_copilot_credential_publish_fixture_is_critical` in the
+nine identities. `uc002_copilot_credential_publish_fixture_is_critical` in the
 same module separately proves Copilot's credential-harvest/publish chain.
 These are synthetic conformance checks, not new efficacy samples, historical
 source parity, or live client-generated store qualification.
@@ -145,7 +146,7 @@ until those artifacts and the coverage gates above exist in the same change.
 
 | Use Case | Description | Clients Covered | Status |
 | --- | --- | --- | --- |
-| UC-001 | Fake MCP prompt injection to controlled domain | Positive: 5/6 client families, 7/8 source identities; conformance: all 8 identities | ⚠️ Copilot capability-indeterminate visibility gap |
+| UC-001 | Fake MCP prompt injection to controlled domain | Positive: 6/7 client families, 8/9 source identities; conformance: all 9 identities | ⚠️ Copilot capability-indeterminate visibility gap |
 | UC-002 | Credential harvesting before package publish | Codex, Copilot | ✅ 2 clients |
 | UC-003 | DNS exfiltration with encoded payload | Codex | ✅ 1 client |
 

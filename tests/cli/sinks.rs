@@ -706,7 +706,7 @@ fn scan_once_emits_identical_events_to_jsonl_hec_and_elastic() {
         .collect::<Vec<_>>();
     assert_eq!(
         detections.len(),
-        34,
+        35,
         "expected canonical fixture detections"
     );
     assert!(detections.iter().any(|event| {
