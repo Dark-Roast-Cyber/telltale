@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$BinaryPath,
-    [Parameter(Mandatory = $true)][string]$Root,
+    [ValidateNotNullOrEmpty()][string]$Root,
     [ValidateSet('codex', 'claude', 'opencode', 'copilot', 'openclaw', 'qwen')]
     [string[]]$Client = @('codex', 'claude', 'opencode', 'copilot'),
     [ValidateRange(1, 25)][int]$MaxSources = 5,
@@ -143,8 +143,12 @@ function Invoke-TTHostProcess([string]$File, [string[]]$Arguments, [int]$Timeout
 function Invoke-TTHostVerification {
     $binary = (Get-Item -LiteralPath $BinaryPath -ErrorAction Stop).FullName
     if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'BinaryPath must be a file.' }
-    $scanRoot = (Get-Item -LiteralPath $Root -ErrorAction Stop).FullName
-    if (-not (Test-Path -LiteralPath $scanRoot -PathType Container)) { throw 'Root must be a directory.' }
+    $rootArguments = @()
+    if ($Root) {
+        $scanRoot = (Get-Item -LiteralPath $Root -ErrorAction Stop).FullName
+        if (-not (Test-Path -LiteralPath $scanRoot -PathType Container)) { throw 'Root must be a directory.' }
+        $rootArguments = @('--root', $scanRoot)
+    }
     $clients = @($Client + $RequiredClient | Select-Object -Unique)
     $versionResult = Invoke-TTHostProcess $binary @('--version') $TimeoutSeconds
     $version = $versionResult.Stdout.Trim()
@@ -159,8 +163,8 @@ function Invoke-TTHostVerification {
         [IO.Directory]::CreateDirectory($temp) | Out-Null
         try {
             $arguments = @('scan', '--once', '--dry-run', '--no-local-config', '--emit-activity',
-                '--root', $scanRoot, '--client', $selectedClient, '--max-sources', [string]$MaxSources,
-                '--log-path', (Join-Path $temp 'events.jsonl'), '--state-path', (Join-Path $temp 'state.json'))
+                '--client', $selectedClient, '--max-sources', [string]$MaxSources,
+                '--log-path', (Join-Path $temp 'events.jsonl'), '--state-path', (Join-Path $temp 'state.json')) + $rootArguments
             $scan = Invoke-TTHostProcess $binary $arguments $TimeoutSeconds
             $summary = $null
             if (-not $scan.TimedOut) {
