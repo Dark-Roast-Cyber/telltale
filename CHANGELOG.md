@@ -148,6 +148,11 @@
 
 ### Changes
 
+- Claude Code transcripts: count the local Agent SDK's exact
+  `{type: "tag", tag, sessionId}` envelope as bookkeeping when `tag` is a
+  string of at most 4,096 bytes and `sessionId` is a non-empty string. Tag
+  values are not projected. Other shapes and larger tags still quarantine.
+
 - **Unknown tools are counted, and each harness's tool list is checked against
   its table.** The scan summary's `source_processing` gains two optional
   counts, `unclassified_tool_calls` (tool requests whose name no source tool
