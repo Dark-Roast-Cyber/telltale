@@ -3367,6 +3367,25 @@ fn embedded_community_rules_fire_on_agent_sessions_and_spare_look_alikes() {
 
 const RULE_V2_FIXTURE: &str = "tests/fixtures/rule_v2/cli_synthetic.yml";
 
+/// The Rule v2 fixture with LF line endings, then with CRLF ones, as files in
+/// the returned directory. A Windows checkout may hold either.
+fn rule_v2_fixture_copies() -> (tempfile::TempDir, [String; 2]) {
+    let temp = tempdir().expect("tempdir");
+    let lf = fs::read_to_string(RULE_V2_FIXTURE)
+        .expect("fixture")
+        .replace("\r\n", "\n");
+    let paths = [
+        ("lf.yml", lf.clone()),
+        ("crlf.yml", lf.replace('\n', "\r\n")),
+    ]
+    .map(|(name, text)| {
+        let path = temp.path().join(name);
+        fs::write(&path, text).expect("fixture copy");
+        path.to_str().expect("UTF-8 path").to_owned()
+    });
+    (temp, paths)
+}
+
 fn rules_command(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("rules")
@@ -3394,14 +3413,19 @@ fn rules_catalog_prints_a_schema_valid_v2_catalog_of_the_resolved_rules() {
     let embedded = telltale_core::rule_catalog_document(&Default::default()).unwrap();
     assert_eq!(bundled, serde_json::to_value(&embedded).unwrap());
 
-    let output = rules_command(&["catalog", "--rules", RULE_V2_FIXTURE]);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let catalog: Value = serde_json::from_slice(&output.stdout).expect("catalog json");
-    assert!(validator.is_valid(&catalog));
+    let (_temp, fixtures) = rule_v2_fixture_copies();
+    let catalogs = fixtures.map(|fixture| {
+        let output = rules_command(&["catalog", "--rules", &fixture]);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("catalog json")
+    });
+    assert_eq!(catalogs[0], catalogs[1], "CRLF and LF load alike");
+    let catalog = &catalogs[0];
+    assert!(validator.is_valid(catalog));
     let entries = catalog["entries"].as_array().expect("entries");
     assert_eq!(
         entries.len(),
@@ -3435,7 +3459,14 @@ fn rules_catalog_prints_a_schema_valid_v2_catalog_of_the_resolved_rules() {
 
 #[test]
 fn rules_show_prints_one_rule_or_chain_and_rejects_an_unknown_name() {
-    let output = rules_command(&["show", "synthetic.cli.marker", "--rules", RULE_V2_FIXTURE]);
+    let (_temp, fixtures) = rule_v2_fixture_copies();
+    for fixture in &fixtures {
+        assert_rules_show(fixture);
+    }
+}
+
+fn assert_rules_show(fixture: &str) {
+    let output = rules_command(&["show", "synthetic.cli.marker", "--rules", fixture]);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -3466,7 +3497,7 @@ fn rules_show_prints_one_rule_or_chain_and_rejects_an_unknown_name() {
         );
     }
 
-    let chain = rules_command(&["show", "synthetic.cli.chain", "--rules", RULE_V2_FIXTURE]);
+    let chain = rules_command(&["show", "synthetic.cli.chain", "--rules", fixture]);
     assert!(chain.status.success());
     let text = String::from_utf8_lossy(&chain.stdout);
     assert!(text.lines().any(|line| line == "kind: chain"), "{text}");
@@ -3475,7 +3506,7 @@ fn rules_show_prints_one_rule_or_chain_and_rejects_an_unknown_name() {
         "{text}"
     );
 
-    let unknown = rules_command(&["show", "synthetic.cli.unknown", "--rules", RULE_V2_FIXTURE]);
+    let unknown = rules_command(&["show", "synthetic.cli.unknown", "--rules", fixture]);
     assert_eq!(unknown.status.code(), Some(1));
     assert!(unknown.stdout.is_empty());
     assert!(
@@ -3492,13 +3523,31 @@ fn rules_validate_reports_rule_v2_load_notices() {
     let bundled: Value = serde_json::from_slice(&bundled.stdout).expect("validate json");
     assert_eq!(bundled["notices"], serde_json::json!([]));
 
-    let output = rules_command(&["validate", "--rules", RULE_V2_FIXTURE]);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+    let (_temp, fixtures) = rule_v2_fixture_copies();
+    let summaries = fixtures.map(|fixture| {
+        let output = rules_command(&["validate", "--rules", &fixture]);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("validate json")
+    });
+    // Source hashes cover the file bytes, so only they differ.
+    let without_source_hashes = |summary: &Value| {
+        let mut summary = summary.clone();
+        summary["sources"] = Value::Null;
+        for entry in summary["provenance"].as_array_mut().expect("provenance") {
+            entry["winner"] = Value::Null;
+        }
+        summary
+    };
+    assert_eq!(
+        without_source_hashes(&summaries[0]),
+        without_source_hashes(&summaries[1]),
+        "CRLF and LF load alike"
     );
-    let summary: Value = serde_json::from_slice(&output.stdout).expect("validate json");
+    let summary = &summaries[0];
     assert_eq!(summary["status"], "ok");
     assert_eq!(
         summary["rule_count"],
@@ -3517,13 +3566,17 @@ fn rules_validate_reports_rule_v2_load_notices() {
     // A rule with a bundled rule's name but other matchers loses the native
     // action profile, which validate reports. A replacement carries the
     // bundled rule's UUID.
-    let bundled_rules = fs::read_to_string("config/rules/tool-call-regex.yaml")
-        .unwrap()
-        .replace("\r\n", "\n");
-    let (before, _) = bundled_rules
-        .split_once("\nname: network.download\n")
-        .unwrap();
-    let uuid = before.rsplit_once("\nid: ").unwrap().1.trim();
+    let bundled_rules = fs::read_to_string("config/rules/tool-call-regex.yaml").unwrap();
+    let download_uuid = |text: &str| {
+        let text = text.replace("\r\n", "\n");
+        let (before, _) = text.split_once("\nname: network.download\n").unwrap();
+        before.rsplit_once("\nid: ").unwrap().1.trim().to_owned()
+    };
+    let uuid = download_uuid(&bundled_rules);
+    assert_eq!(
+        download_uuid(&bundled_rules.replace("\r\n", "\n").replace('\n', "\r\n")),
+        uuid
+    );
     let temp = tempdir().expect("tempdir");
     let replacement = temp.path().join("rules.d/download.yml");
     fs::create_dir_all(replacement.parent().unwrap()).unwrap();

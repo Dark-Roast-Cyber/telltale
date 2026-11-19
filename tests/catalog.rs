@@ -219,17 +219,19 @@ fn load_rules(raw: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn probe_package() -> String {
-    let rule = yaml_map(PROBE_RULE);
-    let mut package = yaml_map(&format!(
+/// The header document of a probe package.
+fn probe_package_header() -> String {
+    format!(
         "format: {RULE_PACKAGE_FORMAT_V2}\nid: probe.package\ntitle: Probe\nversion: '1.0.0'\n\
          publisher: Probe\nlicense: Apache-2.0\nrule_namespace: probe\n"
-    ));
-    package.insert(
-        "documents".into(),
-        Yaml::Sequence(vec![Yaml::Mapping(rule)]),
-    );
-    serde_yaml::to_string(&package).unwrap()
+    )
+}
+
+/// Load a package of `header` followed by the probe rule as its own document.
+fn load_probe_package(header: &str) -> Result<(), String> {
+    RulePackage::parse(&format!("{header}---\n{PROBE_RULE}"))
+        .map(drop)
+        .map_err(|error| error.to_string())
 }
 
 /// What each field reads, written by hand; the test checks it names exactly
@@ -399,9 +401,8 @@ fn rule_vocabulary_catalog() -> Value {
         },
         "package": {
             "format": RULE_PACKAGE_FORMAT_V2,
-            "keys": probed_keys(&probe_package(), &[], |raw| {
-                RulePackage::parse(raw).map(drop).map_err(|error| error.to_string())
-            }),
+            "layout": "A YAML stream: the header document first, then each Rule v2 rule or chain as its own `---` document, sorted by name.",
+            "header_keys": probed_keys(&probe_package_header(), &[], load_probe_package),
         },
         "limits": {
             "max_pattern_bytes": MAX_PATTERN_BYTES,
@@ -475,6 +476,7 @@ const RULE_V1_KEYS: &[&str] = &[
     "modifiers:",
 ];
 
+#[derive(Debug, PartialEq)]
 struct Example {
     doc: &'static str,
     line: usize,
@@ -485,9 +487,14 @@ struct Example {
 /// Every fenced YAML block of `doc` with the `<!-- rule-example: ... -->`
 /// marker on the line before its fence, if any.
 fn yaml_examples(doc: &'static str) -> Vec<Example> {
-    let text = fs::read_to_string(repo_path(doc))
-        .unwrap_or_else(|error| panic!("{doc}: {error}"))
-        .replace("\r\n", "\n");
+    let text = fs::read_to_string(repo_path(doc)).unwrap_or_else(|error| panic!("{doc}: {error}"));
+    examples_in(doc, &text)
+}
+
+/// The examples of `text`, the contents of `doc`, with LF line endings
+/// whatever the checkout wrote.
+fn examples_in(doc: &'static str, text: &str) -> Vec<Example> {
+    let text = text.replace("\r\n", "\n");
     let lines = text.lines().collect::<Vec<_>>();
     let mut examples = Vec::new();
     let mut index = 0;
@@ -649,6 +656,13 @@ fn expect_outcome(
 
 #[test]
 fn rule_doc_examples_load_as_rule_v2() {
+    // A Windows checkout may write the docs with CRLF line endings; the
+    // examples read from them must not change.
+    for doc in RULE_EXAMPLE_DOCS {
+        let text = fs::read_to_string(repo_path(doc)).unwrap();
+        let crlf = text.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert_eq!(examples_in(doc, &crlf), examples_in(doc, &text), "{doc}");
+    }
     let mut checked = 0;
     let failures = RULE_EXAMPLE_DOCS
         .iter()

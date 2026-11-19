@@ -66,6 +66,14 @@ fn assert_parity(v1: &RuleV1CompatibilityExport, v2: &RuleV1CompatibilityExport,
     assert!(native_profile_notices(v2).is_empty(), "{label}");
 }
 
+/// `text` with LF line endings, then with CRLF ones. A Windows checkout may
+/// hold either, so the test runs on both.
+fn line_endings(text: &str) -> [String; 2] {
+    let lf = text.replace("\r\n", "\n");
+    let crlf = lf.replace('\n', "\r\n");
+    [lf, crlf]
+}
+
 #[test]
 fn host_rule_files_compile_like_their_rule_v1_originals() {
     let documents = host_rule_documents();
@@ -75,33 +83,42 @@ fn host_rule_files_compile_like_their_rule_v1_originals() {
             .iter()
             .find(|(document, _)| document == name)
             .unwrap_or_else(|| panic!("{name} is not a host rule document"));
-        let original = expand_rule_template(template);
-        let loaded = load_rule_set_from_documents(&[converted], None).unwrap();
-        assert!(loaded.notices().is_empty(), "{name}");
-        assert_parity(&export(&original), &loaded.compatibility_export(), name);
-
-        // Each document alone compiles like its original rule alone, and the
-        // documents hold every original once, in order.
-        let v1_set = parse_rule_document(&original).unwrap();
-        let converted = converted.replace("\r\n", "\n");
-        let mut ids = Vec::new();
-        for document in converted.trim_end_matches('\n').split("\n---\n") {
-            let v2 = export(document);
-            assert_eq!(v2.rules().len(), 1, "{name}");
-            let id = v2.rules()[0].id.clone();
-            let mut v1 = v1_set.clone();
-            v1.rules.retain(|rule| rule.id == id);
-            let v1 = compile_rule_sets(vec![v1], None)
-                .unwrap()
-                .compatibility_export();
-            assert_parity(&v1, &v2, &id);
-            ids.push(id);
+        for (template, converted) in line_endings(template)
+            .into_iter()
+            .zip(line_endings(converted))
+        {
+            assert_host_file_parity(name, &template, &converted);
         }
-        let original_ids = v1_set
-            .rules
-            .iter()
-            .map(|rule| rule.id.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(ids, original_ids, "{name}");
     }
+}
+
+fn assert_host_file_parity(name: &str, template: &str, converted: &str) {
+    let original = expand_rule_template(template);
+    let loaded = load_rule_set_from_documents(&[converted], None).unwrap();
+    assert!(loaded.notices().is_empty(), "{name}");
+    assert_parity(&export(&original), &loaded.compatibility_export(), name);
+
+    // Each document alone compiles like its original rule alone, and the
+    // documents hold every original once, in order.
+    let v1_set = parse_rule_document(&original).unwrap();
+    let converted = converted.replace("\r\n", "\n");
+    let mut ids = Vec::new();
+    for document in converted.trim_end_matches('\n').split("\n---\n") {
+        let v2 = export(document);
+        assert_eq!(v2.rules().len(), 1, "{name}");
+        let id = v2.rules()[0].id.clone();
+        let mut v1 = v1_set.clone();
+        v1.rules.retain(|rule| rule.id == id);
+        let v1 = compile_rule_sets(vec![v1], None)
+            .unwrap()
+            .compatibility_export();
+        assert_parity(&v1, &v2, &id);
+        ids.push(id);
+    }
+    let original_ids = v1_set
+        .rules
+        .iter()
+        .map(|rule| rule.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, original_ids, "{name}");
 }

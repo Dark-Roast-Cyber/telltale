@@ -533,8 +533,9 @@ it reaches a release. Use only the core rules with `--no-community-rules` on
 `--no-default-rules` omits both the core rules and the embedded community
 snapshot, while installed packages still load like other managed content.
 
-A rule package is one YAML file in format `telltale-rule-package/v2` whose
-`documents` are [Rule v2](rule-format.md) rules and chains, sorted by `name`:
+A rule package is one YAML file in format `telltale-rule-package/v2`: a header
+document, then each [Rule v2](rule-format.md) rule or chain as its own `---`
+document, sorted by `name`:
 
 ```yaml
 format: telltale-rule-package/v2
@@ -546,23 +547,23 @@ license: Apache-2.0
 rule_namespace: acme        # every rule and chain name starts with "acme."
 source: https://example.com/acme/agent-rules   # optional, informational
 revision: 0123456789abcdef0123456789abcdef01234567  # optional, informational
-documents:
-    - title: Shell profile written
-      id: 0f8fad5b-d9cb-469f-a165-70867728950e
-      name: acme.persistence.shell_profile_write
-      taxonomy: telltale
-      logsource:
-          product: ai_agent
-          category: tool_activity
-      detection:
-          selection:
-              tool.written_path|endswith: ['/.bashrc', '/.zshrc']
-          condition: selection
-      level: medium
-      telltale:
-          category: persistence
-          score: 30
-          explanation: An agent wrote a shell startup file.
+---
+title: Shell profile written
+id: 0f8fad5b-d9cb-469f-a165-70867728950e
+name: acme.persistence.shell_profile_write
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        tool.written_path|endswith: ['/.bashrc', '/.zshrc']
+    condition: selection
+level: medium
+telltale:
+    category: persistence
+    score: 30
+    explanation: An agent wrote a shell startup file.
 ```
 
 See [rule packages](rule-format.md#rule-packages) for every header check.

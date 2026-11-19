@@ -909,6 +909,133 @@ fn yaml_anchors_share_one_pattern() {
     assert_eq!(found[0].1, r"(?i:curl\s)");
 }
 
+/// A rule named `synthetic.<suffix>` whose two matchers share `pattern`
+/// through the anchor `&pattern`.
+fn anchored_rule(suffix: &str, uuid: &str, pattern: &str) -> String {
+    tool_rule(&format!(
+        "selection:\n    - tool.command|re|i: &pattern '{pattern}'\n    - tool.arguments|re|i: *pattern\n\
+         condition: selection"
+    ))
+    .replacen(UUID, uuid, 1)
+    .replacen("synthetic.rule", &format!("synthetic.{suffix}"), 1)
+}
+
+/// (rule id, matcher regexes) for every rule of a file.
+fn rule_patterns(file: &str) -> Vec<(String, Vec<String>)> {
+    export(file)
+        .rules()
+        .iter()
+        .map(|rule| {
+            let regexes = rule.matchers.iter().map(|m| m.regex.clone()).collect();
+            (rule.id.clone(), regexes)
+        })
+        .collect()
+}
+
+#[test]
+fn each_document_keeps_its_own_anchors() {
+    let uuids = [UUID, OTHER_UUID, "0d0c4f7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"];
+    let file = ["alpha", "beta", "gamma"]
+        .iter()
+        .zip(uuids)
+        .map(|(name, uuid)| anchored_rule(name, uuid, &format!("{name}-marker")))
+        .collect::<Vec<_>>()
+        .join("---\n");
+    let expected = ["alpha", "beta", "gamma"]
+        .map(|name| {
+            let regex = format!("(?i:{name}-marker)");
+            (format!("synthetic.{name}"), vec![regex.clone(), regex])
+        })
+        .to_vec();
+    assert_eq!(rule_patterns(&file), expected);
+    assert_eq!(rule_patterns(&file.replace('\n', "\r\n")), expected);
+}
+
+#[test]
+fn an_anchor_defined_twice_in_one_document_is_rejected() {
+    let message = "YAML anchor `&pattern` is defined more than once in this document; anchor \
+                   names must be unique within a document";
+    let twice = tool_rule(
+        "selection:\n    - tool.command|re: &pattern 'first'\n    - tool.arguments|re: *pattern\n\
+         \x20   - tool.written_path|re: &pattern 'second'\n    - tool.path|re: *pattern\n\
+         condition: selection",
+    );
+    assert_error(&twice, &format!("rule document 1: {message}"));
+    // Flow style, and in the second document of a file.
+    let flow = tool_rule(
+        "selection:\n    - tool.command|re: [&pattern 'first', &pattern 'second']\n\
+         \x20   - tool.arguments|re: *pattern\ncondition: selection",
+    )
+    .replacen(UUID, OTHER_UUID, 1)
+    .replacen("synthetic.rule", "synthetic.flow", 1);
+    let first = anchored_rule("first", UUID, "marker");
+    assert_error(
+        &format!("{first}---\n{flow}"),
+        &format!("rule document 2: {message}"),
+    );
+    assert_error(&twice.replace('\n', "\r\n"), message);
+}
+
+#[test]
+fn ampersands_and_unaliased_repeats_are_not_rejected() {
+    // ` && ` names no anchor; `&marker` inside quotes repeats but is never
+    // aliased.
+    let document = tool_rule(
+        "selection:\n    - tool.command|re: 'make && make install'\n\
+         \x20   - tool.arguments|re: 'cd /tmp && ls'\n    - tool.written_path|re: 'a&marker'\n\
+         \x20   - tool.path|re: 'b&marker'\ncondition: selection",
+    );
+    let regexes = matchers(&document)
+        .into_iter()
+        .map(|(_, regex, _, _)| regex)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        regexes,
+        [
+            "make && make install",
+            "cd /tmp && ls",
+            "a&marker",
+            "b&marker"
+        ]
+    );
+}
+
+#[test]
+fn document_texts_split_where_yaml_starts_and_ends_documents() {
+    let raw = "# leading comment\n%YAML 1.2\n---\na: &x 1\n--- &y\nb: 2\n...\n# trailing\n\
+               ---x: not a marker\n----\nc: 3\n... \nd: 4\n";
+    assert_eq!(
+        super::document_texts(raw),
+        [
+            "---\na: &x 1\n",
+            "--- &y\nb: 2\n",
+            "# trailing\n---x: not a marker\n----\nc: 3\n",
+            "d: 4\n",
+        ]
+    );
+    assert_eq!(super::document_texts("a: 1\n---\n"), ["a: 1\n", "---\n"]);
+    assert_eq!(
+        super::document_texts("a: 1\r\n---\r\nb: 2\r\n"),
+        ["a: 1\r\n", "---\r\nb: 2\r\n"]
+    );
+}
+
+#[test]
+fn crlf_rule_files_load_like_lf() {
+    let first = tool_rule(
+        "selection:\n    tool.command|re: |\n        first\n        line\ncondition: selection",
+    );
+    let second = anchored_rule("second", OTHER_UUID, "second-marker");
+    let file = format!(
+        "{first}---\n{second}---\n{}",
+        chain("categories: [synthetic]")
+    );
+    let lf = export(&file);
+    let crlf = export(&file.replace('\n', "\r\n"));
+    assert_eq!(format!("{crlf:?}"), format!("{lf:?}"));
+    assert_eq!(lf.rules().len(), 2);
+}
+
 const CHAIN_UUID: &str = "6a0c3b7e-2d1f-4e8a-9b5c-7d6e5f4a3b2c";
 
 /// A valid chain whose `correlation` block holds `steps` plus `type`.

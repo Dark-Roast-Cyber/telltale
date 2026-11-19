@@ -29,11 +29,38 @@ inside an otherwise complete rule.
 - Keys are closed: an unknown top-level key, or an unknown key inside
   `logsource`, `telltale` or `correlation`, is an error. This catches typos
   that Sigma tools would keep as custom attributes.
-- YAML anchors and aliases work, so a pattern shared by several fields is
-  written once. YAML tags (`!name`) and invisible or control characters
-  (including bidirectional formatting characters) are rejected.
+- YAML anchors and aliases work within a document, so a pattern shared by
+  several fields is written once. Anchor names must be unique within a
+  document: a document that defines the same anchor name twice and uses it
+  in an alias is rejected. YAML tags (`!name`) and invisible or control
+  characters (including bidirectional formatting characters) are rejected.
 - Telltale reads `detection` in document order, because matchers follow the
   order of the selections.
+
+This rule is rejected because `&pattern` is defined twice; give the second
+pattern its own name, such as `&wget`:
+
+<!-- rule-example: error: YAML anchor `&pattern` is defined more than once in this document -->
+```yaml
+title: Download tool in an agent command
+id: 1b4e28ba-2fa1-41d2-883f-0016d3cca427
+name: example.download.tool
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: &pattern '\bcurl\b'
+        - tool.arguments|re|i: *pattern
+        - tool.url|re|i: &pattern '\bwget\b'
+    condition: selection
+level: low
+telltale:
+    category: execution
+    score: 10
+    explanation: An agent ran a download tool.
+```
 
 The same files load from every rule tier: `organization-rules.d`, `rules.d`
 and `ui-rules.d`, explicit `--rules` files, rule packages, and documents an
@@ -474,7 +501,10 @@ link.
 
 A rule package ships namespaced rules and chains as one YAML file in
 `rule-packages.d`; see [Install](install.md#community-rules-and-rule-packages)
-for installation and trust.
+for installation and trust. The file is a YAML stream: the first document is
+the package header, and every following `---` document is one rule or chain,
+written exactly as in a rule file. A package can therefore be built by writing
+the header and appending rule files.
 
 ```yaml
 format: telltale-rule-package/v2
@@ -485,55 +515,60 @@ publisher: Example security team
 license: Apache-2.0
 rule_namespace: example
 source: https://example.invalid/agent-rules
-documents:
-    - title: Package manager configuration written
-      id: f47ac10b-58cc-4372-a567-0e02b2c3d479
-      name: example.persistence.npmrc_write
-      taxonomy: telltale
-      status: test
-      logsource:
-          product: ai_agent
-          category: tool_activity
-      detection:
-          selection:
-              tool.written_path|endswith: '/.npmrc'
-          condition: selection
-      level: low
-      telltale:
-          category: persistence
-          score: 20
-          explanation: An agent wrote a package manager configuration file.
-    - title: Shell profile written
-      id: a3bb189e-8bf9-4888-9912-ace4e6543002
-      name: example.persistence.shell_profile_write
-      taxonomy: telltale
-      status: test
-      logsource:
-          product: ai_agent
-          category: tool_activity
-      detection:
-          selection:
-              tool.written_path|endswith:
-                  - '/.bashrc'
-                  - '/.zshrc'
-          condition: selection
-      level: medium
-      telltale:
-          category: persistence
-          score: 30
-          explanation: An agent wrote a shell startup file.
+---
+title: Package manager configuration written
+id: f47ac10b-58cc-4372-a567-0e02b2c3d479
+name: example.persistence.npmrc_write
+taxonomy: telltale
+status: test
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        tool.written_path|endswith: '/.npmrc'
+    condition: selection
+level: low
+telltale:
+    category: persistence
+    score: 20
+    explanation: An agent wrote a package manager configuration file.
+---
+title: Shell profile written
+id: a3bb189e-8bf9-4888-9912-ace4e6543002
+name: example.persistence.shell_profile_write
+taxonomy: telltale
+status: test
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        tool.written_path|endswith:
+            - '/.bashrc'
+            - '/.zshrc'
+    condition: selection
+level: medium
+telltale:
+    category: persistence
+    score: 30
+    explanation: An agent wrote a shell startup file.
 ```
 
 - `format` is `telltale-rule-package/v2`. Telltale 0.7 does not read it.
 - `id` (dot-separated lowercase segments, at most 64 characters), `title`,
   `version` (at most 64 characters of `A-Z`, `a-z`, `0-9`, `.`, `+`, `-`, `_`),
   `publisher` and `license` are required; `source` and `revision` are optional
-  labels. Labels are one line of at most 256 characters.
+  labels. Labels are one line of at most 256 characters. The header has no
+  other keys; in particular there is no `documents` list.
 - `rule_namespace` (lowercase, at most 32 characters) may not be a core rule
   namespace or `telltale`/`procchain`. Every `name` starts with
   `<rule_namespace>.`.
-- `documents` is a non-empty list of Rule v2 rules and chains, sorted by
-  `name`, each name once. Each `id` is used once.
+- At least one rule or chain document follows the header. The documents are
+  sorted by `name`, each name once, and each `id` is used once. Errors number
+  the documents in the file, the header being document 1.
+- Each document is read on its own, like a document of a rule file, so YAML
+  anchors never reach from one rule into another.
 - A package file is at most 4 MiB.
 
 Packages only add definitions: a package never replaces a core rule or another

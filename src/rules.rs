@@ -1033,27 +1033,18 @@ overrides:
         );
         let package = temp.path().join("rule-packages.d/acme.yaml");
         fs::create_dir_all(package.parent().unwrap()).expect("package dir");
+        // A package is its header, then each rule file document verbatim.
         let packaged = v2_rule_yaml(
             "acme.v2",
             "2f2e6b9a-4c3d-4e5f-a07b-8c9d0e1f2a3b",
             "package-marker",
             5,
-        )
-        .lines()
-        .enumerate()
-        .map(|(index, line)| {
-            if index == 0 {
-                format!("  - {line}\n")
-            } else {
-                format!("    {line}\n")
-            }
-        })
-        .collect::<String>();
+        );
         fs::write(
             &package,
             format!(
                 "format: telltale-rule-package/v2\nid: acme.rules\ntitle: Acme rules\nversion: 1.0.0\n\
-                 publisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: acme\ndocuments:\n{packaged}"
+                 publisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: acme\n---\n{packaged}"
             ),
         )
         .expect("package");

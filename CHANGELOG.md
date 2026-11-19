@@ -46,8 +46,12 @@
   `telltale rules show <name>` prints one rule or chain, and
   `telltale rules validate` reports load notices under `notices`. Rule files in
   every tier, `--rules` files, `Pipeline::rules_document` and rule packages
-  (format `telltale-rule-package/v2`, with a `title` and documents sorted by
-  name) accept Rule v2 documents.
+  accept Rule v2 documents. A `telltale-rule-package/v2` package is a YAML
+  stream: a header with a `title`, then each rule or chain as its own `---`
+  document, sorted by name, so a package can be built by appending rule files
+  to the header. A Rule v2 document that defines one YAML anchor name more
+  than once and aliases it is rejected; anchor names must be unique within a
+  document.
 - **Rule v1 has a `tool_kind` target, and `execution.shell` selects it.** The
   target (`compat.v1.tool_kind`, the tenth compatibility view) is what a call
   does: `shell`, `file_read`, `file_write`, `web`, `delegate` or `other`, from
