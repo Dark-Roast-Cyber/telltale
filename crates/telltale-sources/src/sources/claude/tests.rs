@@ -280,6 +280,76 @@ fn skipped_or_unknown_record_payloads_remain_opaque() {
 }
 
 #[test]
+fn session_tag_bookkeeping_requires_its_native_envelope() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-tag.jsonl"),
+    };
+    let records = r#"{"type":"user","sessionId":"synthetic","content":"valid turn"}
+{"type":"tag","sessionId":"synthetic","tag":""}
+{"role":"tag","sessionId":"synthetic","tag":"label"}
+{"type":"tag","sessionId":"synthetic","tag":false}
+{"type":"tag","sessionId":"synthetic","tag":"label","content":"unknown shape"}
+{"type":"tag","sessionId":"","tag":"label"}
+{"type":"tag","tag":"label"}
+"#;
+    let label_at_limit = "é".repeat(2048); // 4,096 UTF-8 bytes
+    let at_limit = json!({"type":"tag","sessionId":"synthetic","tag":&label_at_limit});
+    let oversized =
+        json!({"type":"tag","sessionId":"synthetic","tag":format!("{label_at_limit}x")});
+    std::fs::write(&source.path, format!("{records}{at_limit}\n{oversized}\n")).unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        batch
+            .quarantined
+            .iter()
+            .map(|unit| (unit.source_sequence, unit.code))
+            .collect::<Vec<_>>(),
+        [
+            (2, "unknown_discriminator"),
+            (3, "unknown_discriminator"),
+            (4, "unknown_discriminator"),
+            (5, "unknown_discriminator"),
+            (6, "unknown_discriminator"),
+            (8, "unknown_discriminator"),
+        ],
+    );
+    assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+    assert_eq!(batch.observations.len(), 1);
+}
+
+#[test]
+fn session_tag_bookkeeping_counts_cleared_tag_as_other() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-cleared-tag.jsonl"),
+    };
+    std::fs::write(
+        &source.path,
+        r#"{"type":"user","sessionId":"synthetic","content":"valid turn"}
+{"type":"tag","sessionId":"synthetic","tag":""}
+"#,
+    )
+    .unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        batch.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
+    assert!(batch.quarantined.is_empty());
+    assert_eq!(batch.observations.len(), 1);
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 2);
+    assert_eq!(counts.record_counts.other, 1);
+}
+
+#[test]
 fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
     let directory = tempfile::tempdir().unwrap();
     let source = Source {
