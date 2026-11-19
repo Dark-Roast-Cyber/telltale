@@ -1,12 +1,12 @@
 {
-  "description": "A Claude Code 2.1.306 transcript with session tag entries written by the matching Agent SDK's local tagSession writer.",
+  "description": "A Claude Code 2.1.327 transcript with session tag entries written by the matching Agent SDK's local tagSession writer.",
   "harness": "claude-code",
   "upstream": [
-    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L7846",
-    "https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-agent-sdk@0.3.306/sdk.mjs"
+    "https://github.com/anthropics/claude-code/blob/9fa26078be418ec4b217334812e2a04cc63336ae/CHANGELOG.md#L9760",
+    "https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-agent-sdk@0.3.327/sdk.mjs"
   ],
   "status": "supported",
-  "note": "Claude Code's transcript serializer is not published. The pinned changelog documents /tag. In the matching Agent SDK 0.3.306 (claudeCodeVersion 2.1.306), the local tagSession writer in sdk.mjs appends {type: tag, tag, sessionId}, encoding a cleared tag as an empty string.",
+  "note": "Claude Code's transcript serializer is not published. The pinned changelog documents /tag. In the matching Agent SDK 0.3.327 (claudeCodeVersion 2.1.327), the local tagSession writer in sdk.mjs appends {type: tag, tag, sessionId}, encoding a cleared tag as an empty string.",
   "acquire": {
     "source_id": "claude.projects",
     "jsonl": [
