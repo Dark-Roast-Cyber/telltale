@@ -1,4 +1,8 @@
-//! Content identity for effective Rule v1 compatibility semantics.
+//! Content identity of the compiled rule form ([`RuleV1CompatibilityExport`]).
+//!
+//! The `rule_v1_*` names and the fingerprint domain name the compiled detector
+//! version 1, not an authoring format; they stay so that identities computed
+//! for the same compiled content never change.
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -248,413 +252,297 @@ struct CanonicalMetadata<'a> {
 #[cfg(test)]
 mod tests {
     use super::rule_v1_fingerprint;
-    use crate::{
-        DetectionDefinition, ModifierDefinition, ModifierLink, ModifierLinkOrder, RuleDefaults,
-        RuleDefinition, RulePolicy, RuleSet, load_rule_set_from_documents,
-    };
-    use std::collections::BTreeMap;
+    use crate::test_rules::{file, uuid};
+    use crate::{RulePolicy, load_rule_set_from_documents};
 
-    fn rule() -> RuleDefinition {
-        RuleDefinition {
-            id: "rule.synthetic".to_string(),
-            title: Some("Synthetic title".to_string()),
-            description: Some("Synthetic description".to_string()),
-            status: None,
-            author: None,
-            references: Vec::new(),
-            falsepositives: vec!["z".to_string(), "a".to_string()],
-            level: None,
-            category: "execution".to_string(),
-            detection_class: "security_detection".to_string(),
-            signal_type: "atomic".to_string(),
-            analytic_intent: "alert".to_string(),
-            atlas_tags: vec!["atlas:Z".to_string(), "atlas:A".to_string()],
-            severity: "high".to_string(),
-            score: 60,
-            targets: vec!["tool_result".to_string(), "command".to_string()],
-            regex: Some("synthetic".to_string()),
-            detection: None,
-            tags: vec!["z".to_string(), "a".to_string()],
-            explanation: "Synthetic explanation".to_string(),
-            enabled: true,
-        }
+    const RULE: &str = "title: Synthetic title
+id: UUID
+name: rule.synthetic
+taxonomy: telltale
+description: Synthetic description
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.result|re: &pattern synthetic
+        - tool.command|re: *pattern
+    condition: selection
+falsepositives: [z, a]
+level: high
+tags: [atlas.z, atlas.a]
+telltale:
+    category: execution
+    score: 60
+    explanation: Synthetic explanation
+    tags: [z, a]
+";
+
+    const CHAIN: &str = "title: Synthetic chain
+id: UUID
+name: chain.synthetic
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [rule.synthetic]
+    within_calls: 3
+falsepositives: [none]
+tags: [atlas.a]
+telltale:
+    score: 7
+    explanation: modifier explanation
+";
+
+    fn rule() -> String {
+        RULE.replace("UUID", &uuid("rule.synthetic"))
     }
 
-    fn compiled(
-        rule: RuleDefinition,
-        modifiers: Vec<ModifierDefinition>,
-    ) -> crate::CompiledRuleSet {
-        RuleSet {
-            version: 1,
-            description: "synthetic source-only text".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: vec![rule],
-            modifiers,
-        }
-        .compile(None)
-        .expect("compiled rules")
+    fn modifier() -> String {
+        CHAIN.replace("UUID", &uuid("chain.synthetic"))
+    }
+
+    fn fingerprint(documents: &[String]) -> String {
+        rule_v1_fingerprint(
+            &load_rule_set_from_documents(&[file(documents).as_str()], None)
+                .expect("compiled rules")
+                .compatibility_export(),
+        )
     }
 
     #[test]
     fn unordered_rule_metadata_and_matchers_are_canonical() {
-        let mut first = rule();
-        first.targets = vec!["command".to_string(), "tool_result".to_string()];
-        first.atlas_tags.reverse();
-        first.tags.reverse();
-        let first = rule_v1_fingerprint(&compiled(first, Vec::new()).compatibility_export());
-
-        let second = rule_v1_fingerprint(&compiled(rule(), Vec::new()).compatibility_export());
-        assert_eq!(first, second);
+        let reordered = rule()
+            .replace(
+                "        - tool.result|re: &pattern synthetic\n        - tool.command|re: *pattern",
+                "        - tool.command|re: &pattern synthetic\n        - tool.result|re: *pattern",
+            )
+            .replace("[atlas.z, atlas.a]", "[atlas.a, atlas.z]")
+            .replace("tags: [z, a]", "tags: [a, z]");
+        assert_ne!(reordered, rule());
+        assert_eq!(fingerprint(&[reordered]), fingerprint(&[rule()]));
     }
 
     #[test]
     fn source_formatting_and_line_endings_do_not_affect_identity() {
-        let first = "version: 1\ndescription: source-a\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: rule.synthetic\n    title: Synthetic title\n    description: Synthetic description\n    category: execution\n    severity: high\n    score: 60\n    targets: [command, tool_result]\n    regex: synthetic\n    tags: [z, a]\n    explanation: Synthetic explanation\nmodifiers: []\n";
-        let second = first
-            .replace("source-a", "source-b")
-            .replace("[command, tool_result]", "[tool_result, command]")
-            .replace("[z, a]", "[a, z]")
+        let second = format!("# A comment the first source does not have.\n{}", rule())
+            .replace("tags: [z, a]", "tags:\n        - a\n        - z")
             .replace('\n', "\r\n");
-        let first = load_rule_set_from_documents(&[first], None)
-            .expect("first rules")
-            .compatibility_export();
-        let second = load_rule_set_from_documents(&[second.as_str()], None)
-            .expect("second rules")
-            .compatibility_export();
-        assert_eq!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&second));
+        assert_eq!(fingerprint(&[rule()]), fingerprint(&[second]));
     }
 
     #[test]
     fn descriptive_rule_metadata_does_not_change_compiled_fingerprint() {
-        let first = rule_v1_fingerprint(&compiled(rule(), Vec::new()).compatibility_export());
-        let mut changed = rule();
-        changed.title = Some("different title".to_string());
-        changed.description = Some("different description".to_string());
-        changed.falsepositives = vec!["different false-positive guidance".to_string()];
-        let second = rule_v1_fingerprint(&compiled(changed, Vec::new()).compatibility_export());
-        assert_eq!(first, second);
+        let first = fingerprint(&[rule()]);
+        let changed = rule()
+            .replace("title: Synthetic title", "title: different title")
+            .replace(
+                "description: Synthetic description",
+                "description: different description\nstatus: test\nauthor: Someone",
+            )
+            .replace(
+                "falsepositives: [z, a]",
+                "falsepositives: [different false-positive guidance]",
+            )
+            .replace(
+                "id: ",
+                "references:\n    - https://example.invalid/rule\nid: ",
+            )
+            .replace(
+                "tags: [atlas.z, atlas.a]",
+                "tags: [atlas.z, atlas.a, attack.t1105]",
+            );
+        assert_eq!(first, fingerprint(&[changed]));
 
-        let base_modifier = ModifierDefinition {
-            id: "chain.synthetic".to_string(),
-            score: 7,
-            detection_class: "security_detection".to_string(),
-            signal_type: "chain".to_string(),
-            analytic_intent: "alert".to_string(),
-            atlas_tags: vec!["atlas:A".to_string()],
-            when_all_categories: vec!["execution".to_string()],
-            when_all_rule_ids: vec!["rule.synthetic".to_string()],
-            link: None,
-            falsepositives: vec!["base guidance".to_string()],
-            explanation: "modifier explanation".to_string(),
-            enabled: true,
-        };
-        let mut changed_modifier = base_modifier.clone();
-        changed_modifier.falsepositives = vec!["different guidance".to_string()];
-        let first =
-            rule_v1_fingerprint(&compiled(rule(), vec![base_modifier]).compatibility_export());
-        let second =
-            rule_v1_fingerprint(&compiled(rule(), vec![changed_modifier]).compatibility_export());
-        assert_eq!(first, second);
+        let first = fingerprint(&[rule(), modifier()]);
+        let changed = modifier()
+            .replace(
+                "falsepositives: [none]",
+                "falsepositives: [different guidance]",
+            )
+            .replace("title: Synthetic chain", "title: Different chain");
+        assert_eq!(first, fingerprint(&[rule(), changed]));
     }
 
     #[test]
     fn every_fingerprinted_rule_field_changes_identity() {
-        let base = compiled(
-            rule(),
-            vec![ModifierDefinition {
-                id: "chain.synthetic".to_string(),
-                score: 7,
-                detection_class: "security_detection".to_string(),
-                signal_type: "chain".to_string(),
-                analytic_intent: "alert".to_string(),
-                atlas_tags: vec!["atlas:A".to_string()],
-                when_all_categories: vec!["execution".to_string()],
-                when_all_rule_ids: vec!["rule.synthetic".to_string()],
-                link: None,
-                falsepositives: vec!["none".to_string()],
-                explanation: "modifier explanation".to_string(),
-                enabled: true,
-            }],
-        );
-        let base = rule_v1_fingerprint(&base.compatibility_export());
-        for mutate in [
-            |rule: &mut RuleDefinition| rule.id = "rule.other".to_string(),
-            |rule: &mut RuleDefinition| rule.category = "other".to_string(),
-            |rule: &mut RuleDefinition| rule.detection_class = "policy_violation".to_string(),
-            |rule: &mut RuleDefinition| rule.signal_type = "chain".to_string(),
-            |rule: &mut RuleDefinition| rule.analytic_intent = "audit".to_string(),
-            |rule: &mut RuleDefinition| rule.atlas_tags.push("atlas:B".to_string()),
-            |rule: &mut RuleDefinition| rule.severity = "critical".to_string(),
-            |rule: &mut RuleDefinition| rule.score = 80,
-            |rule: &mut RuleDefinition| rule.tags.push("other".to_string()),
-            |rule: &mut RuleDefinition| rule.explanation = "other".to_string(),
-            |rule: &mut RuleDefinition| rule.targets = vec!["url".to_string()],
-            |rule: &mut RuleDefinition| rule.regex = Some("other".to_string()),
+        let base = fingerprint(&[rule(), modifier()]);
+        for (from, to) in [
+            ("name: rule.synthetic", "name: rule.other"),
+            ("category: execution", "category: other"),
+            (
+                "    tags: [z, a]",
+                "    tags: [z, a]\n    detection_class: policy_violation",
+            ),
+            (
+                "    tags: [z, a]",
+                "    tags: [z, a]\n    signal_type: chain",
+            ),
+            (
+                "    tags: [z, a]",
+                "    tags: [z, a]\n    analytic_intent: audit",
+            ),
+            ("[atlas.z, atlas.a]", "[atlas.z, atlas.a, atlas.b]"),
+            ("level: high", "level: critical"),
+            ("score: 60", "score: 80"),
+            ("tags: [z, a]", "tags: [z, a, other]"),
+            ("explanation: Synthetic explanation", "explanation: other"),
+            ("tool.result|re", "tool.url|re"),
+            ("&pattern synthetic", "&pattern other"),
+            (
+                "    condition: selection",
+                "    selection_url:\n        tool.url|re: benign\n    condition: 1 of selection*",
+            ),
         ] {
-            let mut changed = rule();
-            mutate(&mut changed);
-            let fingerprint =
-                rule_v1_fingerprint(&compiled(changed, Vec::new()).compatibility_export());
-            assert_ne!(base, fingerprint);
+            let changed = rule().replacen(from, to, 1);
+            assert_ne!(changed, rule(), "{from}");
+            assert_ne!(base, fingerprint(&[changed, modifier()]), "{from} -> {to}");
         }
-
-        let mut changed = rule();
-        changed.targets.clear();
-        changed.regex = None;
-        changed.detection = Some(DetectionDefinition {
-            selection: BTreeMap::from([
-                ("command".to_string(), "synthetic".to_string()),
-                ("tool_result".to_string(), "synthetic".to_string()),
-            ]),
-            exclude: BTreeMap::from([("command".to_string(), "benign".to_string())]),
-            condition: "selection".to_string(),
-            scope: crate::MatchScope::Field,
-        });
-        assert_ne!(
-            base,
-            rule_v1_fingerprint(&compiled(changed, Vec::new()).compatibility_export())
-        );
-
-        let modifier = ModifierDefinition {
-            id: "chain.synthetic".to_string(),
-            score: 8,
-            detection_class: "security_detection".to_string(),
-            signal_type: "chain".to_string(),
-            analytic_intent: "alert".to_string(),
-            atlas_tags: vec!["atlas:A".to_string()],
-            when_all_categories: vec!["execution".to_string()],
-            when_all_rule_ids: vec!["rule.synthetic".to_string()],
-            link: None,
-            falsepositives: vec!["none".to_string()],
-            explanation: "modifier explanation".to_string(),
-            enabled: true,
-        };
-        let fingerprint =
-            rule_v1_fingerprint(&compiled(rule(), vec![modifier]).compatibility_export());
-        assert_ne!(base, fingerprint);
+        let changed = modifier().replace("score: 7", "score: 8");
+        assert_ne!(base, fingerprint(&[rule(), changed]));
     }
 
     #[test]
     fn exclusion_order_and_source_formatting_do_not_affect_v2_identity() {
-        let first = r#"
-version: 1
-description: first source
-defaults: {case_insensitive: false, enabled: true}
-rules:
-  - id: rule.synthetic
-    category: execution
-    severity: high
-    score: 60
-    detection:
-      selection:
-        command: synthetic
-        tool_result: synthetic
-      exclude:
-        command: benign-command
-        tool_result: benign-result
-      condition: selection
-    tags: [a, z]
-    explanation: Synthetic explanation
-modifiers: []
-"#;
+        let detection = "    selection_command:
+        tool.command|re: synthetic
+    filter_command:
+        tool.command|re: benign-command
+    selection_tool_result:
+        tool.result|re: synthetic
+    filter_tool_result:
+        tool.result|re: benign-result
+    condition: (selection_command and not filter_command) or (selection_tool_result and not filter_tool_result)
+";
+        let first = rule().replace(
+            "    selection:\n        - tool.result|re: &pattern synthetic\n        - tool.command|re: *pattern\n    condition: selection\n",
+            detection,
+        );
         let second = first
-            .replace("first source", "second source")
             .replace(
-                "        command: benign-command\n        tool_result: benign-result",
-                "        tool_result: benign-result\n        command: benign-command",
+                "    filter_command:\n        tool.command|re: benign-command\n    selection_tool_result:\n        tool.result|re: synthetic\n    filter_tool_result:\n        tool.result|re: benign-result\n",
+                "    filter_tool_result:\n        tool.result|re: benign-result\n    selection_tool_result:\n        tool.result|re: synthetic\n    filter_command:\n        tool.command|re: benign-command\n",
             )
-            .replace("[a, z]", "[z, a]")
+            .replace("tags: [z, a]", "tags: [a, z]")
             .replace('\n', "\r\n");
-        let first = load_rule_set_from_documents(&[first], None)
-            .expect("first")
-            .compatibility_export();
-        let second = load_rule_set_from_documents(&[&second], None)
-            .expect("second")
-            .compatibility_export();
-        assert_eq!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&second));
+        assert_ne!(first.replace('\n', "\r\n"), second);
+        assert_eq!(fingerprint(&[first]), fingerprint(&[second]));
     }
 
     #[test]
     fn changing_only_exclusion_regex_changes_v2_identity() {
         let document = |exclusion: &str| {
-            format!(
-                "version: 1\ndescription: source\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: high\n    score: 60\n    detection:\n      selection:\n        command: synthetic\n      exclude:\n        command: {exclusion}\n      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n"
+            rule().replace(
+                "    selection:\n        - tool.result|re: &pattern synthetic\n        - tool.command|re: *pattern\n    condition: selection\n",
+                &format!(
+                    "    selection_command:\n        tool.command|re: synthetic\n    filter_command:\n        tool.command|re: {exclusion}\n    condition: selection_command and not filter_command\n"
+                ),
             )
         };
-        let first = load_rule_set_from_documents(&[&document("benign-a")], None)
-            .expect("first")
-            .compatibility_export();
-        let second = load_rule_set_from_documents(&[&document("benign-b")], None)
-            .expect("second")
-            .compatibility_export();
-        assert_ne!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&second));
+        assert_ne!(
+            fingerprint(&[document("benign-a")]),
+            fingerprint(&[document("benign-b")])
+        );
     }
 
     #[test]
     fn duplicate_matchers_and_rule_order_are_canonicalized_as_specified() {
-        let mut first_rule = rule();
-        first_rule.targets = vec!["command".to_string(), "command".to_string()];
-        let mut unique_rule = first_rule.clone();
-        unique_rule.targets = vec!["command".to_string()];
-        let mut second_rule = rule();
-        second_rule.id = "rule.second".to_string();
-        second_rule.targets = vec!["tool_result".to_string()];
-        let first = RuleSet {
-            version: 1,
-            description: "source".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: vec![first_rule.clone(), second_rule.clone()],
-            modifiers: Vec::new(),
-        }
-        .compile(None)
-        .expect("compiled")
+        let one_target = |name: &str, field: &str| {
+            rule()
+                .replace("name: rule.synthetic", &format!("name: {name}"))
+                .replace(&uuid("rule.synthetic"), &uuid(name))
+                .replace(
+                    "        - tool.result|re: &pattern synthetic\n        - tool.command|re: *pattern\n",
+                    &format!("        - {field}|re: synthetic\n"),
+                )
+        };
+        let first = fingerprint(&[
+            one_target("rule.synthetic", "tool.command"),
+            one_target("rule.second", "tool.result"),
+        ]);
+        let reordered = fingerprint(&[
+            one_target("rule.second", "tool.result"),
+            one_target("rule.synthetic", "tool.command"),
+        ]);
+        assert_ne!(first, reordered);
+        // Rule v2 never compiles a field twice; the compiled form drops a
+        // repeated matcher from its identity all the same.
+        let export = load_rule_set_from_documents(
+            &[one_target("rule.synthetic", "tool.command").as_str()],
+            None,
+        )
+        .unwrap()
         .compatibility_export();
-
-        let mut reordered = second_rule.clone();
-        reordered.targets = vec!["tool_result".to_string()];
-        let second = RuleSet {
-            version: 1,
-            description: "source".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: vec![reordered, first_rule],
-            modifiers: Vec::new(),
-        }
-        .compile(None)
-        .expect("compiled")
-        .compatibility_export();
-
-        assert_ne!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&second));
-        let unique = RuleSet {
-            version: 1,
-            description: "source".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: vec![unique_rule, second_rule],
-            modifiers: Vec::new(),
-        }
-        .compile(None)
-        .expect("compiled")
-        .compatibility_export();
-        assert_eq!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&unique));
-    }
-
-    fn link() -> ModifierLink {
-        ModifierLink {
-            calls: 3,
-            order: ModifierLinkOrder::Declared,
-            minutes: None,
-        }
+        let unique = export.rules()[0].clone();
+        let mut repeated = unique.clone();
+        repeated.matchers.push(repeated.matchers[0].clone());
+        assert_eq!(
+            super::rule_v1_rule_fingerprint(&unique),
+            super::rule_v1_rule_fingerprint(&repeated)
+        );
     }
 
     #[test]
     fn every_fingerprinted_modifier_field_changes_identity() {
-        let modifier = || ModifierDefinition {
-            id: "chain.synthetic".to_string(),
-            score: 7,
-            detection_class: "security_detection".to_string(),
-            signal_type: "chain".to_string(),
-            analytic_intent: "alert".to_string(),
-            atlas_tags: vec!["atlas:A".to_string()],
-            when_all_categories: vec!["execution".to_string()],
-            when_all_rule_ids: vec!["rule.synthetic".to_string()],
-            link: Some(link()),
-            falsepositives: vec!["none".to_string()],
-            explanation: "modifier explanation".to_string(),
-            enabled: true,
-        };
-        let fingerprint = |modifier: ModifierDefinition| {
-            rule_v1_fingerprint(&compiled(rule(), vec![modifier]).compatibility_export())
-        };
-        let base = fingerprint(modifier());
-        for mutate in [
-            |value: &mut ModifierDefinition| value.id = "chain.other".to_string(),
-            |value: &mut ModifierDefinition| value.score = 8,
-            |value: &mut ModifierDefinition| value.detection_class = "policy_violation".to_string(),
-            |value: &mut ModifierDefinition| value.signal_type = "correlation".to_string(),
-            |value: &mut ModifierDefinition| value.analytic_intent = "audit".to_string(),
-            |value: &mut ModifierDefinition| value.atlas_tags.push("atlas:B".to_string()),
-            |value: &mut ModifierDefinition| value.when_all_categories.push("other".to_string()),
-            |value: &mut ModifierDefinition| value.when_all_rule_ids.push("rule.other".to_string()),
-            |value: &mut ModifierDefinition| value.explanation = "other".to_string(),
-            |value: &mut ModifierDefinition| value.link = None,
-            |value: &mut ModifierDefinition| {
-                value.link = Some(ModifierLink { calls: 2, ..link() });
-            },
-            |value: &mut ModifierDefinition| {
-                value.link = Some(ModifierLink {
-                    order: ModifierLinkOrder::Any,
-                    ..link()
-                });
-            },
-            |value: &mut ModifierDefinition| {
-                value.link = Some(ModifierLink {
-                    minutes: Some(15),
-                    ..link()
-                });
-            },
+        let base = fingerprint(&[rule(), modifier()]);
+        for (from, to) in [
+            ("name: chain.synthetic", "name: chain.other"),
+            ("score: 7", "score: 8"),
+            (
+                "    explanation: modifier explanation",
+                "    explanation: modifier explanation\n    detection_class: policy_violation",
+            ),
+            (
+                "    explanation: modifier explanation",
+                "    explanation: modifier explanation\n    signal_type: correlation",
+            ),
+            (
+                "    explanation: modifier explanation",
+                "    explanation: modifier explanation\n    analytic_intent: audit",
+            ),
+            ("tags: [atlas.a]", "tags: [atlas.a, atlas.b]"),
+            ("rules: [rule.synthetic]", "categories: [execution]"),
+            (
+                "rules: [rule.synthetic]",
+                "rules: [rule.synthetic, rule.other]",
+            ),
+            ("explanation: modifier explanation", "explanation: other"),
+            ("    within_calls: 3\n", ""),
+            ("within_calls: 3", "within_calls: 2"),
+            ("within_calls: 3", "within_calls: 3\n    order: any"),
         ] {
-            let mut changed = modifier();
-            mutate(&mut changed);
-            assert_ne!(base, fingerprint(changed));
+            let changed = modifier().replacen(from, to, 1);
+            assert_ne!(changed, modifier(), "{from}");
+            assert_ne!(base, fingerprint(&[rule(), changed]), "{from} -> {to}");
         }
+        // A minutes cap has no Rule v2 spelling; the compiled form keeps it
+        // in the fingerprint.
+        let export = load_rule_set_from_documents(&[file(&[rule(), modifier()]).as_str()], None)
+            .unwrap()
+            .compatibility_export();
+        assert_eq!(rule_v1_fingerprint(&export), base);
+        assert_ne!(
+            rule_v1_fingerprint(&export.with_modifier("chain.synthetic", |modifier| {
+                if let Some(link) = &mut modifier.link {
+                    link.minutes = Some(15);
+                }
+            })),
+            base
+        );
     }
 
     #[test]
     fn policy_names_are_not_part_of_ruleset_identity() {
-        let policy_a = RulePolicy {
-            name: Some("policy-a".to_string()),
-            ..RulePolicy::default()
+        let compiled = |name: &str| {
+            let policy = RulePolicy {
+                name: Some(name.to_string()),
+                ..RulePolicy::default()
+            };
+            crate::LoadedRules::parse(&rule())
+                .unwrap()
+                .compile(Some(&policy))
+                .expect("compiled")
         };
-        let policy_b = RulePolicy {
-            name: Some("policy-b".to_string()),
-            ..RulePolicy::default()
-        };
-        let mut selection = BTreeMap::new();
-        selection.insert("command".to_string(), "synthetic".to_string());
-        let mut selected_rule = rule();
-        selected_rule.targets.clear();
-        selected_rule.regex = None;
-        selected_rule.detection = Some(DetectionDefinition {
-            selection,
-            exclude: BTreeMap::new(),
-            condition: "selection".to_string(),
-            scope: crate::MatchScope::Field,
-        });
-        let first = RuleSet {
-            version: 1,
-            description: "test".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: vec![selected_rule.clone()],
-            modifiers: Vec::new(),
-        }
-        .compile(Some(&policy_a))
-        .expect("compiled policy a");
-        let second = RuleSet {
-            version: 1,
-            description: "test".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: vec![selected_rule],
-            modifiers: Vec::new(),
-        }
-        .compile(Some(&policy_b))
-        .expect("compiled policy b");
+        let (first, second) = (compiled("policy-a"), compiled("policy-b"));
         assert_eq!(first.policy_name(), Some("policy-a"));
         assert_eq!(second.policy_name(), Some("policy-b"));
         assert_eq!(

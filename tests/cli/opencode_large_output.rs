@@ -18,33 +18,41 @@ fn opencode_large_output_wal_restart_and_persistence_recovery() {
     fs::write(
         &rules,
         r#"
-version: 1
-description: Synthetic full output coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.output.suffix
-    title: Synthetic output suffix
-    tags: [synthetic]
+title: Synthetic output suffix
+id: 6b8c7500-2933-4afa-89f8-d94d57203e16
+name: synthetic.output.suffix
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-output-suffix-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        tool_result: 'synthetic-output-suffix-marker'
-      condition: selection
-    explanation: Synthetic test.
-  - id: synthetic.output.second
-    title: Second synthetic output attribution
+    explanation: 'Synthetic test.'
     tags: [synthetic]
+---
+title: Second synthetic output attribution
+id: a9d01418-24eb-4de6-8623-52fe62a57cb8
+name: synthetic.output.second
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-output-suffix-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 10
-    detection:
-      selection:
-        tool_result: 'synthetic-output-suffix-marker'
-      condition: selection
-    explanation: Synthetic repeated evidence material.
+    explanation: 'Synthetic repeated evidence material.'
+    tags: [synthetic]
 "#,
     )
     .unwrap();

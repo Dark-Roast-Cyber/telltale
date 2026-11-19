@@ -38,22 +38,23 @@ impl Harness {
         fs::write(
             &rules,
             r#"
-version: 1
-description: Synthetic cursor reset coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.reset
-    title: Synthetic cursor reset marker
-    tags: [synthetic]
+title: Synthetic cursor reset marker
+id: 0b47d07a-8fa6-4cb7-80bd-2d6902dd5e68
+name: synthetic.reset
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re: 'synthetic-reset-marker'
+    condition: selection_command
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        command: 'synthetic-reset-marker'
-      condition: selection
-    explanation: Synthetic test.
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
 "#,
         )
         .unwrap();

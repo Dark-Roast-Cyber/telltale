@@ -120,7 +120,7 @@ mod tests {
     fn effective_exclusion_changes_rules_and_manifest_identity() {
         let document = |exclusion: &str| {
             format!(
-                "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: low\n    score: 20\n    detection:\n      selection:\n        command: synthetic-command\n      exclude:\n        command: {exclusion}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic explanation\nmodifiers: []\n"
+                "title: synthetic explanation\nid: ae1f897e-d152-448a-8f35-1cfb169b06cf\nname: rule.synthetic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection_command:\n        tool.command|re: 'synthetic-command'\n    filter_command:\n        tool.command|re: '{exclusion}'\n    condition: selection_command and not filter_command\nlevel: low\ntelltale:\n    category: execution\n    score: 20\n    explanation: 'synthetic explanation'\n    tags: [synthetic]\n"
             )
         };
         let first = load_rule_set_from_documents(&[&document("benign-a")], None).expect("first");
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn policy_name_changes_full_identity_but_not_ruleset_identity() {
-        let rules_document = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: low\n    score: 20\n    targets: [command]\n    regex: synthetic-command\n    tags: [synthetic]\n    explanation: synthetic explanation\nmodifiers: []\n";
+        let rules_document = "title: synthetic explanation\nid: ae1f897e-d152-448a-8f35-1cfb169b06cf\nname: rule.synthetic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'synthetic-command'\n    condition: selection\nlevel: low\ntelltale:\n    category: execution\n    score: 20\n    explanation: 'synthetic explanation'\n    tags: [synthetic]\n";
         let policy_a = "version: 1\nname: policy.a\n";
         let policy_b = "version: 1\nname: policy.b\n";
         let rules_a = load_rule_set_from_documents(&[rules_document], Some(policy_a))

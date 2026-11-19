@@ -1,11 +1,11 @@
-version: 1
-description: First equal-tier modifier conflict fixture.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules: []
-modifiers:
-  - id: pack.modifier.conflict
+# First equal-tier modifier conflict fixture.
+title: Synthetic modifier conflict
+id: 8fa5eb18-b697-4366-a117-7225ccfd9ce8
+name: pack.modifier.conflict
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [pack_test]
+telltale:
     score: 1
-    when_all_categories: [pack_test]
-    explanation: Synthetic modifier conflict.
+    explanation: 'Synthetic modifier conflict.'

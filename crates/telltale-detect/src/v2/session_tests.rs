@@ -51,13 +51,11 @@ fn work_budget_control_rules_do_not_scan_unrelated_authored_arguments() {
             < telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES
     );
     let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
-    for target in ["arguments", "tool_name"] {
-        let definitions = (0..40)
-            .map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [{target}]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n"))
-            .collect::<String>();
-        let document = format!(
-            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n{definitions}modifiers: []\n"
-        );
+    for (target, field) in [("arguments", "tool.arguments"), ("tool_name", "tool.name")] {
+        let document = (0..40)
+            .map(|index| synthetic_never_match_rule(index, field))
+            .collect::<Vec<_>>()
+            .join("---\n");
         let rules = telltale_rules::load_rule_set_from_documents(&[&document], None).unwrap();
         let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
         let work = EvaluationWorkBudget::default();
@@ -553,20 +551,46 @@ fn message_with_correlation(
 }
 
 fn plan(modifier_score: u64) -> super::RuleV1CompatibilityPlan {
-    let document = format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers:\n  - id: chain.synthetic\n    score: {modifier_score}\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: audit\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n"
-    );
+    let document = "title: synthetic\nid: 2f33e0ea-6afb-4a33-84ae-7fa76ce268cb\nname: synthetic.atomic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n---\ntitle: synthetic\nid: 1ba8e050-4895-4b15-82c3-84ee5647cbc9\nname: chain.synthetic\ntaxonomy: telltale\ncorrelation:\n    type: telltale_chain\n    rules: [synthetic.atomic]\ntelltale:\n    score: 0\n    explanation: 'synthetic'\n    analytic_intent: audit\n    detection_class: security_detection\n    signal_type: chain\n";
+    // Rule v2 caps a score at 100; the compiled form takes any score.
     compile_rule_v1(
-        &telltale_rules::load_rule_set_from_documents(&[&document], None)
+        &telltale_rules::load_rule_set_from_documents(&[document], None)
             .unwrap()
-            .compatibility_export(),
+            .compatibility_export()
+            .with_modifier("chain.synthetic", |modifier| {
+                modifier.score = modifier_score
+            }),
     )
     .unwrap()
 }
 
 fn target_plan(targets: &str, regex: &str) -> super::RuleV1CompatibilityPlan {
+    // `targets` lists compiled target names; each reads the Rule v2 field that
+    // compiles to it.
+    let selection = targets
+        .split(", ")
+        .enumerate()
+        .map(|(index, target)| {
+            let field = match target {
+                "command" => "tool.command",
+                "url" => "tool.url",
+                "user_context" => "message.user_text",
+                other => panic!("unmapped target {other}"),
+            };
+            if index == 0 {
+                format!("        - {field}|re: &pattern '{regex}'\n")
+            } else {
+                format!("        - {field}|re: *pattern\n")
+            }
+        })
+        .collect::<String>();
+    let category = match (selection.contains("tool."), selection.contains("message.")) {
+        (true, true) => "agent_activity",
+        (false, true) => "message",
+        _ => "tool_activity",
+    };
     let document = format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.target\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [{targets}]\n    regex: {regex}\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n"
+        "title: synthetic\nid: 1523429f-99fb-4ca1-85ff-dfa1ea08477d\nname: synthetic.target\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: {category}\ndetection:\n    selection:\n{selection}    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n"
     );
     compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&document], None)
@@ -710,9 +734,10 @@ fn evaluation_work_is_charged_for_no_matches_and_never_reset_between_detectors()
             )
         })
         .collect::<Vec<_>>();
-    let base = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n";
-    let rules = (0..40).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
-    let document = format!("{base}{rules}modifiers: []\n");
+    let documents = (0..40)
+        .map(|index| synthetic_never_match_rule(index, "message.user_text"))
+        .collect::<Vec<_>>();
+    let document = documents.join("---\n");
     let rules = compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&document], None)
             .unwrap()
@@ -723,12 +748,7 @@ fn evaluation_work_is_charged_for_no_matches_and_never_reset_between_detectors()
         evaluate(&observations, &rules),
         Err(ProcessingError::Bounds)
     ));
-    let half_document = document
-        .split("  - id: synthetic.no10\n")
-        .next()
-        .unwrap()
-        .to_owned()
-        + "modifiers: []\n";
+    let half_document = documents[..10].join("---\n");
     let half_rules = compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&half_document], None)
             .unwrap()
@@ -979,7 +999,7 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
 
 #[test]
 fn event3_aggregates_one_deterministic_anchor_per_occurrence() {
-    let document = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.alpha\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [arguments, tool_name]\n    regex: shell\n    tags: [synthetic]\n    explanation: synthetic\n  - id: synthetic.beta\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 2\n    targets: [arguments]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers:\n  - id: chain.synthetic_both\n    score: 3\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: audit\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.alpha, synthetic.beta]\n    explanation: synthetic\n";
+    let document = "title: synthetic\nid: 7a02cd2b-4f01-4a02-8ba6-5de7618c40b2\nname: synthetic.alpha\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.arguments|re: &pattern 'shell'\n        - tool.name|re: *pattern\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n---\ntitle: synthetic\nid: 07accc6a-2c10-4c59-82a0-1ae67c726ef6\nname: synthetic.beta\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.arguments|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 2\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n---\ntitle: synthetic\nid: 87dc6578-a998-43b8-832a-62596015a375\nname: chain.synthetic_both\ntaxonomy: telltale\ncorrelation:\n    type: telltale_chain\n    rules: [synthetic.alpha, synthetic.beta]\ntelltale:\n    score: 3\n    explanation: 'synthetic'\n    analytic_intent: audit\n    detection_class: security_detection\n    signal_type: chain\n";
     let anchor_plan = compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[document], None)
             .unwrap()
@@ -1636,9 +1656,9 @@ fn event3_projection_budget_failure_is_atomic() {
 
 #[test]
 fn event3_occurrence_modifier_copies_are_preflight_charged() {
-    let mut document = "version: 1\ndescription: synthetic\ndefaults: { case_insensitive: false, enabled: true }\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n".to_owned();
+    let mut document = "title: synthetic\nid: 2f33e0ea-6afb-4a33-84ae-7fa76ce268cb\nname: synthetic.atomic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n".to_owned();
     for index in 0..30 {
-        document.push_str(&format!("  - id: chain.synthetic_{index}\n    score: 0\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n"));
+        document.push_str(&format!("---\ntitle: synthetic {index}\nid: 00000000-0000-4000-8000-{index:012}\nname: chain.synthetic_{index}\ntaxonomy: telltale\ncorrelation:\n    type: telltale_chain\n    rules: [synthetic.atomic]\ntelltale:\n    score: 0\n    explanation: synthetic\n"));
     }
     let plan = compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&document], None)
@@ -2119,4 +2139,20 @@ fn detection_event_whose_anchors_alone_exceed_the_limit_fails_projection() {
         super::event3::project_event3(&evaluation.unwrap(), &context()),
         Err(ProcessingError::Projection)
     ));
+}
+
+/// Rule `synthetic.no{index}`: one never-matching selection on `field`.
+fn synthetic_never_match_rule(index: usize, field: &str) -> String {
+    let category = if field.starts_with("message.") {
+        "message"
+    } else {
+        "tool_activity"
+    };
+    format!(
+        "title: Synthetic {index}\nid: 00000000-0000-4000-8000-{index:012}\nname: synthetic.no{index}\n\
+         taxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: {category}\n\
+         detection:\n    selection:\n        - {field}|re: NEVER-MATCH\n    condition: selection\n\
+         level: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: synthetic\n\
+         \x20   analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n"
+    )
 }

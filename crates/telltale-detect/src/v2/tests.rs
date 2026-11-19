@@ -1484,69 +1484,99 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
 
 fn rule_v1_session_plan() -> RuleV1CompatibilityPlan {
     let document = r#"
-version: 1
-description: synthetic session compatibility
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: synthetic.alpha
+title: alpha rationale
+id: 7a02cd2b-4f01-4a02-8ba6-5de7618c40b2
+name: synthetic.alpha
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'alpha'
+    condition: selection
+level: low
+tags:
+    - atlas.aml.t0001
+telltale:
     category: alpha
+    score: 7
+    explanation: 'alpha rationale'
+    analytic_intent: alert
     detection_class: security_detection
     signal_type: atomic
-    analytic_intent: alert
-    severity: low
-    score: 7
-    targets: [assistant_context]
-    regex: alpha
     tags: [tag:alpha]
-    atlas_tags: [atlas:AML.T0001]
-    explanation: alpha rationale
-  - id: synthetic.beta
+---
+title: beta rationale
+id: 07accc6a-2c10-4c59-82a0-1ae67c726ef6
+name: synthetic.beta
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'beta'
+    condition: selection
+level: medium
+tags:
+    - atlas.aml.t0002
+telltale:
     category: beta
+    score: 0
+    explanation: 'beta rationale'
+    analytic_intent: hunt
     detection_class: threat_hunting
     signal_type: atomic
-    analytic_intent: hunt
-    severity: medium
-    score: 0
-    targets: [assistant_context]
-    regex: beta
     tags: [tag:beta]
-    atlas_tags: [atlas:AML.T0002]
-    explanation: beta rationale
-modifiers:
-  - id: chain.categories
+---
+title: category rationale
+id: 5991de8b-bb59-4184-807d-d3a9e17a11e0
+name: chain.categories
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [alpha, beta]
+tags:
+    - atlas.aml.t0003
+telltale:
     score: 9
+    explanation: 'category rationale'
+    analytic_intent: audit
     detection_class: policy_violation
     signal_type: chain
-    analytic_intent: audit
-    atlas_tags: [atlas:AML.T0003]
-    when_all_categories: [alpha, beta]
-    explanation: category rationale
-  - id: chain.rules
+---
+title: rule rationale
+id: 8b5542bf-0676-443c-8a31-62b597541bd2
+name: chain.rules
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [synthetic.alpha, synthetic.beta]
+tags:
+    - atlas.aml.t0004
+telltale:
     score: 0
+    explanation: 'rule rationale'
+    analytic_intent: audit
     detection_class: compliance_observation
     signal_type: chain
-    analytic_intent: audit
-    atlas_tags: [atlas:AML.T0004]
-    when_all_rule_ids: [synthetic.alpha, synthetic.beta]
-    explanation: rule rationale
-  - id: chain.combined
+---
+title: combined rationale
+id: de963e6a-4ce3-4bdc-8e37-387d614e2284
+name: chain.combined
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [synthetic.alpha, synthetic.beta]
+tags:
+    - atlas.aml.t0005
+telltale:
     score: 11
+    explanation: 'combined rationale'
+    analytic_intent: audit
     detection_class: security_detection
     signal_type: chain
-    analytic_intent: audit
-    atlas_tags: [atlas:AML.T0005]
-    when_all_categories: [alpha, beta]
-    when_all_rule_ids: [synthetic.alpha, synthetic.beta]
-    explanation: combined rationale
-  - id: chain.empty
-    score: 13
-    detection_class: security_detection
-    signal_type: chain
-    analytic_intent: audit
-    atlas_tags: []
-    explanation: empty rationale
 "#;
     let export = telltale_rules::load_rule_set_from_documents(&[document], None)
         .expect("session rules")
@@ -1688,13 +1718,14 @@ fn rule_v1_session_modifier_conditions_and_empty_session_are_bounded() {
 
 #[test]
 fn rule_v1_session_compatibility_score_overflow_fails_closed() {
-    let document = format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [assistant_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n  - id: chain.overflow\n    score: {}\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: audit\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n",
-        u64::MAX
+    let document = String::from(
+        "title: synthetic\nid: 2f33e0ea-6afb-4a33-84ae-7fa76ce268cb\nname: synthetic.atomic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.assistant_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n---\ntitle: synthetic\nid: 8480a708-8d36-407e-8e3e-d744914e0e1f\nname: chain.overflow\ntaxonomy: telltale\ncorrelation:\n    type: telltale_chain\n    rules: [synthetic.atomic]\ntelltale:\n    score: 0\n    explanation: 'synthetic'\n    analytic_intent: audit\n    detection_class: security_detection\n    signal_type: chain\n",
     );
     let export = telltale_rules::load_rule_set_from_documents(&[&document], None)
         .expect("overflow rules")
-        .compatibility_export();
+        .compatibility_export()
+        // Rule v2 caps a score at 100; the compiled form takes any score.
+        .with_modifier("chain.overflow", |modifier| modifier.score = u64::MAX);
     let plan = compile_rule_v1(&export).expect("overflow plan");
     let observation = message(MessageRole::Assistant, "needle", "overflow");
     assert!(matches!(
@@ -2652,23 +2683,26 @@ fn fixed_identity_vector_matches_architecture_tuple() {
 #[test]
 fn effective_rule_export_preserves_defaults_and_fails_closed_on_unmappable_class() {
     let document = r#"
-version: 1
-description: synthetic
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: synthetic.case
+title: synthetic explanation
+id: 316347a2-e10a-4ebb-8bfb-7a9077069766
+name: synthetic.case
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.name|re|i: 'SHELL'
+    condition: selection
+level: high
+tags:
+    - atlas.aml.t0051
+telltale:
     category: synthetic
-    detection_class: security_detection
-    severity: high
     score: 25
-    targets: [tool_name]
-    regex: SHELL
+    explanation: 'synthetic explanation'
+    detection_class: security_detection
     tags: [synthetic]
-    atlas_tags: [atlas:AML.T0051]
-    explanation: synthetic explanation
-modifiers: []
 "#;
     let export = telltale_rules::load_rule_set_from_documents(&[document], None)
         .expect("custom rules")
@@ -2735,26 +2769,27 @@ overrides:
 #[test]
 fn rule_v1_target_exclusion_uses_shared_content_matcher() {
     let document = r#"
-version: 1
-description: synthetic exclusion
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: synthetic.exclusion
+title: synthetic
+id: a4f140fe-69db-4856-83e5-01f57451bec9
+name: synthetic.exclusion
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: agent_activity
+detection:
+    selection_arguments:
+        tool.arguments|re|i: 'needle'
+    selection_assistant_context:
+        message.assistant_text|re|i: 'needle'
+    filter_assistant_context:
+        message.assistant_text|re|i: 'quoted example'
+    condition: selection_arguments or (selection_assistant_context and not filter_assistant_context)
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 10
-    detection:
-      selection:
-        assistant_context: needle
-        arguments: needle
-      exclude:
-        assistant_context: quoted example
-      condition: selection
+    explanation: 'synthetic'
     tags: [synthetic]
-    explanation: synthetic
-modifiers: []
 "#;
     let export = telltale_rules::load_rule_set_from_documents(&[document], None)
         .expect("custom rules")

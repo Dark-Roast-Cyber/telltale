@@ -13,27 +13,41 @@ use telltale_sources::acquisition::{
 };
 
 const PRIVATE: &str = "SYNTHETIC-GAPS-PRIVATE";
-const RULES: &str = r#"version: 1
-description: Synthetic Codex record conformance, not an efficacy label.
-defaults: {enabled: true, case_insensitive: false}
-rules:
-  - id: synthetic.search
+const RULES: &str = r#"title: Synthetic search action
+id: ae19c01a-2b98-4863-854f-1bc7d90dc7ee
+name: synthetic.search
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.arguments|re: 'gap-search-needle'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 3
-    targets: [arguments]
-    regex: gap-search-needle
+    explanation: 'Synthetic search action.'
     tags: [synthetic]
-    explanation: Synthetic search action.
-  - id: synthetic.assistant
+---
+title: Synthetic assistant text
+id: 660adacb-4725-4d18-8d52-5242458b594a
+name: synthetic.assistant
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'gap-assistant-needle'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 3
-    targets: [assistant_context]
-    regex: gap-assistant-needle
+    explanation: 'Synthetic assistant text.'
     tags: [synthetic]
-    explanation: Synthetic assistant text.
-modifiers: []
 "#;
 
 fn write(source: &Source, values: &[Value]) {

@@ -71,10 +71,9 @@ impl RuleResolution {
 /// other tier already has is an error. `replacements` is text to use in place
 /// of reading a named file (a rule, package, override or policy file).
 ///
-/// Every file is one Rule v1 document or one or more Rule v2 documents.
+/// Every file is one or more Rule v2 documents; a Rule v1 document fails.
 /// Definitions merge by compiled id (the Rule v2 `name`): a higher tier
-/// replaces a lower one in place, and a Rule v2 definition that replaces a
-/// Rule v2 definition must keep its UUID. An id twice within one tier, or a
+/// replaces a lower one in place, and must keep its UUID. An id twice within one tier, or a
 /// UUID on two names, is an error.
 pub fn resolve_rule_set(
     pack_paths: &RulePackPaths,

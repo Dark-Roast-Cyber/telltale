@@ -13,44 +13,59 @@ const SUBAGENT: &str = "01a10000-0000-7000-8000-00000000000c";
 const CHILD: &str = "01a10000-0000-7000-8000-00000000000d";
 const SECRET: &str = "SYNTHETIC-CODEX-OUTPUT-SECRET";
 const RULES: &str = r#"
-version: 1
-description: Synthetic Codex coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.codex.exec_result
-    title: Synthetic Codex exec result marker
-    tags: [synthetic]
+title: Synthetic Codex exec result marker
+id: efcebac7-dfa6-4f78-8ec8-70b8cd8f3c9b
+name: synthetic.codex.exec_result
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-codex-exec-result-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 60
-    detection:
-      selection:
-        tool_result: 'synthetic-codex-exec-result-marker'
-      condition: selection
-    explanation: Synthetic test.
-  - id: synthetic.codex.command_output
-    title: Synthetic Codex command output marker
+    explanation: 'Synthetic test.'
     tags: [synthetic]
+---
+title: Synthetic Codex command output marker
+id: d3a6494f-3164-4faf-837b-86a5d007df64
+name: synthetic.codex.command_output
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-codex-command-output-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 50
-    detection:
-      selection:
-        tool_result: 'synthetic-codex-command-output-marker'
-      condition: selection
-    explanation: Synthetic test.
-  - id: synthetic.codex.child_result
-    title: Synthetic Codex subagent result marker
+    explanation: 'Synthetic test.'
     tags: [synthetic]
+---
+title: Synthetic Codex subagent result marker
+id: 4c5b9bdc-c52c-4d0b-8c74-c4c035dbd03f
+name: synthetic.codex.child_result
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-codex-child-result-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 50
-    detection:
-      selection:
-        tool_result: 'synthetic-codex-child-result-marker'
-      condition: selection
-    explanation: Synthetic test.
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
 "#;
 
 fn rollout(first: u64, records: Vec<Value>) -> String {

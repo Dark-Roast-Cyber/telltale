@@ -203,8 +203,8 @@ second detector or an Event 3 conversion loop.
   watch, debounce, backfill, persist seen state, cursors, or baselines, or deliver
   anything. One observation clock covers the batch.
 - `build()` compiles canonical semantics once; keep one long-lived `Pipeline`.
-  Rule content that loads as Rule v1 but that canonical compilation rejects
-  fails `build()` with `Compilation`, so a built `Pipeline` can always scan.
+  Rule content that loads but that canonical compilation rejects fails
+  `build()` with `Compilation`, so a built `Pipeline` can always scan.
 - `DetailedEvaluationOptions` holds `context` (same-pass context),
   `linked_download_score` (0–100), and `process_chain`, which opts into the
   bundled process pack in the same pass, never a second pass or a replay. There
@@ -966,8 +966,10 @@ Analyzer extensions are a separate future protocol and are not implemented.
 - Other public APIs in `telltale-schema`, `telltale-sources`, `telltale-detect`,
   and `telltale-rules` are usable foundations without a blanket compatibility
   promise. Canonical Observation v2 and Detection v2 are semantic contracts, not a
-  source-adapter or detector plugin ABI. Rule v1 documents remain supported
-  content regardless of the `telltale-rules` Rust API.
+  source-adapter or detector plugin ABI. Rule v2 documents are supported
+  content regardless of the `telltale-rules` Rust API; Rule v1 documents no
+  longer load. The `rule_v1`, `RuleV1*` and `compat.v1.*` names that remain
+  name the compiled rule form, not an authoring format.
 - `telltale-detect` works without source I/O when its default `source-io` feature
   is disabled.
 - Public visibility alone does not authorize removing these modules or weakening

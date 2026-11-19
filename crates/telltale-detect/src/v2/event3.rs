@@ -1311,7 +1311,7 @@ mod tests {
     fn unsafe_short_session_terminal_expansion_is_preflight_charged() {
         use super::super::session::MAX_COMPATIBILITY_RETAINED_BYTES;
         let plan = super::super::compile_rule_v1(
-            &telltale_rules::load_rule_set_from_documents(&["version: 1\ndescription: synthetic\ndefaults: { enabled: true, case_insensitive: false }\nrules:\n  - { id: synthetic.session, category: synthetic, severity: low, score: 1, targets: [user_context], regex: needle, tags: [], explanation: synthetic }\nmodifiers: []\n"], None).unwrap().compatibility_export()
+            &telltale_rules::load_rule_set_from_documents(&["title: synthetic\nid: 3f36ebc7-8364-403d-8e23-78e6761a7e59\nname: synthetic.session\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n"], None).unwrap().compatibility_export()
         ).unwrap();
         let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
         let evaluate = |session: &str| {

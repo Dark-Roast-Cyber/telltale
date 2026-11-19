@@ -710,7 +710,7 @@ fn scan_dry_run_reports_selected_source_coverage_without_private_details() {
     let log = temp.path().join("events.jsonl");
     let state = temp.path().join("state.json");
     let rules = temp.path().join("rules.yaml");
-    fs::write(&rules, "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.coverage\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    detection:\n      selection: {user_context: NEVER-MATCH}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n").unwrap();
+    fs::write(&rules, "title: synthetic\nid: cf07a880-903b-4121-8cfc-1fdfbfe9c3ab\nname: synthetic.coverage\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection_user_context:\n        message.user_text|re: 'NEVER-MATCH'\n    condition: selection_user_context\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n").unwrap();
     let scan = || {
         let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
@@ -873,7 +873,7 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
     let rules = temp.path().join("rules.yaml");
     let log = temp.path().join("events.jsonl");
     let state = temp.path().join("state.json");
-    fs::write(&rules, "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.long\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 3\n    detection:\n      selection: {user_context: 'needle|first\\nsecond'}\n      exclude: {user_context: EXCLUDE}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n").unwrap();
+    fs::write(&rules, "title: synthetic\nid: 40e160ed-a389-485c-8031-d5f241a1be99\nname: synthetic.long\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection_user_context:\n        message.user_text|re: 'needle|first\\nsecond'\n    filter_user_context:\n        message.user_text|re: 'EXCLUDE'\n    condition: selection_user_context and not filter_user_context\nlevel: low\ntelltale:\n    category: synthetic\n    score: 3\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n").unwrap();
     let text = format!(
         "api_key=SYNTHETIC-CLI-LONG-SECRET {}needle",
         "ordinary ".repeat(1_000)
@@ -984,9 +984,11 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
     // Individually valid messages still fail atomically when repeated no-match
     // scans cost more source-wide work than the bytes read admit.
     let document = fs::read_to_string(&rules).unwrap();
-    let header = document.split("rules:\n").next().unwrap();
-    let repeated = (0..512).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
-    fs::write(&rules, format!("{header}rules:\n{repeated}modifiers: []\n")).unwrap();
+    let repeated = (0..512)
+        .map(|index| format!("title: Synthetic {index}\nid: 00000000-0000-4000-8000-{index:012}\nname: synthetic.no{index}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: NEVER-MATCH\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: synthetic\n"))
+        .collect::<Vec<_>>()
+        .join("---\n");
+    fs::write(&rules, &repeated).unwrap();
     let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(60_000)}).to_string();
     fs::write(&source, format!("{}\n", vec![record; 16].join("\n"))).unwrap();
     let offset = fs::metadata(&log).unwrap().len() as usize;
@@ -1015,13 +1017,7 @@ fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence
     );
     // The punctuation records alone cost about 200 byte visits per byte read,
     // within the scaled budget; with the no-match rules they exceed it.
-    let original = document.split("rules:\n").nth(1).unwrap();
-    let original = original.trim_end_matches("modifiers: []\n");
-    fs::write(
-        &rules,
-        format!("{header}rules:\n{original}{repeated}modifiers: []\n"),
-    )
-    .unwrap();
+    fs::write(&rules, format!("{document}---\n{repeated}")).unwrap();
     let record =
         serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":punctuation})
             .to_string();
@@ -3926,22 +3922,23 @@ fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
     fs::write(
         &rules_path,
         r#"
-version: 1
-description: Synthetic page-two recovery test.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.recovery.page_two
-    title: Synthetic recovery marker
-    tags: [synthetic]
+title: Synthetic recovery marker
+id: ad0a4a30-30a1-4404-8fa0-a2728329c9dc
+name: synthetic.recovery.page_two
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection_assistant_context:
+        message.assistant_text|re: 'synthetic-page-two-security-marker'
+    condition: selection_assistant_context
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        assistant_context: 'synthetic-page-two-security-marker'
-      condition: selection
-    explanation: Synthetic persisted recovery evidence.
+    explanation: 'Synthetic persisted recovery evidence.'
+    tags: [synthetic]
 "#,
     )
     .unwrap();

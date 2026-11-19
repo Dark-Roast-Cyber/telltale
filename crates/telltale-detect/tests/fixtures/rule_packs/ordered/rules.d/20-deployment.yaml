@@ -1,23 +1,36 @@
-version: 1
-description: Synthetic deployment rule pack.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: secret.env.read
+# Synthetic deployment rule pack.
+title: Synthetic replacement for the bundled secret rule
+id: 416a6e7f-29bd-470c-bf0e-a1a24646a288
+name: secret.env.read
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'fixture-secret-marker'
+    condition: selection
+level: high
+telltale:
     category: secret_access
-    severity: high
     score: 77
-    targets: [command]
-    regex: 'fixture-secret-marker'
+    explanation: 'Synthetic replacement for the bundled secret rule.'
     tags: [fixture, replacement]
-    explanation: Synthetic replacement for the bundled secret rule.
-  - id: pack.deployment
+---
+title: Synthetic deployment rule
+id: 52a80838-036a-496c-9b5a-3c98e100b064
+name: pack.deployment
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'deployment-marker'
+    condition: selection
+level: medium
+telltale:
     category: pack_test
-    severity: medium
     score: 22
-    targets: [command]
-    regex: 'deployment-marker'
+    explanation: 'Synthetic deployment rule.'
     tags: [fixture]
-    explanation: Synthetic deployment rule.
-modifiers: []

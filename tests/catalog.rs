@@ -24,8 +24,7 @@ use telltale_rules::rule_v2::{
     RULE_V2_PRODUCT, RULE_V2_TAXONOMY, SCOPE_MODIFIERS, STATUSES, VALUE_MODIFIERS,
 };
 use telltale_rules::{
-    LoadedRules, MAX_MODIFIER_LINK_CALLS, MAX_PATTERN_BYTES, SEGMENT_SCOPE_TARGETS,
-    load_rule_set_from_documents,
+    MAX_MODIFIER_LINK_CALLS, MAX_PATTERN_BYTES, SEGMENT_SCOPE_TARGETS, load_rule_set_from_documents,
 };
 use telltale_schema::event::{
     VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_DETECTION_SEVERITIES, VALID_SEVERITIES,
@@ -607,20 +606,12 @@ fn check_example(example: &Example) -> Result<(), String> {
         };
     }
     let document = example_document(text);
-    let (error, notices) = match LoadedRules::parse(&document) {
+    let (error, notices) = match load_rule_set_from_documents(&[&document], None) {
         Err(error) => (Some(error.to_string()), Vec::new()),
-        Ok(loaded) => {
-            if let Some(definition) = loaded.definitions().iter().find(|d| !d.is_rule_v2()) {
-                return Err(format!("`{}` is not Rule v2", definition.id()));
-            }
-            match load_rule_set_from_documents(&[&document], None) {
-                Err(error) => (Some(error.to_string()), Vec::new()),
-                Ok(rules) => (
-                    None,
-                    rules.notices().iter().map(|notice| notice.kind).collect(),
-                ),
-            }
-        }
+        Ok(rules) => (
+            None,
+            rules.notices().iter().map(|notice| notice.kind).collect(),
+        ),
     };
     expect_outcome(marker, error, notices)
 }

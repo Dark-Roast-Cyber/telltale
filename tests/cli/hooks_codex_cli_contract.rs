@@ -55,7 +55,7 @@ fn canary_rules(dir: &Path) -> PathBuf {
     let path = dir.join("canary-rules.yaml");
     std::fs::write(
         &path,
-        "version: 1\ndescription: test canary\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: tth.test.canary\n    title: Capture canary\n    category: e2e_test\n    severity: critical\n    score: 95\n    targets: [command]\n    regex: 'TTH_CANARY'\n    tags: [test-only]\n    explanation: Test-only canary.\nmodifiers: []\n",
+        "title: Capture canary\nid: c550d179-3e68-459b-8a04-7f73294cf3c7\nname: tth.test.canary\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'TTH_CANARY'\n    condition: selection\nlevel: critical\ntelltale:\n    category: e2e_test\n    score: 95\n    explanation: 'Test-only canary.'\n    tags: [test-only]\n",
     )
     .unwrap();
     path

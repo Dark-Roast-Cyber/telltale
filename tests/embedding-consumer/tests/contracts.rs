@@ -777,7 +777,7 @@ fn linked_action_catalog_policy_scores_and_startup_rebaseline_are_explicit() {
     );
     private_output(&format!("{startup:?}"));
     assert!(!startup.identity().is_empty() && !startup.effective_rule_fingerprint().is_empty());
-    let custom_rule = "version: 1\ndescription: synthetic\ndefaults: {enabled: true, case_insensitive: false}\nrules:\n  - id: synthetic.custom\n    category: synthetic\n    severity: high\n    score: 7\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
+    let custom_rule = "title: synthetic\nid: fc07ae96-8b7f-4c85-851f-aca27379e32e\nname: synthetic.custom\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'needle'\n    condition: selection\nlevel: high\ntelltale:\n    category: synthetic\n    score: 7\n    explanation: 'synthetic'\n";
     let custom_source = source(
         root.path(),
         "custom.jsonl",
@@ -791,8 +791,10 @@ fn linked_action_catalog_policy_scores_and_startup_rebaseline_are_explicit() {
         .unwrap();
     let custom_provenance = custom_pipeline.semantic_provenance(&options()).unwrap();
     let presentation = custom_rule
-        .replace("description: synthetic", "description: other source description")
-        .replace("    category: synthetic", "    title: Other display title\n    description: Other rule description\n    falsepositives: [Other guidance]\n    category: synthetic")
+        .replace(
+            "title: synthetic\n",
+            "title: Other display title\ndescription: Other rule description\nfalsepositives: [Other guidance]\n",
+        )
         .replace('\n', "\r\n");
     let presented = Pipeline::builder()
         .without_bundled_defaults()
@@ -804,7 +806,7 @@ fn linked_action_catalog_policy_scores_and_startup_rebaseline_are_explicit() {
         presented.semantic_provenance(&options()).unwrap()
     );
     for (changed_rule, expected_score) in [
-        (custom_rule.replace("regex: needle", "regex: other"), None),
+        (custom_rule.replace("'needle'", "'other'"), None),
         (custom_rule.replace("score: 7", "score: 8"), Some(8)),
         (custom_rule.replace("score: 7", "score: 0"), Some(0)),
     ] {
@@ -865,7 +867,7 @@ fn linked_action_catalog_policy_scores_and_startup_rebaseline_are_explicit() {
 fn replacement_rule_content_builds_a_new_pipeline_or_fails_without_one() {
     let rule = |regex: &str| {
         format!(
-            "version: 1\ndescription: synthetic\ndefaults: {{enabled: true, case_insensitive: false}}\nrules:\n  - id: synthetic.replaceable\n    category: synthetic\n    severity: high\n    score: 7\n    targets: [command]\n    regex: {regex}\n    tags: []\n    explanation: synthetic\nmodifiers: []\n"
+            "title: synthetic\nid: 80a0b0b9-cde7-4f99-867f-b5ce95a819ad\nname: synthetic.replaceable\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: '{regex}'\n    condition: selection\nlevel: high\ntelltale:\n    category: synthetic\n    score: 7\n    explanation: 'synthetic'\n"
         )
     };
     let build = |document: String| {
@@ -912,9 +914,9 @@ fn replacement_rule_content_builds_a_new_pipeline_or_fails_without_one() {
         );
     }
     // Valid content that leaves no effective rule is refused, not built empty.
-    let empty = "version: 1\ndescription: synthetic\ndefaults: {enabled: true, case_insensitive: false}\nrules: []\nmodifiers: []\n";
+    let empty = format!("{}    enabled: false\n", rule("first-needle"));
     assert!(matches!(
-        build(empty.to_owned()),
+        build(empty),
         Err(PipelineError::EmptyRuleSet)
     ));
     assert!(matches!(
@@ -940,10 +942,17 @@ fn replacement_rule_content_builds_a_new_pipeline_or_fails_without_one() {
     assert!(matches(&active));
 
     // A policy applies to supplied content and changes semantic identity too.
+    // The kept rule has its own Rule v2 id: an id under two names is an error.
+    let kept = rule("first-needle")
+        .replace("synthetic.replaceable", "synthetic.kept")
+        .replace(
+            "80a0b0b9-cde7-4f99-867f-b5ce95a819ad",
+            "ffec8eea-15b6-45d3-a07a-ebe088e5aaee",
+        );
     let disabled = Pipeline::builder()
         .without_bundled_defaults()
         .rules_document(rule("first-needle"))
-        .rules_document(rule("first-needle").replace("synthetic.replaceable", "synthetic.kept"))
+        .rules_document(kept)
         .policy_document("version: 1\ndisabled_rules: [synthetic.replaceable]\n")
         .build()
         .unwrap();

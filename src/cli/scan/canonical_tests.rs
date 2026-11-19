@@ -701,9 +701,17 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
     );
 }
 
+/// A plan with one rule matching `needle` in the field that compiles to the
+/// target `target`.
 fn plan(target: &str) -> RuleV1CompatibilityPlan {
+    let (field, category) = match target {
+        "user_context" => ("message.user_text", "message"),
+        "assistant_context" => ("message.assistant_text", "message"),
+        "url" => ("tool.url", "tool_activity"),
+        other => panic!("unmapped target {other}"),
+    };
     let yaml = format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.target\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [{target}]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n"
+        "title: synthetic\nid: 1523429f-99fb-4ca1-85ff-dfa1ea08477d\nname: synthetic.target\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: {category}\ndetection:\n    selection:\n        - {field}|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n"
     );
     compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&yaml], None)

@@ -6,7 +6,7 @@ checked subset of Sigma's detection language. This page is the authoring
 reference. The accepted keys, fields, modifiers and values are also published
 as data in the generated [rule vocabulary](catalog/rule-vocabulary.json).
 
-Rule v2 replaces Rule v1, which stops loading in 0.8.0; there is no automatic
+Rule v2 replaces Rule v1, which fails to load since 0.8.0; there is no automatic
 converter. The [0.8.0 migration guide](migrations/0.8.0.md) maps every Rule v1
 key to its Rule v2 spelling. Process-chain rules are a separate, internal pack
 and are not written in this format (see

@@ -6,6 +6,7 @@
 //! The rule file under `config/rules/` is byte-identical to the one linted
 //! here (`tests/package_metadata.rs`).
 
+use super::test_rules::{file, rule};
 use super::{CompiledDefinition, LoadedRules, bundled_default_rules};
 use crate::package::bundled_community_package;
 
@@ -15,8 +16,8 @@ const TOOL_NAME_EXEMPT: &[(&str, &str)] = &[(
     "reads the tool name as untrusted text for injected tool-call shapes, not as a harness vocabulary",
 )];
 
-/// Whether the rule compiles to a matcher on `tool_name`. A Rule v1 exclusion
-/// or a Rule v2 filter always shares its selection's target.
+/// Whether the rule compiles to a matcher on `tool_name`. A Rule v2 filter
+/// always shares its selection's target.
 fn selects_tool_name(rule: &CompiledDefinition) -> bool {
     matches!(rule, CompiledDefinition::Rule(rule)
         if rule.matchers.iter().any(|matcher| matcher.target == "tool_name"))
@@ -28,7 +29,7 @@ fn unexempt_tool_name_rules(rules: &LoadedRules) -> Vec<&str> {
     rules
         .definitions()
         .iter()
-        .filter(|definition| selects_tool_name(&definition.compile().unwrap()))
+        .filter(|definition| selects_tool_name(&definition.compile()))
         .map(|definition| definition.id())
         .filter(|id| !TOOL_NAME_EXEMPT.iter().any(|(exempt, _)| exempt == id))
         .collect()
@@ -45,35 +46,37 @@ fn bundled_rules_select_tool_name_only_when_exempt() {
     for (id, reason) in TOOL_NAME_EXEMPT {
         assert!(!reason.is_empty(), "{id}");
         let rule = sets[0].get(id).expect(id);
-        assert!(selects_tool_name(&rule.compile().unwrap()), "{id}");
+        assert!(selects_tool_name(&rule.compile()), "{id}");
     }
 }
 
 #[test]
 fn the_lint_flags_a_rule_that_selects_tool_name_unless_it_is_exempt() {
-    let rule = |id: &str, body: &str| {
-        format!(
-            "  - id: {id}\n    category: synthetic\n    severity: low\n    score: 1\n{body}\n    tags: []\n    explanation: synthetic\n"
-        )
-    };
-    let document = format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: true\n  enabled: true\nrules:\n{}{}{}{}{}modifiers: []\n",
-        rule("synthetic.target", "    targets: [tool_name]\n    regex: x"),
+    let rule = |id: &str, detection: &str| rule(id, "synthetic", detection, "");
+    let document = file(&[
+        rule(
+            "synthetic.target",
+            "selection:\n    - tool.name|re|i: x\ncondition: selection",
+        ),
         rule(
             "synthetic.selection",
-            "    detection:\n      selection:\n        tool_name: x\n      condition: selection"
+            "selection_tool_name:\n    tool.name|re|i: x\ncondition: selection_tool_name",
         ),
-        // An exclusion needs a selection on its own target.
+        // A filter needs a selection on its own field.
         rule(
             "synthetic.exclusion",
-            "    detection:\n      selection:\n        tool_name: x\n      exclude:\n        tool_name: y\n      condition: selection"
+            "selection_tool_name:\n    tool.name|re|i: x\nfilter_tool_name:\n    tool.name|re|i: y\n\
+             condition: selection_tool_name and not filter_tool_name",
         ),
-        rule("synthetic.kind", "    targets: [tool_kind]\n    regex: x"),
+        rule(
+            "synthetic.kind",
+            "selection:\n    - tool.kind|re|i: x\ncondition: selection",
+        ),
         rule(
             "tool.injection.shape",
-            "    targets: [tool_name]\n    regex: x"
+            "selection:\n    - tool.name|re|i: x\ncondition: selection",
         ),
-    );
+    ]);
     let set = LoadedRules::parse(&document).unwrap();
     assert_eq!(
         unexempt_tool_name_rules(&set),
