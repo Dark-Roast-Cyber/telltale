@@ -192,6 +192,37 @@
 
 ### Changes
 
+- **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
+  acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions
+  (session format version 3) from `~/.pi/agent/sessions`. User and assistant
+  messages, tool calls and their results, and commands the user runs with `!`
+  are projected; session state, injected context and later context rewrites
+  are counted, not projected. The built-in `bash`, `powershell`, `read`,
+  `write`, `edit`, `grep`, `find` and `ls` tools are declared, so they carry
+  tool kinds and operands. The shared authored-text argument table gains
+  `powershell` `command` and `edit` `oldText`/`newText`, the Pi names; no
+  earlier client sends them. An `edit` whose nested `edits` text exceeds the
+  4 KB nested-value bound is quarantined alone. An unknown entry, role or
+  content block is quarantined alone. `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`
+  relocations are not discovered. Install inventory gains a `pi` agent (the
+  `pi` launcher, the `@earendil-works/pi-coding-agent` package, and the managed
+  launcher in `~/.pi/agent/bin`), which changes the inventory snapshot hash
+  once. Events and alerts name the client `pi`. Action Record v1 is frozen and
+  its client list does not include Pi, so a Pi source returns no action
+  records; `ACTION_RECORD_V1_CLIENTS` lists the clients that do.
+
+- **Windows install inventory finds the current Codex, Claude and OpenCode
+  desktop apps, and survives a stray quote in `PATH`.** Codex gains a
+  `codex-desktop` signal for the CLI the desktop app (the `OpenAI.Codex`
+  package, which also ships ChatGPT) unpacks to
+  `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`. `claude-desktop-packaged`
+  also matches `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc\claude-code`,
+  and `opencode-desktop` also matches
+  `%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe`, where current
+  builds put them. A `PATH` with an unbalanced `"` no longer hides every later
+  entry (and with it PATH launchers such as WinGet links). Metadata only; the
+  new Codex signal changes the inventory snapshot hash once on Windows hosts.
+
 - Claude Code transcripts: count the local Agent SDK's exact
   `{type: "tag", tag, sessionId}` envelope as bookkeeping when `tag` is a
   string of at most 4,096 bytes and `sessionId` is a non-empty string. Tag

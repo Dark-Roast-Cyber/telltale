@@ -81,7 +81,7 @@
         "points": { "type": "integer", "minimum": 1 }
       }
     },
-    "client": { "enum": ["codex", "claude", "openclaw", "qwen", "opencode", "copilot"] },
+    "client": { "enum": ["codex", "claude", "openclaw", "qwen", "opencode", "copilot", "pi"] },
     "source_kind": { "enum": ["json", "jsonl", "archived_jsonl", "headless_jsonl", "sqlite", "copilot_process_log"] },
     "record_kind": { "enum": ["user_message", "assistant_message", "tool_call", "tool_result", "session_meta", "other"] },
     "visibility_field": { "enum": ["pid", "parent_pid", "user_intent", "timestamp", "tool_name", "arguments", "content", "agent", "model", "provider"] }

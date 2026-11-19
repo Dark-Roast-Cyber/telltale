@@ -330,6 +330,29 @@ cases:
       expected_contributions: []
     tags: [source_conformance, characterization]
 
+  - id: SC-PI-001
+    description: Pi session benign source conformance
+    input:
+      kind: source_fixture
+      fixture: tests/fixtures/benign_baselines/pi/sessions/--baseline-project--/2026-05-10T14-00-00-000Z_pi-baseline-session.jsonl
+      client: pi
+      source_id: pi.sessions
+      source_kind: jsonl
+    eventfulness: routine
+    disposition: benign
+    expected_security_review: not_scored
+    label_rationale: Parser identity and visibility verification for Pi sessions is not an independent security-review scenario.
+    expected_visibility:
+      required_record_kinds: [assistant_message]
+      optional_fields: [timestamp, tool_name, arguments, content]
+      unavailable_fields: [pid, parent_pid]
+    expected_detection:
+      rule_expectations: []
+      exact_rule_set: true
+      expected_score: 0
+      expected_contributions: []
+    tags: [source_conformance, characterization]
+
   - id: RX-SECRET-NET-001
     description: Secret environment access followed by network download
     input:

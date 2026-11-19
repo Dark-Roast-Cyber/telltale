@@ -566,7 +566,10 @@ action format.
 
 `SourceScan::action_records()` returns one `ActionRecordV1`
 (`telltale.action.v1`) per action finding, in `action_findings` order, and none
-for a failed source. A record carries every accessor value (`coordinate` is
+for a failed source. v1 is frozen with its client vocabulary
+(`ACTION_RECORD_V1_CLIENTS`), so a source of a later client (Pi) returns none;
+its action findings and session events are unaffected and await a record
+version that names it. A record carries every accessor value (`coordinate` is
 the anchor observation ID) plus the scan's `client`, `source_id`,
 `source_path_hash` (as in Event 3) and `semantic_identity`, and
 `session_event_id`: the `event_id` of the session Event 3 object at

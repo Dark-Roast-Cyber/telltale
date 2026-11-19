@@ -581,6 +581,13 @@ fn uc001_source_cases() -> Vec<Uc001SourceCase> {
             "session_stores/copilot/process-uc001.log",
             "session_stores/copilot/process-fixture.log",
         ),
+        (
+            C::Pi,
+            "pi.sessions",
+            K::Jsonl,
+            "session_stores/pi/sessions/--synthetic-project-b--/2026-04-27T12-40-00-000Z_pi-uc001-tool-result.jsonl",
+            "session_stores/pi/sessions/--synthetic-project-a--/2026-04-27T18-00-00-000Z_pi-session-a.jsonl",
+        ),
     ]
 }
 
@@ -616,7 +623,7 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
         .iter()
         .map(|case| (case.0, case.1, case.2))
         .collect::<BTreeSet<_>>();
-    if expected.len() != 8 || represented != expected || cases.len() != represented.len() {
+    if expected.len() != 9 || represented != expected || cases.len() != represented.len() {
         return Err(format!(
             "UC-001 exact identity coverage: expected {expected:?}, represented {represented:?}"
         ));
@@ -791,7 +798,7 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
 #[test]
 fn uc001_fixture_conformance_covers_every_supported_source_identity() {
     check_uc001_source_coverage(&uc001_source_cases(), &repo_root().join("tests/fixtures"))
-        .expect("all eight exact identities need attack and observed benign UC-001 conformance");
+        .expect("all nine exact identities need attack and observed benign UC-001 conformance");
 }
 
 #[test]
