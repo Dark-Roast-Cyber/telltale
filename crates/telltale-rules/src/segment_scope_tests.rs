@@ -74,7 +74,7 @@ fn segment_scope_changes_the_fingerprint() {
     let segment = command_rule("      scope: segment\n", "synthetic", "benign");
     assert_ne!(fingerprint(&field), fingerprint(&segment));
     // Only the scope of the bundled download rule differs from the same rules
-    // in field scope: without the line, the core fingerprint is the field one.
+    // in field scope: without the modifiers, the core fingerprint is the field one.
     const CORE_BEFORE_SCOPE: &str =
         "sha256:cff020a08d4cebdae7c115b553ccb60b0f6a02def2474bc423415504c64bc6b1";
     let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
@@ -83,16 +83,14 @@ fn segment_scope_changes_the_fingerprint() {
     for newline in ["\n", "\r\n"] {
         let bundled = bundled.replace('\n', newline);
         let normalized = bundled.replace("\r\n", "\n");
-        assert_eq!(normalized.matches("      scope: segment\n").count(), 1);
-        let without = normalized.replace("      scope: segment\n", "");
-        assert!(!without.contains("      scope: segment"));
-        let explicit_field = normalized.replace("      scope: segment\n", "      scope: field\n");
+        // Rule v2 writes the scope as a modifier on each of the download
+        // rule's three selections and three filters. Field scope has no
+        // modifier of its own: it is the scope without one.
+        assert_eq!(normalized.matches("|segment:").count(), 6);
+        let without = normalized.replace("|segment:", ":");
+        assert!(!without.contains("|segment"));
         assert_eq!(
             fingerprint(&without.replace('\n', newline)),
-            CORE_BEFORE_SCOPE
-        );
-        assert_eq!(
-            fingerprint(&explicit_field.replace('\n', newline)),
             CORE_BEFORE_SCOPE
         );
         assert_eq!(fingerprint(&bundled), segment_fingerprint);
@@ -491,7 +489,7 @@ fn case_insensitive_defaults_apply_to_segment_scope() {
 fn documented_segment_scope_example_behaves_as_described() {
     // The `detection` block from docs/detection-model.md, verbatim. The root
     // catalog tests check doc consistency outside the crate package boundary.
-    let rule = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules:\n  - id: rule.synthetic\n    category: download\n    severity: low\n    score: 20\n    detection:\n      selection:\n        command: '\\bcurl\\b[^;|\\n]*https?://'\n      exclude:\n        command: '\\bcurl\\b[^;|\\n]*--data'\n      scope: segment\n      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n";
+    let rule = "title: Synthetic segment rule\nid: 3f2504e0-4f89-41d3-9a0c-0305e82c3301\nname: rule.synthetic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        tool.command|re|segment: '\\bcurl\\b[^;|\\n]*https?://'\n    filter:\n        tool.command|re|segment: '\\bcurl\\b[^;|\\n]*--data'\n    condition: selection and not filter\nlevel: low\ntelltale:\n    category: download\n    score: 20\n    explanation: Synthetic explanation\n";
     let matcher = content(rule);
     assert!(
         !matcher

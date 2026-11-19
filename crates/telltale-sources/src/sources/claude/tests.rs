@@ -280,6 +280,176 @@ fn skipped_or_unknown_record_payloads_remain_opaque() {
 }
 
 #[test]
+fn session_tag_bookkeeping_requires_its_native_envelope() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-tag.jsonl"),
+    };
+    let records = r#"{"type":"user","sessionId":"synthetic","content":"valid turn"}
+{"type":"tag","sessionId":"synthetic","tag":""}
+{"role":"tag","sessionId":"synthetic","tag":"label"}
+{"type":"tag","sessionId":"synthetic","tag":false}
+{"type":"tag","sessionId":"synthetic","tag":"label","content":"unknown shape"}
+{"type":"tag","sessionId":"","tag":"label"}
+{"type":"tag","tag":"label"}
+"#;
+    let label_at_limit = "é".repeat(2048); // 4,096 UTF-8 bytes
+    let at_limit = json!({"type":"tag","sessionId":"synthetic","tag":&label_at_limit});
+    let oversized =
+        json!({"type":"tag","sessionId":"synthetic","tag":format!("{label_at_limit}x")});
+    std::fs::write(&source.path, format!("{records}{at_limit}\n{oversized}\n")).unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        batch
+            .quarantined
+            .iter()
+            .map(|unit| (unit.source_sequence, unit.code))
+            .collect::<Vec<_>>(),
+        [
+            (2, "unknown_discriminator"),
+            (3, "unknown_discriminator"),
+            (4, "unknown_discriminator"),
+            (5, "unknown_discriminator"),
+            (6, "unknown_discriminator"),
+            (8, "unknown_discriminator"),
+        ],
+    );
+    assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+    assert_eq!(batch.observations.len(), 1);
+}
+
+#[test]
+fn session_tag_bookkeeping_counts_cleared_tag_as_other() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-cleared-tag.jsonl"),
+    };
+    std::fs::write(
+        &source.path,
+        r#"{"type":"user","sessionId":"synthetic","content":"valid turn"}
+{"type":"tag","sessionId":"synthetic","tag":""}
+"#,
+    )
+    .unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        batch.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
+    assert!(batch.quarantined.is_empty());
+    assert_eq!(batch.observations.len(), 1);
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 2);
+    assert_eq!(counts.record_counts.other, 1);
+}
+
+#[test]
+fn bridge_and_tools_used_bookkeeping_count_as_other() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-bridge-tools.jsonl"),
+    };
+    std::fs::write(
+        &source.path,
+        r#"{"type":"user","sessionId":"synthetic","content":"valid turn"}
+{"type":"bridge-session","sessionId":"synthetic","bridgeSessionId":"bridge-synthetic","lastSequenceNum":7,"ownerAccountUuid":"account-synthetic","ownerOrganizationUuid":"org-synthetic"}
+{"type":"tools-used","sessionId":"synthetic","tools":["Bash","Read"]}
+{"type":"tools-used","sessionId":"synthetic","tools":[]}
+"#,
+    )
+    .unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert!(batch.quarantined.is_empty());
+    assert_eq!(
+        batch.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
+    assert_eq!(batch.observations.len(), 1);
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 4);
+    assert_eq!(counts.record_counts.other, 3);
+}
+
+#[test]
+fn bridge_and_tools_used_bookkeeping_require_their_native_envelopes() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-bridge-tools-shapes.jsonl"),
+    };
+    let bridge = json!({"type":"bridge-session","sessionId":"synthetic",
+        "bridgeSessionId":"bridge","lastSequenceNum":1,
+        "ownerAccountUuid":"account","ownerOrganizationUuid":"org"});
+    let with = |key: &str, value: Value| {
+        let mut record = bridge.clone();
+        record[key] = value;
+        record
+    };
+    let mut extra_bridge = bridge.clone();
+    extra_bridge["message"] = json!({"role":"assistant","content":[{"type":"tool_use",
+        "id":"synthetic-call","name":"Bash","input":{"command":"printf synthetic"}}]});
+    let mut missing_bridge = bridge.clone();
+    missing_bridge
+        .as_object_mut()
+        .unwrap()
+        .remove("ownerAccountUuid");
+    let tools = |value: Value| json!({"type":"tools-used","sessionId":"synthetic","tools":value});
+    let at_limit = "a".repeat(4096);
+    let lines = [
+        json!({"type":"user","sessionId":"synthetic","content":"valid turn"}),
+        extra_bridge,                       // 1: unknown key carrying a tool call
+        missing_bridge,                     // 2
+        with("lastSequenceNum", json!(-1)), // 3
+        with("bridgeSessionId", json!(7)),  // 4
+        with("sessionId", json!("")),       // 5
+        with("ownerOrganizationUuid", json!(format!("{at_limit}x"))), // 6
+        with("bridgeSessionId", json!(at_limit)), // 7: at the bound, accepted
+        tools(json!("Bash")),               // 8
+        tools(json!(["Bash", 1])),          // 9
+        tools(json!(vec!["Bash"; 65])),     // 10
+        tools(json!(vec!["Bash"; 64])),     // 11: at the bound, accepted
+        json!({"type":"tools-used","sessionId":"synthetic","tools":[],"extra":true}), // 12
+    ];
+    let text = lines
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    std::fs::write(&source.path, text).unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        batch
+            .quarantined
+            .iter()
+            .map(|unit| (unit.source_sequence, unit.code))
+            .collect::<Vec<_>>(),
+        [
+            (1, "unknown_discriminator"),
+            (2, "unknown_discriminator"),
+            (3, "unknown_discriminator"),
+            (4, "unknown_discriminator"),
+            (5, "unknown_discriminator"),
+            (6, "unknown_discriminator"),
+            (8, "unknown_discriminator"),
+            (9, "unknown_discriminator"),
+            (10, "unknown_discriminator"),
+            (12, "unknown_discriminator"),
+        ],
+    );
+    assert_eq!(batch.observations.len(), 1);
+}
+
+#[test]
 fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
     let directory = tempfile::tempdir().unwrap();
     let source = Source {
@@ -303,8 +473,6 @@ fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
         "artifact-autoreact-ledger",
         "artifact-comment-monitor",
         "continued-in",
-        "bridge-session",
-        "tools-used",
     ] {
         let record = json!({"type":kind,"sessionId":"synthetic","message":{
             "role":"assistant","content":[{"type":"tool_use","id":"synthetic-call",
@@ -335,37 +503,6 @@ fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
             "{kind}"
         );
     }
-}
-
-/// Remote Control bridge pointers and per-session tool-name summaries, in the
-/// shapes the desktop app writes. A `tools-used` name list is not tool usage.
-#[test]
-fn bridge_session_and_tools_used_records_are_bookkeeping() {
-    let directory = tempfile::tempdir().unwrap();
-    let source = Source {
-        client: ClientId::Claude,
-        kind: SourceKind::Jsonl,
-        source_id: "claude.projects".into(),
-        path: directory.path().join("synthetic-desktop-bookkeeping.jsonl"),
-    };
-    let turn = json!({"type":"user","sessionId":"synthetic","content":"valid turn"});
-    let bridge = json!({"type":"bridge-session","sessionId":"synthetic",
-        "bridgeSessionId":"synthetic-bridge","lastSequenceNum":3,
-        "ownerAccountUuid":"synthetic-account","ownerOrganizationUuid":"synthetic-org"});
-    let tools = json!({"type":"tools-used","sessionId":"synthetic","tools":["Bash","Write"]});
-    std::fs::write(&source.path, format!("{turn}\n{bridge}\n{tools}\n")).unwrap();
-    let batch = acquire_source(&source, options()).unwrap();
-    assert!(batch.quarantined.is_empty());
-    assert_eq!(batch.observations.len(), 1);
-    assert_eq!(
-        batch.accounting.coverage,
-        AccountingCoverage::CompleteSource
-    );
-    let counts = &batch.accounting.sessions[0].counts;
-    assert_eq!(counts.native_units, 3);
-    assert_eq!(counts.record_counts.other, 2);
-    assert_eq!(counts.record_counts.tool_call, 0);
-    assert!(counts.tool_usage.is_empty());
 }
 
 #[test]
@@ -434,8 +571,6 @@ fn explicit_outer_record_types_cannot_be_shadowed_by_payload_types() {
         "artifact-autoreact-ledger",
         "artifact-comment-monitor",
         "continued-in",
-        "bridge-session",
-        "tools-used",
         "Future",
     ] {
         for payload in [
@@ -502,4 +637,194 @@ fn non_object_envelope_is_schema_drift() {
     assert!(matches!(error, SourceReadError::SchemaDrift { .. }));
     assert!(message.contains("schema drift"));
     assert!(!message.contains("Synthetic schema envelope drift"));
+}
+
+const SPILL_SESSION: &str = "synthetic-spill-session";
+const SPILL_MARKER: &str = "synthetic full output beyond the preview";
+
+fn spill_notice(path: &str) -> String {
+    format!(
+        "<persisted-output>\nOutput too large (3KB). Full output saved to: {path}\n\nPreview (first 2KB):\nsynthetic preview\n...\n</persisted-output>"
+    )
+}
+
+/// A call/result pair whose result is `result`, in a transcript at `transcript`.
+fn spill_source(transcript: std::path::PathBuf, result: Value) -> Source {
+    let call = json!({"type":"assistant","sessionId":SPILL_SESSION,"message":{"role":"assistant",
+        "content":[{"type":"tool_use","id":"synthetic-call","name":"Bash",
+            "input":{"command":"printf synthetic"}}]}});
+    let returned = json!({"type":"user","sessionId":SPILL_SESSION,"message":{"role":"user",
+        "content":[{"type":"tool_result","tool_use_id":"synthetic-call","content":result}]}});
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, format!("{call}\n{returned}\n")).unwrap();
+    Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: transcript,
+    }
+}
+
+fn write_spill(project: &std::path::Path, name: &str, bytes: &[u8]) {
+    let directory = project.join(SPILL_SESSION).join("tool-results");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join(name), bytes).unwrap();
+}
+
+fn observed_result(
+    observations: &[telltale_schema::observation::CanonicalObservationV2],
+) -> Option<JsonValue> {
+    observations
+        .iter()
+        .find_map(|observation| match observation.body() {
+            ObservationBody::Tool(tool) => tool.result().cloned(),
+            _ => None,
+        })
+}
+
+fn spilled_result(source: &Source) -> Value {
+    super::native::extract_claude_native_records(source)
+        .unwrap()
+        .into_iter()
+        .flat_map(|record| record.blocks.unwrap_or_default())
+        .find_map(|block| match block {
+            super::native::ClaudeContentBlock::ToolResult { content, .. } => content,
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn spilled_tool_results_resolve_from_the_session_directory() {
+    let project = tempfile::tempdir().unwrap();
+    let full = format!("{SPILL_MARKER}\n{}", "x".repeat(3000));
+    write_spill(project.path(), "b9synthetic.txt", full.as_bytes());
+    // The notice names the writer's absolute path; only the file name is used,
+    // so a store copied elsewhere (here, a different directory) still resolves.
+    let notice = spill_notice(r"C:\Elsewhere\project\other-session\tool-results\b9synthetic.txt");
+    let source = spill_source(
+        project.path().join(format!("{SPILL_SESSION}.jsonl")),
+        json!(notice),
+    );
+    assert_eq!(spilled_result(&source), json!(full));
+
+    // Every production read mode resolves it, and the observation carries it.
+    let batch = acquire_source(&source, options()).unwrap();
+    assert!(batch.quarantined.is_empty());
+    assert_eq!(
+        observed_result(&batch.observations),
+        Some(JsonValue::string(&full))
+    );
+    let bounded = acquire_source_bounded(
+        project.path(),
+        &source,
+        options(),
+        DirectReadLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        observed_result(&bounded.observations),
+        Some(JsonValue::string(&full))
+    );
+
+    // A single-text-block array notice resolves the same way.
+    let source = spill_source(
+        project.path().join(format!("{SPILL_SESSION}.jsonl")),
+        json!([{"type":"text","text":notice}]),
+    );
+    assert_eq!(spilled_result(&source), json!(full));
+}
+
+#[test]
+fn spilled_subagent_results_resolve_from_the_parent_session_directory() {
+    let project = tempfile::tempdir().unwrap();
+    write_spill(
+        project.path(),
+        "toolu_synthetic.txt",
+        SPILL_MARKER.as_bytes(),
+    );
+    let source = spill_source(
+        project
+            .path()
+            .join(SPILL_SESSION)
+            .join("subagents")
+            .join("agent-synthetic.jsonl"),
+        json!(spill_notice("/home/u/p/s/tool-results/toolu_synthetic.txt")),
+    );
+    assert_eq!(spilled_result(&source), json!(SPILL_MARKER));
+}
+
+#[test]
+fn unresolvable_spills_keep_the_notice() {
+    let project = tempfile::tempdir().unwrap();
+    write_spill(project.path(), "present.txt", SPILL_MARKER.as_bytes());
+    write_spill(project.path(), "invalid.txt", &[0xff, 0xfe, 0x00]);
+    write_spill(
+        project.path(),
+        "oversized.txt",
+        &vec![b'x'; telltale_schema::observation::TOOL_RESULT_MAX_TEXT_BYTES + 1],
+    );
+    write_spill(
+        project.path(),
+        "atlimit.txt",
+        &vec![b'y'; telltale_schema::observation::TOOL_RESULT_MAX_TEXT_BYTES],
+    );
+    let present = spill_notice("/p/s/tool-results/present.txt");
+    let cases = [
+        // Not exactly one notice: quoted inside other output, or unterminated.
+        json!(format!("transcript excerpt: {present}")),
+        json!(present.trim_end_matches("</persisted-output>")),
+        json!([{"type":"text","text":present},{"type":"text","text":"more"}]),
+        // The named file is not a plain name in a tool-results directory.
+        json!(spill_notice("/p/s/other/present.txt")),
+        json!(spill_notice("/p/s/tool-results/../present.txt")),
+        json!(spill_notice("/p/s/tool-results/pre sent.txt")),
+        json!(spill_notice("/p/s/tool-results/present.exe")),
+        // Missing, not UTF-8, or over the direct tool-result budget.
+        json!(spill_notice("/p/s/tool-results/missing.txt")),
+        json!(spill_notice("/p/s/tool-results/invalid.txt")),
+        json!(spill_notice("/p/s/tool-results/oversized.txt")),
+    ];
+    let transcript = project.path().join(format!("{SPILL_SESSION}.jsonl"));
+    for case in cases {
+        let source = spill_source(transcript.clone(), case.clone());
+        assert_eq!(spilled_result(&source), case);
+    }
+    let source = spill_source(
+        transcript,
+        json!(spill_notice("/p/s/tool-results/atlimit.txt")),
+    );
+    assert_eq!(
+        spilled_result(&source).as_str().map(str::len),
+        Some(telltale_schema::observation::TOOL_RESULT_MAX_TEXT_BYTES)
+    );
+}
+
+#[test]
+fn spills_outside_a_plain_session_directory_are_not_read() {
+    let project = tempfile::tempdir().unwrap();
+    write_spill(project.path(), "present.txt", SPILL_MARKER.as_bytes());
+    let notice = json!(spill_notice("/p/s/tool-results/present.txt"));
+    // A subagent directory under a different session, and a session id that
+    // is not a single plain path component, resolve nothing.
+    let source = spill_source(
+        project
+            .path()
+            .join("other-session")
+            .join("subagents")
+            .join("agent-synthetic.jsonl"),
+        notice.clone(),
+    );
+    assert_eq!(spilled_result(&source), notice);
+    let transcript = project.path().join("traversal.jsonl");
+    let call = json!({"type":"user","sessionId":"../synthetic-spill-session","message":{"role":"user",
+        "content":[{"type":"tool_result","tool_use_id":"synthetic-call","content":notice}]}});
+    std::fs::write(&transcript, format!("{call}\n")).unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: transcript,
+    };
+    assert_eq!(spilled_result(&source), notice);
 }

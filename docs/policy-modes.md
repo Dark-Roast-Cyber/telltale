@@ -1,6 +1,6 @@
 # Policy Modes
 
-Telltale uses policy YAML to select Rule v1 detections. The names below describe configuration outcomes and proposed future behavior, not selectable scanner modes.
+Telltale uses policy YAML to select rule detections. The names below describe configuration outcomes and proposed future behavior, not selectable scanner modes.
 
 ## Current Phase: Log-Review
 
@@ -22,7 +22,7 @@ There is no policy-mode flag and no `policy_mode` event field. `observe` and `al
 
 ### `observe`
 
-Suppress policy-controlled Rule v1 detections while retaining conditional health
+Suppress policy-controlled rule detections while retaining conditional health
 events and activity with `--emit-activity`. Health events are emitted for dry-run
 or backfill, inventory changes, scanner errors, outages, or operational alerts;
 an unchanged routine scan need not emit one. Process-chain detections are independently
@@ -33,14 +33,14 @@ enabled by default; also set `detections.process_chain: false` in `settings.d`
 | --- | --- |
 | Activity events | emitted only with `--emit-activity` |
 | Health events | conditional on the changes, errors, execution settings, or alerts described above |
-| Detection events | Rule v1 candidates disabled by policy; process-chain events require the separate setting above |
+| Detection events | Rule candidates disabled by policy; process-chain events require the separate setting above |
 | Review metadata | absent only when neither detection path emits |
 | Operational alerts | emitted |
 
 Use this configuration when onboarding a host or source to confirm discovery,
 parsing, and schema compliance without detection noise.
 
-For the bundled Rule v1 pack, disable all of its categories as follows. Custom
+For the bundled rule pack, disable all of its categories as follows. Custom
 packs need their own categories or rule IDs disabled too; the policy name alone
 does not select any behavior.
 
@@ -96,7 +96,7 @@ Without an effective policy, policy filtering is not applied; rule packs and
 overrides still determine the active definitions. An explicit `--policy` selects
 the policy file; omitting it can still load an auto-discovered `policies.d` file.
 `--no-local-config` disables that discovery, not an explicit policy. An effective
-policy filters Rule v1 rules; process-chain enablement is independent.
+policy filters rules; process-chain enablement is independent.
 
 ### `simulate-block`
 
@@ -155,7 +155,7 @@ Automatically deny or terminate sessions for high-confidence detections that mat
 
 ## Policy YAML
 
-Telltale uses policy YAML to select active Rule v1 categories and rule IDs:
+Telltale uses policy YAML to select active rule categories (`telltale.category`) and rule names:
 
 ```yaml
 # config/policy.yaml
@@ -175,7 +175,7 @@ Load a policy at scan time:
 telltale scan --once --policy config/policy.yaml --root "$HOME"
 ```
 
-Policy YAML controls which Rule v1 rules remain active, not an enforcement
+Policy YAML controls which rules remain active, not an enforcement
 response or scanner mode. Matching active rules emit the current deterministic
 review metadata. Future decisions, capabilities, and enforcement degradation
 belong to the separately accepted policy layer.
@@ -187,14 +187,14 @@ belong to the separately accepted policy layer.
 | Allowlists | Suppressed detections are logged at `informational` with the `suppressed` tag. |
 | Analyst review | Above-threshold events carry deterministic response metadata and optional anchors; suppressed detections remain informational. |
 | Response contract | Non-suppressed emitted detections carry response metadata. Allowlist suppression clears `response`. `simulate-block` is not implemented. |
-| Operational alerts | Independent of Rule v1 category/rule selection. |
+| Operational alerts | Independent of rule category/name selection. |
 | Correlation | Cross-session correlation operates on emitted detection events; there is no distinct `simulate-block` path. |
 
 ## Configuration Guidance
 
 | Scenario | Current configuration |
 | --- | --- |
-| First deployment on a new host | Disable all active Rule v1 categories/rules and set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0`; add `--emit-activity` for activity telemetry |
+| First deployment on a new host | Disable all active rule categories/rules and set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0`; add `--emit-activity` for activity telemetry |
 | Tuning rules on a developer workstation | Keep relevant detections active and use `--policy` to select them |
 | Production SIEM ingestion | Normal scan with reviewed policy and sink configuration |
 | Evaluating containment rules | Review response recommendations; no simulation mode is implemented |

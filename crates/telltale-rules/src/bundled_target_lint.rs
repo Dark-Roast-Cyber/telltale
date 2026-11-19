@@ -6,7 +6,7 @@
 //! The rule file under `config/rules/` is byte-identical to the one linted
 //! here (`tests/package_metadata.rs`).
 
-use super::{RuleSet, bundled_default_rule_set, parse_rule_document};
+use super::{CompiledDefinition, LoadedRules, bundled_default_rules};
 use crate::package::bundled_community_package;
 
 /// Bundled rules that may use `tool_name`, each with its reason.
@@ -15,40 +15,37 @@ const TOOL_NAME_EXEMPT: &[(&str, &str)] = &[(
     "reads the tool name as untrusted text for injected tool-call shapes, not as a harness vocabulary",
 )];
 
-/// The IDs of the rules in `rule_set` that use `tool_name` as a target or as a
+/// Whether the rule compiles to a matcher on `tool_name`. A Rule v1 exclusion
+/// or a Rule v2 filter always shares its selection's target.
+fn selects_tool_name(rule: &CompiledDefinition) -> bool {
+    matches!(rule, CompiledDefinition::Rule(rule)
+        if rule.matchers.iter().any(|matcher| matcher.target == "tool_name"))
+}
+
+/// The IDs of the rules in `rules` that use `tool_name` as a target or as a
 /// selection or exclusion field and are not exempt.
-fn unexempt_tool_name_rules(rule_set: &RuleSet) -> Vec<&str> {
-    rule_set
-        .rules
+fn unexempt_tool_name_rules(rules: &LoadedRules) -> Vec<&str> {
+    rules
+        .definitions()
         .iter()
-        .filter(|rule| {
-            let detection = rule
-                .detection
-                .iter()
-                .flat_map(|detection| detection.selection.keys().chain(detection.exclude.keys()));
-            rule.targets
-                .iter()
-                .chain(detection)
-                .any(|target| target == "tool_name")
-        })
-        .map(|rule| rule.id.as_str())
+        .filter(|definition| selects_tool_name(&definition.compile().unwrap()))
+        .map(|definition| definition.id())
         .filter(|id| !TOOL_NAME_EXEMPT.iter().any(|(exempt, _)| exempt == id))
         .collect()
 }
 
 #[test]
 fn bundled_rules_select_tool_name_only_when_exempt() {
-    let mut sets = vec![bundled_default_rule_set().unwrap()];
+    let mut sets = vec![bundled_default_rules().unwrap()];
     sets.extend(bundled_community_package().unwrap().into_documents());
     for set in &sets {
         assert_eq!(unexempt_tool_name_rules(set), Vec::<&str>::new());
     }
     // An exemption names a rule that still exists and still uses the name.
-    let rules = &sets[0].rules;
     for (id, reason) in TOOL_NAME_EXEMPT {
         assert!(!reason.is_empty(), "{id}");
-        let rule = rules.iter().find(|rule| rule.id == *id).expect(id);
-        assert!(rule.targets.iter().any(|t| t == "tool_name"), "{id}");
+        let rule = sets[0].get(id).expect(id);
+        assert!(selects_tool_name(&rule.compile().unwrap()), "{id}");
     }
 }
 
@@ -66,9 +63,10 @@ fn the_lint_flags_a_rule_that_selects_tool_name_unless_it_is_exempt() {
             "synthetic.selection",
             "    detection:\n      selection:\n        tool_name: x\n      condition: selection"
         ),
+        // An exclusion needs a selection on its own target.
         rule(
             "synthetic.exclusion",
-            "    detection:\n      selection:\n        command: x\n      exclude:\n        tool_name: x\n      condition: selection"
+            "    detection:\n      selection:\n        tool_name: x\n      exclude:\n        tool_name: y\n      condition: selection"
         ),
         rule("synthetic.kind", "    targets: [tool_kind]\n    regex: x"),
         rule(
@@ -76,7 +74,7 @@ fn the_lint_flags_a_rule_that_selects_tool_name_unless_it_is_exempt() {
             "    targets: [tool_name]\n    regex: x"
         ),
     );
-    let set = parse_rule_document(&document).unwrap();
+    let set = LoadedRules::parse(&document).unwrap();
     assert_eq!(
         unexempt_tool_name_rules(&set),
         [

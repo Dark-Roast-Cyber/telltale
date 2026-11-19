@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/rule-catalog-v2.schema.json",
+  "title": "Telltale Rule Catalog v2",
+  "description": "Presentation metadata for the rules and chain modifiers of one rule set (the bundled content, or content resolved from rule folders, packages and files) and, when enabled, the bundled process-chain pack. Every key is always present; absent values are null.",
+  "$defs": {
+    "text": { "type": "string", "maxLength": 4096 },
+    "optionalText": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+    "texts": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/text" } },
+    "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "optionalLabel": { "anyOf": [{ "$ref": "#/$defs/label" }, { "type": "null" }] },
+    "labels": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/label" } },
+    "optionalCount": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "optionalDate": {
+      "anyOf": [{ "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }, { "type": "null" }]
+    },
+    "optionalRevision": {
+      "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }]
+    },
+    "related": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "type": { "type": "string", "enum": ["derived", "obsolete", "merged", "renamed", "similar"] }
+      },
+      "additionalProperties": false
+    },
+    "logsource": {
+      "type": "object",
+      "required": ["product", "category", "service"],
+      "properties": {
+        "product": { "$ref": "#/$defs/label" },
+        "category": { "$ref": "#/$defs/label" },
+        "service": { "$ref": "#/$defs/optionalLabel" }
+      },
+      "additionalProperties": false
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "id", "kind", "title", "explanation", "falsepositives", "category",
+        "severity", "session_score", "action_score", "action_ordered",
+        "action_within_seconds", "action_link", "atlas_tags", "attack_techniques",
+        "signal_type", "tags", "enabled", "when_all_categories", "when_all_rule_ids",
+        "package_id", "uuid", "status", "description", "references", "author",
+        "license", "date", "modified", "related", "logsource",
+        "behavior_fingerprint", "metadata_revision"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/label" },
+        "kind": { "type": "string", "enum": ["rule", "modifier", "process_chain"] },
+        "title": { "$ref": "#/$defs/optionalText" },
+        "explanation": { "$ref": "#/$defs/text" },
+        "falsepositives": { "$ref": "#/$defs/texts" },
+        "category": { "$ref": "#/$defs/optionalLabel" },
+        "severity": {
+          "anyOf": [
+            { "type": "string", "enum": ["informational", "low", "medium", "high", "critical"] },
+            { "type": "null" }
+          ]
+        },
+        "session_score": { "type": "integer", "minimum": 0 },
+        "action_score": { "$ref": "#/$defs/optionalCount" },
+        "action_ordered": { "type": "boolean" },
+        "action_within_seconds": { "$ref": "#/$defs/optionalCount" },
+        "action_link": { "$ref": "#/$defs/optionalLabel" },
+        "atlas_tags": { "$ref": "#/$defs/labels" },
+        "attack_techniques": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^T[0-9]{4}(?:\\.[0-9]{3})?$" }
+        },
+        "signal_type": { "$ref": "#/$defs/label" },
+        "tags": { "$ref": "#/$defs/labels" },
+        "enabled": { "type": "boolean" },
+        "when_all_categories": { "$ref": "#/$defs/labels" },
+        "when_all_rule_ids": { "$ref": "#/$defs/labels" },
+        "package_id": { "$ref": "#/$defs/optionalLabel" },
+        "uuid": { "anyOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": ["experimental", "test", "stable", "deprecated", "unsupported"]
+            },
+            { "type": "null" }
+          ]
+        },
+        "description": { "$ref": "#/$defs/optionalText" },
+        "references": { "$ref": "#/$defs/texts" },
+        "author": { "$ref": "#/$defs/optionalText" },
+        "license": { "$ref": "#/$defs/optionalText" },
+        "date": { "$ref": "#/$defs/optionalDate" },
+        "modified": { "$ref": "#/$defs/optionalDate" },
+        "related": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/related" } },
+        "logsource": { "anyOf": [{ "$ref": "#/$defs/logsource" }, { "type": "null" }] },
+        "behavior_fingerprint": { "$ref": "#/$defs/optionalRevision" },
+        "metadata_revision": { "$ref": "#/$defs/optionalRevision" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schema", "telltale_version", "semantic_identity", "entries"],
+  "properties": {
+    "schema": { "const": "telltale.rule_catalog.v2" },
+    "telltale_version": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "semantic_identity": { "type": "string", "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" },
+    "entries": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/entry" } }
+  },
+  "additionalProperties": false
+}

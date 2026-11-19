@@ -58,7 +58,7 @@ and not a sandbox. It is one enforcement point among several; see the
 | `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. Keeps short top-level values and the head of a command with every variant, and reports what it had to separate (`pending_input_separated`, floored at `on_unevaluable`). |
 | `codex_cli` | Parse Codex CLI 0.166.0 hook payloads; composite, escaped correlation key (`session:agent:turn:tool_use_id`); `Stop`/`SubagentStop` settle by `turn_id`; render only `hookSpecificOutput` deny (ask becomes deny, allow prints nothing); generate `hooks.json` and the exec-policy backstop rules. |
 | `evaluator` | Long-lived evaluator: Unix-socket protocol, trust checks, autostart, fallback rules (`evaluator/unix.rs`). Other platforms report `evaluator_unsupported_platform` and evaluate in-process. |
-| `rules/` | Host-owned Rule v1 content (hook self-protection), the shared document and each adapter's own (`Adapter::rules`), loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
+| `rules/` | Host-owned Rule v2 content (hook self-protection), the shared document and each adapter's own (`Adapter::rules`), loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
 
 ## Runtime contract for adapters
 
@@ -170,7 +170,7 @@ a harness means:
    - `home`: the environment variable that relocates the harness's config
      home, if it has one, and the pattern for the hook files below it. The
      engine generates rules for the resolved path.
-   - `rules`: the adapter's own Rule v1 document in
+   - `rules`: the adapter's own Rule v2 document in
      `crates/telltale/src/hooks/rules/<name>-self-protection.yaml`, or
      `Shared`. Every document is always loaded, because one pipeline serves
      every harness; a test fails if a file in `rules/` belongs to no adapter.

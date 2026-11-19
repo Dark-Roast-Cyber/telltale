@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 use std::sync::LazyLock;
 use telltale_rules::{
-    ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
+    ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier,
+    RuleV1CompatibilityRule, RuleV1ContentMatcher,
 };
 use telltale_schema::event::{
     PrivacySanitizer, SanitizationContext, terminal_identifier, terminal_session_id,
@@ -476,6 +477,47 @@ static BUNDLED: LazyLock<RuleV1CompatibilityExport> = LazyLock::new(|| {
         .expect("bundled rules")
         .compatibility_export()
 });
+/// Whether the bundled rule with `rule`'s id has the same matchers, compared
+/// in fingerprint order: `None` when no bundled rule has that id.
+fn native_profile_applies(rule: &RuleV1CompatibilityRule) -> Option<bool> {
+    BUNDLED
+        .rules()
+        .iter()
+        .find(|base| base.id == rule.id)
+        .map(|base| base.canonical_matchers() == rule.canonical_matchers())
+}
+
+/// A loaded rule that has a bundled rule's id but not its matchers, so its
+/// action findings use its own matchers over every action field instead of
+/// the bundled rule's native action profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeProfileNotice {
+    pub rule_id: String,
+}
+
+impl std::fmt::Display for NativeProfileNotice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "rule '{}': native action profile not applied; its matchers differ from the bundled rule's",
+            self.rule_id
+        )
+    }
+}
+
+/// The rules of `export` whose id is bundled but whose matchers are not, in
+/// export order.
+pub fn native_profile_notices(export: &RuleV1CompatibilityExport) -> Vec<NativeProfileNotice> {
+    export
+        .rules()
+        .iter()
+        .filter(|rule| native_profile_applies(rule) == Some(false))
+        .map(|rule| NativeProfileNotice {
+            rule_id: rule.id.clone(),
+        })
+        .collect()
+}
+
 pub(crate) fn compile(
     export: &RuleV1CompatibilityExport,
 ) -> Result<Vec<ActionRule>, super::RuleV1CompileError> {
@@ -483,19 +525,7 @@ pub(crate) fn compile(
         .rules()
         .iter()
         .map(|rule| {
-            let native = BUNDLED
-                .rules()
-                .iter()
-                .find(|r| r.id == rule.id)
-                .is_some_and(|base| {
-                    base.matchers.len() == rule.matchers.len()
-                        && base.matchers.iter().zip(&rule.matchers).all(|(a, b)| {
-                            a.target == b.target
-                                && a.regex == b.regex
-                                && a.exclusion_regex == b.exclusion_regex
-                                && a.scope == b.scope
-                        })
-                });
+            let native = native_profile_applies(rule) == Some(true);
             let mut content = rule.clone();
             if native {
                 // Precision is compiled content, not a bypass of the effective

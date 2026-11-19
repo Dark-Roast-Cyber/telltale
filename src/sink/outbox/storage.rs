@@ -127,6 +127,19 @@ pub(crate) fn validate_outbox_path_without_activation(
     Ok(())
 }
 
+/// The outbox database and every name kept beside it: the admission lock and
+/// SQLite's rollback, write-ahead and shared-memory files. No other writer,
+/// such as the diagnostics file, may use any of them.
+pub(crate) fn reserved_outbox_paths(outbox_path: &Path) -> [PathBuf; 5] {
+    [
+        outbox_path.to_path_buf(),
+        path_with_suffix(outbox_path, ".lock"),
+        path_with_suffix(outbox_path, "-journal"),
+        path_with_suffix(outbox_path, "-wal"),
+        path_with_suffix(outbox_path, "-shm"),
+    ]
+}
+
 fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);

@@ -222,12 +222,40 @@ struct ScanCommandArgs {
         conflicts_with_all = ["backfill", "rebuild_baselines", "interval_seconds"]
     )]
     history: Option<HistoryScope>,
+
+    /// Write one diagnostics record per scan with these categories, comma
+    /// separated or repeated. Turns them on; diagnostics.* in settings.d and
+    /// TELLTALE_DIAGNOSTICS_* can also turn them off. Records go to a file of
+    /// their own, never to the event log.
+    #[arg(long = "diagnostics", value_enum, value_delimiter = ',')]
+    diagnostics: Vec<DiagnosticsCategory>,
+
+    /// Diagnostics file. Overrides diagnostics.path (settings.d,
+    /// TELLTALE_DIAGNOSTICS_PATH; default
+    /// diagnostics/telltale-scan-diagnostics.jsonl beside the state file).
+    #[arg(long)]
+    diagnostics_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
 enum HistoryScope {
     /// Everything the store still holds.
     All,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DiagnosticsCategory {
+    /// Time spent in each scan phase.
+    ScanPhases,
+    /// Process CPU time and peak memory.
+    ProcessResources,
+}
+
+fn diagnostics_categories(selected: &[DiagnosticsCategory]) -> crate::diagnostics::Categories {
+    crate::diagnostics::Categories {
+        scan_phases: selected.contains(&DiagnosticsCategory::ScanPhases),
+        process_resources: selected.contains(&DiagnosticsCategory::ProcessResources),
+    }
 }
 
 #[derive(ClapArgs)]
@@ -494,6 +522,21 @@ enum RulesCommand {
 
     /// Validate rule and policy YAML.
     Validate {
+        #[command(flatten)]
+        config: RuleConfigCliArgs,
+    },
+
+    /// Print the rule catalog (telltale.rule_catalog.v2 JSON) of the loaded rules.
+    Catalog {
+        #[command(flatten)]
+        config: RuleConfigCliArgs,
+    },
+
+    /// Show one loaded rule or chain by name.
+    Show {
+        /// Rule or chain name (its compiled id).
+        name: String,
+
         #[command(flatten)]
         config: RuleConfigCliArgs,
     },
@@ -914,6 +957,188 @@ fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json
             }))
             .collect::<Vec<_>>(),
     })
+}
+
+/// A notice about loaded content that did not stop it from loading.
+struct RuleNotice {
+    rule_id: String,
+    kind: &'static str,
+    message: String,
+}
+
+/// Load notices of the content, then the native-profile notices of the
+/// effective set, each in rule order.
+fn rule_notices(rule_set: &crate::rules::CompiledRuleSet) -> Vec<RuleNotice> {
+    let load = rule_set.notices().iter().map(|notice| RuleNotice {
+        rule_id: notice.rule_id.clone(),
+        kind: notice.kind,
+        message: notice.message.clone(),
+    });
+    let native = telltale_detect::v2::native_profile_notices(&rule_set.compatibility_export())
+        .into_iter()
+        .map(|notice| RuleNotice {
+            message: notice.to_string(),
+            rule_id: notice.rule_id,
+            kind: "native_profile_not_applied",
+        });
+    load.chain(native).collect()
+}
+
+/// The text of a pipeline error and its cause, since the error alone is a
+/// code.
+fn pipeline_failure(
+    command: &str,
+    error: &telltale_core::PipelineError,
+) -> Box<dyn std::error::Error> {
+    use std::error::Error as _;
+    match error.source() {
+        Some(source) => format!("{command} failed: {error}: {source}").into(),
+        None => format!("{command} failed: {error}").into(),
+    }
+}
+
+/// `rules show`: one rule or chain as readable text, or an error naming an
+/// unknown name.
+fn show_rule(
+    resolution: &crate::rules::RuleResolution,
+    name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use std::fmt::Write as _;
+    let Some(definition) = resolution.content.get(name) else {
+        return Err(format!(
+            "unknown rule or chain '{name}'; `telltale rules list` names the loaded rules"
+        )
+        .into());
+    };
+    let export = resolution.rule_set.compatibility_export();
+    let effective = export.rules().iter().any(|rule| rule.id == name)
+        || export
+            .modifiers()
+            .iter()
+            .any(|modifier| modifier.id == name);
+    let metadata = definition.metadata();
+    let dash = |value: Option<&str>| value.unwrap_or("-").to_owned();
+    let mut text = String::new();
+    let line = |text: &mut String, key: &str, value: String| {
+        let _ = writeln!(text, "{key}: {value}");
+    };
+    let list = |text: &mut String, key: &str, values: &[String]| {
+        if values.is_empty() {
+            let _ = writeln!(text, "{key}: -");
+        } else {
+            let _ = writeln!(text, "{key}:");
+            for value in values {
+                let _ = writeln!(text, "  - {value}");
+            }
+        }
+    };
+    let chain = definition.kind() == crate::rules::DefinitionKind::Modifier;
+    line(&mut text, "title", dash(metadata.title.as_deref()));
+    line(&mut text, "name", terminal_rule_identifier(definition.id()));
+    line(
+        &mut text,
+        "kind",
+        if chain { "chain" } else { "rule" }.to_owned(),
+    );
+    line(&mut text, "uuid", dash(definition.uuid()));
+    line(&mut text, "status", dash(metadata.status.as_deref()));
+    line(&mut text, "enabled", effective.to_string());
+    line(
+        &mut text,
+        "enabled before policy",
+        definition.enabled().to_string(),
+    );
+    line(
+        &mut text,
+        "severity",
+        definition
+            .severity()
+            .map(terminal_rule_severity)
+            .unwrap_or_else(|| "-".to_owned()),
+    );
+    line(&mut text, "score", definition.score().to_string());
+    line(
+        &mut text,
+        "category",
+        definition
+            .category()
+            .map(terminal_rule_category)
+            .unwrap_or_else(|| "-".to_owned()),
+    );
+    line(&mut text, "package", dash(definition.package_id()));
+    line(
+        &mut text,
+        "description",
+        dash(metadata.description.as_deref()),
+    );
+    line(
+        &mut text,
+        "explanation",
+        definition.explanation().to_owned(),
+    );
+    list(&mut text, "references", &metadata.references);
+    list(&mut text, "false positives", &metadata.falsepositives);
+    line(
+        &mut text,
+        "logsource",
+        metadata
+            .logsource
+            .as_ref()
+            .map(|logsource| {
+                let mut value = format!(
+                    "product={} category={}",
+                    logsource.product, logsource.category
+                );
+                if let Some(service) = &logsource.service {
+                    let _ = write!(value, " service={service}");
+                }
+                value
+            })
+            .unwrap_or_else(|| "-".to_owned()),
+    );
+    list(&mut text, "tags", &metadata.tags);
+    list(&mut text, "telltale tags", definition.tags());
+    list(&mut text, "atlas tags", definition.atlas_tags());
+    match definition.compile() {
+        Ok(crate::rules::CompiledDefinition::Rule(rule)) => {
+            let _ = writeln!(text, "matchers:");
+            for matcher in &rule.matchers {
+                let _ = write!(
+                    text,
+                    "  - target={} scope={} pattern_bytes={}",
+                    matcher.target,
+                    matcher.scope.as_str(),
+                    matcher.regex.len()
+                );
+                if let Some(exclusion) = &matcher.exclusion_regex {
+                    let _ = write!(text, " exclusion_bytes={}", exclusion.len());
+                }
+                text.push('\n');
+            }
+        }
+        Ok(crate::rules::CompiledDefinition::Modifier(modifier)) => {
+            list(&mut text, "chain categories", &modifier.when_all_categories);
+            list(&mut text, "chain rules", &modifier.when_all_rule_ids);
+            line(
+                &mut text,
+                "chain link",
+                modifier
+                    .link
+                    .map(|link| {
+                        format!("within_calls={} order={}", link.calls, link.order.as_str())
+                    })
+                    .unwrap_or_else(|| "-".to_owned()),
+            );
+        }
+        Err(error) => line(&mut text, "matchers", format!("does not compile: {error}")),
+    }
+    let notices = rule_notices(&resolution.rule_set)
+        .into_iter()
+        .filter(|notice| notice.rule_id == name)
+        .map(|notice| format!("{}: {}", notice.kind, notice.message))
+        .collect::<Vec<_>>();
+    list(&mut text, "notices", &notices);
+    Ok(text)
 }
 
 fn community_rules(enabled: bool) -> CommunityRules {
@@ -1557,6 +1782,8 @@ mod runtime_dispatch_tests {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Diagnostics measure startup from here.
+    let command_started = std::time::Instant::now();
     // A hook answers a tool call that is waiting: skip the scanner's startup
     // work (executable hashing, full argument parsing) and use the hooks' own
     // exit codes.
@@ -1582,6 +1809,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             rebuild_baselines,
             max_sources,
             history,
+            diagnostics,
+            diagnostics_path,
         }) => {
             let runtime = runtime.as_ref().expect("scan runtime was selected");
             let mut prepared = execution.prepare(
@@ -1589,18 +1818,39 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     endpoint: splunk_hec_endpoint.as_deref(),
                     token: splunk_hec_token.as_deref(),
                 },
-                Default::default(),
+                crate::settings::CliSettings {
+                    diagnostics: diagnostics_categories(&diagnostics),
+                    diagnostics_path,
+                    ..Default::default()
+                },
             )?;
             if !once && interval_seconds.is_none() {
                 return Err("scan requires --once or --interval-seconds".into());
             }
             prepared.activate(&runtime.value)?;
+            let diagnostics_categories = prepared.settings.diagnostics_categories();
+            let diagnostics_path = crate::diagnostics::resolve_path(
+                prepared.settings.diagnostics_path(),
+                &prepared.state_path,
+            );
             let scan_config = scan::ScanConfig {
                 execution: prepared.config(&runtime.value),
                 backfill,
                 history: history.is_some(),
                 rebuild_baselines,
                 max_sources,
+                diagnostics: diagnostics_categories
+                    .any()
+                    .then_some(scan::ScanDiagnosticsOptions {
+                        categories: diagnostics_categories,
+                        path: &diagnostics_path,
+                        command: if once {
+                            scan::ScanCommand::ScanOnce
+                        } else {
+                            scan::ScanCommand::ScanInterval
+                        },
+                        command_started,
+                    }),
             };
             if once {
                 let failures = scan::run_scan_once(scan_config)?;
@@ -1689,8 +1939,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "sources": diagnostics["sources"],
                         "provenance": diagnostics["provenance"],
                         "packages": diagnostics["packages"],
+                        "notices": rule_notices(&resolution.rule_set)
+                            .into_iter()
+                            .map(|notice| serde_json::json!({
+                                "rule_id": terminal_rule_identifier(&notice.rule_id),
+                                "kind": notice.kind,
+                                "message": notice.message,
+                            }))
+                            .collect::<Vec<_>>(),
                     }))?
                 );
+            }
+            RulesCommand::Catalog { config } => {
+                let document = config
+                    .resolve_rule_set()?
+                    .into_pipeline()
+                    .and_then(|pipeline| {
+                        pipeline.rule_catalog_document(
+                            &telltale_core::DetailedEvaluationOptions::default(),
+                        )
+                    })
+                    .map_err(|error| pipeline_failure("rules catalog", &error))?;
+                println!("{}", serde_json::to_string(&document)?);
+            }
+            RulesCommand::Show { name, config } => {
+                let resolution = config.resolve_rule_set()?;
+                print!("{}", show_rule(&resolution, &name)?);
             }
             RulesCommand::Test { fixture, config } => {
                 let resolution = config.resolve_rule_set()?;

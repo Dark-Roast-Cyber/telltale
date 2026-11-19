@@ -1,0 +1,43 @@
+version: 1
+description: Synthetic copy of the community container host-access pack, for Rule v2 parity.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: tdx.privilege_escalation.container_host_escape
+    title: Agent command requests container-mediated host filesystem or namespace access
+    status: experimental
+    category: privilege_escalation
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 50
+    targets: [command, arguments]
+    regex: '(?:\bmount\b(?:[^;&|\n]|\\\r?\n){0,120}?\s-t\s*virtiofs\s+[^\s;&|]+\s+[^\s;&|]|\b(?:docker|podman|nerdctl)\b(?:\s+-[\w-]+(?:[=\s]+[^\s;&|-][^\s;&|]*)?){0,8}(?:\s+container)?\s+(?:run|create)\b(?:[^;&|\n]|\\\r?\n){0,600}?(?:\s(?:-v|--volume)(?:\s+|=)\\{0,7}[\"'']?/:|\s--mount(?:\s+|=)\\{0,7}[\"'']?[^\s;&|]*?\b(?:source|src)=/(?:,|\\{0,7}[\"'']|\s|$))|\bnsenter\b(?:[^;&|\n]|\\\r?\n){0,120}?\s(?:-t\s*1|--target(?:\s+|=)1)(?:\s|$)|(?:--unix-socket(?:\s+|=)[^\s;&|]*docker\.sock|\bhttps?://[^\s;&|]*?/containers/create(?:[^\w./]|$))(?:[^;&|\n]|\\\r?\n){0,600}?\\{0,7}[\"''](?:privileged\\{0,7}[\"'']\s*:\s*true|(?:binds\\{0,7}[\"'']\s*:\s*\[|source\\{0,7}[\"'']\s*:)\s*\\{0,7}[\"'']/(?::|\\{0,7}[\"'']))|\\{0,7}[\"''](?:privileged\\{0,7}[\"'']\s*:\s*true|(?:binds\\{0,7}[\"'']\s*:\s*\[|source\\{0,7}[\"'']\s*:)\s*\\{0,7}[\"'']/(?::|\\{0,7}[\"'']))(?:[^;&|\n]|\\\r?\n){0,600}?(?:--unix-socket(?:\s+|=)[^\s;&|]*docker\.sock|\bhttps?://[^\s;&|]*?/containers/create(?:[^\w./]|$)))'
+    tags: [container, docker, sandbox-escape, privilege-escalation, host-mount]
+    explanation: An agent tool request includes a virtiofs mount, a host-root container bind on a local or remote daemon, PID 1 namespace entry, or a Docker Engine API create request, over the Unix socket or a TCP endpoint, containing privileged or host-root settings. These can enable host access when permissions and runtime configuration allow it; the command alone does not prove a sandbox escape, a successful mount, or execution.
+    falsepositives:
+      - Monitoring agents such as node-exporter or cAdvisor are commonly started with the host root mounted read-only.
+      - Requested host recovery or forensics work may mount the host root into a container or use nsenter on purpose.
+      - Developers working inside a VM guest may mount a virtiofs share they configured themselves.
+      - Requested CI or remote host maintenance may create privileged or host-root containers on a remote daemon on purpose.
+
+  - id: tdx.privilege_escalation.container_privileged_launch
+    title: Privileged or socket-mounted container launched by an agent
+    status: experimental
+    category: privilege_escalation
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: hunt
+    severity: low
+    score: 20
+    targets: [command, arguments]
+    regex: '(?:\b(?:docker|podman|nerdctl)\b(?:\s+-[\w-]+(?:[=\s]+[^\s;&|-][^\s;&|]*)?){0,8}(?:\s+container)?\s+(?:run|create)\b(?:[^;&|\n]|\\\r?\n){0,600}?\s(?:--privileged\b|--pid(?:\s+|=)\\{0,7}[\"'']?host\b|--cap-add(?:\s+|=)(?:cap_)?(?:sys_admin|all)\b|--security-opt(?:\s+|=)\\{0,7}[\"'']?(?:seccomp|apparmor)[=:]unconfined|(?:-v|--volume|--mount)(?:\s+|=)[^\s;&|]*docker\.sock)|\bcurl\b(?:[^;&|\n]|\\\r?\n){0,200}?--unix-socket(?:\s+|=)\\{0,7}[\"'']?[^\s;&|]*docker\.sock)'
+    tags: [container, docker, privileged, docker-socket, privilege-escalation]
+    explanation: An agent tool request specifies privileged container options, broad capabilities, relaxed confinement, or a daemon-socket mount, on a local or remote daemon, or makes a curl request to the Docker socket. The command is a host-access prerequisite, not evidence that the container was created or that isolation was bypassed.
+    falsepositives:
+      - Docker-in-Docker, KinD, and testcontainers setups routinely mount the Docker socket or run privileged.
+      - Hardware, eBPF, and profiling work often needs privileged containers or added capabilities.
+      - Scripts that query the Docker API socket for container status match without creating anything.
+modifiers: []

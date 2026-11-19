@@ -142,10 +142,10 @@ impl RuleContent {
         }
         let read = |path: &Path| crate::hooks::state::read_operator_input(path).ok();
         let reserved = |id: &str| id.starts_with(HOST_RULE_ID_PREFIX);
-        let in_set = |set: &telltale_rules::RuleSet| {
-            let rules = set.rules.iter().map(|rule| &rule.id);
-            let modifiers = set.modifiers.iter().map(|modifier| &modifier.id);
-            rules.chain(modifiers).any(|id| reserved(id))
+        let in_set = |set: &telltale_rules::LoadedRules| {
+            set.definitions()
+                .iter()
+                .any(|definition| reserved(definition.id()))
         };
         let packs = &self.packs;
         let documents = packs
@@ -155,7 +155,7 @@ impl RuleContent {
             .chain(&packs.local)
             .find(|path| {
                 read(path)
-                    .and_then(|text| serde_yaml::from_str::<telltale_rules::RuleSet>(&text).ok())
+                    .and_then(|text| telltale_rules::LoadedRules::parse(&text).ok())
                     .is_some_and(|set| in_set(&set))
             });
         let packages = packs.packages.iter().find(|path| {

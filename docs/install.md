@@ -12,7 +12,8 @@ For exact non-production canary identity and output-routing requirements, see
 [Controlled development deployment](controlled-deployment.md). Its tested
 compatibility record and pinned rollback recipe are historical evidence
 against `v0.5.0`, not proof of rollback from the current stable release.
-For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md).
+For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md); for
+the 0.8 line, the [0.8.0 migration guide](migrations/0.8.0.md).
 
 ## Prerequisites
 
@@ -280,10 +281,12 @@ checks that `--version` reports the checked-out revision, and prints the binary
 path and SHA-256. It never falls back to another target.
 
 To check a live host read-only, run
-`.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Root <source root> -Client codex,claude`.
-It performs one dry-run scan per client with temporary log and state paths and
-reports `passed`, `passed_with_limits`, `failed`, or `not_available`. It does not
-install, schedule, or change any source store.
+`.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Client codex,claude`.
+The verifier uses the scanner's default host discovery, including store locations
+set through variables such as `CODEX_HOME`. Pass `-Root <source root>` to limit
+discovery to an explicit directory. The verifier performs one dry-run scan per
+client with temporary log and state paths and reports `passed`,
+`passed_with_limits`, `failed`, or `not_available`.
 
 ### Windows Scheduled Task example
 
@@ -492,8 +495,9 @@ Rule packs resolve in fixed tier order: bundled core rules, rule packages (the
 embedded community package and `rule-packages.d`), `organization-rules.d`,
 `rules.d` deployment files, and `ui-rules.d` local/UI files. Files are sorted
 within each root and roots are processed in configured root order. A higher tier
-fully replaces a same-ID definition in place; unique IDs are additive. Equal-tier
-duplicate IDs fail with source diagnostics. Repeated explicit `--rules` paths are
+fully replaces the definition with the same rule `name` in place and must keep
+its `id`; unique names are additive. Equal-tier duplicate names, and one `id`
+under two names, fail with source diagnostics. Repeated explicit `--rules` paths are
 loaded afterward as additive-only documents and cannot replace managed packs.
 `overrides.d` files are sorted the same way and applied after packs are merged,
 before policy filtering. If no explicit `--policy` is provided, exactly one
@@ -531,30 +535,46 @@ it reaches a release. Use only the core rules with `--no-community-rules` on
 `--no-default-rules` omits both the core rules and the embedded community
 snapshot, while installed packages still load like other managed content.
 
-A rule package is one YAML file:
+A rule package is one YAML file in format `telltale-rule-package/v2`: a header
+document, then each [Rule v2](rule-format.md) rule or chain as its own `---`
+document, sorted by `name`:
 
 ```yaml
-format: telltale-rule-package/v1
+format: telltale-rule-package/v2
 id: acme.agent-rules        # unique package identity
-version: "1.4.0"
+title: Acme agent rules     # display name
+version: '1.4.0'
 publisher: Acme security engineering
 license: Apache-2.0
-rule_namespace: acme        # every rule and modifier ID starts with "acme."
+rule_namespace: acme        # every rule and chain name starts with "acme."
 source: https://example.com/acme/agent-rules   # optional, informational
 revision: 0123456789abcdef0123456789abcdef01234567  # optional, informational
-documents:
-  - version: 1
-    description: Acme agent rules.
-    defaults: {case_insensitive: true, enabled: true}
-    rules:
-      - id: acme.persistence.example
-        # ... ordinary Rule v1 fields ...
-    modifiers: []
+---
+title: Shell profile written
+id: 0f8fad5b-d9cb-469f-a165-70867728950e
+name: acme.persistence.shell_profile_write
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        tool.written_path|endswith: ['/.bashrc', '/.zshrc']
+    condition: selection
+level: medium
+telltale:
+    category: persistence
+    score: 30
+    explanation: An agent wrote a shell startup file.
 ```
+
+See [rule packages](rule-format.md#rule-packages) for every header check.
+Format `telltale-rule-package/v1`, the only format Telltale 0.7 reads, stops
+loading in 0.8.0; see the [0.8.0 migration guide](migrations/0.8.0.md).
 
 Packages only add definitions. A package cannot reuse a core rule namespace,
 replace a core rule, or replace another package's rule; conflicting package IDs,
-namespaces, or rule IDs fail validation with both sources. Diagnostics never
+namespaces, or rule names fail validation with both sources. Diagnostics never
 show paths, so two installed copies of one package are named by version and the
 first 12 hex digits of their content SHA-256; `sha256sum` on the
 `rule-packages.d` files finds them. Operators may still
@@ -585,8 +605,9 @@ embedded version; scans record the same list under
 `effective_configuration.rules.packages`.
 
 Use overrides for local rule disablement or score tuning without editing bundled
-or custom rule files:
+or custom rule files. `rule_id` is the rule's `name`:
 
+<!-- rule-example: skip -->
 ```yaml
 version: 1
 description: Local workstation tuning.
@@ -619,7 +640,7 @@ YAML, and prints a JSON status summary without reading session stores.
 Use `telltale rules export-default` when you want to inspect or fork the bundled
 default rules from an installed binary. Save an edited copy in the intended
 managed tier (`organization-rules.d`, `rules.d`, or `ui-rules.d`) when it should
-replace matching IDs. Passing an exported copy with `--rules` is additive-only;
+replace rules with matching names; keep each replaced rule's `id`. Passing an exported copy with `--rules` is additive-only;
 use `--no-default-rules` if it is intended to be the complete explicit rule set.
 Do not edit bundled defaults in place.
 
@@ -658,6 +679,10 @@ events:
 watch:
   debounce_ms: 500                   # watch --debounce-ms
   min_scan_interval_ms: 10000        # watch --min-scan-interval-ms
+diagnostics:                         # opt-in scan records; see docs/telemetry-output.md
+  scan_phases: false                 # TELLTALE_DIAGNOSTICS_SCAN_PHASES, scan --diagnostics scan-phases
+  process_resources: false           # TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES, scan --diagnostics process-resources
+  # path: <path>                     # TELLTALE_DIAGNOSTICS_PATH, scan --diagnostics-path; default diagnostics/ beside the state file
 hooks:                               # telltale hooks; see docs/hooks/README.md
   mode: observe                      # detect-only; enforce returns ask and deny to the harness
   on_error: allow                    # allow, ask or deny when evaluation fails
@@ -686,7 +711,8 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
 
 Precedence, lowest to highest: defaults, settings files (roots in order, files
 sorted within a root, so a later file wins per key), environment variables, then
-explicit flags. The `events` on/off flags can only turn their setting on;
+explicit flags. The `events` on/off flags and `scan --diagnostics` can only
+turn their setting on;
 `--health-heartbeat-interval-seconds 0` turns the heartbeat off. A
 vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can share one
 directory. Unknown keys, an unsupported `version`, files over 64 KiB,

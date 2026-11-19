@@ -16,12 +16,13 @@ use telltale_rules::package::{
     CommunityRules, PackageOrigin, RulePackage, RulePackageSummary, resolve_rule_packages,
 };
 use telltale_rules::{
-    CompiledRuleSet, ModifierDefinition, RuleDefaults, RuleDefinition, RuleLoadMode,
-    RuleOverrideDocument, RulePolicy, RuleSet, apply_modifier_defaults, apply_rule_defaults,
-    apply_rule_override_document, bundled_default_rule_set,
+    CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode,
+    RuleOverrideDocument, bundled_default_rules, parse_rule_policy,
 };
 
-/// Managed rule content: tiered Rule v1 packs, installed rule packages, and
+use crate::{Pipeline, PipelineError};
+
+/// Managed rule content: tiered rule files, installed rule packages, and
 /// whether community content participates.
 #[derive(Debug, Clone, Default)]
 pub struct RulePackPaths {
@@ -49,19 +50,36 @@ pub struct RuleResolutionDiagnostics {
 
 #[derive(Debug, Clone)]
 pub struct RuleResolution {
+    /// The effective set: enabled definitions the policy selects.
     pub rule_set: CompiledRuleSet,
-    pub merged_rule_set: RuleSet,
+    /// Every definition after tier merge and overrides, before policy,
+    /// disabled ones included.
+    pub content: LoadedRules,
     pub diagnostics: RuleResolutionDiagnostics,
 }
 
-/// Resolve rule content. `documents` are in-memory rule documents, labelled
-/// by source, loaded at the explicit tier: additive, so a definition ID that
-/// any other tier already has is an error. `replacements` is text to use in
-/// place of reading a named file (a rule, package, override or policy file).
+impl RuleResolution {
+    /// A pipeline over the effective set, which keeps [`Self::content`] for
+    /// its rule catalog.
+    pub fn into_pipeline(self) -> Result<Pipeline, PipelineError> {
+        Pipeline::from_compiled(self.content, self.rule_set, self.diagnostics.packages)
+    }
+}
+
+/// Resolve rule content. `documents` are in-memory rule content, labelled by
+/// source, loaded at the explicit tier: additive, so a definition ID that any
+/// other tier already has is an error. `replacements` is text to use in place
+/// of reading a named file (a rule, package, override or policy file).
+///
+/// Every file is one Rule v1 document or one or more Rule v2 documents.
+/// Definitions merge by compiled id (the Rule v2 `name`): a higher tier
+/// replaces a lower one in place, and a Rule v2 definition that replaces a
+/// Rule v2 definition must keep its UUID. An id twice within one tier, or a
+/// UUID on two names, is an error.
 pub fn resolve_rule_set(
     pack_paths: &RulePackPaths,
     explicit_rule_paths: &[PathBuf],
-    documents: Vec<(String, RuleSet)>,
+    documents: Vec<(String, LoadedRules)>,
     policy_path: Option<&Path>,
     mode: RuleLoadMode,
     override_paths: &[PathBuf],
@@ -89,20 +107,16 @@ pub fn resolve_rule_set(
     }
 
     let policy = match policy_path {
-        Some(path) => {
-            let raw = read_source(path, &replacements)?;
-            Some(serde_yaml::from_str::<RulePolicy>(&raw)?)
-        }
+        Some(path) => Some(parse_rule_policy(&read_source(path, &replacements)?)?),
         None => None,
     };
 
-    let (mut rule_set, mut diagnostics) = merge_rule_documents(documents)?;
+    let (mut content, mut diagnostics) = merge_rule_documents(documents)?;
     diagnostics.packages = packages;
-    apply_rule_overrides_from_paths(&mut rule_set, override_paths, &replacements)?;
-    let merged_rule_set = rule_set.clone();
+    apply_rule_overrides_from_paths(&mut content, override_paths, &replacements)?;
     Ok(RuleResolution {
-        rule_set: rule_set.compile(policy.as_ref())?,
-        merged_rule_set,
+        rule_set: content.compile(policy.as_ref())?,
+        content,
         diagnostics,
     })
 }
@@ -139,13 +153,13 @@ impl RuleTier {
 struct RuleDocument {
     tier: RuleTier,
     source: String,
-    rule_set: RuleSet,
+    rules: LoadedRules,
 }
 
 fn load_rule_documents(
     pack_paths: &RulePackPaths,
     explicit_rule_paths: &[PathBuf],
-    extra_documents: Vec<(String, RuleSet)>,
+    extra_documents: Vec<(String, LoadedRules)>,
     mode: RuleLoadMode,
     replacements: &BTreeMap<PathBuf, &str>,
 ) -> Result<(Vec<RuleDocument>, Vec<RulePackageSummary>), Box<dyn std::error::Error>> {
@@ -155,7 +169,7 @@ fn load_rule_documents(
         documents.push(RuleDocument {
             tier: RuleTier::Builtin,
             source: "builtin:telltale.default".to_string(),
-            rule_set: bundled_default_rule_set()?,
+            rules: bundled_default_rules()?,
         });
     }
     let packages = load_package_documents(pack_paths, mode, &mut documents, replacements)?;
@@ -178,11 +192,11 @@ fn load_rule_documents(
         }
         documents.push(load_rule_document(RuleTier::Explicit, path, replacements)?);
     }
-    for (source, rule_set) in extra_documents {
+    for (source, rules) in extra_documents {
         documents.push(RuleDocument {
             tier: RuleTier::Explicit,
             source,
-            rule_set,
+            rules,
         });
     }
     Ok((documents, packages))
@@ -225,11 +239,11 @@ fn load_package_documents(
         };
         let package = resolved.package;
         let identity = format!("{}@{}", package.id(), package.version());
-        for (index, rule_set) in package.into_documents().into_iter().enumerate() {
+        for (index, rules) in package.into_documents().into_iter().enumerate() {
             documents.push(RuleDocument {
                 tier: RuleTier::Package,
                 source: format!("package:{identity}:{location}#document:{index}"),
-                rule_set,
+                rules,
             });
         }
     }
@@ -244,28 +258,13 @@ fn load_rule_document(
     let identity_path = canonical_or_original(path);
     let source = format!("{}:{}#document:0", tier.name(), identity_path.display());
     let raw = read_source(path, replacements)?;
-    let rule_set = serde_yaml::from_str::<RuleSet>(&raw)
+    let rules = LoadedRules::parse(&raw)
         .map_err(|error| format!("invalid rule document '{source}': {error}"))?;
     Ok(RuleDocument {
         tier,
         source,
-        rule_set,
+        rules,
     })
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DefinitionKind {
-    Rule,
-    Modifier,
-}
-
-impl DefinitionKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Rule => "rule",
-            Self::Modifier => "modifier",
-        }
-    }
 }
 
 struct DefinitionLocation {
@@ -278,16 +277,8 @@ struct DefinitionLocation {
 
 fn merge_rule_documents(
     documents: Vec<RuleDocument>,
-) -> Result<(RuleSet, RuleResolutionDiagnostics), Box<dyn std::error::Error>> {
-    for document in &documents {
-        document
-            .rule_set
-            .validate_version()
-            .map_err(|error| format!("invalid rule document '{}': {error}", document.source))?;
-    }
-    let mut descriptions = Vec::new();
-    let mut rules = Vec::new();
-    let mut modifiers = Vec::new();
+) -> Result<(LoadedRules, RuleResolutionDiagnostics), Box<dyn std::error::Error>> {
+    let mut definitions = Vec::<LoadedDefinition>::new();
     let mut locations = BTreeMap::<String, DefinitionLocation>::new();
     let mut sources = Vec::new();
 
@@ -299,57 +290,35 @@ fn merge_rule_documents(
         RuleTier::Local,
         RuleTier::Explicit,
     ] {
-        let tier_documents = documents.iter().filter(|document| document.tier == tier);
-        let mut equal_tier_ids = BTreeMap::<String, (DefinitionKind, String)>::new();
-        for document in tier_documents {
-            for id in document
-                .rule_set
-                .rules
-                .iter()
-                .map(|rule| (&rule.id, DefinitionKind::Rule))
-                .chain(
-                    document
-                        .rule_set
-                        .modifiers
-                        .iter()
-                        .map(|modifier| (&modifier.id, DefinitionKind::Modifier)),
-                )
-            {
-                if let Some((previous_kind, previous_source)) =
-                    equal_tier_ids.insert(id.0.clone(), (id.1, document.source.clone()))
-                {
+        let tier_documents = documents
+            .iter()
+            .filter(|document| document.tier == tier)
+            .collect::<Vec<_>>();
+        let mut equal_tier_ids = BTreeMap::<&str, (DefinitionKind, &str)>::new();
+        for document in &tier_documents {
+            for definition in document.rules.definitions() {
+                if let Some((previous_kind, previous_source)) = equal_tier_ids.insert(
+                    definition.id(),
+                    (definition.kind(), document.source.as_str()),
+                ) {
                     return Err(duplicate_definition_error(
-                        id.0.to_string(),
+                        definition.id(),
                         previous_kind,
-                        &previous_source,
-                        id.1,
+                        previous_source,
+                        definition.kind(),
                         &document.source,
                     ));
                 }
             }
         }
 
-        for document in documents.iter().filter(|document| document.tier == tier) {
+        for document in tier_documents {
             sources.push(document.source.clone());
-            descriptions.push(document.rule_set.description.clone());
-            let defaults = document.rule_set.defaults.clone();
-            for mut rule in document.rule_set.rules.clone() {
-                apply_rule_defaults(&mut rule, &defaults);
-                upsert_rule_definition(
+            for definition in document.rules.definitions() {
+                upsert_definition(
                     &mut locations,
-                    &mut rules,
-                    rule,
-                    DefinitionKind::Rule,
-                    tier,
-                    &document.source,
-                )?;
-            }
-            for mut modifier in document.rule_set.modifiers.clone() {
-                apply_modifier_defaults(&mut modifier, &defaults);
-                upsert_modifier_definition(
-                    &mut locations,
-                    &mut modifiers,
-                    modifier,
+                    &mut definitions,
+                    definition.clone(),
                     tier,
                     &document.source,
                 )?;
@@ -361,22 +330,13 @@ fn merge_rule_documents(
         .into_iter()
         .map(|(id, location)| RuleProvenance {
             id,
-            kind: location.kind.name().to_string(),
+            kind: location.kind.as_str().to_string(),
             winner: location.source,
             replaced_sources: location.replaced_sources,
         })
         .collect();
     Ok((
-        RuleSet {
-            version: 1,
-            description: descriptions.join("; "),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules,
-            modifiers,
-        },
+        LoadedRules::from_definitions(definitions)?,
         RuleResolutionDiagnostics {
             sources,
             provenance,
@@ -386,7 +346,7 @@ fn merge_rule_documents(
 }
 
 fn duplicate_definition_error(
-    id: String,
+    id: &str,
     first_kind: DefinitionKind,
     first_source: &str,
     second_kind: DefinitionKind,
@@ -394,110 +354,61 @@ fn duplicate_definition_error(
 ) -> Box<dyn std::error::Error> {
     format!(
         "duplicate rule id: {id} ({} from {first_source}; {} from {second_source})",
-        first_kind.name(),
-        second_kind.name(),
+        first_kind.as_str(),
+        second_kind.as_str(),
     )
     .into()
 }
 
-fn upsert_rule_definition(
+/// Add `definition`, or let it replace the definition with its id from a
+/// lower tier that allows replacement, at that definition's position.
+fn upsert_definition(
     locations: &mut BTreeMap<String, DefinitionLocation>,
-    rules: &mut Vec<RuleDefinition>,
-    rule: RuleDefinition,
-    kind: DefinitionKind,
+    definitions: &mut Vec<LoadedDefinition>,
+    definition: LoadedDefinition,
     tier: RuleTier,
     source: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    upsert_definition_location(locations, &rule.id, kind, tier, source, rules.len())?;
-    if let Some(location) = locations.get_mut(&rule.id)
-        && location.index < rules.len()
-    {
-        rules[location.index] = rule;
-        location.replaced_sources.push(location.source.clone());
-        location.source = source.to_string();
-        return Ok(());
-    }
-    let index = rules.len();
-    rules.push(rule);
-    locations
-        .get_mut(source_id_from_rule(&rules[index]))
-        .unwrap()
-        .index = index;
-    Ok(())
-}
-
-fn source_id_from_rule(rule: &RuleDefinition) -> &str {
-    &rule.id
-}
-
-fn upsert_modifier_definition(
-    locations: &mut BTreeMap<String, DefinitionLocation>,
-    modifiers: &mut Vec<ModifierDefinition>,
-    modifier: ModifierDefinition,
-    tier: RuleTier,
-    source: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let id = modifier.id.clone();
-    upsert_definition_location(
-        locations,
-        &id,
-        DefinitionKind::Modifier,
-        tier,
-        source,
-        modifiers.len(),
-    )?;
-    if let Some(location) = locations.get_mut(&id)
-        && location.kind == DefinitionKind::Modifier
-        && location.index < modifiers.len()
-    {
-        modifiers[location.index] = modifier;
-        location.replaced_sources.push(location.source.clone());
-        location.source = source.to_string();
-        return Ok(());
-    }
-    modifiers.push(modifier);
-    Ok(())
-}
-
-fn upsert_definition_location(
-    locations: &mut BTreeMap<String, DefinitionLocation>,
-    id: &str,
-    kind: DefinitionKind,
-    tier: RuleTier,
-    source: &str,
-    index: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(existing) = locations.get_mut(id) else {
+    let id = definition.id().to_owned();
+    let kind = definition.kind();
+    let Some(existing) = locations.get_mut(&id) else {
         locations.insert(
-            id.to_string(),
+            id,
             DefinitionLocation {
                 kind,
                 tier,
-                index,
+                index: definitions.len(),
                 source: source.to_string(),
                 replaced_sources: Vec::new(),
             },
         );
+        definitions.push(definition);
         return Ok(());
     };
-    if existing.kind != kind {
+    if existing.kind != kind || tier.is_additive_only() || existing.tier >= tier {
         return Err(duplicate_definition_error(
-            id.to_string(),
+            &id,
             existing.kind,
             &existing.source,
             kind,
             source,
         ));
     }
-    if tier.is_additive_only() || existing.tier >= tier {
-        return Err(duplicate_definition_error(
-            id.to_string(),
-            existing.kind,
-            &existing.source,
-            kind,
-            source,
-        ));
+    let replaced = &definitions[existing.index];
+    if let (Some(old), Some(new)) = (replaced.uuid(), definition.uuid())
+        && old != new
+    {
+        return Err(format!(
+            "rule '{id}' from {source} replaces the rule from {} but its Rule v2 id {new} differs \
+             from {old}; a replacement keeps the id of the rule it replaces",
+            existing.source
+        )
+        .into());
     }
+    definitions[existing.index] = definition;
+    existing.replaced_sources.push(existing.source.clone());
+    existing.source = source.to_string();
+    existing.tier = tier;
     Ok(())
 }
 
@@ -507,7 +418,7 @@ pub fn canonical_or_original(path: &Path) -> PathBuf {
 }
 
 fn apply_rule_overrides_from_paths(
-    rule_set: &mut RuleSet,
+    content: &mut LoadedRules,
     override_paths: &[PathBuf],
     replacements: &BTreeMap<PathBuf, &str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -515,7 +426,7 @@ fn apply_rule_overrides_from_paths(
         let raw = read_source(path, replacements)?;
         let document = serde_yaml::from_str::<RuleOverrideDocument>(&raw)
             .map_err(|error| format!("invalid rule override file '{}': {error}", path.display()))?;
-        apply_rule_override_document(rule_set, &document, path)?;
+        content.apply_override_document(&document, path)?;
     }
     Ok(())
 }

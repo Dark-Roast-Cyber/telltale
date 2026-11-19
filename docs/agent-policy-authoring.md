@@ -1,6 +1,6 @@
 # Agent Policy Authoring
 
-Telltale uses one detection engine for production alerts, bleeding-edge ad-hoc hunts, security detections, and policy-violation detections. A policy violation is not a separate runtime path. It is a normal Telltale rule bundle, written in the same YAML syntax, validated by the same CLI commands, tested with the same synthetic fixtures, and emitted as the same SIEM-friendly detection event shape.
+Telltale uses one detection engine for production alerts, bleeding-edge ad-hoc hunts, security detections, and policy-violation detections. A policy violation is not a separate runtime path. It is a normal Telltale rule bundle, written in the same [rule format](rule-format.md), validated by the same CLI commands, tested with the same synthetic fixtures, and emitted as the same SIEM-friendly detection event shape.
 
 This document defines the first deterministic workflow for turning human-written AI agent policy into Telltale detection content. The first supported policy inputs are Markdown and YAML. PDF, DOCX, and AI-assisted import are future workflow layers.
 
@@ -38,6 +38,7 @@ The agent behavior policy is a normalized planning artifact. It records controls
 
 The first schema is intentionally simple and reviewable:
 
+<!-- rule-example: skip -->
 ```yaml
 version: 1
 name: example-agent-policy
@@ -57,13 +58,13 @@ controls:
 
 ### Detection Bundle
 
-Detection bundles remain Telltale rule YAML. Bundles can be organized by purpose:
+Detection bundles remain Telltale rule files (Rule v2). Bundles can be organized by purpose:
 
 - `config/rules/tool-call-regex.yaml` for bundled security and threat-hunting detections.
 - `config/rules/ad-hoc/*.yaml` for temporary or bleeding-edge rules that should be validated before promotion.
-- `config/rules/policy-violations/*.yaml` for policy-violation detection or audit. These are ordinary detection YAML, not an enforcement action.
+- `config/rules/policy-violations/*.yaml` for policy-violation detection or audit. These are ordinary rule files, not an enforcement action.
 - Deployment-specific custom bundles passed with repeated `--rules` flags. These
-  bundles are additive-only after managed packs and cannot replace their IDs.
+  bundles are additive-only after managed packs and cannot replace their rules.
 - Small deployments can place organization, deployment, and local/UI bundles
   under `organization-rules.d/*.yaml|*.yml`, `rules.d/*.yaml|*.yml`, and
   `ui-rules.d/*.yaml|*.yml`; reserve `--rules` for explicit one-off additions.
@@ -71,14 +72,19 @@ Detection bundles remain Telltale rule YAML. Bundles can be organized by purpose
 
 Policy-violation bundles use exactly the same engine and syntax as other detection bundles.
 
-Rule purpose is described with metadata fields, not by changing syntax:
+Rule purpose is described in the `telltale` block, not by changing syntax:
 
 ```yaml
-detection_class: policy_violation
-signal_type: atomic
-analytic_intent: audit
-atlas_tags: []
+telltale:
+    category: policy_guardrail
+    score: 30
+    explanation: An agent changed its own guardrail configuration.
+    detection_class: policy_violation
+    signal_type: atomic
+    analytic_intent: audit
 ```
+
+MITRE ATLAS mappings, when specific, go in Sigma `tags` as `atlas.<id>`.
 
 See the [detection content standard](detection-content-standard.md) and the
 [ATLAS coverage map](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
@@ -114,7 +120,7 @@ If a control depends on missing user intent, process ancestry, network packet co
 1. Read the human policy and extract agent behavior controls.
 2. Assign each control one decision and one observability value.
 3. Map each control to ADR categories from `docs/threat-taxonomy.md`.
-4. Reuse existing rule IDs when they already cover the behavior.
+4. Reuse existing rule names when they already cover the behavior.
 5. Add new policy-violation rules only for observable gaps.
 6. Add synthetic positive and negative fixtures.
 7. Validate syntax with `telltale rules validate`.

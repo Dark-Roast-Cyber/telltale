@@ -493,19 +493,12 @@ fn rule_match_confusion(
     evaluations: &[CaseEvaluation],
 ) -> BTreeMap<String, Confusion> {
     let evaluations = by_id(evaluations);
-    let rule_set = telltale_rules::bundled_default_rule_set().expect("bundled rules");
+    let rule_set = telltale_rules::bundled_default_rules().expect("bundled rules");
     let enabled = rule_set
-        .rules
+        .definitions()
         .iter()
-        .filter(|rule| rule.enabled && rule_set.defaults.enabled)
-        .map(|rule| rule.id.clone())
-        .chain(
-            rule_set
-                .modifiers
-                .iter()
-                .filter(|modifier| modifier.enabled && rule_set.defaults.enabled)
-                .map(|modifier| modifier.id.clone()),
-        )
+        .filter(|definition| definition.enabled())
+        .map(|definition| definition.id().to_owned())
         .collect::<BTreeSet<_>>();
     let mut result = BTreeMap::<String, Confusion>::new();
     for case in &manifest.cases {

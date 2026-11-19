@@ -51,9 +51,13 @@ const OPENCODE_SQLITE_SESSION_MESSAGE_TABLE: &str = "session_message";
 #[cfg(test)]
 mod activation_tests;
 mod canonical;
+mod diagnostics;
 mod discovery;
 mod processing;
 pub(super) mod watch;
+
+pub(crate) use diagnostics::{ScanCommand, ScanDiagnosticsOptions};
+use diagnostics::{ScanCounts, ScanPhase, ScanRecorder};
 
 use processing::{
     SourceProcessingStatus, should_stage_sqlite_ingestion_cursors, sqlite_progress_candidate,
@@ -106,6 +110,8 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) history: bool,
     pub(crate) rebuild_baselines: bool,
     pub(crate) max_sources: Option<usize>,
+    /// Opt-in diagnostics records; `None` when every category is off.
+    pub(crate) diagnostics: Option<ScanDiagnosticsOptions<'a>>,
 }
 
 pub(crate) fn run_scan_loop(
@@ -114,8 +120,10 @@ pub(crate) fn run_scan_loop(
     interval: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut remaining = iterations;
+    let mut first_scan = true;
     loop {
-        run_scan_once(config)?;
+        run_recorded_scan(config, first_scan)?;
+        first_scan = false;
         if iteration_budget_exhausted(&mut remaining) {
             break;
         }
@@ -247,8 +255,26 @@ fn cached_rule_plan(
 pub(crate) fn run_scan_once(
     config: ScanConfig<'_>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    run_scan(config, ScanTargets::Full, StateSavePolicy::Always)
-        .map(|result| result.source_failures)
+    run_recorded_scan(config, true)
+}
+
+/// One full `scan`, followed by its diagnostics record when a category is
+/// enabled, whether or not the scan succeeded. The record never changes the
+/// result.
+fn run_recorded_scan(
+    config: ScanConfig<'_>,
+    first_scan: bool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut recorder = ScanRecorder::new(config.diagnostics, first_scan);
+    let result = run_scan_for_platform(
+        config,
+        ScanTargets::Full,
+        StateSavePolicy::Always,
+        crate::sink::outbox::current_platform_is_windows(),
+        &mut recorder,
+    );
+    recorder.finish(&config, result.is_ok());
+    result.map(|result| result.source_failures)
 }
 
 /// A completed scan saw source failures and the operator asked to fail on them.
@@ -277,6 +303,7 @@ fn run_scan(
         targets,
         save_policy,
         crate::sink::outbox::current_platform_is_windows(),
+        &mut ScanRecorder::disabled(),
     )
 }
 
@@ -285,9 +312,11 @@ fn run_scan_for_platform(
     targets: ScanTargets,
     save_policy: StateSavePolicy,
     is_windows: bool,
+    recorder: &mut ScanRecorder<'_>,
 ) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
     validate_scan_execution_paths(config.execution, is_windows)?;
     let scan_started = Instant::now();
+    recorder.start(scan_started);
     let (mut sources, targeted, source_discovery, workspace_roots) = match targets {
         ScanTargets::Targeted { sources, discovery } => (sources, true, discovery, Vec::new()),
         ScanTargets::Full => {
@@ -317,6 +346,7 @@ fn run_scan_for_platform(
     } else {
         Some((sources.clone(), source_discovery.clone()))
     };
+    recorder.enter(ScanPhase::Preparation);
     // A history pass never touches scan state, so it needs no lock and can
     // run beside a routine scanner.
     let state_lock = if config.execution.dry_run || config.history {
@@ -335,7 +365,7 @@ fn run_scan_for_platform(
     let diagnostics = super::rule_diagnostics_value(&resolution.diagnostics);
     let policy_active = config.execution.policy_path.is_some();
     let rule_set = resolution.rule_set;
-    let merged_rule_set = resolution.merged_rule_set;
+    let content = resolution.content;
     let mut effective_configuration = config.execution.effective_configuration.clone();
     effective_configuration["rules"] = {
         let mut rules = effective_configuration["rules"].clone();
@@ -373,7 +403,7 @@ fn run_scan_for_platform(
     }
     let rules = cached_rule_plan(&rule_set.compatibility_export())?;
     let pre_policy_rules = policy_active.then(|| {
-        let compiled = merged_rule_set.compile(None)?;
+        let compiled = content.compile(None)?;
         cached_rule_plan(&compiled.compatibility_export())
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
     });
@@ -387,6 +417,7 @@ fn run_scan_for_platform(
     } else {
         Default::default()
     };
+    recorder.enter(ScanPhase::SourceProcessing);
     let processed_sources = sources
         .iter()
         .map(|source| {
@@ -416,6 +447,7 @@ fn run_scan_for_platform(
             )
         })
         .collect::<Vec<_>>();
+    recorder.enter(ScanPhase::DetectionAssembly);
     let source_processing = source_processing_accounting(&processed_sources)?;
     // Targeted scans see only changed sources, so only a full scan can say a
     // client lost every source.
@@ -504,7 +536,13 @@ fn run_scan_for_platform(
         &detections,
     )?;
     let session_risk_summary_count = session_risk_summaries.len();
-    let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let assembled = Instant::now();
+    let scan_duration_ms = assembled
+        .saturating_duration_since(scan_started)
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    recorder.enter_at(ScanPhase::EventSelection, assembled);
+    recorder.observe_scan_duration(scan_duration_ms);
     // Targeted scans see only a slice of the source inventory; comparing that
     // slice against prior observations would misreport every unscanned source
     // as removed, so inventory-change tracking is left to full scans. A
@@ -653,6 +691,7 @@ fn run_scan_for_platform(
         }
     };
     let prepared_state = if should_save {
+        recorder.enter(ScanPhase::StateSave);
         Some(state.prepare_atomic_save(config.execution.state_path)?)
     } else {
         None
@@ -668,16 +707,24 @@ fn run_scan_for_platform(
             None if config.history => Ok(()),
             None => Err("state lock missing before durable delivery".into()),
         };
+        let persistent_replay = config.execution.sinks.has_persistent_replay();
+        recorder.enter(if persistent_replay {
+            ScanPhase::DurableAdmission
+        } else {
+            ScanPhase::CanonicalWrite
+        });
         verify_lock()?;
-        if config.execution.sinks.has_persistent_replay() {
+        if persistent_replay {
             sink_failures = config
                 .execution
                 .sinks
                 .persist_for_durable_replay_with_failures(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
+                recorder.enter(ScanPhase::StateSave);
                 verify_lock()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
+            recorder.enter(ScanPhase::RemoteDelivery);
             sink_failures.extend(config.execution.sinks.deliver_durable()?);
             sink_failures.extend(
                 config
@@ -686,10 +733,21 @@ fn run_scan_for_platform(
                     .deliver_best_effort(&emitted_events)?,
             );
         } else {
-            sink_failures = config.execution.sinks.deliver(&emitted_events)?;
+            // The same order as `SinkSet::deliver`, timed in two parts.
+            config
+                .execution
+                .sinks
+                .write_canonical_best_effort(&emitted_events)?;
+            recorder.enter(ScanPhase::RemoteDelivery);
+            sink_failures = config
+                .execution
+                .sinks
+                .deliver_remote_best_effort(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
+                recorder.enter(ScanPhase::StateSave);
                 verify_lock()?;
                 prepared_state.install_replace(config.execution.state_path)?;
+                recorder.enter(ScanPhase::RemoteDelivery);
             }
         }
         let observation = if persist_episode_latch {
@@ -773,6 +831,7 @@ fn run_scan_for_platform(
         }
     }
 
+    recorder.enter(ScanPhase::Report);
     let mut warnings = diagnostic_warnings(
         &source_discovery,
         &source_processing,
@@ -819,8 +878,21 @@ fn run_scan_for_platform(
     if config.history {
         summary["history"] = "all".into();
     }
+    recorder.observe_counts(ScanCounts {
+        selected_source_count: source_processing.selected_source_count as u64,
+        parsed_record_count: source_processing.parsed_record_count,
+        evaluated_window_count: source_processing.evaluated_window_count as u64,
+        emitted_count,
+    });
     println!("{}", serde_json::to_string(&summary)?);
     if let Some(error) = alert_persistence_error {
+        // The sink-failure alert could not be written where events are
+        // written first; its time counts toward remote delivery.
+        recorder.fail_in(if config.execution.sinks.has_persistent_replay() {
+            ScanPhase::DurableAdmission
+        } else {
+            ScanPhase::CanonicalWrite
+        });
         return Err(error);
     }
     Ok(ScanRunResult {
@@ -2780,13 +2852,19 @@ mod tests {
             backfill: false,
             rebuild_baselines: false,
             max_sources: None,
+            diagnostics: None,
         };
 
-        let error =
-            match run_scan_for_platform(config, ScanTargets::Full, StateSavePolicy::Always, true) {
-                Ok(_) => panic!("Windows durable scan must be rejected"),
-                Err(error) => error,
-            };
+        let error = match run_scan_for_platform(
+            config,
+            ScanTargets::Full,
+            StateSavePolicy::Always,
+            true,
+            &mut ScanRecorder::disabled(),
+        ) {
+            Ok(_) => panic!("Windows durable scan must be rejected"),
+            Err(error) => error,
+        };
         let delivery = error
             .downcast_ref::<DeliveryError>()
             .expect("platform rejection must be structured");

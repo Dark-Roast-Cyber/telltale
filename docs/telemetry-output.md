@@ -353,6 +353,91 @@ fails, status is `unavailable` and all three counters are null. Without a
 configured policy, status remains `not_applicable` and no diagnostic matching
 work is performed.
 
+### Opt-in diagnostics records
+
+`scan` can also append one record per scan to a separate diagnostics file,
+covering where the scan spent its time and what the process used. It is off by
+default, and each category is enabled on its own:
+
+| Category | Settings file | Environment | Flag |
+|---|---|---|---|
+| Scan phase timings | `diagnostics.scan_phases: true` | `TELLTALE_DIAGNOSTICS_SCAN_PHASES=1` | `--diagnostics scan-phases` |
+| Process resources | `diagnostics.process_resources: true` | `TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES=1` | `--diagnostics process-resources` |
+
+Precedence follows the other [operational settings](install.md#operational-settings).
+The flag takes a comma-separated list or can be repeated, and it can only turn a
+category on. `scan --once` and `scan --interval-seconds` write records;
+`watch` does not. `--dry-run` still writes a record, though it writes no
+events or state.
+
+The file defaults to `diagnostics/telltale-scan-diagnostics.jsonl` in the state
+file's directory. Set `diagnostics.path`, `TELLTALE_DIAGNOSTICS_PATH` or
+`--diagnostics-path` to move it. It is outside the event log, so a shipper
+glob for `telltale-events*.jsonl` does not collect it. To ship it, give it its
+own input and dataset; it is not Event 3.0. A path on or beside the event log,
+on the state file or its lock and manifest files, or on the durable queue's
+database or the lock and SQLite files beside it is refused.
+
+Each record is one JSON line:
+
+```json
+{"schema":"telltale.scan_diagnostics","version":1,"recorded_at":"2026-11-19T04:32:34.854Z",
+ "telltale_version":"0.7.2","command":"scan_once","dry_run":false,"history":false,"backfill":false,
+ "delivery_posture":"durable_first_write","outcome":"completed","failure_stage":null,"scan_duration_ms":70,
+ "counts":{"selected_source_count":1,"parsed_record_count":40,"evaluated_window_count":1,"emitted_count":2},
+ "scan_phases":{"startup_us":226437,"discovery_us":186,"preparation_us":26915,"source_processing_us":43149,
+  "detection_assembly_us":118,"event_selection_us":158,"state_save_us":5659,"canonical_write_us":6487,
+  "durable_admission_us":null,"remote_delivery_us":18,"report_us":2168,"total_us":84862},
+ "process_resources":{"process":{"wall_us":311299,"user_cpu_us":271994,"kernel_cpu_us":33888,
+  "peak_memory_bytes":53506048,"peak_memory_measure":"linux_vm_hwm"},
+  "scan":{"wall_us":84862,"user_cpu_us":77617,"kernel_cpu_us":985}}}
+```
+
+The example is wrapped here; the file holds one line per record. A section
+appears only when its category is enabled.
+
+- `outcome` is `completed` or `failed`. A failed scan names the phase it
+  failed in as `failure_stage` and keeps its exit status. `counts` and
+  `scan_duration_ms` are null when the scan stopped before measuring them.
+- `scan_phases` times are monotonic microseconds. The phases from `discovery`
+  to `report` follow each other without gaps and add up to `total_us`, which
+  runs from the start of the scan to the record being written. `discovery`
+  through `detection_assembly` is the span `scan_duration_ms` measures; state
+  save and delivery come after it. `startup_us` is the time from command start
+  to the first scan and appears only on a command's first record. A phase that
+  did not run is null, which is different from 0. With a durable queue,
+  `durable_admission` covers the canonical write and queue admission together,
+  and the retry of already queued events that runs first. `remote_delivery`
+  also covers writing a sink-failure alert and saving its episode state; if
+  that alert cannot be written, `failure_stage` is `canonical_write` or
+  `durable_admission`.
+- `process_resources.process` covers the whole command so far: wall time since
+  it started, user and kernel CPU time, and peak memory. These values grow across
+  `--interval-seconds` scans. Peak memory is the process's lifetime peak, not
+  the peak of one scan. `process_resources.scan` covers this scan alone: its
+  wall time and the CPU time it used.
+- `peak_memory_measure` names the counter behind `peak_memory_bytes`. Values
+  from different measures are not comparable:
+
+  | Measure | Platform | Source |
+  |---|---|---|
+  | `linux_vm_hwm` | Linux | `VmHWM` in `/proc/self/status`. It is approximate; after memory is freed, a later reading can sit a few hundred KiB lower. |
+  | `macos_max_rss` | macOS | `ru_maxrss` from `getrusage`, in bytes. |
+  | `windows_peak_working_set` | Windows | `PeakWorkingSetSize` from `GetProcessMemoryInfo`. Windows readings await native validation. |
+
+  A counter the platform cannot provide is null, not 0.
+
+Records hold only these fields: no paths, source or session identifiers,
+prompts, tool commands or error text. A record is at most 4 KiB. The file
+rotates to one `.1` generation at 1 MiB and is not flushed to disk on each
+write. Two scans writing at once, such as a `--history` scan beside a routine
+scanner, can take the file a record past that size or lose a generation when
+both rotate. If a record cannot be
+written, the scan prints `warning: diagnostics not written (<class>)` to
+stderr, with `<class>` one of `overlap`, `unsafe_target`, `too_large`,
+`rotate`, `open` or `write`. Events, state and the exit status are the same
+as without diagnostics.
+
 ## Event Families
 
 Common event types include:
@@ -821,7 +906,8 @@ uses. A safe starter pattern is:
 1. Write events locally with the default path profile, `TELLTALE_LOG_PATH`, or an
    explicit `--log-path`.
 2. Validate the event shape against the schema.
-3. Configure the shipper to read only that active JSONL event path.
+3. Configure the shipper to read the active JSONL event path. For Filebeat,
+   include the matching rotated generations so it can resume after downtime.
 4. Keep human-readable diagnostics, scanner state, credentials, and raw agent
    session stores outside the forwarded telemetry path.
 
@@ -855,10 +941,23 @@ Scheduled Tasks) is required.
 
 When the active JSONL file exceeds the configured max size, Telltale renames it
 to a date-stamped rotated file and starts a fresh active file. The active file
-name is always stable (`telltale-events.jsonl`) so shippers can monitor a single
-path. Rotated files are named `telltale-events-YYYY-MM-DD.jsonl`, with a counter
-suffix (`.1`, `.2`) for same-day rotations. Files beyond the keep count are
-deleted oldest-first.
+name stays `telltale-events.jsonl`. Rotated files are named
+`telltale-events-YYYY-MM-DD.jsonl`, with a counter suffix (`.1`, `.2`) for
+same-day rotations. Files beyond the keep count are deleted oldest-first.
+
+For a Windows user-profile deployment with built-in rotation, set both paths on
+the same Filebeat `filestream` input.
+
+```yaml
+paths:
+  - '${LOCALAPPDATA}\Telltale\Logs\telltale-events.jsonl'
+  - '${LOCALAPPDATA}\Telltale\Logs\telltale-events-????-??-??*.jsonl'
+```
+
+Keep the existing input ID and fingerprint settings when adding the rotated
+path so Filebeat can resume from recorded offsets. Size the rotation retention
+to cover the expected shipper downtime.
+[Filebeat rotation guidance](https://www.elastic.co/docs/reference/beats/filebeat/file-log-rotation).
 
 Defaults:
 
