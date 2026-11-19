@@ -197,6 +197,18 @@
   string of at most 4,096 bytes and `sessionId` is a non-empty string. Tag
   values are not projected. Other shapes and larger tags still quarantine.
 
+- Claude Code transcripts: count exact `bridge-session` and `tools-used`
+  envelopes as bookkeeping instead of quarantining them, which left current
+  Claude Code sessions with partial coverage and a `canonical_units_quarantined`
+  scanner error on most scans.
+
+- Claude Code transcripts: a tool result that Claude Code moved to
+  `<session>/tool-results/` is read from that file instead of evaluating only
+  the transcript's ~2 KB preview, so content past the preview (for example an
+  injected instruction in a large fetch or MCP result) reaches detection. Files
+  over the 64 KiB tool-result budget, not UTF-8, missing or outside the
+  session's own directory keep the preview.
+
 - **`scan` can record where its time and resources go.** Two opt-in
   categories, `scan_phases` and `process_resources`, each append to one
   bounded diagnostics record per scan. Records go in a separate file, by
