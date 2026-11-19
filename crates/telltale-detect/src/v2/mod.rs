@@ -14,8 +14,8 @@ mod classification;
 pub use actions::{
     ActionContextEntry, ActionContextKind, ActionContribution, ActionCoordinate, ActionEvidence,
     ActionFinding, ActionFindingKind, ActionModifierSemantics, CanonicalActionFinding,
-    ContextOptions, DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions, ReplayIdentity,
-    SemanticProvenance,
+    ContextOptions, DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions,
+    NativeProfileNotice, ReplayIdentity, SemanticProvenance, native_profile_notices,
 };
 #[cfg(test)]
 mod action_tests;

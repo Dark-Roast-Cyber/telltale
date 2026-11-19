@@ -12,7 +12,8 @@ For exact non-production canary identity and output-routing requirements, see
 [Controlled development deployment](controlled-deployment.md). Its tested
 compatibility record and pinned rollback recipe are historical evidence
 against `v0.5.0`, not proof of rollback from the current stable release.
-For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md).
+For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md); for
+the 0.8 line, the [0.8.0 migration guide](migrations/0.8.0.md).
 
 ## Prerequisites
 
@@ -492,8 +493,9 @@ Rule packs resolve in fixed tier order: bundled core rules, rule packages (the
 embedded community package and `rule-packages.d`), `organization-rules.d`,
 `rules.d` deployment files, and `ui-rules.d` local/UI files. Files are sorted
 within each root and roots are processed in configured root order. A higher tier
-fully replaces a same-ID definition in place; unique IDs are additive. Equal-tier
-duplicate IDs fail with source diagnostics. Repeated explicit `--rules` paths are
+fully replaces the definition with the same rule `name` in place and must keep
+its `id`; unique names are additive. Equal-tier duplicate names, and one `id`
+under two names, fail with source diagnostics. Repeated explicit `--rules` paths are
 loaded afterward as additive-only documents and cannot replace managed packs.
 `overrides.d` files are sorted the same way and applied after packs are merged,
 before policy filtering. If no explicit `--policy` is provided, exactly one
@@ -531,30 +533,45 @@ it reaches a release. Use only the core rules with `--no-community-rules` on
 `--no-default-rules` omits both the core rules and the embedded community
 snapshot, while installed packages still load like other managed content.
 
-A rule package is one YAML file:
+A rule package is one YAML file in format `telltale-rule-package/v2` whose
+`documents` are [Rule v2](rule-format.md) rules and chains, sorted by `name`:
 
 ```yaml
-format: telltale-rule-package/v1
+format: telltale-rule-package/v2
 id: acme.agent-rules        # unique package identity
-version: "1.4.0"
+title: Acme agent rules     # display name
+version: '1.4.0'
 publisher: Acme security engineering
 license: Apache-2.0
-rule_namespace: acme        # every rule and modifier ID starts with "acme."
+rule_namespace: acme        # every rule and chain name starts with "acme."
 source: https://example.com/acme/agent-rules   # optional, informational
 revision: 0123456789abcdef0123456789abcdef01234567  # optional, informational
 documents:
-  - version: 1
-    description: Acme agent rules.
-    defaults: {case_insensitive: true, enabled: true}
-    rules:
-      - id: acme.persistence.example
-        # ... ordinary Rule v1 fields ...
-    modifiers: []
+    - title: Shell profile written
+      id: 0f8fad5b-d9cb-469f-a165-70867728950e
+      name: acme.persistence.shell_profile_write
+      taxonomy: telltale
+      logsource:
+          product: ai_agent
+          category: tool_activity
+      detection:
+          selection:
+              tool.written_path|endswith: ['/.bashrc', '/.zshrc']
+          condition: selection
+      level: medium
+      telltale:
+          category: persistence
+          score: 30
+          explanation: An agent wrote a shell startup file.
 ```
+
+See [rule packages](rule-format.md#rule-packages) for every header check.
+Format `telltale-rule-package/v1`, the only format Telltale 0.7 reads, stops
+loading in 0.8.0; see the [0.8.0 migration guide](migrations/0.8.0.md).
 
 Packages only add definitions. A package cannot reuse a core rule namespace,
 replace a core rule, or replace another package's rule; conflicting package IDs,
-namespaces, or rule IDs fail validation with both sources. Diagnostics never
+namespaces, or rule names fail validation with both sources. Diagnostics never
 show paths, so two installed copies of one package are named by version and the
 first 12 hex digits of their content SHA-256; `sha256sum` on the
 `rule-packages.d` files finds them. Operators may still
@@ -585,8 +602,9 @@ embedded version; scans record the same list under
 `effective_configuration.rules.packages`.
 
 Use overrides for local rule disablement or score tuning without editing bundled
-or custom rule files:
+or custom rule files. `rule_id` is the rule's `name`:
 
+<!-- rule-example: skip -->
 ```yaml
 version: 1
 description: Local workstation tuning.
@@ -619,7 +637,7 @@ YAML, and prints a JSON status summary without reading session stores.
 Use `telltale rules export-default` when you want to inspect or fork the bundled
 default rules from an installed binary. Save an edited copy in the intended
 managed tier (`organization-rules.d`, `rules.d`, or `ui-rules.d`) when it should
-replace matching IDs. Passing an exported copy with `--rules` is additive-only;
+replace rules with matching names; keep each replaced rule's `id`. Passing an exported copy with `--rules` is additive-only;
 use `--no-default-rules` if it is intended to be the complete explicit rule set.
 Do not edit bundled defaults in place.
 

@@ -8,7 +8,8 @@ The source directory remains `crates/telltale` for repository compatibility.
 The full contract (surface classification, detailed action scanning, source
 outcomes, typed errors, OpenCode, inventory, and host wire guidance) lives in
 [docs/embedding.md](../../docs/embedding.md); upgrades are in the
-[0.7.0 migration guide](../../docs/migrations/0.7.0.md).
+[0.7.0 migration guide](../../docs/migrations/0.7.0.md) and the
+[0.8.0 migration guide](../../docs/migrations/0.8.0.md).
 
 ```toml
 [dependencies]

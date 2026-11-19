@@ -8,6 +8,46 @@
 
 ### Compatibility and operator impact
 
+- **Rule v2, Telltale's Sigma profile, is the rule format, and all shipped
+  content uses it.** A Rule v2 document is a Sigma 2.1 rule marked
+  `taxonomy: telltale` (or a chain, `correlation.type: telltale_chain`) with
+  Telltale semantics in a `telltale` block; the new
+  [rule format reference](docs/rule-format.md) documents every key, field,
+  modifier, condition, chain and package check, and `cargo test --test catalog`
+  loads each of its examples. The bundled core rules and chains, the hooks
+  self-protection rules and the example rules under `config/rules/` are now
+  Rule v2. A parity test proved each converted rule compiles to the same
+  matchers, so detections, rule names (the Rule v1 `id` is the Rule v2
+  `name`), Event 3.0 output and effective rule fingerprints are unchanged.
+  Rule v1 files and `telltale-rule-package/v1` packages stop loading in 0.8.0,
+  and there is no automatic converter; the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md) maps every Rule v1 key to
+  Rule v2. `docs/catalog/rule-vocabulary.json` now describes Rule v2 (keys,
+  fields, modifiers, scope modifiers, condition forms, statuses, `telltale`
+  values and limits), read from the Rule v2 reader. Load errors point to
+  `docs/rule-format.md`.
+- **A replacement keeps the replaced rule's `id`.** A Rule v2 rule in
+  `organization-rules.d`, `rules.d` or `ui-rules.d` that replaces a rule by
+  `name` must carry the same UUID `id`, and one `id` under two names is an
+  error. Start a replacement of a bundled rule from
+  `telltale rules export-default`, which writes each rule's `id`.
+- **`telltale_rules::bundled_default_rule_set()` is removed.** Use
+  `bundled_default_rules()` (loaded content, which `LoadedRules::merge` combines
+  with package documents) or `load_default_rule_set()`.
+- **Rule catalog v2 replaces catalog v1.** `rule_catalog_document` returns
+  `RuleCatalogV2` (`telltale.rule_catalog.v2`,
+  `schemas/rule-catalog-v2.schema.json`): every v1 entry key with the same
+  meaning, plus `uuid`, `status`, `description`, `references`, `author`,
+  `license`, `date`, `modified`, `related`, `logsource`,
+  `behavior_fingerprint` and `metadata_revision`. `RuleCatalogV1` is removed;
+  its schema stays under `schemas/historical/`. `Pipeline::rule_catalog` and
+  `Pipeline::rule_catalog_document` describe any pipeline's content, and
+  `telltale rules catalog` prints the catalog of the resolved rules.
+  `telltale rules show <name>` prints one rule or chain, and
+  `telltale rules validate` reports load notices under `notices`. Rule files in
+  every tier, `--rules` files, `Pipeline::rules_document` and rule packages
+  (format `telltale-rule-package/v2`, with a `title` and documents sorted by
+  name) accept Rule v2 documents.
 - **Rule v1 has a `tool_kind` target, and `execution.shell` selects it.** The
   target (`compat.v1.tool_kind`, the tenth compatibility view) is what a call
   does: `shell`, `file_read`, `file_write`, `web`, `delegate` or `other`, from

@@ -853,9 +853,11 @@ fn upload_flags_veto_a_download_only_in_their_own_segment() {
     let bundled = super::DEFAULT_RULE_YAML.replace("\r\n", "\n");
     for newline in ["\n", "\r\n"] {
         let document = bundled.replace('\n', newline).replace("\r\n", "\n");
-        assert_eq!(document.matches("      scope: segment\n").count(), 1);
-        let document = document.replace("      scope: segment\n", "");
-        assert!(!document.contains("      scope: segment"));
+        // The scope is a modifier on each selection and filter of the
+        // download rule; without it the rule is field-scoped.
+        assert_eq!(document.matches("|segment:").count(), 6);
+        let document = document.replace("|segment:", ":");
+        assert!(!document.contains("|segment"));
         let document = document.replace('\n', newline);
         let field = super::load_rule_set_from_documents(&[&document], None)
             .expect("field-scoped rules")

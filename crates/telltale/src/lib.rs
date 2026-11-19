@@ -31,11 +31,11 @@
 //! # Ok::<(), PipelineError>(())
 //! ```
 
-use telltale_rules::CompiledRuleSet;
 pub use telltale_rules::package::{COMMUNITY_PACKAGE_ID, RulePackageSummary};
 use telltale_rules::package::{
     CommunityRules, ResolvedRulePackage, RulePackage, resolve_rule_packages,
 };
+use telltale_rules::{CompiledRuleSet, LoadedRules};
 
 #[cfg(feature = "protected-assignment")]
 pub mod assignment;
@@ -103,7 +103,8 @@ pub use telltale_schema::action_record::{
     ActionRecordEvidence, ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
 };
 pub use telltale_schema::rule_catalog::{
-    RULE_CATALOG_V1_ID, RULE_CATALOG_V1_SCHEMA, RuleCatalogEntryV1, RuleCatalogError, RuleCatalogV1,
+    RULE_CATALOG_V2_ID, RULE_CATALOG_V2_SCHEMA, RuleCatalogEntryV2, RuleCatalogError,
+    RuleCatalogLogSourceV2, RuleCatalogRelatedV2, RuleCatalogV2,
 };
 
 type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
@@ -633,6 +634,8 @@ impl SourceScan {
 /// A compiled detection pipeline: bundled (and optional custom) rules, ready
 /// to evaluate supported session stores through canonical acquisition.
 pub struct Pipeline {
+    /// Every loaded definition before policy, for the rule catalog.
+    content: LoadedRules,
     rule_set: CompiledRuleSet,
     /// Canonical semantics compiled once in `build`; content they reject never
     /// becomes a `Pipeline`.
@@ -964,7 +967,8 @@ impl Pipeline {
 }
 
 impl PipelineBuilder {
-    /// Add a YAML rule document. Additive to the bundled defaults unless
+    /// Add a YAML rule file: one Rule v1 document, or one or more Rule v2 rule
+    /// and chain documents. Additive to the bundled defaults unless
     /// [`Self::without_bundled_defaults`] is set (mirrors `--rules`).
     pub fn rules_document(mut self, yaml: impl Into<String>) -> Self {
         self.extra_rule_documents.push(yaml.into());
@@ -977,7 +981,7 @@ impl PipelineBuilder {
         self
     }
 
-    /// Add a rule package document (`telltale-rule-package/v1`). Package
+    /// Add a rule package document (`telltale-rule-package/v2` or `/v1`). Package
     /// definitions are additive; a package with the community ID replaces the
     /// embedded community snapshot (mirrors an installed `rule-packages.d` file).
     pub fn rule_package(mut self, yaml: impl Into<String>) -> Self {
@@ -999,8 +1003,8 @@ impl PipelineBuilder {
         self
     }
 
-    /// Compile bundled core rules, rule packages, and supplied Rule v1
-    /// documents with the optional policy.
+    /// Compile bundled core rules, rule packages, and supplied rule documents
+    /// with the optional policy.
     /// Missing documents or rejected rules/packages/policy return [`PipelineError`].
     /// Canonical semantics are compiled once here and reused by every scan.
     /// Content that Rule v1 loading accepts but canonical compilation rejects
@@ -1027,27 +1031,31 @@ impl PipelineBuilder {
             .iter()
             .map(ResolvedRulePackage::summary)
             .collect::<Vec<_>>();
-        let mut rule_sets = Vec::new();
+        let mut documents = Vec::new();
         if !self.custom_only {
-            rule_sets.push(
-                telltale_rules::bundled_default_rule_set().map_err(PipelineError::Compilation)?,
-            );
+            documents
+                .push(telltale_rules::bundled_default_rules().map_err(PipelineError::Compilation)?);
         }
         for resolved in packages {
-            rule_sets.extend(resolved.package.into_documents());
+            documents.extend(resolved.package.into_documents());
         }
         for raw in &self.extra_rule_documents {
-            rule_sets.push(
-                telltale_rules::parse_rule_document(raw).map_err(PipelineError::Compilation)?,
-            );
+            documents.push(LoadedRules::parse(raw).map_err(PipelineError::Compilation)?);
         }
-        if rule_sets.is_empty() {
+        if documents.is_empty() {
             return Err(PipelineError::InvalidConfiguration);
         }
-        let rule_set =
-            telltale_rules::compile_rule_sets(rule_sets, self.policy_document.as_deref())
-                .map_err(PipelineError::Compilation)?;
-        Pipeline::from_compiled(rule_set, rule_packages)
+        let policy = self
+            .policy_document
+            .as_deref()
+            .map(telltale_rules::parse_rule_policy)
+            .transpose()
+            .map_err(PipelineError::Compilation)?;
+        let content = LoadedRules::merge(documents).map_err(PipelineError::Compilation)?;
+        let rule_set = content
+            .compile(policy.as_ref())
+            .map_err(PipelineError::Compilation)?;
+        Pipeline::from_compiled(content, rule_set, rule_packages)
     }
 }
 
@@ -1055,6 +1063,7 @@ impl Pipeline {
     /// A pipeline over rule content that is already merged and compiled, such
     /// as a [`rule_resolution`] result.
     pub(crate) fn from_compiled(
+        content: LoadedRules,
         rule_set: CompiledRuleSet,
         rule_packages: Vec<RulePackageSummary>,
     ) -> Result<Self, PipelineError> {
@@ -1068,6 +1077,7 @@ impl Pipeline {
         let canonical = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export())
             .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
         Ok(Pipeline {
+            content,
             rule_set,
             canonical,
             process_rules: std::sync::OnceLock::new(),
@@ -1188,13 +1198,66 @@ modifiers: []
     }
 
     #[test]
+    fn builder_accepts_rule_v2_documents_beside_rule_v1() {
+        let v2 = "title: Synthetic v2 marker\nid: 3f2504e0-4f89-41d3-9a0c-0305e82c3301\n\
+                  name: synthetic.v2.marker\ntaxonomy: telltale\nstatus: test\n\
+                  logsource:\n    product: ai_agent\n    category: tool_activity\n\
+                  detection:\n    selection:\n        tool.command|contains: synthetic-v2-marker\n    condition: selection\n\
+                  level: medium\ntelltale:\n    category: synthetic\n    score: 25\n    explanation: Synthetic v2 rule.\n";
+        let pipeline = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(v2)
+            .build()
+            .unwrap();
+        assert_eq!(pipeline.rule_count(), 1);
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("source.jsonl");
+        let row = serde_json::json!({"sessionId":"v2-session","type":"assistant","uuid":"v2-call","timestamp":"2026-11-18T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"v2-call","name":"Bash","input":{"command":"echo synthetic-v2-marker"}}]}});
+        std::fs::write(&path, format!("{row}\n")).unwrap();
+        let source = Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".into(),
+            path,
+        };
+        let events = pipeline.scan_sources(&[source]).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|(_, event)| event.rule_ids.iter().any(|id| id == "synthetic.v2.marker")),
+            "{events:?}"
+        );
+
+        // Added beside the bundled Rule v1 content, a v2 rule may not reuse a
+        // bundled id.
+        assert_eq!(
+            Pipeline::builder()
+                .rules_document(v2)
+                .build()
+                .unwrap()
+                .rule_count(),
+            Pipeline::builder().build().unwrap().rule_count() + 1
+        );
+        let error = Pipeline::builder()
+            .rules_document(v2.replace("synthetic.v2.marker", "network.download"))
+            .build()
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            "duplicate rule id: network.download"
+        );
+    }
+
+    #[test]
     fn community_rules_are_default_and_opt_out_leaves_core_rules() {
         let embedded = telltale_rules::package::bundled_community_package().unwrap();
         let community_rules = embedded
             .documents()
             .iter()
-            .map(|document| document.rules.len())
-            .sum::<usize>();
+            .flat_map(|document| document.definitions())
+            .filter(|definition| definition.kind() == telltale_rules::DefinitionKind::Rule)
+            .count();
         let default = Pipeline::builder().build().unwrap();
         let core = Pipeline::builder()
             .without_community_rules()

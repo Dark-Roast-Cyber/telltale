@@ -6,11 +6,17 @@
 //! normalized fields as in-memory values, which keeps the engine reusable for
 //! batch session scanning and future inline inference-proxy evaluation alike.
 
+mod content;
 pub mod package;
 pub mod process_chain;
 pub mod provenance;
+pub mod rule_v2;
 mod segment;
 
+pub use content::{
+    CompiledDefinition, DefinitionKind, DefinitionMetadata, LoadedDefinition, LoadedRules,
+    RelatedRule, RuleLogSource,
+};
 pub use segment::{unquoted, unquoted_with_origin};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,6 +63,10 @@ pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &[
     "exclusion_segment",
     "recorded_exclusion",
 ];
+
+/// Most bytes one compiled pattern may hold, flag group included. Rule v2
+/// rejects a longer pattern at load; Detection v2 rejects it at compile.
+pub const MAX_PATTERN_BYTES: usize = 1_024;
 
 /// Targets that carry command-line text, the only ones segment scope accepts.
 // Shared with the published vocabulary catalog, not a supported embedding API.
@@ -172,7 +182,7 @@ impl MatchScope {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ModifierDefinition {
     pub id: String,
     pub score: u64,
@@ -239,6 +249,30 @@ impl ModifierLinkOrder {
 pub struct CompiledRuleSet {
     rules: Vec<CompiledRule>,
     content: RuleV1CompatibilityExport,
+    notices: Vec<RuleLoadNotice>,
+}
+
+/// A finding about loaded content that does not stop it from loading, such as
+/// a Rule v2 filter whose case mode differs from its selection's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleLoadNotice {
+    /// The compiled rule or modifier id (the Rule v2 `name`).
+    pub rule_id: String,
+    /// A stable machine-readable kind, such as
+    /// [`RuleLoadNotice::FILTER_CASE_MISMATCH`].
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl RuleLoadNotice {
+    /// A Rule v2 filter whose case mode differs from its selection's.
+    pub const FILTER_CASE_MISMATCH: &'static str = "filter_case_mismatch";
+}
+
+impl std::fmt::Display for RuleLoadNotice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "rule '{}': {}", self.rule_id, self.message)
+    }
 }
 
 /// Effective, read-only Rule v1 data for semantic compatibility consumers.
@@ -251,7 +285,7 @@ pub struct RuleV1CompatibilityExport {
     modifiers: Vec<RuleV1CompatibilityModifier>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleV1CompatibilityRule {
     pub id: String,
     pub title: Option<String>,
@@ -269,7 +303,7 @@ pub struct RuleV1CompatibilityRule {
     pub matchers: Vec<RuleV1CompatibilityMatcher>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleV1CompatibilityMatcher {
     pub target: String,
     pub regex: String,
@@ -277,7 +311,7 @@ pub struct RuleV1CompatibilityMatcher {
     pub scope: MatchScope,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleV1CompatibilityModifier {
     pub id: String,
     pub score: u64,
@@ -423,10 +457,54 @@ impl RuleV1CompatibilityRule {
     }
 }
 
+/// One enabled rule: its effective export form and the compiled matchers that
+/// export was read from. Rule v1 and Rule v2 both compile into this form.
 #[derive(Debug, Clone)]
 struct CompiledRule {
-    definition: RuleDefinition,
+    export: RuleV1CompatibilityRule,
     matchers: Vec<CompiledMatcher>,
+}
+
+impl CompiledRule {
+    /// The export copies each matcher's compiled pattern text, so it holds
+    /// exactly what is evaluated.
+    fn new(mut export: RuleV1CompatibilityRule, matchers: Vec<CompiledMatcher>) -> Self {
+        export.matchers = matchers
+            .iter()
+            .map(|matcher| RuleV1CompatibilityMatcher {
+                target: matcher.target.clone(),
+                regex: matcher.regex.as_str().to_owned(),
+                exclusion_regex: matcher
+                    .exclusion_regex
+                    .as_ref()
+                    .map(|regex| regex.as_str().to_owned()),
+                scope: matcher.scope,
+            })
+            .collect();
+        Self { export, matchers }
+    }
+
+    fn from_v1(definition: RuleDefinition, matchers: Vec<CompiledMatcher>) -> Self {
+        Self::new(
+            RuleV1CompatibilityRule {
+                id: definition.id,
+                title: definition.title,
+                description: definition.description,
+                category: definition.category,
+                detection_class: definition.detection_class,
+                signal_type: definition.signal_type,
+                analytic_intent: definition.analytic_intent,
+                atlas_tags: definition.atlas_tags,
+                severity: definition.severity,
+                score: definition.score,
+                tags: definition.tags,
+                explanation: definition.explanation,
+                falsepositives: definition.falsepositives,
+                matchers: Vec::new(),
+            },
+            matchers,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -738,19 +816,48 @@ pub fn load_default_rule_set() -> Result<CompiledRuleSet, Box<dyn std::error::Er
     load_rule_set_from_documents(&[bundled_default_rule_yaml()], None)
 }
 
-pub fn bundled_default_rule_set() -> Result<RuleSet, Box<dyn std::error::Error>> {
-    Ok(serde_yaml::from_str::<RuleSet>(bundled_default_rule_yaml())?)
+/// The bundled core rules as loaded content.
+pub fn bundled_default_rules() -> Result<LoadedRules, Box<dyn std::error::Error>> {
+    LoadedRules::parse(bundled_default_rule_yaml())
 }
 
+/// Load and compile rule files with an optional policy document. Each file is
+/// one Rule v1 document or one or more Rule v2 documents (see [`rule_v2`]);
+/// the two may be mixed. Rules and modifiers keep file and document order. A
+/// repeated rule or modifier id fails, whichever format defines it, as does a
+/// repeated Rule v2 UUID.
 pub fn load_rule_set_from_documents(
     rule_documents: &[&str],
     policy_document: Option<&str>,
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
     let loaded = rule_documents
         .iter()
-        .map(|raw| parse_rule_document(raw))
+        .map(|raw| LoadedRules::parse(raw))
         .collect::<Result<Vec<_>, _>>()?;
-    compile_rule_sets(loaded, policy_document)
+    let policy = parse_policy(policy_document)?;
+    LoadedRules::merge(loaded)?.compile(policy.as_ref())
+}
+
+/// Parse a rule policy document.
+pub fn parse_rule_policy(raw: &str) -> Result<RulePolicy, Box<dyn std::error::Error>> {
+    Ok(serde_yaml::from_str::<RulePolicy>(raw)?)
+}
+
+fn parse_policy(
+    policy_document: Option<&str>,
+) -> Result<Option<RulePolicy>, Box<dyn std::error::Error>> {
+    policy_document.map(parse_rule_policy).transpose()
+}
+
+fn policy_name(policy: Option<&RulePolicy>) -> Option<String> {
+    policy.and_then(|policy| {
+        policy
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+    })
 }
 
 /// Parse one Rule v1 document without compiling it.
@@ -765,11 +872,12 @@ pub fn compile_rule_sets(
     rule_sets: Vec<RuleSet>,
     policy_document: Option<&str>,
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    let policy = match policy_document {
-        Some(raw) => Some(serde_yaml::from_str::<RulePolicy>(raw)?),
-        None => None,
-    };
-    merge_rule_sets(rule_sets)?.compile(policy.as_ref())
+    let policy = parse_policy(policy_document)?;
+    let loaded = rule_sets
+        .into_iter()
+        .map(LoadedRules::from_rule_set)
+        .collect::<Result<Vec<_>, _>>()?;
+    LoadedRules::merge(loaded)?.compile(policy.as_ref())
 }
 
 pub fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::error::Error>> {
@@ -843,48 +951,6 @@ pub fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &Rul
     }
 }
 
-pub fn apply_rule_override_document(
-    rule_set: &mut RuleSet,
-    document: &RuleOverrideDocument,
-    path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if document.version != 1 {
-        return Err(format!(
-            "unsupported rule override version {} in {}; only version 1 is supported",
-            document.version,
-            path.display()
-        )
-        .into());
-    }
-    let _ = &document.description;
-
-    let rule_indexes = rule_set
-        .rules
-        .iter()
-        .enumerate()
-        .map(|(index, rule)| (rule.id.clone(), index))
-        .collect::<BTreeMap<_, _>>();
-    for entry in &document.overrides {
-        validate_rule_override_entry(entry, path)?;
-        let Some(index) = rule_indexes.get(&entry.rule_id).copied() else {
-            return Err(format!(
-                "unknown rule_id '{}' in rule override file {}",
-                entry.rule_id,
-                path.display()
-            )
-            .into());
-        };
-        let rule = &mut rule_set.rules[index];
-        if let Some(enabled) = entry.enabled {
-            rule.enabled = enabled;
-        }
-        if let Some(score) = entry.score {
-            rule.score = score;
-        }
-    }
-    Ok(())
-}
-
 fn validate_rule_override_entry(
     entry: &RuleOverrideEntry,
     path: &Path,
@@ -938,14 +1004,13 @@ impl RuleSet {
             .rules
             .into_iter()
             .filter(|rule| {
-                rule.enabled && self.defaults.enabled && policy_allows_rule(rule, policy)
+                rule.enabled
+                    && self.defaults.enabled
+                    && policy_allows_rule(&rule.id, &rule.category, policy)
             })
             .map(|definition| {
                 let matchers = compile_matchers(&definition, case_insensitive)?;
-                Ok(CompiledRule {
-                    definition,
-                    matchers,
-                })
+                Ok(CompiledRule::from_v1(definition, matchers))
             })
             .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
         let modifiers = self
@@ -954,7 +1019,7 @@ impl RuleSet {
             .filter(|modifier| {
                 modifier.enabled
                     && self.defaults.enabled
-                    && policy_allows_modifier(modifier, policy)
+                    && policy_allows_modifier(&modifier.id, policy)
             })
             .map(|modifier| {
                 validate_rule_metadata(
@@ -964,20 +1029,28 @@ impl RuleSet {
                     &modifier.analytic_intent,
                     &modifier.atlas_tags,
                 )?;
-                validate_modifier_link(&modifier)?;
-                Ok(modifier)
+                validate_modifier_link(
+                    &modifier.id,
+                    !modifier.when_all_categories.is_empty()
+                        || !modifier.when_all_rule_ids.is_empty(),
+                    modifier.link,
+                )?;
+                Ok(RuleV1CompatibilityModifier {
+                    id: modifier.id,
+                    score: modifier.score,
+                    detection_class: modifier.detection_class,
+                    signal_type: modifier.signal_type,
+                    analytic_intent: modifier.analytic_intent,
+                    atlas_tags: modifier.atlas_tags,
+                    when_all_categories: modifier.when_all_categories,
+                    when_all_rule_ids: modifier.when_all_rule_ids,
+                    link: modifier.link,
+                    falsepositives: modifier.falsepositives,
+                    explanation: modifier.explanation,
+                })
             })
             .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-        let policy_name = policy.and_then(|policy| {
-            policy
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-        });
-        let content = build_export(&rules, &modifiers, policy_name.as_deref());
-        Ok(CompiledRuleSet { rules, content })
+        Ok(CompiledRuleSet::new(rules, modifiers, policy_name(policy)))
     }
 }
 
@@ -994,12 +1067,15 @@ fn validate_rule_ids(rule_set: &RuleSet) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn validate_modifier_link(modifier: &ModifierDefinition) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(link) = modifier.link else {
+fn validate_modifier_link(
+    id: &str,
+    has_steps: bool,
+    link: Option<ModifierLink>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(link) = link else {
         return Ok(());
     };
-    let id = &modifier.id;
-    if modifier.when_all_categories.is_empty() && modifier.when_all_rule_ids.is_empty() {
+    if !has_steps {
         return Err(format!("modifier '{id}' link has no steps to link").into());
     }
     if link.calls > MAX_MODIFIER_LINK_CALLS {
@@ -1043,17 +1119,23 @@ impl CompiledRuleSet {
         self.rules
             .iter()
             .map(|rule| RuleSummary {
-                id: rule.definition.id.clone(),
-                category: rule.definition.category.clone(),
-                detection_class: rule.definition.detection_class.clone(),
-                signal_type: rule.definition.signal_type.clone(),
-                analytic_intent: rule.definition.analytic_intent.clone(),
-                atlas_tags: rule.definition.atlas_tags.clone(),
-                severity: rule.definition.severity.clone(),
-                score: rule.definition.score,
-                enabled: rule.definition.enabled,
+                id: rule.export.id.clone(),
+                category: rule.export.category.clone(),
+                detection_class: rule.export.detection_class.clone(),
+                signal_type: rule.export.signal_type.clone(),
+                analytic_intent: rule.export.analytic_intent.clone(),
+                atlas_tags: rule.export.atlas_tags.clone(),
+                severity: rule.export.severity.clone(),
+                score: rule.export.score,
+                // Only enabled rules compile.
+                enabled: true,
             })
             .collect()
+    }
+
+    /// Findings about the loaded content that did not stop it from loading.
+    pub fn notices(&self) -> &[RuleLoadNotice] {
+        &self.notices
     }
 
     /// Exposes only the effective compiled Rule v1 plan.  In particular, this
@@ -1071,12 +1153,12 @@ impl CompiledRuleSet {
 
         for rule in &self.rules {
             if let Some(matched) = matching_field(rule, fields) {
-                matched_ids.insert(rule.definition.id.as_str());
+                matched_ids.insert(rule.export.id.as_str());
                 evidence.push(Evidence {
                     field: matched.name.to_string(),
                     redacted_value: redact_sensitive_text(matched.value),
                     hash: Some(evidence_hash(matched.value)),
-                    rule_id: Some(rule.definition.id.clone()),
+                    rule_id: Some(rule.export.id.clone()),
                 });
             }
         }
@@ -1089,60 +1171,22 @@ impl CompiledRuleSet {
     }
 }
 
-fn build_export(
-    rules: &[CompiledRule],
-    modifiers: &[ModifierDefinition],
-    policy_name: Option<&str>,
-) -> RuleV1CompatibilityExport {
-    RuleV1CompatibilityExport {
-        policy_name: policy_name.map(str::to_owned),
-        rules: rules
-            .iter()
-            .map(|rule| RuleV1CompatibilityRule {
-                id: rule.definition.id.clone(),
-                title: rule.definition.title.clone(),
-                description: rule.definition.description.clone(),
-                category: rule.definition.category.clone(),
-                detection_class: rule.definition.detection_class.clone(),
-                signal_type: rule.definition.signal_type.clone(),
-                analytic_intent: rule.definition.analytic_intent.clone(),
-                atlas_tags: rule.definition.atlas_tags.clone(),
-                severity: rule.definition.severity.clone(),
-                score: rule.definition.score,
-                tags: rule.definition.tags.clone(),
-                explanation: rule.definition.explanation.clone(),
-                falsepositives: rule.definition.falsepositives.clone(),
-                matchers: rule
-                    .matchers
-                    .iter()
-                    .map(|matcher| RuleV1CompatibilityMatcher {
-                        target: matcher.target.clone(),
-                        regex: matcher.regex.as_str().to_owned(),
-                        exclusion_regex: matcher
-                            .exclusion_regex
-                            .as_ref()
-                            .map(|regex| regex.as_str().to_owned()),
-                        scope: matcher.scope,
-                    })
-                    .collect(),
-            })
-            .collect(),
-        modifiers: modifiers
-            .iter()
-            .map(|modifier| RuleV1CompatibilityModifier {
-                id: modifier.id.clone(),
-                score: modifier.score,
-                detection_class: modifier.detection_class.clone(),
-                signal_type: modifier.signal_type.clone(),
-                analytic_intent: modifier.analytic_intent.clone(),
-                atlas_tags: modifier.atlas_tags.clone(),
-                when_all_categories: modifier.when_all_categories.clone(),
-                when_all_rule_ids: modifier.when_all_rule_ids.clone(),
-                link: modifier.link,
-                falsepositives: modifier.falsepositives.clone(),
-                explanation: modifier.explanation.clone(),
-            })
-            .collect(),
+impl CompiledRuleSet {
+    fn new(
+        rules: Vec<CompiledRule>,
+        modifiers: Vec<RuleV1CompatibilityModifier>,
+        policy_name: Option<String>,
+    ) -> Self {
+        let content = RuleV1CompatibilityExport {
+            policy_name,
+            rules: rules.iter().map(|rule| rule.export.clone()).collect(),
+            modifiers,
+        };
+        Self {
+            rules,
+            content,
+            notices: Vec::new(),
+        }
     }
 }
 
@@ -1524,7 +1568,7 @@ fn matching_field<'a>(
         .map(|(name, value)| MatchedField { name, value })
 }
 
-fn policy_allows_rule(rule: &RuleDefinition, policy: Option<&RulePolicy>) -> bool {
+fn policy_allows_rule(id: &str, category: &str, policy: Option<&RulePolicy>) -> bool {
     let Some(policy) = policy else {
         return true;
     };
@@ -1532,47 +1576,33 @@ fn policy_allows_rule(rule: &RuleDefinition, policy: Option<&RulePolicy>) -> boo
         && !policy
             .enabled_categories
             .iter()
-            .any(|category| category == &rule.category)
+            .any(|enabled| enabled == category)
     {
         return false;
     }
     if policy
         .disabled_categories
         .iter()
-        .any(|category| category == &rule.category)
+        .any(|disabled| disabled == category)
     {
         return false;
     }
-    if !policy.enabled_rules.is_empty()
-        && !policy
-            .enabled_rules
-            .iter()
-            .any(|rule_id| rule_id == &rule.id)
+    if !policy.enabled_rules.is_empty() && !policy.enabled_rules.iter().any(|rule_id| rule_id == id)
     {
         return false;
     }
-    !policy
-        .disabled_rules
-        .iter()
-        .any(|rule_id| rule_id == &rule.id)
+    !policy.disabled_rules.iter().any(|rule_id| rule_id == id)
 }
 
-fn policy_allows_modifier(modifier: &ModifierDefinition, policy: Option<&RulePolicy>) -> bool {
+fn policy_allows_modifier(id: &str, policy: Option<&RulePolicy>) -> bool {
     let Some(policy) = policy else {
         return true;
     };
-    if !policy.enabled_rules.is_empty()
-        && !policy
-            .enabled_rules
-            .iter()
-            .any(|rule_id| rule_id == &modifier.id)
+    if !policy.enabled_rules.is_empty() && !policy.enabled_rules.iter().any(|rule_id| rule_id == id)
     {
         return false;
     }
-    !policy
-        .disabled_rules
-        .iter()
-        .any(|rule_id| rule_id == &modifier.id)
+    !policy.disabled_rules.iter().any(|rule_id| rule_id == id)
 }
 
 #[cfg(test)]

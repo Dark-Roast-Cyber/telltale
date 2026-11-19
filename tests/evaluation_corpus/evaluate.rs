@@ -6,7 +6,7 @@ use telltale_detect::v2::{
     session::{CanonicalSourceInput, evaluate_source},
 };
 use telltale_rules::package::{CommunityRules, resolve_rule_packages};
-use telltale_rules::{RuleSet, bundled_default_rule_set, compile_rule_sets};
+use telltale_rules::{DefinitionKind, LoadedRules, bundled_default_rules};
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, MessageRole, ObservationBody, ObservationStage,
     ObservedAt,
@@ -119,7 +119,7 @@ struct ProfileRules {
 }
 
 fn profile_rules(profile: RuleProfile) -> Result<ProfileRules, String> {
-    let mut documents = vec![bundled_default_rule_set().map_err(|error| error.to_string())?];
+    let mut documents = vec![bundled_default_rules().map_err(|error| error.to_string())?];
     if profile == RuleProfile::Default {
         for resolved in resolve_rule_packages(CommunityRules::Embedded, Vec::new())
             .map_err(|error| error.to_string())?
@@ -127,23 +127,18 @@ fn profile_rules(profile: RuleProfile) -> Result<ProfileRules, String> {
             documents.extend(resolved.package.into_documents());
         }
     }
-    let enabled_rules = enabled_ids(&documents, |rule_set| {
-        rule_set
-            .rules
+    let content = LoadedRules::merge(documents).map_err(|error| error.to_string())?;
+    let enabled = |kind: DefinitionKind| {
+        content
+            .definitions()
             .iter()
-            .filter(|rule| rule.enabled)
-            .map(|rule| rule.id.clone())
-            .collect()
-    });
-    let enabled_modifiers = enabled_ids(&documents, |rule_set| {
-        rule_set
-            .modifiers
-            .iter()
-            .filter(|modifier| modifier.enabled)
-            .map(|modifier| modifier.id.clone())
-            .collect()
-    });
-    let compiled = compile_rule_sets(documents, None).map_err(|error| error.to_string())?;
+            .filter(|definition| definition.kind() == kind && definition.enabled())
+            .map(|definition| definition.id().to_owned())
+            .collect::<BTreeSet<_>>()
+    };
+    let enabled_rules = enabled(DefinitionKind::Rule);
+    let enabled_modifiers = enabled(DefinitionKind::Modifier);
+    let compiled = content.compile(None).map_err(|error| error.to_string())?;
     let canonical =
         compile_rule_v1(&compiled.compatibility_export()).map_err(|error| error.to_string())?;
     Ok(ProfileRules {
@@ -151,14 +146,6 @@ fn profile_rules(profile: RuleProfile) -> Result<ProfileRules, String> {
         enabled_rules,
         enabled_modifiers,
     })
-}
-
-fn enabled_ids(documents: &[RuleSet], ids: impl Fn(&RuleSet) -> Vec<String>) -> BTreeSet<String> {
-    documents
-        .iter()
-        .filter(|rule_set| rule_set.defaults.enabled)
-        .flat_map(ids)
-        .collect()
 }
 
 pub fn evaluate_manifest(

@@ -77,8 +77,9 @@ validation. Existing-format-only clients remain preview/experimental for live us
 
 Canonical Observation v2 acquisition and the Detection v2 runtime are now the
 authoritative path for CLI scan/watch and every `Pipeline` scan method across the
-eight registered source identities. Rule v1 remains the content-compatibility
-format, and Event 3.0 remains the compatibility projection. Rust hosts embed
+eight registered source identities. Rules are written in
+[Rule v2](docs/rule-format.md), Telltale's Sigma profile, which compiles into the
+Rule v1 compatibility form, and Event 3.0 remains the compatibility projection. Rust hosts embed
 `telltale-core` and use detailed scans for per-action findings with typed
 outcomes; see [embedding](docs/embedding.md) for the contract and surface
 classification. Event4 and Telemetry/Output v2 remain inactive.
@@ -100,7 +101,8 @@ Published v0.7.0 and v0.7.1 retain explicit state and historical-event migration
 the [migration contract](docs/migration-contract.md). See
 [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) for
 published builds and the [0.7.0 migration guide](docs/migrations/0.7.0.md) for that
-upgrade line. A source checkout is not evidence of release qualification.
+upgrade line; the [0.8.0 migration guide](docs/migrations/0.8.0.md) covers the
+move to Rule v2. A source checkout is not evidence of release qualification.
 
 ## Development verification
 
