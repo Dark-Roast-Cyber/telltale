@@ -1,11 +1,11 @@
 # Process-Chain Detections
 
-Telltale's Rule v1 content compatibility asks "does this text look risky".
+Telltale's [Rule v2](rule-format.md) content rules ask "does this text look risky".
 Process-chain rules ask whether available evidence supports a parent/child
 matcher relationship and what command context accompanies it. In the production
-path, Detection v2 evaluates both: Rule v1 retains its content-compatibility
-semantics, while the specialized process-chain evaluator uses the compiled
-process-chain rules and shared session kernel. Rule v1 results continue through
+path, Detection v2 evaluates both: rule content keeps its Rule v1
+compatibility semantics, while the specialized process-chain evaluator uses the compiled
+process-chain rules and shared session kernel. Rule results continue through
 the Event3 `detection` compatibility projection; process-chain results project
 Event3 `process_chain` events. Directly observed Process evidence can support
 an execution relationship. Command/tool-derived matcher context is an

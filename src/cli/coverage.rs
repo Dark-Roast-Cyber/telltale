@@ -28,7 +28,7 @@ pub(crate) fn run_rules_coverage(
         &[],
     )?;
     let rule_set = &resolution.rule_set;
-    let (all_falsepositives, all_rule_categories) = load_rule_metadata(&resolution.merged_rule_set);
+    let (all_falsepositives, all_rule_categories) = load_rule_metadata(&resolution.content);
 
     let sources = discover_sources_best_effort(root);
     if sources.is_empty() {
@@ -163,23 +163,21 @@ pub(crate) fn run_rules_coverage(
     Ok(())
 }
 
-fn load_rule_metadata(rule_set: &crate::rules::RuleSet) -> RuleMetadata {
+fn load_rule_metadata(content: &crate::rules::LoadedRules) -> RuleMetadata {
     let mut all_falsepositives: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut all_rule_categories: BTreeMap<String, String> = BTreeMap::new();
-    for rule in &rule_set.rules {
-        all_rule_categories.insert(rule.id.clone(), rule.category.clone());
-        if !rule.falsepositives.is_empty() {
-            all_falsepositives.insert(rule.id.clone(), rule.falsepositives.clone());
+    for definition in content.definitions() {
+        let id = definition.id().to_owned();
+        if let Some(category) = definition.category() {
+            all_rule_categories.insert(id.clone(), category.to_owned());
+        } else if !definition.when_all_categories().is_empty() {
+            all_rule_categories.insert(id.clone(), definition.when_all_categories().join("+"));
+        } else if !definition.when_all_rule_ids().is_empty() {
+            all_rule_categories.insert(id.clone(), definition.when_all_rule_ids().join("+"));
         }
-    }
-    for modifier in &rule_set.modifiers {
-        if !modifier.when_all_categories.is_empty() {
-            all_rule_categories.insert(modifier.id.clone(), modifier.when_all_categories.join("+"));
-        } else if !modifier.when_all_rule_ids.is_empty() {
-            all_rule_categories.insert(modifier.id.clone(), modifier.when_all_rule_ids.join("+"));
-        }
-        if !modifier.falsepositives.is_empty() {
-            all_falsepositives.insert(modifier.id.clone(), modifier.falsepositives.clone());
+        let falsepositives = &definition.metadata().falsepositives;
+        if !falsepositives.is_empty() {
+            all_falsepositives.insert(id, falsepositives.clone());
         }
     }
 
@@ -193,7 +191,7 @@ mod tests {
     use super::load_rule_metadata;
     #[test]
     fn coverage_metadata_uses_embedded_default_rules() {
-        let default = crate::rules::bundled_default_rule_set().expect("default rules");
+        let default = crate::rules::bundled_default_rules().expect("default rules");
         let (falsepositives, categories) = load_rule_metadata(&default);
 
         assert_eq!(

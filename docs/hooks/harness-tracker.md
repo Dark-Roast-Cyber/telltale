@@ -595,3 +595,4 @@ harness's entry.
 - 2026-11-17: merged main's driver change (each scenario states the hook decision it expects) with the same-call join; the merged Codex and Copilot drivers passed their pairs on installed 0.167.0 and 1.0.105 (E2E, scripted models). The join now hashes tool arguments as the harness sent them.
 - 2026-11-18: merged main's change that evaluates each hook call through its client's tool table; the OpenCode pilot uses OpenCode's table and all 17 of its scenarios passed again on installed 2.3.2 (E2E, scripted model).
 - 2026-11-18: the Adapter stage no longer names normalization tests: since #225 a harness's built-in tools are declared in its client's tool table. The native parity test now sends OpenCode's captured shapes through its registered adapter name.
+- 2026-11-18: hooks self-protection rules are Rule v2 documents (rule names unchanged); README and architecture wording updated to rule names and Rule v2, no harness facts changed.

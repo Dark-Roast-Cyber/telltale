@@ -695,9 +695,14 @@ fn review_category_chain_order_window_and_independent_repeats() {
 fn review_link_score_ownership_preserves_effective_edits_and_explicit_options() {
     let lf_document = telltale_rules::bundled_default_rule_yaml().replace("\r\n", "\n");
     for source_document in [lf_document.clone(), lf_document.replace("\n", "\r\n")] {
-        let document = source_document.replace("\r\n", "\n").replace(
-            "id: chain.download_then_execute\n    score: 35",
-            "id: chain.download_then_execute\n    score: 7",
+        // The chain's score is the first one after its name.
+        let normalized = source_document.replace("\r\n", "\n");
+        let (head, tail) = normalized
+            .split_once("name: chain.download_then_execute\n")
+            .unwrap();
+        let document = format!(
+            "{head}name: chain.download_then_execute\n{}",
+            tail.replacen("    score: 35\n", "    score: 7\n", 1)
         );
         let rules = telltale_rules::load_rule_set_from_documents(&[&document], None).unwrap();
         let export = rules.compatibility_export();
@@ -2067,10 +2072,11 @@ fn segment_scoped_download_follows_the_declared_yaml_in_sessions_and_keeps_nativ
     for newline in ["\n", "\r\n"] {
         let bundled = bundled.replace('\n', newline);
         let normalized = bundled.replace("\r\n", "\n");
-        assert_eq!(normalized.matches("      scope: segment\n").count(), 1);
-        let field_copy = normalized.replace("      scope: segment\n", "");
-        assert!(!field_copy.contains("      scope: segment"));
-        let explicit_field = normalized.replace("      scope: segment\n", "      scope: field\n");
+        // The scope is a modifier on each selection and filter of the download
+        // rule; Rule v2 spells field scope by leaving it out.
+        assert_eq!(normalized.matches("|segment:").count(), 6);
+        let field_copy = normalized.replace("|segment:", ":");
+        assert!(!field_copy.contains("|segment"));
         let fork = bundled
             .replace("network.download", "fork.network.download")
             .replace("exfil.outbound_upload", "fork.exfil.outbound_upload");
@@ -2094,14 +2100,12 @@ fn segment_scoped_download_follows_the_declared_yaml_in_sessions_and_keeps_nativ
         );
         assert_eq!(evaluate_with(&fork, same).0, ["fork.exfil.outbound_upload"]);
 
-        // Same-ID copies with omitted or explicit field scope are different
-        // predicates, so neither is mistaken for the bundled native profile.
-        for document in [&field_copy, &explicit_field] {
-            let document = document.replace('\n', newline);
-            assert_eq!(
-                evaluate_with(&document, separate),
-                (upload.to_vec(), upload.to_vec())
-            );
-        }
+        // A same-ID copy in field scope is a different predicate, so it is not
+        // mistaken for the bundled native profile.
+        let document = field_copy.replace('\n', newline);
+        assert_eq!(
+            evaluate_with(&document, separate),
+            (upload.to_vec(), upload.to_vec())
+        );
     }
 }

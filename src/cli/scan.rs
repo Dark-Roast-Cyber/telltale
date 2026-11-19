@@ -335,7 +335,7 @@ fn run_scan_for_platform(
     let diagnostics = super::rule_diagnostics_value(&resolution.diagnostics);
     let policy_active = config.execution.policy_path.is_some();
     let rule_set = resolution.rule_set;
-    let merged_rule_set = resolution.merged_rule_set;
+    let content = resolution.content;
     let mut effective_configuration = config.execution.effective_configuration.clone();
     effective_configuration["rules"] = {
         let mut rules = effective_configuration["rules"].clone();
@@ -373,7 +373,7 @@ fn run_scan_for_platform(
     }
     let rules = cached_rule_plan(&rule_set.compatibility_export())?;
     let pre_policy_rules = policy_active.then(|| {
-        let compiled = merged_rule_set.compile(None)?;
+        let compiled = content.compile(None)?;
         cached_rule_plan(&compiled.compatibility_export())
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
     });

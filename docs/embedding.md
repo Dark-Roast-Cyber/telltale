@@ -28,7 +28,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -63,8 +63,8 @@ coverage. Inventory is independent of token counters.
 
 The crates are not on crates.io yet. Depend on `telltale-core` from Git and pin
 a revision, not a branch; update the pin deliberately and rerun your tests. See
-[versioning](versioning.md) and the [0.7.0 migration guide](migrations/0.7.0.md)
-before upgrading.
+[versioning](versioning.md), the [0.7.0 migration guide](migrations/0.7.0.md) and
+the [0.8.0 migration guide](migrations/0.8.0.md) before upgrading.
 
 ```toml
 [dependencies]
@@ -529,8 +529,14 @@ never reopens a source.
 (`RuleCatalogEntry`: `id`, `kind`, `title`, `explanation`, `falsepositives`,
 `category`, `severity`, `session_score`, `action_score`, `action_ordered`,
 `action_within_seconds`, `action_link`, `atlas_tags`, `attack_techniques`,
-`package_id`) for core rules and the embedded community package; `package_id`
-is `None` for core rules and `enabled` describes the default pipeline. When
+`package_id`, and the descriptive metadata `uuid`, `status`, `description`,
+`references`, `author`, `license`, `date`, `modified`, `related` and
+`logsource`, with the `behavior_fingerprint` and `metadata_revision`
+revisions) for core rules and the embedded community package; `package_id`
+is `None` for core rules and `enabled` describes the default pipeline.
+`Pipeline::rule_catalog(&options)` returns the same entries for any
+pipeline's content, supplied documents, packages and policy included, with
+`enabled` describing that pipeline. When
 `options.process_chain` is set, it also lists every rule of the bundled
 process-chain pack as `RuleCatalogKind::ProcessChain` (`"process_chain"` on the
 wire), with its title, reason as `explanation`, category false-positive
@@ -538,21 +544,23 @@ guidance, score before environment false-positive controls, signal type
 (`chain`, `atomic` or `correlation`) and, for correlations, its window in
 `action_within_seconds` and `action_ordered` true, because their steps match in
 sequence order. Process-chain entries carry MITRE ATT&CK technique IDs
-in `attack_techniques`; Rule v1 rules and modifiers carry only `atlas_tags`. Session scores are frozen compatibility
+in `attack_techniques`, as do Rule v2 documents through `attack.*` tags. Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
-promotion totals. It exposes no detector internals, custom documents, policy
-overrides, or executable process AST. Like `ActionFinding`, catalog entries do
-not implement `Serialize`. `rule_catalog_document(&options)` returns the same
-entries as a versioned `RuleCatalogV1` document (`telltale.rule_catalog.v1`)
-with the default pipeline's semantic identity; publish it to services that
-render detections. Its JSON Schema is
-[`schemas/rule-catalog-v1.schema.json`](../schemas/rule-catalog-v1.schema.json).
+promotion totals. It exposes no detector internals, rule patterns, or
+executable process AST. Like `ActionFinding`, catalog entries do
+not implement `Serialize`. `rule_catalog_document(&options)` (and `Pipeline::rule_catalog_document`)
+returns the same entries as a versioned `RuleCatalogV2` document
+(`telltale.rule_catalog.v2`) with the pipeline's semantic identity; publish it
+to services that render detections. `telltale rules catalog` prints it for the
+CLI's resolved rules. Its JSON Schema is
+[`schemas/rule-catalog-v2.schema.json`](../schemas/rule-catalog-v2.schema.json);
+catalog v1 is kept as a historical schema.
 
 ## Host wire and durable handoff
 
 `ActionFinding` is a Rust value and deliberately does not implement
 `Serialize`. Telltale's cross-process formats are explicit, versioned schemas:
-Event 3 for session events, action record v1 for actions, and rule catalog v1
+Event 3 for session events, action record v1 for actions, and rule catalog v2
 for presentation metadata. Hosts forward these; they do not design their own
 action format.
 

@@ -1,24 +1,28 @@
-version: 1
-description: Example ad-hoc detections for temporary or bleeding-edge agent behavior hunts.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: adhoc.agent_tool_exfil_phrase
-    title: Ad-hoc agent tool exfiltration phrase
+# Example ad-hoc detections for temporary or bleeding-edge agent behavior hunts.
+title: Ad-hoc agent tool exfiltration phrase
+id: 75ae473e-ef85-457a-a190-b48518af4b61
+name: adhoc.agent_tool_exfil_phrase
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: agent_activity
+detection:
+    selection:
+        - message.assistant_text|re|i: &pattern '(exfiltrate|send|upload).{0,120}(via|using).{0,80}(tool|webhook|slack|email|paste)'
+        - tool.arguments|re|i: *pattern
+        - tool.result|re|i: *pattern
+    condition: selection
+falsepositives:
+    - 'Security testing, documentation, or quoted incident reports may use exfiltration language without execution.'
+level: medium
+tags:
+    - atlas.aml.t0086
+    - atlas.aml.t0025
+telltale:
     category: exfiltration
+    score: 45
+    explanation: 'Ad-hoc hunt for agent context describing data exfiltration through an available tool.'
+    analytic_intent: hunt
     detection_class: threat_hunting
     signal_type: atomic
-    analytic_intent: hunt
-    atlas_tags:
-      - atlas:AML.T0086
-      - atlas:AML.T0025
-    severity: medium
-    score: 45
-    targets: [assistant_context, arguments, tool_result]
-    regex: '(exfiltrate|send|upload).{0,120}(via|using).{0,80}(tool|webhook|slack|email|paste)'
     tags: [ad-hoc, exfiltration, agent-tool-use]
-    falsepositives:
-      - Security testing, documentation, or quoted incident reports may use exfiltration language without execution.
-    explanation: Ad-hoc hunt for agent context describing data exfiltration through an available tool.
-modifiers: []

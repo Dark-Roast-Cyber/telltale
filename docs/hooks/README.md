@@ -243,14 +243,15 @@ hooks:
     # socket: <path>     # default: <state dir>/evaluator.sock
 ```
 
-While `hooks.self_protection_rules` is on, rule IDs that start with
-`tth.tamper.` belong to hooks. Rule content and policy cannot change the
+While `hooks.self_protection_rules` is on, rule names that start with
+`tth.tamper.` belong to hooks (the self-protection rules are
+[Rule v2](../rule-format.md) documents). Rule content and policy cannot change the
 self-protection rules: a rule document, rule package or override file that names
-such an ID is invalid configuration, and so is a policy under which any
+such a name is invalid configuration, and so is a policy under which any
 self-protection rule would not stay enabled. A shared policy with a whitelist
 (`enabled_categories` or `enabled_rules`) must therefore include the
 self-protection rules when hooks read it: list the `approval_bypass` category,
-or every `tth.tamper.` rule ID. A policy that only turns off other rules or
+or every `tth.tamper.` rule name. A policy that only turns off other rules or
 categories is unaffected. `telltale hooks check` names the file (never its
 content) and exits 1, a hook whose settings ask for `hooks.mode: enforce` denies
 tool calls until it is fixed, and any other hook is detect-only on the defaults

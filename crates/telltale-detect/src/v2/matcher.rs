@@ -13,7 +13,7 @@ use super::types::{DetectionError, NonEvaluationReason};
 
 pub const MAX_MATCHER_DEPTH: usize = 8;
 pub const MAX_MATCHER_BRANCHES: usize = 64;
-pub const MAX_PATTERN_BYTES: usize = 1_024;
+pub const MAX_PATTERN_BYTES: usize = telltale_rules::MAX_PATTERN_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatcherOperator {
