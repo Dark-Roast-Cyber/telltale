@@ -66,7 +66,7 @@ pub fn default_project_paths() -> Vec<PathBuf> {
 /// Loads default project paths, filtering to only those that exist.
 /// Used when no --project-config or TELLTALE_PROJECT_CONFIG is provided.
 pub fn load_default_projects() -> Vec<ProjectDef> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = project_home();
     load_default_projects_with_home(home.as_deref())
 }
 
@@ -93,8 +93,17 @@ fn load_default_projects_with_home(home: Option<&Path>) -> Vec<ProjectDef> {
 }
 
 fn expand_tilde(path: &Path) -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = project_home();
     expand_tilde_with_home(path, home.as_deref())
+}
+
+fn project_home() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME");
+    #[cfg(windows)]
+    let home = home
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()));
+    home.map(PathBuf::from)
 }
 
 fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
@@ -269,6 +278,43 @@ mod tests {
         let projects = load_default_projects_with_home(Some(&home));
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "github");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_projects_use_userprofile_without_home() {
+        let temp = tempdir().expect("tempdir");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "projects::tests::windows_project_profile_worker",
+                "--ignored",
+            ])
+            .env_remove("HOME")
+            .env("USERPROFILE", temp.path())
+            .output()
+            .expect("project profile worker");
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "invoked with an isolated Windows profile"]
+    fn windows_project_profile_worker() {
+        let profile = PathBuf::from(std::env::var_os("USERPROFILE").expect("profile"));
+        let project = profile.join("github");
+        fs::create_dir(&project).expect("github dir");
+        let project = project.canonicalize().expect("canonical project path");
+        let defaults = load_default_projects();
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].path, project);
+
+        let config = profile.join("projects.yaml");
+        fs::write(&config, "projects:\n  - name: custom\n    path: ~/github\n")
+            .expect("write config");
+        let projects = load_project_config(&config).expect("expand configured project path");
+        assert_eq!(projects[0].path, project);
     }
 
     #[test]

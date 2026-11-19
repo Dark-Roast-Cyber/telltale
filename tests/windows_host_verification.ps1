@@ -95,6 +95,28 @@ if ($script:TestBinary) {
         $report = $run.Stdout | ConvertFrom-Json
         Assert-TTHost ($run.ExitCode -eq 0 -and $report.checks[0].classification -eq 'passed') 'Real supported source must pass.'
         Assert-TTHost ($run.Stdout -notmatch 'SENTINEL-PRIVATE|synthetic.jsonl|codex\\sessions') 'Real report must omit paths and transcript content.'
+
+        $relocatedHome = Join-Path $testRoot 'relocated Codex home'
+        $relocatedSessions = Join-Path $relocatedHome 'sessions'
+        [IO.Directory]::CreateDirectory($relocatedSessions) | Out-Null
+        foreach ($index in 1..2) {
+            [IO.File]::Copy($source, (Join-Path $relocatedSessions "rollout-$index.jsonl"))
+        }
+        $savedCodexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', 'Process')
+        try {
+            $env:CODEX_HOME = $relocatedHome
+            $run = Invoke-TTHostProcess $shell @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                '-File', $verifier, '-BinaryPath', $BinaryPath, '-Client', 'codex', '-RequiredClient', 'codex')
+            Assert-TTHost ($run.ExitCode -eq 0) 'Omitting Root must allow host discovery.'
+            $hostCheck = ($run.Stdout | ConvertFrom-Json).checks[0]
+            Assert-TTHost ($hostCheck.classification -eq 'passed' -and $hostCheck.counters.selected_source_count -eq 2) 'Host discovery must find the relocated Codex store.'
+            Assert-TTHost ($run.Stdout -notmatch 'relocated Codex home|rollout-|SENTINEL-PRIVATE') 'Host report must omit relocated paths and transcript content.'
+            $run = Invoke-TTHostProcess $shell $arguments
+            Assert-TTHost ($run.ExitCode -eq 0 -and ($run.Stdout | ConvertFrom-Json).checks[0].counters.selected_source_count -eq 1) 'Explicit Root must keep scanning only that root.'
+        } finally {
+            [Environment]::SetEnvironmentVariable('CODEX_HOME', $savedCodexHome, 'Process')
+        }
+
         $expectedRevision = [regex]::Match($report.binary_version, '\(([0-9a-f]{12}|unknown)\)').Groups[1].Value
         $scan = Invoke-TTHostProcess $BinaryPath @('scan', '--once', '--dry-run', '--no-local-config', '--root', $testRoot, '--client', 'codex')
         $runtime = ($scan.Stdout | ConvertFrom-Json).runtime
