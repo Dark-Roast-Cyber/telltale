@@ -98,9 +98,11 @@ fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 fn project_home() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|value| !value.is_empty());
+    let home = std::env::var_os("HOME");
     #[cfg(windows)]
-    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()));
+    let home = home
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()));
     home.map(PathBuf::from)
 }
 
