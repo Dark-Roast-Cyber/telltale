@@ -32,16 +32,36 @@ fn override_entry(change: &str) -> String {
     )
 }
 
-fn rule_document(id: &str) -> String {
+/// A UUIDv4-shaped id derived from `name`, so synthetic rules with different
+/// names never share one and a replacement keeps the id of what it replaces.
+fn synthetic_uuid(name: &str) -> String {
+    let hash = |seed: u64| {
+        name.bytes().fold(seed, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+    };
+    let (high, low) = (hash(0xcbf2_9ce4_8422_2325), hash(0x84222325_cbf29ce4));
     format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: {id}\n    title: synthetic\n    category: approval_bypass\n    severity: high\n    score: 90\n    targets: [command]\n    regex: 'synthetic-never-matches-xyz'\n    tags: [synthetic]\n    explanation: synthetic.\nmodifiers: []\n"
+        "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+        high >> 32,
+        (high >> 16) & 0xffff,
+        high & 0xfff,
+        low >> 52,
+        low & 0xffff_ffff_ffff
+    )
+}
+
+fn rule_document(id: &str) -> String {
+    let uuid = synthetic_uuid(id);
+    format!(
+        "title: synthetic\nid: {uuid}\nname: {id}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'synthetic-never-matches-xyz'\n    condition: selection\nlevel: high\ntelltale:\n    category: approval_bypass\n    score: 90\n    explanation: 'synthetic.'\n    tags: [synthetic]\n"
     )
 }
 
 fn rule_package(id: &str) -> String {
-    let document = rule_document(id).trim_end().replace('\n', "\n    ");
+    let document = rule_document(id);
     format!(
-        "format: telltale-rule-package/v1\nid: synthetic.package\nversion: 1.0.0\npublisher: synthetic\nlicense: MIT\nrule_namespace: tth\ndocuments:\n  - {document}\n"
+        "format: telltale-rule-package/v2\nid: synthetic.package\ntitle: Synthetic package\nversion: 1.0.0\npublisher: synthetic\nlicense: MIT\nrule_namespace: tth\n---\n{document}"
     )
 }
 

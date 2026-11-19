@@ -1,7 +1,8 @@
 # telltale-detect
 
 
-Detection v2 over Canonical Observation v2: Rule v1 content compilation,
+Detection v2 over Canonical Observation v2: compiled rule content (the
+`RuleV1Compatibility*` form Rule v2 compiles to),
 canonical session evaluation, process-chain correlation, Event3 projection,
 timelines, baseline models, allowlists, and optional MCP analysis. Source
 acquisition belongs to `telltale-sources`; scan/watch orchestration belongs to

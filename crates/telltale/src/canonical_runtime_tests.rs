@@ -229,10 +229,10 @@ fn pre_policy_compatibility_retention_failure_remains_diagnostic_only() {
 
 #[test]
 fn pre_policy_true_shared_work_exhaustion_discards_authoritative_success() {
-    let rules = (0..17).map(|index| format!("  - id: synthetic.work{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
-    let document = format!(
-        "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n{rules}modifiers: []\n"
-    );
+    let document = (0..17)
+        .map(|index| format!("title: Synthetic {index}\nid: 00000000-0000-4000-8000-{index:012}\nname: synthetic.work{index}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: needle\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: synthetic\n"))
+        .collect::<Vec<_>>()
+        .join("---\n");
     let before = compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&document], None)
             .unwrap()
@@ -288,9 +288,17 @@ fn source(path: std::path::PathBuf) -> Source {
     }
 }
 
+/// A plan with one rule matching `needle` in the field that compiles to the
+/// target `target`.
 fn plan(target: &str) -> RuleV1CompatibilityPlan {
+    let (field, category) = match target {
+        "user_context" => ("message.user_text", "message"),
+        "assistant_context" => ("message.assistant_text", "message"),
+        "url" => ("tool.url", "tool_activity"),
+        other => panic!("unmapped target {other}"),
+    };
     let yaml = format!(
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.target\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [{target}]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n"
+        "title: synthetic\nid: 1523429f-99fb-4ca1-85ff-dfa1ea08477d\nname: synthetic.target\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: {category}\ndetection:\n    selection:\n        - {field}|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n"
     );
     compile_rule_v1(
         &telltale_rules::load_rule_set_from_documents(&[&yaml], None)
@@ -464,33 +472,50 @@ fn message_with_content(
 fn canonical_policy_accounting_counts_filtered_modifiers_and_fully_filtered_sessions() {
     use telltale_sources::acquisition::{AccountingCoverage, SessionAccounting};
 
-    const RULES: &str = r#"version: 1
-description: synthetic policy accounting
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: test.first
+    const RULES: &str = r#"title: first match
+id: 3662e907-edee-4a08-89b7-16349d6c3ed3
+name: test.first
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.user_text|re: 'needle'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 1
-    targets: [user_context]
-    regex: needle
-    tags: []
-    explanation: first match
-  - id: test.second
+    explanation: 'first match'
+---
+title: second match
+id: 1b40876b-88e4-440b-8847-821afe44f9f0
+name: test.second
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.user_text|re: 'second'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 1
-    targets: [user_context]
-    regex: second
-    tags: []
-    explanation: second match
-modifiers:
-  - id: chain.test
+    explanation: 'second match'
+---
+title: test modifier
+id: deb8e249-a994-4c77-86fc-f794e580eaeb
+name: chain.test
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [test.first]
+telltale:
     score: 1
-    when_all_rule_ids: [test.first]
-    explanation: test modifier
+    explanation: 'test modifier'
 "#;
     let compiled = |policy| {
         compile_rule_v1(

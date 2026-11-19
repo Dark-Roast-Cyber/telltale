@@ -1,28 +1,21 @@
+use super::test_rules::{chain, file, rule};
 use super::{ModifierLink, ModifierLinkOrder, load_rule_set_from_documents};
 
+/// A rule in category `alpha` and a chain on it whose correlation adds `link`.
 fn document(link: &str) -> String {
-    format!(
-        "version: 1
-description: synthetic
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: synthetic.alpha
-    category: alpha
-    severity: low
-    score: 1
-    targets: [command]
-    regex: alpha
-    tags: []
-    explanation: alpha
-modifiers:
-  - id: chain.synthetic
-    score: 1
-    when_all_categories: [alpha]
-{link}    explanation: synthetic
-"
-    )
+    file(&[
+        rule(
+            "synthetic.alpha",
+            "alpha",
+            "selection:\n    - tool.command|re: alpha\ncondition: selection",
+            "",
+        ),
+        chain(
+            "chain.synthetic",
+            &format!("categories: [alpha]\n{link}"),
+            "",
+        ),
+    ])
 }
 
 fn load(link: &str) -> Result<Option<ModifierLink>, String> {
@@ -35,7 +28,7 @@ fn load(link: &str) -> Result<Option<ModifierLink>, String> {
 fn links_default_to_declared_order_without_a_time_cap() {
     assert_eq!(load(""), Ok(None));
     assert_eq!(
-        load("    link: {calls: 3}\n"),
+        load("within_calls: 3\n"),
         Ok(Some(ModifierLink {
             calls: 3,
             order: ModifierLinkOrder::Declared,
@@ -43,11 +36,15 @@ fn links_default_to_declared_order_without_a_time_cap() {
         }))
     );
     assert_eq!(
-        load("    link: {calls: 0, order: any, minutes: 15}\n"),
+        load("within_calls: 3\norder: ordered\n"),
+        load("within_calls: 3\n")
+    );
+    assert_eq!(
+        load("within_calls: 0\norder: any\n"),
         Ok(Some(ModifierLink {
             calls: 0,
             order: ModifierLinkOrder::Any,
-            minutes: Some(15),
+            minutes: None,
         }))
     );
 }
@@ -55,21 +52,37 @@ fn links_default_to_declared_order_without_a_time_cap() {
 #[test]
 fn links_reject_unknown_fields_and_out_of_range_bounds() {
     for link in [
-        "    link: {calls: 3, window: 5}\n",
-        "    link: {calls: 3, order: sometimes}\n",
-        "    link: {order: any}\n",
+        "within_calls: 3\nwindow: 5\n",
+        "within_calls: 3\norder: sometimes\n",
+        "order: any\n",
     ] {
         assert!(load(link).is_err(), "{link}");
     }
-    for (link, message) in [
-        ("    link: {calls: 11}\n", "link calls must be at most 10"),
-        ("    link: {calls: 1, minutes: 0}\n", "between 1 and 1440"),
-        (
-            "    link: {calls: 1, minutes: 1441}\n",
-            "between 1 and 1440",
-        ),
-    ] {
-        let error = load(link).unwrap_err();
-        assert!(error.contains(message), "{link}: {error}");
-    }
+    let error = load("within_calls: 11\n").unwrap_err();
+    assert!(error.contains("link calls must be at most 10"), "{error}");
+}
+
+#[test]
+fn a_minutes_cap_is_set_only_on_the_compiled_form() {
+    let export = load_rule_set_from_documents(&[document("within_calls: 2\n").as_str()], None)
+        .unwrap()
+        .compatibility_export();
+    let fingerprint = export.fingerprint();
+    let timed = export.with_modifier("chain.synthetic", |modifier| {
+        if let Some(link) = &mut modifier.link {
+            link.minutes = Some(15);
+        }
+    });
+    assert_eq!(timed.modifiers()[0].link.unwrap().minutes, Some(15));
+    assert_ne!(timed.fingerprint(), fingerprint);
+    // A chain without a link gains none.
+    let unlinked = load_rule_set_from_documents(&[document("").as_str()], None)
+        .unwrap()
+        .compatibility_export()
+        .with_modifier("chain.synthetic", |modifier| {
+            if let Some(link) = &mut modifier.link {
+                link.minutes = Some(15);
+            }
+        });
+    assert_eq!(unlinked.modifiers()[0].link, None);
 }

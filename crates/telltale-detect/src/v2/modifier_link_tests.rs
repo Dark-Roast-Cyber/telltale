@@ -6,54 +6,99 @@ use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
 const RULES: &str = r#"
-version: 1
-description: synthetic modifier links
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: synthetic.alpha
+title: alpha
+id: 7a02cd2b-4f01-4a02-8ba6-5de7618c40b2
+name: synthetic.alpha
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'alpha'
+    condition: selection
+level: low
+telltale:
     category: alpha
-    severity: low
     score: 7
-    targets: [command]
-    regex: alpha
-    tags: []
-    explanation: alpha
-  - id: synthetic.beta
+    explanation: 'alpha'
+---
+title: beta
+id: 07accc6a-2c10-4c59-82a0-1ae67c726ef6
+name: synthetic.beta
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'beta'
+    condition: selection
+level: low
+telltale:
     category: beta
-    severity: low
     score: 5
-    targets: [command]
-    regex: beta
-    tags: []
-    explanation: beta
-modifiers:
-  - id: chain.ordered
+    explanation: 'beta'
+---
+title: ordered
+id: 6adc6101-1213-4d9d-8045-514b33882595
+name: chain.ordered
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [alpha, beta]
+    within_calls: 2
+telltale:
     score: 11
-    when_all_categories: [alpha, beta]
-    link: {calls: 2}
-    explanation: ordered
-  - id: chain.unordered
+    explanation: 'ordered'
+---
+title: unordered
+id: 3ea8c5b5-d076-4c46-869f-87daedcf25e7
+name: chain.unordered
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [alpha, beta]
+    within_calls: 1
+    order: any
+telltale:
     score: 13
-    when_all_categories: [alpha, beta]
-    link: {calls: 1, order: any}
-    explanation: unordered
-  - id: chain.timed
+    explanation: 'unordered'
+---
+title: timed
+id: 71fcc397-1903-41be-8d45-3338e5a89829
+name: chain.timed
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [alpha, beta]
+    within_calls: 2
+telltale:
     score: 17
-    when_all_categories: [alpha, beta]
-    link: {calls: 2, minutes: 15}
-    explanation: timed
-  - id: chain.legacy
+    explanation: 'timed'
+---
+title: legacy
+id: 447bd26c-e398-41fe-85e7-cb619c7d35c8
+name: chain.legacy
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [alpha, beta]
+telltale:
     score: 19
-    when_all_categories: [alpha, beta]
-    explanation: legacy
+    explanation: 'legacy'
 "#;
 
 fn plan() -> RuleV1CompatibilityPlan {
+    // A minutes cap has no Rule v2 spelling; it is set on the compiled form.
     let export = telltale_rules::load_rule_set_from_documents(&[RULES], None)
         .unwrap()
-        .compatibility_export();
+        .compatibility_export()
+        .with_modifier("chain.timed", |modifier| {
+            if let Some(link) = &mut modifier.link {
+                link.minutes = Some(15);
+            }
+        });
     compile_rule_v1(&export).unwrap()
 }
 

@@ -1,15 +1,18 @@
-version: 1
-description: Synthetic organization rule pack.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: pack.organization
+# Synthetic organization rule pack.
+title: Synthetic organization rule
+id: 9a04a9f7-ed35-4eb6-af76-195901bbeebd
+name: pack.organization
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'organization-marker'
+    condition: selection
+level: low
+telltale:
     category: pack_test
-    severity: low
     score: 11
-    targets: [command]
-    regex: 'organization-marker'
+    explanation: 'Synthetic organization rule.'
     tags: [fixture]
-    explanation: Synthetic organization rule.
-modifiers: []

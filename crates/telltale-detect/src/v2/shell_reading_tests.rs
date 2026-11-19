@@ -1469,7 +1469,7 @@ fn comment_text_triggers_no_exclusion() {
 fn a_segment_rule_reads_the_code_with_its_quotes() {
     fn custom(rule: &str, regex: &str, exclude: &str) -> String {
         format!(
-            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: {rule}\n    category: custom\n    severity: low\n    score: 10\n    detection:\n      selection:\n        command: '{regex}'\n      exclude:\n        command: '{exclude}'\n      scope: segment\n      condition: selection\n    tags: [custom]\n    explanation: synthetic\nmodifiers: []\n"
+            "title: synthetic\nid: 0223f0bf-30ed-436c-8784-63086033677f\nname: {rule}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection_command:\n        tool.command|re|segment: '{regex}'\n    filter_command:\n        tool.command|re|segment: '{exclude}'\n    condition: selection_command and not filter_command\nlevel: low\ntelltale:\n    category: custom\n    score: 10\n    explanation: 'synthetic'\n    tags: [custom]\n"
         )
     }
     let document = custom("custom.fetch", "^fetch\\b", "--post");
@@ -1496,9 +1496,15 @@ fn a_segment_rule_reads_the_code_with_its_quotes() {
 /// recorded text is then no excluded command.
 #[test]
 fn a_recorded_exclusion_rule_reads_quote_free_text_and_judges_the_exclusion_on_the_recorded_text() {
+    /// `scope` is a `      scope: <name>\n` line naming the scope modifier of
+    /// both keys, or empty for none.
     fn custom(scope: &str) -> String {
+        let scope = match scope.trim().strip_prefix("scope: ") {
+            Some(name) => format!("|{name}"),
+            None => String::new(),
+        };
         format!(
-            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: custom.remove\n    category: custom\n    severity: low\n    score: 10\n    detection:\n      selection:\n        command: '(?:^|[;&|\\n])\\s*rm\\s+\\S*secret'\n      exclude:\n        command: '^git +commit +-m +(?:\"[^\"]*\"|\\x27[^\\x27]*\\x27)$'\n{scope}      condition: selection\n    tags: [custom]\n    explanation: synthetic\nmodifiers: []\n"
+            "title: Synthetic remove\nid: 9c4f1e2a-3b5d-4c6e-8f70-1a2b3c4d5e6f\nname: custom.remove\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection_command:\n        tool.command|re{scope}: '(?:^|[;&|\\n])\\s*rm\\s+\\S*secret'\n    filter_command:\n        tool.command|re{scope}: '^git +commit +-m +(?:\"[^\"]*\"|\\x27[^\\x27]*\\x27)$'\n    condition: selection_command and not filter_command\nlevel: low\ntelltale:\n    category: custom\n    score: 10\n    explanation: synthetic\n    tags: [custom]\n"
         )
     }
     let fires_under = |scope: &str, command: &str| {

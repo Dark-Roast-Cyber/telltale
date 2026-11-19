@@ -4,7 +4,7 @@ use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::observation::ObservedAt;
 use telltale_sources::acquisition::{AccountingCoverage, AcquisitionProgress};
 
-const RULE: &str = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.target\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n";
+const RULE: &str = "title: synthetic\nid: 1523429f-99fb-4ca1-85ff-dfa1ea08477d\nname: synthetic.target\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n";
 
 fn clock() -> ObservedAt {
     ObservedAt::new("2026-09-19T00:00:00Z").unwrap()
@@ -412,7 +412,11 @@ fn canonical_embedding_is_stateless_and_deterministic() {
         .rules_document(RULE)
         .rules_document(
             RULE.replace("synthetic.target", "synthetic.never")
-                .replace("regex: needle", "regex: NEVER-MATCH"),
+                .replace(
+                    "1523429f-99fb-4ca1-85ff-dfa1ea08477d",
+                    "2634530a-0a0c-4db2-96aa-eeb2fb19588e",
+                )
+                .replace("|re: 'needle'", "|re: 'NEVER-MATCH'"),
         )
         .policy_document("version: 1\ndisabled_rules: [synthetic.target]\n")
         .build()

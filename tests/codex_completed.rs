@@ -7,50 +7,78 @@ use telltale_schema::{
 };
 use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 
-const RULES: &str = r#"version: 1
-description: synthetic
-defaults: {enabled: true, case_insensitive: false}
-rules:
-  - id: synthetic.user
+const RULES: &str = r#"title: synthetic
+id: 942dbb16-339f-43ce-83ae-baacf752f6ba
+name: synthetic.user
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.user_text|re: 'needle'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 3
-    targets: [user_context]
-    regex: needle
+    explanation: 'synthetic'
     tags: [synthetic]
-    explanation: synthetic
-  - id: synthetic.assistant
+---
+title: synthetic
+id: 660adacb-4725-4d18-8d52-5242458b594a
+name: synthetic.assistant
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'needle'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 3
-    targets: [assistant_context]
-    regex: needle
+    explanation: 'synthetic'
     tags: [synthetic]
-    explanation: synthetic
-  - id: synthetic.command
+---
+title: synthetic
+id: ff74baf2-7ab9-44bd-80cb-5b92ea036f09
+name: synthetic.command
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'printf synthetic'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 3
-    targets: [command]
-    regex: printf synthetic
+    explanation: 'synthetic'
     tags: [synthetic]
-    explanation: synthetic
-modifiers: []
 "#;
 
-const FILE_CHANGE_RULES: &str = r#"version: 1
-description: Synthetic reported patch visibility, not proof of filesystem effects.
-defaults: {enabled: true, case_insensitive: false}
-rules:
-  - id: synthetic.patch
+const FILE_CHANGE_RULES: &str = r#"title: Synthetic reported patch
+id: 86d21fc1-7881-440e-8b87-d4c1bbf08113
+name: synthetic.patch
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.result|re: 'patch-visibility-needle'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 3
-    targets: [tool_result]
-    regex: patch-visibility-needle
+    explanation: 'Synthetic reported patch.'
     tags: [synthetic]
-    explanation: Synthetic reported patch.
-modifiers: []
 "#;
 
 #[test]

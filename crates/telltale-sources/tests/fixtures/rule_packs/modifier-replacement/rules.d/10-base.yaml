@@ -1,11 +1,11 @@
-version: 1
-description: Synthetic modifier base pack.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules: []
-modifiers:
-  - id: pack.modifier
+# Synthetic modifier base pack.
+title: Synthetic base modifier
+id: 20b7aa06-397b-4fd7-932c-a79b54f6253a
+name: pack.modifier
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [pack_test]
+telltale:
     score: 4
-    when_all_categories: [pack_test]
-    explanation: Synthetic base modifier.
+    explanation: 'Synthetic base modifier.'

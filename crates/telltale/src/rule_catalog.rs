@@ -11,8 +11,8 @@ use telltale_schema::rule_catalog::{
 
 /// Most entries one catalog holds.
 const MAX_CATALOG_ENTRIES: usize = 4096;
-/// The Sigma statuses the catalog reports; other Rule v1 status text is
-/// reported as `None`.
+/// The Sigma statuses the catalog reports; any other status is reported as
+/// `None`.
 const SIGMA_STATUSES: &[&str] = &[
     "experimental",
     "test",
@@ -74,7 +74,7 @@ pub struct RuleCatalogEntry {
     metadata_revision: Option<String>,
 }
 impl RuleCatalogEntry {
-    /// The compiled id: a Rule v2 `name`, a Rule v1 `id`.
+    /// The compiled id: a Rule v2 `name` or a process-chain rule `id`.
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -138,7 +138,7 @@ impl RuleCatalogEntry {
     pub fn package_id(&self) -> Option<&str> {
         self.package_id.as_deref()
     }
-    /// The Rule v2 `id` (a UUID); `None` for Rule v1 and process-chain rules.
+    /// The Rule v2 `id` (a UUID); `None` for process-chain rules.
     pub fn uuid(&self) -> Option<&str> {
         self.uuid.as_deref()
     }
@@ -389,7 +389,7 @@ fn definition_entry(definition: &LoadedDefinition) -> RuleCatalogEntry {
                 category: logsource.category.clone(),
                 service: logsource.service.clone(),
             }),
-        behavior_fingerprint: definition.behavior_fingerprint(),
+        behavior_fingerprint: Some(definition.behavior_fingerprint()),
         metadata_revision: Some(definition.metadata_revision()),
     }
 }

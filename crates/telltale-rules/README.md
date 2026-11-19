@@ -38,7 +38,9 @@ assert!(rules.rule_count() > 0);
 
 `LoadedRules::parse` reads one rule file of Rule v2 documents;
 `CompiledRuleSet::notices()` lists findings that did not stop a rule from
-loading. Rule v2 compiles into the Rule v1 compatibility form, so
+loading; a Rule v1 document fails to load. Rule v2 compiles into the compiled
+rule form, still named `RuleV1Compatibility*` so that fingerprints and
+identities never change, so
 `CompiledRuleSet::compatibility_export()` exposes the effective compiled
 semantics used by the public provenance manifest. The export's
 `evaluate_matched()` supplies the same session-level Rule v1 content decisions

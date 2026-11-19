@@ -1,5 +1,11 @@
-//! Telltale rule language: YAML rule-set parsing, validation, defaults and
-//! policy merging, and in-memory regex evaluation.
+//! Telltale rule language: Rule v2 parsing and validation ([`rule_v2`]),
+//! rule packages, overrides and policy, and in-memory regex evaluation.
+//!
+//! Rule v2 compiles into the compiled rule form: [`RuleV1CompatibilityExport`]
+//! with its rules, matchers and modifiers. The `RuleV1*` and `rule_v1_*` names
+//! (here, in [`provenance`] and in Detection v2) name that compiled form, the
+//! detector version 1 whose identity fingerprints and semantic provenance hash,
+//! not an authoring format: Rule v1 documents no longer load.
 //!
 //! This crate is deliberately I/O-free: it never touches the filesystem, a
 //! watcher, or a database. Callers hand it rule documents as strings and
@@ -51,19 +57,6 @@ pub const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "written_path",
 ];
 
-// Shared with the published vocabulary catalog, not a supported embedding API.
-#[doc(hidden)]
-pub const SUPPORTED_DETECTION_CONDITIONS: &[&str] = &["selection"];
-
-// Shared with the published vocabulary catalog, not a supported embedding API.
-#[doc(hidden)]
-pub const SUPPORTED_DETECTION_SCOPES: &[&str] = &[
-    "field",
-    "segment",
-    "exclusion_segment",
-    "recorded_exclusion",
-];
-
 /// Most bytes one compiled pattern may hold, flag group included. Rule v2
 /// rejects a longer pattern at load; Detection v2 rejects it at compile.
 pub const MAX_PATTERN_BYTES: usize = 1_024;
@@ -73,79 +66,8 @@ pub const MAX_PATTERN_BYTES: usize = 1_024;
 #[doc(hidden)]
 pub const SEGMENT_SCOPE_TARGETS: &[&str] = &["arguments", "command", "url"];
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RuleSet {
-    pub version: u32,
-    pub description: String,
-    pub defaults: RuleDefaults,
-    pub rules: Vec<RuleDefinition>,
-    pub modifiers: Vec<ModifierDefinition>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RuleDefaults {
-    pub case_insensitive: bool,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuleDefinition {
-    pub id: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub author: Option<String>,
-    #[serde(default)]
-    pub references: Vec<String>,
-    #[serde(default)]
-    pub falsepositives: Vec<String>,
-    #[serde(default)]
-    pub level: Option<String>,
-    pub category: String,
-    #[serde(default = "default_detection_class")]
-    pub detection_class: String,
-    #[serde(default = "default_signal_type")]
-    pub signal_type: String,
-    #[serde(default = "default_analytic_intent")]
-    pub analytic_intent: String,
-    #[serde(default)]
-    pub atlas_tags: Vec<String>,
-    pub severity: String,
-    pub score: u64,
-    #[serde(default)]
-    pub targets: Vec<String>,
-    #[serde(default)]
-    pub regex: Option<String>,
-    #[serde(default)]
-    pub detection: Option<DetectionDefinition>,
-    pub tags: Vec<String>,
-    pub explanation: String,
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DetectionDefinition {
-    pub selection: BTreeMap<String, String>,
-    #[serde(default)]
-    pub exclude: BTreeMap<String, String>,
-    #[serde(default = "default_condition")]
-    pub condition: String,
-    /// What each selection and its exclusion evaluate: the whole target text
-    /// (the default) or each shell command segment of it.
-    #[serde(default)]
-    pub scope: MatchScope,
-}
-
 /// The text a `detection` selection and its exclusion evaluate together.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MatchScope {
     /// The whole target text: an exclusion match anywhere vetoes the target.
     #[default]
@@ -182,54 +104,23 @@ impl MatchScope {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct ModifierDefinition {
-    pub id: String,
-    pub score: u64,
-    #[serde(default = "default_detection_class")]
-    pub detection_class: String,
-    #[serde(default = "default_chain_signal_type")]
-    pub signal_type: String,
-    #[serde(default = "default_analytic_intent")]
-    pub analytic_intent: String,
-    #[serde(default)]
-    pub atlas_tags: Vec<String>,
-    #[serde(default)]
-    pub when_all_categories: Vec<String>,
-    #[serde(default)]
-    pub when_all_rule_ids: Vec<String>,
-    /// How the steps must link. Without one, they may match anywhere in a
-    /// session.
-    #[serde(default)]
-    pub link: Option<ModifierLink>,
-    #[serde(default)]
-    pub falsepositives: Vec<String>,
-    pub explanation: String,
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-}
-
 /// Most tool calls a modifier link may span.
 pub const MAX_MODIFIER_LINK_CALLS: u32 = 10;
-/// Most minutes a modifier link may allow between steps.
-pub const MAX_MODIFIER_LINK_MINUTES: u32 = 1440;
 
 /// How a chain modifier's steps must link: within `calls` tool calls of each
 /// other (0 means within one call), in declared order unless `order` is `any`,
 /// and, with `minutes`, within that many minutes of the step that completes the
-/// chain when both have a source time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// chain when both have a source time. Rule v2 has no spelling for `minutes`
+/// yet, so loaded content never sets it; the compiled form and its fingerprint
+/// keep the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModifierLink {
     pub calls: u32,
-    #[serde(default)]
     pub order: ModifierLinkOrder,
-    #[serde(default)]
     pub minutes: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ModifierLinkOrder {
     #[default]
     Declared,
@@ -275,7 +166,9 @@ impl std::fmt::Display for RuleLoadNotice {
     }
 }
 
-/// Effective, read-only Rule v1 data for semantic compatibility consumers.
+/// The effective compiled rule form, read-only, for semantic compatibility
+/// consumers. "V1" names the compiled detector version, not an authoring
+/// format.
 /// Regexes are copied from compiled matchers, after defaults and policy have
 /// been applied; source YAML is intentionally not exposed here.
 #[derive(Debug, Clone)]
@@ -340,7 +233,7 @@ pub struct MatchResult {
     pub evidence: Vec<Evidence>,
 }
 
-/// Compiled Rule v1 predicates independent of any observation or record type.
+/// Compiled rule predicates independent of any observation or record type.
 #[derive(Debug, Clone)]
 pub struct RuleV1ContentMatcher {
     matchers: Vec<CompiledMatcher>,
@@ -379,7 +272,8 @@ impl RuleV1ContentMatcher {
             .expect("infallible charge")
     }
 
-    /// Charge each reached scan before execution, preserving Rule v1 short-circuiting.
+    /// Charge each reached scan before execution, preserving the compiled
+    /// form's short-circuiting.
     pub fn try_matching_fields<'a, E>(
         &self,
         fields: &'a [(&'a str, &'a str)],
@@ -458,7 +352,7 @@ impl RuleV1CompatibilityRule {
 }
 
 /// One enabled rule: its effective export form and the compiled matchers that
-/// export was read from. Rule v1 and Rule v2 both compile into this form.
+/// export was read from. Rule v2 rules compile into this form.
 #[derive(Debug, Clone)]
 struct CompiledRule {
     export: RuleV1CompatibilityRule,
@@ -482,28 +376,6 @@ impl CompiledRule {
             })
             .collect();
         Self { export, matchers }
-    }
-
-    fn from_v1(definition: RuleDefinition, matchers: Vec<CompiledMatcher>) -> Self {
-        Self::new(
-            RuleV1CompatibilityRule {
-                id: definition.id,
-                title: definition.title,
-                description: definition.description,
-                category: definition.category,
-                detection_class: definition.detection_class,
-                signal_type: definition.signal_type,
-                analytic_intent: definition.analytic_intent,
-                atlas_tags: definition.atlas_tags,
-                severity: definition.severity,
-                score: definition.score,
-                tags: definition.tags,
-                explanation: definition.explanation,
-                falsepositives: definition.falsepositives,
-                matchers: Vec::new(),
-            },
-            matchers,
-        )
     }
 }
 
@@ -821,11 +693,10 @@ pub fn bundled_default_rules() -> Result<LoadedRules, Box<dyn std::error::Error>
     LoadedRules::parse(bundled_default_rule_yaml())
 }
 
-/// Load and compile rule files with an optional policy document. Each file is
-/// one Rule v1 document or one or more Rule v2 documents (see [`rule_v2`]);
-/// the two may be mixed. Rules and modifiers keep file and document order. A
-/// repeated rule or modifier id fails, whichever format defines it, as does a
-/// repeated Rule v2 UUID.
+/// Load and compile rule files with an optional policy document. Each file
+/// holds one or more Rule v2 documents (see [`rule_v2`]); a Rule v1 document
+/// is an error. Rules and modifiers keep file and document order. A repeated
+/// rule or chain name fails, as does a repeated Rule v2 UUID.
 pub fn load_rule_set_from_documents(
     rule_documents: &[&str],
     policy_document: Option<&str>,
@@ -860,97 +731,6 @@ fn policy_name(policy: Option<&RulePolicy>) -> Option<String> {
     })
 }
 
-/// Parse one Rule v1 document without compiling it.
-pub fn parse_rule_document(raw: &str) -> Result<RuleSet, Box<dyn std::error::Error>> {
-    Ok(serde_yaml::from_str::<RuleSet>(raw)?)
-}
-
-/// Merge parsed rule documents, such as bundled core rules, package documents,
-/// and caller documents, then compile them with an optional policy document.
-/// Definitions are additive: a repeated rule or modifier ID fails.
-pub fn compile_rule_sets(
-    rule_sets: Vec<RuleSet>,
-    policy_document: Option<&str>,
-) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    let policy = parse_policy(policy_document)?;
-    let loaded = rule_sets
-        .into_iter()
-        .map(LoadedRules::from_rule_set)
-        .collect::<Result<Vec<_>, _>>()?;
-    LoadedRules::merge(loaded)?.compile(policy.as_ref())
-}
-
-pub fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::error::Error>> {
-    for rule_set in &rule_sets {
-        rule_set.validate_version()?;
-    }
-    let mut ids = BTreeSet::new();
-    let mut descriptions = Vec::new();
-    let mut rules = Vec::new();
-    let mut modifiers = Vec::new();
-    let defaults = RuleDefaults {
-        case_insensitive: false,
-        enabled: true,
-    };
-
-    for rule_set in rule_sets {
-        let document_defaults = rule_set.defaults.clone();
-        descriptions.push(rule_set.description);
-        for mut rule in rule_set.rules {
-            if !ids.insert(rule.id.clone()) {
-                return Err(format!("duplicate rule id: {}", rule.id).into());
-            }
-            apply_rule_defaults(&mut rule, &document_defaults);
-            rules.push(rule);
-        }
-        for mut modifier in rule_set.modifiers {
-            if !ids.insert(modifier.id.clone()) {
-                return Err(format!("duplicate rule id: {}", modifier.id).into());
-            }
-            apply_modifier_defaults(&mut modifier, &document_defaults);
-            modifiers.push(modifier);
-        }
-    }
-
-    Ok(RuleSet {
-        version: 1,
-        description: descriptions.join("; "),
-        defaults,
-        rules,
-        modifiers,
-    })
-}
-
-/// Materialize document defaults before combining rule definitions. Compile the
-/// combined set with neutral defaults (`case_insensitive: false, enabled: true`)
-/// so defaults are not applied again. This does not resolve duplicate IDs.
-pub fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
-    if !defaults.enabled {
-        rule.enabled = false;
-    }
-    if defaults.case_insensitive {
-        if let Some(regex) = rule.regex.as_mut() {
-            *regex = case_insensitive_pattern(regex);
-        }
-        if let Some(detection) = rule.detection.as_mut() {
-            for regex in detection.selection.values_mut() {
-                *regex = case_insensitive_pattern(regex);
-            }
-            for regex in detection.exclude.values_mut() {
-                *regex = case_insensitive_pattern(regex);
-            }
-        }
-    }
-}
-
-/// Materialize document enablement before combining modifier definitions.
-/// Case-insensitivity does not affect modifiers. This does not resolve IDs.
-pub fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &RuleDefaults) {
-    if !defaults.enabled {
-        modifier.enabled = false;
-    }
-}
-
 fn validate_rule_override_entry(
     entry: &RuleOverrideEntry,
     path: &Path,
@@ -977,96 +757,6 @@ fn validate_rule_override_entry(
     Ok(())
 }
 
-fn case_insensitive_pattern(pattern: &str) -> String {
-    format!("(?i:{pattern})")
-}
-
-impl RuleSet {
-    pub fn validate_version(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.version != 1 {
-            return Err(format!(
-                "unsupported rule set version {}; only version 1 is supported",
-                self.version
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    pub fn compile(
-        self,
-        policy: Option<&RulePolicy>,
-    ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-        self.validate_version()?;
-        validate_rule_ids(&self)?;
-        let case_insensitive = self.defaults.case_insensitive;
-        let rules = self
-            .rules
-            .into_iter()
-            .filter(|rule| {
-                rule.enabled
-                    && self.defaults.enabled
-                    && policy_allows_rule(&rule.id, &rule.category, policy)
-            })
-            .map(|definition| {
-                let matchers = compile_matchers(&definition, case_insensitive)?;
-                Ok(CompiledRule::from_v1(definition, matchers))
-            })
-            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-        let modifiers = self
-            .modifiers
-            .into_iter()
-            .filter(|modifier| {
-                modifier.enabled
-                    && self.defaults.enabled
-                    && policy_allows_modifier(&modifier.id, policy)
-            })
-            .map(|modifier| {
-                validate_rule_metadata(
-                    &modifier.id,
-                    &modifier.detection_class,
-                    &modifier.signal_type,
-                    &modifier.analytic_intent,
-                    &modifier.atlas_tags,
-                )?;
-                validate_modifier_link(
-                    &modifier.id,
-                    !modifier.when_all_categories.is_empty()
-                        || !modifier.when_all_rule_ids.is_empty(),
-                    modifier.link,
-                )?;
-                Ok(RuleV1CompatibilityModifier {
-                    id: modifier.id,
-                    score: modifier.score,
-                    detection_class: modifier.detection_class,
-                    signal_type: modifier.signal_type,
-                    analytic_intent: modifier.analytic_intent,
-                    atlas_tags: modifier.atlas_tags,
-                    when_all_categories: modifier.when_all_categories,
-                    when_all_rule_ids: modifier.when_all_rule_ids,
-                    link: modifier.link,
-                    falsepositives: modifier.falsepositives,
-                    explanation: modifier.explanation,
-                })
-            })
-            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-        Ok(CompiledRuleSet::new(rules, modifiers, policy_name(policy)))
-    }
-}
-
-fn validate_rule_ids(rule_set: &RuleSet) -> Result<(), Box<dyn std::error::Error>> {
-    for rule in &rule_set.rules {
-        validate_canonical_rule_id(&rule.id, "rule")?;
-    }
-    for modifier in &rule_set.modifiers {
-        validate_canonical_rule_id(&modifier.id, "modifier")?;
-        for rule_id in &modifier.when_all_rule_ids {
-            validate_canonical_rule_id(rule_id, "modifier rule reference")?;
-        }
-    }
-    Ok(())
-}
-
 fn validate_modifier_link(
     id: &str,
     has_steps: bool,
@@ -1081,15 +771,6 @@ fn validate_modifier_link(
     if link.calls > MAX_MODIFIER_LINK_CALLS {
         return Err(format!(
             "modifier '{id}' link calls must be at most {MAX_MODIFIER_LINK_CALLS}"
-        )
-        .into());
-    }
-    if link
-        .minutes
-        .is_some_and(|minutes| minutes == 0 || minutes > MAX_MODIFIER_LINK_MINUTES)
-    {
-        return Err(format!(
-            "modifier '{id}' link minutes must be between 1 and {MAX_MODIFIER_LINK_MINUTES}"
         )
         .into());
     }
@@ -1138,7 +819,7 @@ impl CompiledRuleSet {
         &self.notices
     }
 
-    /// Exposes only the effective compiled Rule v1 plan.  In particular, this
+    /// Exposes only the effective compiled plan.  In particular, this
     /// cannot be used to recover a disabled or replaced source definition.
     pub fn compatibility_export(&self) -> RuleV1CompatibilityExport {
         self.content.clone()
@@ -1236,7 +917,7 @@ impl RuleV1CompatibilityExport {
             .collect()
     }
 
-    /// Evaluate Rule v1 session content only. The caller owns input selection,
+    /// Evaluate compiled session content only. The caller owns input selection,
     /// capability status and evidence; unknown IDs cannot create matches.
     pub fn evaluate_matched(
         &self,
@@ -1337,14 +1018,30 @@ impl RuleV1CompatibilityExport {
     pub fn modifiers(&self) -> &[RuleV1CompatibilityModifier] {
         &self.modifiers
     }
+
+    /// Test support for consumers of the compiled form: this export with
+    /// `edit` applied to the modifier `modifier_id`. It reaches compiled values
+    /// no rule format spells, such as a minutes limit between linked steps or a
+    /// score above 100.
+    #[doc(hidden)]
+    pub fn with_modifier(
+        mut self,
+        modifier_id: &str,
+        edit: impl FnOnce(&mut RuleV1CompatibilityModifier),
+    ) -> Self {
+        if let Some(modifier) = self
+            .modifiers
+            .iter_mut()
+            .find(|modifier| modifier.id == modifier_id)
+        {
+            edit(modifier);
+        }
+        self
+    }
 }
 
 fn default_enabled() -> bool {
     true
-}
-
-fn default_condition() -> String {
-    SUPPORTED_DETECTION_CONDITIONS[0].to_string()
 }
 
 fn default_detection_class() -> String {
@@ -1361,88 +1058,6 @@ fn default_chain_signal_type() -> String {
 
 fn default_analytic_intent() -> String {
     "alert".to_string()
-}
-
-fn compile_matchers(
-    definition: &RuleDefinition,
-    case_insensitive: bool,
-) -> Result<Vec<CompiledMatcher>, Box<dyn std::error::Error>> {
-    validate_metadata_value(
-        &definition.id,
-        "severity",
-        &definition.severity,
-        &VALID_DETECTION_SEVERITIES,
-    )?;
-    validate_rule_metadata(
-        &definition.id,
-        &definition.detection_class,
-        &definition.signal_type,
-        &definition.analytic_intent,
-        &definition.atlas_tags,
-    )?;
-    let mut matchers = Vec::new();
-    if let Some(regex) = &definition.regex {
-        if definition.targets.is_empty() {
-            return Err(format!("rule {} has regex but no targets", definition.id).into());
-        }
-        for target in &definition.targets {
-            validate_target(&definition.id, target)?;
-            matchers.push(CompiledMatcher {
-                target: target.clone(),
-                regex: compile_regex(regex, case_insensitive, &definition.id)?,
-                exclusion_regex: None,
-                scope: MatchScope::Field,
-            });
-        }
-    }
-    if let Some(detection) = &definition.detection {
-        if !SUPPORTED_DETECTION_CONDITIONS.contains(&detection.condition.as_str()) {
-            return Err(format!(
-                "rule {} uses unsupported condition {}; only 'selection' is supported",
-                definition.id, detection.condition
-            )
-            .into());
-        }
-        for (target, regex) in &detection.selection {
-            validate_target(&definition.id, target)?;
-            if detection.scope != MatchScope::Field
-                && !SEGMENT_SCOPE_TARGETS.contains(&target.as_str())
-            {
-                return Err(format!(
-                    "rule {} uses scope '{}' with target '{}'; segment scope supports only command-text targets: {}",
-                    definition.id,
-                    detection.scope.as_str(),
-                    target,
-                    SEGMENT_SCOPE_TARGETS.join(", ")
-                )
-                .into());
-            }
-            matchers.push(CompiledMatcher {
-                target: target.clone(),
-                regex: compile_regex(regex, case_insensitive, &definition.id)?,
-                exclusion_regex: detection
-                    .exclude
-                    .get(target)
-                    .map(|regex| compile_regex(regex, case_insensitive, &definition.id))
-                    .transpose()?,
-                scope: detection.scope,
-            });
-        }
-        for target in detection.exclude.keys() {
-            validate_target(&definition.id, target)?;
-            if !detection.selection.contains_key(target) {
-                return Err(format!(
-                    "rule {} excludes target '{}' without a selection",
-                    definition.id, target
-                )
-                .into());
-            }
-        }
-    }
-    if matchers.is_empty() {
-        return Err(format!("rule {} has no regex or detection.selection", definition.id).into());
-    }
-    Ok(matchers)
 }
 
 fn validate_rule_metadata(
@@ -1491,32 +1106,6 @@ fn validate_metadata_value(
         )
         .into())
     }
-}
-
-fn validate_target(rule_id: &str, target: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if SUPPORTED_RULE_TARGETS.contains(&target) {
-        Ok(())
-    } else {
-        Err(format!(
-            "rule {rule_id} uses unsupported target '{target}'; supported targets: {}",
-            SUPPORTED_RULE_TARGETS.join(", ")
-        )
-        .into())
-    }
-}
-
-fn compile_regex(
-    pattern: &str,
-    case_insensitive: bool,
-    rule_id: &str,
-) -> Result<Regex, Box<dyn std::error::Error>> {
-    let pattern = if case_insensitive {
-        format!("(?i:{pattern})")
-    } else {
-        pattern.to_string()
-    };
-    shared_regex(&pattern)
-        .map_err(|error| format!("invalid regex for rule {rule_id}: {error}").into())
 }
 
 /// Patterns kept by [`shared_regex`] before it starts over.
@@ -1624,25 +1213,49 @@ mod bundled_target_lint;
 mod segment_scope_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        DetectionDefinition, ModifierDefinition, RuleDefaults, RuleDefinition, RulePolicy, RuleSet,
-    };
-    use std::collections::BTreeMap;
+mod test_rules;
 
-    fn single_rule_set(rule: RuleDefinition) -> super::CompiledRuleSet {
-        RuleSet {
-            version: 1,
-            description: "test rules".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: true,
-                enabled: true,
-            },
-            rules: vec![rule],
-            modifiers: Vec::new(),
-        }
-        .compile(None)
-        .expect("compile rules")
+#[cfg(test)]
+mod tests {
+    use super::test_rules::{chain, file, rule};
+    use super::{LoadedRules, RuleOverrideDocument, RulePolicy, load_rule_set_from_documents};
+    use std::path::Path;
+
+    /// Two case-insensitive selections, on assistant text and tool results,
+    /// for `hidden instruction`.
+    const HIDDEN_INSTRUCTION: &str = "selection:\n    - message.assistant_text|re|i: &pattern 'hidden instruction'\n    - tool.result|re|i: *pattern\ncondition: selection";
+
+    /// A rule on [`HIDDEN_INSTRUCTION`] with the Telltale tag `mcp`.
+    fn hidden_instruction_rule(name: &str, category: &str) -> String {
+        rule(name, category, HIDDEN_INSTRUCTION, "tags: [mcp]")
+    }
+
+    fn compile(documents: &[String]) -> super::CompiledRuleSet {
+        load_rule_set_from_documents(&[file(documents).as_str()], None).expect("compile rules")
+    }
+
+    fn compile_error(documents: &[String]) -> String {
+        load_rule_set_from_documents(&[file(documents).as_str()], None)
+            .expect_err("rejected")
+            .to_string()
+    }
+
+    /// `documents` with rule scores set by an override document, which accepts
+    /// scores above the Rule v2 maximum.
+    fn with_scores(documents: &[String], scores: &[(&str, u64)]) -> super::CompiledRuleSet {
+        let mut loaded = LoadedRules::parse(&file(documents)).unwrap();
+        let entries = scores
+            .iter()
+            .map(|(id, score)| {
+                format!("  - {{rule_id: {id}, reason: synthetic, score: {score}}}\n")
+            })
+            .collect::<String>();
+        let overrides: RuleOverrideDocument =
+            serde_yaml::from_str(&format!("version: 1\noverrides:\n{entries}")).unwrap();
+        loaded
+            .apply_override_document(&overrides, Path::new("synthetic-overrides.yaml"))
+            .unwrap();
+        loaded.compile(None).unwrap()
     }
 
     #[test]
@@ -1688,63 +1301,52 @@ mod tests {
     }
 
     #[test]
-    fn rule_set_version_is_checked_before_merge_and_compile() {
-        let valid = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules: []\nmodifiers: []\n";
-        let v1: RuleSet = serde_yaml::from_str(valid).expect("synthetic v1");
-        assert_eq!(v1.version, 1);
-        assert!(v1.clone().compile(None).is_ok());
-        assert!(super::merge_rule_sets(vec![v1.clone()]).is_ok());
-        for version in [0, 2] {
-            let mut unsupported = v1.clone();
-            unsupported.version = version;
-            let expected =
-                format!("unsupported rule set version {version}; only version 1 is supported");
-            assert_eq!(
-                unsupported.clone().compile(None).unwrap_err().to_string(),
-                expected
-            );
-            assert_eq!(
-                super::merge_rule_sets(vec![unsupported.clone()])
-                    .unwrap_err()
-                    .to_string(),
-                expected
-            );
-            assert_eq!(
-                super::merge_rule_sets(vec![v1.clone(), unsupported])
-                    .unwrap_err()
-                    .to_string(),
-                expected
-            );
-            let raw = valid.replacen("version: 1", &format!("version: {version}"), 1);
-            assert_eq!(
-                super::load_rule_set_from_documents(&[&raw], None)
-                    .unwrap_err()
-                    .to_string(),
-                expected
-            );
+    fn rule_v1_documents_fail_with_a_pointer_to_rule_v2() {
+        let v1 = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules: []\nmodifiers: []\n";
+        let expected = format!("rule document 1: {}", super::rule_v2::RULE_V1_UNSUPPORTED);
+        assert!(expected.contains("docs/rule-format.md"));
+        assert!(expected.contains("docs/migrations/0.8.0.md"));
+        for version in [0, 1, 2] {
+            let raw = v1.replacen("version: 1", &format!("version: {version}"), 1);
+            for raw in [raw.clone(), raw.replace('\n', "\r\n")] {
+                assert_eq!(
+                    load_rule_set_from_documents(&[&raw], None)
+                        .unwrap_err()
+                        .to_string(),
+                    expected
+                );
+                assert_eq!(LoadedRules::parse(&raw).unwrap_err().to_string(), expected);
+            }
         }
+        // A Rule v1 document after a Rule v2 one is named by its position.
+        let v2 = rule(
+            "synthetic.v2",
+            "execution",
+            "selection:\n    - tool.command|re: a\ncondition: selection",
+            "",
+        );
+        assert_eq!(
+            compile_error(&[v2, v1.to_owned()]),
+            format!("rule document 2: {}", super::rule_v2::RULE_V1_UNSUPPORTED)
+        );
     }
 
     #[test]
     fn rule_yaml_preserves_aliases_and_rejects_ambiguous_documents() {
-        let document = r#"
-version: 1
-description: synthetic YAML compatibility
-defaults: {case_insensitive: false, enabled: true}
-rules:
-  - id: synthetic.yaml
-    category: execution
-    severity: low
-    score: 7
-    targets: [command]
-    regex: &pattern '^needle$'
-    tags: []
-    explanation: *pattern
-modifiers: []
-"#;
-        let compiled = super::load_rule_set_from_documents(&[document], None)
+        let document = rule(
+            "synthetic.yaml",
+            "execution",
+            "selection:\n    - tool.command|re: &pattern '^needle$'\ncondition: selection",
+            "",
+        )
+        .replace(
+            "explanation: Synthetic explanation.",
+            "explanation: *pattern",
+        );
+        let compiled = load_rule_set_from_documents(&[&document], None)
             .expect("offline rules support YAML anchors and aliases");
         let export = compiled.compatibility_export();
+        assert_eq!(export.rules()[0].explanation, "^needle$");
         let matcher = export.rules()[0].compile_content_matcher().unwrap();
         assert_eq!(
             matcher.matching_fields(&[("command", "needle"), ("command", "not needle")]),
@@ -1753,18 +1355,17 @@ modifiers: []
         assert!(matcher.matching_fields(&[("command", "NEEDLE")]).is_empty());
 
         for (case, invalid) in [
-            document.replacen("version: 1", "version: 1\nversion: 1", 1),
-            document.replacen("    tags: []", "    regex: other\n    tags: []", 1),
-            document.replacen("    tags: []", "    unknown_field: true\n    tags: []", 1),
-            format!("{document}\n---\n{document}"),
+            document.replacen("level: high", "level: high\nlevel: low", 1),
+            document.replacen("level: high", "level: high\nunknown_field: true", 1),
+            format!("{document}---\n{document}"),
             document.replace("explanation: *pattern", "explanation: *missing"),
-            document.replace("targets: [command]", "targets: [command"),
+            document.replace("level: high", "level: [high"),
         ]
         .into_iter()
         .enumerate()
         {
             assert!(
-                super::load_rule_set_from_documents(&[&invalid], None).is_err(),
+                load_rule_set_from_documents(&[&invalid], None).is_err(),
                 "invalid YAML case {case} was accepted"
             );
         }
@@ -1772,41 +1373,24 @@ modifiers: []
 
     #[test]
     fn content_owner_matches_excludes_and_scores_once_per_session() {
-        let document = r#"
-version: 1
-description: synthetic content contract
-defaults: {case_insensitive: false, enabled: true}
-rules:
-  - id: test.alpha
-    category: execution
-    severity: high
-    score: 7
-    detection:
-      selection: {command: needle}
-      exclude: {command: quoted}
-    tags: [synthetic]
-    explanation: synthetic
-  - id: test.beta
-    category: network
-    severity: low
-    score: 0
-    targets: [arguments]
-    regex: beta
-    tags: []
-    explanation: synthetic
-modifiers:
-  - id: chain.both
-    score: 9
-    when_all_categories: [execution, network]
-    when_all_rule_ids: [test.alpha, test.beta]
-    explanation: synthetic
-  - id: chain.empty
-    score: 5
-    explanation: synthetic
-"#;
-        let export = super::load_rule_set_from_documents(&[document], None)
-            .unwrap()
-            .compatibility_export();
+        let alpha = rule(
+            "test.alpha",
+            "execution",
+            "selection_command:\n    tool.command|re: needle\nfilter_command:\n    tool.command|re: quoted\ncondition: selection_command and not filter_command",
+            "",
+        )
+        .replace("score: 60", "score: 7");
+        let beta = rule(
+            "test.beta",
+            "network",
+            "selection:\n    - tool.arguments|re: beta\ncondition: selection",
+            "",
+        )
+        .replace("score: 60", "score: 0");
+        let both = chain("chain.both", "rules: [test.alpha, test.beta]", "")
+            .replace("score: 7", "score: 9");
+        let documents = [alpha, beta, both];
+        let export = compile(&documents).compatibility_export();
         let matcher = export.rules()[0].compile_content_matcher().unwrap();
         let mut visits = Vec::new();
         let fields = [
@@ -1853,10 +1437,8 @@ modifiers:
                 .collect::<Vec<_>>(),
             [("test.alpha", 7), ("chain.both", 9)]
         );
-        let overflowing = document.replace("score: 9", &format!("score: {}", u64::MAX));
-        let overflow_export = super::load_rule_set_from_documents(&[&overflowing], None)
-            .unwrap()
-            .compatibility_export();
+        let overflow_export =
+            with_scores(&documents, &[("test.alpha", u64::MAX)]).compatibility_export();
         assert!(
             overflow_export
                 .evaluate_matched(&["test.alpha", "test.beta"].into_iter().collect())
@@ -1864,38 +1446,12 @@ modifiers:
         );
     }
 
-    fn rule(id: &str, category: &str) -> RuleDefinition {
-        RuleDefinition {
-            id: id.to_string(),
-            title: None,
-            description: None,
-            status: None,
-            author: None,
-            references: Vec::new(),
-            falsepositives: Vec::new(),
-            level: None,
-            category: category.to_string(),
-            detection_class: super::default_detection_class(),
-            signal_type: super::default_signal_type(),
-            analytic_intent: super::default_analytic_intent(),
-            atlas_tags: Vec::new(),
-            severity: "high".to_string(),
-            score: 60,
-            targets: vec!["assistant_context".to_string(), "tool_result".to_string()],
-            regex: Some("hidden instruction".to_string()),
-            detection: None,
-            tags: vec!["mcp".to_string()],
-            explanation: "test".to_string(),
-            enabled: true,
-        }
-    }
-
     #[test]
     fn evidence_field_uses_actual_matched_target() {
-        let rule_set = single_rule_set(rule(
+        let rule_set = compile(&[hidden_instruction_rule(
             "mcp.tool_metadata.prompt_injection",
             "mcp_prompt_injection",
-        ));
+        )]);
 
         let result = rule_set
             .evaluate(&[
@@ -1920,71 +1476,51 @@ modifiers:
     fn excluded_candidates_preserve_retained_metadata_and_modifiers() {
         let text = "policy says do not read .env; hidden instruction";
         let fields = [("assistant_context", text), ("tool_result", text)];
-        let mut retained = rule("test.retained", "execution");
-        retained.atlas_tags = vec!["atlas:AML.T0051".to_string()];
-        let mut skipped = retained.clone();
-        skipped.id = "test.excluded".to_string();
-        skipped.targets.clear();
-        skipped.regex = None;
-        skipped.detection = Some(DetectionDefinition {
-            selection: BTreeMap::from([
-                (
-                    "assistant_context".to_string(),
-                    "hidden instruction".to_string(),
-                ),
-                ("tool_result".to_string(), "hidden instruction".to_string()),
-            ]),
-            exclude: BTreeMap::from([
-                ("assistant_context".to_string(), "policy".to_string()),
-                ("tool_result".to_string(), "policy".to_string()),
-            ]),
-            condition: "selection".to_string(),
-            scope: crate::MatchScope::Field,
-        });
-        skipped.tags.push("skipped-only".to_string());
-        skipped.atlas_tags.push("atlas:AML.T0000".to_string());
-        let mut unmatched = rule("test.unmatched", "unmatched");
-        unmatched.regex = Some("absent marker".to_string());
-        let mut disabled = rule("test.disabled", "disabled");
-        disabled.enabled = false;
+        let retained = hidden_instruction_rule("test.retained", "execution").replace(
+            "level: high\n",
+            "level: high\ntags:\n    - atlas.aml.t0051\n",
+        );
+        let skipped = rule(
+            "test.excluded",
+            "execution",
+            "selection_assistant_context:\n    message.assistant_text|re|i: 'hidden instruction'\n\
+             filter_assistant_context:\n    message.assistant_text|re|i: 'policy'\n\
+             selection_tool_result:\n    tool.result|re|i: 'hidden instruction'\n\
+             filter_tool_result:\n    tool.result|re|i: 'policy'\n\
+             condition: (selection_assistant_context and not filter_assistant_context) or (selection_tool_result and not filter_tool_result)",
+            "tags: [mcp, skipped-only]",
+        )
+        .replace(
+            "level: high\n",
+            "level: high\ntags:\n    - atlas.aml.t0051\n    - atlas.aml.t0000\n",
+        );
+        let unmatched = hidden_instruction_rule("test.unmatched", "unmatched")
+            .replace("'hidden instruction'", "'absent marker'");
+        let disabled = rule(
+            "test.disabled",
+            "disabled",
+            HIDDEN_INSTRUCTION,
+            "tags: [mcp]\nenabled: false",
+        );
+        let modifier = chain(
+            "chain.retained",
+            "rules: [test.retained]",
+            "detection_class: baseline_deviation\nanalytic_intent: baseline",
+        )
+        .replace("correlation:", "tags:\n    - atlas.aml.t0051\ncorrelation:");
 
         for skipped_first in [false, true] {
             for with_modifier in [false, true] {
-                let mut rules = if skipped_first {
+                let mut documents = if skipped_first {
                     vec![skipped.clone(), retained.clone()]
                 } else {
                     vec![retained.clone(), skipped.clone()]
                 };
-                rules.extend([unmatched.clone(), disabled.clone()]);
-                let compiled = RuleSet {
-                    version: 1,
-                    description: "synthetic skip regression".to_string(),
-                    defaults: RuleDefaults {
-                        case_insensitive: true,
-                        enabled: true,
-                    },
-                    rules,
-                    modifiers: if with_modifier {
-                        vec![ModifierDefinition {
-                            id: "chain.retained".to_string(),
-                            score: 7,
-                            detection_class: "baseline_deviation".to_string(),
-                            signal_type: super::default_chain_signal_type(),
-                            analytic_intent: "baseline".to_string(),
-                            atlas_tags: vec!["atlas:AML.T0051".to_string()],
-                            when_all_categories: vec!["execution".to_string()],
-                            when_all_rule_ids: vec!["test.retained".to_string()],
-                            link: None,
-                            falsepositives: Vec::new(),
-                            explanation: "synthetic modifier".to_string(),
-                            enabled: true,
-                        }]
-                    } else {
-                        Vec::new()
-                    },
+                documents.extend([unmatched.clone(), disabled.clone()]);
+                if with_modifier {
+                    documents.push(modifier.clone());
                 }
-                .compile(None)
-                .expect("compile");
+                let compiled = compile(&documents);
                 for _ in 0..2 {
                     let result = compiled
                         .evaluate(&fields)
@@ -2043,7 +1579,7 @@ modifiers:
             }
         }
         assert!(
-            single_rule_set(skipped)
+            compile(&[skipped])
                 .evaluate(&fields)
                 .expect("evaluate")
                 .is_none()
@@ -2052,10 +1588,11 @@ modifiers:
 
     #[test]
     fn matched_rules_emit_positive_contribution_metadata() {
-        let mut definition = rule("rule.large", "hidden instruction");
-        definition.score = 4_294_967_296;
-        definition.explanation = "synthetic execution match".to_string();
-        let rule_set = single_rule_set(definition);
+        // Rule v2 caps a rule's score at 100; an override is not capped.
+        let rule_set = with_scores(
+            &[hidden_instruction_rule("rule.large", "hidden instruction")],
+            &[("rule.large", 4_294_967_296)],
+        );
         let result = rule_set
             .evaluate(&[("assistant_context", "hidden instruction")])
             .expect("evaluate")
@@ -2072,33 +1609,10 @@ modifiers:
 
     #[test]
     fn matched_modifiers_emit_chain_contribution_metadata() {
-        let mut definition = rule("rule.base", "hidden instruction");
-        definition.category = "execution".to_string();
-        let rule_set = RuleSet {
-            version: 1,
-            description: "test rules".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: true,
-                enabled: true,
-            },
-            rules: vec![definition],
-            modifiers: vec![ModifierDefinition {
-                id: "chain.test".to_string(),
-                score: 7,
-                detection_class: super::default_detection_class(),
-                signal_type: super::default_chain_signal_type(),
-                analytic_intent: super::default_analytic_intent(),
-                atlas_tags: Vec::new(),
-                when_all_categories: vec!["execution".to_string()],
-                when_all_rule_ids: Vec::new(),
-                link: None,
-                falsepositives: Vec::new(),
-                explanation: "synthetic chain modifier".to_string(),
-                enabled: true,
-            }],
-        }
-        .compile(None)
-        .expect("compile rules");
+        let rule_set = compile(&[
+            hidden_instruction_rule("rule.base", "execution"),
+            chain("chain.test", "categories: [execution]", ""),
+        ]);
 
         let result = rule_set
             .evaluate(&[("assistant_context", "hidden instruction")])
@@ -2114,21 +1628,10 @@ modifiers:
 
     #[test]
     fn contributions_are_sorted_by_type_then_resolved_id() {
-        let rule_set = RuleSet {
-            version: 1,
-            description: "test rules".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: true,
-                enabled: true,
-            },
-            rules: vec![
-                rule("rule.z", "hidden instruction"),
-                rule("rule.a", "hidden instruction"),
-            ],
-            modifiers: Vec::new(),
-        }
-        .compile(None)
-        .expect("compile rules");
+        let rule_set = compile(&[
+            hidden_instruction_rule("rule.z", "hidden instruction"),
+            hidden_instruction_rule("rule.a", "hidden instruction"),
+        ]);
 
         let result = rule_set
             .evaluate(&[("assistant_context", "hidden instruction")])
@@ -2145,19 +1648,13 @@ modifiers:
     }
 
     #[test]
-    fn supports_sigma_inspired_selection_rules() {
-        let mut selection = BTreeMap::new();
-        selection.insert("arguments".to_string(), "evil-action".to_string());
-        let mut definition = rule("custom.agent_behavior", "custom");
-        definition.targets = Vec::new();
-        definition.regex = None;
-        definition.detection = Some(DetectionDefinition {
-            selection,
-            exclude: BTreeMap::new(),
-            condition: "selection".to_string(),
-            scope: crate::MatchScope::Field,
-        });
-        let rule_set = single_rule_set(definition);
+    fn supports_sigma_selection_rules() {
+        let rule_set = compile(&[rule(
+            "custom.agent_behavior",
+            "custom",
+            "selection_arguments:\n    tool.arguments|re|i: 'evil-action'\ncondition: selection_arguments",
+            "",
+        )]);
 
         let result = rule_set
             .evaluate(&[("arguments", "run evil-action now")])
@@ -2170,29 +1667,15 @@ modifiers:
 
     #[test]
     fn target_exclusion_filters_only_the_declared_target() {
-        let document = r#"
-version: 1
-description: target exclusion
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: custom.target_exclusion
-    category: custom
-    severity: low
-    score: 10
-    detection:
-      selection:
-        assistant_context: needle
-        command: needle
-      exclude:
-        assistant_context: quoted example
-      condition: selection
-    tags: [custom]
-    explanation: synthetic
-modifiers: []
-"#;
-        let rule_set = super::load_rule_set_from_documents(&[document], None).expect("compile");
+        let rule_set = compile(&[rule(
+            "custom.target_exclusion",
+            "custom",
+            "selection_assistant_context:\n    message.assistant_text|re|i: needle\n\
+             filter_assistant_context:\n    message.assistant_text|re|i: quoted example\n\
+             selection_command:\n    tool.command|re|i: needle\n\
+             condition: (selection_assistant_context and not filter_assistant_context) or selection_command",
+            "",
+        )]);
 
         assert!(
             rule_set
@@ -2232,63 +1715,50 @@ modifiers: []
 
     #[test]
     fn target_exclusion_rejects_targets_without_a_positive_matcher() {
-        let document = r#"
-version: 1
-description: invalid target exclusion
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: custom.target_exclusion
-    category: custom
-    severity: low
-    score: 10
-    detection:
-      selection:
-        command: needle
-      exclude:
-        assistant_context: quoted example
-      condition: selection
-    tags: [custom]
-    explanation: synthetic
-modifiers: []
-"#;
-
-        assert!(super::load_rule_set_from_documents(&[document], None).is_err());
+        let message = compile_error(&[rule(
+            "custom.target_exclusion",
+            "custom",
+            "selection_command:\n    tool.command|re: needle\n\
+             filter_assistant_context:\n    message.assistant_text|re: quoted example\n\
+             condition: selection_command and not filter_assistant_context",
+            "",
+        )]);
+        assert!(message.contains("custom.target_exclusion"), "{message}");
     }
 
     #[test]
     fn target_exclusion_rejects_unknown_targets_and_invalid_regex() {
-        for exclusion in ["unknown_target: quoted", "command: '[unterminated'"] {
-            let document = format!(
-                "version: 1\ndescription: invalid exclusion\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: custom.target_exclusion\n    category: custom\n    severity: low\n    score: 10\n    detection:\n      selection:\n        command: needle\n      exclude:\n        {exclusion}\n      condition: selection\n    tags: [custom]\n    explanation: synthetic\nmodifiers: []\n"
+        for exclusion in [
+            "unknown.target|re: quoted",
+            "tool.command|re: '[unterminated'",
+        ] {
+            let document = rule(
+                "custom.target_exclusion",
+                "custom",
+                &format!(
+                    "selection_command:\n    tool.command|re: needle\nfilter_command:\n    {exclusion}\n\
+                     condition: selection_command and not filter_command"
+                ),
+                "",
             );
             assert!(
-                super::load_rule_set_from_documents(&[&document], None).is_err(),
+                load_rule_set_from_documents(&[&document], None).is_err(),
                 "accepted {exclusion}"
             );
         }
     }
 
     #[test]
-    fn simple_rule_form_rejects_exclusions() {
-        let document = r#"
-version: 1
-description: invalid simple exclusion
-defaults: {case_insensitive: false, enabled: true}
-rules:
-  - id: custom.simple
-    category: custom
-    severity: low
-    score: 10
-    targets: [command]
-    regex: needle
-    exclude: {command: quoted}
-    tags: [custom]
-    explanation: synthetic
-modifiers: []
-"#;
-        assert!(super::load_rule_set_from_documents(&[document], None).is_err());
+    fn a_filter_vetoes_only_a_one_field_selection() {
+        let message = compile_error(&[rule(
+            "custom.simple",
+            "custom",
+            "selection:\n    - tool.command|re: needle\n    - tool.arguments|re: needle\n\
+             filter_command:\n    tool.command|re: quoted\n\
+             condition: selection and not filter_command",
+            "",
+        )]);
+        assert!(message.contains("custom.simple"), "{message}");
     }
 
     #[test]
@@ -2442,12 +1912,16 @@ modifiers: []
 
     #[test]
     fn evaluates_rule_purpose_metadata_and_atlas_tags() {
-        let mut definition = rule("policy.agent_guardrail_modification", "persistence");
-        definition.detection_class = "policy_violation".to_string();
-        definition.signal_type = "atomic".to_string();
-        definition.analytic_intent = "audit".to_string();
-        definition.atlas_tags = vec!["atlas:AML.T0051".to_string()];
-        let rule_set = single_rule_set(definition);
+        let rule_set = compile(&[rule(
+            "policy.agent_guardrail_modification",
+            "persistence",
+            HIDDEN_INSTRUCTION,
+            "detection_class: policy_violation\nsignal_type: atomic\nanalytic_intent: audit",
+        )
+        .replace(
+            "level: high\n",
+            "level: high\ntags:\n    - atlas.aml.t0051\n",
+        )]);
 
         let result = rule_set
             .evaluate(&[("assistant_context", "hidden instruction")])
@@ -2510,28 +1984,19 @@ modifiers: []
             schema["$defs"]["detection"]["allOf"][1]["properties"]["severity"]["enum"],
             serde_json::json!(telltale_schema::event::VALID_DETECTION_SEVERITIES)
         );
-        let rule_set = |severity: &str| {
-            let mut definition = rule("synthetic.severity", "custom");
-            definition.severity = severity.to_string();
-            RuleSet {
-                version: 1,
-                description: "synthetic severity validation".to_string(),
-                defaults: RuleDefaults {
-                    case_insensitive: false,
-                    enabled: true,
-                },
-                rules: vec![definition],
-                modifiers: Vec::new(),
-            }
+        let document = |level: &str, telltale: &str| {
+            rule("synthetic.severity", "custom", HIDDEN_INSTRUCTION, telltale)
+                .replace("level: high", &format!("level: '{level}'"))
         };
         for severity in &telltale_schema::event::VALID_DETECTION_SEVERITIES {
-            let compiled = rule_set(severity).compile(None).expect("accepted severity");
+            let compiled = compile(&[document(severity, "")]);
             assert_eq!(compiled.summaries()[0].severity, *severity);
             assert_eq!(
                 compiled.compatibility_export().rules()[0].severity,
                 *severity
             );
         }
+        let policy = "disabled_rules: [synthetic.severity]\n";
         for invalid in [
             "warning",
             "catastrophic",
@@ -2542,51 +2007,33 @@ modifiers: []
             " high",
             "high\u{a0}",
         ] {
-            let error = rule_set(invalid)
-                .compile(None)
-                .expect_err("invalid severity must fail shared compilation");
-            assert_eq!(
-                error.to_string(),
-                format!(
-                    "rule synthetic.severity uses unsupported severity '{invalid}'; supported values: {}",
-                    telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
-                )
+            let expected = format!(
+                "rule synthetic.severity uses unsupported level '{invalid}'; supported values: {}",
+                telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
             );
-            let mut disabled = rule_set(invalid);
-            disabled.rules[0].enabled = false;
-            assert_eq!(
-                disabled.compile(None).expect("disabled rule").rule_count(),
-                0
-            );
-            let mut disabled_defaults = rule_set(invalid);
-            disabled_defaults.defaults.enabled = false;
-            assert_eq!(
-                disabled_defaults
-                    .compile(None)
-                    .expect("disabled document")
-                    .rule_count(),
-                0
-            );
-            let policy = super::RulePolicy {
-                disabled_rules: vec!["synthetic.severity".to_string()],
-                ..Default::default()
-            };
-            assert_eq!(
-                rule_set(invalid)
-                    .compile(Some(&policy))
-                    .expect("policy-filtered rule")
-                    .rule_count(),
-                0
-            );
+            // Rule v2 checks every document when it is read, so a disabled or
+            // policy-filtered rule fails the same way.
+            for (document, policy) in [
+                (document(invalid, ""), None),
+                (document(invalid, "enabled: false"), None),
+                (document(invalid, ""), Some(policy)),
+            ] {
+                let error = load_rule_set_from_documents(&[&document], policy)
+                    .expect_err("invalid severity must fail")
+                    .to_string();
+                assert!(error.ends_with(&expected), "{error}");
+            }
         }
     }
 
     #[test]
-    fn rule_status_remains_informational_metadata() {
-        for status in ["not_a_status", "disabled", "deprecated"] {
-            let mut definition = rule("synthetic.status", "custom");
-            definition.status = Some(status.to_string());
-            let compiled = single_rule_set(definition);
+    fn rule_status_is_catalog_metadata_for_enabled_statuses() {
+        for status in ["experimental", "test", "stable"] {
+            let compiled = compile(&[hidden_instruction_rule("synthetic.status", "custom")
+                .replace(
+                    "taxonomy: telltale\n",
+                    &format!("taxonomy: telltale\nstatus: {status}\n"),
+                )]);
             assert_eq!(compiled.rule_count(), 1);
             assert!(
                 compiled
@@ -2599,7 +2046,10 @@ modifiers: []
 
     #[test]
     fn rule_category_remains_open_behavior_metadata() {
-        let compiled = single_rule_set(rule("synthetic.category", "not_a_category"));
+        let compiled = compile(&[hidden_instruction_rule(
+            "synthetic.category",
+            "not_a_category",
+        )]);
         assert_eq!(compiled.summaries()[0].category, "not_a_category");
         assert_eq!(
             compiled.compatibility_export().rules()[0].category,
@@ -2614,73 +2064,37 @@ modifiers: []
 
     #[test]
     fn rejects_invalid_rule_purpose_metadata() {
-        let mut definition = rule("custom.invalid_metadata", "custom");
-        definition.detection_class = "alert".to_string();
-        let result = RuleSet {
-            version: 1,
-            description: "test rules".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: true,
-                enabled: true,
-            },
-            rules: vec![definition],
-            modifiers: Vec::new(),
-        }
-        .compile(None);
-
-        assert!(result.is_err());
+        let document = rule(
+            "custom.invalid_metadata",
+            "custom",
+            HIDDEN_INSTRUCTION,
+            "detection_class: alert",
+        );
+        assert!(load_rule_set_from_documents(&[&document], None).is_err());
     }
 
     #[test]
     fn rejects_noncanonical_rule_ids_before_matching_for_zero_and_positive_scores() {
         for score in [0, 1] {
-            let mut definition = rule("invalid", "custom");
-            definition.score = score;
-            let result = RuleSet {
-                version: 1,
-                description: "test rules".to_string(),
-                defaults: RuleDefaults {
-                    case_insensitive: true,
-                    enabled: true,
-                },
-                rules: vec![definition],
-                modifiers: Vec::new(),
-            }
-            .compile(None);
-            assert!(result.is_err(), "score {score} should reject invalid id");
+            let document = hidden_instruction_rule("invalid", "custom")
+                .replace("score: 60", &format!("score: {score}"));
+            assert!(
+                load_rule_set_from_documents(&[&document], None).is_err(),
+                "score {score} should reject invalid id"
+            );
         }
     }
 
     #[test]
     fn rejects_noncanonical_modifier_ids_and_rule_references_before_matching() {
         for score in [0, 1] {
-            for (id, references) in [("invalid", Vec::new()), ("chain.valid", vec!["invalid"])] {
-                let result = RuleSet {
-                    version: 1,
-                    description: "test rules".to_string(),
-                    defaults: RuleDefaults {
-                        case_insensitive: true,
-                        enabled: true,
-                    },
-                    rules: Vec::new(),
-                    modifiers: vec![ModifierDefinition {
-                        id: id.to_string(),
-                        score,
-                        detection_class: super::default_detection_class(),
-                        signal_type: super::default_chain_signal_type(),
-                        analytic_intent: super::default_analytic_intent(),
-                        atlas_tags: Vec::new(),
-                        when_all_categories: Vec::new(),
-                        when_all_rule_ids: references.into_iter().map(str::to_string).collect(),
-                        link: None,
-                        falsepositives: Vec::new(),
-                        explanation: "test modifier".to_string(),
-                        enabled: true,
-                    }],
-                }
-                .compile(None);
+            for (id, steps) in [
+                ("invalid", "categories: [custom]"),
+                ("chain.valid", "rules: [invalid]"),
+            ] {
+                let document = chain(id, steps, "").replace("score: 7", &format!("score: {score}"));
                 assert!(
-                    result.is_err(),
+                    load_rule_set_from_documents(&[&document], None).is_err(),
                     "invalid modifier metadata should reject at score {score}"
                 );
             }
@@ -2693,19 +2107,11 @@ modifiers: []
             disabled_categories: vec!["mcp_prompt_injection".to_string()],
             ..RulePolicy::default()
         };
-        let rule_set = RuleSet {
-            version: 1,
-            description: "test rules".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: true,
-                enabled: true,
-            },
-            rules: vec![rule(
-                "mcp.tool_metadata.prompt_injection",
-                "mcp_prompt_injection",
-            )],
-            modifiers: Vec::new(),
-        }
+        let rule_set = LoadedRules::parse(&hidden_instruction_rule(
+            "mcp.tool_metadata.prompt_injection",
+            "mcp_prompt_injection",
+        ))
+        .unwrap()
         .compile(Some(&policy))
         .expect("compile rules");
 
@@ -2719,18 +2125,9 @@ modifiers: []
                 name: Some(name.to_string()),
                 ..RulePolicy::default()
             };
-            let compiled = RuleSet {
-                version: 1,
-                description: "test rules".to_string(),
-                defaults: RuleDefaults {
-                    case_insensitive: false,
-                    enabled: true,
-                },
-                rules: Vec::new(),
-                modifiers: Vec::new(),
-            }
-            .compile(Some(&policy))
-            .expect("compile rules");
+            let compiled = LoadedRules::default()
+                .compile(Some(&policy))
+                .expect("compile rules");
 
             assert_eq!(compiled.policy_name(), None);
         }
@@ -2739,18 +2136,9 @@ modifiers: []
             name: Some("  named-policy  ".to_string()),
             ..RulePolicy::default()
         };
-        let compiled = RuleSet {
-            version: 1,
-            description: "test rules".to_string(),
-            defaults: RuleDefaults {
-                case_insensitive: false,
-                enabled: true,
-            },
-            rules: Vec::new(),
-            modifiers: Vec::new(),
-        }
-        .compile(Some(&policy))
-        .expect("compile rules");
+        let compiled = LoadedRules::default()
+            .compile(Some(&policy))
+            .expect("compile rules");
         assert_eq!(compiled.policy_name(), Some("named-policy"));
     }
 }
