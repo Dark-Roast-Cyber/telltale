@@ -226,7 +226,7 @@ use telltale_rules::load_rule_set_from_documents;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
-const RULE: &str = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.package\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [arguments]\n    regex: package-needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n";
+const RULE: &str = "title: synthetic\nid: 0c288d8d-4c64-4085-8bcc-2fb6b2e525d9\nname: synthetic.package\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.arguments|re: 'package-needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n";
 
 fn main() {
     // Detection v2 compiles and evaluates without the default source-io feature.

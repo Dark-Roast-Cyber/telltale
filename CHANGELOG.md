@@ -18,14 +18,28 @@
   self-protection rules and the example rules under `config/rules/` are now
   Rule v2. A parity test proved each converted rule compiles to the same
   matchers, so detections, rule names (the Rule v1 `id` is the Rule v2
-  `name`), Event 3.0 output and effective rule fingerprints are unchanged.
-  Rule v1 files and `telltale-rule-package/v1` packages stop loading in 0.8.0,
-  and there is no automatic converter; the
+  `name`), Event 3.0 output and the core and hooks rule fingerprints are
+  unchanged. There is no automatic converter; the
   [0.8.0 migration guide](docs/migrations/0.8.0.md) maps every Rule v1 key to
   Rule v2. `docs/catalog/rule-vocabulary.json` now describes Rule v2 (keys,
   fields, modifiers, scope modifiers, condition forms, statuses, `telltale`
   values and limits), read from the Rule v2 reader. Load errors point to
   `docs/rule-format.md`.
+- **Rule v1 and package format v1 are removed.** A Rule v1 document (one with
+  a top-level `version` key) in any rule tier, `--rules` file, package or
+  `Pipeline::rules_document` fails to load with "Rule v1 is no longer
+  supported", pointing to `docs/rule-format.md` and the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md); it fails even when a
+  higher tier replaces it or it is disabled. A `telltale-rule-package/v1`
+  package fails the same way. Compiled-form names (`RuleV1Compatibility*`,
+  `compile_rule_v1`, the `rule_v1_*` fingerprints, detector version 1 and the
+  `compat.v1.*` selectors) are unchanged and name the compiled form, so
+  fingerprints, semantic identities and selectors are byte-identical.
+- **The embedded community package is its Rule v2 release, 0.2.0.** Its
+  documents are ordered by name, so the effective rule set fingerprint and
+  semantic identity change once. `tdx.persistence.git_hook_change` now also
+  matches a write to `.git/hooks/<name>` by written path, sample hooks
+  excluded.
 - **A replacement keeps the replaced rule's `id`.** A Rule v2 rule in
   `organization-rules.d`, `rules.d` or `ui-rules.d` that replaces a rule by
   `name` must carry the same UUID `id`, and one `id` under two names is an
@@ -46,7 +60,7 @@
   `telltale rules show <name>` prints one rule or chain, and
   `telltale rules validate` reports load notices under `notices`. Rule files in
   every tier, `--rules` files, `Pipeline::rules_document` and rule packages
-  accept Rule v2 documents. A `telltale-rule-package/v2` package is a YAML
+  take Rule v2 documents only. A `telltale-rule-package/v2` package is a YAML
   stream: a header with a `title`, then each rule or chain as its own `---`
   document, sorted by name, so a package can be built by appending rule files
   to the header. A Rule v2 document that defines one YAML anchor name more

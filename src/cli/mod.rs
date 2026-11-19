@@ -1100,7 +1100,7 @@ fn show_rule(
     list(&mut text, "telltale tags", definition.tags());
     list(&mut text, "atlas tags", definition.atlas_tags());
     match definition.compile() {
-        Ok(crate::rules::CompiledDefinition::Rule(rule)) => {
+        crate::rules::CompiledDefinition::Rule(rule) => {
             let _ = writeln!(text, "matchers:");
             for matcher in &rule.matchers {
                 let _ = write!(
@@ -1116,7 +1116,7 @@ fn show_rule(
                 text.push('\n');
             }
         }
-        Ok(crate::rules::CompiledDefinition::Modifier(modifier)) => {
+        crate::rules::CompiledDefinition::Modifier(modifier) => {
             list(&mut text, "chain categories", &modifier.when_all_categories);
             list(&mut text, "chain rules", &modifier.when_all_rule_ids);
             line(
@@ -1130,7 +1130,6 @@ fn show_rule(
                     .unwrap_or_else(|| "-".to_owned()),
             );
         }
-        Err(error) => line(&mut text, "matchers", format!("does not compile: {error}")),
     }
     let notices = rule_notices(&resolution.rule_set)
         .into_iter()

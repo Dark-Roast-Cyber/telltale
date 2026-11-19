@@ -3876,7 +3876,7 @@ fn many_long_rule_files(root: &std::path::Path, count: usize) -> Vec<std::path::
         .map(|i| {
             let path = dir.join(format!("rules-{i}.yaml"));
             let document = format!(
-                "version: 1\ndescription: test\ndefaults:\n  case_insensitive: true\n  enabled: true\nrules:\n  - id: test.operator.rule_{i}\n    title: test\n    category: test\n    severity: low\n    score: 1\n    targets: [command]\n    regex: 'tth-test-marker-never-{i}'\n    tags: [test]\n    explanation: test\nmodifiers: []\n"
+                "title: test\nid: 4ba4d899-bc5c-40f0-8d7d-{i:012}\nname: test.operator.rule_{i}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re|i: 'tth-test-marker-never-{i}'\n    condition: selection\nlevel: low\ntelltale:\n    category: test\n    score: 1\n    explanation: 'test'\n    tags: [test]\n"
             );
             std::fs::write(&path, document).unwrap();
             path

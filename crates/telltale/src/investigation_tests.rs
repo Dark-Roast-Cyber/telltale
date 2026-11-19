@@ -67,7 +67,7 @@ fn investigation_context_scan_order_matches_occurrence_and_emitted_index() {
     }).collect::<String>();
     let source = claude(dir.path(), &payload);
     let pipeline = super::Pipeline::builder().without_bundled_defaults().rules_document(
-        "version: 1\ndescription: synthetic\ndefaults: { case_insensitive: false, enabled: true }\nrules:\n  - id: synthetic.order\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n"
+        "title: synthetic\nid: cc602218-b8b2-46e8-8dda-440c104a500a\nname: synthetic.order\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n"
     ).build().unwrap();
     let scans = pipeline.scan_sources_with_occurrences(&[source]).unwrap();
     let scan = &scans[0];
@@ -436,7 +436,7 @@ fn investigation_context_occurrences_are_exact_source_facts() {
             .replace("synthetic-session", "foreign-session"),
     )
     .unwrap();
-    let rule = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.target\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n";
+    let rule = "title: synthetic\nid: 1523429f-99fb-4ca1-85ff-dfa1ea08477d\nname: synthetic.target\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n";
     let pipeline = super::Pipeline::builder()
         .without_bundled_defaults()
         .rules_document(rule)

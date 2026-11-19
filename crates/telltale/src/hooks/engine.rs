@@ -24,7 +24,7 @@ use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent}
 use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
 
-/// The shared host-owned Rule v1 template (name, content): detections of an
+/// The shared host-owned Rule v2 template (name, content): detections of an
 /// agent disabling hooks, for every harness. A template writes the pattern
 /// text rules share as `{{NAME}}` (`RULE_FRAGMENTS`).
 const SHARED_RULE_TEMPLATE: (&str, &str) = (
@@ -750,7 +750,7 @@ fn push_halves(blocks: &mut Vec<Range<usize>>, block: Range<usize>) {
     }
 }
 
-/// Telltale rejects Rule v1 patterns longer than 1,024 bytes; stay under it.
+/// Telltale rejects patterns longer than 1,024 bytes; stay under it.
 const MAX_PATTERN_BYTES: usize = 1000;
 
 // Pattern text the bundled rules share. A template in rules/*.yaml names one as `{{NAME}}`
@@ -1539,47 +1539,12 @@ mod tests {
         assert!(filters > 0);
     }
 
-    /// Rule v1 rendering of a family's generated rules, as the generator wrote
-    /// it before Rule v2. Kept only for the conversion parity test below.
-    fn rule_v1_family_document(family: &super::Family, case_insensitive: bool) -> Option<String> {
-        use super::{HARMLESS, HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, Selection};
-        let rules = super::family_rules(family);
-        if rules.is_empty() {
-            return None;
-        }
-        let quote = |regex: &str| regex.replace('\'', "''");
-        let rules: String = rules
-            .iter()
-            .map(|rule| {
-                let matcher = match &rule.selection {
-                    Selection::Written(regex) => format!(
-                        "    targets: [written_path]\n    regex: '{}'\n",
-                        quote(regex)
-                    ),
-                    Selection::Command(regex) => format!(
-                        "    detection:\n      selection:\n        command: '{}'\n      exclude:\n        command: '{}'\n      scope: recorded_exclusion\n      condition: selection\n",
-                        quote(regex),
-                        quote(HARMLESS)
-                    ),
-                };
-                let (id, title, score) = (&rule.id, &rule.title, rule.score);
-                let severity = if score >= 90 { "high" } else { "medium" };
-                format!(
-                    "  - id: {HOST_RULE_ID_PREFIX}{id}\n    title: {title}\n    category: {HOST_RULE_CATEGORY}\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
-                )
-            })
-            .collect();
-        Some(format!(
-            "version: 1\ndescription: Telltale Hooks self-protection generated for this installation.\ndefaults:\n  case_insensitive: {case_insensitive}\n  enabled: true\nrules:\n{rules}modifiers: []\n"
-        ))
-    }
-
     /// Every generated family, with written-path and command rules, the 90- and
     /// 60-point shapes, reverse, reference and fail-safe rules and numbered
-    /// chunks, compiles from Rule v2 exactly as it did from Rule v1, case-
-    /// sensitive (Unix) and case-insensitive (Windows).
+    /// chunks, loads and compiles without notices, case-sensitive (Unix) and
+    /// case-insensitive (Windows).
     #[test]
-    fn generated_rule_v2_documents_compile_like_the_rule_v1_ones() {
+    fn generated_rule_documents_load_and_compile_in_every_shape() {
         use std::path::PathBuf;
         use telltale_rules::load_rule_set_from_documents;
         let mut coverage = super::GeneratedCoverage::default();
@@ -1616,44 +1581,27 @@ mod tests {
         let mut shapes = std::collections::BTreeSet::new();
         for family in &families {
             for case_insensitive in [false, true] {
-                let v1 = rule_v1_family_document(family, case_insensitive).unwrap();
                 let v2 = super::family_document_with_case(
                     family,
                     &mut super::GeneratedCoverage::default(),
                     case_insensitive,
                 )
                 .unwrap();
-                let v1 = load_rule_set_from_documents(&[&v1], None)
-                    .unwrap()
-                    .compatibility_export();
                 let v2_rules = load_rule_set_from_documents(&[&v2], None).unwrap();
                 assert!(v2_rules.notices().is_empty());
                 let v2 = v2_rules.compatibility_export();
-                assert!(!v1.rules().is_empty());
-                assert_eq!(v2.rules(), v1.rules(), "{}", family.prefix);
-                for (old, new) in v1.rules().iter().zip(v2.rules()) {
-                    assert_eq!(
-                        telltale_rules::provenance::rule_v1_rule_fingerprint(new),
-                        telltale_rules::provenance::rule_v1_rule_fingerprint(old)
-                    );
+                assert!(!v2.rules().is_empty(), "{}", family.prefix);
+                for rule in v2.rules() {
                     shapes.insert((
-                        new.matchers[0].target.clone(),
-                        new.score,
-                        new.matchers[0].regex.starts_with("(?i:"),
+                        rule.matchers[0].target.clone(),
+                        rule.score,
+                        rule.matchers[0].regex.starts_with("(?i:"),
                     ));
                 }
-                assert_eq!(v2.fingerprint(), v1.fingerprint());
-                let (old_plan, new_plan) = (
-                    telltale_detect::v2::compile_rule_v1(&v1).unwrap(),
-                    telltale_detect::v2::compile_rule_v1(&v2).unwrap(),
-                );
-                assert_eq!(
-                    new_plan.semantic_provenance().identity(),
-                    old_plan.semantic_provenance().identity()
-                );
+                telltale_detect::v2::compile_rule_v1(&v2).unwrap();
             }
         }
-        // Both selections, both scores and both case modes were compared.
+        // Both selections, both scores and both case modes were covered.
         for target in ["command", "written_path"] {
             for case_insensitive in [false, true] {
                 assert!(shapes.contains(&(target.to_owned(), 90, case_insensitive)));

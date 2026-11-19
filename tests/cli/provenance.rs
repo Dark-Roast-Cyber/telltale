@@ -41,7 +41,7 @@ fn config_provenance_uses_effective_rule_policy_and_allowlist_inputs() {
     let criterion_marker = "TT_PRIVACY_CLI_SUPPRESSION_CRITERION_39";
     fs::write(
         &rules,
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: low\n    score: 20\n    targets: [command]\n    regex: synthetic-command\n    tags: [synthetic]\n    explanation: synthetic explanation\nmodifiers: []\n",
+        "title: synthetic explanation\nid: ae1f897e-d152-448a-8f35-1cfb169b06cf\nname: rule.synthetic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'synthetic-command'\n    condition: selection\nlevel: low\ntelltale:\n    category: execution\n    score: 20\n    explanation: 'synthetic explanation'\n    tags: [synthetic]\n",
     )
     .expect("rules");
     fs::write(
@@ -152,7 +152,7 @@ fn config_provenance_opaque_labels_hide_lowercase_identity_like_values() {
     let session = "tt-privacy-session-39";
     fs::write(
         &rules,
-        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: low\n    score: 20\n    targets: [command]\n    regex: synthetic-command\n    tags: [synthetic]\n    explanation: synthetic explanation\nmodifiers: []\n",
+        "title: synthetic explanation\nid: ae1f897e-d152-448a-8f35-1cfb169b06cf\nname: rule.synthetic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'synthetic-command'\n    condition: selection\nlevel: low\ntelltale:\n    category: execution\n    score: 20\n    explanation: 'synthetic explanation'\n    tags: [synthetic]\n",
     )
     .expect("rules");
     fs::write(
@@ -198,7 +198,7 @@ fn config_provenance_matches_the_public_core_assembly() {
     let rules = temp.path().join("rules.yaml");
     let policy = temp.path().join("policy.yaml");
     let allowlist = temp.path().join("allowlist.yaml");
-    let rules_document = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: low\n    score: 20\n    targets: [command]\n    regex: synthetic-command\n    tags: [synthetic]\n    explanation: synthetic explanation\nmodifiers: []\n";
+    let rules_document = "title: synthetic explanation\nid: ae1f897e-d152-448a-8f35-1cfb169b06cf\nname: rule.synthetic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'synthetic-command'\n    condition: selection\nlevel: low\ntelltale:\n    category: execution\n    score: 20\n    explanation: 'synthetic explanation'\n    tags: [synthetic]\n";
     let policy_document = "version: 1\nname: policy.synthetic\nenabled_rules: [rule.synthetic]\n";
     let allowlist_document =
         "version: 1\nsuppressions:\n  - name: synthetic-suppression\n    categories: [synthetic]\n";

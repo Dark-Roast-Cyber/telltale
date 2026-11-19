@@ -194,53 +194,72 @@ fn detection_evidence_uses_loaded_custom_and_package_severities_not_aggregate_ri
     let local = temp.path().join("rules.yaml");
     fs::write(
         &local,
-        r#"version: 1
-description: Synthetic severity rules.
-defaults: {case_insensitive: false, enabled: true}
-modifiers: []
-rules:
-  - id: synthetic.low
+        r#"title: Synthetic low rule
+id: b8700c7e-f8de-478e-89c1-92620cdb0ac3
+name: synthetic.low
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'synthetic'
+    condition: selection
+level: low
+telltale:
     category: test
-    severity: low
     score: 1
-    targets: [command]
-    regex: synthetic
+    explanation: 'Synthetic low rule.'
     tags: [test]
-    explanation: Synthetic low rule.
-  - id: synthetic.medium
+---
+title: Synthetic medium rule
+id: 3862bfe8-e25b-46b7-8ff0-555b155e436c
+name: synthetic.medium
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'synthetic'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 1
-    targets: [command]
-    regex: synthetic
+    explanation: 'Synthetic medium rule.'
     tags: [test]
-    explanation: Synthetic medium rule.
 "#,
     )
     .unwrap();
     let package = temp.path().join("package.yaml");
     fs::write(
         &package,
-        r#"format: telltale-rule-package/v1
+        r#"format: telltale-rule-package/v2
 id: synthetic.package
+title: Synthetic packaged severity rules
 version: "1.0.0"
 publisher: Synthetic
 license: Apache-2.0
 rule_namespace: packaged
-documents:
-  - version: 1
-    description: Synthetic packaged severity rules.
-    defaults: {case_insensitive: false, enabled: true}
-    modifiers: []
-    rules:
-      - id: packaged.high
-        category: test
-        severity: high
-        score: 1
-        targets: [command]
-        regex: synthetic
-        tags: [test]
-        explanation: Synthetic package rule.
+---
+title: Synthetic package rule
+id: 5d0f6c4e-8a1b-4c2d-9e3f-0a1b2c3d4e5f
+name: packaged.high
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'synthetic'
+    condition: selection
+level: high
+telltale:
+    category: test
+    score: 1
+    explanation: 'Synthetic package rule.'
+    tags: [test]
 "#,
     )
     .unwrap();

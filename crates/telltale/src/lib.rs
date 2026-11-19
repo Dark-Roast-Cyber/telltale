@@ -967,8 +967,8 @@ impl Pipeline {
 }
 
 impl PipelineBuilder {
-    /// Add a YAML rule file: one Rule v1 document, or one or more Rule v2 rule
-    /// and chain documents. Additive to the bundled defaults unless
+    /// Add a YAML rule file: one or more Rule v2 rule and chain documents. A
+    /// Rule v1 document fails at [`Self::build`]. Additive to the bundled defaults unless
     /// [`Self::without_bundled_defaults`] is set (mirrors `--rules`).
     pub fn rules_document(mut self, yaml: impl Into<String>) -> Self {
         self.extra_rule_documents.push(yaml.into());
@@ -982,7 +982,7 @@ impl PipelineBuilder {
     }
 
     /// Add a rule package: the whole text of a `telltale-rule-package/v2` YAML
-    /// stream or a `/v1` document. Package definitions are additive; a package with the community ID replaces the
+    /// stream. Package definitions are additive; a package with the community ID replaces the
     /// embedded community snapshot (mirrors an installed `rule-packages.d` file).
     pub fn rule_package(mut self, yaml: impl Into<String>) -> Self {
         self.rule_packages.push(yaml.into());
@@ -1007,7 +1007,7 @@ impl PipelineBuilder {
     /// with the optional policy.
     /// Missing documents or rejected rules/packages/policy return [`PipelineError`].
     /// Canonical semantics are compiled once here and reused by every scan.
-    /// Content that Rule v1 loading accepts but canonical compilation rejects
+    /// Content that rule loading accepts but canonical compilation rejects
     /// returns [`PipelineError::Compilation`] here, not later from a scan.
     /// Content and policy that leave no effective rule return
     /// [`PipelineError::EmptyRuleSet`].
@@ -1068,7 +1068,7 @@ impl Pipeline {
         rule_packages: Vec<RulePackageSummary>,
     ) -> Result<Self, PipelineError> {
         // Modifiers only combine rule matches, so no effective rule leaves no
-        // Rule v1 detection. Fail closed instead of building an empty pipeline,
+        // rule detection. Fail closed instead of building an empty pipeline,
         // even though opt-in process-chain detection does not use this rule set:
         // building cannot know whether a later scan enables it.
         if rule_set.rule_count() == 0 {
@@ -1115,24 +1115,27 @@ mod tests {
     #[test]
     fn canonical_rejection_fails_build_and_batch_time_precedes_source_io() {
         let invalid_rules = r#"
-version: 1
-description: synthetic batch error precedence
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: synthetic.invalid
+title: Synthetic batch error precedence
+id: 3f2504e0-4f89-41d3-9a0c-0305e82c3302
+name: synthetic.invalid
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'needle'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
-    score: 101
-    targets: [command]
-    regex: needle
-    tags: []
+    score: 1
     explanation: synthetic
-modifiers: []
+    detection_class: operational_health
 "#;
-        // Rule v1 loading accepts the score; canonical compilation rejects
-        // it at build time, so no pipeline exists that can only fail scans.
+        // Rule loading accepts the detection class; canonical compilation
+        // rejects it at build time, so no pipeline exists that can only fail
+        // scans.
         let error = Pipeline::builder()
             .without_bundled_defaults()
             .rules_document(invalid_rules)
@@ -1144,7 +1147,7 @@ modifiers: []
             error
                 .source()
                 .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-            Some(RuleV1CompileError::ScoreOutOfRange)
+            Some(RuleV1CompileError::UnmappableDetectionClass)
         ));
         let valid = Pipeline::builder().build().unwrap();
         let sources = [synthetic_source()];
@@ -1188,17 +1191,57 @@ modifiers: []
 
     fn community_package(version: &str, rule_id: &str) -> String {
         format!(
-            "format: telltale-rule-package/v1\nid: telltale.community\nversion: \"{version}\"\n\
-             publisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: tdx\ndocuments:\n  \
-             - version: 1\n    description: Synthetic.\n    defaults: {{case_insensitive: true, \
-             enabled: true}}\n    rules:\n      - id: {rule_id}\n        category: persistence\n        \
-             severity: low\n        score: 20\n        targets: [command]\n        regex: marker\n        \
-             tags: [synthetic]\n        explanation: Synthetic.\n    modifiers: []\n"
+            "format: telltale-rule-package/v2\nid: telltale.community\ntitle: Synthetic community\n\
+             version: \"{version}\"\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: tdx\n\
+             ---\ntitle: Synthetic community rule\nid: 5d0f6c4e-8a1b-4c2d-9e3f-0a1b2c3d4e5f\n\
+             name: {rule_id}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    \
+             category: tool_activity\ndetection:\n    selection:\n        - tool.command|re|i: marker\n    \
+             condition: selection\nlevel: low\ntelltale:\n    category: persistence\n    score: 20\n    \
+             explanation: Synthetic.\n    tags: [synthetic]\n"
         )
     }
 
     #[test]
-    fn builder_accepts_rule_v2_documents_beside_rule_v1() {
+    fn rule_v1_documents_and_packages_fail_with_a_pointer_to_rule_v2() {
+        let v1 = concat!(
+            "version: 1\ndescription: synthetic\n",
+            "defaults: {case_insensitive: true, enabled: true}\nrules: []\nmodifiers: []\n",
+        );
+        let error = Pipeline::builder()
+            .rules_document(v1)
+            .build()
+            .err()
+            .expect("Rule v1 document");
+        assert!(matches!(error, PipelineError::Compilation(_)));
+        let message = error.source().unwrap().to_string();
+        assert!(
+            message.contains("Rule v1 is no longer supported")
+                && message.contains("docs/rule-format.md")
+                && message.contains("docs/migrations/0.8.0.md"),
+            "{message}"
+        );
+        let package = format!(
+            "format: telltale-rule-package/v1\nid: acme.rules\nversion: 1.0.0\npublisher: Acme\n\
+             license: Apache-2.0\nrule_namespace: acme\ndocuments:\n  - {}",
+            v1.replace('\n', "\n    ")
+        );
+        let message = Pipeline::builder()
+            .rule_package(package)
+            .build()
+            .err()
+            .expect("format v1 package")
+            .source()
+            .unwrap()
+            .to_string();
+        assert!(
+            message.contains("telltale-rule-package/v1 is no longer supported")
+                && message.contains("docs/migrations/0.8.0.md"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn builder_accepts_rule_v2_documents_beside_bundled_rules() {
         let v2 = "title: Synthetic v2 marker\nid: 3f2504e0-4f89-41d3-9a0c-0305e82c3301\n\
                   name: synthetic.v2.marker\ntaxonomy: telltale\nstatus: test\n\
                   logsource:\n    product: ai_agent\n    category: tool_activity\n\
@@ -1228,8 +1271,7 @@ modifiers: []
             "{events:?}"
         );
 
-        // Added beside the bundled Rule v1 content, a v2 rule may not reuse a
-        // bundled id.
+        // Added beside the bundled content, a rule may not reuse a bundled id.
         assert_eq!(
             Pipeline::builder()
                 .rules_document(v2)

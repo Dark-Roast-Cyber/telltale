@@ -1,15 +1,18 @@
-version: 1
-description: Test-only rule with a target that Telltale does not evaluate.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: custom.unsupported_target
+# Test-only rule with a field that Telltale does not evaluate.
+title: Unsupported field fixture
+id: 6b1d0c3e-7f2a-4e5b-9c8d-1e2f3a4b5c6d
+name: custom.unsupported_target
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.raw_transcript|re|i: 'exfiltrate'
+    condition: selection
+level: low
+telltale:
     category: custom_agent_behavior
-    severity: low
     score: 10
-    targets: [raw_transcript]
-    regex: 'exfiltrate'
+    explanation: 'This fixture should fail validation because message.raw_transcript is not a supported field.'
     tags: [custom]
-    explanation: This fixture should fail validation because raw_transcript is not a supported target.
-modifiers: []

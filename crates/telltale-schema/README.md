@@ -52,7 +52,7 @@ timing, identity, JSONL, replay, and sink boundaries.
 ## Producer provenance
 
 `ProducerProvenanceManifestV1` is a separate, closed contract for comparing
-effective producer configuration. It includes compiled Rule v1 and suppression
+effective producer configuration. It includes compiled-rule (`rule_v1`) and suppression
 fingerprints, the declared suppression canonicalization
 `suppression-v1-effective-v1`, thresholds, audited feature switches, and the
 frozen Event 3.0 identity. It does not contain rule YAML, regexes, paths,

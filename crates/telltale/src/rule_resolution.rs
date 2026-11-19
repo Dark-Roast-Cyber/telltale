@@ -71,10 +71,9 @@ impl RuleResolution {
 /// other tier already has is an error. `replacements` is text to use in place
 /// of reading a named file (a rule, package, override or policy file).
 ///
-/// Every file is one Rule v1 document or one or more Rule v2 documents.
+/// Every file is one or more Rule v2 documents; a Rule v1 document fails.
 /// Definitions merge by compiled id (the Rule v2 `name`): a higher tier
-/// replaces a lower one in place, and a Rule v2 definition that replaces a
-/// Rule v2 definition must keep its UUID. An id twice within one tier, or a
+/// replaces a lower one in place, and must keep its UUID. An id twice within one tier, or a
 /// UUID on two names, is an error.
 pub fn resolve_rule_set(
     pack_paths: &RulePackPaths,
@@ -222,7 +221,7 @@ fn load_package_documents(
             RulePackage::parse(&read_source(path, replacements)?).map_err(|error| {
                 format!(
                     "invalid rule package '{}': {error}",
-                    canonical_or_original(path).display()
+                    source_label_path(path)
                 )
                 .into()
             })
@@ -233,9 +232,7 @@ fn load_package_documents(
         summaries.push(resolved.summary());
         let location = match resolved.origin {
             PackageOrigin::Embedded => "embedded".to_string(),
-            PackageOrigin::Supplied(index) => canonical_or_original(&pack_paths.packages[index])
-                .display()
-                .to_string(),
+            PackageOrigin::Supplied(index) => source_label_path(&pack_paths.packages[index]),
         };
         let package = resolved.package;
         let identity = format!("{}@{}", package.id(), package.version());
@@ -255,8 +252,7 @@ fn load_rule_document(
     path: &Path,
     replacements: &BTreeMap<PathBuf, &str>,
 ) -> Result<RuleDocument, Box<dyn std::error::Error>> {
-    let identity_path = canonical_or_original(path);
-    let source = format!("{}:{}#document:0", tier.name(), identity_path.display());
+    let source = format!("{}:{}#document:0", tier.name(), source_label_path(path));
     let raw = read_source(path, replacements)?;
     let rules = LoadedRules::parse(&raw)
         .map_err(|error| format!("invalid rule document '{source}': {error}"))?;
@@ -415,6 +411,17 @@ fn upsert_definition(
 /// The canonical path, or `path` itself when it cannot be canonicalized.
 pub fn canonical_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// `path` canonicalized for a rule source label, without the verbatim prefix
+/// (`\\?\`) that canonicalizing a Windows drive path adds: labels show the path
+/// as people write it.
+fn source_label_path(path: &Path) -> String {
+    let label = canonical_or_original(path).display().to_string();
+    match label.strip_prefix(r"\\?\") {
+        Some(plain) if plain.as_bytes().get(1) == Some(&b':') => plain.to_string(),
+        _ => label,
+    }
 }
 
 fn apply_rule_overrides_from_paths(

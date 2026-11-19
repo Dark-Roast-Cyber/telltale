@@ -16,33 +16,41 @@ CREATE UNIQUE INDEX `session_message_session_seq_idx` ON `session_message` (`ses
 const T0: i64 = 1_775_000_000_000;
 const SECRET: &str = "SYNTHETIC-V2-OUTPUT-SECRET";
 const RULES: &str = r#"
-version: 1
-description: Synthetic OpenCode v2 coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.v2.command
-    title: Synthetic v2 command marker
-    tags: [synthetic]
+title: Synthetic v2 command marker
+id: 6afd3024-62ac-4789-87ce-259d80036c06
+name: synthetic.v2.command
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re: 'synthetic-v2-command-marker'
+    condition: selection_command
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        command: 'synthetic-v2-command-marker'
-      condition: selection
-    explanation: Synthetic test.
-  - id: synthetic.v2.result
-    title: Synthetic v2 result marker
+    explanation: 'Synthetic test.'
     tags: [synthetic]
+---
+title: Synthetic v2 result marker
+id: 855c7024-dbd5-4629-8b46-f880774a46cf
+name: synthetic.v2.result
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-v2-result-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 60
-    detection:
-      selection:
-        tool_result: 'synthetic-v2-result-marker'
-      condition: selection
-    explanation: Synthetic test.
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
 "#;
 
 struct Harness {

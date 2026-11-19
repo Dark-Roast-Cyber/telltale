@@ -34,7 +34,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "crates" / "telltale-rules" / "data" / "community.package.yaml"
 HEADER = {
-    "format": "telltale-rule-package/v1",
+    "format": "telltale-rule-package/v2",
     "id": "telltale.community",
 }
 

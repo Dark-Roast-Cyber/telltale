@@ -6,21 +6,25 @@
 use telltale_rules::load_rule_set_from_documents;
 
 const CUSTOM_RULES: &str = r#"
-version: 1
-description: In-memory example rules
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: example.curl_pipe_shell
+# In-memory example rules
+title: Downloading and piping a remote script straight into a shell
+id: 584eb41b-8ac8-4eb4-884b-e8446405102d
+name: example.curl_pipe_shell
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: &pattern 'curl[^|]*\|\s*(ba)?sh'
+        - tool.arguments|re|i: *pattern
+    condition: selection
+level: high
+telltale:
     category: execution
-    severity: high
     score: 60
-    targets: ["command", "arguments"]
-    regex: "curl[^|]*\\|\\s*(ba)?sh"
-    tags: ["example"]
-    explanation: Downloading and piping a remote script straight into a shell.
-modifiers: []
+    explanation: 'Downloading and piping a remote script straight into a shell.'
+    tags: [example]
 "#;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -30,7 +30,7 @@ fn review_custom_metadata_does_not_survive_detailed_serialization() {
     );
     let marker = "/home/synthetic/private-category";
     let document = format!(
-        "version: 1\ndescription: synthetic\ndefaults: {{enabled: true, case_insensitive: false}}\nrules:\n  - id: synthetic.rule\n    category: {marker}\n    severity: high\n    score: 30\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n"
+        "title: synthetic\nid: ed3e2258-5474-404b-8f03-f55c1ba86f44\nname: synthetic.rule\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'needle'\n    condition: selection\nlevel: high\ntelltale:\n    category: {marker}\n    score: 30\n    explanation: 'synthetic'\n"
     );
     let scans = Pipeline::builder()
         .without_bundled_defaults()
@@ -601,7 +601,7 @@ fn pipeline_remains_shareable_across_host_threads() {
 /// native profile version) and a migration note. Never update values alone.
 #[test]
 fn action_identities_are_pinned_to_their_algorithm_versions() {
-    const RULE: &str = "version: 1\ndescription: synthetic golden\ndefaults: {enabled: true, case_insensitive: false}\nrules:\n  - id: synthetic.golden\n    category: synthetic\n    severity: high\n    score: 30\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
+    const RULE: &str = "title: synthetic\nid: 0bb3a1f3-c75a-489d-8d11-77e9c483a86b\nname: synthetic.golden\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'needle'\n    condition: selection\nlevel: high\ntelltale:\n    category: synthetic\n    score: 30\n    explanation: 'synthetic'\n";
     let pipeline = Pipeline::builder()
         .without_bundled_defaults()
         .rules_document(RULE)

@@ -1,4 +1,4 @@
-//! The Rule v1 `tool_kind` target: what a call does, as the declared kind of its
+//! The `tool_kind` target (`tool.kind` in Rule v2): what a call does, as the declared kind of its
 //! source's tool table, else the kind of a native tool name, else nothing. The
 //! session selectors and the action view give the same value for the same call.
 
@@ -330,29 +330,39 @@ fn a_record_that_names_no_tool_has_no_kind_and_is_credited_by_its_command_only()
 const SHELL: &str = "execution.shell";
 
 const CUSTOM_RULES: &str = r#"
-version: 1
-description: synthetic
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: synthetic.by_name
+title: synthetic
+id: 563b9d31-64ab-4f9f-8d9a-a084c9a0126c
+name: synthetic.by_name
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.name|re|i: '^probe$'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 1
-    targets: [tool_name]
-    regex: '^probe$'
-    tags: []
-    explanation: synthetic
-  - id: synthetic.by_kind
+    explanation: 'synthetic'
+---
+title: synthetic
+id: 4bdba06f-0ef6-4205-8428-ae4cba9252a8
+name: synthetic.by_kind
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.kind|re|i: '^(delegate|web)$'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 1
-    targets: [tool_kind]
-    regex: '^(delegate|web)$'
-    tags: []
-    explanation: synthetic
-modifiers: []
+    explanation: 'synthetic'
 "#;
 
 /// A custom rule may select on either target, in a session scan and in an

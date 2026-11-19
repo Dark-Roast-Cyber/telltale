@@ -4,34 +4,36 @@ use telltale_core::{
 };
 
 const RULE: &str = r#"
-version: 1
-description: synthetic error contract
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: custom.error_contract
+title: synthetic
+id: 7f2d6606-179f-483e-836d-76cd06ce9b3b
+name: custom.error_contract
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.arguments|re: 'needle'
+    condition: selection
+level: low
+telltale:
     category: custom
-    severity: low
     score: 10
-    targets: [arguments]
-    regex: needle
+    explanation: 'synthetic'
     tags: [synthetic]
-    explanation: synthetic
-modifiers: []
 "#;
 
 fn synthetic_package(document: &str) -> String {
     format!(
-        "format: telltale-rule-package/v1\nid: custom.synthetic\nversion: 1.0.0\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: custom\ndocuments:\n  - {}\n",
-        document.trim().replace('\n', "\n    ")
+        "format: telltale-rule-package/v2\nid: custom.synthetic\ntitle: Synthetic\nversion: 1.0.0\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: custom\n---\n{}\n",
+        document.trim()
     )
 }
 
 #[test]
 fn accepted_detection_severities_have_shared_canonical_and_embedding_parity() {
     for severity in telltale_schema::event::VALID_DETECTION_SEVERITIES {
-        let document = RULE.replace("severity: low", &format!("severity: {severity}"));
+        let document = RULE.replace("level: low", &format!("level: {severity}"));
         let compiled = telltale_rules::load_rule_set_from_documents(&[&document], None)
             .expect("supported detection severity");
         let plan = telltale_detect::v2::compile_rule_v1(&compiled.compatibility_export())
@@ -54,7 +56,7 @@ fn accepted_detection_severities_have_shared_canonical_and_embedding_parity() {
 #[test]
 fn unsupported_detection_severities_fail_shared_compilation_for_documents_and_packages() {
     for severity in ["warning", "catastrophic"] {
-        let document = RULE.replace("severity: low", &format!("severity: {severity}"));
+        let document = RULE.replace("level: low", &format!("level: {severity}"));
         for builder in [
             Pipeline::builder()
                 .without_bundled_defaults()
@@ -65,12 +67,13 @@ fn unsupported_detection_severities_fail_shared_compilation_for_documents_and_pa
         ] {
             let error = builder.build().err().expect("unsupported severity");
             assert!(matches!(error, PipelineError::Compilation(_)));
-            assert_eq!(
-                error.source().unwrap().to_string(),
-                format!(
-                    "rule custom.error_contract uses unsupported severity '{severity}'; supported values: {}",
+            let message = error.source().unwrap().to_string();
+            assert!(
+                message.ends_with(&format!(
+                    "rule custom.error_contract uses unsupported level '{severity}'; supported values: {}",
                     telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
-                )
+                )),
+                "{message}"
             );
         }
     }
@@ -89,20 +92,20 @@ fn pipeline_error_characterization_builder_diagnostics() {
 
     for (document, expected) in [
         (
-            RULE.replace("version: 1", "version: 2"),
-            "unsupported rule set version 2; only version 1 is supported",
+            format!("version: 1\n{RULE}"),
+            "rule document 1: Rule v1 is no longer supported",
         ),
         (
-            RULE.replace("[arguments]", "[unknown]"),
-            "rule custom.error_contract uses unsupported target 'unknown'",
+            RULE.replace("tool.arguments|re", "tool.unknown|re"),
+            "rule document 1: rule 'custom.error_contract': search identifier `selection`: unknown field `tool.unknown`",
         ),
         (
-            RULE.replace("regex: needle", "regex: '['"),
-            "invalid regex for rule custom.error_contract:",
+            RULE.replace("'needle'", "'['"),
+            "rule document 1: rule 'custom.error_contract':",
         ),
         (
-            RULE.replace("severity: low", "severity: catastrophic"),
-            "rule custom.error_contract uses unsupported severity 'catastrophic'; supported values:",
+            RULE.replace("level: low", "level: catastrophic"),
+            "rule document 1: rule custom.error_contract uses unsupported level 'catastrophic'; supported values:",
         ),
     ] {
         let error = Pipeline::builder()
@@ -149,12 +152,18 @@ fn pipeline_error_characterization_builder_diagnostics() {
 fn pipeline_error_characterization_canonical_rejection_fails_build() {
     let error = Pipeline::builder()
         .without_bundled_defaults()
-        .rules_document(RULE.replace("score: 10", "score: 101"))
+        .rules_document(RULE.replace(
+            "    tags: [synthetic]",
+            "    tags: [synthetic]\n    detection_class: operational_health",
+        ))
         .build()
         .err()
-        .expect("canonical score rejection at build");
+        .expect("canonical detection class rejection at build");
     assert_eq!(error.to_string(), "pipeline_compilation_failed");
-    assert_eq!(error.source().unwrap().to_string(), "score_out_of_range");
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "unmappable_detection_class"
+    );
 }
 
 #[test]
@@ -194,7 +203,10 @@ fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
     }
     let error = Pipeline::builder()
         .without_bundled_defaults()
-        .rules_document(RULE.replace("score: 10", "score: 101"))
+        .rules_document(RULE.replace(
+            "    tags: [synthetic]",
+            "    tags: [synthetic]\n    detection_class: operational_health",
+        ))
         .build()
         .err()
         .unwrap();
@@ -203,7 +215,7 @@ fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
         error
             .source()
             .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-        Some(RuleV1CompileError::ScoreOutOfRange)
+        Some(RuleV1CompileError::UnmappableDetectionClass)
     ));
     assert!(pipeline.scan_sources(&[])?.is_empty());
     assert!(pipeline.scan_sources_with_occurrences(&[])?.is_empty());
