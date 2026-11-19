@@ -3,7 +3,7 @@
 //! parser.
 
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::source_read::{SourceReadError, collect_string_values, nested_string_field};
 use telltale_schema::record::RecordKind;
@@ -40,6 +40,7 @@ pub(crate) struct ClaudeNativeRecord {
     pub(crate) session_id: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
+    pub(crate) is_bookkeeping: bool,
     pub(crate) role: Option<String>,
     pub(crate) message_content: Option<Value>,
     pub(crate) blocks: Option<Vec<ClaudeContentBlock>>,
@@ -64,13 +65,13 @@ pub(crate) fn extract_claude_native_records_with_limits(
     let mut records = Vec::with_capacity(values.len());
 
     for (source_sequence, value) in values.into_iter().enumerate() {
-        if !value.is_object() {
+        let Some(envelope) = value.as_object() else {
             return Err(SourceReadError::SchemaDrift {
                 client: source.client,
                 source_id: source.source_id.clone(),
                 detail: "JSONL record envelope must be an object",
             });
-        }
+        };
 
         // Claude names a transcript by an outer `sessionId`. Current Claude Code
         // also writes an outer `session_id`, which can name a different session
@@ -123,6 +124,7 @@ pub(crate) fn extract_claude_native_records_with_limits(
             session_id,
             timestamp: nested_string_field(&value, "timestamp"),
             discriminator: discriminator.map(ToOwned::to_owned),
+            is_bookkeeping: is_claude_bookkeeping(envelope, discriminator),
             role: nested_string_field(&value, "role"),
             message_content: conversational
                 .then(|| claude_message_content(&value))
@@ -256,7 +258,19 @@ pub(crate) fn is_known_claude_discriminator(kind: &str) -> bool {
 /// Claude Code session bookkeeping records (titles, queue state, file
 /// snapshots, hook attachments). They are not conversation turns and carry no
 /// tool lifecycle, so projection skips them.
-pub(crate) fn is_claude_metadata_discriminator(kind: &str) -> bool {
+fn is_claude_bookkeeping(envelope: &Map<String, Value>, kind: Option<&str>) -> bool {
+    let Some(kind) = kind else { return false };
+    if kind == "tag" {
+        // The local Agent SDK writer persists only {type, tag, sessionId};
+        // a fallback role/payload discriminator or a different shape is not a tag entry.
+        return envelope.len() == 3
+            && envelope.get("type").and_then(Value::as_str) == Some("tag")
+            && envelope.get("tag").is_some_and(Value::is_string)
+            && envelope
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
+    }
     matches!(
         kind,
         "attachment"

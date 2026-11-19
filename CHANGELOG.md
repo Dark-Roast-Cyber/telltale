@@ -121,6 +121,10 @@
 
 ### Changes
 
+- Claude Code transcripts: count the local Agent SDK's session tag entries as
+  bookkeeping instead of quarantining them. Tag values are not projected;
+  unrecognized shapes still quarantine one record at a time.
+
 - **Unknown tools are counted, and each harness's tool list is checked against
   its table.** The scan summary's `source_processing` gains two optional
   counts, `unclassified_tool_calls` (tool requests whose name no source tool

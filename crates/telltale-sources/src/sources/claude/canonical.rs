@@ -15,10 +15,7 @@ use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory
 
 use crate::tool_operation::{ToolSpec, declare, table};
 
-use super::native::{
-    ClaudeContentBlock, ClaudeNativeRecord, is_claude_metadata_discriminator,
-    is_known_claude_discriminator,
-};
+use super::native::{ClaudeContentBlock, ClaudeNativeRecord, is_known_claude_discriminator};
 
 #[derive(Clone)]
 pub(crate) struct ClaudeCanonicalOptions {
@@ -192,16 +189,18 @@ fn project_record(
     options: &ClaudeCanonicalOptions,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
-    if let Some(kind) = record.discriminator.as_deref() {
-        if is_claude_metadata_discriminator(kind) {
-            return Ok(());
-        }
-        if !is_known_claude_discriminator(kind) {
-            return Err(mapping(
-                "unknown_discriminator",
-                "explicit Claude record discriminator is not supported",
-            ));
-        }
+    if record.is_bookkeeping {
+        return Ok(());
+    }
+    if record
+        .discriminator
+        .as_deref()
+        .is_some_and(|kind| !is_known_claude_discriminator(kind))
+    {
+        return Err(mapping(
+            "unknown_discriminator",
+            "explicit Claude record discriminator is not supported",
+        ));
     }
 
     let role = canonical_role(record)?;
