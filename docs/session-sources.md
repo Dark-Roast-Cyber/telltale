@@ -376,12 +376,13 @@ Claude Code adapter notes:
   `cost-state`, `api-request`, `api-request-blob`, `api-request-shape`, `pr-link`,
   `artifact-autoreact-ledger`, `artifact-comment-monitor`, `continued-in`) are
   counted as other native records but not projected as conversation or tool
-  activity. The local Agent SDK's `{type: "tag", tag, sessionId}` entries,
-  including a cleared tag, are also bookkeeping. Other `tag` shapes stay
-  quarantined. API request replays are opaque bookkeeping, not another execution
-  of any tool calls they contain. Their nested text and tools contribute no
-  activity facts. This is not inference-traffic normalization or a claim of
-  full support for unpublished request schemas.
+  activity. The local Agent SDK's exact `{type: "tag", tag, sessionId}`
+  entries are also bookkeeping: `tag` is a string up to 4,096 UTF-8 bytes
+  (empty when cleared), and `sessionId` is a non-empty string. Other shapes
+  and larger tags stay quarantined. API request replays are opaque bookkeeping,
+  not another execution of any tool calls they contain. Their nested text and
+  tools contribute no activity facts. This is not inference-traffic
+  normalization or a claim of full support for unpublished request schemas.
 - `thinking`, `redacted_thinking`, `image`, and `document` blocks are dropped
   from messages; reasoning text is not retained.
 - A message's `tool_use`/`tool_result` part keeps only its call id, name and
