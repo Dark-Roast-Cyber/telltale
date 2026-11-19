@@ -350,13 +350,13 @@ fn session_tag_bookkeeping_counts_cleared_tag_as_other() {
 }
 
 #[test]
-fn bridge_and_tools_used_bookkeeping_count_as_other() {
+fn current_bookkeeping_records_count_as_other() {
     let directory = tempfile::tempdir().unwrap();
     let source = Source {
         client: ClientId::Claude,
         kind: SourceKind::Jsonl,
         source_id: "claude.projects".into(),
-        path: directory.path().join("synthetic-bridge-tools.jsonl"),
+        path: directory.path().join("synthetic-bookkeeping.jsonl"),
     };
     std::fs::write(
         &source.path,
@@ -364,6 +364,8 @@ fn bridge_and_tools_used_bookkeeping_count_as_other() {
 {"type":"bridge-session","sessionId":"synthetic","bridgeSessionId":"bridge-synthetic","lastSequenceNum":7,"ownerAccountUuid":"account-synthetic","ownerOrganizationUuid":"org-synthetic"}
 {"type":"tools-used","sessionId":"synthetic","tools":["Bash","Read"]}
 {"type":"tools-used","sessionId":"synthetic","tools":[]}
+{"type":"session-owner","sessionId":"synthetic","accountUuid":"account-synthetic","organizationUuid":"org-synthetic"}
+{"type":"agent-setting","sessionId":"synthetic","agentSetting":"agent-synthetic"}
 "#,
     )
     .unwrap();
@@ -375,18 +377,18 @@ fn bridge_and_tools_used_bookkeeping_count_as_other() {
     );
     assert_eq!(batch.observations.len(), 1);
     let counts = &batch.accounting.sessions[0].counts;
-    assert_eq!(counts.native_units, 4);
-    assert_eq!(counts.record_counts.other, 3);
+    assert_eq!(counts.native_units, 6);
+    assert_eq!(counts.record_counts.other, 5);
 }
 
 #[test]
-fn bridge_and_tools_used_bookkeeping_require_their_native_envelopes() {
+fn current_bookkeeping_records_require_their_native_envelopes() {
     let directory = tempfile::tempdir().unwrap();
     let source = Source {
         client: ClientId::Claude,
         kind: SourceKind::Jsonl,
         source_id: "claude.projects".into(),
-        path: directory.path().join("synthetic-bridge-tools-shapes.jsonl"),
+        path: directory.path().join("synthetic-bookkeeping-shapes.jsonl"),
     };
     let bridge = json!({"type":"bridge-session","sessionId":"synthetic",
         "bridgeSessionId":"bridge","lastSequenceNum":1,
@@ -406,6 +408,11 @@ fn bridge_and_tools_used_bookkeeping_require_their_native_envelopes() {
         .remove("ownerAccountUuid");
     let tools = |value: Value| json!({"type":"tools-used","sessionId":"synthetic","tools":value});
     let at_limit = "a".repeat(4096);
+    let owner = |account: Value, organization: Value| {
+        json!({"type":"session-owner","sessionId":"synthetic",
+            "accountUuid":account,"organizationUuid":organization})
+    };
+    let agent = |setting: Value| json!({"type":"agent-setting","sessionId":"synthetic","agentSetting":setting});
     let lines = [
         json!({"type":"user","sessionId":"synthetic","content":"valid turn"}),
         extra_bridge,                       // 1: unknown key carrying a tool call
@@ -420,6 +427,15 @@ fn bridge_and_tools_used_bookkeeping_require_their_native_envelopes() {
         tools(json!(vec!["Bash"; 65])),     // 10
         tools(json!(vec!["Bash"; 64])),     // 11: at the bound, accepted
         json!({"type":"tools-used","sessionId":"synthetic","tools":[],"extra":true}), // 12
+        owner(json!(""), json!("org")),     // 13
+        owner(json!("account"), Value::Null), // 14
+        owner(json!("account"), json!(format!("{at_limit}x"))), // 15
+        owner(json!("account"), json!(at_limit)), // 16: at the bound, accepted
+        json!({"type":"session-owner","sessionId":"synthetic","accountUuid":"account"}), // 17
+        agent(json!("")),                   // 18
+        agent(json!(7)),                    // 19
+        json!({"type":"agent-setting","sessionId":"synthetic","agentSetting":"a","extra":1}), // 20
+        json!({"type":"agent-setting","agentSetting":"agent"}), // 21
     ];
     let text = lines
         .iter()
@@ -444,6 +460,14 @@ fn bridge_and_tools_used_bookkeeping_require_their_native_envelopes() {
             (9, "unknown_discriminator"),
             (10, "unknown_discriminator"),
             (12, "unknown_discriminator"),
+            (13, "unknown_discriminator"),
+            (14, "unknown_discriminator"),
+            (15, "unknown_discriminator"),
+            (17, "unknown_discriminator"),
+            (18, "unknown_discriminator"),
+            (19, "unknown_discriminator"),
+            (20, "unknown_discriminator"),
+            (21, "unknown_discriminator"),
         ],
     );
     assert_eq!(batch.observations.len(), 1);

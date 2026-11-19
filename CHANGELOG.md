@@ -202,6 +202,12 @@
   Claude Code sessions with partial coverage and a `canonical_units_quarantined`
   scanner error on most scans.
 
+- Claude Code transcripts: count exact `session-owner` and `agent-setting`
+  envelopes as bookkeeping too. Current Claude Code writes both, and scans
+  quarantined them. Their account, organization and setting values are not
+  projected. The Claude Code format cases move to the 2.1.327 pin, which cites
+  the Agent SDK definition of `tools-used`.
+
 - Claude Code transcripts: a tool result that Claude Code moved to
   `<session>/tool-results/` is read from that file instead of evaluating only
   the transcript's ~2 KB preview, so content past the preview (for example an
