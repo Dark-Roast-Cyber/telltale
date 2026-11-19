@@ -4,48 +4,74 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    MatchScope, RuleV1CompatibilityExport, RuleV1CompatibilityMatcher, RuleV1CompatibilityModifier,
-    RuleV1CompatibilityRule,
+    DefinitionMetadata, MatchScope, RuleV1CompatibilityExport, RuleV1CompatibilityMatcher,
+    RuleV1CompatibilityModifier, RuleV1CompatibilityRule,
 };
 
 pub const RULE_V1_FINGERPRINT_DOMAIN: &[u8] = b"telltale:producer-rule-v1-fingerprint:v2\0";
 
 /// Fingerprint the already compiled compatibility export, never source YAML.
 pub fn rule_v1_fingerprint(export: &RuleV1CompatibilityExport) -> String {
-    let canonical = canonical_export(export);
+    hash_canonical(&CanonicalRuleExport {
+        rules: export.rules.iter().map(canonical_rule).collect(),
+        modifiers: export.modifiers.iter().map(canonical_modifier).collect(),
+    })
+}
+
+fn hash_canonical(payload: &CanonicalRuleExport<'_>) -> String {
+    let canonical = serde_json::to_vec(payload).expect("rule provenance payload is serializable");
     let mut hasher = Sha256::new();
     hasher.update(RULE_V1_FINGERPRINT_DOMAIN);
     hasher.update(canonical);
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
-fn canonical_export(export: &RuleV1CompatibilityExport) -> Vec<u8> {
-    let payload = CanonicalRuleExport {
-        rules: export.rules.iter().map(canonical_rule).collect(),
-        modifiers: export.modifiers.iter().map(canonical_modifier).collect(),
-    };
-    serde_json::to_vec(&payload).expect("rule provenance payload is serializable")
+impl RuleV1CompatibilityRule {
+    /// The rule's matchers in fingerprint order: sorted by target, pattern,
+    /// exclusion and scope, duplicates removed. Two rules whose lists are equal
+    /// match the same text; their declared order only decides which matcher
+    /// reports a field's evidence span.
+    pub fn canonical_matchers(&self) -> Vec<&RuleV1CompatibilityMatcher> {
+        fn key(
+            matcher: &RuleV1CompatibilityMatcher,
+        ) -> (&str, &str, Option<&str>, Option<&'static str>) {
+            (
+                matcher.target.as_str(),
+                matcher.regex.as_str(),
+                matcher.exclusion_regex.as_deref(),
+                canonical_scope(matcher.scope),
+            )
+        }
+        let mut matchers = self.matchers.iter().collect::<Vec<_>>();
+        matchers.sort_by(|left, right| key(left).cmp(&key(right)));
+        matchers.dedup_by(|left, right| key(left) == key(right));
+        matchers
+    }
+}
+
+/// Fingerprint the one-rule export of `rule`: its behaviour revision, which
+/// rule order elsewhere in a set does not change.
+pub fn rule_v1_rule_fingerprint(rule: &RuleV1CompatibilityRule) -> String {
+    hash_canonical(&CanonicalRuleExport {
+        rules: vec![canonical_rule(rule)],
+        modifiers: Vec::new(),
+    })
+}
+
+/// Fingerprint the one-modifier export of `modifier`.
+pub fn rule_v1_modifier_fingerprint(modifier: &RuleV1CompatibilityModifier) -> String {
+    hash_canonical(&CanonicalRuleExport {
+        rules: Vec::new(),
+        modifiers: vec![canonical_modifier(modifier)],
+    })
 }
 
 fn canonical_rule(rule: &RuleV1CompatibilityRule) -> CanonicalRule<'_> {
-    let mut matchers = rule
-        .matchers
-        .iter()
+    let matchers = rule
+        .canonical_matchers()
+        .into_iter()
         .map(canonical_matcher)
         .collect::<Vec<_>>();
-    matchers.sort_by(|left, right| {
-        left.target
-            .cmp(right.target)
-            .then_with(|| left.regex.cmp(right.regex))
-            .then_with(|| left.exclusion_regex.cmp(&right.exclusion_regex))
-            .then_with(|| left.scope.cmp(&right.scope))
-    });
-    matchers.dedup_by(|left, right| {
-        left.target == right.target
-            && left.regex == right.regex
-            && left.exclusion_regex == right.exclusion_regex
-            && left.scope == right.scope
-    });
     CanonicalRule {
         id: &rule.id,
         category: &rule.category,
@@ -66,8 +92,14 @@ fn canonical_matcher(matcher: &RuleV1CompatibilityMatcher) -> CanonicalMatcher<'
         target: &matcher.target,
         regex: &matcher.regex,
         exclusion_regex: matcher.exclusion_regex.as_deref(),
-        scope: (matcher.scope != MatchScope::Field).then(|| matcher.scope.as_str()),
+        scope: canonical_scope(matcher.scope),
     }
+}
+
+// Absent for the default field scope, so field-scoped rules keep their
+// fingerprints; this is also the scope's sort key.
+fn canonical_scope(scope: MatchScope) -> Option<&'static str> {
+    (scope != MatchScope::Field).then(|| scope.as_str())
 }
 
 fn canonical_modifier(modifier: &RuleV1CompatibilityModifier) -> CanonicalModifier<'_> {
@@ -149,6 +181,68 @@ struct CanonicalLink {
     calls: u32,
     order: &'static str,
     minutes: Option<u32>,
+}
+
+/// Domain of [`metadata_revision`].
+pub const RULE_METADATA_REVISION_DOMAIN: &[u8] = b"telltale:rule-metadata-revision:v1\0";
+
+/// The metadata revision of one definition: SHA-256, domain-separated, over
+/// canonical JSON of the descriptive metadata the behaviour fingerprint leaves
+/// out. Tags are a set (sorted, duplicates removed) without the `atlas.*`
+/// tags, which compile into the fingerprinted ATLAS tags; lists that are read
+/// in order (references, related rules, false positives) keep it.
+pub fn metadata_revision(metadata: &DefinitionMetadata) -> String {
+    let tags = metadata
+        .tags
+        .iter()
+        .filter(|tag| !tag.starts_with("atlas."))
+        .cloned()
+        .collect::<Vec<_>>();
+    let payload = CanonicalMetadata {
+        title: metadata.title.as_deref(),
+        status: metadata.status.as_deref(),
+        description: metadata.description.as_deref(),
+        references: metadata.references.iter().map(String::as_str).collect(),
+        author: metadata.author.as_deref(),
+        license: metadata.license.as_deref(),
+        date: metadata.date.as_deref(),
+        modified: metadata.modified.as_deref(),
+        related: metadata
+            .related
+            .iter()
+            .map(|related| (related.id.as_str(), related.kind.as_str()))
+            .collect(),
+        logsource: metadata.logsource.as_ref().map(|logsource| {
+            (
+                logsource.product.as_str(),
+                logsource.category.as_str(),
+                logsource.service.as_deref(),
+            )
+        }),
+        tags: sorted_unique(&tags),
+        falsepositives: metadata.falsepositives.iter().map(String::as_str).collect(),
+    };
+    let canonical = serde_json::to_vec(&payload).expect("rule metadata payload is serializable");
+    let mut hasher = Sha256::new();
+    hasher.update(RULE_METADATA_REVISION_DOMAIN);
+    hasher.update(canonical);
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+#[derive(Serialize)]
+struct CanonicalMetadata<'a> {
+    title: Option<&'a str>,
+    status: Option<&'a str>,
+    description: Option<&'a str>,
+    references: Vec<&'a str>,
+    author: Option<&'a str>,
+    license: Option<&'a str>,
+    date: Option<&'a str>,
+    modified: Option<&'a str>,
+    related: Vec<(&'a str, &'a str)>,
+    logsource: Option<(&'a str, &'a str, Option<&'a str>)>,
+    tags: Vec<&'a str>,
+    falsepositives: Vec<&'a str>,
 }
 
 #[cfg(test)]

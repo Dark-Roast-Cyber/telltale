@@ -1,0 +1,502 @@
+version: 1
+description: Seed static rules for agentic coding tool-call monitoring.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: secret.env.read
+    category: secret_access
+    atlas_tags:
+      - atlas:AML.T0055
+    severity: medium
+    score: 35
+    detection:
+      selection:
+        command: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+        arguments: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+        file_path: '(^|[\/\\])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))'
+        assistant_context: '(?s:((read_file|readfile|view_file).*([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:])).*(read_file|readfile|view_file)))'
+        tool_result: '(?s:((read_file|readfile|view_file).*([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:])).*(read_file|readfile|view_file)))'
+      exclude:
+        assistant_context: '(?s:((do not|don''t|should not|must not|never|refuse to)\s+(use\s+(read_file|readfile|view_file)\s+to\s+)?read\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|(read_file|readfile|view_file).*(\.env|\.bash_secrets|\.zsh_secrets).*(forbidden|disallowed|prohibited)( behavior)?))'
+        tool_result: '(?s:((do not|don''t|should not|must not|never|refuse to)\s+(use\s+(read_file|readfile|view_file)\s+to\s+)?read\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|(read_file|readfile|view_file).*(\.env|\.bash_secrets|\.zsh_secrets).*(forbidden|disallowed|prohibited)( behavior)?))'
+      condition: selection
+    tags: [credentials, env, file-read]
+    explanation: Access to .env files can expose API keys and secrets.
+    falsepositives:
+      - Legitimate debugging or deployment work may inspect local env-style files when explicitly requested by the user.
+
+  - id: secret.private_key.read
+    category: secret_access
+    atlas_tags:
+      - atlas:AML.T0055
+    severity: high
+    score: 55
+    targets: [command, arguments, file_path, tool_result]
+    regex: '((?:id_rsa|id_ed25519)(?:$|[^.]|\.(?:$|[^p]|p(?:$|[^u]|u(?:$|[^b]))))|\.pem|\.p12|BEGIN\s+(?:RSA|OPENSSH|EC|DSA)?\s*PRIVATE\s+KEY)'
+    tags: [credentials, private-key]
+    explanation: Private key access is high risk and should match explicit user intent.
+    falsepositives:
+      - Certificate inventory, key-format documentation, or authorized SSH troubleshooting can mention private-key filenames without malicious intent.
+
+  - id: credential.api_key.pattern
+    category: credential_pattern
+    detection_class: threat_hunting
+    signal_type: atomic
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0057
+    severity: medium
+    score: 30
+    targets: [command, arguments, tool_result, assistant_context]
+    regex: '((?:^|[^A-Za-z0-9_\-])(?-i:sk-)[A-Za-z0-9_\-]{16,}|(?:^|[^A-Za-z0-9_\-])(?-i:gh[pousr]_)[A-Za-z0-9_]{20,}|(?:^|[^A-Za-z0-9_\-])(?-i:xox[baprs]-)[A-Za-z0-9\-]{20,}|(?:^|[^A-Za-z0-9_\-])(?-i:AKIA)[0-9A-Z]{16}|(?:^|[^A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|(?:^|[^A-Za-z0-9_\-])Bearer\s+[A-Za-z0-9._~+\/=\-]{20,})'
+    tags: [credentials, token-pattern]
+    explanation: Credential-like token appeared in tool context.
+    falsepositives:
+      - Synthetic examples, redacted fixtures, or documentation may contain token-shaped strings that are not usable credentials.
+
+  - id: execution.shell
+    category: execution
+    atlas_tags:
+      - atlas:AML.T0050
+    severity: low
+    score: 15
+    detection:
+      selection:
+        tool_kind: '^shell$'
+        command: '(^|\b)(bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)\b|python\s+-c|node\s+-e|perl\s+-e|ruby\s+-e'
+        arguments: '(^|\b)(bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)\b|python\s+-c|node\s+-e|perl\s+-e|ruby\s+-e'
+      condition: selection
+    tags: [execution]
+    explanation: Shell or interpreter activity was recorded.
+    falsepositives:
+      - Normal development tasks frequently use shells or one-line interpreters; chain with other risky behavior before escalating.
+
+  - id: execution.encoded_payload
+    category: execution
+    atlas_tags:
+      - atlas:AML.T0050
+    severity: high
+    score: 50
+    targets: [command, arguments]
+    regex: '(base64\s+(-d|--decode)|openssl\s+enc|certutil\s+-decode|FromBase64String|xxd\s+-r|echo\s+[A-Za-z0-9+/]{80,}={0,2}\s*\|)'
+    tags: [execution, obfuscation]
+    explanation: Encoded payload decoding before execution is often malicious.
+    falsepositives:
+      - Build scripts, test fixtures, or incident-response decoding tasks may legitimately handle encoded blobs.
+
+  - id: network.download
+    category: download
+    severity: low
+    score: 20
+    detection:
+      selection:
+        command: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+        arguments: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+        url: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+      exclude:
+        command: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+        arguments: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+        url: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+      scope: segment
+      condition: selection
+    tags: [network, download]
+    explanation: HTTP or FTP retrieval by a download client, not an outbound upload or a literal loopback-only URL.
+    falsepositives:
+      - Installing tools, fetching release artifacts, or following documented setup steps can require expected downloads.
+      - Outbound POST, PUT, form, or --data transfers are scored by exfil.outbound_upload rather than this rule.
+      - Literal loopback-only URLs are excluded unless the same command segment also has a non-loopback URL, or a URL together with a proxy or reroute flag.
+
+  - id: install.package_manager
+    category: install
+    severity: low
+    score: 20
+    targets: [command, arguments]
+    regex: '(^|\b)(npm|pnpm|yarn|bun|pip|pipx|uv|cargo|go|brew|apt|apt-get|dnf|yum)\b\s+(install|add|i|get|run|create|x)'
+    tags: [install, supply-chain]
+    explanation: Package install or package-manager execution.
+    falsepositives:
+      - Dependency installation is common during setup and repair; review package source and surrounding commands for risk.
+
+  - id: exfil.outbound_upload
+    category: exfiltration
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0025
+    severity: high
+    score: 60
+    detection:
+      selection:
+        command: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+        arguments: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+        url: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+      exclude:
+        command: '^[ \t]*(?:(?:export[ \t]+)?\w+=["\x27]?(?:\$\(|`)[ \t]*)?(?:curl(?:(?:[ \t]|\\\r?\n)+(?:(?-i:-[sSfv]*X)[ \t]*["\x27]?PUT["\x27]?|--request[ \t=]+["\x27]?PUT["\x27]?|(?-i:-[sSfv]+)|--(?:silent|show-error|fail|no-progress-meter)|(?-i:-m)[ \t]*\d+|--(?:max-time|connect-timeout|retry)[ \t=]+\d+|(?-i:-H)[ \t]*["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+|wget(?:(?:[ \t]|\\\r?\n)+(?:--method[ \t=]+["\x27]?PUT["\x27]?|(?-i:-q)|(?-i:-q?O)[ \t]*-|--quiet|--(?:timeout|tries)[ \t=]+\d+|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+)[ \t]*(?:(?:\)|`)["\x27]?)?[ \t]*$'
+        arguments: '^[ \t]*(?:(?:export[ \t]+)?\w+=["\x27]?(?:\$\(|`)[ \t]*)?(?:curl(?:(?:[ \t]|\\\r?\n)+(?:(?-i:-[sSfv]*X)[ \t]*["\x27]?PUT["\x27]?|--request[ \t=]+["\x27]?PUT["\x27]?|(?-i:-[sSfv]+)|--(?:silent|show-error|fail|no-progress-meter)|(?-i:-m)[ \t]*\d+|--(?:max-time|connect-timeout|retry)[ \t=]+\d+|(?-i:-H)[ \t]*["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+|wget(?:(?:[ \t]|\\\r?\n)+(?:--method[ \t=]+["\x27]?PUT["\x27]?|(?-i:-q)|(?-i:-q?O)[ \t]*-|--quiet|--(?:timeout|tries)[ \t=]+\d+|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+)[ \t]*(?:(?:\)|`)["\x27]?)?[ \t]*$'
+        url: '^[ \t]*(?:(?:export[ \t]+)?\w+=["\x27]?(?:\$\(|`)[ \t]*)?(?:curl(?:(?:[ \t]|\\\r?\n)+(?:(?-i:-[sSfv]*X)[ \t]*["\x27]?PUT["\x27]?|--request[ \t=]+["\x27]?PUT["\x27]?|(?-i:-[sSfv]+)|--(?:silent|show-error|fail|no-progress-meter)|(?-i:-m)[ \t]*\d+|--(?:max-time|connect-timeout|retry)[ \t=]+\d+|(?-i:-H)[ \t]*["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+|wget(?:(?:[ \t]|\\\r?\n)+(?:--method[ \t=]+["\x27]?PUT["\x27]?|(?-i:-q)|(?-i:-q?O)[ \t]*-|--quiet|--(?:timeout|tries)[ \t=]+\d+|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+)[ \t]*(?:(?:\)|`)["\x27]?)?[ \t]*$'
+      scope: exclusion_segment
+      condition: selection
+    tags: [network, exfiltration]
+    explanation: Outbound upload or object-storage copy in a tool call, not a bodyless IMDSv2 token request.
+    falsepositives:
+      - Authorized uploads of build artifacts, logs, or release assets may match when the destination is expected.
+      - A bodyless PUT to the literal IMDSv2 token endpoint is excluded only when every other token in the command segment is a listed harmless flag. Other metadata paths, a body, an extra header or another destination still match.
+
+  - id: persistence.shell_profile
+    category: persistence
+    severity: high
+    score: 45
+    detection:
+      selection:
+        command: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*)[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
+        arguments: '((?:>\s*["'']?|\btee\b[^;&|\n]*\s["'']?|\b(?:sed|perl)\b[^;&|\n]*\s(?:-[a-z]*i|--in-place)[^;&|\n]*\s["'']?|\*\*\*\s+(?:(?:add|update)\s+file|move\s+to):\s*)[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)(?:$|[\s"'';&|)])|\b(?:cp|mv|ln|install|rsync)\b[^;&|\n]*\s["'']?[^\s;&|<>"'']*(?:\.bash(?:rc|_profile|_login)|\.z(?:shrc|profile|shenv|login)|\.profile|config/fish/config\.fish)["'']?\s*(?:$|[;&|)\n])|\bcrontab\b(?:\s+-u\s+\S+)?\s+(?:-e\b|-(?:$|[\s;&|)])|[^\s;&|)-])|\bsystemctl\s+(?:-\S+\s+)*enable\b|\blaunchctl\s+(?:load|bootstrap)\b)'
+        written_path: '(?m)(?:(?:^|[\/\\])(?:\.bashrc|\.bash_profile|\.bash_login|\.profile|\.zshrc|\.zprofile|\.zshenv|\.zlogin)|config/fish/config\.fish)$'
+      condition: selection
+    tags: [persistence]
+    explanation: A shell startup file, crontab or login service was written or enabled.
+    falsepositives:
+      - Shell profile edits and service enablement can be legitimate environment setup when user-approved.
+      - Shell commands and native file tools that only read a startup file do not match.
+
+  - id: persistence.agent_instruction_write
+    title: Agent instruction or skill entrypoint written
+    category: persistence
+    detection_class: threat_hunting
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0081
+    severity: medium
+    score: 40
+    targets: [written_path]
+    regex: '(?:^|[\/\\])(?:AGENTS\.md|CLAUDE\.md)$|(?:^|[\/\\])(?:\.agents|\.claude)[\/\\]skills[\/\\][^\/\\]+[\/\\]SKILL\.md$'
+    tags: [agent-instructions, skill, persistence, file-write]
+    explanation: A native file tool wrote an agent instruction or skill entrypoint; review the change and user request for persistent behavioral redirection.
+    falsepositives:
+      - Authorized project maintenance often edits agent instructions or skills; a write alone does not establish poisoning.
+      - Shell writes are outside this native file-tool rule and require separate command evidence.
+
+  - id: approval.bypass.context
+    category: approval_bypass
+    detection_class: policy_violation
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: high
+    score: 45
+    detection:
+      selection:
+        assistant_context: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+        command: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+        arguments: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+        tool_result: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+      exclude:
+        assistant_context: '(?s:\s*((for documentation|documentation review|review notes).*((without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm).*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*(without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm))(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+|metadata|exit_code|duration_seconds|\d+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass\s+approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass\s+approval\s*|cost data .*examples in the policy mention bypass\s+approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+        command: '(?s:\s*((for documentation|documentation review|review notes).*((without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm).*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*(without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm))(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+|metadata|exit_code|duration_seconds|\d+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass\s+approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass\s+approval\s*|cost data .*examples in the policy mention bypass\s+approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+        arguments: '(?s:\s*((for documentation|documentation review|review notes).*((without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm).*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*(without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm))(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+|metadata|exit_code|duration_seconds|\d+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass\s+approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass\s+approval\s*|cost data .*examples in the policy mention bypass\s+approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+        tool_result: '(?s:\s*((for documentation|documentation review|review notes).*((without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm).*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*(without\s+(asking|approval|confirmation|telling)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm))(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+|metadata|exit_code|duration_seconds|\d+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass\s+approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass\s+approval\s*|cost data .*examples in the policy mention bypass\s+approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+      condition: selection
+    tags: [approval, intent]
+    explanation: Context suggests bypassing human approval or hiding execution.
+    falsepositives:
+      - Quoted policy text, copied transcripts, or discussions about unsafe behavior may contain bypass language without agent intent.
+
+  - id: tool.injection.shape
+    category: tool_injection
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: high
+    score: 55
+    targets: [assistant_context, tool_name, arguments]
+    regex: '(<tool_call>|</tool_call>|"tool_calls"\s*:|\bfunction_call\b|recipient_name\s*:|namespace\s*:|arguments\s*:\s*\{)'
+    tags: [tool-injection, model-output]
+    explanation: Tool-call-shaped content may indicate injected or spoofed tool execution.
+    falsepositives:
+      - Parser tests, docs, or copied logs may include serialized tool-call examples that were not executed.
+
+  - id: mcp.tool_metadata.prompt_injection
+    category: mcp_prompt_injection
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: high
+    score: 60
+    targets: [assistant_context, arguments, tool_result]
+    regex: '((\bmcp\b|tools/list|tool\s+description|parameter\s+description|server\s+instructions?|tool\s+result).{0,240}(ignore\s+(all\s+)?previous\s+instructions?|hidden\s+instruction|without\s+(asking|approval|confirmation)|do\s+not\s+tell|silently\s+(run|execute|call)|bypass\s+approval|call\s+(the\s+)?tool))|((ignore\s+(all\s+)?previous\s+instructions?|hidden\s+instruction|without\s+(asking|approval|confirmation)|do\s+not\s+tell|silently\s+(run|execute|call)|bypass\s+approval|call\s+(the\s+)?tool).{0,240}(\bmcp\b|tools/list|tool\s+description|parameter\s+description|server\s+instructions?|tool\s+result))'
+    tags: [mcp, prompt-injection, tool-poisoning]
+    explanation: MCP tool metadata or output appears to contain prompt-injection instructions.
+    falsepositives:
+      - Security tests and documentation may intentionally embed MCP prompt-injection phrases in synthetic metadata.
+
+  - id: prompt_injection.instruction_override
+    category: instruction_override
+    detection_class: threat_hunting
+    signal_type: atomic
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: low
+    score: 0
+    detection:
+      selection:
+        assistant_context: '\b(ignore|disregard)\s+(all\s+)?(previous|prior)\s+instructions?'
+      exclude:
+        assistant_context: '(?s:\s*((for documentation|in the documentation review|documentation review|review notes|test vector).*((ignore|disregard)\s+(all\s+)?(previous|prior)\s+instructions?.*(quoted example|should not be treated as an instruction|review notes|test vector)|(quoted example|should not be treated as an instruction|review notes|test vector).*(ignore|disregard)\s+(all\s+)?(previous|prior)\s+instructions?)(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+      condition: selection
+    tags: [prompt-injection, instruction-override]
+    explanation: Assistant output contains a generic instruction-override phrase. It carries no points by itself and corroborates other behavior through chain modifiers.
+    falsepositives:
+      - Prompt-injection discussions, triage notes, and security documentation quote override phrases without acting on them.
+
+  - id: prompt_injection.tool_result_egress_directive
+    title: Tool result directs secret upload after instruction override
+    category: instruction_override
+    detection_class: threat_hunting
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: informational
+    score: 0
+    detection:
+      selection:
+        tool_result: '(?s:(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior)\s+instructions?.{0,240}\b(?:upload|send|post|transfer)\b.{0,160}\b(?:secrets?|credentials?|tokens?|api[_ -]?keys?)\b)'
+      exclude:
+        tool_result: '(?s:(?:for documentation review|security test vector|quoted example).{0,400}(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior)\s+instructions?.{0,240}(?:should not be treated as an instruction|quoted example))'
+      condition: selection
+    tags: [prompt-injection, tool-result, exfiltration-intent]
+    explanation: A tool result contains an instruction override directing secret transfer; this zero-point hunt corroborates a later observed upload.
+    falsepositives:
+      - Documentation and security tests may quote attack instructions; a directive alone does not prove the agent followed it.
+
+  - id: network.controlled_test_domain.darkroast
+    category: exfiltration
+    atlas_tags:
+      - atlas:AML.T0025
+    severity: high
+    score: 45
+    targets: [command, arguments, url, assistant_context, tool_result]
+    regex: 'https?://([A-Za-z0-9_-]+\.)?darkroastcyber\.io(/[^\s"'']*)?'
+    tags: [network, controlled-domain, test-fixture]
+    explanation: Controlled tester domain appeared in network or injection context.
+    falsepositives:
+      - Telltale fixtures, documentation, and operator validation commands may intentionally reference the controlled test domain.
+
+  - id: exfil.dns_encoding
+    category: exfiltration
+    atlas_tags:
+      - atlas:AML.T0025
+    severity: high
+    score: 55
+    targets: [command, arguments]
+    regex: '(\b(?:base64|base32|basenc|xxd|od|hexdump)\b[^;&\n]*\|\s*(?:xargs\s+(?:-\S+\s+)*)?(?:nslookup|dig|host|drill)\b|\b(?:nslookup|dig|host|drill)\s+[^;&|\n]*\$\([^)]*\b(?:base64|base32|basenc|xxd|od|hexdump)\b|echo\s+[A-Za-z0-9+/]{40,}={0,2}\s*\|\s*(nslookup|dig|host)\b|nslookup\s+[A-Za-z0-9+/]{20,}|dig\s+[A-Za-z0-9+/]{20,}|host\s+[A-Za-z0-9+/]{20,})'
+    tags: [exfiltration, dns, encoding, obfuscation]
+    explanation: Encoded data was sent toward a DNS lookup, a common exfiltration channel.
+    falsepositives:
+      - DNS troubleshooting or demonstrations may include encoded labels, but secret-adjacent context should raise priority.
+      - Encoding alone, without a DNS lookup in the same command, does not match.
+
+  - id: exfil.encoded_http
+    category: exfiltration
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0025
+    severity: high
+    score: 50
+    targets: [command, arguments]
+    regex: '(curl|wget|fetch|Invoke-WebRequest)\s+.*([A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]{39,}|[A-Za-z0-9+/]{40,}[+/=][A-Za-z0-9+/=]*).*https?://|(curl|wget|fetch|Invoke-WebRequest)\s+.*https?://.*(?:--data|--data-binary|--data-raw|[\s]-d(?:[\s=@A-Za-z0-9])).*(?:[A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]{39,}|[A-Za-z0-9+/]{40,}[+/=][A-Za-z0-9+/=]*)|(curl|wget|fetch)\s+.*https?://[A-Za-z0-9+/]{20,}\.[a-z]{2,}'
+    tags: [exfiltration, encoding, network]
+    explanation: Encoded hostname or base64 request material sent through an HTTP client.
+    falsepositives:
+      - Tests or API calls may send encoded payloads over HTTP when the destination and data are expected.
+      - Long unencoded tokens, IDs, or test vectors without base64 special characters are not encoded HTTP.
+
+  - id: credential.cloud_harvest
+    category: credential_harvesting
+    atlas_tags:
+      - atlas:AML.T0055
+    severity: high
+    score: 50
+    detection:
+      selection:
+        command: '(?:(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base64|base32|basenc|grep|egrep|fgrep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|ncat|socat|dd|tee|vim?|nano|type|get-content|gc|copy-item|compress-archive|invoke-webrequest|invoke-restmethod)(?:\.exe)?\s[^;&|\n]*?|(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?|[<@]\s*["'']?[^\s;&|<>"'']*?)(?:\.aws[\/\\](?:credentials|config)|\.gcloud[\/\\]credentials\.json|\.kube[\/\\]config|\.docker[\/\\]config\.json|credentials\.json|service-account\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)'
+        arguments: '(?:(?:(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base64|base32|basenc|grep|egrep|fgrep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|ncat|socat|dd|tee|vim?|nano|type|get-content|gc|copy-item|compress-archive|invoke-webrequest|invoke-restmethod)(?:\.exe)?\s[^;&|\n]*?|(?:^|[\s;&|(`''"])(?:\S*[\/\\])?(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?|[<@]\s*["'']?[^\s;&|<>"'']*?)|"(?:file_?path|filePath|path|absolute_path|target_file|file|filename)"\s*:\s*"[^"]*?)(?:\.aws[\/\\](?:credentials|config)|\.gcloud[\/\\]credentials\.json|\.kube[\/\\]config|\.docker[\/\\]config\.json|credentials\.json|service-account\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)'
+        file_path: '(?m)(?:\.aws[\/\\](?:credentials|config)|\.kube[\/\\]config|\.docker[\/\\]config\.json|(?:^|[\/\\])(?:credentials|service-account)\.json|\.azure[\/\\]accessTokens\.json|\.config[\/\\]gcloud[\/\\]credentials\.db)$'
+      condition: selection
+    tags: [credentials, cloud, harvesting]
+    explanation: A cloud credential file was read, copied, encoded, archived or sent, or a native file tool opened it.
+    falsepositives:
+      - Authorized cloud CLI troubleshooting or inventory may read credential files under explicit operator direction.
+      - A cloud CLI given the credential path it authenticates with (`--kubeconfig`, `KUBECONFIG=`, `--key-file`) does not match.
+
+  - id: supply_chain.publish
+    category: supply_chain
+    severity: high
+    score: 45
+    targets: [command, arguments]
+    regex: '(^|\b)(npm|pnpm|yarn|bun)\s+publish\b|pip\s+upload|twine\s+upload|cargo\s+publish|gem\s+push|nuget\s+push|maven\s+deploy'
+    tags: [supply-chain, publish]
+    explanation: Package publishing command detected.
+    falsepositives:
+      - Legitimate release workflows publish packages; correlate with credential access and user release intent.
+
+  - id: mcp.server_enumeration
+    category: mcp_enumeration
+    atlas_tags:
+      - atlas:AML.T0084
+    severity: medium
+    score: 40
+    targets: [command, arguments, assistant_context, tool_result]
+    regex: '(tools/list.{0,80}tools/list|servers?\s*(probe|scan|enumerate|list\s+all)|enumerate.{0,40}(mcp|server|tool)|probe.{0,40}(mcp|server|tool))'
+    tags: [mcp, enumeration, reconnaissance]
+    explanation: MCP server enumeration or probing pattern detected.
+    falsepositives:
+      - Inventory, diagnostics, and integration tests may enumerate MCP tools with operator approval.
+
+  - id: destructive.filesystem_wipe
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\brm\s+(?:-{1,2}\S*\s+)+["'']?(?:/\*?|~/?\*?|\$\{?home\}?/?\*?)["'']?(?:$|[\s;&|)])|--no-preserve-root|\bmkfs(?:\.\w+)?\s|\bdd\b[^;&|\n]*\bof=/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|rdisk)|\bwipefs\b|\bshred\b[^;&|\n]*\s/dev/|\bfind\s+(?:/|~/?|\$\{?home\}?/?)\s[^;&|\n]*-delete\b|\bformat-volume\b|(?:^|[\s;&|])format(?:\.com)?\s+[a-z]:(?:$|[\s/])|\b(?:rd|rmdir)\s+/s\s+(?:/q\s+)?[a-z]:\\?(?:$|[\s;&|])|\bremove-item\b[^;&|\n]*-recurse\b[^;&|\n]*\s["'']?(?:[a-z]:\\?|~|\$home|\$env:userprofile)["'']?(?:$|[\s;&|]))'
+    tags: [destructive, filesystem]
+    explanation: A command can delete a home directory, a filesystem root or a disk.
+    falsepositives:
+      - Disposable containers and CI machines are sometimes reset this way on purpose; confirm the host and the request.
+
+  - id: destructive.git_discard
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*push\b[^;&|\n]*\s(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--delete|-d|\+[\w./-]+|:[\w./-]+)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*reset\b[^;&|\n]*\s--hard\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*clean\b(?:\s+-[a-z]*)*\s+-[a-z]*f|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:checkout\s+(?:--\s+)?|restore\s+(?:--worktree\s+)?)\.(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*branch\b[^;&|\n]*\s(?-i:-D)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*stash\s+(?:drop|clear)\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:filter-branch|filter-repo)\b)'
+    tags: [destructive, git]
+    explanation: A Git command discards uncommitted work, deletes a branch or stash, or rewrites remote history.
+    falsepositives:
+      - Developers often reset, clean or force-push their own branches deliberately; confirm the branch and the request.
+
+  - id: destructive.database_drop
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\bdrop\s+(?:table|database|schema)\b|\btruncate\s+table\b|\bdelete\s+from\s+[\w."`]+\s*(?:;|$|["''])|\bdropdb\b|\bredis-cli\b[^;&|\n]*\bflush(?:all|db)\b|\.dropdatabase\s*\()'
+    tags: [destructive, database]
+    explanation: A command drops or empties a database, table or schema.
+    falsepositives:
+      - Resetting a local or test database is routine development work; confirm which database the command targets.
+
+  - id: destructive.infrastructure_teardown
+    category: destructive
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: high
+    score: 55
+    targets: [command]
+    regex: '(\b(?:terraform|tofu)\s+(?:-\S+\s+)*destroy\b|\b(?:terraform|tofu)\s+(?:-\S+\s+)*apply\b[^;&|\n]*\s-destroy\b|\bpulumi\s+(?:-\S+\s+)*destroy\b|\bkubectl\b[^;&|\n]*\sdelete\b(?:\s+(?:namespaces?|ns)\b|[^;&|\n]*\s--all(?:-namespaces)?\b)|\baws\s+s3\s+rb\b[^;&|\n]*\s--force\b|\baws\s+s3\s+rm\b[^;&|\n]*\s--recursive\b|\bgsutil\s+(?:-m\s+)?rm\s+(?:-\S+\s+)*-r|\bgcloud\s+projects\s+delete\b|\baz\s+group\s+delete\b|\b(?:docker|podman)\s+volume\s+prune\b|\b(?:docker|podman)\s+system\s+prune\b[^;&|\n]*\s--volumes\b|\bpodman\s+(?:system|machine)\s+reset\b)'
+    tags: [destructive, infrastructure]
+    explanation: A command tears down cloud infrastructure, a Kubernetes namespace, container storage or stored data.
+    falsepositives:
+      - Tearing down a disposable or test environment is routine; confirm which environment the command targets.
+
+modifiers:
+  - id: chain.secret_then_network
+    score: 35
+    when_all_categories: [secret_access, exfiltration]
+    link: {calls: 3}
+    explanation: Secret access followed by outbound transfer materially increases exfiltration risk.
+    falsepositives:
+      - Authorized backup or migration work may read secret files and upload artifacts; confirm the destination and the request before escalating.
+  - id: chain.download_then_execute
+    score: 35
+    when_all_categories: [download, execution]
+    explanation: Download followed by execution is a common malware pattern.
+    falsepositives:
+      - Normal installer workflows often download and execute setup scripts; validate the source, checksum, and explicit user request.
+  - id: chain.shell_encoded_payload
+    score: 10
+    when_all_rule_ids: [execution.shell, execution.encoded_payload]
+    link: {calls: 0, order: any}
+    explanation: Shell execution of decoded payload content should cross the triage threshold.
+    falsepositives:
+      - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
+  - id: chain.mcp_injection_then_egress
+    score: 35
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+      - atlas:AML.T0086
+    when_all_categories: [mcp_prompt_injection, exfiltration]
+    link: {calls: 3}
+    explanation: MCP prompt injection near outbound egress is the first Telltale high-signal alert use case.
+    falsepositives:
+      - Telltale security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
+  - id: chain.credential_then_publish
+    score: 40
+    when_all_categories: [credential_harvesting, supply_chain]
+    link: {calls: 3}
+    explanation: Credential harvesting followed by package publishing is a supply chain attack pattern.
+    falsepositives:
+      - Authorized release automation may read cloud or package credentials before publishing; verify release intent, credential scope, and package destination.
+  - id: chain.harvest_then_exfil
+    score: 35
+    atlas_tags:
+      - atlas:AML.T0055
+      - atlas:AML.T0025
+    when_all_categories: [credential_harvesting, exfiltration]
+    link: {calls: 3}
+    explanation: Credential harvesting followed by exfiltration is a data theft pattern.
+    falsepositives:
+      - Backup, migration, or inventory work may read credential-adjacent files and upload artifacts when both actions are explicitly approved.
+  - id: chain.mcp_enumeration_then_injection
+    score: 30
+    atlas_tags:
+      - atlas:AML.T0084
+      - atlas:AML.T0051
+    when_all_categories: [mcp_enumeration, mcp_prompt_injection]
+    link: {calls: 3}
+    explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
+    falsepositives:
+      - MCP integration tests may enumerate tools and include synthetic injection strings to validate defenses.
+  - id: chain.instruction_override_with_approval_bypass
+    score: 30
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    when_all_categories: [instruction_override, approval_bypass]
+    link: {calls: 3, order: any}
+    explanation: An instruction override co-occurring with an approval-bypass directive in assistant output requires security review.
+    falsepositives:
+      - The two phrases link within three tool calls of each other in either order, not per message or field; an override phrase in one assistant message and an unrelated approval-bypass phrase nearby (including a tool result or command) can trigger this chain, as can security documentation that quotes both phrases without the documentation markers the exclusions recognize.
+  - id: chain.tool_result_egress_directive_then_upload
+    score: 15
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+      - atlas:AML.T0086
+    when_all_rule_ids: [prompt_injection.tool_result_egress_directive, exfil.outbound_upload]
+    link: {calls: 2}
+    explanation: An untrusted tool result directed secret transfer before a nearby outbound upload command.
+    falsepositives:
+      - A quoted attack instruction followed by an authorized upload can still link when the quote is not recognized as documentation; confirm the user request and destination.

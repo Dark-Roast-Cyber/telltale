@@ -2705,15 +2705,12 @@ overrides:
         serde_yaml::from_str(override_yaml).expect("override document");
     // Apply the override to a synthetic equivalent so the effective export
     // proves that the compatibility seam sees post-override values.
-    let mut rule_set = serde_yaml::from_str(document).expect("synthetic document");
-    telltale_rules::apply_rule_override_document(
-        &mut rule_set,
-        &override_doc,
-        Path::new("synthetic-overrides.yaml"),
-    )
-    .expect("apply override");
+    let mut rules = telltale_rules::LoadedRules::parse(document).expect("synthetic document");
+    rules
+        .apply_override_document(&override_doc, Path::new("synthetic-overrides.yaml"))
+        .expect("apply override");
     assert_eq!(
-        rule_set
+        rules
             .compile(None)
             .expect("overridden rules")
             .compatibility_export()

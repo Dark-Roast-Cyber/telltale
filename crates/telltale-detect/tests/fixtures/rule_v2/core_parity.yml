@@ -1,0 +1,177 @@
+title: Agent reads an env-style secret file
+id: f1c2d3e4-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+name: secret.env.read
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: agent_activity
+detection:
+    selection_arguments:
+        tool.arguments|re|i: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+    selection_assistant_context:
+        message.assistant_text|re|i: '(?s:((read_file|readfile|view_file).*([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:])).*(read_file|readfile|view_file)))'
+    filter_assistant_context:
+        message.assistant_text|re|i: '(?s:((do not|don''t|should not|must not|never|refuse to)\s+(use\s+(read_file|readfile|view_file)\s+to\s+)?read\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|(read_file|readfile|view_file).*(\.env|\.bash_secrets|\.zsh_secrets).*(forbidden|disallowed|prohibited)( behavior)?))'
+    selection_command:
+        tool.command|re|i: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+    selection_file_path:
+        tool.path|re|i: '(^|[\/\\])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))'
+    selection_tool_result:
+        tool.result|re|i: '(?s:((read_file|readfile|view_file).*([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:])).*(read_file|readfile|view_file)))'
+    filter_tool_result:
+        tool.result|re|i: '(?s:((do not|don''t|should not|must not|never|refuse to)\s+(use\s+(read_file|readfile|view_file)\s+to\s+)?read\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|(read_file|readfile|view_file).*(\.env|\.bash_secrets|\.zsh_secrets).*(forbidden|disallowed|prohibited)( behavior)?))'
+    condition: selection_arguments or (selection_assistant_context and not filter_assistant_context) or selection_command or selection_file_path or (selection_tool_result and not filter_tool_result)
+falsepositives:
+    - Legitimate debugging or deployment work may inspect local env-style files when explicitly requested by the user.
+level: medium
+tags:
+    - atlas.aml.t0055
+telltale:
+    category: secret_access
+    score: 35
+    explanation: Access to .env files can expose API keys and secrets.
+    tags: [credentials, env, file-read]
+---
+title: Agent tool call downloads over HTTP or FTP
+id: 0b6e3f7a-8c9d-4e1f-a2b3-c4d5e6f7a8b9
+name: network.download
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_arguments:
+        tool.arguments|re|i|segment: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+    filter_arguments:
+        tool.arguments|re|i|segment: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+    selection_command:
+        tool.command|re|i|segment: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+    filter_command:
+        tool.command|re|i|segment: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+    selection_url:
+        tool.url|re|i|segment: '(?:^|\b)(?:curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:["\x27]?(?:https?|ftp)://(?:[^/\s@]*@)?(?:\[(?:[^:]|:[^:]|::(?:[^1f]|1[^\]]|f(?:[^f]|f(?:[^f]|f(?:[^f]|f(?:[^:]|:(?:[^1]|1(?:[^2]|2(?:[^7]|7[^.])))))))))|(?:[^\s/?#@:;|&"\x27<>()`\[\]]*[^\d.\s/?#@:;|&"\x27<>()`\[\]]|[02-9.]|1(?:[^2]|2(?:[^7]|7[^.])))[^\s/?#@:]*(?::\d+)?(?:[/?#\s"\x27`;|&<>)]|$))|(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=])(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*["\x27]?(?:https?|ftp)://|["\x27]?(?:https?|ftp)://(?:[^;|\n&"\x27]|\\[\s\S]|"[^"\n]*"|"(?:[^"\\\n]|\\[\s\S])*"|\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|\x27[^\x27\n]*\x27|&[^;&|\n])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*x)|[ \t]--(?:(?:pre)?proxy|connect-to|resolve)[ \t=]))'
+    filter_url:
+        tool.url|re|i|segment: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))'
+    condition: (selection_arguments and not filter_arguments) or (selection_command and not filter_command) or (selection_url and not filter_url)
+falsepositives:
+    - Installing tools, fetching release artifacts, or following documented setup steps can require expected downloads.
+    - Outbound POST, PUT, form, or --data transfers are scored by exfil.outbound_upload rather than this rule.
+    - Literal loopback-only URLs are excluded unless the same command segment also has a non-loopback URL, or a URL together with a proxy or reroute flag.
+level: low
+telltale:
+    category: download
+    score: 20
+    explanation: HTTP or FTP retrieval by a download client, not an outbound upload or a literal loopback-only URL.
+    tags: [network, download]
+---
+title: Agent tool call uploads data outbound
+id: 2c7d4e8f-9a0b-4c1d-b2e3-f4a5b6c7d8e9
+name: exfil.outbound_upload
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_arguments:
+        tool.arguments|re|i|exclusion_segment: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    filter_arguments:
+        tool.arguments|re|i|exclusion_segment: '^[ \t]*(?:(?:export[ \t]+)?\w+=["\x27]?(?:\$\(|`)[ \t]*)?(?:curl(?:(?:[ \t]|\\\r?\n)+(?:(?-i:-[sSfv]*X)[ \t]*["\x27]?PUT["\x27]?|--request[ \t=]+["\x27]?PUT["\x27]?|(?-i:-[sSfv]+)|--(?:silent|show-error|fail|no-progress-meter)|(?-i:-m)[ \t]*\d+|--(?:max-time|connect-timeout|retry)[ \t=]+\d+|(?-i:-H)[ \t]*["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+|wget(?:(?:[ \t]|\\\r?\n)+(?:--method[ \t=]+["\x27]?PUT["\x27]?|(?-i:-q)|(?-i:-q?O)[ \t]*-|--quiet|--(?:timeout|tries)[ \t=]+\d+|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+)[ \t]*(?:(?:\)|`)["\x27]?)?[ \t]*$'
+    selection_command:
+        tool.command|re|i|exclusion_segment: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    filter_command:
+        tool.command|re|i|exclusion_segment: '^[ \t]*(?:(?:export[ \t]+)?\w+=["\x27]?(?:\$\(|`)[ \t]*)?(?:curl(?:(?:[ \t]|\\\r?\n)+(?:(?-i:-[sSfv]*X)[ \t]*["\x27]?PUT["\x27]?|--request[ \t=]+["\x27]?PUT["\x27]?|(?-i:-[sSfv]+)|--(?:silent|show-error|fail|no-progress-meter)|(?-i:-m)[ \t]*\d+|--(?:max-time|connect-timeout|retry)[ \t=]+\d+|(?-i:-H)[ \t]*["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+|wget(?:(?:[ \t]|\\\r?\n)+(?:--method[ \t=]+["\x27]?PUT["\x27]?|(?-i:-q)|(?-i:-q?O)[ \t]*-|--quiet|--(?:timeout|tries)[ \t=]+\d+|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+)[ \t]*(?:(?:\)|`)["\x27]?)?[ \t]*$'
+    selection_url:
+        tool.url|re|i|exclusion_segment: '(?:^|\b)(?:curl\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*(?:(?-i:[ \t]-[0-46:#aBfgGhiIjJklLMnNOpqRsSvVZ]*(?:[dFT](?:[ \t]|[^\s"\x27]|["\x27]\S)|X[ \t]*["\x27]?(?i:POST|PUT)))|[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|wget\b(?:[^;|\n&"\x27\\$]|&?\$?\\[\s\S]|&?\$?"(?:[^"\\\n]|\\[\s\S])*"|&?\x27[^\x27\n]*\x27|&?\$\x27(?:[^\x27\\\n]|\\[\s\S])*\x27|&?\$\$|&?\$[^$\x27"\\;|\n&]|&[^;&|\n"\x27\\$])*[ \t]--(?:(?:request|method)(?:[ \t]+|=)["\x27]?(?:POST|PUT)|data|json|form|upload-file|(?:post|body)-))|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    filter_url:
+        tool.url|re|i|exclusion_segment: '^[ \t]*(?:(?:export[ \t]+)?\w+=["\x27]?(?:\$\(|`)[ \t]*)?(?:curl(?:(?:[ \t]|\\\r?\n)+(?:(?-i:-[sSfv]*X)[ \t]*["\x27]?PUT["\x27]?|--request[ \t=]+["\x27]?PUT["\x27]?|(?-i:-[sSfv]+)|--(?:silent|show-error|fail|no-progress-meter)|(?-i:-m)[ \t]*\d+|--(?:max-time|connect-timeout|retry)[ \t=]+\d+|(?-i:-H)[ \t]*["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+|wget(?:(?:[ \t]|\\\r?\n)+(?:--method[ \t=]+["\x27]?PUT["\x27]?|(?-i:-q)|(?-i:-q?O)[ \t]*-|--quiet|--(?:timeout|tries)[ \t=]+\d+|2>/dev/null|--header[ \t=]+["\x27]X-aws-ec2-metadata-token-ttl-seconds:[ \t]*\d+["\x27]|["\x27]?http://(?:169\.254\.169\.254|\[fd00:ec2::254\])/latest/api/token["\x27]?))+)[ \t]*(?:(?:\)|`)["\x27]?)?[ \t]*$'
+    condition: (selection_arguments and not filter_arguments) or (selection_command and not filter_command) or (selection_url and not filter_url)
+falsepositives:
+    - Authorized uploads of build artifacts, logs, or release assets may match when the destination is expected.
+    - A bodyless PUT to the literal IMDSv2 token endpoint is excluded only when every other token in the command segment is a listed harmless flag. Other metadata paths, a body, an extra header or another destination still match.
+level: high
+tags:
+    - atlas.aml.t0025
+telltale:
+    category: exfiltration
+    score: 60
+    explanation: Outbound upload or object-storage copy in a tool call, not a bodyless IMDSv2 token request.
+    analytic_intent: alert
+    detection_class: security_detection
+    signal_type: atomic
+    tags: [network, exfiltration]
+---
+title: Agent sends encoded material through an HTTP client
+id: 3d8e5f9a-0b1c-4d2e-83f4-a5b6c7d8e9fa
+name: exfil.encoded_http
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: &pattern '(curl|wget|fetch|Invoke-WebRequest)\s+.*([A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]{39,}|[A-Za-z0-9+/]{40,}[+/=][A-Za-z0-9+/=]*).*https?://|(curl|wget|fetch|Invoke-WebRequest)\s+.*https?://.*(?:--data|--data-binary|--data-raw|[\s]-d(?:[\s=@A-Za-z0-9])).*(?:[A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]{39,}|[A-Za-z0-9+/]{40,}[+/=][A-Za-z0-9+/=]*)|(curl|wget|fetch)\s+.*https?://[A-Za-z0-9+/]{20,}\.[a-z]{2,}'
+        - tool.arguments|re|i: *pattern
+    condition: selection
+falsepositives:
+    - Tests or API calls may send encoded payloads over HTTP when the destination and data are expected.
+    - Long unencoded tokens, IDs, or test vectors without base64 special characters are not encoded HTTP.
+level: high
+tags:
+    - atlas.aml.t0025
+telltale:
+    category: exfiltration
+    score: 50
+    explanation: Encoded hostname or base64 request material sent through an HTTP client.
+    analytic_intent: alert
+    detection_class: security_detection
+    signal_type: atomic
+    tags: [exfiltration, encoding, network]
+---
+title: Secret access followed by network egress
+id: 4e9f6a0b-1c2d-4e3f-94a5-b6c7d8e9fa0b
+name: chain.secret_then_network
+taxonomy: telltale
+status: stable
+correlation:
+    type: telltale_chain
+    categories: [secret_access, exfiltration]
+    within_calls: 3
+falsepositives:
+    - Authorized backup or migration work may read secret files and upload artifacts; confirm the destination and the request before escalating.
+telltale:
+    score: 35
+    explanation: Secret access followed by outbound transfer materially increases exfiltration risk.
+---
+title: Download followed by execution
+id: 5fa07b1c-2d3e-4f4a-a5b6-c7d8e9fa0b1c
+name: chain.download_then_execute
+taxonomy: telltale
+status: stable
+correlation:
+    type: telltale_chain
+    categories: [download, execution]
+falsepositives:
+    - Normal installer workflows often download and execute setup scripts; validate the source, checksum, and explicit user request.
+telltale:
+    score: 35
+    explanation: Download followed by execution is a common malware pattern.
+---
+title: Shell execution of an encoded payload
+id: 6a1b8c2d-3e4f-4a5b-b6c7-d8e9fa0b1c2d
+name: chain.shell_encoded_payload
+taxonomy: telltale
+status: stable
+correlation:
+    type: telltale_chain
+    rules: [execution.shell, execution.encoded_payload]
+    within_calls: 0
+    order: any
+falsepositives:
+    - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
+telltale:
+    score: 10
+    explanation: Shell execution of decoded payload content should cross the triage threshold.

@@ -17,7 +17,7 @@ use crate::{
     ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
-use telltale_rules::RuleDefinition;
+use telltale_rules::{DefinitionKind, LoadedDefinition, LoadedRules};
 
 use crate::ClientId;
 use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
@@ -54,6 +54,14 @@ pub fn host_rule_documents() -> &'static [(&'static str, String)] {
             .collect()
     });
     &DOCUMENTS
+}
+
+/// A host rule template with every placeholder expanded, as
+/// [`host_rule_documents`] expands the bundled ones. For the Rule v2
+/// conversion parity test, which expands the pre-conversion templates.
+#[doc(hidden)]
+pub fn expand_rule_template(template: &str) -> String {
+    expand_fragments(template)
 }
 
 /// Replace each `{{NAME}}` that names a `RULE_FRAGMENTS` entry by its text, quoted for
@@ -273,7 +281,7 @@ impl Engine {
         .map_err(|error| {
             EngineError::Build(PipelineError::Compilation(error.to_string().into()))
         })?;
-        if let Some(id) = altered_host_rule(&host_rules, &resolution.merged_rule_set) {
+        if let Some(id) = altered_host_rule(&host_rules, &resolution.content) {
             return Err(EngineError::Build(PipelineError::Compilation(
                 format!("user rule content changes the self-protection rule {id}").into(),
             )));
@@ -283,9 +291,7 @@ impl Engine {
                 format!("the policy removes the self-protection rule {id}").into(),
             )));
         }
-        let pipeline =
-            Pipeline::from_compiled(resolution.rule_set, resolution.diagnostics.packages)
-                .map_err(EngineError::Build)?;
+        let pipeline = resolution.into_pipeline().map_err(EngineError::Build)?;
         let mut options = DetailedEvaluationOptions::default();
         options.process_chain = rules.process_chain;
         let semantic_identity = pipeline
@@ -1073,22 +1079,34 @@ enum Selection {
     Command(String),
 }
 
-/// A Rule v1 document matching writes to, and modifying commands naming, one
+/// A Rule v2 file matching writes to, and modifying commands naming, one
 /// family's paths. Windows paths compare case-insensitively.
 fn family_document(family: &Family, coverage: &mut GeneratedCoverage) -> Option<String> {
-    let rules: Vec<GeneratedRule> = path_rules(family)
-        .into_iter()
-        .chain(failsafe_rules(family))
-        .collect();
+    family_document_with_case(family, coverage, cfg!(windows))
+}
+
+fn family_document_with_case(
+    family: &Family,
+    coverage: &mut GeneratedCoverage,
+    case_insensitive: bool,
+) -> Option<String> {
+    let rules = family_rules(family);
     if rules.is_empty() {
         return None;
     }
     coverage.rules += rules.len();
-    let rules: String = rules.iter().map(GeneratedRule::to_yaml).collect();
-    let case_insensitive = cfg!(windows);
-    Some(format!(
-        "version: 1\ndescription: Telltale Hooks self-protection generated for this installation.\ndefaults:\n  case_insensitive: {case_insensitive}\n  enabled: true\nrules:\n{rules}modifiers: []\n"
-    ))
+    let documents = rules
+        .iter()
+        .map(|rule| rule.to_yaml(case_insensitive))
+        .collect::<Vec<_>>();
+    Some(documents.join("---\n"))
+}
+
+fn family_rules(family: &Family) -> Vec<GeneratedRule> {
+    path_rules(family)
+        .into_iter()
+        .chain(failsafe_rules(family))
+        .collect()
 }
 
 /// One generated rule, before it is written out.
@@ -1109,28 +1127,64 @@ impl GeneratedRule {
         }
     }
 
-    fn to_yaml(&self) -> String {
+    /// The rule as one Rule v2 document.
+    fn to_yaml(&self, case_insensitive: bool) -> String {
         let Self {
             id, title, score, ..
         } = self;
         // YAML single-quoted scalars escape a quote by doubling it.
         let quote = |regex: &str| regex.replace('\'', "''");
-        let matcher = match &self.selection {
+        let flags = if case_insensitive { "|re|i" } else { "|re" };
+        let detection = match &self.selection {
             Selection::Written(regex) => format!(
-                "    targets: [written_path]\n    regex: '{}'\n",
+                "    selection:\n        - tool.written_path{flags}: '{}'\n    condition: selection\n",
                 quote(regex)
             ),
             Selection::Command(regex) => format!(
-                "    detection:\n      selection:\n        command: '{}'\n      exclude:\n        command: '{}'\n      scope: recorded_exclusion\n      condition: selection\n",
+                "    selection_command:\n        tool.command{flags}|recorded_exclusion: '{}'\n    \
+                 filter_command:\n        tool.command{flags}|recorded_exclusion: '{}'\n    \
+                 condition: selection_command and not filter_command\n",
                 quote(regex),
                 quote(HARMLESS)
             ),
         };
         let severity = if *score >= 90 { "high" } else { "medium" };
+        let name = format!("{HOST_RULE_ID_PREFIX}{id}");
+        let uuid = generated_rule_uuid(&name);
         format!(
-            "  - id: {HOST_RULE_ID_PREFIX}{id}\n    title: {title}\n    category: {HOST_RULE_CATEGORY}\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
+            "title: {title}\nid: {uuid}\nname: {name}\ntaxonomy: telltale\nstatus: stable\n\
+             logsource:\n    product: ai_agent\n    category: tool_activity\n\
+             detection:\n{detection}level: {severity}\ntelltale:\n    \
+             category: {HOST_RULE_CATEGORY}\n    score: {score}\n    explanation: {title}.\n    \
+             tags: [self-protection, hooks, defense-evasion]\n"
         )
     }
+}
+
+/// The Rule v2 `id` of a generated rule. Rule v2 ids are UUIDv4s written once
+/// and committed, but these rules are generated per installation, so the id is
+/// derived from the rule name instead: a SHA-256 of the name with the UUIDv4
+/// version and variant bits set. The same name always gets the same id, so a
+/// generated rule keeps its catalog identity across runs and installations.
+fn generated_rule_uuid(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::new()
+        .chain_update(b"telltale-hooks:generated-rule-uuid:v1\0")
+        .chain_update(name.as_bytes())
+        .finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = hex::encode(bytes);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 /// What may stand before a family's path: anything, or for a family whose paths can
@@ -1282,7 +1336,7 @@ fn same_instant(a: &str, b: &str) -> bool {
 fn self_protection_documents(
     protected_paths: &[PathBuf],
     generated: &mut GeneratedCoverage,
-) -> Result<Vec<(String, telltale_rules::RuleSet)>, EngineError> {
+) -> Result<Vec<(String, LoadedRules)>, EngineError> {
     let host = host_rule_documents()
         .iter()
         .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
@@ -1293,8 +1347,8 @@ fn self_protection_documents(
         .map(|(index, document)| (format!("hooks:generated#{index}"), document.as_str()));
     host.chain(own)
         .map(|(source, document)| {
-            telltale_rules::parse_rule_document(document)
-                .map(|rule_set| (source, rule_set))
+            LoadedRules::parse(document)
+                .map(|rules| (source, rules))
                 .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))
         })
         .collect()
@@ -1317,24 +1371,15 @@ pub fn policy_drops_host_rule(path: &Path, protected_paths: &[PathBuf]) -> bool 
         return false;
     };
     let host = host_rule_definitions(&documents);
-    let set = telltale_rules::RuleSet {
-        version: 1,
-        description: String::new(),
-        defaults: telltale_rules::RuleDefaults {
-            case_insensitive: false,
-            enabled: true,
-        },
-        rules: host.clone(),
-        modifiers: Vec::new(),
-    };
-    set.compile(Some(&policy))
+    LoadedRules::from_definitions(host.clone())
+        .and_then(|rules| rules.compile(Some(&policy)))
         .is_ok_and(|compiled| dropped_host_rule(&host, &compiled).is_some())
 }
 
 /// The ID of the first enabled host rule that `compiled` (the rules after the
 /// policy) does not carry.
 fn dropped_host_rule<'a>(
-    host: &'a [RuleDefinition],
+    host: &'a [LoadedDefinition],
     compiled: &telltale_rules::CompiledRuleSet,
 ) -> Option<&'a str> {
     let kept = compiled
@@ -1343,21 +1388,17 @@ fn dropped_host_rule<'a>(
         .map(|summary| summary.id)
         .collect::<std::collections::BTreeSet<_>>();
     host.iter()
-        .find(|rule| rule.enabled && !kept.contains(&rule.id))
-        .map(|rule| rule.id.as_str())
+        .find(|rule| rule.enabled() && !kept.contains(rule.id()))
+        .map(LoadedDefinition::id)
 }
 
-/// The host rules as their documents define them, document defaults applied
-/// the way the merged rule set applies them.
-fn host_rule_definitions(documents: &[(String, telltale_rules::RuleSet)]) -> Vec<RuleDefinition> {
+/// The host rules as their documents define them, document defaults applied.
+fn host_rule_definitions(documents: &[(String, LoadedRules)]) -> Vec<LoadedDefinition> {
     documents
         .iter()
-        .flat_map(|(_, set)| {
-            set.rules.iter().cloned().map(|mut rule| {
-                telltale_rules::apply_rule_defaults(&mut rule, &set.defaults);
-                rule
-            })
-        })
+        .flat_map(|(_, rules)| rules.definitions())
+        .filter(|definition| definition.kind() == DefinitionKind::Rule)
+        .cloned()
         .collect()
 }
 
@@ -1365,18 +1406,10 @@ fn host_rule_definitions(documents: &[(String, telltale_rules::RuleSet)]) -> Vec
 /// and overrides) does not carry exactly as defined. The rules merge adds
 /// definitions at a tier that can replace none and applies override files
 /// after them, so user content must not have reached any of these.
-fn altered_host_rule<'a>(
-    host: &'a [RuleDefinition],
-    merged: &telltale_rules::RuleSet,
-) -> Option<&'a str> {
-    let merged = merged
-        .rules
-        .iter()
-        .map(|rule| (rule.id.as_str(), rule))
-        .collect::<std::collections::BTreeMap<_, _>>();
+fn altered_host_rule<'a>(host: &'a [LoadedDefinition], merged: &LoadedRules) -> Option<&'a str> {
     host.iter()
-        .find(|rule| merged.get(rule.id.as_str()) != Some(rule))
-        .map(|rule| rule.id.as_str())
+        .find(|rule| merged.get(rule.id()) != Some(*rule))
+        .map(LoadedDefinition::id)
 }
 
 fn read(path: &Path) -> Result<String, EngineError> {
@@ -1457,7 +1490,7 @@ mod tests {
     #[test]
     fn every_rule_template_placeholder_is_a_known_fragment() {
         let placeholder = regex::Regex::new(r"\{\{([A-Z][A-Z0-9_]*)\}\}").unwrap();
-        let quoted = regex::Regex::new(r"^\s*[a-z_]+: '.*'$").unwrap();
+        let quoted = regex::Regex::new(r"^\s*(?:- )?[a-z_.|]+: '.*'$").unwrap();
         let mut named = std::collections::BTreeSet::new();
         for (name, template) in super::host_rule_templates() {
             for line in template.lines() {
@@ -1492,15 +1525,166 @@ mod tests {
     /// is built from the shared texts, and a change to one reaches every rule that uses it.
     #[test]
     fn every_exclusion_is_built_from_shared_text() {
+        let mut filters = 0;
         for (name, template) in super::host_rule_templates() {
             let mut lines = template.lines();
             while let Some(line) = lines.next() {
-                if line.trim() == "exclude:" {
+                if line.trim().starts_with("filter_") {
+                    filters += 1;
                     let value = lines.next().unwrap_or_default();
                     assert!(value.contains("{{"), "{name}: {value}");
                 }
             }
         }
+        assert!(filters > 0);
+    }
+
+    /// Rule v1 rendering of a family's generated rules, as the generator wrote
+    /// it before Rule v2. Kept only for the conversion parity test below.
+    fn rule_v1_family_document(family: &super::Family, case_insensitive: bool) -> Option<String> {
+        use super::{HARMLESS, HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, Selection};
+        let rules = super::family_rules(family);
+        if rules.is_empty() {
+            return None;
+        }
+        let quote = |regex: &str| regex.replace('\'', "''");
+        let rules: String = rules
+            .iter()
+            .map(|rule| {
+                let matcher = match &rule.selection {
+                    Selection::Written(regex) => format!(
+                        "    targets: [written_path]\n    regex: '{}'\n",
+                        quote(regex)
+                    ),
+                    Selection::Command(regex) => format!(
+                        "    detection:\n      selection:\n        command: '{}'\n      exclude:\n        command: '{}'\n      scope: recorded_exclusion\n      condition: selection\n",
+                        quote(regex),
+                        quote(HARMLESS)
+                    ),
+                };
+                let (id, title, score) = (&rule.id, &rule.title, rule.score);
+                let severity = if score >= 90 { "high" } else { "medium" };
+                format!(
+                    "  - id: {HOST_RULE_ID_PREFIX}{id}\n    title: {title}\n    category: {HOST_RULE_CATEGORY}\n    severity: {severity}\n    score: {score}\n{matcher}    tags: [self-protection, hooks, defense-evasion]\n    explanation: {title}.\n"
+                )
+            })
+            .collect();
+        Some(format!(
+            "version: 1\ndescription: Telltale Hooks self-protection generated for this installation.\ndefaults:\n  case_insensitive: {case_insensitive}\n  enabled: true\nrules:\n{rules}modifiers: []\n"
+        ))
+    }
+
+    /// Every generated family, with written-path and command rules, the 90- and
+    /// 60-point shapes, reverse, reference and fail-safe rules and numbered
+    /// chunks, compiles from Rule v2 exactly as it did from Rule v1, case-
+    /// sensitive (Unix) and case-insensitive (Windows).
+    #[test]
+    fn generated_rule_v2_documents_compile_like_the_rule_v1_ones() {
+        use std::path::PathBuf;
+        use telltale_rules::load_rule_set_from_documents;
+        let mut coverage = super::GeneratedCoverage::default();
+        let many: Vec<PathBuf> = (0..12)
+            .map(|i| PathBuf::from(format!("/srv/{}/rules-{i}.yaml", "x".repeat(150))))
+            .collect();
+        let homes: Vec<crate::hooks::config::HarnessHome> = crate::hooks::harness::Harness::ALL
+            .iter()
+            .filter_map(|harness| harness.adapter().home)
+            .map(|home| crate::hooks::config::HarnessHome {
+                variable: home.variable,
+                hook_files: home.hook_files,
+                path: PathBuf::from(format!("/srv/synthetic-home/{}", home.variable)),
+            })
+            .collect();
+        assert!(!homes.is_empty());
+        let [home_files, home_dirs] = super::harness_home_families(&homes, &mut coverage);
+        let families = [
+            super::own_state_family(
+                &[
+                    PathBuf::from("/srv/tth/state"),
+                    PathBuf::from("/srv/tth/it's here/telemetry.jsonl"),
+                ],
+                &mut coverage,
+            ),
+            super::own_state_family(&many, &mut coverage),
+            home_files,
+            home_dirs,
+            super::installed_binary_family(
+                Some(std::path::Path::new("/srv/synthetic/bin/telltale")),
+                &mut coverage,
+            ),
+        ];
+        let mut shapes = std::collections::BTreeSet::new();
+        for family in &families {
+            for case_insensitive in [false, true] {
+                let v1 = rule_v1_family_document(family, case_insensitive).unwrap();
+                let v2 = super::family_document_with_case(
+                    family,
+                    &mut super::GeneratedCoverage::default(),
+                    case_insensitive,
+                )
+                .unwrap();
+                let v1 = load_rule_set_from_documents(&[&v1], None)
+                    .unwrap()
+                    .compatibility_export();
+                let v2_rules = load_rule_set_from_documents(&[&v2], None).unwrap();
+                assert!(v2_rules.notices().is_empty());
+                let v2 = v2_rules.compatibility_export();
+                assert!(!v1.rules().is_empty());
+                assert_eq!(v2.rules(), v1.rules(), "{}", family.prefix);
+                for (old, new) in v1.rules().iter().zip(v2.rules()) {
+                    assert_eq!(
+                        telltale_rules::provenance::rule_v1_rule_fingerprint(new),
+                        telltale_rules::provenance::rule_v1_rule_fingerprint(old)
+                    );
+                    shapes.insert((
+                        new.matchers[0].target.clone(),
+                        new.score,
+                        new.matchers[0].regex.starts_with("(?i:"),
+                    ));
+                }
+                assert_eq!(v2.fingerprint(), v1.fingerprint());
+                let (old_plan, new_plan) = (
+                    telltale_detect::v2::compile_rule_v1(&v1).unwrap(),
+                    telltale_detect::v2::compile_rule_v1(&v2).unwrap(),
+                );
+                assert_eq!(
+                    new_plan.semantic_provenance().identity(),
+                    old_plan.semantic_provenance().identity()
+                );
+            }
+        }
+        // Both selections, both scores and both case modes were compared.
+        for target in ["command", "written_path"] {
+            for case_insensitive in [false, true] {
+                assert!(shapes.contains(&(target.to_owned(), 90, case_insensitive)));
+            }
+        }
+        assert!(shapes.contains(&("command".to_owned(), 60, false)));
+        let names = families
+            .iter()
+            .flat_map(super::family_rules)
+            .map(|rule| rule.id)
+            .collect::<Vec<_>>();
+        assert!(names.iter().any(|name| name.ends_with("_2")));
+        assert!(names.iter().any(|name| name.contains("failsafe")));
+        assert!(names.iter().any(|name| name.contains("reverse")));
+    }
+
+    #[test]
+    fn a_generated_rule_uuid_is_a_v4_shaped_uuid_derived_from_its_name() {
+        let first = super::generated_rule_uuid("tth.tamper.own_state_write");
+        assert_eq!(
+            first,
+            super::generated_rule_uuid("tth.tamper.own_state_write")
+        );
+        assert_ne!(
+            first,
+            super::generated_rule_uuid("tth.tamper.own_state_write_2")
+        );
+        let bytes = first.as_bytes();
+        assert_eq!(bytes.len(), 36);
+        assert_eq!((bytes[14], bytes[8], bytes[13]), (b'4', b'-', b'-'));
+        assert!(matches!(bytes[19], b'8' | b'9' | b'a' | b'b'));
     }
 
     #[test]
@@ -1605,7 +1789,7 @@ mod tests {
                 .collect()
         };
         let rule = |doc: &str, rule: &str| -> String {
-            let id = format!("- id: tth.tamper.{rule}");
+            let id = format!("name: tth.tamper.{rule}");
             let rest: Vec<&str> = doc
                 .lines()
                 .skip_while(|line| line.trim_start() != id)
@@ -1691,14 +1875,14 @@ mod tests {
             .iter()
             .map(|(_, document)| document);
         for document in host.chain(&generated) {
-            let set = telltale_rules::parse_rule_document(document).unwrap();
-            assert!(!set.rules.is_empty());
-            for rule in &set.rules {
+            let set = telltale_rules::LoadedRules::parse(document).unwrap();
+            assert!(!set.is_empty());
+            for rule in set.definitions() {
                 assert!(
-                    rule.id
+                    rule.id()
                         .starts_with(crate::hooks::config::HOST_RULE_ID_PREFIX),
                     "{}",
-                    rule.id
+                    rule.id()
                 );
             }
         }

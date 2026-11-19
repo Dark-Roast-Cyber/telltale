@@ -963,7 +963,8 @@ fn rules_export_default_writes_bundled_rules_to_stdout() {
         String::from_utf8_lossy(&export.stderr)
     );
     let exported_yaml = String::from_utf8(export.stdout).expect("exported yaml utf8");
-    assert!(exported_yaml.contains("version:"));
+    assert!(exported_yaml.contains("taxonomy: telltale"));
+    assert!(!exported_yaml.contains("version:"));
     assert!(exported_yaml.contains("secret.env.read"));
     fs::write(&exported_path, exported_yaml).expect("write exported yaml");
 
@@ -2836,7 +2837,9 @@ fn community_rule_ids() -> Vec<String> {
     let ids = community
         .documents()
         .iter()
-        .flat_map(|document| document.rules.iter().map(|rule| rule.id.clone()))
+        .flat_map(|document| document.definitions())
+        .filter(|definition| definition.kind() == telltale_rules::DefinitionKind::Rule)
+        .map(|rule| rule.id().to_owned())
         .collect::<Vec<_>>();
     assert!(!ids.is_empty(), "embedded community package has rules");
     ids
@@ -3215,8 +3218,9 @@ fn embedded_community_rules_fire_on_agent_sessions_and_spare_look_alikes() {
     let points = community
         .documents()
         .iter()
-        .flat_map(|document| &document.rules)
-        .map(|rule| (rule.id.as_str(), rule.score))
+        .flat_map(|document| document.definitions())
+        .filter(|definition| definition.kind() == telltale_rules::DefinitionKind::Rule)
+        .map(|rule| (rule.id(), rule.score()))
         .collect::<BTreeMap<_, _>>();
 
     let temp = tempdir().expect("tempdir");
@@ -3359,4 +3363,250 @@ fn embedded_community_rules_fire_on_agent_sessions_and_spare_look_alikes() {
         );
         assert!(!matched.contains_key("community-look-alike"), "{matched:?}");
     }
+}
+
+const RULE_V2_FIXTURE: &str = "tests/fixtures/rule_v2/cli_synthetic.yml";
+
+/// The Rule v2 fixture with LF line endings, then with CRLF ones, as files in
+/// the returned directory. A Windows checkout may hold either.
+fn rule_v2_fixture_copies() -> (tempfile::TempDir, [String; 2]) {
+    let temp = tempdir().expect("tempdir");
+    let lf = fs::read_to_string(RULE_V2_FIXTURE)
+        .expect("fixture")
+        .replace("\r\n", "\n");
+    let paths = [
+        ("lf.yml", lf.clone()),
+        ("crlf.yml", lf.replace('\n', "\r\n")),
+    ]
+    .map(|(name, text)| {
+        let path = temp.path().join(name);
+        fs::write(&path, text).expect("fixture copy");
+        path.to_str().expect("UTF-8 path").to_owned()
+    });
+    (temp, paths)
+}
+
+fn rules_command(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .arg("rules")
+        .args(args)
+        .arg("--no-local-config")
+        .output()
+        .expect("run telltale rules")
+}
+
+#[test]
+fn rules_catalog_prints_a_schema_valid_v2_catalog_of_the_resolved_rules() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/rule-catalog-v2.schema.json"))
+            .expect("catalog schema");
+    let validator = validator_for(&schema).expect("catalog validator");
+    let bundled = rules_command(&["catalog"]);
+    assert!(
+        bundled.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&bundled.stderr)
+    );
+    let bundled: Value = serde_json::from_slice(&bundled.stdout).expect("catalog json");
+    assert!(validator.is_valid(&bundled));
+    assert_eq!(bundled["schema"], "telltale.rule_catalog.v2");
+    let embedded = telltale_core::rule_catalog_document(&Default::default()).unwrap();
+    assert_eq!(bundled, serde_json::to_value(&embedded).unwrap());
+
+    let (_temp, fixtures) = rule_v2_fixture_copies();
+    let catalogs = fixtures.map(|fixture| {
+        let output = rules_command(&["catalog", "--rules", &fixture]);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("catalog json")
+    });
+    assert_eq!(catalogs[0], catalogs[1], "CRLF and LF load alike");
+    let catalog = &catalogs[0];
+    assert!(validator.is_valid(catalog));
+    let entries = catalog["entries"].as_array().expect("entries");
+    assert_eq!(
+        entries.len(),
+        bundled["entries"].as_array().unwrap().len() + 2
+    );
+    let rule = entries
+        .iter()
+        .find(|entry| entry["id"] == "synthetic.cli.marker")
+        .expect("v2 rule entry");
+    assert_eq!(rule["uuid"], "5d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6");
+    assert_eq!(rule["status"], "test");
+    assert_eq!(rule["attack_techniques"], serde_json::json!(["T1059"]));
+    assert_eq!(rule["logsource"]["category"], "tool_activity");
+    assert_eq!(rule["enabled"], true);
+    assert!(
+        rule["behavior_fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:"))
+    );
+    let chain = entries
+        .iter()
+        .find(|entry| entry["id"] == "synthetic.cli.chain")
+        .expect("v2 chain entry");
+    assert_eq!(chain["kind"], "modifier");
+    assert_eq!(
+        chain["when_all_rule_ids"],
+        serde_json::json!(["synthetic.cli.marker"])
+    );
+    assert_ne!(catalog["semantic_identity"], bundled["semantic_identity"]);
+}
+
+#[test]
+fn rules_show_prints_one_rule_or_chain_and_rejects_an_unknown_name() {
+    let (_temp, fixtures) = rule_v2_fixture_copies();
+    for fixture in &fixtures {
+        assert_rules_show(fixture);
+    }
+}
+
+fn assert_rules_show(fixture: &str) {
+    let output = rules_command(&["show", "synthetic.cli.marker", "--rules", fixture]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in [
+        "title: Synthetic marker command",
+        "name: synthetic.cli.marker",
+        "kind: rule",
+        "uuid: 5d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6",
+        "status: test",
+        "enabled: true",
+        "severity: low",
+        "score: 15",
+        "category: synthetic_cli",
+        "description: Synthetic rule for command-line tests.",
+        "  - https://example.invalid/synthetic-note",
+        "  - Synthetic tests.",
+        "logsource: product=ai_agent category=tool_activity",
+        "  - attack.t1059",
+        "  - target=command scope=field pattern_bytes=31 exclusion_bytes=35",
+        "  - filter_case_mismatch: filter `filter_command` is case-sensitive but its selection `selection_command` is case-insensitive",
+    ] {
+        assert!(
+            text.lines().any(|candidate| candidate == line),
+            "{line}\n{text}"
+        );
+    }
+
+    let chain = rules_command(&["show", "synthetic.cli.chain", "--rules", fixture]);
+    assert!(chain.status.success());
+    let text = String::from_utf8_lossy(&chain.stdout);
+    assert!(text.lines().any(|line| line == "kind: chain"), "{text}");
+    assert!(
+        text.lines().any(|line| line == "  - synthetic.cli.marker"),
+        "{text}"
+    );
+
+    let unknown = rules_command(&["show", "synthetic.cli.unknown", "--rules", fixture]);
+    assert_eq!(unknown.status.code(), Some(1));
+    assert!(unknown.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("unknown rule or chain"),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
+    );
+}
+
+#[test]
+fn rules_validate_reports_rule_v2_load_notices() {
+    let bundled = rules_command(&["validate"]);
+    assert!(bundled.status.success());
+    let bundled: Value = serde_json::from_slice(&bundled.stdout).expect("validate json");
+    assert_eq!(bundled["notices"], serde_json::json!([]));
+
+    let (_temp, fixtures) = rule_v2_fixture_copies();
+    let summaries = fixtures.map(|fixture| {
+        let output = rules_command(&["validate", "--rules", &fixture]);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("validate json")
+    });
+    // Source hashes cover the file bytes, so only they differ.
+    let without_source_hashes = |summary: &Value| {
+        let mut summary = summary.clone();
+        summary["sources"] = Value::Null;
+        for entry in summary["provenance"].as_array_mut().expect("provenance") {
+            entry["winner"] = Value::Null;
+        }
+        summary
+    };
+    assert_eq!(
+        without_source_hashes(&summaries[0]),
+        without_source_hashes(&summaries[1]),
+        "CRLF and LF load alike"
+    );
+    let summary = &summaries[0];
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(
+        summary["rule_count"],
+        bundled["rule_count"].as_u64().unwrap() + 1
+    );
+    let notices = summary["notices"].as_array().expect("notices");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["rule_id"], "synthetic.cli.marker");
+    assert_eq!(notices[0]["kind"], "filter_case_mismatch");
+    assert!(
+        notices[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("filter `filter_command`")
+    );
+    // A rule with a bundled rule's name but other matchers loses the native
+    // action profile, which validate reports. A replacement carries the
+    // bundled rule's UUID.
+    let bundled_rules = fs::read_to_string("config/rules/tool-call-regex.yaml").unwrap();
+    let download_uuid = |text: &str| {
+        let text = text.replace("\r\n", "\n");
+        let (before, _) = text.split_once("\nname: network.download\n").unwrap();
+        before.rsplit_once("\nid: ").unwrap().1.trim().to_owned()
+    };
+    let uuid = download_uuid(&bundled_rules);
+    assert_eq!(
+        download_uuid(&bundled_rules.replace("\r\n", "\n").replace('\n', "\r\n")),
+        uuid
+    );
+    let temp = tempdir().expect("tempdir");
+    let replacement = temp.path().join("rules.d/download.yml");
+    fs::create_dir_all(replacement.parent().unwrap()).unwrap();
+    fs::write(
+        &replacement,
+        format!(
+            "title: Synthetic download replacement\nid: {uuid}\n\
+             name: network.download\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\n\
+             detection:\n    selection:\n        tool.command|contains: synthetic-download-marker\n    condition: selection\n\
+             level: low\ntelltale:\n    category: network\n    score: 10\n    explanation: Synthetic replacement.\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "validate", "--config-dir"])
+        .arg(temp.path())
+        .output()
+        .expect("run telltale rules validate");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("validate json");
+    assert_eq!(
+        summary["notices"],
+        serde_json::json!([{
+            "rule_id": "network.download",
+            "kind": "native_profile_not_applied",
+            "message": "rule 'network.download': native action profile not applied; its matchers differ from the bundled rule's",
+        }])
+    );
 }

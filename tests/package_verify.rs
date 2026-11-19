@@ -123,7 +123,7 @@ package)
         : > "$package_root/data/event-3.0.schema.json"
         : > "$package_root/data/event-4.0.schema.json"
         : > "$package_root/data/action-record-v1.schema.json"
-        : > "$package_root/data/rule-catalog-v1.schema.json"
+        : > "$package_root/data/rule-catalog-v2.schema.json"
     fi
     ;;
 test|check)
