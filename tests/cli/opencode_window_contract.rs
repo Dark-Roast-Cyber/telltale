@@ -26,22 +26,23 @@ fn opencode_window_transition_reemits_changed_aggregates_without_cursor_retreat(
     fs::write(
         &rules,
         r#"
-version: 1
-description: Synthetic selected-window coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.window
-    title: Synthetic selected-window match
-    tags: [synthetic]
+title: Synthetic selected-window match
+id: f31f4c48-fee1-4fe7-874c-7c8142a99bdc
+name: synthetic.window
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re: 'synthetic-window-'
+    condition: selection_command
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        command: 'synthetic-window-'
-      condition: selection
-    explanation: Synthetic test.
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
 "#,
     )
     .unwrap();

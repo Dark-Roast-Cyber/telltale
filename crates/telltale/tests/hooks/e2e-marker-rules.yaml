@@ -1,38 +1,60 @@
-version: 1
-description: >-
-  Deterministic marker rules for real-harness enforcement tests only. They let
-  a test ask the model for a harmless command, or a harmless MCP tool argument,
-  that Telltale scores as deny or ask, so harness enforcement is tested independently of model-side safety
-  refusals of genuinely malicious-looking commands. Never deploy these.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: tth.e2e.deny_marker
-    title: E2E deny marker
+# Deterministic marker rules for real-harness enforcement tests only. They let a
+# test ask the model for a harmless command, or a harmless MCP tool argument,
+# that Telltale scores as deny or ask, so harness enforcement is tested
+# independently of model-side safety refusals of genuinely malicious-looking
+# commands. Never deploy these.
+title: E2E deny marker
+id: 774f46db-ce54-44f4-8c05-684b869e5236
+name: tth.e2e.deny_marker
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: &pattern 'TTH_E2E_DENY_MARKER'
+        - tool.arguments|re: *pattern
+    condition: selection
+level: critical
+telltale:
     category: e2e_test
-    severity: critical
     score: 95
-    targets: [command, arguments]
-    regex: 'TTH_E2E_DENY_MARKER'
+    explanation: 'Test-only marker that must be denied.'
     tags: [test-only]
-    explanation: Test-only marker that must be denied.
-  - id: tth.e2e.ask_marker
-    title: E2E ask marker
+---
+title: E2E ask marker
+id: a429b5e0-f96c-4cea-9092-92f9597393c3
+name: tth.e2e.ask_marker
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: &pattern 'TTH_E2E_ASK_MARKER'
+        - tool.arguments|re: *pattern
+    condition: selection
+level: medium
+telltale:
     category: e2e_test
-    severity: medium
     score: 60
-    targets: [command, arguments]
-    regex: 'TTH_E2E_ASK_MARKER'
+    explanation: 'Test-only marker that must require approval.'
     tags: [test-only]
-    explanation: Test-only marker that must require approval.
-  - id: tth.e2e.result_marker
-    title: E2E result marker
+---
+title: E2E result marker
+id: 860bde41-1343-4e84-819a-8f90616565cf
+name: tth.e2e.result_marker
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.result|re: 'TTH_E2E_RESULT_MARKER'
+    condition: selection
+level: medium
+telltale:
     category: e2e_test
-    severity: medium
     score: 60
-    targets: [tool_result]
-    regex: 'TTH_E2E_RESULT_MARKER'
+    explanation: 'Test-only marker in a tool result that must be flagged to the model.'
     tags: [test-only]
-    explanation: Test-only marker in a tool result that must be flagged to the model.
-modifiers: []

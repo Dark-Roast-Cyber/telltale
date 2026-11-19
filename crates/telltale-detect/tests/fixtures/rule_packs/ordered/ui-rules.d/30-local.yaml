@@ -1,15 +1,18 @@
-version: 1
-description: Synthetic local UI rule pack.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: pack.local
+# Synthetic local UI rule pack.
+title: Synthetic local UI rule
+id: 2434a7c2-b9a5-4521-afe1-3a36ec3346ce
+name: pack.local
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'local-marker'
+    condition: selection
+level: high
+telltale:
     category: pack_test
-    severity: high
     score: 33
-    targets: [command]
-    regex: 'local-marker'
+    explanation: 'Synthetic local UI rule.'
     tags: [fixture]
-    explanation: Synthetic local UI rule.
-modifiers: []

@@ -1,15 +1,18 @@
-version: 1
-description: First equal-tier conflict fixture.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: pack.conflict
+# First equal-tier conflict fixture.
+title: Synthetic conflict rule
+id: 725b2c65-3f69-4cfc-8a47-553b047b5cbf
+name: pack.conflict
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'first-conflict-marker'
+    condition: selection
+level: low
+telltale:
     category: pack_test
-    severity: low
     score: 1
-    targets: [command]
-    regex: 'first-conflict-marker'
+    explanation: 'Synthetic conflict rule.'
     tags: [fixture]
-    explanation: Synthetic conflict rule.
-modifiers: []

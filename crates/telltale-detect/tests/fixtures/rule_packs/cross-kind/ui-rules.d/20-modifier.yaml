@@ -1,11 +1,11 @@
-version: 1
-description: Synthetic modifier side of a cross-kind collision.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules: []
-modifiers:
-  - id: pack.cross_kind
+# Synthetic modifier side of a cross-kind collision.
+title: Synthetic cross-kind modifier
+id: 93f0b5fb-ece2-433a-9e8b-eacae50a7884
+name: pack.cross_kind
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    categories: [pack_test]
+telltale:
     score: 5
-    when_all_categories: [pack_test]
-    explanation: Synthetic cross-kind modifier.
+    explanation: 'Synthetic cross-kind modifier.'

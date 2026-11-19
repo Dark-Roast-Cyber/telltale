@@ -5,8 +5,6 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-use telltale_core::rule_resolution::canonical_or_original;
 pub(crate) use telltale_core::rule_resolution::{
     RulePackPaths, RuleResolution, RuleResolutionDiagnostics,
 };
@@ -82,7 +80,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CommunityRules, RuleLoadMode, RulePackPaths, canonical_or_original,
+        CommunityRules, RuleLoadMode, RulePackPaths,
         resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
     };
 
@@ -100,23 +98,45 @@ mod tests {
             .filter(|definition| definition.kind() == super::DefinitionKind::Modifier)
     }
 
-    fn rule_yaml(id: &str, regex: &str, score: u64) -> String {
+    /// A UUIDv4-shaped id derived from `name`, so synthetic rules with different
+    /// names never share one and a replacement keeps the id of what it replaces.
+    fn synthetic_uuid(name: &str) -> String {
+        let hash = |seed: u64| {
+            name.bytes().fold(seed, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        let (high, low) = (hash(0xcbf2_9ce4_8422_2325), hash(0x84222325_cbf29ce4));
         format!(
-            r#"version: 1
-description: Test rules.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: {id}
+            "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+            high >> 32,
+            (high >> 16) & 0xffff,
+            high & 0xfff,
+            low >> 52,
+            low & 0xffff_ffff_ffff
+        )
+    }
+
+    fn rule_yaml(id: &str, regex: &str, score: u64) -> String {
+        let uuid = synthetic_uuid(id);
+        format!(
+            r#"title: Synthetic test rule
+id: {uuid}
+name: {id}
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: '{regex}'
+    condition: selection
+level: low
+telltale:
     category: test
-    severity: low
     score: {score}
-    targets: [command]
-    regex: '{regex}'
+    explanation: 'Synthetic test rule.'
     tags: [test]
-    explanation: Synthetic test rule.
-modifiers: []
 "#
         )
     }
@@ -171,53 +191,70 @@ modifiers: []
     }
 
     #[test]
-    fn cli_document_defaults_match_document_loader() {
+    fn cli_rule_files_match_document_loader() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("rules.yaml");
         let other_path = temp.path().join("other.yaml");
         let other = rule_yaml("test.other", "other", 7);
         fs::write(&other_path, &other).expect("write other rules");
-        for (case_insensitive, enabled, definition_enabled) in [
-            (false, false, false),
-            (false, false, true),
-            (false, true, false),
-            (false, true, true),
-            (true, false, false),
-            (true, false, true),
-            (true, true, false),
-            (true, true, true),
-        ] {
+        // Rule v2 has no document defaults: each document spells its own case
+        // flag and `enabled`.
+        for (case_insensitive, enabled) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let flag = if case_insensitive { "|i" } else { "" };
             let raw = format!(
-                r#"version: 1
-description: document defaults
-defaults: {{case_insensitive: {case_insensitive}, enabled: {enabled}}}
-rules:
-  - id: test.simple
+                r#"title: Synthetic test rule
+id: 2ad880ae-fb1b-4b0e-808f-e31e860e9a2b
+name: test.simple
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re{flag}: 'needle'
+    condition: selection
+level: low
+telltale:
     category: test
-    severity: low
     score: 2
-    targets: [command]
-    regex: needle
-    enabled: {definition_enabled}
+    explanation: 'Synthetic test rule.'
     tags: [test]
-    explanation: Synthetic test rule.
-  - id: test.exclusion
+    enabled: {enabled}
+---
+title: Synthetic test rule
+id: dec4ef35-33d2-444b-8e58-9bde2718b4a8
+name: test.exclusion
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re{flag}: 'needle'
+    filter_command:
+        tool.command|re{flag}: 'quoted'
+    condition: selection_command and not filter_command
+level: low
+telltale:
     category: test
-    severity: low
     score: 1
-    enabled: {definition_enabled}
-    detection:
-      selection: {{command: needle}}
-      exclude: {{command: quoted}}
-      condition: selection
+    explanation: 'Synthetic test rule.'
     tags: [test]
-    explanation: Synthetic test rule.
-modifiers:
-  - id: test.modifier
+    enabled: {enabled}
+---
+title: Synthetic test modifier
+id: 7fa8798b-5480-4d1f-8de3-961ebb03c0f8
+name: test.modifier
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [test.simple, test.exclusion]
+telltale:
     score: 3
-    enabled: {definition_enabled}
-    when_all_rule_ids: [test.simple, test.exclusion]
-    explanation: Synthetic test modifier.
+    explanation: 'Synthetic test modifier.'
+    enabled: {enabled}
 "#,
             );
             fs::write(&path, &raw).expect("write rules");
@@ -238,11 +275,11 @@ modifiers:
                 super::load_rule_set_from_documents(&[&raw, &other], None).expect("load documents");
             assert_eq!(
                 rules(&resolution.content).next().unwrap().enabled(),
-                enabled && definition_enabled
+                enabled
             );
             assert_eq!(
                 modifiers(&resolution.content).next().unwrap().enabled(),
-                enabled && definition_enabled
+                enabled
             );
             for text in [
                 "needle",
@@ -257,14 +294,14 @@ modifiers:
                 assert_eq!(
                     cli_match.map(|matched| (matched.rule_ids, matched.score)),
                     document_match.map(|matched| (matched.rule_ids, matched.score)),
-                    "case_insensitive={case_insensitive}, enabled={enabled}, definition_enabled={definition_enabled}, text={text}"
+                    "case_insensitive={case_insensitive}, enabled={enabled}, text={text}"
                 );
             }
             let matched = resolution
                 .rule_set
                 .evaluate(&[("command", "needle")])
                 .unwrap();
-            assert_eq!(matched.is_some(), enabled && definition_enabled);
+            assert_eq!(matched.is_some(), enabled);
             if let Some(matched) = matched {
                 assert_eq!(matched.score, 6);
                 assert_eq!(
@@ -290,7 +327,7 @@ modifiers:
                     .evaluate(&[("command", "NEEDLE")])
                     .unwrap()
                     .is_some(),
-                case_insensitive && enabled && definition_enabled
+                case_insensitive && enabled
             );
             assert_eq!(
                 resolution
@@ -317,7 +354,10 @@ modifiers:
         assert_eq!(pipeline.rule_count(), 2);
         for duplicate in [
             first.clone(),
-            first.replace("enabled: true", "enabled: false"),
+            first.replace(
+                "    tags: [test]\n",
+                "    tags: [test]\n    enabled: false\n",
+            ),
         ] {
             let error = telltale_core::Pipeline::builder()
                 .without_bundled_defaults()
@@ -547,15 +587,22 @@ modifiers:
             &[],
             &[],
         )
-        .expect("v1 pack replacement");
+        .expect("pack replacement");
         assert_eq!(rules(&valid.content).next().unwrap().score(), 2);
         assert_eq!(valid.diagnostics.provenance[0].replaced_sources.len(), 1);
 
-        for version in [0, 2] {
+        // A Rule v1 document, of any version, fails even when a higher tier
+        // shadows it or it is disabled.
+        for version in [0, 1, 2] {
             for path in [&deployment, &local] {
-                let raw = rule_yaml("pack.same", "first", 1)
-                    .replacen("version: 1", &format!("version: {version}"), 1)
-                    .replacen("enabled: true", "enabled: false", 1);
+                let raw = format!(
+                    "version: {version}\n{}",
+                    rule_yaml("pack.same", "first", 1).replacen(
+                        "    tags: [test]\n",
+                        "    tags: [test]\n    enabled: false\n",
+                        1
+                    )
+                );
                 let error =
                     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
                         &paths,
@@ -568,9 +615,7 @@ modifiers:
                     .expect_err("unsupported pack version must not be laundered")
                     .to_string();
                 assert!(
-                    error.contains(&format!(
-                        "unsupported rule set version {version}; only version 1 is supported"
-                    )),
+                    error.contains(telltale_rules::rule_v2::RULE_V1_UNSUPPORTED),
                     "{error}"
                 );
                 let tier = if path == &deployment {
@@ -613,8 +658,8 @@ modifiers:
         .expect_err("equal-tier duplicate");
         let error = error.to_string();
         assert!(error.starts_with("duplicate rule id: same.id"));
-        assert!(error.contains(&canonical_or_original(&first).display().to_string()));
-        assert!(error.contains(&canonical_or_original(&second).display().to_string()));
+        assert!(error.contains("one.yaml#document:0"), "{error}");
+        assert!(error.contains("two.yaml#document:0"), "{error}");
     }
 
     #[test]
@@ -669,13 +714,10 @@ modifiers:
         )
         .expect_err("distinct explicit collision");
         let collision = collision.to_string();
-        assert!(collision.contains(&canonical_or_original(&managed).display().to_string()));
+        assert!(collision.contains("managed.yaml#document:0"), "{collision}");
         assert!(
-            collision.contains(
-                &canonical_or_original(&explicit_collision)
-                    .display()
-                    .to_string()
-            )
+            collision.contains("explicit-collision.yaml#document:0"),
+            "{collision}"
         );
 
         let duplicate = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
@@ -860,15 +902,9 @@ overrides:
     }
 
     fn package_yaml(id: &str, namespace: &str, document: &str) -> String {
-        let mut lines = document.lines();
-        let mut yaml = format!(
-            "format: telltale-rule-package/v1\nid: {id}\nversion: \"1.0.0\"\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: {namespace}\ndocuments:\n  - {}\n",
-            lines.next().expect("document line")
-        );
-        for line in lines {
-            yaml.push_str(&format!("    {line}\n"));
-        }
-        yaml
+        format!(
+            "format: telltale-rule-package/v2\nid: {id}\ntitle: Synthetic package\nversion: \"1.0.0\"\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: {namespace}\n---\n{document}"
+        )
     }
 
     #[test]
@@ -1108,11 +1144,6 @@ overrides:
         let error = custom(&paths, &[]).expect_err("a different UUID does not replace");
         assert!(error.contains("rule 'v2.same'"), "{error}");
         assert!(error.contains(UUID_A) && error.contains(UUID_B), "{error}");
-
-        // A Rule v1 definition has no UUID to keep, either way round.
-        write_rule(&local, "v2.same", "v1-marker", 7);
-        let v1 = custom(&paths, &[]).expect("v1 replaces v2");
-        assert_eq!(v1.content.get("v2.same").unwrap().uuid(), None);
     }
 
     #[test]

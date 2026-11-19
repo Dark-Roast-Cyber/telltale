@@ -103,9 +103,9 @@ The Cargo/package version is not the version of every data contract:
   `telltale migrate state`; that command does not migrate historical events.
   Event relocation on that binary is the separate `telltale migrate events`
   command and does not rewrite Event 1.0 or 2.0 records as Event 3.0.
-- **Rule language and bundled rules:** Rule v1 content remains compatible in
-  the 0.7 line; the 0.8 line replaces it with [Rule v2](rule-format.md) as a
-  reviewed minor-release change (see the [0.8.0 migration guide](migrations/0.8.0.md)). Removing syntax, changing evaluation meaning incompatibly,
+- **Rule language and bundled rules:** Rule v1 content is the format of the
+  0.7 line; the 0.8 line replaces it with [Rule v2](rule-format.md), and Rule v1
+  documents no longer load, as a reviewed minor-release change (see the [0.8.0 migration guide](migrations/0.8.0.md)). Removing syntax, changing evaluation meaning incompatibly,
   or invalidating existing rule documents requires a separately reviewed minor
   release rather than a routine patch batch.
 

@@ -1,15 +1,18 @@
-version: 1
-description: Invalid custom Telltale rule fixture.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: custom.invalid_regex
+# Invalid custom Telltale rule fixture.
+title: Invalid regex should fail validation
+id: 90f0f9ff-25f7-46af-bc5a-66cd9e2eb967
+name: custom.invalid_regex
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re|i: '['
+    condition: selection
+level: high
+telltale:
     category: custom_agent_behavior
-    severity: high
     score: 70
-    targets: [assistant_context]
-    regex: '['
+    explanation: 'Invalid regex should fail validation.'
     tags: [custom]
-    explanation: Invalid regex should fail validation.
-modifiers: []

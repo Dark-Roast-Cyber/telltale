@@ -79,7 +79,7 @@ Canonical Observation v2 acquisition and the Detection v2 runtime are now the
 authoritative path for CLI scan/watch and every `Pipeline` scan method across the
 eight registered source identities. Rules are written in
 [Rule v2](docs/rule-format.md), Telltale's Sigma profile, which compiles into the
-Rule v1 compatibility form, and Event 3.0 remains the compatibility projection. Rust hosts embed
+compiled rule form named `RuleV1Compatibility*` (Rule v1 documents no longer load), and Event 3.0 remains the compatibility projection. Rust hosts embed
 `telltale-core` and use detailed scans for per-action findings with typed
 outcomes; see [embedding](docs/embedding.md) for the contract and surface
 classification. Event4 and Telemetry/Output v2 remain inactive.

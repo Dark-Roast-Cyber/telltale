@@ -4,8 +4,8 @@ Status: Accepted (2026-11-04)
 
 ## Context
 
-Telltale owns acquisition, Canonical Observation v2, Detection v2, Rule v1
-content, action findings, redaction and versioned wire forms. Its embedding
+Telltale owns acquisition, Canonical Observation v2, Detection v2, rule
+content (Rule v1 when this was decided, Rule v2 since 0.8.0), action findings, redaction and versioned wire forms. Its embedding
 contract (`docs/embedding.md` at Telltale `0249eaf`) classifies
 `scan_sources_detailed`, `SourceScan`, `ActionFinding` / `ActionRecordV1`,
 `semantic_provenance` and the rule catalog as *Supported*;
@@ -16,8 +16,9 @@ contract (`docs/embedding.md` at Telltale `0249eaf`) classifies
 
 Implement Telltale Hooks in Rust as an ordinary Cargo consumer of
 `telltale-core`, pinned by Git revision, and use only Supported surfaces.
-Host-only detection knowledge (hook self-protection) ships as Rule v1
-documents added through `Pipeline::builder().rules_document()`.
+Host-only detection knowledge (hook self-protection) ships as rule documents
+added through `Pipeline::builder().rules_document()`: Rule v1 when this was
+decided, Rule v2 since 0.8.0, when Rule v1 stopped loading.
 
 ## Evidence
 

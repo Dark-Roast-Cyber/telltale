@@ -4,10 +4,12 @@
 //! document is a Sigma 2.1 rule marked `taxonomy: telltale` (it has
 //! `detection`), or a chain: a Sigma correlation document whose
 //! `correlation.type` is the Telltale extension `telltale_chain`. Rules compile
-//! into the same compiled rule Rule v1 produces and chains into the same
-//! modifier, so the compatibility export, its fingerprint, and Detection v2
-//! read both formats unchanged. The compiled id is the document's `name`; the
-//! UUID `id` is the catalog key and never reaches the compiled form.
+//! into the compiled rule form ([`crate::RuleV1CompatibilityRule`]) and chains
+//! into its modifiers ([`crate::RuleV1CompatibilityModifier`]), which the
+//! compatibility export, its fingerprint and Detection v2 read; "V1" there
+//! names the compiled detector version, not an authoring format. The compiled
+//! id is the document's `name`; the UUID `id` is the catalog key and never
+//! reaches the compiled form.
 //!
 //! The key sets are closed. Unknown top-level, `logsource`, `telltale` and
 //! `correlation` keys are errors, and so is every Sigma construct level 1 does
@@ -15,8 +17,9 @@
 //! documents are not supported. `detection` is read in YAML mapping order,
 //! because compiled matchers follow selection order.
 //!
-//! This front end shares only the compiled types and validators with Rule v1;
-//! it never builds the Rule v1 document structs, which will be removed.
+//! Rule v1 is no longer read: a document with a top-level `version` (a Rule v1
+//! document) fails with [`RULE_V1_UNSUPPORTED`], which points to the Rule v2
+//! documentation.
 
 mod detection;
 #[cfg(test)]
@@ -84,16 +87,13 @@ pub const MAX_TITLE_CHARS: usize = 256;
 pub const MAX_SCORE: u64 = 100;
 
 const DOCS: &str = "see docs/rule-format.md";
+
+/// The error for a Rule v1 document, in a rule file or a rule package.
+pub const RULE_V1_UNSUPPORTED: &str = "Rule v1 is no longer supported; rewrite this document \
+     as Rule v2: see docs/rule-format.md and docs/migrations/0.8.0.md";
 const TOOL_ACTIVITY: &str = "tool_activity";
 const MESSAGE: &str = "message";
 const AGENT_ACTIVITY: &str = "agent_activity";
-
-/// What one rule file holds.
-pub(crate) enum RuleFile {
-    /// One Rule v1 document (it has `version`), read by the Rule v1 reader.
-    V1,
-    V2(Vec<Definition>),
-}
 
 /// One validated Rule v2 rule or chain, compiled whether or not it is enabled.
 #[derive(Debug, Clone)]
@@ -112,23 +112,13 @@ pub(crate) enum Body {
     Chain(RuleV1CompatibilityModifier),
 }
 
-/// Read one rule file: every document must be a Rule v2 rule or chain, or the
-/// file must hold exactly one Rule v1 document.
-pub(crate) fn read_file(raw: &str) -> Result<RuleFile, Box<dyn Error>> {
+/// Read one rule file: every document must be a Rule v2 rule or chain.
+pub(crate) fn read_file(raw: &str) -> Result<Vec<Definition>, Box<dyn Error>> {
     let documents = serde_yaml::Deserializer::from_str(raw)
         .map(Value::deserialize)
         .collect::<Result<Vec<_>, _>>()?;
-    let is_v1 =
-        |document: &Value| matches!(document, Value::Mapping(map) if map.contains_key("version"));
-    match documents.as_slice() {
-        [] => return Err("rule file holds no YAML documents".into()),
-        [document] if is_v1(document) => return Ok(RuleFile::V1),
-        documents if documents.iter().any(is_v1) => {
-            return Err(
-                "a Rule v1 document (`version`) must be the only document in its file".into(),
-            );
-        }
-        _ => {}
+    if documents.is_empty() {
+        return Err("rule file holds no YAML documents".into());
     }
     package::reject_hidden_characters("rule file", raw)?;
     for (index, text) in document_texts(raw).into_iter().enumerate() {
@@ -142,8 +132,7 @@ pub(crate) fn read_file(raw: &str) -> Result<RuleFile, Box<dyn Error>> {
             read_document(document)
                 .map_err(|error| format!("rule document {}: {error}", index + 1).into())
         })
-        .collect::<Result<Vec<_>, Box<dyn Error>>>()
-        .map(RuleFile::V2)
+        .collect()
 }
 
 /// The source text of each YAML document in `raw`, in stream order. Callers
@@ -253,6 +242,9 @@ pub(crate) fn read_document(document: Value) -> Result<Definition, Box<dyn Error
     let Value::Mapping(map) = &document else {
         return Err(format!("a rule document must be a YAML mapping; {DOCS}").into());
     };
+    if map.contains_key("version") {
+        return Err(RULE_V1_UNSUPPORTED.into());
+    }
     reject_yaml_tags(&document)?;
     package::reject_decoded_hidden_characters_in("rule document decoded string", &document)?;
     if map.contains_key("filter") {

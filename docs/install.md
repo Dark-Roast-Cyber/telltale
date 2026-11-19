@@ -569,8 +569,8 @@ telltale:
 ```
 
 See [rule packages](rule-format.md#rule-packages) for every header check.
-Format `telltale-rule-package/v1`, the only format Telltale 0.7 reads, stops
-loading in 0.8.0; see the [0.8.0 migration guide](migrations/0.8.0.md).
+Format `telltale-rule-package/v1`, the only format Telltale 0.7 reads, fails to
+load; see the [0.8.0 migration guide](migrations/0.8.0.md).
 
 Packages only add definitions. A package cannot reuse a core rule namespace,
 replace a core rule, or replace another package's rule; conflicting package IDs,

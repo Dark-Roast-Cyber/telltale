@@ -1,4 +1,9 @@
-//! Rule v1 compatibility compiler.
+//! Compiler for the compiled rule form.
+//!
+//! The `RuleV1*` and `rule_v1_*` names, detector version 1 and the `compat.v1.*`
+//! selectors name the compiled form that Rule v2 documents compile to, not an
+//! authoring format; Rule v1 documents no longer load. They stay so that
+//! fingerprints, semantic identities and selectors never change.
 //!
 //! This compiler consumes the effective compiled-rule view.  It intentionally
 //! does not parse YAML and does not carry the legacy allowlist or evaluator into

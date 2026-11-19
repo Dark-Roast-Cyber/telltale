@@ -244,23 +244,45 @@ fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
     assert_eq!(provenance, &expected_provenance);
 }
 
-fn custom_rule_yaml(id: &str, regex: &str) -> String {
+/// A UUIDv4-shaped id derived from `name`, so synthetic rules with different
+/// names never share one and a replacement keeps the id of what it replaces.
+fn synthetic_uuid(name: &str) -> String {
+    let hash = |seed: u64| {
+        name.bytes().fold(seed, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+    };
+    let (high, low) = (hash(0xcbf2_9ce4_8422_2325), hash(0x84222325_cbf29ce4));
     format!(
-        r#"version: 1
-description: Test custom rule.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: {id}
+        "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+        high >> 32,
+        (high >> 16) & 0xffff,
+        high & 0xfff,
+        low >> 52,
+        low & 0xffff_ffff_ffff
+    )
+}
+
+fn custom_rule_yaml(id: &str, regex: &str) -> String {
+    let uuid = synthetic_uuid(id);
+    format!(
+        r#"title: Test rule
+id: {uuid}
+name: {id}
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: '{regex}'
+    condition: selection
+level: low
+telltale:
     category: custom_agent_behavior
-    severity: low
     score: 10
-    targets: [command]
-    regex: '{regex}'
+    explanation: 'Test rule.'
     tags: [test]
-    explanation: Test rule.
-modifiers: []
 "#
     )
 }
@@ -299,8 +321,11 @@ fn rules_validate_reports_unsupported_targets() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("custom.unsupported_target"));
-    assert!(stderr.contains("unsupported target 'raw_transcript'"));
-    assert!(stderr.contains("supported targets"));
+    assert!(
+        stderr.contains("unknown field `message.raw_transcript`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("supported fields"), "{stderr}");
 }
 
 #[test]
@@ -311,8 +336,9 @@ fn rules_validate_and_test_accept_every_detection_severity() {
         fs::write(
             &rules,
             custom_rule_yaml("synthetic.severity", "exfiltrate project secrets")
-                .replace("severity: low", &format!("severity: {severity}"))
-                .replace("targets: [command]", "targets: [assistant_context]"),
+                .replace("level: low", &format!("level: {severity}"))
+                .replace("category: tool_activity", "category: message")
+                .replace("tool.command|", "message.assistant_text|"),
         )
         .expect("synthetic rule");
         let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
@@ -371,10 +397,10 @@ fn unsupported_rule_severity_fails_before_activation() {
         fs::write(
             &rules,
             custom_rule_yaml("synthetic.severity", "synthetic-probe")
-                .replace("severity: low", &format!("severity: {severity}"))
+                .replace("level: low", &format!("level: {severity}"))
                 .replace(
                     "category: custom_agent_behavior",
-                    "status: not_a_status\n    category: not_a_category",
+                    "category: not_a_category",
                 ),
         )
         .expect("synthetic invalid severity rule");
@@ -409,7 +435,7 @@ fn unsupported_rule_severity_fails_before_activation() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 stderr.contains(&format!(
-                    "rule synthetic.severity uses unsupported severity '{severity}'"
+                    "rule synthetic.severity uses unsupported level '{severity}'"
                 )),
                 "{args:?}: {stderr}"
             );
@@ -1320,21 +1346,23 @@ fn config_validate_reports_managed_rule_replacement() {
     fs::create_dir_all(rule_path.parent().expect("rules dir")).expect("rules dir");
     fs::write(
         &rule_path,
-        r#"version: 1
-description: Duplicate bundled id for local config validation.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: secret.env.read
+        r#"title: Duplicate bundled rule id
+id: 416a6e7f-29bd-470c-bf0e-a1a24646a288
+name: secret.env.read
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: '\.env'
+    condition: selection
+level: medium
+telltale:
     category: secret_access
-    severity: medium
     score: 35
-    targets: [command]
-    regex: '\.env'
+    explanation: 'Duplicate bundled rule id.'
     tags: [test]
-    explanation: Duplicate bundled rule id.
-modifiers: []
 "#,
     )
     .expect("write duplicate rule");
@@ -1613,21 +1641,24 @@ fn additive_custom_defaults_enabled_false_do_not_disable_bundled_rules() {
     let custom_rules = temp.path().join("disabled-custom-rules.yaml");
     fs::write(
         &custom_rules,
-        r#"version: 1
-description: Disabled custom defaults should not affect bundled rules.
-defaults:
-  case_insensitive: true
-  enabled: false
-rules:
-  - id: custom.disabled.default
+        r#"title: Disabled custom rule used for regression coverage
+id: 6061ea1b-b75a-4059-8b15-885b860bd8e5
+name: custom.disabled.default
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: 'custom-disabled-default'
+    condition: selection
+level: low
+telltale:
     category: custom_agent_behavior
-    severity: low
     score: 10
-    targets: [command]
-    regex: 'custom-disabled-default'
+    explanation: 'Disabled custom rule used for regression coverage.'
     tags: [test]
-    explanation: Disabled custom rule used for regression coverage.
-modifiers: []
+    enabled: false
 "#,
     )
     .expect("write custom rules");
@@ -1665,21 +1696,23 @@ fn additive_custom_defaults_case_sensitive_do_not_change_bundled_case_insensitiv
     let custom_rules = temp.path().join("case-sensitive-custom-rules.yaml");
     fs::write(
         &custom_rules,
-        r#"version: 1
-description: Case-sensitive custom defaults should not affect bundled rules.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: custom.case_sensitive.default
+        r#"title: Case-sensitive custom rule used for regression coverage
+id: a18e69da-ecee-41b4-809d-240c3e1d46d1
+name: custom.case_sensitive.default
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'custom-case-sensitive-default'
+    condition: selection
+level: low
+telltale:
     category: custom_agent_behavior
-    severity: low
     score: 10
-    targets: [command]
-    regex: 'custom-case-sensitive-default'
+    explanation: 'Case-sensitive custom rule used for regression coverage.'
     tags: [test]
-    explanation: Case-sensitive custom rule used for regression coverage.
-modifiers: []
 "#,
     )
     .expect("write custom rules");
@@ -1728,31 +1761,43 @@ fn scan_target_exclusion_emits_valid_retained_event3() {
     fs::write(
         &rules,
         r#"
-version: 1
-description: Synthetic retained metadata regression
-defaults: {case_insensitive: true, enabled: true}
-rules:
-  - id: test.retained
+title: Synthetic retained match
+id: 1d5c8557-6d4b-4f45-87ba-5fd1bad84774
+name: test.retained
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re|i: 'synthetic marker'
+    condition: selection
+level: high
+telltale:
     category: execution
-    severity: high
     score: 60
-    targets: [assistant_context]
-    regex: 'synthetic marker'
+    explanation: 'Synthetic retained match'
     tags: [synthetic]
-    explanation: Synthetic retained match
-  - id: test.excluded
+---
+title: Synthetic skipped match
+id: d908b88e-83b7-4010-8a83-583dd847e09c
+name: test.excluded
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection_assistant_context:
+        message.assistant_text|re|i: '\.env'
+    filter_assistant_context:
+        message.assistant_text|re|i: 'policy'
+    condition: selection_assistant_context and not filter_assistant_context
+level: high
+telltale:
     category: execution
-    severity: high
     score: 80
-    detection:
-      selection:
-        assistant_context: '\.env'
-      exclude:
-        assistant_context: policy
-      condition: selection
+    explanation: 'Synthetic skipped match'
     tags: [synthetic, skipped-only]
-    explanation: Synthetic skipped match
-modifiers: []
 "#,
     )
     .expect("rules");
@@ -2016,41 +2061,28 @@ fn policy_filtered_invalid_rules_only_degrade_diagnostics() {
     )
     .expect("diagnostic fixture");
 
-    for (case, invalid_rule, sentinel) in [
-        (
-            "regex",
-            r#"    - id: test.invalid.regex
-      category: test
-      severity: medium
-      score: 1
-      targets: [assistant_context]
-      regex: '[DIAGNOSTIC_REGEX_SENTINEL'
-      tags: []
-      explanation: invalid regex fixture
-"#,
-            "DIAGNOSTIC_REGEX_SENTINEL",
-        ),
-        (
-            "metadata",
-            r#"    - id: test.invalid.metadata
-      category: test
-      detection_class: DIAGNOSTIC_METADATA_SENTINEL
-      severity: medium
-      score: 1
-      targets: [assistant_context]
-      regex: 'never-matches'
-      tags: []
-      explanation: invalid metadata fixture
-"#,
-            "DIAGNOSTIC_METADATA_SENTINEL",
-        ),
-    ] {
+    // Rule v2 rejects an invalid regex or metadata value when the document is
+    // read, policy or not; a rule the canonical compiler rejects still loads.
+    {
+        let (case, invalid_rule, sentinel) = (
+            "canonical",
+            "title: invalid canonical fixture\nid: 2b8c4d6e-0f1a-4b3c-8d5e-6f7a8b9c0d1e\nname: test.invalid.canonical\n\
+         taxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\n\
+         detection:\n    selection:\n        - message.assistant_text|re: 'DIAGNOSTIC_CANONICAL_SENTINEL'\n\
+         \x20   condition: selection\nlevel: medium\ntelltale:\n    category: test\n    score: 1\n\
+         \x20   explanation: invalid canonical fixture\n    detection_class: operational_health\n",
+            "DIAGNOSTIC_CANONICAL_SENTINEL",
+        );
         let rules_path = temp.path().join(format!("invalid-{case}.yaml"));
         let invalid_id = format!("test.invalid.{case}");
         fs::write(
             &rules_path,
             format!(
-                "version: 1\ndescription: diagnostic fixture\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n    - id: test.valid\n      category: test\n      severity: medium\n      score: 1\n      targets: [assistant_context]\n      regex: 'exfiltrate project secrets'\n      tags: []\n      explanation: valid fixture\n{invalid_rule}modifiers: []\n"
+                "title: valid fixture\nid: 7c9e1f3a-5b2d-4e6f-8a0b-1c2d3e4f5a6b\nname: test.valid\ntaxonomy: telltale\n\
+                 logsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n\
+                 \x20       - message.assistant_text|re: 'exfiltrate project secrets'\n    condition: selection\n\
+                 level: medium\ntelltale:\n    category: test\n    score: 1\n    explanation: valid fixture\n\
+                 ---\n{invalid_rule}"
             ),
         )
         .expect("invalid rules fixture");
@@ -2087,7 +2119,10 @@ fn policy_filtered_invalid_rules_only_degrade_diagnostics() {
 }
 
 #[test]
-fn policy_filtered_pre_policy_overflow_only_degrades_diagnostics() {
+/// Chain scores that would overflow pre-policy risk accounting no longer load:
+/// Rule v2 bounds every score at 100, policy or not, so a scan fails before it
+/// activates any output.
+fn pre_policy_overflow_scores_fail_before_scan_outputs_activate() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions");
@@ -2101,37 +2136,61 @@ fn policy_filtered_pre_policy_overflow_only_degrades_diagnostics() {
     let rules_path = temp.path().join("overflow.yaml");
     fs::write(
         &rules_path,
-        r#"version: 1
-description: overflow diagnostic fixture
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: test.overflow.first
+        r#"title: first overflow fixture
+id: 67870354-fc7a-4ffe-8b2d-1512ce13617a
+name: test.overflow.first
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'overflow diagnostic match'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 0
-    targets: [assistant_context]
-    regex: 'overflow diagnostic match'
-    tags: []
-    explanation: first overflow fixture
-  - id: test.overflow.second
+    explanation: 'first overflow fixture'
+---
+title: second overflow fixture
+id: 4a10d07a-52fd-4570-806a-22e43fddad34
+name: test.overflow.second
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'overflow diagnostic match'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 0
-    targets: [assistant_context]
-    regex: 'overflow diagnostic match'
-    tags: []
-    explanation: second overflow fixture
-modifiers:
-  - id: test.overflow.first.modifier
-    when_all_rule_ids: [test.overflow.first]
+    explanation: 'second overflow fixture'
+---
+title: first compatibility contribution
+id: 13f30fa9-3c45-49d4-88ff-43b4769be938
+name: test.overflow.first.modifier
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [test.overflow.first]
+telltale:
     score: 18446744073709551615
-    explanation: first compatibility contribution
-  - id: test.overflow.second.modifier
-    when_all_rule_ids: [test.overflow.second]
+    explanation: 'first compatibility contribution'
+---
+title: second compatibility contribution
+id: 788f72d5-8ff5-4157-811b-493dbc596a8f
+name: test.overflow.second.modifier
+taxonomy: telltale
+correlation:
+    type: telltale_chain
+    rules: [test.overflow.second]
+telltale:
     score: 18446744073709551615
-    explanation: second compatibility contribution
+    explanation: 'second compatibility contribution'
 "#,
     )
     .expect("overflow rules fixture");
@@ -2163,12 +2222,16 @@ modifiers:
         .arg(&state_path)
         .output()
         .expect("run overflow diagnostic scan");
-    assert_diagnostic_only_scan(
-        &output,
-        &log_path,
-        "risk contribution total overflowed u64",
-        2,
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "chain 'test.overflow.first.modifier': telltale.score must be between 0 and 100"
+        ),
+        "{stderr}"
     );
+    assert!(!stderr.contains("overflow diagnostic match"), "{stderr}");
+    assert!(!log_path.exists() && !state_path.exists());
 }
 
 #[test]
@@ -2185,29 +2248,39 @@ fn partial_policy_repeated_state_preserves_events_and_accounting() {
     let rules_path = temp.path().join("partial.yaml");
     fs::write(
         &rules_path,
-        r#"version: 1
-description: partial policy fixture
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: test.partial.first
+        r#"title: first partial fixture
+id: dbcb6cfc-54e7-4095-855f-b6cb20d81361
+name: test.partial.first
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'exfiltrate project secrets'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 1
-    targets: [assistant_context]
-    regex: 'exfiltrate project secrets'
-    tags: []
-    explanation: first partial fixture
-  - id: test.partial.second
+    explanation: 'first partial fixture'
+---
+title: second partial fixture
+id: 1d020aeb-8c14-498f-8629-85f5d2caa25e
+name: test.partial.second
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'exfiltrate project secrets'
+    condition: selection
+level: medium
+telltale:
     category: test
-    severity: medium
     score: 1
-    targets: [assistant_context]
-    regex: 'exfiltrate project secrets'
-    tags: []
-    explanation: second partial fixture
-modifiers: []
+    explanation: 'second partial fixture'
 "#,
     )
     .expect("partial rules fixture");
@@ -2699,41 +2772,56 @@ fn rules_coverage_fails_nonzero_on_invalid_accounting() {
     let rules = temp.path().join("overflow.yaml");
     fs::write(
         &rules,
-        r#"version: 1
-description: overflow fixture
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: rule.one
+        r#"title: first overflow contribution
+id: 48dcb2dd-d88d-4efb-8c4b-e637b39c0996
+name: rule.one
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'trigger'
+    condition: selection
+level: high
+telltale:
     category: test
-    severity: high
-    score: 18446744073709551615
-    targets: [assistant_context]
-    regex: trigger
-    tags: []
-    explanation: first overflow contribution
-  - id: rule.two
+    score: 1
+    explanation: 'first overflow contribution'
+---
+title: second overflow contribution
+id: 27a90c79-52fc-4ad4-8995-258dee056fe6
+name: rule.two
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: message
+detection:
+    selection:
+        - message.assistant_text|re: 'trigger'
+    condition: selection
+level: high
+telltale:
     category: test
-    severity: high
-    score: 18446744073709551615
-    targets: [assistant_context]
-    regex: trigger
-    tags: []
-    explanation: second overflow contribution
-modifiers: []
+    score: 1
+    explanation: 'second overflow contribution'
 "#,
     )
     .expect("write overflow rules");
+    // Rule v2 bounds a document score at 100; an override can still set a
+    // score the canonical compiler rejects.
+    let config = temp.path().join("config");
+    fs::create_dir_all(config.join("overrides.d")).expect("overrides dir");
+    fs::write(
+        config.join("overrides.d/overflow.yaml"),
+        "version: 1\noverrides:\n  - rule_id: rule.one\n    score: 18446744073709551615\n    reason: synthetic\n  - rule_id: rule.two\n    score: 18446744073709551615\n    reason: synthetic\n",
+    )
+    .expect("write overflow overrides");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "rules",
-            "coverage",
-            "--no-local-config",
-            "--no-default-rules",
-            "--root",
-        ])
+        .args(["rules", "coverage", "--no-default-rules", "--config-dir"])
+        .arg(&config)
+        .arg("--root")
         .arg(temp.path())
         .arg("--rules")
         .arg(&rules)
@@ -2868,28 +2956,31 @@ fn listed_rule_ids(args: &[&str], community_env: Option<&str>) -> Vec<String> {
 
 fn community_package_yaml(version: &str, rule_id: &str) -> String {
     format!(
-        r#"format: telltale-rule-package/v1
+        r#"format: telltale-rule-package/v2
 id: telltale.community
+title: Synthetic community release
 version: "{version}"
 publisher: Synthetic community
 license: Apache-2.0
 rule_namespace: tdx
-documents:
-  - version: 1
-    description: Synthetic community release.
-    defaults:
-      case_insensitive: true
-      enabled: true
-    rules:
-      - id: {rule_id}
-        category: persistence
-        severity: low
-        score: 20
-        targets: [command]
-        regex: 'synthetic-community-marker'
-        tags: [synthetic]
-        explanation: Synthetic community rule.
-    modifiers: []
+---
+title: Synthetic community rule
+id: 5d0f6c4e-8a1b-4c2d-9e3f-0a1b2c3d4e5f
+name: {rule_id}
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: 'synthetic-community-marker'
+    condition: selection
+level: low
+telltale:
+    category: persistence
+    score: 20
+    explanation: Synthetic community rule.
+    tags: [synthetic]
 "#
     )
 }
@@ -2908,21 +2999,23 @@ fn community_rules_load_by_default_and_every_opt_out_removes_them() {
     let custom = temp.path().join("custom.yaml");
     fs::write(
         &custom,
-        r#"version: 1
-description: Synthetic custom rules.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: custom.synthetic.marker
+        r#"title: Synthetic custom rule
+id: d640aeee-8eb1-49d1-86e5-ad545315a80f
+name: custom.synthetic.marker
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: 'synthetic-custom-marker'
+    condition: selection
+level: low
+telltale:
     category: persistence
-    severity: low
     score: 20
-    targets: [command]
-    regex: 'synthetic-custom-marker'
+    explanation: 'Synthetic custom rule.'
     tags: [synthetic]
-    explanation: Synthetic custom rule.
-modifiers: []
 "#,
     )
     .expect("custom rules");

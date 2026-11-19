@@ -33,22 +33,23 @@ fn stateless_opencode_repeats_keep_events_and_action_replay_semantics() {
         .without_bundled_defaults()
         .rules_document(
             r#"
-version: 1
-description: Synthetic fallback repeat coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.window.result
-    title: Synthetic result
-    tags: [synthetic]
+title: Synthetic result
+id: 4199adb6-ba9b-424b-850f-da132995d56c
+name: synthetic.window.result
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'Hidden instruction'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        tool_result: 'Hidden instruction'
-      condition: selection
-    explanation: Synthetic test.
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
 "#,
         )
         .build()

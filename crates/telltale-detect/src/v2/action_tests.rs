@@ -3,7 +3,7 @@ use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
 fn sanitizer_budget_rules() -> telltale_rules::RuleV1CompatibilityExport {
-    telltale_rules::load_rule_set_from_documents(&["version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.sanitizer\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [command]\n    regex: MATCH\n    tags: []\n    explanation: synthetic\nmodifiers: []\n"], None).unwrap().compatibility_export()
+    telltale_rules::load_rule_set_from_documents(&["title: synthetic\nid: 3ae13e5d-7e73-4707-832b-e01986743da8\nname: synthetic.sanitizer\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'MATCH'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n"], None).unwrap().compatibility_export()
 }
 
 #[test]
@@ -93,13 +93,10 @@ fn action_nonmatches_exhaust_the_shared_work_budget() {
 #[test]
 fn each_reached_nonmatching_action_matcher_charges_work() {
     let document = |count| {
-        let mut yaml = String::from(
-            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n",
-        );
-        for index in 0..count {
-            yaml.push_str(&format!("  - id: synthetic.nonmatch{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [command]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n"));
-        }
-        yaml.push_str("modifiers: []\n");
+        let yaml = (0..count)
+            .map(|index| format!("title: Synthetic {index}\nid: 00000000-0000-4000-8000-{index:012}\nname: synthetic.nonmatch{index}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: NEVER-MATCH\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: synthetic\n"))
+            .collect::<Vec<_>>()
+            .join("---\n");
         telltale_rules::load_rule_set_from_documents(&[&yaml], None)
             .unwrap()
             .compatibility_export()
@@ -1628,19 +1625,22 @@ fn credential_action_surfaces_remain_distinct_from_session_selectors() {
 #[test]
 fn credential_same_id_custom_predicate_does_not_inherit_native_refinements() {
     let document = r"
-version: 1
-description: synthetic
-defaults: { enabled: true, case_insensitive: false }
-rules:
-  - id: credential.api_key.pattern
+title: synthetic
+id: 065b86f7-94a3-4e98-bd21-f378b77e2cd3
+name: credential.api_key.pattern
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.result|re: 'needle|AKIAIOSFODNN7EXAMPLE|_ghp_[A-Za-z0-9]{20,}'
+    condition: selection
+level: medium
+telltale:
     category: credential_pattern
-    severity: medium
     score: 30
-    targets: [tool_result]
-    regex: 'needle|AKIAIOSFODNN7EXAMPLE|_ghp_[A-Za-z0-9]{20,}'
-    tags: []
-    explanation: synthetic
-modifiers: []
+    explanation: 'synthetic'
 ";
     let export = telltale_rules::load_rule_set_from_documents(&[document], None)
         .unwrap()
@@ -1725,7 +1725,7 @@ fn link_needs_source_time_order_artifact_and_window() {
 
 #[test]
 fn custom_predicates_and_policy_are_effective_not_overridden_by_native_profiles() {
-    let document = "version: 1\ndescription: synthetic\ndefaults:\n  enabled: true\n  case_insensitive: false\nrules:\n  - id: network.download\n    category: download\n    severity: low\n    score: 3\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
+    let document = "title: synthetic\nid: 5a1cb130-ceb5-4e9f-ba17-6689869f1240\nname: network.download\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        - tool.command|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: download\n    score: 3\n    explanation: 'synthetic'\n";
     let rules = telltale_rules::load_rule_set_from_documents(&[document], None).unwrap();
     let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
     let instance = CorrelationId::source_reported("source").unwrap();
@@ -1835,14 +1835,45 @@ fn projected(evaluation: &CanonicalSourceEvaluation) -> ProjectedSource {
 fn rule_action_links_only_to_a_session_event_carrying_every_action_rule() {
     // The action view also reads command text as URL text; the session URL
     // selector does not. The URL rule therefore matches only the action.
-    let export = telltale_rules::load_rule_set_from_documents(&[r"version: 1
-description: synthetic
-defaults: { enabled: true, case_insensitive: false }
-rules:
-  - { id: synthetic.command, category: synthetic, severity: low, score: 1, targets: [command], regex: needle, tags: [], explanation: synthetic }
-  - { id: synthetic.url, category: synthetic, severity: low, score: 1, targets: [url], regex: 'paste\.example', tags: [], explanation: synthetic }
-modifiers: []
-"], None).unwrap().compatibility_export();
+    let export = telltale_rules::load_rule_set_from_documents(
+        &[r"title: synthetic
+id: ff74baf2-7ab9-44bd-80cb-5b92ea036f09
+name: synthetic.command
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'needle'
+    condition: selection
+level: low
+telltale:
+    category: synthetic
+    score: 1
+    explanation: 'synthetic'
+---
+title: synthetic
+id: 0e3abc60-1fbb-47e4-82f3-b4f2d91f40fd
+name: synthetic.url
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.url|re: 'paste\.example'
+    condition: selection
+level: low
+telltale:
+    category: synthetic
+    score: 1
+    explanation: 'synthetic'
+"],
+        None,
+    )
+    .unwrap()
+    .compatibility_export();
     let plan = compile_rule_v1(&export).unwrap();
     let observations = [
         command_tool(

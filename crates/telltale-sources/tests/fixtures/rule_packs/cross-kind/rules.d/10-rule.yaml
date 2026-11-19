@@ -1,15 +1,18 @@
-version: 1
-description: Synthetic rule side of a cross-kind collision.
-defaults:
-  case_insensitive: false
-  enabled: true
-rules:
-  - id: pack.cross_kind
+# Synthetic rule side of a cross-kind collision.
+title: Synthetic cross-kind rule
+id: 93f0b5fb-ece2-433a-9e8b-eacae50a7884
+name: pack.cross_kind
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'cross-kind-marker'
+    condition: selection
+level: low
+telltale:
     category: pack_test
-    severity: low
     score: 1
-    targets: [command]
-    regex: 'cross-kind-marker'
+    explanation: 'Synthetic cross-kind rule.'
     tags: [fixture]
-    explanation: Synthetic cross-kind rule.
-modifiers: []

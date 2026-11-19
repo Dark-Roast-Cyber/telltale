@@ -12,27 +12,41 @@ use telltale_sources::acquisition::{
 };
 
 const PRIVATE: &str = "SYNTHETIC-PRIVATE-METADATA";
-const RULES: &str = r#"version: 1
-description: Synthetic compatibility gate.
-defaults: {enabled: true, case_insensitive: false}
-rules:
-  - id: synthetic.routine
+const RULES: &str = r#"title: Synthetic
+id: 9bfbd2c7-92a3-494e-8001-c46e9fd26bd6
+name: synthetic.routine
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.result|re: 'routine-result-marker'
+    condition: selection
+level: low
+telltale:
     category: synthetic
-    severity: low
     score: 1
-    targets: [tool_result]
-    regex: routine-result-marker
+    explanation: 'Synthetic.'
     tags: [synthetic]
-    explanation: Synthetic.
-  - id: synthetic.result
+---
+title: Synthetic
+id: 3ef189d6-033d-417e-8635-c3218267e677
+name: synthetic.result
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.result|re: 'compatible-result-marker'
+    condition: selection
+level: medium
+telltale:
     category: synthetic
-    severity: medium
     score: 3
-    targets: [tool_result]
-    regex: compatible-result-marker
+    explanation: 'Synthetic.'
     tags: [synthetic]
-    explanation: Synthetic.
-modifiers: []
 "#;
 
 fn command(id: &str, output: String) -> Value {

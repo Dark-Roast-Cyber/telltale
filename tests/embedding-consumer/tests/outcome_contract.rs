@@ -4,19 +4,23 @@
 use telltale_core::*;
 
 const RULE: &str = r#"
-version: 1
-description: Synthetic outcome coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.outcome.command
+title: Synthetic test
+id: 67c36ba2-d168-44a2-8728-d37afc7d975c
+name: synthetic.outcome.command
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re: 'needle'
+    condition: selection
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    targets: [command]
-    regex: needle
+    explanation: 'Synthetic test.'
     tags: [synthetic]
-    explanation: Synthetic test.
 "#;
 
 fn pipeline() -> Pipeline {

@@ -9,44 +9,59 @@ use super::*;
 const SESSION: &str = "11111111-2222-4333-8444-555555555555";
 const SECRET: &str = "SYNTHETIC-CLAUDE-OUTPUT-SECRET";
 const RULES: &str = r#"
-version: 1
-description: Synthetic Claude Code coverage.
-defaults: { case_insensitive: false, enabled: true }
-modifiers: []
-rules:
-  - id: synthetic.claude.command
-    title: Synthetic Claude command marker
-    tags: [synthetic]
+title: Synthetic Claude command marker
+id: ef28b755-b4fb-46d1-89f3-ac6f7e7958fc
+name: synthetic.claude.command
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re: 'synthetic-claude-command-marker'
+    condition: selection_command
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 70
-    detection:
-      selection:
-        command: 'synthetic-claude-command-marker'
-      condition: selection
-    explanation: Synthetic test.
-  - id: synthetic.claude.result
-    title: Synthetic Claude result marker
+    explanation: 'Synthetic test.'
     tags: [synthetic]
+---
+title: Synthetic Claude result marker
+id: acdd4349-e08a-4f11-8f91-663d1e96b1c9
+name: synthetic.claude.result
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool_result:
+        tool.result|re: 'synthetic-claude-result-marker'
+    condition: selection_tool_result
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 60
-    detection:
-      selection:
-        tool_result: 'synthetic-claude-result-marker'
-      condition: selection
-    explanation: Synthetic test.
-  - id: synthetic.claude.path
-    title: Synthetic Claude write path marker
+    explanation: 'Synthetic test.'
     tags: [synthetic]
+---
+title: Synthetic Claude write path marker
+id: 6902048f-1d4a-459b-851c-b3fc24bd8b6f
+name: synthetic.claude.path
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_file_path:
+        tool.path|re: 'synthetic-claude-path-marker'
+    condition: selection_file_path
+level: high
+telltale:
     category: synthetic
-    severity: high
     score: 50
-    detection:
-      selection:
-        file_path: 'synthetic-claude-path-marker'
-      condition: selection
-    explanation: Synthetic test.
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
 "#;
 
 fn record(kind: &str, uuid: &str, body: Value) -> String {

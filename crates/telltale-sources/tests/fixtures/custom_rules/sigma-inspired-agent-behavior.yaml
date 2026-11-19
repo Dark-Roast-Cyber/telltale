@@ -1,27 +1,28 @@
-version: 1
-description: Test-only custom Telltale rules using Sigma-inspired detection selection.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: custom.agent.malicious_behavior
-    title: Custom malicious agent behavior
-    status: experimental
-    author: telltale-test
-    references:
-      - https://example.invalid/telltale-custom-rule
-    falsepositives:
-      - Synthetic fixture text.
-    level: high
+# Test-only custom Telltale rules using Sigma-inspired detection selection.
+title: Custom malicious agent behavior
+id: 4ba923a2-5eda-45b1-bd42-7eda11a881ed
+name: custom.agent.malicious_behavior
+taxonomy: telltale
+status: experimental
+references:
+    - https://example.invalid/telltale-custom-rule
+author: 'telltale-test'
+logsource:
+    product: ai_agent
+    category: agent_activity
+detection:
+    selection_arguments:
+        tool.arguments|re|i: 'exfiltrate project secrets'
+    selection_assistant_context:
+        message.assistant_text|re|i: 'exfiltrate project secrets'
+    selection_tool_result:
+        tool.result|re|i: 'exfiltrate project secrets'
+    condition: 1 of selection_*
+falsepositives:
+    - 'Synthetic fixture text.'
+level: high
+telltale:
     category: custom_agent_behavior
-    severity: high
     score: 70
-    detection:
-      selection:
-        assistant_context: 'exfiltrate project secrets'
-        arguments: 'exfiltrate project secrets'
-        tool_result: 'exfiltrate project secrets'
-      condition: selection
+    explanation: 'User-defined rule for suspicious agent behavior.'
     tags: [custom, agent-behavior]
-    explanation: User-defined rule for suspicious agent behavior.
-modifiers: []

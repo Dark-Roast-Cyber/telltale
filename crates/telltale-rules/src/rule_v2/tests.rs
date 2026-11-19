@@ -793,12 +793,6 @@ fn names_and_ids_are_unique_across_the_set() {
             .contains(&format!("duplicate Rule v2 id {UUID}"))
     );
 
-    let v1 = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\n\
-              rules:\n  - id: synthetic.rule\n    category: synthetic\n    severity: low\n    score: 1\n\
-              \x20   targets: [command]\n    regex: a\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
-    assert!(error(&[v1, &same_name]).contains("duplicate rule id: synthetic.rule"));
-    assert!(error(&[&same_name, v1]).contains("duplicate rule id: synthetic.rule"));
-
     let chain_named_like_rule = chain("categories: [synthetic]").replacen(
         "name: chain.synthetic",
         "name: synthetic.rule",
@@ -808,14 +802,12 @@ fn names_and_ids_are_unique_across_the_set() {
 }
 
 #[test]
-fn rule_v1_and_rule_v2_files_load_together_in_order() {
-    let v1 = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: true\n  enabled: true\n\
-              rules:\n  - id: synthetic.first\n    category: synthetic\n    severity: low\n    score: 1\n\
-              \x20   targets: [command]\n    regex: a\n    tags: []\n    explanation: synthetic\n\
-              modifiers:\n  - id: chain.first\n    score: 1\n    when_all_categories: [synthetic]\n\
-              \x20   explanation: synthetic\n";
+fn files_load_together_in_order() {
+    let first = tool_rule("selection:\n    tool.command|re|i: a\ncondition: selection")
+        .replacen(UUID, OTHER_UUID, 1)
+        .replacen("name: synthetic.rule", "name: synthetic.first", 1);
     let v2 = tool_rule("selection:\n    tool.command|re|i: a\ncondition: selection");
-    let export = load(&[v1, &v2]).compatibility_export();
+    let export = load(&[&first, &v2]).compatibility_export();
     let ids = export
         .rules()
         .iter()
@@ -823,8 +815,7 @@ fn rule_v1_and_rule_v2_files_load_together_in_order() {
         .collect::<Vec<_>>();
     assert_eq!(ids, ["synthetic.first", "synthetic.rule"]);
     assert_eq!(export.rules()[0].matchers, export.rules()[1].matchers);
-    assert_eq!(export.modifiers()[0].id, "chain.first");
-    let export = load(&[&v2, v1]).compatibility_export();
+    let export = load(&[&v2, &first]).compatibility_export();
     assert_eq!(export.rules()[0].id, "synthetic.rule");
 }
 
@@ -860,7 +851,7 @@ fn documents_are_dispatched_by_their_top_level_keys() {
         ("- a\n- b\n".to_owned(), "must be a YAML mapping"),
         (
             format!("{rule_document}---\nversion: 1\n"),
-            "must be the only document in its file",
+            "rule document 2: Rule v1 is no longer supported",
         ),
         (
             rule_document.replacen("title: Synthetic rule", "title: !custom Synthetic", 1),
@@ -873,9 +864,11 @@ fn documents_are_dispatched_by_their_top_level_keys() {
     ] {
         assert_error(&document, expected);
     }
-    // Rule v1 keeps its own reader and its own errors.
-    let message = error(&["version: 1\ndescription: x\n"]);
-    assert!(message.contains("missing field"), "{message}");
+    // A Rule v1 document fails whatever else it holds.
+    assert_eq!(
+        error(&["version: 1\ndescription: x\n"]),
+        format!("rule document 1: {}", super::RULE_V1_UNSUPPORTED)
+    );
 }
 
 #[test]

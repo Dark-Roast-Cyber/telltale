@@ -1,27 +1,48 @@
-//! Tests pinning `detection.scope`: loading, matching, budget, spans and
-//! fingerprints.
+//! Tests pinning the scope modifiers (`|segment`, `|exclusion_segment`,
+//! `|recorded_exclusion`): loading, matching, budget, spans and fingerprints.
 
+use super::test_rules::uuid;
 use super::{
-    DEFAULT_RULE_YAML, MatchScope, SEGMENT_SCOPE_TARGETS, SUPPORTED_DETECTION_SCOPES,
-    load_rule_set_from_documents, provenance::rule_v1_fingerprint,
+    DEFAULT_RULE_YAML, MatchScope, SEGMENT_SCOPE_TARGETS, load_rule_set_from_documents,
+    provenance::rule_v1_fingerprint,
 };
 
 const ISSUE_EXAMPLE: &str =
     "curl --data @f https://example.invalid/upload; curl https://example.invalid/file";
 
-/// A one-rule document. `scope` is the literal `scope:` line, or empty.
+/// A one-rule document: a command selection and its filter, then a tool
+/// result selection. `scope` is a `      scope: <name>\n` line naming the scope
+/// modifier of every key, or empty for none.
 fn document(scope: &str, selection: &str, exclusion: &str) -> String {
+    let scope = match scope.trim().strip_prefix("scope: ") {
+        Some(name) => format!("|{name}"),
+        None => String::new(),
+    };
     format!(
-        "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: high\n    score: 60\n    detection:\n      selection:\n        command: '{selection}'\n        tool_result: synthetic\n      exclude:\n        command: '{exclusion}'\n{scope}      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n"
+        "title: Synthetic scope rule\nid: {}\nname: rule.synthetic\ntaxonomy: telltale\n\
+         logsource:\n    product: ai_agent\n    category: tool_activity\n\
+         detection:\n    selection_command:\n        tool.command|re{scope}: '{selection}'\n\
+         \x20   filter_command:\n        tool.command|re{scope}: '{exclusion}'\n\
+         \x20   selection_tool_result:\n        tool.result|re{scope}: synthetic\n\
+         \x20   condition: (selection_command and not filter_command) or selection_tool_result\n\
+         level: high\ntelltale:\n    category: execution\n    score: 60\n\
+         \x20   explanation: Synthetic explanation\n    tags: [a]\n",
+        uuid("rule.synthetic")
     )
 }
 
 fn command_rule(scope: &str, selection: &str, exclusion: &str) -> String {
-    document(scope, selection, exclusion).replace("        tool_result: synthetic\n", "")
+    let document = document(scope, selection, exclusion);
+    let start = document.find("    selection_tool_result:").unwrap();
+    let end = document.find("    condition:").unwrap();
+    format!("{}{}", &document[..start], &document[end..])
+        .replace(" or selection_tool_result\n", "\n")
 }
 
 fn arguments_rule(scope: &str, selection: &str, exclusion: &str) -> String {
-    command_rule(scope, selection, exclusion).replace("command: ", "arguments: ")
+    command_rule(scope, selection, exclusion)
+        .replace("tool.command|", "tool.arguments|")
+        .replace("_command", "_arguments")
 }
 
 fn fingerprint(document: &str) -> String {
@@ -54,9 +75,7 @@ fn field_scope_is_the_default_and_keeps_its_fingerprint() {
     const BEFORE_SCOPE: &str =
         "sha256:9399d3fa8892002e81886efffab30e626cf62fb7bad28a4c7a916ef7cb429b0d";
     let omitted = document("", "synthetic", "benign");
-    let explicit = document("      scope: field\n", "synthetic", "benign");
     assert_eq!(fingerprint(&omitted), BEFORE_SCOPE);
-    assert_eq!(fingerprint(&explicit), BEFORE_SCOPE);
     let export = load_rule_set_from_documents(&[&omitted], None)
         .unwrap()
         .compatibility_export();
@@ -98,76 +117,75 @@ fn segment_scope_changes_the_fingerprint() {
 }
 
 #[test]
-fn a_legacy_and_a_segment_matcher_with_the_same_pattern_both_stay_identified() {
-    let base = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: high\n    score: 60\n    targets: [command]\n    regex: synthetic\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n";
-    let both = base.replace(
-        "    regex: synthetic\n",
-        "    regex: synthetic\n    detection:\n      selection: {command: synthetic}\n      scope: segment\n",
+fn a_field_and_a_segment_matcher_with_the_same_pattern_both_stay_identified() {
+    let base = command_rule("", "synthetic", "x").replace(
+        "    selection_command:\n        tool.command|re: 'synthetic'\n    filter_command:\n        tool.command|re: 'x'\n    condition: selection_command and not filter_command\n",
+        "    selection:\n        - tool.command|re: synthetic\n    condition: selection\n",
     );
-    let export = load_rule_set_from_documents(&[&both], None)
+    // Rule v2 compiles a field once, so the second matcher is added to the
+    // compiled form directly.
+    let field = load_rule_set_from_documents(&[&base], None)
         .unwrap()
-        .compatibility_export();
+        .compatibility_export()
+        .rules()[0]
+        .clone();
+    let mut both = field.clone();
+    let mut segment = both.matchers[0].clone();
+    segment.scope = MatchScope::Segment;
+    both.matchers.push(segment);
     assert_eq!(
-        export.rules()[0]
-            .matchers
+        both.canonical_matchers()
             .iter()
             .map(|matcher| matcher.scope)
             .collect::<Vec<_>>(),
         [MatchScope::Field, MatchScope::Segment]
     );
-    assert_ne!(fingerprint(base), fingerprint(&both));
+    assert_ne!(
+        super::provenance::rule_v1_rule_fingerprint(&field),
+        super::provenance::rule_v1_rule_fingerprint(&both)
+    );
 }
 
 #[test]
 fn invalid_scopes_fail_at_load_with_a_clear_error() {
     let unknown = error(&command_rule("      scope: line\n", "x", "y"));
-    assert!(
-        unknown.contains(
-            "unknown variant `line`, expected one of `field`, `segment`, `exclusion_segment`, `recorded_exclusion`"
-        ),
-        "{unknown}"
-    );
+    assert!(unknown.contains("`line`"), "{unknown}");
     let prose = error(&document("      scope: segment\n", "x", "y"));
-    assert_eq!(
-        prose,
-        "rule rule.synthetic uses scope 'segment' with target 'tool_result'; segment scope supports only command-text targets: arguments, command, url"
+    assert!(
+        prose.contains("tool.result") && prose.contains("segment"),
+        "{prose}"
     );
-    let rule_level = error(
-        &command_rule("", "x", "y")
-            .replace("    tags: [a]\n", "    scope: segment\n    tags: [a]\n"),
-    );
-    assert!(rule_level.contains("unknown field `scope`"), "{rule_level}");
-    for target in super::SUPPORTED_RULE_TARGETS {
+    for (field, target) in super::rule_v2::FIELD_TARGETS {
         let rule = command_rule("      scope: segment\n", "x", "y")
-            .replace("        command: 'x'", &format!("        {target}: 'x'"))
-            .replace("        command: 'y'", &format!("        {target}: 'y'"));
+            .replace("tool.command|", &format!("{field}|"))
+            .replace("category: tool_activity", "category: agent_activity");
+        let category = if field.starts_with("message.") {
+            "message"
+        } else {
+            "tool_activity"
+        };
+        let rule = rule.replace("category: agent_activity", &format!("category: {category}"));
         assert_eq!(
             load_rule_set_from_documents(&[&rule], None).is_ok(),
             SEGMENT_SCOPE_TARGETS.contains(target),
-            "{target}"
+            "{field}"
         );
     }
-    // The published vocabulary names exactly the deserializable scopes,
-    // default first.
-    assert_eq!(
-        MatchScope::default().as_str(),
-        SUPPORTED_DETECTION_SCOPES[0]
-    );
-    assert_eq!(SUPPORTED_DETECTION_SCOPES.len(), 4);
-    for (value, scope) in SUPPORTED_DETECTION_SCOPES.iter().zip([
-        MatchScope::Field,
+    // The scope modifiers name exactly the non-default scopes.
+    assert_eq!(MatchScope::default(), MatchScope::Field);
+    for (value, scope) in super::rule_v2::SCOPE_MODIFIERS.iter().zip([
         MatchScope::Segment,
         MatchScope::ExclusionSegment,
         MatchScope::RecordedExclusion,
     ]) {
         assert_eq!(scope.as_str(), *value);
-        assert!(
-            load_rule_set_from_documents(
-                &[&command_rule(&format!("      scope: {value}\n"), "x", "y")],
-                None
-            )
-            .is_ok()
-        );
+        let export = load_rule_set_from_documents(
+            &[&command_rule(&format!("      scope: {value}\n"), "x", "y")],
+            None,
+        )
+        .unwrap()
+        .compatibility_export();
+        assert_eq!(export.rules()[0].matchers[0].scope, scope);
     }
 }
 
@@ -470,8 +488,7 @@ fn segment_scope_charges_each_scan_before_it_runs() {
 
 #[test]
 fn case_insensitive_defaults_apply_to_segment_scope() {
-    let rule = command_rule("      scope: segment\n", "needle", "quoted")
-        .replace("case_insensitive: false", "case_insensitive: true");
+    let rule = command_rule("      scope: segment\n", "needle", "quoted").replace("|re|", "|re|i|");
     let matcher = content(&rule);
     assert!(
         matcher

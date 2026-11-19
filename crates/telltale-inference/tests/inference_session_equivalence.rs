@@ -900,13 +900,36 @@ fn synthetic_plan(target: &str) -> RuleV1CompatibilityPlan {
         "file_path" => r"^synthetic-equivalence/synthetic\.txt$",
         _ => "^shell$",
     };
-    let rules: telltale_rules::RuleSet = serde_json::from_value(json!({
-        "version":1,"description":"Synthetic equivalence rules","defaults":{"case_insensitive":false,"enabled":true},"modifiers":[],
-        "rules":[
-            {"id":"synthetic.equivalence.positive","category":"synthetic","severity":"low","score":10,"targets":[target],"regex":positive,"tags":[],"explanation":"Synthetic shared fact match."},
-            {"id":"synthetic.equivalence.nonmatch","category":"synthetic","severity":"low","score":10,"targets":[target],"regex":"synthetic-value-never-present","tags":[],"explanation":"Synthetic explicit non-match."}
-        ]})).unwrap();
-    compile_rule_v1(&rules.compile(None).unwrap().compatibility_export()).unwrap()
+    let field = match target {
+        "command" => "tool.command",
+        "file_path" => "tool.path",
+        _ => "tool.name",
+    };
+    let rule = |name: &str, id: &str, regex: &str, explanation: &str| {
+        format!(
+            "title: {explanation}\nid: {id}\nname: {name}\ntaxonomy: telltale\nlogsource:\n    \
+             product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n        \
+             - {field}|re: '{regex}'\n    condition: selection\nlevel: low\ntelltale:\n    \
+             category: synthetic\n    score: 10\n    explanation: {explanation}\n"
+        )
+    };
+    let document = [
+        rule(
+            "synthetic.equivalence.positive",
+            "0f1e2d3c-4b5a-4968-8776-655443322110",
+            positive,
+            "Synthetic shared fact match",
+        ),
+        rule(
+            "synthetic.equivalence.nonmatch",
+            "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "synthetic-value-never-present",
+            "Synthetic explicit non-match",
+        ),
+    ]
+    .join("---\n");
+    let rules = telltale_rules::load_rule_set_from_documents(&[&document], None).unwrap();
+    compile_rule_v1(&rules.compatibility_export()).unwrap()
 }
 
 #[test]
