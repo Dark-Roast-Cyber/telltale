@@ -15,6 +15,7 @@ this repository owns versioned product contracts.
 | What current harness releases write, and what Telltale reads of it? | [Upstream format cases](../tests/upstream_formats/README.md) and their pinned [harness manifest](../tests/upstream_formats/harnesses.json) |
 | OpenCode admission, cursor behavior, or recovery limits? | [OpenCode live ingestion](opencode-live-ingestion.md) |
 | Scoring and process chains? | [Detection model](detection-model.md), [process-chain detections](process-chain-detections.md) |
+| How should live hooks and native session scans share detections? | [Proposed collection contract](hook-and-session-collection.md) |
 | Rule quality and categories? | [Detection content standard](detection-content-standard.md), [threat taxonomy](threat-taxonomy.md) |
 | Write, validate, or package a rule? | [Rule format](rule-format.md) (Rule v2, a Sigma profile) |
 | Rule v2 keys, fields, modifiers, and accepted values as data? | [Rule vocabulary](catalog/rule-vocabulary.json), generated from the reader |
