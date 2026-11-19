@@ -8,6 +8,12 @@
 
 ### Compatibility and operator impact
 
+- Stop repeated process-chain correlation alerts caused only by fresh supporting
+  Event 3 IDs on each scan. Scanner state uses canonical supporting evidence,
+  while new occurrences and evidence changes remain eligible. No state migration
+  or Event 3 change; an upgrade can emit a previously seen correlation once.
+  Correlation windows remain source-time windows, not replay timers.
+
 - **Rule v1 has a `tool_kind` target, and `execution.shell` selects it.** The
   target (`compat.v1.tool_kind`, the tenth compatibility view) is what a call
   does: `shell`, `file_read`, `file_write`, `web`, `delegate` or `other`, from

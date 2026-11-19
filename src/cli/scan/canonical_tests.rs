@@ -501,6 +501,68 @@ fn source(path: std::path::PathBuf) -> Source {
     }
 }
 
+#[test]
+fn process_correlation_state_ignores_only_proven_projection_links() {
+    let directory = tempdir().unwrap();
+    let source = source(directory.path().join("synthetic.jsonl"));
+    std::fs::write(
+        &source.path,
+        r#"{"type":"assistant","sessionId":"synthetic","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"cmd.exe /c hostname & cmd.exe /c whoami"}}]}}"#,
+    )
+    .unwrap();
+    let rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
+    let result = process_canonical_source(
+        &source,
+        &ScanState::default(),
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan("command"),
+        Some((&rules, &ProcessChainConfig::default())),
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    let mut event = result
+        .events
+        .into_iter()
+        .find(|event| event.signal_types == ["correlation"])
+        .unwrap();
+    let mut state = ScanState::default();
+    assert!(state.should_emit(&source, &event, &Default::default()));
+    let link = event
+        .evidence
+        .iter_mut()
+        .find(|item| item.field == "correlated_event_ids")
+        .unwrap();
+    link.redacted_value = "fresh-projection-ids".into();
+    link.hash = Some(crate::event::evidence_hash("fresh-projection-ids"));
+    event.observed_at = "2026-09-20T00:00:00Z".into();
+    assert!(!state.should_emit(&source, &event, &Default::default()));
+
+    let step = event
+        .evidence
+        .iter_mut()
+        .find(|item| item.field == "correlation_process_step")
+        .unwrap();
+    step.redacted_value = "synthetic changed supporting step".into();
+    step.hash = Some(crate::event::evidence_hash(
+        "synthetic changed supporting step",
+    ));
+    assert!(state.should_emit(&source, &event, &Default::default()));
+
+    // Without canonical support, changing a link can be new evidence.
+    event
+        .evidence
+        .retain(|item| item.field != "canonical_observation_id");
+    assert!(state.should_emit(&source, &event, &Default::default()));
+    let link = event
+        .evidence
+        .iter_mut()
+        .find(|item| item.field == "correlated_event_ids")
+        .unwrap();
+    link.redacted_value = "unproven-new-evidence".into();
+    link.hash = Some(crate::event::evidence_hash("unproven-new-evidence"));
+    assert!(state.should_emit(&source, &event, &Default::default()));
+}
+
 /// The command is data in a synthetic session file; nothing runs it.
 #[test]
 fn scan_links_a_download_beside_a_comment_or_here_document() {

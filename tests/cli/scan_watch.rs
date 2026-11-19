@@ -5170,6 +5170,123 @@ fn scan_once_continues_after_malformed_source() {
 }
 
 #[test]
+fn process_chain_correlations_deduplicate_across_scanner_restarts_without_hiding_new_occurrences() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("session_stores");
+    let sessions = root.join("claude/projects/synthetic");
+    fs::create_dir_all(&sessions).unwrap();
+    let source = sessions.join("replay.jsonl");
+    let initial = concat!(
+        "{\"type\":\"assistant\",\"uuid\":\"message-a\",\"sessionId\":\"synthetic-replay\",\"timestamp\":\"2026-05-08T10:00:00Z\",",
+        "\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call-a\",\"name\":\"Bash\",",
+        "\"input\":{\"command\":\"cmd.exe /c hostname & cmd.exe /c whoami\"}}]}}\n"
+    );
+    fs::write(&source, initial).unwrap();
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let run_scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .env_clear()
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--install-inventory-disabled",
+                "--no-community-rules",
+                "--client",
+                "claude",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .env("TELLTALE_PROCESS_CHAIN_DETECTIONS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["event_type"] == "process_chain")
+            .collect::<Vec<_>>()
+    };
+
+    let first = run_scan();
+    assert_eq!(first.len(), 3);
+    assert_eq!(
+        first[2]["rule_ids"],
+        serde_json::json!(["procchain.correlation.host_then_account_discovery"])
+    );
+    assert_eq!(first[2]["risk_score"], 45);
+    assert_eq!(first[2]["process"]["suppression_window_seconds"], 900);
+    let repeated = run_scan();
+    assert_eq!(
+        repeated.len(),
+        3,
+        "a new process must reuse persisted deduplication"
+    );
+    assert_eq!(repeated, first);
+
+    // Unrelated source growth does not make the old correlation new evidence.
+    let grown = format!(
+        "{initial}{}\n",
+        r#"{"type":"assistant","uuid":"routine","sessionId":"synthetic-replay","timestamp":"2026-05-08T10:05:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Synthetic routine update."}]}}"#
+    );
+    fs::write(&source, &grown).unwrap();
+    assert_eq!(run_scan(), first);
+
+    // Later actions outside the atomic suppression window still emit. The
+    // existing per-scan correlation cap selects the original correlation.
+    fs::write(
+        &source,
+        format!(
+            "{grown}{}\n",
+            r#"{"type":"assistant","uuid":"message-c","sessionId":"synthetic-replay","timestamp":"2026-05-08T12:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-c","name":"Bash","input":{"command":"cmd.exe /c hostname & cmd.exe /c whoami"}}]}}"#
+        ),
+    )
+    .unwrap();
+    let appended = run_scan();
+    assert_eq!(appended.len(), 5);
+    assert_eq!(
+        appended[3]["rule_ids"],
+        serde_json::json!(["procchain.discovery.cmd_hostname"])
+    );
+    assert_eq!(
+        appended[4]["rule_ids"],
+        serde_json::json!(["procchain.discovery.cmd_whoami"])
+    );
+    assert_eq!(run_scan(), appended);
+
+    // The same source/session/rule can carry a distinct occurrence. This call
+    // occupies a new native source coordinate, not just a renamed call ID.
+    fs::write(
+        &source,
+        concat!(
+            "{\"type\":\"user\",\"sessionId\":\"synthetic-replay\",\"message\":{\"role\":\"user\",\"content\":\"Synthetic later window.\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"message-b\",\"sessionId\":\"synthetic-replay\",\"timestamp\":\"2026-05-08T14:00:00Z\",",
+            "\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call-b\",\"name\":\"Bash\",",
+            "\"input\":{\"command\":\"cmd.exe /c hostname & cmd.exe /c whoami\"}}]}}\n"
+        ),
+    )
+    .unwrap();
+    let fresh = run_scan();
+    assert_eq!(fresh.len(), 8);
+    assert_eq!(fresh[7]["rule_ids"], first[2]["rule_ids"]);
+    assert_eq!(fresh[7]["session_id"], "synthetic-replay");
+    assert_eq!(fresh[7]["event_time"], "2026-05-08T14:00:00.000Z");
+    assert_ne!(fresh[7]["event_id"], first[2]["event_id"]);
+    assert_eq!(run_scan(), fresh);
+}
+
+#[test]
 fn scan_preserves_process_chain_correlation_then_ordinary_detection_order_with_policy() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
