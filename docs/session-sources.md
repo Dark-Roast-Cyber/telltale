@@ -379,7 +379,11 @@ Claude Code adapter notes:
   activity. The local Agent SDK's exact `{type: "tag", tag, sessionId}`
   entries are also bookkeeping: `tag` is a string up to 4,096 UTF-8 bytes
   (empty when cleared), and `sessionId` is a non-empty string. Other shapes
-  and larger tags stay quarantined. API request replays are opaque bookkeeping,
+  and larger tags stay quarantined. Exact Remote Control `bridge-session`
+  envelopes (`sessionId`, `bridgeSessionId`, `lastSequenceNum`,
+  `ownerAccountUuid`, `ownerOrganizationUuid`) and `tools-used` envelopes
+  (`sessionId` and up to 64 tool-name strings) are bookkeeping too; their
+  values are not projected, and any other shape stays quarantined. API request replays are opaque bookkeeping,
   not another execution of any tool calls they contain. Their nested text and
   tools contribute no activity facts. This is not inference-traffic
   normalization or a claim of full support for unpublished request schemas.
@@ -391,6 +395,18 @@ Claude Code adapter notes:
   `old_string`/`new_string`, `NotebookEdit` `new_source` and `Task`/`Agent`
   `prompt` get the authored-text budget, and an all-text result array is
   joined into one direct string.
+- Claude Code moves a tool result over its inline limit to
+  `<session>/tool-results/<name>` and leaves only a `<persisted-output>`
+  notice with a short preview in the transcript. When a result is exactly one
+  such notice, the adapter reads the named file from the transcript's own
+  session directory (`<project>/<sessionId>/tool-results/`, also for
+  `<sessionId>/subagents/*.jsonl`) and uses it as the result. Only the file
+  name is taken from the notice, so a relocated or copied store resolves and a
+  notice cannot name a file elsewhere. The file is opened as the transcript was,
+  without following a final link; it must be UTF-8, fit the 64 KiB direct
+  tool-result budget and the source's remaining byte budget. Otherwise the
+  notice and its preview remain the result, as before. An unresolved spill is
+  not yet counted separately in the scan summary.
 - An unknown record type or content block, or a record whose own values
   exceed a canonical bound, is quarantined by itself and reported by session,
   record `uuid`, sequence and bound, never content; the rest of the
