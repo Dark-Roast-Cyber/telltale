@@ -280,10 +280,12 @@ checks that `--version` reports the checked-out revision, and prints the binary
 path and SHA-256. It never falls back to another target.
 
 To check a live host read-only, run
-`.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Root <source root> -Client codex,claude`.
-It performs one dry-run scan per client with temporary log and state paths and
-reports `passed`, `passed_with_limits`, `failed`, or `not_available`. It does not
-install, schedule, or change any source store.
+`.\scripts\verify-live-host.ps1 -BinaryPath <telltale.exe> -Client codex,claude`.
+The verifier uses the scanner's default host discovery, including store locations
+set through variables such as `CODEX_HOME`. Pass `-Root <source root>` to limit
+discovery to an explicit directory. The verifier performs one dry-run scan per
+client with temporary log and state paths and reports `passed`,
+`passed_with_limits`, `failed`, or `not_available`.
 
 ### Windows Scheduled Task example
 
