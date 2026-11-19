@@ -6,6 +6,7 @@ use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::{Map, Value};
 
 use crate::source_read::{SourceReadError, collect_string_values, nested_string_field};
+use telltale_schema::observation::LOCAL_MAX_STRING_BYTES;
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -265,7 +266,10 @@ fn is_claude_bookkeeping(envelope: &Map<String, Value>, kind: Option<&str>) -> b
         // a fallback role/payload discriminator or a different shape is not a tag entry.
         return envelope.len() == 3
             && envelope.get("type").and_then(Value::as_str) == Some("tag")
-            && envelope.get("tag").is_some_and(Value::is_string)
+            && envelope
+                .get("tag")
+                .and_then(Value::as_str)
+                .is_some_and(|tag| tag.len() <= LOCAL_MAX_STRING_BYTES)
             && envelope
                 .get("sessionId")
                 .and_then(Value::as_str)
