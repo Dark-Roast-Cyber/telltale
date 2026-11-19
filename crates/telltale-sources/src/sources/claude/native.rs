@@ -328,6 +328,24 @@ fn is_claude_bookkeeping(envelope: &Map<String, Value>, kind: Option<&str>) -> b
                         && tools.iter().all(|tool| bounded_str(Some(tool)))
                 });
     }
+    // No published source defines the next two; their shapes come from current
+    // transcripts. Their identifiers are never projected.
+    if kind == "session-owner" {
+        // The account and organization that own the session.
+        return has_exact_keys(
+            envelope,
+            &["type", "sessionId", "accountUuid", "organizationUuid"],
+        ) && has_session_id(envelope)
+            && ["accountUuid", "organizationUuid"]
+                .iter()
+                .all(|key| bounded_identifier(envelope.get(*key)));
+    }
+    if kind == "agent-setting" {
+        // The named agent configuration the session runs with.
+        return has_exact_keys(envelope, &["type", "sessionId", "agentSetting"])
+            && has_session_id(envelope)
+            && bounded_identifier(envelope.get("agentSetting"));
+    }
     matches!(
         kind,
         "attachment"
@@ -372,6 +390,13 @@ fn bounded_str(value: Option<&Value>) -> bool {
     value
         .and_then(Value::as_str)
         .is_some_and(|text| text.len() <= LOCAL_MAX_STRING_BYTES)
+}
+
+fn bounded_identifier(value: Option<&Value>) -> bool {
+    bounded_str(value)
+        && value
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
 }
 
 /// Claude Code writes a tool result over its inline limit to

@@ -382,8 +382,13 @@ Claude Code adapter notes:
   and larger tags stay quarantined. Exact Remote Control `bridge-session`
   envelopes (`sessionId`, `bridgeSessionId`, `lastSequenceNum`,
   `ownerAccountUuid`, `ownerOrganizationUuid`) and `tools-used` envelopes
-  (`sessionId` and up to 64 tool-name strings) are bookkeeping too; their
-  values are not projected, and any other shape stays quarantined. API request replays are opaque bookkeeping,
+  (`sessionId` and up to 64 tool-name strings) are bookkeeping too, as are
+  exact `session-owner` envelopes (`sessionId` and non-empty `accountUuid`
+  and `organizationUuid` strings) and exact `agent-setting` envelopes
+  (`sessionId` and a non-empty `agentSetting` string). No published source
+  defines the last two; their shapes come from current transcripts. None of
+  these values are projected, a `tools-used` list adds no tool activity, and
+  any other shape stays quarantined. API request replays are opaque bookkeeping,
   not another execution of any tool calls they contain. Their nested text and
   tools contribute no activity facts. This is not inference-traffic
   normalization or a claim of full support for unpublished request schemas.

@@ -2,9 +2,9 @@
   "description": "A Claude Code 2.1 transcript with bookkeeping records between turns, a thinking block, a tool_use and its tool_result.",
   "harness": "claude-code",
   "upstream": [
-    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L678",
-    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L3121",
-    "https://github.com/anthropics/claude-code/blob/d014fc0fa64280540728772fc84063918ed185cc/CHANGELOG.md#L315",
+    "https://github.com/anthropics/claude-code/blob/9fa26078be418ec4b217334812e2a04cc63336ae/CHANGELOG.md#L2592",
+    "https://github.com/anthropics/claude-code/blob/9fa26078be418ec4b217334812e2a04cc63336ae/CHANGELOG.md#L5035",
+    "https://github.com/anthropics/claude-code/blob/9fa26078be418ec4b217334812e2a04cc63336ae/CHANGELOG.md#L2229",
     "https://code.claude.com/docs/en/sessions"
   ],
   "status": "supported",

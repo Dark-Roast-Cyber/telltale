@@ -2,9 +2,9 @@
   "claude-code": {
     "client": "claude",
     "repository": "anthropics/claude-code",
-    "tag": "v2.1.306",
-    "commit": "d014fc0fa64280540728772fc84063918ed185cc",
-    "checked": "2026-10-21",
+    "tag": "v2.1.327",
+    "commit": "9fa26078be418ec4b217334812e2a04cc63336ae",
+    "checked": "2026-11-18",
     "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
     "note": "The transcript format is internal and unpublished. v2.1.300 added API-request details, but their record schema is not published; the existing bounded transcript case does not establish coverage of those additions."
   },
