@@ -1,0 +1,41 @@
+title: Synthetic marker command
+id: 5d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6
+name: synthetic.cli.marker
+taxonomy: telltale
+status: test
+description: Synthetic rule for command-line tests.
+references:
+    - https://example.invalid/synthetic-note
+author: Synthetic author
+date: 2026-11-18
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|contains: synthetic-cli-marker
+    filter_command:
+        tool.command|contains|cased: synthetic-cli-marker-allowed
+    condition: selection_command and not filter_command
+falsepositives:
+    - Synthetic tests.
+level: low
+tags:
+    - attack.t1059
+telltale:
+    category: synthetic_cli
+    score: 15
+    explanation: A synthetic marker appears in a command.
+    tags: [synthetic]
+---
+title: Synthetic marker chain
+id: 6e2f3a4b-5c6d-4e7f-9081-92b3c4d5e6f7
+name: synthetic.cli.chain
+taxonomy: telltale
+status: test
+correlation:
+    type: telltale_chain
+    rules: [synthetic.cli.marker]
+telltale:
+    score: 5
+    explanation: Synthetic chain.

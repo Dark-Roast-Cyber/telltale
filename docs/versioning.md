@@ -9,7 +9,8 @@ format.
 
 - `v0.7.2` is the current stable GitHub Release; `v0.7.1` is the previous stable.
   See the [migration guide](migrations/0.7.0.md) before upgrading from 0.6.x, and
-  the 0.7.1 and 0.7.2 changelog entries before upgrading from 0.7.0.
+  the 0.7.1 and 0.7.2 changelog entries before upgrading from 0.7.0. The 0.8 line
+  replaces Rule v1 with Rule v2; see the [0.8.0 migration guide](migrations/0.8.0.md).
 - The final prerelease is `v0.7.0-rc.4`. Each release's source SHA, artifacts
   and qualification results are recorded on its
   [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases)
@@ -23,8 +24,9 @@ format.
 - Package version identifies the release line; the full Git SHA plus archive
   and binary SHA-256 identify an exact artifact. Neither version output nor a
   package build proves official release provenance.
-- Event3 schema version stays `3.0` and Rule v1 stays version 1; neither follows
-  the package version.
+- Event3 schema version stays `3.0` and the rule format is versioned by its own
+  name (Rule v2, a [Sigma profile](rule-format.md)); neither follows the package
+  version.
 - Published v0.7.2 contains six functional Cargo packages: `telltale-schema`,
   `telltale-rules`, `telltale-sources`, `telltale-detect`, `telltale-core`, and
   `telltale-cli`. The current workspace adds the publishable `telltale-discover`
@@ -102,7 +104,8 @@ The Cargo/package version is not the version of every data contract:
   Event relocation on that binary is the separate `telltale migrate events`
   command and does not rewrite Event 1.0 or 2.0 records as Event 3.0.
 - **Rule language and bundled rules:** Rule v1 content remains compatible in
-  the 0.7 line. Removing syntax, changing evaluation meaning incompatibly,
+  the 0.7 line; the 0.8 line replaces it with [Rule v2](rule-format.md) as a
+  reviewed minor-release change (see the [0.8.0 migration guide](migrations/0.8.0.md)). Removing syntax, changing evaluation meaning incompatibly,
   or invalidating existing rule documents requires a separately reviewed minor
   release rather than a routine patch batch.
 

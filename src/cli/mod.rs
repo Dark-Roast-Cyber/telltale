@@ -498,6 +498,21 @@ enum RulesCommand {
         config: RuleConfigCliArgs,
     },
 
+    /// Print the rule catalog (telltale.rule_catalog.v2 JSON) of the loaded rules.
+    Catalog {
+        #[command(flatten)]
+        config: RuleConfigCliArgs,
+    },
+
+    /// Show one loaded rule or chain by name.
+    Show {
+        /// Rule or chain name (its compiled id).
+        name: String,
+
+        #[command(flatten)]
+        config: RuleConfigCliArgs,
+    },
+
     /// Evaluate one Codex-shaped JSONL fixture with the loaded rules.
     Test {
         /// Fixture file to evaluate.
@@ -914,6 +929,188 @@ fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json
             }))
             .collect::<Vec<_>>(),
     })
+}
+
+/// A notice about loaded content that did not stop it from loading.
+struct RuleNotice {
+    rule_id: String,
+    kind: &'static str,
+    message: String,
+}
+
+/// Load notices of the content, then the native-profile notices of the
+/// effective set, each in rule order.
+fn rule_notices(rule_set: &crate::rules::CompiledRuleSet) -> Vec<RuleNotice> {
+    let load = rule_set.notices().iter().map(|notice| RuleNotice {
+        rule_id: notice.rule_id.clone(),
+        kind: notice.kind,
+        message: notice.message.clone(),
+    });
+    let native = telltale_detect::v2::native_profile_notices(&rule_set.compatibility_export())
+        .into_iter()
+        .map(|notice| RuleNotice {
+            message: notice.to_string(),
+            rule_id: notice.rule_id,
+            kind: "native_profile_not_applied",
+        });
+    load.chain(native).collect()
+}
+
+/// The text of a pipeline error and its cause, since the error alone is a
+/// code.
+fn pipeline_failure(
+    command: &str,
+    error: &telltale_core::PipelineError,
+) -> Box<dyn std::error::Error> {
+    use std::error::Error as _;
+    match error.source() {
+        Some(source) => format!("{command} failed: {error}: {source}").into(),
+        None => format!("{command} failed: {error}").into(),
+    }
+}
+
+/// `rules show`: one rule or chain as readable text, or an error naming an
+/// unknown name.
+fn show_rule(
+    resolution: &crate::rules::RuleResolution,
+    name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use std::fmt::Write as _;
+    let Some(definition) = resolution.content.get(name) else {
+        return Err(format!(
+            "unknown rule or chain '{name}'; `telltale rules list` names the loaded rules"
+        )
+        .into());
+    };
+    let export = resolution.rule_set.compatibility_export();
+    let effective = export.rules().iter().any(|rule| rule.id == name)
+        || export
+            .modifiers()
+            .iter()
+            .any(|modifier| modifier.id == name);
+    let metadata = definition.metadata();
+    let dash = |value: Option<&str>| value.unwrap_or("-").to_owned();
+    let mut text = String::new();
+    let line = |text: &mut String, key: &str, value: String| {
+        let _ = writeln!(text, "{key}: {value}");
+    };
+    let list = |text: &mut String, key: &str, values: &[String]| {
+        if values.is_empty() {
+            let _ = writeln!(text, "{key}: -");
+        } else {
+            let _ = writeln!(text, "{key}:");
+            for value in values {
+                let _ = writeln!(text, "  - {value}");
+            }
+        }
+    };
+    let chain = definition.kind() == crate::rules::DefinitionKind::Modifier;
+    line(&mut text, "title", dash(metadata.title.as_deref()));
+    line(&mut text, "name", terminal_rule_identifier(definition.id()));
+    line(
+        &mut text,
+        "kind",
+        if chain { "chain" } else { "rule" }.to_owned(),
+    );
+    line(&mut text, "uuid", dash(definition.uuid()));
+    line(&mut text, "status", dash(metadata.status.as_deref()));
+    line(&mut text, "enabled", effective.to_string());
+    line(
+        &mut text,
+        "enabled before policy",
+        definition.enabled().to_string(),
+    );
+    line(
+        &mut text,
+        "severity",
+        definition
+            .severity()
+            .map(terminal_rule_severity)
+            .unwrap_or_else(|| "-".to_owned()),
+    );
+    line(&mut text, "score", definition.score().to_string());
+    line(
+        &mut text,
+        "category",
+        definition
+            .category()
+            .map(terminal_rule_category)
+            .unwrap_or_else(|| "-".to_owned()),
+    );
+    line(&mut text, "package", dash(definition.package_id()));
+    line(
+        &mut text,
+        "description",
+        dash(metadata.description.as_deref()),
+    );
+    line(
+        &mut text,
+        "explanation",
+        definition.explanation().to_owned(),
+    );
+    list(&mut text, "references", &metadata.references);
+    list(&mut text, "false positives", &metadata.falsepositives);
+    line(
+        &mut text,
+        "logsource",
+        metadata
+            .logsource
+            .as_ref()
+            .map(|logsource| {
+                let mut value = format!(
+                    "product={} category={}",
+                    logsource.product, logsource.category
+                );
+                if let Some(service) = &logsource.service {
+                    let _ = write!(value, " service={service}");
+                }
+                value
+            })
+            .unwrap_or_else(|| "-".to_owned()),
+    );
+    list(&mut text, "tags", &metadata.tags);
+    list(&mut text, "telltale tags", definition.tags());
+    list(&mut text, "atlas tags", definition.atlas_tags());
+    match definition.compile() {
+        Ok(crate::rules::CompiledDefinition::Rule(rule)) => {
+            let _ = writeln!(text, "matchers:");
+            for matcher in &rule.matchers {
+                let _ = write!(
+                    text,
+                    "  - target={} scope={} pattern_bytes={}",
+                    matcher.target,
+                    matcher.scope.as_str(),
+                    matcher.regex.len()
+                );
+                if let Some(exclusion) = &matcher.exclusion_regex {
+                    let _ = write!(text, " exclusion_bytes={}", exclusion.len());
+                }
+                text.push('\n');
+            }
+        }
+        Ok(crate::rules::CompiledDefinition::Modifier(modifier)) => {
+            list(&mut text, "chain categories", &modifier.when_all_categories);
+            list(&mut text, "chain rules", &modifier.when_all_rule_ids);
+            line(
+                &mut text,
+                "chain link",
+                modifier
+                    .link
+                    .map(|link| {
+                        format!("within_calls={} order={}", link.calls, link.order.as_str())
+                    })
+                    .unwrap_or_else(|| "-".to_owned()),
+            );
+        }
+        Err(error) => line(&mut text, "matchers", format!("does not compile: {error}")),
+    }
+    let notices = rule_notices(&resolution.rule_set)
+        .into_iter()
+        .filter(|notice| notice.rule_id == name)
+        .map(|notice| format!("{}: {}", notice.kind, notice.message))
+        .collect::<Vec<_>>();
+    list(&mut text, "notices", &notices);
+    Ok(text)
 }
 
 fn community_rules(enabled: bool) -> CommunityRules {
@@ -1689,8 +1886,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "sources": diagnostics["sources"],
                         "provenance": diagnostics["provenance"],
                         "packages": diagnostics["packages"],
+                        "notices": rule_notices(&resolution.rule_set)
+                            .into_iter()
+                            .map(|notice| serde_json::json!({
+                                "rule_id": terminal_rule_identifier(&notice.rule_id),
+                                "kind": notice.kind,
+                                "message": notice.message,
+                            }))
+                            .collect::<Vec<_>>(),
                     }))?
                 );
+            }
+            RulesCommand::Catalog { config } => {
+                let document = config
+                    .resolve_rule_set()?
+                    .into_pipeline()
+                    .and_then(|pipeline| {
+                        pipeline.rule_catalog_document(
+                            &telltale_core::DetailedEvaluationOptions::default(),
+                        )
+                    })
+                    .map_err(|error| pipeline_failure("rules catalog", &error))?;
+                println!("{}", serde_json::to_string(&document)?);
+            }
+            RulesCommand::Show { name, config } => {
+                let resolution = config.resolve_rule_set()?;
+                print!("{}", show_rule(&resolution, &name)?);
             }
             RulesCommand::Test { fixture, config } => {
                 let resolution = config.resolve_rule_set()?;

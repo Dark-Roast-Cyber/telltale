@@ -6,7 +6,80 @@
     "baseline",
     "audit"
   ],
-  "atlas_tag_prefix": "atlas:",
+  "chain_keys": {
+    "accepted": [
+      "title",
+      "id",
+      "name",
+      "related",
+      "taxonomy",
+      "status",
+      "description",
+      "license",
+      "author",
+      "references",
+      "date",
+      "modified",
+      "correlation",
+      "falsepositives",
+      "tags",
+      "telltale"
+    ],
+    "required": [
+      "title",
+      "id",
+      "name",
+      "taxonomy",
+      "correlation",
+      "telltale"
+    ]
+  },
+  "condition_forms": [
+    {
+      "form": "<selection>",
+      "meaning": "the only selection; only in a rule without filters"
+    },
+    {
+      "form": "1 of <pattern>",
+      "meaning": "any selection whose name matches the pattern (`*` matches any run of characters); only in a rule without filters"
+    },
+    {
+      "form": "1 of them",
+      "meaning": "any selection; only in a rule without filters"
+    },
+    {
+      "form": "<selection> and not <filter>",
+      "meaning": "the selection, vetoed by a filter on the same field; the selection has one key"
+    },
+    {
+      "form": "<term> or <term>",
+      "meaning": "any term, where each term is `<selection>` or `<selection> and not <filter>`, optionally in parentheses"
+    }
+  ],
+  "correlation": {
+    "default_order": "ordered",
+    "keys": {
+      "accepted": [
+        "type",
+        "categories",
+        "rules",
+        "within_calls",
+        "order"
+      ],
+      "exactly_one_of": [
+        "categories",
+        "rules"
+      ],
+      "required": [
+        "type"
+      ]
+    },
+    "orders": [
+      "ordered",
+      "any"
+    ],
+    "type": "telltale_chain"
+  },
   "detection_classes": [
     "security_detection",
     "policy_violation",
@@ -15,55 +88,76 @@
     "operational_health",
     "baseline_deviation"
   ],
-  "detection_conditions": [
-    "selection"
+  "fields": [
+    {
+      "evidence_field": "command",
+      "field": "tool.command",
+      "reads": "The command a shell tool call requested, as parsed from the call.",
+      "scope_modifiers": true
+    },
+    {
+      "evidence_field": "arguments",
+      "field": "tool.arguments",
+      "reads": "The raw arguments text of a tool call; absent where a source records only structured arguments.",
+      "scope_modifiers": true
+    },
+    {
+      "evidence_field": "written_path",
+      "field": "tool.written_path",
+      "reads": "The path a file-writing tool call requested.",
+      "scope_modifiers": false
+    },
+    {
+      "evidence_field": "file_path",
+      "field": "tool.path",
+      "reads": "A file path named by a tool call; its meaning depends on the source.",
+      "scope_modifiers": false
+    },
+    {
+      "evidence_field": "tool_name",
+      "field": "tool.name",
+      "reads": "The tool name the source reported.",
+      "scope_modifiers": false
+    },
+    {
+      "evidence_field": "tool_kind",
+      "field": "tool.kind",
+      "reads": "What a call does, derived from known built-in tool names: shell, file_read, file_write, web, delegate or other.",
+      "scope_modifiers": false
+    },
+    {
+      "evidence_field": "url",
+      "field": "tool.url",
+      "reads": "The URL-keyed string arguments of a tool call.",
+      "scope_modifiers": true
+    },
+    {
+      "evidence_field": "tool_result",
+      "field": "tool.result",
+      "reads": "The tool result text the source reported.",
+      "scope_modifiers": false
+    },
+    {
+      "evidence_field": "assistant_context",
+      "field": "message.assistant_text",
+      "reads": "Assistant message text.",
+      "scope_modifiers": false
+    },
+    {
+      "evidence_field": "user_context",
+      "field": "message.user_text",
+      "reads": "User message text.",
+      "scope_modifiers": false
+    }
   ],
-  "detection_fields": [
-    "selection",
-    "exclude",
-    "condition",
-    "scope"
+  "filter_identifiers": [
+    "filter",
+    "filter_*"
   ],
-  "detection_scopes": {
-    "default": "field",
-    "segment_targets": [
-      "arguments",
-      "command",
-      "url"
-    ],
-    "values": [
-      "field",
-      "segment",
-      "exclusion_segment",
-      "recorded_exclusion"
-    ]
-  },
+  "format": "Rule v2, the Telltale Sigma profile, level 1",
   "generated_by": "tests/catalog.rs",
-  "rule_fields": [
-    "id",
-    "title",
-    "description",
-    "status",
-    "author",
-    "references",
-    "falsepositives",
-    "level",
-    "category",
-    "detection_class",
-    "signal_type",
-    "analytic_intent",
-    "atlas_tags",
-    "severity",
-    "score",
-    "targets",
-    "regex",
-    "detection",
-    "tags",
-    "explanation",
-    "enabled"
-  ],
-  "severities": {
-    "checked_by": "Rule v1 compilation (including telltale rules validate)",
+  "hand_maintained": "fields[].reads, condition_forms[].meaning and tags describe behavior in prose; docs/rule-format.md owns the full description.",
+  "levels": {
     "event3_global_values": [
       "informational",
       "low",
@@ -80,6 +174,149 @@
       "critical"
     ]
   },
+  "limits": {
+    "max_condition_depth": 32,
+    "max_line_chars": 256,
+    "max_name_bytes": 96,
+    "max_package_bytes": 4194304,
+    "max_pattern_bytes": 1024,
+    "max_score": 100,
+    "max_within_calls": 10
+  },
+  "logsource": {
+    "categories": [
+      "tool_activity",
+      "message",
+      "agent_activity"
+    ],
+    "keys": {
+      "accepted": [
+        "product",
+        "category",
+        "service",
+        "definition"
+      ],
+      "required": [
+        "product",
+        "category"
+      ]
+    },
+    "product": "ai_agent",
+    "reserved_keys": [
+      "service"
+    ]
+  },
+  "package": {
+    "format": "telltale-rule-package/v2",
+    "keys": {
+      "accepted": [
+        "format",
+        "id",
+        "title",
+        "version",
+        "publisher",
+        "license",
+        "rule_namespace",
+        "source",
+        "revision",
+        "documents"
+      ],
+      "required": [
+        "format",
+        "id",
+        "title",
+        "version",
+        "publisher",
+        "license",
+        "rule_namespace",
+        "documents"
+      ]
+    }
+  },
+  "regex_flags": [
+    "i",
+    "m",
+    "s"
+  ],
+  "rejected_modifiers": [
+    "all",
+    "exists",
+    "base64",
+    "base64offset",
+    "utf16le",
+    "utf16be",
+    "utf16",
+    "wide",
+    "windash",
+    "cidr",
+    "fieldref",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "neq",
+    "expand",
+    "minute",
+    "hour",
+    "day",
+    "week",
+    "month",
+    "year"
+  ],
+  "related_types": [
+    "derived",
+    "obsolete",
+    "merged",
+    "renamed",
+    "similar"
+  ],
+  "rule_keys": {
+    "accepted": [
+      "title",
+      "id",
+      "name",
+      "related",
+      "taxonomy",
+      "status",
+      "description",
+      "license",
+      "author",
+      "references",
+      "date",
+      "modified",
+      "logsource",
+      "detection",
+      "fields",
+      "scope",
+      "falsepositives",
+      "level",
+      "tags",
+      "telltale"
+    ],
+    "required": [
+      "title",
+      "id",
+      "name",
+      "taxonomy",
+      "logsource",
+      "detection",
+      "level",
+      "telltale"
+    ]
+  },
+  "scope_modifiers": {
+    "default": "field",
+    "fields": [
+      "tool.command",
+      "tool.arguments",
+      "tool.url"
+    ],
+    "values": [
+      "segment",
+      "exclusion_segment",
+      "recorded_exclusion"
+    ]
+  },
   "signal_types": [
     "atomic",
     "chain",
@@ -87,19 +324,74 @@
     "baseline_deviation"
   ],
   "source_of_truth": [
+    "crates/telltale-rules/src/rule_v2/mod.rs",
+    "crates/telltale-rules/src/rule_v2/detection.rs",
+    "crates/telltale-rules/src/package.rs",
     "crates/telltale-rules/src/lib.rs",
     "crates/telltale-schema/src/event/mod.rs"
   ],
-  "targets": [
-    "arguments",
-    "assistant_context",
-    "command",
-    "file_path",
-    "tool_kind",
-    "tool_name",
-    "tool_result",
-    "url",
-    "user_context",
-    "written_path"
+  "statuses": {
+    "load_disabled": [
+      "deprecated",
+      "unsupported"
+    ],
+    "values": [
+      "experimental",
+      "test",
+      "stable",
+      "deprecated",
+      "unsupported"
+    ]
+  },
+  "tags": {
+    "atlas": "atlas.<id> compiles to the ATLAS tag atlas:<ID>",
+    "attack_technique": "attack.tNNNN or attack.tNNNN.NNN lists technique TNNNN[.NNN] in the catalog",
+    "telltale_labels": "free-form labels go in telltale.tags"
+  },
+  "taxonomy": "telltale",
+  "telltale_chain_keys": {
+    "accepted": [
+      "score",
+      "explanation",
+      "analytic_intent",
+      "detection_class",
+      "signal_type",
+      "enabled"
+    ],
+    "required": [
+      "score",
+      "explanation"
+    ]
+  },
+  "telltale_defaults": {
+    "analytic_intent": "alert",
+    "chain_signal_type": "chain",
+    "detection_class": "security_detection",
+    "enabled": true,
+    "rule_signal_type": "atomic"
+  },
+  "telltale_rule_keys": {
+    "accepted": [
+      "category",
+      "score",
+      "explanation",
+      "analytic_intent",
+      "detection_class",
+      "signal_type",
+      "tags",
+      "enabled"
+    ],
+    "required": [
+      "category",
+      "score",
+      "explanation"
+    ]
+  },
+  "value_modifiers": [
+    "contains",
+    "startswith",
+    "endswith",
+    "cased",
+    "re"
   ]
 }

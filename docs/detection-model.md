@@ -2,9 +2,10 @@
 
 > **Website:** For an approachable overview of the detection model and threat taxonomy, see [AgentArchaeology.ai/telltale/detection-model](https://agentarchaeology.ai/telltale/detection-model/).
 
-Rule v1 content and Event3 scoring semantics are documented here. The canonical
-source evaluator used by scan/watch and embedding applies these rules.
-Advanced detector runtime and a Detection Content v2 loader are not implemented.
+Rule scoring and Event3 semantics are documented here. Rules are written in
+Rule v2, Telltale's Sigma profile; the [rule format](rule-format.md) is the
+authoring reference. The canonical source evaluator used by scan/watch and
+embedding applies these rules.
 
 ## Risk Flow
 
@@ -64,7 +65,7 @@ See [threat-taxonomy.md](threat-taxonomy.md) for the Telltale category contract,
 A second rule vocabulary evaluates command-derived parent/child relationships
 and standalone indicators from canonical Tool evidence through Detection v2.
 Its session results project to `process_chain` events through the Event3
-compatibility boundary. Rule v1 content is evaluated over canonical observations;
+compatibility boundary. Rule content is evaluated over canonical observations;
 direct-record evaluation APIs were removed.
 
 Process-chain rules add the `defense_evasion`, `command_and_control`,
@@ -101,8 +102,8 @@ existing `/etc/telltale` and per-user config roots by default; pass
 `--config-dir <path>` to use an explicit root for a command, or
 `--no-local-config` to disable discovery. Rule packs resolve in fixed tier
 order (bundled core → rule packages → `organization-rules.d` → `rules.d` →
-`ui-rules.d`); a higher tier fully replaces a same-ID definition in place, while
-unique IDs are additive. Rule packages are namespaced, additive-only files in
+`ui-rules.d`); a higher tier fully replaces a definition with the same rule
+`name` in place, keeping its `id`, while unique names are additive. Rule packages are namespaced, additive-only files in
 `rule-packages.d`; see [Install](install.md#community-rules-and-rule-packages). Replacements and winners are available in the provenance columns of
 `telltale rules list --verbose` and in `telltale rules validate`. Repeated
 explicit `--rules` files remain an additive-only stage after managed packs, so
@@ -113,81 +114,66 @@ guidance, override YAML format, `--no-default-rules`/`--no-local-config`
 behavior, and `telltale config validate` / `telltale rules export-default`
 usage.
 
-The simplest valid custom rule uses `targets` plus `regex`:
+A custom rule file holds one or more Rule v2 documents. The simplest rule
+selects one pattern on several fields:
 
 ```yaml
-version: 1
-description: Local custom rules.
-defaults:
-  case_insensitive: true
-  enabled: true
-rules:
-  - id: example.download.curl
-    title: Example curl download
+title: Example curl download
+id: 7d444840-9dc0-41d2-a8f2-1c1a2b3c4d5e
+name: example.download.curl
+taxonomy: telltale
+status: experimental
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: &pattern '(^|\b)curl\b.*https?://'
+        - tool.arguments|re|i: *pattern
+        - tool.url|re|i: *pattern
+    condition: selection
+falsepositives:
+    - Setup docs or normal dependency fetches may legitimately use curl.
+level: low
+telltale:
     category: download
-    severity: low
     score: 20
-    targets: [command, arguments, url]
-    regex: '(^|\b)curl\b.*https?://'
-    tags: [example, network, download]
     explanation: Example rule that matches curl-based HTTP downloads.
-    falsepositives:
-      - Setup docs or normal dependency fetches may legitimately use curl.
-modifiers: []
+    tags: [example, network, download]
 ```
 
-Telltale also supports a Sigma-inspired `detection.selection` map with `condition: selection`:
-
-```yaml
-rules:
-  - id: custom.agent.malicious_behavior
-    title: Custom malicious agent behavior
-    category: custom_agent_behavior
-    severity: high
-    score: 70
-    detection:
-      selection:
-        assistant_context: 'exfiltrate project secrets'
-        arguments: 'exfiltrate project secrets'
-      condition: selection
-    tags: [custom, agent-behavior]
-    explanation: User-defined rule for suspicious agent behavior.
-```
-
-The `detection` form may declare one optional exclusion regex per selected
-target:
+A filter vetoes its own selection on the same field, and nothing else:
 
 ```yaml
 detection:
-  selection:
-    assistant_context: 'bypass\s+approval'
-  exclude:
-    assistant_context: '^quoted example:\s+bypass\s+approval$'
-  condition: selection
+    selection:
+        message.assistant_text|re|i: 'bypass\s+approval'
+    filter:
+        message.assistant_text|re|i: '^quoted example:\s+bypass\s+approval$'
+    condition: selection and not filter
 ```
 
-The target matches when its selection regex matches and its exclusion regex does
-not. Exclusions are target-local, must name a target in `selection`, and are not
-available on the simple `targets` + `regex` form. Rule defaults apply
-case-insensitive compilation to both expressions. Rule v1 remains the supported
-production content format; there is no separate filter engine.
+The field matches when its selection matches and its filter does not. A filter
+reads the same field as its selection, and the condition pairs them as
+`<selection> and not <filter>`; there is no separate filter engine. See the
+[rule format](rule-format.md#filters-and-conditions) for the accepted
+conditions, value forms and case rules.
 
-By default an exclusion match anywhere in the target vetoes the whole target
-(`scope: field`). With `scope: segment`, each selection and its exclusion
-evaluate each shell command segment of the target instead:
+By default a filter match anywhere in the field vetoes the whole field (field
+scope). With the `segment` scope modifier, each selection and its filter
+evaluate each shell command segment of the field instead:
 
 ```yaml
 detection:
-  selection:
-    command: '\bcurl\b[^;|\n]*https?://'
-  exclude:
-    command: '\bcurl\b[^;|\n]*--data'
-  scope: segment
-  condition: selection
+    selection:
+        tool.command|re|segment: '\bcurl\b[^;|\n]*https?://'
+    filter:
+        tool.command|re|segment: '\bcurl\b[^;|\n]*--data'
+    condition: selection and not filter
 ```
 
-The target matches when one segment matches the selection and that same
-segment does not match the exclusion, so
+The field matches when one segment matches the selection and that same
+segment does not match the filter, so
 `curl --data @f https://example.invalid/upload; curl https://example.invalid/file`
 matches this rule through its second segment, and a single
 `curl --data @f https://example.invalid/upload` does not. Segments split
@@ -197,30 +183,30 @@ span segments. Single quotes are literal, a backslash escapes the next
 character (`\;` does not split) outside single quotes and inside `$'...'`, and a
 single `&` is not a separator, so `2>&1`
 and unquoted query strings stay in their segment. An unclosed quote runs to the
-end of the target. Background commands (`a & b`) also stay in one segment, so
+end of the field. Background commands (`a & b`) also stay in one segment, so
 an upload after a single `&` can still exclude a download before it. This is a
 known limit of the lexical split, not a claim of shell parsing. Subshells, command
 substitution, heredocs and comments are not interpreted, and a command inside a
-JSON string in `arguments` stays one segment. Segment scope applies to every
-selection target of the rule and accepts only the command-text targets
-`command`, `arguments` and `url`; any other target, or another value, fails when
-the rule loads. The generated vocabulary lists the scopes and those targets.
-The scope is part of the rule fingerprint, so changing it changes producer
-provenance; field-scoped rules keep their fingerprints whether or not they write
-`scope: field`.
+JSON string in `tool.arguments` stays one segment. A scope modifier applies to
+the selection key that carries it and to its filter, which may repeat it or
+leave it out. Scope modifiers accept only the command-text fields
+`tool.command`, `tool.arguments` and `tool.url`; any other field fails when the
+rule loads. The generated vocabulary lists the scope modifiers and those
+fields. The scope is part of the rule fingerprint, so changing it changes
+producer provenance.
 
 The bundled `network.download` rule uses segment scope: an upload in one
 segment no longer hides a download in another, while an upload in the same
 segment still excludes it. Native action findings read HTTP direction per
 command stage on their own and are unchanged by the session scope.
 
-`scope: exclusion_segment` keeps the selection on the whole target, as in field
-scope, and narrows only the exclusion. A selection match is dropped when the
-segment holding it matches the exclusion; every other match counts, including one
+`exclusion_segment` keeps the selection on the whole field, as in field
+scope, and narrows only the filter. A selection match is dropped when the
+segment holding it matches the filter; every other match counts, including one
 that crosses a segment boundary. A line continuation before a separator is not
-part of the text the exclusion reads. It accepts the same targets as `segment`.
+part of the text the filter reads. It accepts the same fields as `segment`.
 
-Some sources also store a shell call as raw JSON in `arguments`, whose quoting
+Some sources also store a shell call as raw JSON in `tool.arguments`, whose quoting
 makes the call one segment. Under this scope a selection match in that raw text
 is dropped when the text is exactly one JSON shell call, every selection match
 in its decoded command is excluded, the command without its excluded segments
@@ -233,34 +219,33 @@ describe how it runs, such as `workdir`, `description` or a timeout. Any other
 shape, including an unknown member or truncated JSON, stays raw text and fails
 toward a match.
 
-The bundled `exfil.outbound_upload` rule uses this scope, and its exclusion
+The bundled `exfil.outbound_upload` rule uses this scope, and its filter
 covers only a bodyless IMDSv2 token request: a `PUT` to the literal token
 endpoint where every other token in the segment is a flag listed for that client
 or the TTL header. Anything else still matches, such as a body, another URL,
 header, path or host, or an unlisted flag or wrapper. Client configuration that
 the command text does not show is not visible. Native action findings apply the
-same exclusion to the whole command holding each upload stage, and may still
+same filter to the whole command holding each upload stage, and may still
 report a token request that spans more than one line.
 
-`scope: recorded_exclusion` is field scope with one addition for the `command` of
+`recorded_exclusion` is field scope with one addition for the `tool.command` of
 a tool call: the selection also reads the command with the quotes around its words
 removed (and each command inside it, such as a substitution or a `sh -c` script),
-which field-scoped rules read anyway. Field scope judges the exclusion on that
+which field-scoped rules read anyway. Field scope judges the filter on that
 reading as well, where a `;`, quote or line break that a quoted string holds is
-bare, so an exclusion written for quoted text cannot hold there. This scope judges
-the exclusion on the recorded text alone, and drops a match in a reading when the
-recorded text matches it. `git commit -m "fix; rm x"` then stays excluded by an
-exclusion for commit messages, while `git commit -m a; "r"m x` selects `rm x`,
-because the recorded text is no excluded command. Soundness rests on the exclusion
+bare, so a filter written for quoted text cannot hold there. This scope judges
+the filter on the recorded text alone, and drops a match in a reading when the
+recorded text matches it. `git commit -m "fix; rm x"` then stays excluded by a
+filter for commit messages, while `git commit -m a; "r"m x` selects `rm x`,
+because the recorded text is no excluded command. Soundness rests on the filter
 reading the recorded text's quotes as a shell does. The scope accepts the same
-targets as `segment`; only `command` has a reading. Bundled rules and rules in
+fields as `segment`; only `tool.command` has a reading. Bundled rules and rules in
 other scopes are unchanged.
 
-The bundled `execution.shell` session rule uses this selection form to match
-exact shell-tool names (`shell`, `exec_command`, `shell_command`, and shell
-executable names) as well as shell/interpreter patterns in command and argument
-text. It contributes 15 points once per session, including when both a tool name
-and wrapper match. Thus omitting a wrapper from a recorded shell request does
+The bundled `execution.shell` session rule selects `tool.kind` `shell` (every
+declared shell tool of any harness) as well as shell/interpreter patterns in
+command and argument text. It contributes 15 points once per session, including when both the tool kind
+and a wrapper match. Thus omitting a wrapper from a recorded shell request does
 not remove execution credit. Requests and denied attempts are not proof of host
 execution. Existing category modifiers still apply, and legitimate user-approved
 shell activity can still alert in combination with other rules. Native
@@ -272,8 +257,10 @@ detector aggregate; other rules and native action findings keep their evidence.
 This prevents redundant score-once shell evidence from exhausting the existing
 source-retention budget on long histories. Retention and work limits are unchanged.
 
-Policy YAML can select active rule categories and rule ids without editing the rule files:
+Policy YAML can select active rule categories (`telltale.category`) and rule
+names without editing the rule files:
 
+<!-- rule-example: skip -->
 ```yaml
 name: strict-workstation
 enabled_categories: [secret_access, credential_pattern, exfiltration, mcp_prompt_injection]
@@ -282,24 +269,29 @@ disabled_rules: [network.controlled_test_domain.darkroast]
 
 Use `telltale rules list`, `telltale rules validate`, and `telltale rules test` to inspect,
 compile, and preview configured rules before writing scan output. `telltale rules list`
-keeps its default five tab-separated columns (`id`, `category`, `severity`,
+keeps its default five tab-separated columns (rule name, `category`, severity (`level`),
 `score`, `enabled`); add `--verbose` for the winner and replaced-source
-provenance columns. All three commands also load bundled defaults unless
+provenance columns. `telltale rules show <name>` prints one rule or chain
+(metadata, compiled matcher targets and scopes, and load notices), and
+`telltale rules catalog` prints the rule catalog v2 JSON of the loaded rules;
+`telltale rules validate` lists load notices under `notices`. These commands
+also load bundled defaults unless
 `--no-default-rules` is set; managed
 directories still load when bundled defaults are disabled. Use
 `telltale rules export-default --output <local-path>` when an operator wants a local
 copy of the embedded default pack to inspect or adapt. An edited copy placed in
-a managed tier intentionally replaces matching IDs; passing it with `--rules`
-requires `--no-default-rules` to avoid additive collision with the embedded copy.
+a managed tier intentionally replaces rules with matching names, and must keep
+each replaced rule's `id`; passing it with `--rules` requires
+`--no-default-rules` to avoid additive collision with the embedded copy.
 
-Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to Telltale categories, rule IDs, fixtures, and validation commands.
+Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by the `telltale` block keys `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `telltale.category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to Telltale categories, rule IDs, fixtures, and validation commands.
 
 Events carry the same metadata for SIEM filtering:
 
 - `detection_classes`: `security_detection`, `policy_violation`, `threat_hunting`, `compliance_observation`, `operational_health`, or `baseline_deviation`.
 - `signal_types`: `atomic`, `chain`, `correlation`, or `baseline_deviation`.
 - `analytic_intents`: `alert`, `hunt`, `enrich`, `baseline`, or `audit`.
-- `atlas_tags`: optional MITRE ATLAS context tags. Coverage is tracked in the [ATLAS coverage map](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
+- `atlas_tags`: optional MITRE ATLAS context tags, from a rule's `atlas.*` Sigma tags. Coverage is tracked in the [ATLAS coverage map](https://github.com/Dark-Roast-Cyber/telltale-detections/blob/main/docs/atlas-coverage.md).
 
 ## Context Rules
 
@@ -342,14 +334,14 @@ Expected rule chain:
 - `network.controlled_test_domain.darkroast`
 - `chain.mcp_injection_then_egress`
 
-Rule modifiers may key off categories or exact rule ids. Exact rule-id modifiers cover chains where both signals share one category, such as `execution.shell` plus `execution.encoded_payload` emitting `chain.shell_encoded_payload`.
+Chains may key off categories or exact rule names (`correlation.categories` or `correlation.rules`). Exact rule-name chains cover chains where both signals share one category, such as `execution.shell` plus `execution.encoded_payload` emitting `chain.shell_encoded_payload`.
 
 ## Source Capability Awareness
 
 Not all agent sources expose the same fields. Detection and analyst review context
 should account for source-level gaps documented in [agent-capability-profiles.md](agent-capability-profiles.md). Key constraints:
 
-- **User intent context** is unavailable for Copilot process logs. Rules that require `user_context` or `assistant_context` are capability-indeterminate for Copilot, including rules that also list other targets. They are not silently skipped.
+- **User intent context** is unavailable for Copilot process logs. Rules that read `message.user_text` or `message.assistant_text` are capability-indeterminate for Copilot, including rules that also read other fields. They are not silently skipped.
 - **Model/provider attribution** is weaker for Copilot and Claude. Cross-session correlation by model/provider is unreliable for these sources.
 - **`call_id` linking** is source-dependent. Missing IDs are not fabricated.
 - **`is_error`** is used only when the source attests it.
