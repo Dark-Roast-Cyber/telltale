@@ -293,9 +293,14 @@ fn session_tag_bookkeeping_requires_its_native_envelope() {
 {"role":"tag","sessionId":"synthetic","tag":"label"}
 {"type":"tag","sessionId":"synthetic","tag":false}
 {"type":"tag","sessionId":"synthetic","tag":"label","content":"unknown shape"}
+{"type":"tag","sessionId":"","tag":"label"}
+{"type":"tag","tag":"label"}
 "#;
-    let oversized = json!({"type":"tag","sessionId":"synthetic","tag":"x".repeat(4097)});
-    std::fs::write(&source.path, format!("{records}{oversized}\n")).unwrap();
+    let label_at_limit = "é".repeat(2048); // 4,096 UTF-8 bytes
+    let at_limit = json!({"type":"tag","sessionId":"synthetic","tag":&label_at_limit});
+    let oversized =
+        json!({"type":"tag","sessionId":"synthetic","tag":format!("{label_at_limit}x")});
+    std::fs::write(&source.path, format!("{records}{at_limit}\n{oversized}\n")).unwrap();
     let batch = acquire_source(&source, options()).unwrap();
     assert_eq!(
         batch
@@ -308,6 +313,8 @@ fn session_tag_bookkeeping_requires_its_native_envelope() {
             (3, "unknown_discriminator"),
             (4, "unknown_discriminator"),
             (5, "unknown_discriminator"),
+            (6, "unknown_discriminator"),
+            (8, "unknown_discriminator"),
         ],
     );
     assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
