@@ -17,7 +17,9 @@ pub(crate) const INSTALL: AgentInstallDef = AgentInstallDef {
 /// The Claude desktop app bundles Claude Code and may not expose a PATH shim
 /// or an npm package. Probe only the known executable locations, metadata
 /// only: versioned directories, one hash directory below each, `claude.exe`.
-/// The MSIX-virtualized mirror of `%APPDATA%\Claude` is probed as well.
+/// The MSIX-virtualized mirror of `%APPDATA%\Claude` is probed as well, and so
+/// is `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc`, where current MSIX
+/// builds keep it; both count as the one packaged signal.
 pub(crate) fn desktop_install_signals(
     home: &Path,
     platform: InstallPlatform,
@@ -26,11 +28,15 @@ pub(crate) fn desktop_install_signals(
         return Vec::new();
     }
     let roaming = home.join("AppData/Roaming/Claude/claude-code");
-    let packaged = home
-        .join("AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code");
+    let mut packaged = bundled_executables(
+        &home.join("AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc/claude-code"),
+    );
+    packaged.extend(bundled_executables(&home.join(
+        "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code",
+    )));
     vec![
         executable_path_signal("claude-desktop", bundled_executables(&roaming)),
-        executable_path_signal("claude-desktop-packaged", bundled_executables(&packaged)),
+        executable_path_signal("claude-desktop-packaged", packaged),
     ]
 }
 

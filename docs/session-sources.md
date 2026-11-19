@@ -21,13 +21,24 @@ agent tools appear installed?” using metadata-only checks in
 `crates/telltale-sources/src/install_inventory.rs` such as executables on `PATH`, package roots, VS
 Code-style extension IDs, and globalStorage presence. On Windows, OpenCode
 Desktop also has metadata-only executable probes under
-`~/AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe` and
-`~/AppData/Roaming/ai.opencode.desktop/cli/*/opencode-cli.exe`; these do not
+`~/AppData/Local/Programs/ai.opencode.desktop/OpenCode.exe` (current
+installers), the earlier `~/AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe`,
+and `~/AppData/Roaming/ai.opencode.desktop/cli/*/opencode-cli.exe`; these do not
 require a PATH shim or Node installation. The Claude desktop app bundles
 Claude Code at `~/AppData/Roaming/Claude/claude-code/<version>/<hash>/claude.exe`,
-and the MSIX package `Claude_pzs8sxrjxfjjc` mirrors it under
+and the MSIX package `Claude_pzs8sxrjxfjjc` keeps it under
+`~/AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc/claude-code` (current builds)
+or mirrors it under
 `~/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code`;
-both are probed the same way (`claude-desktop`, `claude-desktop-packaged`).
+all are probed the same way (`claude-desktop`, and `claude-desktop-packaged` for
+either MSIX location).
+The Codex desktop app (the `OpenAI.Codex` package, which also ships the ChatGPT
+app) unpacks its CLI to `~/AppData/Local/OpenAI/Codex/bin/<hash>/codex.exe`,
+probed as `codex-desktop`. Its sessions are the ordinary `CODEX_HOME` rollouts
+(`session_meta.payload.originator` is `Codex Desktop`), so no separate session
+source is needed. On Windows, a `PATH` with an unbalanced `"` (such as
+`C:\Program Files\dotnet"`) is split on `;` with quotes dropped, as shells do,
+rather than letting the quote hide every later entry.
 macOS and Linux desktop bundle locations are not probed until confirmed on a
 real install. Install inventory runs on
 a configurable cadence and never reads transcript/session contents.
@@ -69,6 +80,7 @@ than by exact private path or transcript content.
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Existing JSONL fixtures only; current default store not discovered | Telltale searches this root for older JSONL files, not the current default `agents/<agentId>/agent/openclaw-agent.sqlite` transcripts. Current-store acquisition and live qualification are deferred beyond 0.7; see the [compatibility boundary](source-validation-matrix.md#openclaw-compatibility-boundary). |
 | OpenCode | `opencode.sqlite` | XDG OpenCode data directory; exact `$OPENCODE_DB` when configured | XDG OpenCode data directory plus retained `~/Library/Application Support/opencode/opencode.db`; exact `$OPENCODE_DB` | XDG OpenCode data directory plus retained Windows platform data and `~/.local/share` candidates; exact `%OPENCODE_DB%` | Default paths have prior bounded validation; relocation/channel discovery is synthetic-conformance tested | Environment-resolved mode adds direct-child channel databases and one configured file; see the OpenCode root rules below. Prior Desktop validation does not qualify these new paths or every version. |
+| Pi | `pi.sessions` | `~/.pi/agent/sessions` | `~/.pi/agent/sessions` | `%USERPROFILE%\.pi\agent\sessions` | Candidate; Windows bounded live dry-run (2026-11-18) | Pi writes one JSONL file per session under a directory named for the working directory. `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` relocate the store and are not discovered. |
 | Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Existing process format only; current CLI home logs unqualified | **Project-local only** — discovered below configured project roots or applicable default project roots. Neither `~/.copilot/logs` nor `COPILOT_HOME/logs` is discovered; see the qualification gap below. |
 
 ## Project Roots
@@ -434,3 +446,35 @@ Qwen adapter notes:
 - `qwen.projects` uses source-owned modeled JSONL extraction with metadata
   context, tool-call/result classification, and terminal schema/unknown
   boundaries. It is not a generic JSONL fallback.
+
+Pi adapter notes:
+
+- Session files under `.pi/agent/sessions/<cwd-slug>/<timestamp>_<id>.jsonl`
+  (session format version 3) open with a `session` header whose `id` names the
+  session; no other entry carries one, so every entry belongs to the header's
+  session. Two headers naming different sessions fail the source.
+- `message` entries with role `user`, `assistant`, `toolResult` or
+  `bashExecution` are projected. Assistant `toolCall` blocks become tool
+  requests correlated with `toolResult` messages by call ID; `bashExecution`
+  is a command the user ran with `!` and becomes a shell result with its exit
+  code. Reasoning and image blocks are dropped.
+- Session state (`thinking_level_change`, `model_change`, `usage`,
+  `compaction`, `branch_summary`, `custom`, `label`, `session_info`) and
+  injected context (`system`, `custom`, `branchSummary` and
+  `compactionSummary` roles) are counted, never projected. `custom_message`
+  (extension context) and `context_edit` (a later rewrite of an earlier
+  entry's model context) are skipped as well: the append-only record of what
+  was requested and returned is the evidence, not a later view of it.
+- An unknown entry type or role, or an unknown content block, quarantines that
+  entry alone. A content block that is not an object with a string `type`
+  fails the source.
+- A tool part in a message carries only the call ID and name; the arguments
+  live once, on the tool observation. `bash` and `powershell` commands,
+  `write` content and a top-level `edit` `oldText`/`newText` are authored
+  text with the 64 KB budget. Current `edit` calls nest their text in an
+  `edits` array, which keeps the ordinary nested-value bounds: an edit with
+  a text over 4 KB is quarantined by itself, and its replaced and authored
+  text are not separated from the path.
+- Install inventory checks the `pi` launcher on `PATH`, the
+  `@earendil-works/pi-coding-agent` package, and the managed launcher in
+  `~/.pi/agent/bin` (`pi-managed`).

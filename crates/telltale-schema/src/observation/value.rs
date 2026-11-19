@@ -719,15 +719,18 @@ fn is_bare_text_tool(name: Option<&str>) -> bool {
 /// names are the OpenCode names (`apply_patch` for legacy stores; `patch`,
 /// `shell`, `write`, `edit`, `execute`, `subagent` for v2; `bash` and `task`
 /// as stored by earlier releases) and the capitalized Claude Code names
-/// (`Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`, `Task`, `Agent`);
-/// other adapters do not use these names with string fields.
+/// (`Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`, `Task`, `Agent`).
+/// Pi shares the lowercase `bash`, `write` and `edit` names, and adds
+/// `powershell` and `edit`'s `oldText`/`newText`; other adapters do not use
+/// these names with string fields.
 const AUTHORED_TEXT_ARGUMENTS: &[(&str, &[&str])] = &[
     ("apply_patch", &["patchText"]),
     ("patch", &["patchText"]),
     ("shell", &["command"]),
     ("bash", &["command"]),
+    ("powershell", &["command"]),
     ("write", &["content"]),
-    ("edit", &["oldString", "newString"]),
+    ("edit", &["oldString", "newString", "oldText", "newText"]),
     ("execute", &["code"]),
     ("subagent", &["prompt"]),
     ("task", &["prompt"]),

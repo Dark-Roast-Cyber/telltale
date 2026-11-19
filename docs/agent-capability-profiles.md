@@ -132,6 +132,27 @@ acquired. See [qualification evidence](session-sources.md#copilot-cli-qualificat
 The canonical adapter reports ToolCall **Supported**, UserContext
 **Unsupported**, and ToolExecution **Unknown**.
 
+### Pi
+
+Source: `pi.sessions` (JSONL, session format version 3).
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| User and assistant messages | Full | `user` and `assistant` message entries. Reasoning and images are not retained. System prompts, extension messages and branch and compaction summaries are injected context and are not projected. |
+| Tool calls and results | Full | Assistant `toolCall` blocks and `toolResult` messages, correlated by call ID. Built-in `bash`, `powershell`, `read`, `write`, `edit`, `grep`, `find` and `ls` report their kind and operands. A namespaced (extension or MCP) tool keeps its name and arguments only. |
+| User shell commands | Full | A `!` command (`bashExecution`) is a shell result with its command, output and exit code. |
+| Model and provider | Full | From assistant messages and `model_change` entries. |
+| Agent | Absent | Not reported. |
+| Workspace | Absent | The session header's `cwd` is not retained. |
+| Timestamp and session ID | Full | Every entry has a timestamp; the session header names the session for the whole file. |
+| Process ID | Absent | Not reported. |
+| Exit code | Partial | `!` commands only; agent `bash` results carry none. |
+| Call ID, error state, content parts | Full | As reported. |
+
+The canonical adapter reports ToolCall and UserContext **Supported**
+and ToolExecution **Unknown**. Action records (`ActionRecordV1`) are not
+produced for Pi; that frozen schema predates the client.
+
 ## Cross-source implications
 
 - Copilot detections cannot rely on user-context matching.

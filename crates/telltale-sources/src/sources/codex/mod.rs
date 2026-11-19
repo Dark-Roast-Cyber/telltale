@@ -12,7 +12,7 @@ mod install;
 pub(crate) mod native;
 pub(crate) mod tools;
 
-pub(crate) use install::INSTALL;
+pub(crate) use install::{INSTALL, desktop_install_signals};
 
 pub(crate) const SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {

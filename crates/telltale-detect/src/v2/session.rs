@@ -388,6 +388,7 @@ fn evaluate_source_inner(
         (ClientId::OpenCode, "opencode.sqlite") => "opencode",
         (ClientId::OpenClaw, "openclaw.agents") => "openclaw",
         (ClientId::Qwen, "qwen.projects") => "qwen",
+        (ClientId::Pi, "pi.sessions") => "pi",
         (ClientId::Copilot, "copilot.process_log") => "copilot",
         // A client's hook journal: host-fed, never discovered.
         #[cfg(feature = "hook-journal")]

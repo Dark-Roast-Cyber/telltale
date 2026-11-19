@@ -25,6 +25,7 @@ fn registry_acquisition_and_evaluation_domains_agree() {
         ("openclaw", "openclaw.agents"),
         ("opencode", "opencode.sqlite"),
         ("qwen", "qwen.projects"),
+        ("pi", "pi.sessions"),
     ]);
 
     let directory = tempdir().unwrap();
@@ -47,6 +48,13 @@ fn registry_acquisition_and_evaluation_domains_agree() {
         (
             "qwen.jsonl",
             r#"{"type":"user","sessionId":"synthetic","content":"needle"}"#,
+        ),
+        (
+            "pi.jsonl",
+            concat!(
+                "{\"type\":\"session\",\"version\":3,\"id\":\"synthetic\"}\n",
+                "{\"type\":\"message\",\"id\":\"e1\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n"
+            ),
         ),
         (
             "copilot.log",
@@ -96,6 +104,7 @@ fn registry_acquisition_and_evaluation_domains_agree() {
                 ClientId::OpenClaw => directory.path().join("openclaw.jsonl"),
                 ClientId::Qwen => directory.path().join("qwen.jsonl"),
                 ClientId::Copilot => directory.path().join("copilot.log"),
+                ClientId::Pi => directory.path().join("pi.jsonl"),
                 ClientId::OpenCode => opencode.clone(),
                 _ => panic!("registered client needs a native conformance fixture"),
             },
