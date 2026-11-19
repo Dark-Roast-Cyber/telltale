@@ -539,8 +539,9 @@ impl SinkSet {
     /// Deliver a batch to every sink. Persistent replay commits the canonical
     /// first write before downstream delivery; otherwise this preserves the
     /// existing best-effort ordering. The scan runs these steps itself, with
-    /// its state install between them, so this sequence serves the tests.
-    #[cfg(test)]
+    /// its state install between them, so this sequence serves the tests,
+    /// which do not build on Windows.
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn deliver(
         &self,
         events: &[Event],

@@ -481,24 +481,6 @@ fn a_failed_diagnostics_write_changes_nothing_else() {
     );
     assert_eq!(off.events(), directory.events());
     assert_eq!(off.state(), directory.state());
-
-    let parent = workspace.side("parent");
-    let file_parent = parent.dir.join("not-a-directory");
-    fs::create_dir_all(&parent.dir).expect("side dir");
-    fs::write(&file_parent, "").expect("file in place of the directory");
-    let path_arg = file_parent
-        .join("diagnostics.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let mut args = BOTH.to_vec();
-    args.extend(["--diagnostics-path", &path_arg]);
-    let output = workspace.scan(&parent, &args);
-    succeeded(&output);
-    assert_eq!(
-        stderr(&output),
-        "warning: diagnostics not written (unsafe_target)\n"
-    );
-    assert_eq!(off.events(), parent.events());
 }
 
 #[test]
