@@ -415,6 +415,7 @@ impl Fixture {
             backfill,
             rebuild_baselines: false,
             max_sources: None,
+            diagnostics: None,
         };
         if targeted {
             // Exactly the production watch dispatch: same targets and save policy.
@@ -775,6 +776,7 @@ impl ThresholdHarness {
             backfill,
             rebuild_baselines: false,
             max_sources: None,
+            diagnostics: None,
         };
         let result = if targeted {
             run_scan(

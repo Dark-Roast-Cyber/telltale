@@ -487,6 +487,54 @@ pub(crate) fn validate_runtime_paths(
     validate_path_set(&paths, rotation_namespaces)
 }
 
+/// Whether a side file such as the diagnostics file would land on the
+/// scanner's own persistence: the state file, a local JSONL log, their
+/// sidecars and migration manifest, another protected file such as a durable
+/// outbox, an enabled rotation namespace, or the directory of a local JSONL
+/// log, where a shipper's wildcard input would read it as events.
+pub(crate) fn conflicts_with_runtime_paths(
+    candidate: &Path,
+    state: &Path,
+    local_logs: &[PathBuf],
+    other_protected: &[&Path],
+    rotation_namespaces: &[RotationNamespace],
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let manifest = manifest_path(state);
+    let mut protected = vec![
+        state.to_path_buf(),
+        sidecar_path(state),
+        sidecar_path(&manifest),
+        manifest,
+    ];
+    for log in local_logs {
+        protected.push(log.clone());
+        protected.push(sidecar_path(log));
+    }
+    protected.extend(other_protected.iter().map(|path| path.to_path_buf()));
+    let candidate_identity = existing_identity(candidate)?;
+    for path in &protected {
+        if normalized_paths_equal(candidate, path)?
+            || candidate_identity.is_some() && candidate_identity == existing_identity(path)?
+        {
+            return Ok(true);
+        }
+    }
+    for log in local_logs {
+        if normalized_paths_equal(
+            path_parent_or_current(candidate),
+            path_parent_or_current(log),
+        )? {
+            return Ok(true);
+        }
+    }
+    for namespace in rotation_namespaces {
+        if namespace.matches(candidate)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn validate_path_set(
     paths: &[PathBuf],
     rotation_namespaces: &[RotationNamespace],
@@ -1251,9 +1299,64 @@ mod tests {
 
     use super::{
         RotationNamespace, SidecarLock, TempFile, atomic_rename_no_replace, atomic_replace,
-        safe_path_info, sidecar_path, stable_file_identity, validate_pinned_observation,
-        validate_runtime_paths, verify_target_observation,
+        conflicts_with_runtime_paths, manifest_path, safe_path_info, sidecar_path,
+        stable_file_identity, validate_pinned_observation, validate_runtime_paths,
+        verify_target_observation,
     };
+
+    #[test]
+    fn side_files_may_not_land_on_scanner_files_or_in_a_log_directory() {
+        let dir = tempdir().expect("tempdir");
+        let state = dir.path().join("state").join("state.json");
+        let log = dir.path().join("logs").join("events.jsonl");
+        let outbox = dir.path().join("queue").join("outbox.sqlite");
+        let namespace = RotationNamespace::from_active_path(&log, "events", "jsonl");
+        let conflicts = |candidate: &std::path::Path| {
+            conflicts_with_runtime_paths(
+                candidate,
+                &state,
+                std::slice::from_ref(&log),
+                &[outbox.as_path()],
+                std::slice::from_ref(&namespace),
+            )
+            .expect("conflict check")
+        };
+        for protected in [
+            state.clone(),
+            sidecar_path(&state),
+            manifest_path(&state),
+            log.clone(),
+            sidecar_path(&log),
+            outbox.clone(),
+            dir.path().join("logs").join("diagnostics.jsonl"),
+            dir.path().join("logs").join("events-2026-11-19.jsonl"),
+        ] {
+            assert!(conflicts(&protected), "{}", protected.display());
+        }
+        for allowed in [
+            dir.path()
+                .join("state")
+                .join("diagnostics")
+                .join("scan.jsonl"),
+            dir.path().join("queue").join("diagnostics.jsonl"),
+            dir.path()
+                .join("logs")
+                .join("nested")
+                .join("diagnostics.jsonl"),
+        ] {
+            assert!(!conflicts(&allowed), "{}", allowed.display());
+        }
+
+        // A hard link to the state file is refused, not written through.
+        fs::create_dir_all(state.parent().unwrap()).expect("state dir");
+        fs::write(&state, "{}").expect("state");
+        let alias = dir.path().join("alias.json");
+        fs::hard_link(&state, &alias).expect("hard link");
+        assert!(
+            conflicts_with_runtime_paths(&alias, &state, std::slice::from_ref(&log), &[], &[])
+                .is_err()
+        );
+    }
 
     #[test]
     fn sidecar_lock_is_permanent_and_fail_fast() {

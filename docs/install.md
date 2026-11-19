@@ -679,6 +679,10 @@ events:
 watch:
   debounce_ms: 500                   # watch --debounce-ms
   min_scan_interval_ms: 10000        # watch --min-scan-interval-ms
+diagnostics:                         # opt-in scan records; see docs/telemetry-output.md
+  scan_phases: false                 # TELLTALE_DIAGNOSTICS_SCAN_PHASES, scan --diagnostics scan-phases
+  process_resources: false           # TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES, scan --diagnostics process-resources
+  # path: <path>                     # TELLTALE_DIAGNOSTICS_PATH, scan --diagnostics-path; default diagnostics/ beside the state file
 hooks:                               # telltale hooks; see docs/hooks/README.md
   mode: observe                      # detect-only; enforce returns ask and deny to the harness
   on_error: allow                    # allow, ask or deny when evaluation fails
@@ -707,7 +711,8 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
 
 Precedence, lowest to highest: defaults, settings files (roots in order, files
 sorted within a root, so a later file wins per key), environment variables, then
-explicit flags. The `events` on/off flags can only turn their setting on;
+explicit flags. The `events` on/off flags and `scan --diagnostics` can only
+turn their setting on;
 `--health-heartbeat-interval-seconds 0` turns the heartbeat off. A
 vendor-managed `10-vendor.yaml` and a local `90-local.yaml` can share one
 directory. Unknown keys, an unsupported `version`, files over 64 KiB,
