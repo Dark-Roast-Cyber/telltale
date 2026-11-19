@@ -1,0 +1,23 @@
+{
+  "description": "A Claude Code 2.1.327 transcript with a tools-used entry listing the tools the session has used.",
+  "harness": "claude-code",
+  "upstream": [
+    "https://github.com/anthropics/claude-code/blob/9fa26078be418ec4b217334812e2a04cc63336ae/CHANGELOG.md#L3",
+    "https://cdn.jsdelivr.net/npm/@anthropic-ai/claude-agent-sdk@0.3.327/sdk.mjs"
+  ],
+  "status": "supported",
+  "note": "Claude Code's transcript serializer is not published, and the pinned release notes do not mention this entry; the changelog link identifies the release. The matching Agent SDK 0.3.327 (claudeCodeVersion 2.1.327) reads {type: tools-used, sessionId, tools} from a transcript, keeping the string names, and writes the same entry into a forked session's transcript in sdk.mjs. The entry is a list of tool names, not a record of any call.",
+  "acquire": {
+    "source_id": "claude.projects",
+    "jsonl": [
+      {"type": "user", "uuid": "u1", "sessionId": "11111111-2222-4333-8444-555555555554", "timestamp": "2026-11-18T00:00:01.000Z", "cwd": "/synthetic/work", "version": "2.1.327", "message": {"role": "user", "content": "Summarize the synthetic workspace."}},
+      {"type": "tools-used", "sessionId": "11111111-2222-4333-8444-555555555554", "tools": ["Bash", "Read"]}
+    ]
+  },
+  "expect": {
+    "min_observations": 1,
+    "min_families": {
+      "message": 1
+    }
+  }
+}
