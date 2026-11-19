@@ -821,7 +821,8 @@ uses. A safe starter pattern is:
 1. Write events locally with the default path profile, `TELLTALE_LOG_PATH`, or an
    explicit `--log-path`.
 2. Validate the event shape against the schema.
-3. Configure the shipper to read only that active JSONL event path.
+3. Configure the shipper to read the active JSONL event path. For Filebeat,
+   include the matching rotated generations so it can resume after downtime.
 4. Keep human-readable diagnostics, scanner state, credentials, and raw agent
    session stores outside the forwarded telemetry path.
 
@@ -855,10 +856,23 @@ Scheduled Tasks) is required.
 
 When the active JSONL file exceeds the configured max size, Telltale renames it
 to a date-stamped rotated file and starts a fresh active file. The active file
-name is always stable (`telltale-events.jsonl`) so shippers can monitor a single
-path. Rotated files are named `telltale-events-YYYY-MM-DD.jsonl`, with a counter
-suffix (`.1`, `.2`) for same-day rotations. Files beyond the keep count are
-deleted oldest-first.
+name stays `telltale-events.jsonl`. Rotated files are named
+`telltale-events-YYYY-MM-DD.jsonl`, with a counter suffix (`.1`, `.2`) for
+same-day rotations. Files beyond the keep count are deleted oldest-first.
+
+For a Windows user-profile deployment with built-in rotation, set both paths on
+the same Filebeat `filestream` input.
+
+```yaml
+paths:
+  - '${LOCALAPPDATA}\Telltale\Logs\telltale-events.jsonl'
+  - '${LOCALAPPDATA}\Telltale\Logs\telltale-events-????-??-??*.jsonl'
+```
+
+Keep the existing input ID and fingerprint settings when adding the rotated
+path so Filebeat can resume from recorded offsets. Size the rotation retention
+to cover the expected shipper downtime.
+[Filebeat rotation guidance](https://www.elastic.co/docs/reference/beats/filebeat/file-log-rotation).
 
 Defaults:
 
