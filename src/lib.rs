@@ -9,6 +9,7 @@
 
 mod cli;
 mod config;
+mod diagnostics;
 mod event;
 mod file_lock;
 mod rules;

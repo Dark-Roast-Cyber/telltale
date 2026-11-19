@@ -134,7 +134,7 @@ impl EnvValue for Option<PathBuf> {
 }
 
 /// Flags that override settings for one invocation.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CliSettings {
     pub(crate) no_community_rules: bool,
     pub(crate) log_rotate_max_size: Option<u64>,
@@ -148,6 +148,9 @@ pub(crate) struct CliSettings {
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) watch_debounce_ms: Option<u64>,
     pub(crate) watch_min_scan_interval_ms: Option<u64>,
+    /// Categories named by `scan --diagnostics`; it can only turn them on.
+    pub(crate) diagnostics: crate::diagnostics::Categories,
+    pub(crate) diagnostics_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -171,6 +174,9 @@ pub(crate) struct Settings {
     pub(crate) baseline_deviation_scoring: Setting<bool>,
     pub(crate) watch_debounce_ms: Setting<u64>,
     pub(crate) watch_min_scan_interval_ms: Setting<u64>,
+    diagnostics_scan_phases: Setting<bool>,
+    diagnostics_process_resources: Setting<bool>,
+    diagnostics_path: Setting<Option<PathBuf>>,
     #[cfg(feature = "hooks")]
     pub(crate) hooks: HooksSettings,
 }
@@ -202,6 +208,9 @@ impl Default for Settings {
             baseline_deviation_scoring: Setting::new(false),
             watch_debounce_ms: Setting::new(500),
             watch_min_scan_interval_ms: Setting::new(10_000),
+            diagnostics_scan_phases: Setting::new(false),
+            diagnostics_process_resources: Setting::new(false),
+            diagnostics_path: Setting::new(None),
             #[cfg(feature = "hooks")]
             hooks: HooksSettings::default(),
         }
@@ -229,6 +238,8 @@ struct SettingsDocument {
     events: EventsSection,
     #[serde(default)]
     watch: WatchSection,
+    #[serde(default)]
+    diagnostics: DiagnosticsSection,
     #[cfg(feature = "hooks")]
     #[serde(default)]
     hooks: HooksSection,
@@ -296,6 +307,14 @@ struct EventsSection {
 struct WatchSection {
     debounce_ms: Option<u64>,
     min_scan_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagnosticsSection {
+    scan_phases: Option<bool>,
+    process_resources: Option<bool>,
+    path: Option<PathBuf>,
 }
 
 /// Discover, resolve, and apply settings for this process. Event 3 risk
@@ -416,6 +435,12 @@ impl Settings {
             .set(document.watch.debounce_ms, origin());
         self.watch_min_scan_interval_ms
             .set(document.watch.min_scan_interval_ms, origin());
+        self.diagnostics_scan_phases
+            .set(document.diagnostics.scan_phases, origin());
+        self.diagnostics_process_resources
+            .set(document.diagnostics.process_resources, origin());
+        self.diagnostics_path
+            .set(document.diagnostics.path.map(Some), origin());
         #[cfg(feature = "hooks")]
         self.hooks.apply_document(document.hooks, path);
     }
@@ -447,6 +472,12 @@ impl Settings {
             .set_env(env, "TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")?;
         self.health_heartbeat_interval_seconds
             .set_env(env, "TELLTALE_HEALTH_HEARTBEAT_INTERVAL_SECONDS")?;
+        self.diagnostics_scan_phases
+            .set_env(env, "TELLTALE_DIAGNOSTICS_SCAN_PHASES")?;
+        self.diagnostics_process_resources
+            .set_env(env, "TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES")?;
+        self.diagnostics_path
+            .set_env(env, "TELLTALE_DIAGNOSTICS_PATH")?;
         #[cfg(feature = "hooks")]
         self.hooks.apply_environment(env)?;
         Ok(())
@@ -497,6 +528,18 @@ impl Settings {
         self.watch_min_scan_interval_ms.set(
             cli.watch_min_scan_interval_ms,
             Origin::Cli("--min-scan-interval-ms"),
+        );
+        self.diagnostics_scan_phases.set(
+            cli.diagnostics.scan_phases.then_some(true),
+            Origin::Cli("--diagnostics"),
+        );
+        self.diagnostics_process_resources.set(
+            cli.diagnostics.process_resources.then_some(true),
+            Origin::Cli("--diagnostics"),
+        );
+        self.diagnostics_path.set(
+            cli.diagnostics_path.clone().map(Some),
+            Origin::Cli("--diagnostics-path"),
         );
     }
 
@@ -584,6 +627,18 @@ impl Settings {
         (seconds > 0).then_some(seconds)
     }
 
+    pub(crate) fn diagnostics_categories(&self) -> crate::diagnostics::Categories {
+        crate::diagnostics::Categories {
+            scan_phases: self.diagnostics_scan_phases.value,
+            process_resources: self.diagnostics_process_resources.value,
+        }
+    }
+
+    /// The configured diagnostics file, or `None` for the default location.
+    pub(crate) fn diagnostics_path(&self) -> Option<&Path> {
+        self.diagnostics_path.value.as_deref()
+    }
+
     /// Each effective value with its default and origin, keyed by its
     /// `settings.d` path. A winning file appears only as its path hash.
     pub(crate) fn to_json(&self) -> serde_json::Value {
@@ -607,6 +662,9 @@ impl Settings {
             "events.health_heartbeat_interval_seconds": entry(&self.health_heartbeat_interval_seconds),
             "watch.debounce_ms": entry(&self.watch_debounce_ms),
             "watch.min_scan_interval_ms": entry(&self.watch_min_scan_interval_ms),
+            "diagnostics.scan_phases": entry(&self.diagnostics_scan_phases),
+            "diagnostics.process_resources": entry(&self.diagnostics_process_resources),
+            "diagnostics.path": path_entry(&self.diagnostics_path),
         });
         #[cfg(feature = "hooks")]
         if let serde_json::Value::Object(map) = &mut json {
@@ -644,7 +702,6 @@ fn entry<T: Clone + serde::Serialize>(setting: &Setting<T>) -> serde_json::Value
 }
 
 /// A path appears only as its hash, like a settings file.
-#[cfg(feature = "hooks")]
 fn path_entry(setting: &Setting<Option<PathBuf>>) -> serde_json::Value {
     let hashed = |path: &Option<PathBuf>| serde_json::json!(path.as_deref().map(path_hash));
     described(setting, hashed(&setting.value), hashed(&setting.default))
@@ -1034,6 +1091,105 @@ mod tests {
         assert_eq!(
             origin(&settings, "rules.community"),
             ("default".into(), serde_json::Value::Null)
+        );
+    }
+
+    #[test]
+    fn each_diagnostics_category_resolves_on_its_own() {
+        use crate::diagnostics::Categories;
+
+        let defaults = resolve(&[], &env(&[]), &CliSettings::default()).expect("defaults");
+        assert_eq!(defaults.diagnostics_categories(), Categories::default());
+        assert_eq!(defaults.diagnostics_path(), None);
+
+        let temp = tempdir().expect("tempdir");
+        let file = write(
+            temp.path(),
+            "settings.yaml",
+            "version: 1\ndiagnostics: {scan_phases: true, process_resources: true, path: from-file.jsonl}\n",
+        );
+        // The file turns both on; the environment turns one off again and
+        // moves the file.
+        let settings = resolve(
+            std::slice::from_ref(&file),
+            &env(&[
+                ("TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES", "off"),
+                ("TELLTALE_DIAGNOSTICS_PATH", "from-env.jsonl"),
+            ]),
+            &CliSettings::default(),
+        )
+        .expect("resolve");
+        assert_eq!(
+            settings.diagnostics_categories(),
+            Categories {
+                scan_phases: true,
+                process_resources: false,
+            }
+        );
+        assert_eq!(
+            settings.diagnostics_path(),
+            Some(Path::new("from-env.jsonl"))
+        );
+        assert_eq!(
+            origin(&settings, "diagnostics.scan_phases"),
+            ("settings_file".into(), path_hash(&file).into())
+        );
+        assert_eq!(
+            origin(&settings, "diagnostics.process_resources"),
+            (
+                "environment".into(),
+                "TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES".into()
+            )
+        );
+        // The path is reported only as its hash.
+        assert_eq!(
+            settings.to_json()["diagnostics.path"]["value"],
+            path_hash(Path::new("from-env.jsonl"))
+        );
+
+        // The flag turns a category on over the environment; the other
+        // category keeps the environment's value.
+        let settings = resolve(
+            std::slice::from_ref(&file),
+            &env(&[
+                ("TELLTALE_DIAGNOSTICS_PROCESS_RESOURCES", "off"),
+                ("TELLTALE_DIAGNOSTICS_SCAN_PHASES", "0"),
+            ]),
+            &CliSettings {
+                diagnostics: Categories {
+                    scan_phases: false,
+                    process_resources: true,
+                },
+                diagnostics_path: Some("from-cli.jsonl".into()),
+                ..CliSettings::default()
+            },
+        )
+        .expect("resolve");
+        assert_eq!(
+            settings.diagnostics_categories(),
+            Categories {
+                scan_phases: false,
+                process_resources: true,
+            }
+        );
+        assert_eq!(
+            origin(&settings, "diagnostics.process_resources"),
+            ("cli".into(), "--diagnostics".into())
+        );
+        assert_eq!(
+            origin(&settings, "diagnostics.scan_phases"),
+            (
+                "environment".into(),
+                "TELLTALE_DIAGNOSTICS_SCAN_PHASES".into()
+            )
+        );
+        assert_eq!(
+            settings.diagnostics_path(),
+            Some(Path::new("from-cli.jsonl"))
+        );
+        assert_eq!(
+            origin(&settings, "diagnostics.path"),
+            ("cli".into(), "--diagnostics-path".into())
         );
     }
 
