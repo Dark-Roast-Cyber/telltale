@@ -221,7 +221,7 @@ fn load_package_documents(
             RulePackage::parse(&read_source(path, replacements)?).map_err(|error| {
                 format!(
                     "invalid rule package '{}': {error}",
-                    canonical_or_original(path).display()
+                    source_label_path(path)
                 )
                 .into()
             })

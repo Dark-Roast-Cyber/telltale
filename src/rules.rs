@@ -5,8 +5,6 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-use telltale_core::rule_resolution::canonical_or_original;
 pub(crate) use telltale_core::rule_resolution::{
     RulePackPaths, RuleResolution, RuleResolutionDiagnostics,
 };
@@ -82,7 +80,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CommunityRules, RuleLoadMode, RulePackPaths, canonical_or_original,
+        CommunityRules, RuleLoadMode, RulePackPaths,
         resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
     };
 
@@ -660,8 +658,8 @@ telltale:
         .expect_err("equal-tier duplicate");
         let error = error.to_string();
         assert!(error.starts_with("duplicate rule id: same.id"));
-        assert!(error.contains(&canonical_or_original(&first).display().to_string()));
-        assert!(error.contains(&canonical_or_original(&second).display().to_string()));
+        assert!(error.contains("one.yaml#document:0"), "{error}");
+        assert!(error.contains("two.yaml#document:0"), "{error}");
     }
 
     #[test]
@@ -716,13 +714,10 @@ telltale:
         )
         .expect_err("distinct explicit collision");
         let collision = collision.to_string();
-        assert!(collision.contains(&canonical_or_original(&managed).display().to_string()));
+        assert!(collision.contains("managed.yaml#document:0"), "{collision}");
         assert!(
-            collision.contains(
-                &canonical_or_original(&explicit_collision)
-                    .display()
-                    .to_string()
-            )
+            collision.contains("explicit-collision.yaml#document:0"),
+            "{collision}"
         );
 
         let duplicate = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
