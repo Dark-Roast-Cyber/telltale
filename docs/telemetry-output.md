@@ -375,8 +375,8 @@ file's directory. Set `diagnostics.path`, `TELLTALE_DIAGNOSTICS_PATH` or
 `--diagnostics-path` to move it. It is outside the event log, so a shipper
 glob for `telltale-events*.jsonl` does not collect it. To ship it, give it its
 own input and dataset; it is not Event 3.0. A path on or beside the event log,
-on the state file or its lock and manifest files, or on the durable queue is
-refused.
+on the state file or its lock and manifest files, or on the durable queue's
+database or the lock and SQLite files beside it is refused.
 
 Each record is one JSON line:
 
@@ -406,7 +406,11 @@ appears only when its category is enabled.
   save and delivery come after it. `startup_us` is the time from command start
   to the first scan and appears only on a command's first record. A phase that
   did not run is null, which is different from 0. With a durable queue,
-  `durable_admission` covers the queue admission and canonical write together.
+  `durable_admission` covers the canonical write and queue admission together,
+  and the retry of already queued events that runs first. `remote_delivery`
+  also covers writing a sink-failure alert and saving its episode state; if
+  that alert cannot be written, `failure_stage` is `canonical_write` or
+  `durable_admission`.
 - `process_resources.process` covers the whole command so far: wall time since
   it started, user and kernel CPU time, and peak memory. These values grow across
   `--interval-seconds` scans. Peak memory is the process's lifetime peak, not
@@ -424,8 +428,11 @@ appears only when its category is enabled.
   A counter the platform cannot provide is null, not 0.
 
 Records hold only these fields: no paths, source or session identifiers,
-prompts, tool commands or error text. A record is at most 4 KiB. The file rotates to one `.1` generation
-at 1 MiB and is not flushed to disk on each write. If a record cannot be
+prompts, tool commands or error text. A record is at most 4 KiB. The file
+rotates to one `.1` generation at 1 MiB and is not flushed to disk on each
+write. Two scans writing at once, such as a `--history` scan beside a routine
+scanner, can take the file a record past that size or lose a generation when
+both rotate. If a record cannot be
 written, the scan prints `warning: diagnostics not written (<class>)` to
 stderr, with `<class>` one of `overlap`, `unsafe_target`, `too_large`,
 `rotate`, `open` or `write`. Events, state and the exit status are the same

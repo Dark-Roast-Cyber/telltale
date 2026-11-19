@@ -146,38 +146,37 @@ mod tests {
         );
     }
 
-    /// Spinning must add CPU time in microseconds: too small a unit never
-    /// reaches the target, and too large a unit exceeds what the elapsed time
-    /// and available cores allow.
+    /// Spinning for 200 ms must add CPU time in microseconds: a unit a
+    /// thousand times too small stays under the floor, and one a thousand
+    /// times too large exceeds what the cores could have done.
     #[test]
     fn cpu_time_counts_spinning_in_microseconds() {
         if !SUPPORTED {
             assert_eq!(process_cpu_time(), None);
             return;
         }
-        const TARGET_US: u64 = 50_000;
         let before = process_cpu_time().expect("CPU time is reported");
         let started = Instant::now();
-        let mut used = CpuTime {
-            user_us: 0,
-            kernel_us: 0,
-        };
-        while used.user_us + used.kernel_us < TARGET_US {
-            assert!(
-                started.elapsed() < Duration::from_secs(30),
-                "CPU time did not advance by {TARGET_US} us: {used:?}"
-            );
+        while started.elapsed() < Duration::from_millis(200) {
             std::hint::black_box((0..10_000u64).fold(0u64, u64::wrapping_add));
-            used = process_cpu_time()
-                .expect("CPU time is reported")
-                .since(before)
-                .expect("CPU time never decreases");
         }
-        let cores = std::thread::available_parallelism().map_or(64, usize::from) as u64;
-        // Accounting is tick-based on some kernels, so allow one generous tick.
-        let ceiling = (super::super::micros(started.elapsed()) + 20_000) * cores;
+        let elapsed = started.elapsed();
+        let used = process_cpu_time()
+            .expect("CPU time is reported")
+            .since(before)
+            .expect("CPU time never decreases");
+        let used_us = used.user_us + used.kernel_us;
+        // Even a crowded host gives a spinning process a tenth of the time.
         assert!(
-            used.user_us + used.kernel_us <= ceiling,
+            used_us >= 20_000,
+            "{used:?} is below 20 ms for a 200 ms spin"
+        );
+        // Twice what the cores allow, plus a tick: CPU quotas and tick-based
+        // accounting stay inside it.
+        let cores = std::thread::available_parallelism().map_or(64, usize::from) as u64;
+        let ceiling = (super::super::micros(elapsed) + 20_000) * cores * 2;
+        assert!(
+            used_us <= ceiling,
             "{used:?} exceeds {ceiling} us for {cores} cores"
         );
     }

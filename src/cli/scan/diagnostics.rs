@@ -11,7 +11,7 @@
 //! `scan_duration_ms` is measured. That field keeps its meaning: it excludes
 //! event selection, state save and delivery.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -270,7 +270,13 @@ fn write(
 ) -> Result<(), WriteFailure> {
     let logs = execution.sinks.local_persistence_paths();
     let namespaces = execution.sinks.local_rotation_namespaces();
-    let outbox: Vec<&Path> = execution.sinks.durable_outbox_path().into_iter().collect();
+    let outbox: Vec<PathBuf> = execution
+        .sinks
+        .durable_outbox_path()
+        .map(crate::sink::outbox::reserved_outbox_paths)
+        .into_iter()
+        .flatten()
+        .collect();
     for candidate in [path.to_path_buf(), diagnostics::rotated_path(path)] {
         match crate::file_lock::conflicts_with_runtime_paths(
             &candidate,

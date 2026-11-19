@@ -3,8 +3,12 @@
 //! A record is appended with one write and is not synced, because diagnostics
 //! are not a durable record. Before an append would take the file past
 //! [`MAX_FILE_BYTES`], the file is renamed to `<path>.1`, replacing the previous
-//! generation, so the two files stay below about twice that. Concurrent writers
-//! can lose a record at a rotation; they cannot grow the files past the bound.
+//! generation, so the two files stay below about twice that. Writers are not
+//! serialized: when two scans write at once, such as a `--history` scan beside
+//! a routine scanner, each can pass the size check before the other appends,
+//! which takes the file past the bound by one record per writer, and racing
+//! rotations can discard a whole generation. The bound on both files stays
+//! within a few records.
 //! The target is opened like the event log: symbolic links, hard links and
 //! non-regular files are refused.
 
