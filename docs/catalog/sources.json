@@ -125,6 +125,20 @@
       "relative_path": "logs/copilot",
       "root": "project_local",
       "source_id": "copilot.process_log"
+    },
+    {
+      "client": "pi",
+      "client_display_name": "Pi",
+      "fixture_relative_path": "pi/sessions",
+      "kind": "jsonl",
+      "pattern": {
+        "extension": "jsonl"
+      },
+      "project_relative_path": null,
+      "recursive": true,
+      "relative_path": ".pi/agent/sessions",
+      "root": "home",
+      "source_id": "pi.sessions"
     }
   ]
 }

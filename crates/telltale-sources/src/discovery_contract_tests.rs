@@ -9,7 +9,7 @@ fn supported_registry_drives_shared_discovery_without_broadening_sources() {
     for path in [
         ".codex/sessions/synthetic.jsonl",
         ".claude/projects/synthetic/session.jsonl",
-        ".pi/agent/sessions/synthetic.jsonl",
+        ".gemini/antigravity/brain/synthetic/transcript.jsonl",
         ".gemini/tmp/synthetic.json",
     ] {
         let path = root.path().join(path);

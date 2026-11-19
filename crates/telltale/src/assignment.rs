@@ -146,6 +146,7 @@ impl AssignmentAdapterDomain {
             ("openclaw", "openclaw.agents") => ("openclaw", "openclaw.agents"),
             ("opencode", "opencode.sqlite") => ("opencode", "opencode.sqlite"),
             ("qwen", "qwen.projects") => ("qwen", "qwen.projects"),
+            ("pi", "pi.sessions") => ("pi", "pi.sessions"),
             #[cfg(test)]
             ("synthetic", "coordinate-less") => ("synthetic", "coordinate-less"),
             _ => return Err(error(ProtectedAssignmentErrorCode::InvalidClaim)),

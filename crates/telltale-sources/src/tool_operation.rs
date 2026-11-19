@@ -26,7 +26,7 @@ use telltale_schema::observation::{
 };
 
 use crate::acquisition::ToolTableCounts;
-use crate::sources::{claude, codex, copilot, openclaw, opencode, qwen};
+use crate::sources::{claude, codex, copilot, openclaw, opencode, pi, qwen};
 
 /// One built-in tool of one harness.
 pub(crate) struct ToolSpec {
@@ -238,6 +238,7 @@ pub(crate) fn table(client: ClientId) -> Option<&'static [ToolSpec]> {
         ClientId::OpenClaw => openclaw::tools::TOOLS,
         ClientId::OpenCode => opencode::tools::TOOLS,
         ClientId::Qwen => qwen::tools::TOOLS,
+        ClientId::Pi => pi::tools::TOOLS,
         _ => return None,
     })
 }

@@ -41,6 +41,7 @@ pub fn declared_tools() -> Vec<DeclaredTool> {
         ClientId::OpenClaw,
         ClientId::OpenCode,
         ClientId::Qwen,
+        ClientId::Pi,
     ]
     .into_iter()
     .flat_map(|client| {

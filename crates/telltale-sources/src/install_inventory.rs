@@ -236,8 +236,20 @@ fn observe_agent(
             &context.global_storage_roots,
         ));
     }
+    if def.agent == "codex" {
+        signals.extend(crate::sources::codex::desktop_install_signals(
+            &context.home,
+            platform,
+        ));
+    }
     if def.agent == "claude" {
         signals.extend(crate::sources::claude::desktop_install_signals(
+            &context.home,
+            platform,
+        ));
+    }
+    if def.agent == "pi" {
+        signals.extend(crate::sources::pi::managed_install_signals(
             &context.home,
             platform,
         ));
@@ -396,9 +408,33 @@ fn path_hash(path: &Path) -> String {
 }
 
 fn env_path_dirs() -> Vec<PathBuf> {
-    env::var_os("PATH")
-        .map(|path| env::split_paths(&path).collect())
-        .unwrap_or_default()
+    let Some(path) = env::var_os("PATH") else {
+        return Vec::new();
+    };
+    if cfg!(windows)
+        && let Some(text) = path.to_str()
+        && let Some(dirs) = split_unbalanced_windows_path(text)
+    {
+        return dirs;
+    }
+    env::split_paths(&path).collect()
+}
+
+/// Windows `split_paths` treats `"` as a quote toggle, so one stray quote (for
+/// example `C:\Program Files\dotnet"`) folds every later entry into a single
+/// bogus directory, while shells still resolve them. With an odd number of
+/// quotes, split on `;` and drop the quotes instead, as shells do.
+fn split_unbalanced_windows_path(text: &str) -> Option<Vec<PathBuf>> {
+    if text.matches('"').count().is_multiple_of(2) {
+        return None;
+    }
+    Some(
+        text.split(';')
+            .map(|entry| entry.replace('"', ""))
+            .filter(|entry| !entry.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+    )
 }
 
 fn extension_roots(home: &Path) -> Vec<PathBuf> {
@@ -452,6 +488,7 @@ mod tests {
     #[test]
     fn windows_opencode_desktop_is_confirmed_without_path_or_node() {
         for executable in [
+            "AppData/Local/Programs/ai.opencode.desktop/OpenCode.exe",
             "AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe",
             "AppData/Roaming/ai.opencode.desktop/cli/2.0.24/opencode-cli.exe",
         ] {
@@ -501,6 +538,10 @@ mod tests {
             ("AppData/Roaming/Claude/claude-code", "claude-desktop"),
             (
                 "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code",
+                "claude-desktop-packaged",
+            ),
+            (
+                "AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc/claude-code",
                 "claude-desktop-packaged",
             ),
         ] {
@@ -554,6 +595,132 @@ mod tests {
                 observe(InstallPlatform::Unix).confidence,
                 InstallConfidence::Absent
             );
+        }
+    }
+
+    #[test]
+    fn unbalanced_windows_path_quote_keeps_later_entries() {
+        assert_eq!(
+            split_unbalanced_windows_path(
+                r#"C:\Windows;C:\Program Files\dotnet";C:\Users\u\.local\bin;;C:\Links"#
+            ),
+            Some(
+                [
+                    r"C:\Windows",
+                    r"C:\Program Files\dotnet",
+                    r"C:\Users\u\.local\bin",
+                    r"C:\Links",
+                ]
+                .map(PathBuf::from)
+                .to_vec()
+            )
+        );
+        // Balanced quoting keeps the platform splitter's behavior.
+        assert_eq!(
+            split_unbalanced_windows_path(r#"C:\Windows;"C:\a;b";C:\Links"#),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_codex_desktop_bundle_is_confirmed_without_path_or_node() {
+        let temp = tempdir().unwrap();
+        let context = InstallInventoryContext {
+            home: temp.path().into(),
+            path_dirs: vec![],
+            extension_roots: vec![],
+            global_storage_roots: vec![],
+            node_roots: vec![],
+        };
+        let observe = |platform| {
+            collect_install_inventory_for_platform(&context, 1, platform)
+                .agents
+                .into_iter()
+                .find(|agent| agent.agent == "codex")
+                .unwrap()
+        };
+        let root = temp.path().join("AppData/Local/OpenAI/Codex/bin");
+        // Wrong depths, a sibling tool and a directory named like the binary
+        // are not evidence.
+        std::fs::create_dir_all(root.join("8dbccda2214d0643/codex.exe")).unwrap();
+        std::fs::write(root.join("codex.exe"), b"synthetic").unwrap();
+        std::fs::create_dir_all(root.join("1111111111111111/nested")).unwrap();
+        std::fs::write(root.join("1111111111111111/nested/codex.exe"), b"synthetic").unwrap();
+        std::fs::write(root.join("1111111111111111/rg.exe"), b"synthetic").unwrap();
+        assert_eq!(
+            observe(InstallPlatform::Windows).confidence,
+            InstallConfidence::Absent
+        );
+        let path = root.join("f71a721e0e6193a9").join("codex.exe");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"metadata-only-probe-must-not-execute").unwrap();
+        let agent = observe(InstallPlatform::Windows);
+        assert!(agent.installed);
+        assert_eq!(agent.confidence, InstallConfidence::Confirmed);
+        assert!(
+            !serde_json::to_string(&agent)
+                .unwrap()
+                .contains(temp.path().to_str().unwrap())
+        );
+        let present = agent
+            .signals
+            .iter()
+            .filter(|signal| signal.present)
+            .collect::<Vec<_>>();
+        assert_eq!(present.len(), 1);
+        assert_eq!(present[0].kind, "executable");
+        assert_eq!(present[0].name, "codex-desktop");
+        assert_eq!(present[0].path_hash, Some(path_hash(&path)));
+        assert_eq!(
+            observe(InstallPlatform::Unix).confidence,
+            InstallConfidence::Absent
+        );
+    }
+
+    #[test]
+    fn pi_managed_launcher_is_confirmed_without_path_or_node() {
+        let temp = tempdir().unwrap();
+        let context = InstallInventoryContext {
+            home: temp.path().into(),
+            path_dirs: vec![],
+            extension_roots: vec![],
+            global_storage_roots: vec![],
+            node_roots: vec![],
+        };
+        let observe = |platform| {
+            collect_install_inventory_for_platform(&context, 1, platform)
+                .agents
+                .into_iter()
+                .find(|agent| agent.agent == "pi")
+                .unwrap()
+        };
+        let bin = temp.path().join(".pi/agent/bin");
+        // A directory named like the launcher and the bundled helpers are not
+        // evidence.
+        std::fs::create_dir_all(bin.join("pi.cmd")).unwrap();
+        std::fs::write(bin.join("pi-launcher.js"), b"synthetic").unwrap();
+        for platform in [InstallPlatform::Windows, InstallPlatform::Unix] {
+            assert_eq!(observe(platform).confidence, InstallConfidence::Absent);
+        }
+        std::fs::remove_dir(bin.join("pi.cmd")).unwrap();
+        for (platform, name) in [
+            (InstallPlatform::Windows, "pi.cmd"),
+            (InstallPlatform::Unix, "pi"),
+        ] {
+            let path = bin.join(name);
+            std::fs::write(&path, b"metadata-only-probe-must-not-execute").unwrap();
+            let agent = observe(platform);
+            assert!(agent.installed);
+            assert_eq!(agent.confidence, InstallConfidence::Confirmed);
+            let present = agent
+                .signals
+                .iter()
+                .filter(|signal| signal.present)
+                .collect::<Vec<_>>();
+            assert_eq!(present.len(), 1);
+            assert_eq!(present[0].name, "pi-managed");
+            assert_eq!(present[0].path_hash, Some(path_hash(&path)));
+            std::fs::remove_file(&path).unwrap();
         }
     }
 

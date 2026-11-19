@@ -303,6 +303,8 @@ fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
         "artifact-autoreact-ledger",
         "artifact-comment-monitor",
         "continued-in",
+        "bridge-session",
+        "tools-used",
     ] {
         let record = json!({"type":kind,"sessionId":"synthetic","message":{
             "role":"assistant","content":[{"type":"tool_use","id":"synthetic-call",
@@ -333,6 +335,37 @@ fn bookkeeping_replays_are_opaque_to_observations_and_activity() {
             "{kind}"
         );
     }
+}
+
+/// Remote Control bridge pointers and per-session tool-name summaries, in the
+/// shapes the desktop app writes. A `tools-used` name list is not tool usage.
+#[test]
+fn bridge_session_and_tools_used_records_are_bookkeeping() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: directory.path().join("synthetic-desktop-bookkeeping.jsonl"),
+    };
+    let turn = json!({"type":"user","sessionId":"synthetic","content":"valid turn"});
+    let bridge = json!({"type":"bridge-session","sessionId":"synthetic",
+        "bridgeSessionId":"synthetic-bridge","lastSequenceNum":3,
+        "ownerAccountUuid":"synthetic-account","ownerOrganizationUuid":"synthetic-org"});
+    let tools = json!({"type":"tools-used","sessionId":"synthetic","tools":["Bash","Write"]});
+    std::fs::write(&source.path, format!("{turn}\n{bridge}\n{tools}\n")).unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert!(batch.quarantined.is_empty());
+    assert_eq!(batch.observations.len(), 1);
+    assert_eq!(
+        batch.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 3);
+    assert_eq!(counts.record_counts.other, 2);
+    assert_eq!(counts.record_counts.tool_call, 0);
+    assert!(counts.tool_usage.is_empty());
 }
 
 #[test]
@@ -401,6 +434,8 @@ fn explicit_outer_record_types_cannot_be_shadowed_by_payload_types() {
         "artifact-autoreact-ledger",
         "artifact-comment-monitor",
         "continued-in",
+        "bridge-session",
+        "tools-used",
         "Future",
     ] {
         for payload in [

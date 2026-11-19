@@ -410,13 +410,19 @@ fn schema_vocabularies_match_the_rust_types() {
     let enumerated =
         |pointer: &str| names(schema.pointer(pointer).unwrap().as_array().unwrap().clone());
 
-    // v1 is frozen (`v1_schema_is_frozen`), so a new `ClientId` fails here:
-    // its action records need a schema decision, not a silent enum edit.
-    let clients = crate::clients::ClientId::ALL
+    // v1 is frozen (`v1_schema_is_frozen`): its client vocabulary is the
+    // explicit v1 list, never a silent enum edit. A newer client is left out
+    // of v1 records instead (`ACTION_RECORD_V1_CLIENTS`).
+    let clients = crate::action_record::ACTION_RECORD_V1_CLIENTS
         .iter()
         .map(|client| Value::from(client.as_str()))
         .collect();
     assert_eq!(enumerated("/properties/client/enum"), names(clients));
+    assert_eq!(
+        &crate::clients::ClientId::ALL[..crate::action_record::ACTION_RECORD_V1_CLIENTS.len()],
+        crate::action_record::ACTION_RECORD_V1_CLIENTS,
+        "v1 clients keep their declaration order and later clients are appended"
+    );
 
     let families = ObservationFamily::ALL
         .iter()

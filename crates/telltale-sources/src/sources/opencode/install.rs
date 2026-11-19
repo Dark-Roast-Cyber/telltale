@@ -23,7 +23,12 @@ pub(crate) fn desktop_install_signals(
     if platform != InstallPlatform::Windows {
         return Vec::new();
     }
-    let desktop = home.join("AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe");
+    // Current installers use `ai.opencode.desktop`; earlier ones used
+    // `@opencode-aidesktop`. Both stay one signal so the snapshot hash is stable.
+    let desktop = [
+        home.join("AppData/Local/Programs/ai.opencode.desktop/OpenCode.exe"),
+        home.join("AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe"),
+    ];
     let cli_root = home.join("AppData/Roaming/ai.opencode.desktop/cli");
     let mut cli_candidates = std::fs::read_dir(cli_root)
         .into_iter()
@@ -34,7 +39,7 @@ pub(crate) fn desktop_install_signals(
         .collect::<Vec<_>>();
     cli_candidates.sort_unstable();
     vec![
-        executable_path_signal("opencode-desktop", [desktop]),
+        executable_path_signal("opencode-desktop", desktop),
         executable_path_signal("opencode-desktop-cli", cli_candidates),
     ]
 }

@@ -1,7 +1,7 @@
 //! Projection of facade action findings into the versioned action record.
 use telltale_schema::action_record::{
-    ACTION_RECORD_V1_ID, ActionRecordContext, ActionRecordContribution, ActionRecordEvidence,
-    ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
+    ACTION_RECORD_V1_CLIENTS, ACTION_RECORD_V1_ID, ActionRecordContext, ActionRecordContribution,
+    ActionRecordEvidence, ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
 };
 use telltale_schema::event::{TELLTALE_VERSION, path_hash};
 
@@ -10,7 +10,8 @@ use crate::{ActionFinding, SourceScan};
 impl SourceScan {
     /// This scan's action findings as [`ActionRecordV1`] values, in
     /// `action_findings` order: the serializable form for a host's own wire.
-    /// Empty for a failed source and for compatibility scans.
+    /// Empty for a failed source, for compatibility scans, and for a client
+    /// v1 cannot name ([`ACTION_RECORD_V1_CLIENTS`]): v1 is frozen.
     ///
     /// `session_event_id` names an event in this scan's `events`; deliver the
     /// records and those events together if the link matters to the receiver.
@@ -18,6 +19,9 @@ impl SourceScan {
         let Some(provenance) = &self.semantic_provenance else {
             return Vec::new();
         };
+        if !ACTION_RECORD_V1_CLIENTS.contains(&self.source.client) {
+            return Vec::new();
+        }
         let source_path_hash = path_hash(&self.source.path);
         self.action_findings
             .iter()

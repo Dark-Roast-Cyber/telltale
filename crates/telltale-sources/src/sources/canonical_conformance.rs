@@ -943,6 +943,17 @@ fn declared_fixture(
             ]),
             true,
         ),
+        "pi.sessions" => (
+            jsonl(&[
+                serde_json::json!({"type":"message","id":"declared-operations",
+                "timestamp":"2026-09-02T12:00:00Z","message":{"role":"assistant","content":[
+                    {"type":"toolCall","id":"call-0","name":"write",
+                        "arguments":{"path":WRITTEN,"content":"synthetic"}},
+                    {"type":"toolCall","id":"call-1","name":"read","arguments":{"path":READ}},
+                    {"type":"toolCall","id":"call-2","name":"bash","arguments":{"command":COMMAND}}]}}),
+            ]),
+            true,
+        ),
         "codex.sessions" | "codex.archived_sessions" | "codex.headless_sessions" => {
             (codex_rollout(), false)
         }

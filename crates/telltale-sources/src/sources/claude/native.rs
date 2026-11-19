@@ -283,6 +283,8 @@ pub(crate) fn is_claude_metadata_discriminator(kind: &str) -> bool {
             | "artifact-autoreact-ledger"
             | "artifact-comment-monitor"
             | "continued-in"
+            | "bridge-session"
+            | "tools-used"
     )
 }
 

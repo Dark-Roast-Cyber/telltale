@@ -45,6 +45,10 @@ use crate::sources::opencode::canonical::{
 use crate::sources::opencode::native::{OpenCodeNativeExtraction, extract_opencode_native_source};
 #[cfg(feature = "opencode-sqlite")]
 use crate::sources::opencode::session_message_canonical::{RowProjection, SessionMessageProjector};
+use crate::sources::pi::canonical::{
+    PiCanonicalError, PiCanonicalOptions, project_pi_native_records,
+};
+use crate::sources::pi::native::extract_pi_native_records_with_limits;
 use crate::sources::qwen::canonical::{
     QwenCanonicalError, QwenCanonicalOptions, project_qwen_native_records,
 };
@@ -505,7 +509,8 @@ fn acquire_source_impl(
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
         | (ClientId::OpenClaw, "openclaw.agents")
-        | (ClientId::Qwen, "qwen.projects") => SourceKind::Jsonl,
+        | (ClientId::Qwen, "qwen.projects")
+        | (ClientId::Pi, "pi.sessions") => SourceKind::Jsonl,
         (ClientId::Codex, "codex.archived_sessions") => SourceKind::ArchivedJsonl,
         (ClientId::Codex, "codex.headless_sessions") => SourceKind::HeadlessJsonl,
         (ClientId::Copilot, "copilot.process_log") if limits.is_none() => {
@@ -749,6 +754,90 @@ fn acquire_source_impl(
                 &QwenCanonicalOptions::new(options.observed_at).with_scale(source_scale),
             )
             .map_err(map_qwen_error)?
+        }
+        ClientId::Pi => {
+            let (records, bytes) = extract_pi_native_records_with_limits(source, access)
+                .map_err(|error| map_source_read(error, limits))?;
+            source_scale = SourceScale::for_source_bytes(bytes);
+            // Ownership and attestation are whole-source integrity: every
+            // record is counted, and checked, before any is projected.
+            for record in &records {
+                accounting.record(
+                    record.session_id.as_deref(),
+                    &record.attestation,
+                    &[record.accounting_kind()],
+                )?;
+            }
+            let projection = project_pi_native_records(
+                &records,
+                &PiCanonicalOptions::new(options.observed_at).with_scale(source_scale),
+            )
+            .map_err(map_pi_error)?;
+            let mut excluded = projection
+                .quarantined
+                .iter()
+                .map(|unit| (unit.source_sequence, (unit.code, unit.bound)))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            for record in &records {
+                // Check this record's contribution alone before shared
+                // accounting changes, so a rejected token quarantines the
+                // record instead of half-counting it.
+                let mut keys = 0;
+                if record.accounting_kind() == RecordKind::ToolCall
+                    && !excluded.contains_key(&record.source_sequence)
+                    && let Err(error) = ActivityContributions::default().observe(
+                        record.accounting_tool_name(),
+                        None,
+                        record.contribution_strings().iter().map(String::as_str),
+                        &mut keys,
+                    )
+                {
+                    match error {
+                        AcquisitionError::InvalidContribution => {
+                            excluded.insert(
+                                record.source_sequence,
+                                ("invalid_native_contribution", None),
+                            );
+                        }
+                        error => return Err(error),
+                    }
+                }
+                if let Some((code, bound)) = excluded.get(&record.source_sequence) {
+                    quarantined.push(QuarantinedUnit {
+                        session_id: record.session_id.clone(),
+                        native_id: record.native_id.clone().unwrap_or_default(),
+                        source_sequence: record.source_sequence,
+                        code,
+                        bound: *bound,
+                    });
+                    continue;
+                }
+                let session = record.session_id.as_deref();
+                let kind = record.accounting_kind();
+                accounting.tool_usage(
+                    session,
+                    kind,
+                    record.accounting_tool_name(),
+                    record.timestamp.as_deref(),
+                )?;
+                accounting.contribute(
+                    session,
+                    kind,
+                    record.accounting_tool_name(),
+                    None,
+                    record.contribution_strings().iter().map(String::as_str),
+                )?;
+            }
+            projection
+                .observations
+                .into_iter()
+                .filter(|observation| {
+                    observation
+                        .source()
+                        .source_sequence()
+                        .is_none_or(|sequence| !excluded.contains_key(&sequence))
+                })
+                .collect()
         }
         ClientId::Copilot => {
             let events =
@@ -1160,6 +1249,13 @@ fn map_claude_error(error: ClaudeCanonicalError) -> AcquisitionError {
     }
 }
 
+fn map_pi_error(error: PiCanonicalError) -> AcquisitionError {
+    match error {
+        PiCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
+        PiCanonicalError::Observation(error) => map_observation_error(error),
+    }
+}
+
 fn map_codex_error(error: CodexCanonicalError) -> AcquisitionError {
     match error {
         CodexCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
@@ -1265,6 +1361,7 @@ mod tests {
         (ClientId::Claude, "claude.projects", SourceKind::Jsonl),
         (ClientId::OpenClaw, "openclaw.agents", SourceKind::Jsonl),
         (ClientId::Qwen, "qwen.projects", SourceKind::Jsonl),
+        (ClientId::Pi, "pi.sessions", SourceKind::Jsonl),
         (ClientId::Codex, "codex.sessions", SourceKind::Jsonl),
         (
             ClientId::Codex,
@@ -1325,7 +1422,7 @@ mod tests {
                     .map(move |source| (client.id, source.id, source.kind))
             })
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(expected.len(), 8);
+        assert_eq!(expected.len(), 9);
         assert_eq!(expected, registered);
         // Hook-journal identities are host-fed: no registered source is one.
         for client in ClientId::ALL {
@@ -1530,6 +1627,9 @@ mod tests {
                     ClientId::Qwen => crate::test_fixture_path(
                         "session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl",
                     ),
+                    ClientId::Pi => crate::test_fixture_path(
+                        "session_stores/pi/sessions/--synthetic-project-b--/2026-04-27T12-40-00-000Z_pi-uc001-tool-result.jsonl",
+                    ),
                     _ => codex_path.clone(),
                 },
             };
@@ -1557,6 +1657,7 @@ mod tests {
                 match client {
                     ClientId::OpenClaw => "2026-04-27T19:10:00Z",
                     ClientId::Qwen => "2026-04-27T12:40:00Z",
+                    ClientId::Pi => "2026-04-27T12:40:00.200Z",
                     _ => "2026-04-27T12:10:00Z",
                 }
             );
@@ -1925,13 +2026,16 @@ mod tests {
                 ),
             ] {
                 std::fs::write(&path, payload).unwrap();
-                if matches!(client, ClientId::Claude | ClientId::Codex)
-                    && expected
-                        == (AcquisitionError::CanonicalMapping {
-                            code: "unknown_discriminator",
-                        })
+                let unknown_discriminator = expected
+                    == (AcquisitionError::CanonicalMapping {
+                        code: "unknown_discriminator",
+                    });
+                // Pi has no `user` entry type: both payloads are unknown entries.
+                let pi_unknown = client == ClientId::Pi && expected != AcquisitionError::SourceRead;
+                if matches!(client, ClientId::Claude | ClientId::Codex) && unknown_discriminator
+                    || pi_unknown
                 {
-                    // Claude and Codex quarantine an unknown record by itself.
+                    // Claude, Codex and Pi quarantine an unknown record by itself.
                     let batch = super::acquire_source(&source, options()).unwrap();
                     assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
                     assert!(!format!("{:?}", batch.quarantined).contains("private-"));
