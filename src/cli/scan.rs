@@ -886,7 +886,13 @@ fn run_scan_for_platform(
     });
     println!("{}", serde_json::to_string(&summary)?);
     if let Some(error) = alert_persistence_error {
-        recorder.fail_in(ScanPhase::RemoteDelivery);
+        // The sink-failure alert could not be written where events are
+        // written first; its time counts toward remote delivery.
+        recorder.fail_in(if config.execution.sinks.has_persistent_replay() {
+            ScanPhase::DurableAdmission
+        } else {
+            ScanPhase::CanonicalWrite
+        });
         return Err(error);
     }
     Ok(ScanRunResult {

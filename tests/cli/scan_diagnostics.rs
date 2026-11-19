@@ -560,6 +560,93 @@ fn a_failed_scan_records_its_failure_stage_and_keeps_its_exit_status() {
     assert_eq!(statuses[0].0, Some(1));
 }
 
+/// Scan with a durable queue, configured as `outputs.d` deploys it. Durable
+/// storage is not supported on Windows.
+#[cfg(not(windows))]
+fn durable_scan(workspace: &Workspace, side: &Side, extra: &[&str]) -> std::process::Output {
+    let yaml_path = |path: &Path| {
+        serde_yaml::to_string(&path.to_string_lossy().to_string())
+            .expect("YAML path")
+            .trim()
+            .to_string()
+    };
+    let config = side.dir.join("config");
+    fs::create_dir_all(config.join("outputs.d")).expect("outputs dir");
+    fs::write(
+        config.join("outputs.d/outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+            yaml_path(&side.dir.join("queue/outbox.sqlite")),
+            yaml_path(&side.log)
+        ),
+    )
+    .expect("outputs config");
+    Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("HOME", &workspace.home)
+        .args([
+            "scan",
+            "--once",
+            "--install-inventory-disabled",
+            "--emit-activity",
+            "--emit-session-risk-summary",
+            "--client",
+            "claude",
+        ])
+        .arg("--config-dir")
+        .arg(&config)
+        .arg("--root")
+        .arg(&workspace.home)
+        .arg("--log-path")
+        .arg(&side.log)
+        .arg("--state-path")
+        .arg(&side.state)
+        .args(extra)
+        .output()
+        .expect("run telltale scan")
+}
+
+#[cfg(not(windows))]
+#[test]
+fn with_a_durable_queue_admission_is_timed_and_events_and_state_are_unchanged() {
+    let workspace = Workspace::new();
+    let off = workspace.side("off");
+    let on = workspace.side("on");
+    succeeded(&durable_scan(&workspace, &off, &[]));
+    succeeded(&durable_scan(&workspace, &on, BOTH));
+    assert!(!off.events().is_empty());
+    assert_eq!(off.events(), on.events());
+    assert_eq!(off.state(), on.state());
+
+    let [record] = on.records().try_into().expect("one record");
+    assert_eq!(record["outcome"], "completed");
+    // The queue admission includes the canonical write.
+    assert!(record["scan_phases"]["durable_admission_us"].is_u64());
+    assert_eq!(record["scan_phases"]["canonical_write_us"], Value::Null);
+    assert!(record["scan_phases"]["state_save_us"].is_u64());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn the_durable_queue_lock_is_refused_as_a_diagnostics_path() {
+    let workspace = Workspace::new();
+    let side = workspace.side("queue");
+    succeeded(&durable_scan(&workspace, &side, &[]));
+    let lock = side.dir.join("queue/outbox.sqlite.lock");
+    let before = fs::read(&lock).expect("queue lock");
+
+    let lock_arg = lock.to_string_lossy().into_owned();
+    let mut args = BOTH.to_vec();
+    args.extend(["--diagnostics-path", &lock_arg]);
+    let output = durable_scan(&workspace, &side, &args);
+    succeeded(&output);
+    assert_eq!(
+        stderr(&output),
+        "warning: diagnostics not written (overlap)\n"
+    );
+    assert_eq!(fs::read(&lock).expect("queue lock"), before);
+}
+
 #[test]
 fn a_dry_run_writes_a_record_but_no_events_or_state() {
     let workspace = Workspace::new();

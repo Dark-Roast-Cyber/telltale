@@ -489,14 +489,14 @@ pub(crate) fn validate_runtime_paths(
 
 /// Whether a side file such as the diagnostics file would land on the
 /// scanner's own persistence: the state file, a local JSONL log, their
-/// sidecars and migration manifest, another protected file such as a durable
-/// outbox, an enabled rotation namespace, or the directory of a local JSONL
-/// log, where a shipper's wildcard input would read it as events.
+/// sidecars and migration manifest, another protected file such as the durable
+/// outbox's files, an enabled rotation namespace, or the directory of a local
+/// JSONL log, where a shipper's wildcard input would read it as events.
 pub(crate) fn conflicts_with_runtime_paths(
     candidate: &Path,
     state: &Path,
     local_logs: &[PathBuf],
-    other_protected: &[&Path],
+    other_protected: &[PathBuf],
     rotation_namespaces: &[RotationNamespace],
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let manifest = manifest_path(state);
@@ -510,7 +510,7 @@ pub(crate) fn conflicts_with_runtime_paths(
         protected.push(log.clone());
         protected.push(sidecar_path(log));
     }
-    protected.extend(other_protected.iter().map(|path| path.to_path_buf()));
+    protected.extend_from_slice(other_protected);
     let candidate_identity = existing_identity(candidate)?;
     for path in &protected {
         if normalized_paths_equal(candidate, path)?
@@ -1309,14 +1309,15 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let state = dir.path().join("state").join("state.json");
         let log = dir.path().join("logs").join("events.jsonl");
-        let outbox = dir.path().join("queue").join("outbox.sqlite");
+        let queue = dir.path().join("queue");
+        let outbox = crate::sink::outbox::reserved_outbox_paths(&queue.join("outbox.sqlite"));
         let namespace = RotationNamespace::from_active_path(&log, "events", "jsonl");
         let conflicts = |candidate: &std::path::Path| {
             conflicts_with_runtime_paths(
                 candidate,
                 &state,
                 std::slice::from_ref(&log),
-                &[outbox.as_path()],
+                &outbox,
                 std::slice::from_ref(&namespace),
             )
             .expect("conflict check")
@@ -1327,7 +1328,11 @@ mod tests {
             manifest_path(&state),
             log.clone(),
             sidecar_path(&log),
-            outbox.clone(),
+            queue.join("outbox.sqlite"),
+            queue.join("outbox.sqlite.lock"),
+            queue.join("outbox.sqlite-journal"),
+            queue.join("outbox.sqlite-wal"),
+            queue.join("outbox.sqlite-shm"),
             dir.path().join("logs").join("diagnostics.jsonl"),
             dir.path().join("logs").join("events-2026-11-19.jsonl"),
         ] {
@@ -1338,7 +1343,7 @@ mod tests {
                 .join("state")
                 .join("diagnostics")
                 .join("scan.jsonl"),
-            dir.path().join("queue").join("diagnostics.jsonl"),
+            queue.join("diagnostics.jsonl"),
             dir.path()
                 .join("logs")
                 .join("nested")
