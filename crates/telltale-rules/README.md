@@ -15,8 +15,9 @@ assert!(rules.rule_count() > 0);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`package` validates `telltale-rule-package/v2` documents: identified, versioned,
-namespaced Rule v2 rules and chains that only add definitions. The community package
+`package` validates `telltale-rule-package/v2` packages: a YAML stream of a
+header document, then identified, versioned, namespaced Rule v2 rules and chains,
+one per document, that only add definitions. The community package
 (`telltale.community`, namespace `tdx`) is embedded from a published release of
 the community detections repository; `scripts/dev/vendor-community-rules.py`
 refreshes it. `resolve_rule_packages` selects the effective packages, letting a

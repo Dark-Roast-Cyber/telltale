@@ -208,7 +208,7 @@
   },
   "package": {
     "format": "telltale-rule-package/v2",
-    "keys": {
+    "header_keys": {
       "accepted": [
         "format",
         "id",
@@ -218,8 +218,7 @@
         "license",
         "rule_namespace",
         "source",
-        "revision",
-        "documents"
+        "revision"
       ],
       "required": [
         "format",
@@ -228,10 +227,10 @@
         "version",
         "publisher",
         "license",
-        "rule_namespace",
-        "documents"
+        "rule_namespace"
       ]
-    }
+    },
+    "layout": "A YAML stream: the header document first, then each Rule v2 rule or chain as its own `---` document, sorted by name."
   },
   "regex_flags": [
     "i",

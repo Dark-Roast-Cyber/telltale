@@ -22,7 +22,7 @@ mod detection;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 use serde::Deserialize;
@@ -131,6 +131,10 @@ pub(crate) fn read_file(raw: &str) -> Result<RuleFile, Box<dyn Error>> {
         _ => {}
     }
     package::reject_hidden_characters("rule file", raw)?;
+    for (index, text) in document_texts(raw).into_iter().enumerate() {
+        reject_redefined_anchors(text)
+            .map_err(|error| format!("rule document {}: {error}", index + 1))?;
+    }
     documents
         .into_iter()
         .enumerate()
@@ -140,6 +144,109 @@ pub(crate) fn read_file(raw: &str) -> Result<RuleFile, Box<dyn Error>> {
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()
         .map(RuleFile::V2)
+}
+
+/// The source text of each YAML document in `raw`, in stream order. Callers
+/// reject hidden characters first, so `\n` (after an optional `\r`) is the only
+/// line break.
+///
+/// libyaml (under `yaml_serde`) reads a line that starts with `---` or `...`
+/// followed by a space, a tab or the line end as a document marker before
+/// anything else on the line, and ends any scalar there (block scalar content
+/// is always indented), so these are exactly its document boundaries. Text
+/// before the first `---`, or after `...`, is a document only when it holds
+/// something other than blank lines, comments and directives.
+pub(crate) fn document_texts(raw: &str) -> Vec<&str> {
+    fn marker(line: &str) -> Option<bool> {
+        let start = line.starts_with("---");
+        if !(start || line.starts_with("...")) {
+            return None;
+        }
+        matches!(
+            line.as_bytes().get(3),
+            None | Some(b' ' | b'\t' | b'\r' | b'\n')
+        )
+        .then_some(start)
+    }
+    fn has_content(text: &str) -> bool {
+        text.lines().any(|line| {
+            let line = line.trim();
+            !(line.is_empty() || line.starts_with('#') || line.starts_with('%'))
+        })
+    }
+    let mut documents = Vec::new();
+    let (mut start, mut explicit, mut offset) = (0, false, 0);
+    for line in raw.split_inclusive('\n') {
+        if let Some(document_start) = marker(line) {
+            let text = &raw[start..offset];
+            if explicit || has_content(text) {
+                documents.push(text);
+            }
+            // A `---` line can carry the document's first node; a `...` line
+            // only ends the document.
+            (start, explicit) = if document_start {
+                (offset, true)
+            } else {
+                (offset + line.len(), false)
+            };
+        }
+        offset += line.len();
+    }
+    let text = &raw[start..];
+    if explicit || has_content(text) {
+        documents.push(text);
+    }
+    documents
+}
+
+/// Reject a document that defines one anchor name more than once and aliases
+/// it.
+///
+/// `yaml_serde` 0.10 gives each new anchor the id `anchors.len()` of its
+/// per-document anchor map. Redefining a name replaces the map entry without
+/// growing the map, so the next definition (of that name or any other) reuses
+/// the id, and earlier aliases of the redefined name then resolve to that later
+/// node: a matcher could silently get another rule's pattern. It exposes no
+/// event API, so this scans the document text instead.
+///
+/// The scan reads a superset of the document's anchors and aliases: every `&`
+/// and `*` in the text, in any context (quoted text and comments included),
+/// followed by the longest run of `A-Z`, `a-z`, `0-9`, `_` and `-`. libyaml
+/// reads an anchor or alias name as exactly that run, so no real definition or
+/// alias is missed or misnamed. A name is rejected only when it appears as a
+/// definition at least twice and as an alias at least once, so `&` and `*` in
+/// pattern text (` && `, `.*`) rarely trigger it, and a false match only fails
+/// loudly.
+pub(crate) fn reject_redefined_anchors(document: &str) -> Result<(), String> {
+    let mut definitions = BTreeMap::<&str, usize>::new();
+    let mut aliases = BTreeSet::<&str>::new();
+    for (index, sigil) in document.match_indices(['&', '*']) {
+        let rest = &document[index + sigil.len()..];
+        let end = rest
+            .find(|character: char| {
+                !(character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+            })
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        if name.is_empty() {
+            continue;
+        }
+        if sigil == "&" {
+            *definitions.entry(name).or_default() += 1;
+        } else {
+            aliases.insert(name);
+        }
+    }
+    match definitions
+        .into_iter()
+        .find(|(name, count)| *count > 1 && aliases.contains(name))
+    {
+        Some((name, _)) => Err(format!(
+            "YAML anchor `&{name}` is defined more than once in this document; anchor names \
+             must be unique within a document"
+        )),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn read_document(document: Value) -> Result<Definition, Box<dyn Error>> {

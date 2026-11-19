@@ -49,14 +49,26 @@ fn load(documents: &[&str]) -> RuleV1CompatibilityExport {
         .compatibility_export()
 }
 
-/// The documents of a multi-document Rule v2 file.
-fn documents(file: &str) -> Vec<&str> {
-    file.split("\n---\n").collect()
+/// `text` with LF line endings, then with CRLF ones. A Windows checkout may
+/// hold either, so every test runs on both.
+fn line_endings(text: &str) -> [String; 2] {
+    let lf = text.replace("\r\n", "\n");
+    let crlf = lf.replace('\n', "\r\n");
+    [lf, crlf]
+}
+
+/// The documents of a multi-document Rule v2 file, with LF line endings.
+fn documents(file: &str) -> Vec<String> {
+    file.replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .split("\n---\n")
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The pre-conversion bundled core content.
-fn core_v1() -> RuleSet {
-    parse_rule_document(CORE_V1_BASELINE).unwrap()
+fn core_v1(baseline: &str) -> RuleSet {
+    parse_rule_document(baseline).unwrap()
 }
 
 /// The id of the one rule or chain `v2` holds.
@@ -71,12 +83,10 @@ fn only_id(v2: &RuleV1CompatibilityExport) -> String {
 /// Each Rule v2 document alone compiles like its Rule v1 original alone, and
 /// the documents hold every original once, in order.
 fn assert_each_document_matches(v1: &RuleSet, v2_file: &str) {
-    // A Windows checkout may hold CRLF line endings.
-    let v2_file = v2_file.replace("\r\n", "\n");
-    let ids = documents(v2_file.trim_end_matches('\n'))
+    let ids = documents(v2_file)
         .into_iter()
         .map(|document| {
-            let v2 = load(&[document]);
+            let v2 = load(&[&document]);
             let id = only_id(&v2);
             assert_parity(&v1_subset(v1.clone(), &[&id]), &v2);
             id
@@ -143,8 +153,17 @@ fn assert_parity(v1: &RuleV1CompatibilityExport, v2: &RuleV1CompatibilityExport)
 
 #[test]
 fn container_rules_compile_like_rule_v1() {
-    let v1 = load(&[CONTAINER_V1]);
-    let v2 = load(&[CONTAINER_V2]);
+    for (container_v1, container_v2) in line_endings(CONTAINER_V1)
+        .into_iter()
+        .zip(line_endings(CONTAINER_V2))
+    {
+        assert_container_parity(&container_v1, &container_v2);
+    }
+}
+
+fn assert_container_parity(container_v1: &str, container_v2: &str) {
+    let v1 = load(&[container_v1]);
+    let v2 = load(&[container_v2]);
     assert_parity(&v1, &v2);
 
     // The walkthrough's compiled form: `(?i:P)` on command, then arguments.
@@ -160,9 +179,9 @@ fn container_rules_compile_like_rule_v1() {
         assert_eq!(rule.matchers[0].regex.len(), bytes, "{}", rule.id);
     }
 
-    let v1_set = parse_rule_document(CONTAINER_V1).unwrap();
-    for document in documents(CONTAINER_V2) {
-        let v2 = load(&[document]);
+    let v1_set = parse_rule_document(container_v1).unwrap();
+    for document in documents(container_v2) {
+        let v2 = load(&[&document]);
         let id = v2.rules()[0].id.clone();
         assert_parity(&v1_subset(v1_set.clone(), &[&id]), &v2);
     }
@@ -170,31 +189,44 @@ fn container_rules_compile_like_rule_v1() {
 
 #[test]
 fn core_rules_and_chains_compile_like_bundled_rule_v1() {
-    let bundled = core_v1();
-    assert_parity(&v1_subset(bundled.clone(), CORE_IDS), &load(&[CORE_V2]));
+    for (baseline, core_v2) in line_endings(CORE_V1_BASELINE)
+        .into_iter()
+        .zip(line_endings(CORE_V2))
+    {
+        let bundled = core_v1(&baseline);
+        assert_parity(&v1_subset(bundled.clone(), CORE_IDS), &load(&[&core_v2]));
 
-    let documents = documents(CORE_V2);
-    assert_eq!(documents.len(), CORE_IDS.len());
-    for document in documents {
-        let v2 = load(&[document]);
-        let id = v2
-            .rules()
-            .first()
-            .map(|rule| rule.id.clone())
-            .unwrap_or_else(|| v2.modifiers()[0].id.clone());
-        assert_parity(&v1_subset(bundled.clone(), &[&id]), &v2);
+        let documents = documents(&core_v2);
+        assert_eq!(documents.len(), CORE_IDS.len());
+        for document in documents {
+            let v2 = load(&[&document]);
+            let id = v2
+                .rules()
+                .first()
+                .map(|rule| rule.id.clone())
+                .unwrap_or_else(|| v2.modifiers()[0].id.clone());
+            assert_parity(&v1_subset(bundled.clone(), &[&id]), &v2);
+        }
     }
 }
 
 #[test]
 fn converted_core_rules_keep_their_native_action_profiles() {
-    let converted = load(&[CORE_V2]);
+    for (newline, core_v2) in ["\n", "\r\n"].into_iter().zip(line_endings(CORE_V2)) {
+        assert_native_profiles_kept(newline, &core_v2);
+    }
+}
+
+/// `core_v2` is the converted core content with `newline` line endings; its
+/// edited documents load with the same line endings.
+fn assert_native_profiles_kept(newline: &str, core_v2: &str) {
+    let converted = load(&[core_v2]);
     assert!(native_profile_notices(&converted).is_empty());
 
     // Selections written in another order compile to matchers in another
     // order. The fingerprint and the native profile compare matchers sorted,
     // so neither changes.
-    let download = documents(CORE_V2)
+    let download = documents(core_v2)
         .into_iter()
         .find(|document| document.contains("name: network.download"))
         .unwrap();
@@ -210,8 +242,8 @@ fn converted_core_rules_keep_their_native_action_profiles() {
     let reordered_blocks = [block("url"), block("command"), block("arguments")].join("\n");
     let reordered = download.replacen(&in_order, &reordered_blocks, 1);
     assert_ne!(reordered, download);
-    let reordered = load(&[&reordered]);
-    let bundled = v1_subset(core_v1(), &["network.download"]);
+    let reordered = load(&[&reordered.replace('\n', newline)]);
+    let bundled = v1_subset(core_v1(CORE_V1_BASELINE), &["network.download"]);
     assert_ne!(reordered.rules()[0].matchers, bundled.rules()[0].matchers);
     assert_eq!(reordered.fingerprint(), bundled.fingerprint());
     assert!(native_profile_notices(&reordered).is_empty());
@@ -223,7 +255,7 @@ fn converted_core_rules_keep_their_native_action_profiles() {
         1,
     );
     assert_ne!(changed, download);
-    let rules = load_rule_set_from_documents(&[&changed], None).unwrap();
+    let rules = load_rule_set_from_documents(&[&changed.replace('\n', newline)], None).unwrap();
     assert_eq!(rules.notices().len(), 1, "the filter's case differs");
     let notices = native_profile_notices(&rules.compatibility_export());
     assert_eq!(notices.len(), 1);
@@ -237,8 +269,17 @@ fn converted_core_rules_keep_their_native_action_profiles() {
 
 #[test]
 fn the_shipped_core_rules_and_chains_compile_like_their_rule_v1_originals() {
-    let v1 = load(&[CORE_V1_BASELINE]);
-    let v2 = load(&[bundled_default_rule_yaml()]);
+    for (baseline, shipped) in line_endings(CORE_V1_BASELINE)
+        .into_iter()
+        .zip(line_endings(bundled_default_rule_yaml()))
+    {
+        assert_shipped_core_parity(&baseline, &shipped);
+    }
+}
+
+fn assert_shipped_core_parity(baseline: &str, shipped: &str) {
+    let v1 = load(&[baseline]);
+    let v2 = load(&[shipped]);
     assert_eq!((v2.rules().len(), v2.modifiers().len()), (25, 9));
     // Every core rule gains a title; the two that had one keep it.
     for (old, new) in v1.rules().iter().zip(v2.rules()) {
@@ -251,21 +292,23 @@ fn the_shipped_core_rules_and_chains_compile_like_their_rule_v1_originals() {
     assert!(native_profile_notices(&v1).is_empty());
     assert!(native_profile_notices(&v2).is_empty());
     assert!(
-        load_rule_set_from_documents(&[bundled_default_rule_yaml()], None)
+        load_rule_set_from_documents(&[shipped], None)
             .unwrap()
             .notices()
             .is_empty()
     );
-    assert_each_document_matches(&core_v1(), bundled_default_rule_yaml());
+    assert_each_document_matches(&core_v1(baseline), shipped);
 }
 
 #[test]
 fn the_converted_rule_examples_compile_like_their_rule_v1_originals() {
     for (v1_file, v2_file) in EXAMPLES {
-        let (v1, v2) = (load(&[v1_file]), load(&[v2_file]));
-        assert_eq!(v2.rules().len(), 1);
-        assert_parity(&v1, &v2);
-        assert!(native_profile_notices(&v2).is_empty());
-        assert_each_document_matches(&parse_rule_document(v1_file).unwrap(), v2_file);
+        for (v1_file, v2_file) in line_endings(v1_file).into_iter().zip(line_endings(v2_file)) {
+            let (v1, v2) = (load(&[&v1_file]), load(&[&v2_file]));
+            assert_eq!(v2.rules().len(), 1);
+            assert_parity(&v1, &v2);
+            assert!(native_profile_notices(&v2).is_empty());
+            assert_each_document_matches(&parse_rule_document(&v1_file).unwrap(), &v2_file);
+        }
     }
 }

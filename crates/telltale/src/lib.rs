@@ -981,8 +981,8 @@ impl PipelineBuilder {
         self
     }
 
-    /// Add a rule package document (`telltale-rule-package/v2` or `/v1`). Package
-    /// definitions are additive; a package with the community ID replaces the
+    /// Add a rule package: the whole text of a `telltale-rule-package/v2` YAML
+    /// stream or a `/v1` document. Package definitions are additive; a package with the community ID replaces the
     /// embedded community snapshot (mirrors an installed `rule-packages.d` file).
     pub fn rule_package(mut self, yaml: impl Into<String>) -> Self {
         self.rule_packages.push(yaml.into());

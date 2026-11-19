@@ -1,14 +1,15 @@
 //! Rule packages: identified, versioned, namespaced rule content added to the
 //! bundled core rules.
 //!
-//! A package is one YAML document. Its header names the package, its
-//! publisher and license, and the namespace that every rule and modifier ID
-//! must use. In format `telltale-rule-package/v2` the header also has a
-//! `title`, and `documents` is a list of Rule v2 rule and chain documents,
-//! sorted by `name`; in format `telltale-rule-package/v1` it is a list of
-//! Rule v1 documents. Packages only add
-//! definitions: loading one never replaces a bundled core rule or another
-//! package's rule, and a package namespace may not reuse a core namespace.
+//! In format `telltale-rule-package/v2` a package is a YAML stream: the first
+//! document is the header, which names the package, its title, publisher and
+//! license, and the namespace that every rule and chain name must use; every
+//! following `---` document is one Rule v2 rule or chain, read like a rule
+//! file document, sorted by `name`. In format `telltale-rule-package/v1` a
+//! package is one YAML document whose `documents` list holds Rule v1
+//! documents. Packages only add definitions: loading one never replaces a
+//! bundled core rule or another package's rule, and a package namespace may
+//! not reuse a core namespace.
 //!
 //! Telltale embeds the community package ([`COMMUNITY_PACKAGE_ID`]). A
 //! supplied package with that ID replaces the embedded snapshot as a whole,
@@ -32,7 +33,7 @@ pub const RULE_PACKAGE_FORMAT_V2: &str = "telltale-rule-package/v2";
 pub const RULE_PACKAGE_FORMAT_V1: &str = "telltale-rule-package/v1";
 /// Package ID of the community rules embedded in Telltale.
 pub const COMMUNITY_PACKAGE_ID: &str = "telltale.community";
-/// Upper bound on one package document, in bytes.
+/// Upper bound on one package file, in bytes.
 pub const MAX_RULE_PACKAGE_BYTES: usize = 4 * 1024 * 1024;
 
 const COMMUNITY_PACKAGE_YAML: &str = include_str!("../data/community.package.yaml");
@@ -42,10 +43,13 @@ const MAX_IDENTIFIER_LEN: usize = 64;
 const MAX_NAMESPACE_LEN: usize = 32;
 const MAX_LABEL_LEN: usize = 256;
 
+/// The package header: in format v2 the whole first document of the stream.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawRulePackage<Document> {
-    format: String,
+struct PackageHeader {
+    /// Already read to choose the format; declared so the key is accepted.
+    #[serde(rename = "format")]
+    _format: String,
     id: String,
     /// Required in format v2; format v1 has none.
     #[serde(default)]
@@ -58,17 +62,30 @@ struct RawRulePackage<Document> {
     source: Option<String>,
     #[serde(default)]
     revision: Option<String>,
-    documents: Vec<Document>,
+}
+
+/// A format v1 package: the header keys and `documents` in one document.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRulePackageV1 {
+    format: String,
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    version: String,
+    publisher: String,
+    license: String,
+    rule_namespace: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    revision: Option<String>,
+    documents: Vec<RuleSet>,
 }
 
 enum RawDocuments {
     V1(Vec<RuleSet>),
     V2(Vec<Value>),
-}
-
-#[derive(Deserialize)]
-struct PackageFormat {
-    format: String,
 }
 
 /// A validated rule package.
@@ -87,40 +104,59 @@ pub struct RulePackage {
 }
 
 impl RulePackage {
-    /// Parse and validate one package document.
+    /// Parse and validate one package: a format v2 YAML stream or a format v1
+    /// document.
     ///
     /// Rejects unknown formats or header fields, malformed identities, hidden
     /// control or bidirectional-formatting characters in source text or decoded
-    /// YAML strings,
-    /// reserved or malformed namespaces, definition IDs outside the namespace,
-    /// duplicate IDs, and packages without definitions; in format v2 also a
-    /// missing `title` and documents not sorted by `name`. Rule v2 documents
-    /// are compiled here; Rule v1 content is compiled later, together with the
-    /// rest of the effective rule set.
+    /// YAML strings, reserved or malformed namespaces, definition IDs outside
+    /// the namespace, duplicate IDs, and packages without definitions; in format
+    /// v2 also a missing `title`, a `documents` key, a document that redefines
+    /// an anchor it aliases, and rule documents not sorted by `name`. Rule v2
+    /// documents are compiled here; Rule v1 content is compiled later, together
+    /// with the rest of the effective rule set.
     pub fn parse(raw: &str) -> Result<Self, Box<dyn Error>> {
         if raw.len() > MAX_RULE_PACKAGE_BYTES {
             return Err(format!("rule package exceeds {MAX_RULE_PACKAGE_BYTES} bytes").into());
         }
         reject_hidden_characters("rule package", raw)?;
-        reject_decoded_hidden_characters(raw)?;
-        let format = serde_yaml::from_str::<PackageFormat>(raw)
-            .map(|header| header.format)
+        let invalid = |error: serde_yaml::Error| format!("invalid rule package: {error}");
+        let values = serde_yaml::Deserializer::from_str(raw)
+            .map(Value::deserialize)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?;
+        for value in &values {
+            reject_decoded_hidden_characters_in("rule package decoded string", value)?;
+        }
+        let format = values
+            .first()
+            .and_then(|header| header.get("format"))
+            .and_then(Value::as_str)
             .unwrap_or_default();
         // Keep typed parsing on the source for YAML string coercion and error locations.
-        let invalid = |error: serde_yaml::Error| format!("invalid rule package: {error}");
-        let (package, documents) = match format.as_str() {
+        let (package, documents) = match format {
             RULE_PACKAGE_FORMAT_V2 => {
-                let (header, documents) = serde_yaml::from_str::<RawRulePackage<Value>>(raw)
+                if values[0].get("documents").is_some() {
+                    return Err(format!(
+                        "invalid rule package: format {RULE_PACKAGE_FORMAT_V2} has no `documents` \
+                         key; write each rule or chain as its own `---` document after the header"
+                    )
+                    .into());
+                }
+                let header = serde_yaml::Deserializer::from_str(raw)
+                    .next()
+                    .map(PackageHeader::deserialize)
+                    .transpose()
                     .map_err(invalid)?
-                    .split();
-                (header, RawDocuments::V2(documents))
+                    .ok_or("invalid rule package: no header document")?;
+                (
+                    header,
+                    RawDocuments::V2(values.into_iter().skip(1).collect()),
+                )
             }
-            RULE_PACKAGE_FORMAT_V1 => {
-                let (header, documents) = serde_yaml::from_str::<RawRulePackage<RuleSet>>(raw)
-                    .map_err(invalid)?
-                    .split();
-                (header, RawDocuments::V1(documents))
-            }
+            RULE_PACKAGE_FORMAT_V1 => serde_yaml::from_str::<RawRulePackageV1>(raw)
+                .map_err(invalid)?
+                .split(),
             _ => {
                 return Err(format!(
                     "unsupported rule package format; expected {RULE_PACKAGE_FORMAT_V2} or \
@@ -131,6 +167,12 @@ impl RulePackage {
         };
         validate_package_id(&package.id)?;
         let context = format!("rule package '{}'", package.id);
+        if let RawDocuments::V2(_) = &documents {
+            for (index, text) in rule_v2::document_texts(raw).into_iter().enumerate() {
+                rule_v2::reject_redefined_anchors(text)
+                    .map_err(|error| format!("{context}: document {}: {error}", index + 1))?;
+            }
+        }
         match (&documents, &package.title) {
             (RawDocuments::V2(_), None) => {
                 return Err(
@@ -407,12 +449,6 @@ pub(crate) fn reject_hidden_characters(label: &str, raw: &str) -> Result<(), Box
     Ok(())
 }
 
-fn reject_decoded_hidden_characters(raw: &str) -> Result<(), Box<dyn Error>> {
-    let value = serde_yaml::from_str::<Value>(raw)
-        .map_err(|error| format!("invalid rule package: {error}"))?;
-    reject_decoded_hidden_characters_in("rule package decoded string", &value)
-}
-
 /// Reject hidden characters in any string a YAML value decodes to, keys
 /// included, naming the string as `label`.
 pub(crate) fn reject_decoded_hidden_characters_in(
@@ -538,12 +574,12 @@ fn core_namespaces() -> Result<BTreeSet<String>, Box<dyn Error>> {
         .collect())
 }
 
-impl<Document> RawRulePackage<Document> {
-    /// The header with no documents, and the documents.
-    fn split(self) -> (RawRulePackage<()>, Vec<Document>) {
+impl RawRulePackageV1 {
+    /// The header, and the documents.
+    fn split(self) -> (PackageHeader, RawDocuments) {
         (
-            RawRulePackage {
-                format: self.format,
+            PackageHeader {
+                _format: self.format,
                 id: self.id,
                 title: self.title,
                 version: self.version,
@@ -552,15 +588,15 @@ impl<Document> RawRulePackage<Document> {
                 rule_namespace: self.rule_namespace,
                 source: self.source,
                 revision: self.revision,
-                documents: Vec::new(),
             },
-            self.documents,
+            RawDocuments::V1(self.documents),
         )
     }
 }
 
-/// Read format v2 documents: each one Rule v2 rule or chain whose name is in
-/// the namespace, sorted by name.
+/// Read the format v2 documents after the header: each one Rule v2 rule or
+/// chain whose name is in the namespace, sorted by name. Errors number the
+/// documents in the stream, the header being document 1.
 fn read_v2_documents(
     namespace: &str,
     documents: Vec<Value>,
@@ -571,7 +607,7 @@ fn read_v2_documents(
     for (index, document) in documents.into_iter().enumerate() {
         let definition = rule_v2::read_document(document)
             .map(LoadedDefinition::from_v2)
-            .map_err(|error| format!("document {}: {error}", index + 1))?;
+            .map_err(|error| format!("document {}: {error}", index + 2))?;
         let name = definition.id();
         let kind = definition.kind().as_str();
         if !name.starts_with(&prefix) {
@@ -897,19 +933,25 @@ documents:
     }
 
     fn v2_rule(name: &str, uuid: &str) -> String {
+        v2_anchored_rule(name, uuid, "marker")
+    }
+
+    /// A rule whose two matchers share `pattern` through the anchor `&pattern`.
+    fn v2_anchored_rule(name: &str, uuid: &str, pattern: &str) -> String {
         format!(
-            "  - title: Synthetic v2 rule\n    id: {uuid}\n    name: {name}\n    taxonomy: telltale\n\
-             \x20   logsource:\n        product: ai_agent\n        category: tool_activity\n\
-             \x20   detection:\n        selection:\n            tool.command|contains: marker\n        condition: selection\n\
-             \x20   level: low\n    telltale:\n        category: execution\n        score: 20\n        explanation: Synthetic.\n"
+            "---\ntitle: Synthetic v2 rule\nid: {uuid}\nname: {name}\ntaxonomy: telltale\n\
+             logsource:\n    product: ai_agent\n    category: tool_activity\n\
+             detection:\n    selection:\n        - tool.command|re|i: &pattern '{pattern}'\n\
+             \x20       - tool.arguments|re|i: *pattern\n    condition: selection\n\
+             level: low\ntelltale:\n    category: execution\n    score: 20\n    explanation: Synthetic.\n"
         )
     }
 
     fn v2_chain(name: &str, uuid: &str) -> String {
         format!(
-            "  - title: Synthetic v2 chain\n    id: {uuid}\n    name: {name}\n    taxonomy: telltale\n\
-             \x20   correlation:\n        type: telltale_chain\n        categories: [execution]\n\
-             \x20   telltale:\n        score: 5\n        explanation: Synthetic chain.\n"
+            "---\ntitle: Synthetic v2 chain\nid: {uuid}\nname: {name}\ntaxonomy: telltale\n\
+             correlation:\n    type: telltale_chain\n    categories: [execution]\n\
+             telltale:\n    score: 5\n    explanation: Synthetic chain.\n"
         )
     }
 
@@ -923,7 +965,7 @@ documents:
         format!(
             "format: telltale-rule-package/v2\nid: acme.rules\ntitle: Acme rules\nversion: 2.0.0\n\
              publisher: Synthetic publisher\nlicense: Apache-2.0\nrule_namespace: acme\n\
-             source: https://example.invalid/acme\nrevision: abc123\ndocuments:\n{documents}"
+             source: https://example.invalid/acme\nrevision: abc123\n{documents}"
         )
     }
 
@@ -1011,12 +1053,17 @@ documents:
             "{}",
             error(&reused)
         );
-        let v1_document = v2_package(
-            "  - version: 1\n    description: x\n    defaults: {case_insensitive: false, enabled: true}\n    rules: []\n    modifiers: []\n",
+        // Documents are numbered in the stream, the header being document 1.
+        let v1_document = v2_package(&format!(
+            "{}---\nversion: 1\ndescription: x\ndefaults: {{case_insensitive: false, enabled: true}}\nrules: []\nmodifiers: []\n",
+            v2_rule("acme.alpha", UUIDS[0])
+        ));
+        assert!(
+            error(&v1_document).contains("document 3:"),
+            "{}",
+            error(&v1_document)
         );
-        assert!(error(&v1_document).contains("document 1"));
-        let empty = v2_package("").replace("documents:\n", "documents: []\n");
-        assert!(error(&empty).contains("no rule or chain documents"));
+        assert!(error(&v2_package("")).contains("no rule or chain documents"));
         let reserved = v2_package(&v2_rule("chain.rule", UUIDS[0]))
             .replace("rule_namespace: acme", "rule_namespace: chain");
         assert!(error(&reserved).contains("reserved for core rules"));
@@ -1024,6 +1071,103 @@ documents:
         let titled_v1 = package("acme.rules", "acme", "acme.synthetic.marker")
             .replace("id: acme.rules\n", "id: acme.rules\ntitle: Acme\n");
         assert!(error(&titled_v1).contains("needs format telltale-rule-package/v2"));
+    }
+
+    #[test]
+    fn v2_header_is_the_first_document_and_has_closed_keys() {
+        let rule = v2_rule("acme.rule", UUIDS[0]);
+        // The v1 layout: rules under `documents` in the header.
+        let listed = v2_package(&format!(
+            "documents:\n{}",
+            rule.trim_start_matches("---\n")
+                .lines()
+                .enumerate()
+                .map(|(index, line)| format!(
+                    "{}{line}\n",
+                    if index == 0 { "  - " } else { "    " }
+                ))
+                .collect::<String>()
+        ));
+        let message = error(&listed);
+        assert!(
+            message.contains("has no `documents` key")
+                && message.contains("its own `---` document after the header"),
+            "{message}"
+        );
+        let message = error(&v2_package(&format!("unexpected: true\n{rule}")));
+        assert!(message.contains("unknown field `unexpected`"), "{message}");
+        assert!(!message.contains("`documents`"), "{message}");
+        // A rule without its `---` merges into the header and fails there.
+        let merged = v2_package(&rule.replacen("---\n", "", 1));
+        let message = error(&merged);
+        assert!(message.starts_with("invalid rule package: "), "{message}");
+        // The header must come first.
+        let message = error(&format!(
+            "{}---\n{}",
+            rule.trim_start_matches("---\n"),
+            v2_package("").trim_end()
+        ));
+        assert!(
+            message.contains("unsupported rule package format"),
+            "{message}"
+        );
+        // A YAML-coerced header value reads as a string, as in format v1.
+        let numeric =
+            RulePackage::parse(&v2_package(&rule).replace("revision: abc123", "revision: 12345"))
+                .expect("numeric revision");
+        assert_eq!(numeric.revision(), Some("12345"));
+    }
+
+    #[test]
+    fn v2_documents_keep_their_own_anchors() {
+        let names = ["acme.alpha", "acme.beta", "acme.gamma"];
+        let raw = v2_package(
+            &names
+                .iter()
+                .zip(UUIDS)
+                .map(|(name, uuid)| v2_anchored_rule(name, uuid, &format!("{name}-marker")))
+                .collect::<String>(),
+        );
+        let expected = names
+            .map(|name| {
+                let regex = format!("(?i:{name}-marker)");
+                (name.to_owned(), vec![regex.clone(), regex])
+            })
+            .to_vec();
+        for raw in [raw.clone(), raw.replace('\n', "\r\n")] {
+            let package = RulePackage::parse(&raw).expect("each rule defines its anchor once");
+            let patterns = LoadedRules::merge(package.into_documents())
+                .and_then(|rules| rules.compile(None))
+                .unwrap()
+                .compatibility_export()
+                .rules()
+                .iter()
+                .map(|rule| {
+                    let regexes = rule.matchers.iter().map(|m| m.regex.clone()).collect();
+                    (rule.id.clone(), regexes)
+                })
+                .collect::<Vec<(String, Vec<String>)>>();
+            assert_eq!(patterns, expected);
+        }
+    }
+
+    #[test]
+    fn v2_documents_reject_a_redefined_anchor() {
+        let twice = v2_anchored_rule("acme.beta", UUIDS[1], "first").replace(
+            "    condition: selection\n",
+            "        - tool.written_path|re: &pattern 'second'\n        - tool.path|re: *pattern\n    condition: selection\n",
+        );
+        let raw = v2_package(&format!("{}{twice}", v2_rule("acme.alpha", UUIDS[0])));
+        let expected = "rule package 'acme.rules': document 3: YAML anchor `&pattern` is defined \
+                        more than once in this document; anchor names must be unique within a document";
+        assert_eq!(error(&raw), expected);
+        assert_eq!(error(&raw.replace('\n', "\r\n")), expected);
+        // ` && ` and repeated but unaliased `&name` text are not anchors.
+        let ampersands = v2_package(&v2_rule("acme.alpha", UUIDS[0]).replace(
+            "    condition: selection\n",
+            "        - tool.written_path|re: 'a && b&marker'\n        - tool.path|re: 'c && d&marker'\n    condition: selection\n",
+        ));
+        RulePackage::parse(&ampersands).expect("ampersands in patterns");
     }
 
     #[test]
