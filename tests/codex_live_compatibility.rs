@@ -330,6 +330,13 @@ fn native_watch_preserves_suffix_quarantine_and_supported_activity() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    // Read the summary while watch runs: a pipe smaller than the summary
+    // would otherwise block watch before it can exit.
+    let mut stdout_pipe = child.stdout.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = String::new();
+        std::io::Read::read_to_string(&mut stdout_pipe, &mut stdout).map(|_| stdout)
+    });
     // Match the repository's portable process-boundary readiness gate. Retry
     // the same complete source so delayed registration cannot lose the update.
     std::thread::sleep(Duration::from_secs(2));
@@ -356,7 +363,7 @@ fn native_watch_preserves_suffix_quarantine_and_supported_activity() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = stdout_reader.join().unwrap().unwrap();
     let summary: Value =
         serde_json::from_str(stdout.lines().find(|line| line.starts_with('{')).unwrap()).unwrap();
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);

@@ -753,6 +753,8 @@ mod provenance;
 mod release_public_boundary;
 #[path = "cli/rules_config.rs"]
 mod rules_config;
+#[path = "cli/scan_diagnostics.rs"]
+mod scan_diagnostics;
 #[path = "cli/scan_watch.rs"]
 mod scan_watch;
 #[path = "cli/settings.rs"]

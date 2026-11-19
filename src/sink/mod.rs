@@ -538,7 +538,10 @@ impl SinkSet {
 
     /// Deliver a batch to every sink. Persistent replay commits the canonical
     /// first write before downstream delivery; otherwise this preserves the
-    /// existing best-effort ordering.
+    /// existing best-effort ordering. The scan runs these steps itself, with
+    /// its state install between them, so this sequence serves the tests,
+    /// which do not build on Windows.
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn deliver(
         &self,
         events: &[Event],
@@ -672,17 +675,38 @@ impl SinkSet {
         Ok(failures)
     }
 
+    /// The canonical first write, then every remote sink. Without persistent
+    /// replay this is the whole delivery of a batch.
     pub(crate) fn deliver_best_effort(
         &self,
         events: &[Event],
     ) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
-        let mut failures = Vec::new();
+        self.write_canonical_best_effort(events)?;
+        self.deliver_remote_best_effort(events)
+    }
+
+    /// The canonical JSONL write when no persistent replay owns it. A failure
+    /// aborts the batch before any remote sink sees it.
+    pub(crate) fn write_canonical_best_effort(
+        &self,
+        events: &[Event],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         for entry in self.entries.iter().filter(|entry| {
             entry.persistence_role == PersistenceRole::CanonicalFirstWrite
                 && !self.has_persistent_replay()
         }) {
             entry.sink.emit(events)?;
         }
+        Ok(())
+    }
+
+    /// Every sink other than the canonical write, except durable sinks that
+    /// persistent replay delivers. Failures are collected, not raised.
+    pub(crate) fn deliver_remote_best_effort(
+        &self,
+        events: &[Event],
+    ) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
+        let mut failures = Vec::new();
         for entry in self
             .entries
             .iter()

@@ -222,12 +222,40 @@ struct ScanCommandArgs {
         conflicts_with_all = ["backfill", "rebuild_baselines", "interval_seconds"]
     )]
     history: Option<HistoryScope>,
+
+    /// Write one diagnostics record per scan with these categories, comma
+    /// separated or repeated. Turns them on; diagnostics.* in settings.d and
+    /// TELLTALE_DIAGNOSTICS_* can also turn them off. Records go to a file of
+    /// their own, never to the event log.
+    #[arg(long = "diagnostics", value_enum, value_delimiter = ',')]
+    diagnostics: Vec<DiagnosticsCategory>,
+
+    /// Diagnostics file. Overrides diagnostics.path (settings.d,
+    /// TELLTALE_DIAGNOSTICS_PATH; default
+    /// diagnostics/telltale-scan-diagnostics.jsonl beside the state file).
+    #[arg(long)]
+    diagnostics_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
 enum HistoryScope {
     /// Everything the store still holds.
     All,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DiagnosticsCategory {
+    /// Time spent in each scan phase.
+    ScanPhases,
+    /// Process CPU time and peak memory.
+    ProcessResources,
+}
+
+fn diagnostics_categories(selected: &[DiagnosticsCategory]) -> crate::diagnostics::Categories {
+    crate::diagnostics::Categories {
+        scan_phases: selected.contains(&DiagnosticsCategory::ScanPhases),
+        process_resources: selected.contains(&DiagnosticsCategory::ProcessResources),
+    }
 }
 
 #[derive(ClapArgs)]
@@ -1754,6 +1782,8 @@ mod runtime_dispatch_tests {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Diagnostics measure startup from here.
+    let command_started = std::time::Instant::now();
     // A hook answers a tool call that is waiting: skip the scanner's startup
     // work (executable hashing, full argument parsing) and use the hooks' own
     // exit codes.
@@ -1779,6 +1809,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             rebuild_baselines,
             max_sources,
             history,
+            diagnostics,
+            diagnostics_path,
         }) => {
             let runtime = runtime.as_ref().expect("scan runtime was selected");
             let mut prepared = execution.prepare(
@@ -1786,18 +1818,39 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     endpoint: splunk_hec_endpoint.as_deref(),
                     token: splunk_hec_token.as_deref(),
                 },
-                Default::default(),
+                crate::settings::CliSettings {
+                    diagnostics: diagnostics_categories(&diagnostics),
+                    diagnostics_path,
+                    ..Default::default()
+                },
             )?;
             if !once && interval_seconds.is_none() {
                 return Err("scan requires --once or --interval-seconds".into());
             }
             prepared.activate(&runtime.value)?;
+            let diagnostics_categories = prepared.settings.diagnostics_categories();
+            let diagnostics_path = crate::diagnostics::resolve_path(
+                prepared.settings.diagnostics_path(),
+                &prepared.state_path,
+            );
             let scan_config = scan::ScanConfig {
                 execution: prepared.config(&runtime.value),
                 backfill,
                 history: history.is_some(),
                 rebuild_baselines,
                 max_sources,
+                diagnostics: diagnostics_categories
+                    .any()
+                    .then_some(scan::ScanDiagnosticsOptions {
+                        categories: diagnostics_categories,
+                        path: &diagnostics_path,
+                        command: if once {
+                            scan::ScanCommand::ScanOnce
+                        } else {
+                            scan::ScanCommand::ScanInterval
+                        },
+                        command_started,
+                    }),
             };
             if once {
                 let failures = scan::run_scan_once(scan_config)?;
