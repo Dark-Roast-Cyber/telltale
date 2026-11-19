@@ -8,6 +8,50 @@
 
 ### Compatibility and operator impact
 
+- **Rule v2, Telltale's Sigma profile, is the rule format, and all shipped
+  content uses it.** A Rule v2 document is a Sigma 2.1 rule marked
+  `taxonomy: telltale` (or a chain, `correlation.type: telltale_chain`) with
+  Telltale semantics in a `telltale` block; the new
+  [rule format reference](docs/rule-format.md) documents every key, field,
+  modifier, condition, chain and package check, and `cargo test --test catalog`
+  loads each of its examples. The bundled core rules and chains, the hooks
+  self-protection rules and the example rules under `config/rules/` are now
+  Rule v2. A parity test proved each converted rule compiles to the same
+  matchers, so detections, rule names (the Rule v1 `id` is the Rule v2
+  `name`), Event 3.0 output and effective rule fingerprints are unchanged.
+  Rule v1 files and `telltale-rule-package/v1` packages stop loading in 0.8.0,
+  and there is no automatic converter; the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md) maps every Rule v1 key to
+  Rule v2. `docs/catalog/rule-vocabulary.json` now describes Rule v2 (keys,
+  fields, modifiers, scope modifiers, condition forms, statuses, `telltale`
+  values and limits), read from the Rule v2 reader. Load errors point to
+  `docs/rule-format.md`.
+- **A replacement keeps the replaced rule's `id`.** A Rule v2 rule in
+  `organization-rules.d`, `rules.d` or `ui-rules.d` that replaces a rule by
+  `name` must carry the same UUID `id`, and one `id` under two names is an
+  error. Start a replacement of a bundled rule from
+  `telltale rules export-default`, which writes each rule's `id`.
+- **`telltale_rules::bundled_default_rule_set()` is removed.** Use
+  `bundled_default_rules()` (loaded content, which `LoadedRules::merge` combines
+  with package documents) or `load_default_rule_set()`.
+- **Rule catalog v2 replaces catalog v1.** `rule_catalog_document` returns
+  `RuleCatalogV2` (`telltale.rule_catalog.v2`,
+  `schemas/rule-catalog-v2.schema.json`): every v1 entry key with the same
+  meaning, plus `uuid`, `status`, `description`, `references`, `author`,
+  `license`, `date`, `modified`, `related`, `logsource`,
+  `behavior_fingerprint` and `metadata_revision`. `RuleCatalogV1` is removed;
+  its schema stays under `schemas/historical/`. `Pipeline::rule_catalog` and
+  `Pipeline::rule_catalog_document` describe any pipeline's content, and
+  `telltale rules catalog` prints the catalog of the resolved rules.
+  `telltale rules show <name>` prints one rule or chain, and
+  `telltale rules validate` reports load notices under `notices`. Rule files in
+  every tier, `--rules` files, `Pipeline::rules_document` and rule packages
+  accept Rule v2 documents. A `telltale-rule-package/v2` package is a YAML
+  stream: a header with a `title`, then each rule or chain as its own `---`
+  document, sorted by name, so a package can be built by appending rule files
+  to the header. A Rule v2 document that defines one YAML anchor name more
+  than once and aliases it is rejected; anchor names must be unique within a
+  document.
 - **Rule v1 has a `tool_kind` target, and `execution.shell` selects it.** The
   target (`compat.v1.tool_kind`, the tenth compatibility view) is what a call
   does: `shell`, `file_read`, `file_write`, `web`, `delegate` or `other`, from
@@ -167,13 +211,6 @@
   its client list does not include Pi, so a Pi source returns no action
   records; `ACTION_RECORD_V1_CLIENTS` lists the clients that do.
 
-- **Claude Code `bridge-session` and `tools-used` records are bookkeeping.**
-  Desktop-app transcripts write Remote Control bridge pointers and per-session
-  tool-name lists between turns; they were quarantined as
-  `unknown_discriminator`, leaving sessions partially accounted. They are now
-  counted as other native records and never projected as activity; a
-  `tools-used` name list is not tool usage.
-
 - **Windows install inventory finds the current Codex, Claude and OpenCode
   desktop apps, and survives a stray quote in `PATH`.** Codex gains a
   `codex-desktop` signal for the CLI the desktop app (the `OpenAI.Codex`
@@ -185,6 +222,36 @@
   builds put them. A `PATH` with an unbalanced `"` no longer hides every later
   entry (and with it PATH launchers such as WinGet links). Metadata only; the
   new Codex signal changes the inventory snapshot hash once on Windows hosts.
+
+- Claude Code transcripts: count the local Agent SDK's exact
+  `{type: "tag", tag, sessionId}` envelope as bookkeeping when `tag` is a
+  string of at most 4,096 bytes and `sessionId` is a non-empty string. Tag
+  values are not projected. Other shapes and larger tags still quarantine.
+
+- Claude Code transcripts: count exact `bridge-session` and `tools-used`
+  envelopes as bookkeeping instead of quarantining them, which left current
+  Claude Code sessions with partial coverage and a `canonical_units_quarantined`
+  scanner error on most scans.
+
+- Claude Code transcripts: a tool result that Claude Code moved to
+  `<session>/tool-results/` is read from that file instead of evaluating only
+  the transcript's ~2 KB preview, so content past the preview (for example an
+  injected instruction in a large fetch or MCP result) reaches detection. Files
+  over the 64 KiB tool-result budget, not UTF-8, missing or outside the
+  session's own directory keep the preview.
+
+- **`scan` can record where its time and resources go.** Two opt-in
+  categories, `scan_phases` and `process_resources`, each append to one
+  bounded diagnostics record per scan. Records go in a separate file, by
+  default `diagnostics/telltale-scan-diagnostics.jsonl` beside the state file.
+  They carry monotonic phase timings, CPU time, and an OS-named peak-memory
+  measure, and they hold no paths, identifiers or content. Enable them in a
+  `diagnostics:` settings section, with `TELLTALE_DIAGNOSTICS_*` variables, or
+  with `scan --diagnostics`. Off by default. When enabled, events, state, exit
+  statuses, Event 3.0 output and `scan_duration_ms` stay the same, and a failed
+  diagnostics write prints a fixed warning. `watch` does not write records.
+  Windows readings await native validation. See
+  [Opt-in diagnostics records](docs/telemetry-output.md#opt-in-diagnostics-records).
 
 - **Unknown tools are counted, and each harness's tool list is checked against
   its table.** The scan summary's `source_processing` gains two optional

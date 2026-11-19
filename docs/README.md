@@ -7,7 +7,7 @@ this repository owns versioned product contracts.
 | Question | Owner |
 | --- | --- |
 | Install, configure, schedule, or verify? | [Install](install.md) |
-| Upgrade or roll back? | [Controlled deployment](controlled-deployment.md), [migration contract](migration-contract.md), [0.7 migration](migrations/0.7.0.md) |
+| Upgrade or roll back? | [Controlled deployment](controlled-deployment.md), [migration contract](migration-contract.md), [0.7 migration](migrations/0.7.0.md), [0.8 migration](migrations/0.8.0.md) |
 | Source identities and validation depth? | [Source validation matrix](source-validation-matrix.md) |
 | Discovery paths and per-source visibility? | [Session sources](session-sources.md), [agent capability profiles](agent-capability-profiles.md) |
 | Inventory tools outside detection support, without token collection? | [Independent tool inventory](../crates/telltale-discover/README.md) (experimental) |
@@ -15,8 +15,10 @@ this repository owns versioned product contracts.
 | What current harness releases write, and what Telltale reads of it? | [Upstream format cases](../tests/upstream_formats/README.md) and their pinned [harness manifest](../tests/upstream_formats/harnesses.json) |
 | OpenCode admission, cursor behavior, or recovery limits? | [OpenCode live ingestion](opencode-live-ingestion.md) |
 | Scoring and process chains? | [Detection model](detection-model.md), [process-chain detections](process-chain-detections.md) |
+| How should live hooks and native session scans share detections? | [Proposed collection contract](hook-and-session-collection.md) |
 | Rule quality and categories? | [Detection content standard](detection-content-standard.md), [threat taxonomy](threat-taxonomy.md) |
-| Rule v1 field names, targets, and accepted values as data? | [Rule vocabulary](catalog/rule-vocabulary.json), generated from the validator |
+| Write, validate, or package a rule? | [Rule format](rule-format.md) (Rule v2, a Sigma profile) |
+| Rule v2 keys, fields, modifiers, and accepted values as data? | [Rule vocabulary](catalog/rule-vocabulary.json), generated from the reader |
 | Community rules, rule packages, or opting out? | [Install: community rules and rule packages](install.md#community-rules-and-rule-packages) |
 | Policy configuration versus enforcement? | [Policy modes](policy-modes.md), [policy authoring](agent-policy-authoring.md) |
 | Event 3.0 schema, local output, and sinks? | [Telemetry output](telemetry-output.md) |

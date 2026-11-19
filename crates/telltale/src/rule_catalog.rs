@@ -1,12 +1,31 @@
-//! Presentation metadata for bundled compatibility content and native actions.
+//! Rule catalog: presentation metadata for the rules and chain modifiers of a
+//! pipeline's content and, when enabled, the bundled process-chain pack, as
+//! Rust values and as the versioned catalog v2 document.
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
+use telltale_rules::{DefinitionKind, LoadedDefinition};
 use telltale_schema::event::TELLTALE_VERSION;
-use telltale_schema::rule_catalog::{RULE_CATALOG_V1_ID, RuleCatalogEntryV1, RuleCatalogV1};
+use telltale_schema::rule_catalog::{
+    RULE_CATALOG_V2_ID, RuleCatalogEntryV2, RuleCatalogLogSourceV2, RuleCatalogRelatedV2,
+    RuleCatalogV2,
+};
+
+/// Most entries one catalog holds.
+const MAX_CATALOG_ENTRIES: usize = 4096;
+/// The Sigma statuses the catalog reports; other Rule v1 status text is
+/// reported as `None`.
+const SIGMA_STATUSES: &[&str] = &[
+    "experimental",
+    "test",
+    "stable",
+    "deprecated",
+    "unsupported",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RuleCatalogKind {
     Rule,
+    /// A chain modifier (a Rule v2 chain).
     Modifier,
     /// A rule of the bundled process-chain pack, listed when detailed scans
     /// enable it.
@@ -16,7 +35,8 @@ pub enum RuleCatalogKind {
 /// Immutable display metadata, not executable content or a detection AST.
 /// Session scores describe frozen compatibility contributions; action scores
 /// describe individual native contributions, not host promotion totals.
-/// A Rust value; [`rule_catalog_document`] is its versioned wire form.
+/// A Rust value; [`Pipeline::rule_catalog_document`] is its versioned wire
+/// form.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RuleCatalogEntry {
@@ -40,8 +60,21 @@ pub struct RuleCatalogEntry {
     when_all_categories: Vec<String>,
     when_all_rule_ids: Vec<String>,
     package_id: Option<String>,
+    uuid: Option<String>,
+    status: Option<String>,
+    description: Option<String>,
+    references: Vec<String>,
+    author: Option<String>,
+    license: Option<String>,
+    date: Option<String>,
+    modified: Option<String>,
+    related: Vec<RuleCatalogRelatedV2>,
+    logsource: Option<RuleCatalogLogSourceV2>,
+    behavior_fingerprint: Option<String>,
+    metadata_revision: Option<String>,
 }
 impl RuleCatalogEntry {
+    /// The compiled id: a Rule v2 `name`, a Rule v1 `id`.
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -81,8 +114,8 @@ impl RuleCatalogEntry {
     pub fn atlas_tags(&self) -> &[String] {
         &self.atlas_tags
     }
-    /// MITRE ATT&CK technique IDs, such as `T1105`. Process-chain rules carry
-    /// them; Rule v1 rules and modifiers carry only `atlas_tags`.
+    /// MITRE ATT&CK technique IDs, such as `T1105`: from a Rule v2 document's
+    /// `attack.*` tags, or a process-chain rule's techniques.
     pub fn attack_techniques(&self) -> &[String] {
         &self.attack_techniques
     }
@@ -105,202 +138,304 @@ impl RuleCatalogEntry {
     pub fn package_id(&self) -> Option<&str> {
         self.package_id.as_deref()
     }
+    /// The Rule v2 `id` (a UUID); `None` for Rule v1 and process-chain rules.
+    pub fn uuid(&self) -> Option<&str> {
+        self.uuid.as_deref()
+    }
+    /// The Sigma status, if the definition has one.
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+    pub fn references(&self) -> &[String] {
+        &self.references
+    }
+    pub fn author(&self) -> Option<&str> {
+        self.author.as_deref()
+    }
+    pub fn license(&self) -> Option<&str> {
+        self.license.as_deref()
+    }
+    pub fn date(&self) -> Option<&str> {
+        self.date.as_deref()
+    }
+    pub fn modified(&self) -> Option<&str> {
+        self.modified.as_deref()
+    }
+    pub fn related(&self) -> &[RuleCatalogRelatedV2] {
+        &self.related
+    }
+    pub fn logsource(&self) -> Option<&RuleCatalogLogSourceV2> {
+        self.logsource.as_ref()
+    }
+    /// The behaviour revision (`sha256:<hex>`): the fingerprint of the
+    /// definition's one-definition compiled export.
+    pub fn behavior_fingerprint(&self) -> Option<&str> {
+        self.behavior_fingerprint.as_deref()
+    }
+    /// The metadata revision (`sha256:<hex>`) of the descriptive metadata.
+    pub fn metadata_revision(&self) -> Option<&str> {
+        self.metadata_revision.as_deref()
+    }
 }
 
-/// Bundled UI metadata for core rules and the embedded community package,
-/// and for the bundled process-chain pack when `options.process_chain` enables
-/// it; deterministically ID-ordered and bounded. `enabled` describes the
-/// default pipeline; this does not describe supplied packages, custom
-/// documents, or policy overrides in a caller's Pipeline.
-/// Parses through the RuleSet owner; action semantics come from Detection v2.
-/// No source, environment, or filesystem access is performed.
+/// Catalog of the bundled content: core rules and the embedded community
+/// package (the default pipeline's content), and the bundled process-chain
+/// pack when `options.process_chain` enables it. See
+/// [`Pipeline::rule_catalog`].
 pub fn bundled_rule_catalog(
     options: &DetailedEvaluationOptions,
 ) -> Result<Vec<RuleCatalogEntry>, PipelineError> {
-    options
-        .validate()
-        .map_err(|_| PipelineError::InvalidOptions)?;
     if telltale_rules::bundled_default_rule_yaml().len() > 1024 * 1024 {
-        return Err(PipelineError::Compilation(Box::new(std::io::Error::other(
-            "bundled_catalog_exceeds_bounds",
-        ))));
+        return Err(catalog_bounds());
     }
-    let community =
-        telltale_rules::package::bundled_community_package().map_err(PipelineError::Compilation)?;
-    let community_id = community.id().to_owned();
-    let mut sources = vec![(
-        None,
-        telltale_rules::bundled_default_rule_set().map_err(PipelineError::Compilation)?,
-    )];
-    sources.extend(
-        community
-            .into_documents()
-            .into_iter()
-            .map(|document| (Some(community_id.clone()), document)),
-    );
-    let definitions = sources
-        .iter()
-        .map(|(_, set)| set.rules.len() + set.modifiers.len())
-        .sum::<usize>();
-    if definitions > 4096 {
-        return Err(PipelineError::Compilation(Box::new(std::io::Error::other(
-            "bundled_catalog_exceeds_bounds",
-        ))));
-    }
-    let pipeline = Pipeline::builder().build()?;
-    // Validate exactly the switches accepted by detailed scans, including the
-    // optional bundled process pack.
-    let (plan, _) = pipeline.compile_semantics(Some(options))?;
-    let export = pipeline.rule_set.compatibility_export();
-    let mut entries = Vec::new();
-    for (package_id, set) in sources {
-        for rule in set.rules {
-            let enabled = export
-                .rules()
-                .iter()
-                .any(|effective| effective.id == rule.id);
-            entries.push(RuleCatalogEntry {
-                id: rule.id,
-                kind: RuleCatalogKind::Rule,
-                title: rule.title,
-                explanation: rule.explanation,
-                falsepositives: rule.falsepositives,
-                category: Some(rule.category),
-                severity: Some(rule.severity),
-                session_score: rule.score,
-                action_score: enabled.then_some(rule.score),
-                action_ordered: false,
-                action_within_seconds: None,
-                action_link: None,
-                atlas_tags: rule.atlas_tags,
-                attack_techniques: Vec::new(),
-                signal_type: rule.signal_type,
-                tags: rule.tags,
-                enabled,
-                when_all_categories: Vec::new(),
-                when_all_rule_ids: Vec::new(),
-                package_id: package_id.clone(),
-            });
-        }
-        for modifier in set.modifiers {
-            let action = plan.action_modifier_semantics(&modifier.id, options);
-            entries.push(RuleCatalogEntry {
-                id: modifier.id,
-                kind: RuleCatalogKind::Modifier,
-                title: None,
-                explanation: modifier.explanation,
-                falsepositives: modifier.falsepositives,
-                category: None,
-                severity: None,
-                session_score: modifier.score,
-                action_score: action.as_ref().map(|semantics| semantics.score),
-                action_ordered: action.as_ref().is_some_and(|semantics| semantics.ordered),
-                action_within_seconds: action
-                    .as_ref()
-                    .and_then(|semantics| semantics.within_seconds),
-                action_link: action.as_ref().and_then(|semantics| {
-                    semantics.link.map(str::to_owned).or_else(|| {
-                        semantics
-                            .within_calls
-                            .map(|calls| format!("within_calls:{calls}"))
-                    })
-                }),
-                atlas_tags: modifier.atlas_tags,
-                attack_techniques: Vec::new(),
-                signal_type: modifier.signal_type,
-                tags: Vec::new(),
-                enabled: action.is_some(),
-                when_all_categories: modifier.when_all_categories,
-                when_all_rule_ids: modifier.when_all_rule_ids,
-                package_id: package_id.clone(),
-            });
-        }
-    }
-    if options.process_chain {
-        let rules = telltale_rules::process_chain::bundled_process_chain_metadata()
-            .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
-        if entries.len() + rules.len() > 4096 {
-            return Err(PipelineError::Compilation(Box::new(std::io::Error::other(
-                "bundled_catalog_exceeds_bounds",
-            ))));
-        }
-        for rule in rules {
-            entries.push(RuleCatalogEntry {
-                id: rule.id,
-                kind: RuleCatalogKind::ProcessChain,
-                title: Some(rule.title),
-                explanation: rule.reason,
-                falsepositives: rule.falsepositives,
-                category: Some(rule.category),
-                severity: Some(rule.severity),
-                session_score: rule.score,
-                action_score: rule.enabled.then_some(rule.score),
-                // Correlation steps match in sequence order.
-                action_ordered: rule.signal_type == "correlation",
-                action_within_seconds: rule.window_seconds,
-                action_link: None,
-                atlas_tags: Vec::new(),
-                attack_techniques: rule.attack_techniques,
-                signal_type: rule.signal_type.to_owned(),
-                tags: Vec::new(),
-                enabled: rule.enabled,
-                when_all_categories: Vec::new(),
-                when_all_rule_ids: Vec::new(),
-                package_id: None,
-            });
-        }
-    }
-    entries.sort_by(|left, right| left.id.cmp(&right.id));
-    Ok(entries)
+    Pipeline::builder().build()?.rule_catalog(options)
 }
 
-/// [`bundled_rule_catalog`] as a versioned [`RuleCatalogV1`] document for
-/// services that render detections, with the semantic identity of the
-/// default pipeline its `enabled` flags and action scores describe.
+/// [`bundled_rule_catalog`] as a versioned [`RuleCatalogV2`] document. See
+/// [`Pipeline::rule_catalog_document`].
 pub fn rule_catalog_document(
     options: &DetailedEvaluationOptions,
-) -> Result<RuleCatalogV1, PipelineError> {
-    let entries = bundled_rule_catalog(options)?;
-    let semantic_identity = Pipeline::builder()
-        .build()?
-        .semantic_provenance(options)?
-        .identity()
-        .to_owned();
-    Ok(RuleCatalogV1 {
-        schema: RULE_CATALOG_V1_ID.to_owned(),
-        telltale_version: TELLTALE_VERSION.to_owned(),
-        semantic_identity,
-        entries: entries
-            .into_iter()
-            .map(|entry| RuleCatalogEntryV1 {
-                kind: match entry.kind {
-                    RuleCatalogKind::Rule => "rule",
-                    RuleCatalogKind::Modifier => "modifier",
-                    RuleCatalogKind::ProcessChain => "process_chain",
+) -> Result<RuleCatalogV2, PipelineError> {
+    Pipeline::builder().build()?.rule_catalog_document(options)
+}
+
+fn catalog_bounds() -> PipelineError {
+    PipelineError::Compilation(Box::new(std::io::Error::other("catalog_exceeds_bounds")))
+}
+
+impl Pipeline {
+    /// UI metadata for every rule and chain modifier this pipeline loaded,
+    /// enabled or not, and for the bundled process-chain pack when
+    /// `options.process_chain` enables it; deterministically ID-ordered and
+    /// bounded. `enabled` and action scores describe this pipeline, its
+    /// policy and overrides included. No source, environment, or filesystem
+    /// access is performed.
+    pub fn rule_catalog(
+        &self,
+        options: &DetailedEvaluationOptions,
+    ) -> Result<Vec<RuleCatalogEntry>, PipelineError> {
+        options
+            .validate()
+            .map_err(|_| PipelineError::InvalidOptions)?;
+        if self.content.definitions().len() > MAX_CATALOG_ENTRIES {
+            return Err(catalog_bounds());
+        }
+        // Validate exactly the switches accepted by detailed scans, including the
+        // optional bundled process pack.
+        let (plan, _) = self.compile_semantics(Some(options))?;
+        let export = self.rule_set.compatibility_export();
+        let mut entries = Vec::new();
+        for definition in self.content.definitions() {
+            let entry = match definition.kind() {
+                DefinitionKind::Rule => {
+                    let enabled = export
+                        .rules()
+                        .iter()
+                        .any(|effective| effective.id == definition.id());
+                    RuleCatalogEntry {
+                        kind: RuleCatalogKind::Rule,
+                        action_score: enabled.then_some(definition.score()),
+                        action_ordered: false,
+                        action_within_seconds: None,
+                        action_link: None,
+                        enabled,
+                        ..definition_entry(definition)
+                    }
                 }
-                .to_owned(),
-                id: entry.id,
-                title: entry.title,
-                explanation: entry.explanation,
-                falsepositives: entry.falsepositives,
-                category: entry.category,
-                severity: entry.severity,
-                session_score: entry.session_score,
-                action_score: entry.action_score,
-                action_ordered: entry.action_ordered,
-                action_within_seconds: entry.action_within_seconds,
-                action_link: entry.action_link,
-                atlas_tags: entry.atlas_tags,
-                attack_techniques: entry.attack_techniques,
-                signal_type: entry.signal_type,
-                tags: entry.tags,
-                enabled: entry.enabled,
-                when_all_categories: entry.when_all_categories,
-                when_all_rule_ids: entry.when_all_rule_ids,
-                package_id: entry.package_id,
+                DefinitionKind::Modifier => {
+                    let action = plan.action_modifier_semantics(definition.id(), options);
+                    RuleCatalogEntry {
+                        kind: RuleCatalogKind::Modifier,
+                        action_score: action.as_ref().map(|semantics| semantics.score),
+                        action_ordered: action.as_ref().is_some_and(|semantics| semantics.ordered),
+                        action_within_seconds: action
+                            .as_ref()
+                            .and_then(|semantics| semantics.within_seconds),
+                        action_link: action.as_ref().and_then(|semantics| {
+                            semantics.link.map(str::to_owned).or_else(|| {
+                                semantics
+                                    .within_calls
+                                    .map(|calls| format!("within_calls:{calls}"))
+                            })
+                        }),
+                        enabled: action.is_some(),
+                        ..definition_entry(definition)
+                    }
+                }
+            };
+            entries.push(entry);
+        }
+        if options.process_chain {
+            let rules = telltale_rules::process_chain::bundled_process_chain_metadata()
+                .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
+            if entries.len() + rules.len() > MAX_CATALOG_ENTRIES {
+                return Err(catalog_bounds());
+            }
+            for rule in rules {
+                entries.push(RuleCatalogEntry {
+                    id: rule.id,
+                    kind: RuleCatalogKind::ProcessChain,
+                    title: Some(rule.title),
+                    explanation: rule.reason,
+                    falsepositives: rule.falsepositives,
+                    category: Some(rule.category),
+                    severity: Some(rule.severity),
+                    session_score: rule.score,
+                    action_score: rule.enabled.then_some(rule.score),
+                    // Correlation steps match in sequence order.
+                    action_ordered: rule.signal_type == "correlation",
+                    action_within_seconds: rule.window_seconds,
+                    action_link: None,
+                    atlas_tags: Vec::new(),
+                    attack_techniques: rule.attack_techniques,
+                    signal_type: rule.signal_type.to_owned(),
+                    tags: Vec::new(),
+                    enabled: rule.enabled,
+                    when_all_categories: Vec::new(),
+                    when_all_rule_ids: Vec::new(),
+                    package_id: None,
+                    uuid: None,
+                    status: None,
+                    description: None,
+                    references: Vec::new(),
+                    author: None,
+                    license: None,
+                    date: None,
+                    modified: None,
+                    related: Vec::new(),
+                    logsource: None,
+                    behavior_fingerprint: None,
+                    metadata_revision: None,
+                });
+            }
+        }
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(entries)
+    }
+
+    /// [`Self::rule_catalog`] as a versioned [`RuleCatalogV2`] document, with
+    /// this pipeline's semantic identity, which its `enabled` flags and action
+    /// scores describe.
+    pub fn rule_catalog_document(
+        &self,
+        options: &DetailedEvaluationOptions,
+    ) -> Result<RuleCatalogV2, PipelineError> {
+        let entries = self.rule_catalog(options)?;
+        let semantic_identity = self.semantic_provenance(options)?.identity().to_owned();
+        Ok(RuleCatalogV2 {
+            schema: RULE_CATALOG_V2_ID.to_owned(),
+            telltale_version: TELLTALE_VERSION.to_owned(),
+            semantic_identity,
+            entries: entries
+                .into_iter()
+                .map(RuleCatalogEntry::into_wire)
+                .collect(),
+        })
+    }
+}
+
+/// The fields a definition sets whatever its kind; the caller sets the kind,
+/// enablement and action fields.
+fn definition_entry(definition: &LoadedDefinition) -> RuleCatalogEntry {
+    let metadata = definition.metadata();
+    RuleCatalogEntry {
+        id: definition.id().to_owned(),
+        kind: RuleCatalogKind::Rule,
+        title: metadata.title.clone(),
+        explanation: definition.explanation().to_owned(),
+        falsepositives: metadata.falsepositives.clone(),
+        category: definition.category().map(str::to_owned),
+        severity: definition.severity().map(str::to_owned),
+        session_score: definition.score(),
+        action_score: None,
+        action_ordered: false,
+        action_within_seconds: None,
+        action_link: None,
+        atlas_tags: definition.atlas_tags().to_vec(),
+        attack_techniques: metadata.attack_techniques(),
+        signal_type: definition.signal_type().to_owned(),
+        tags: definition.tags().to_vec(),
+        enabled: false,
+        when_all_categories: definition.when_all_categories().to_vec(),
+        when_all_rule_ids: definition.when_all_rule_ids().to_vec(),
+        package_id: definition.package_id().map(str::to_owned),
+        uuid: metadata.uuid.clone(),
+        status: metadata
+            .status
+            .clone()
+            .filter(|status| SIGMA_STATUSES.contains(&status.as_str())),
+        description: metadata.description.clone(),
+        references: metadata.references.clone(),
+        author: metadata.author.clone(),
+        license: metadata.license.clone(),
+        date: metadata.date.clone(),
+        modified: metadata.modified.clone(),
+        related: metadata
+            .related
+            .iter()
+            .map(|related| RuleCatalogRelatedV2 {
+                id: related.id.clone(),
+                kind: related.kind.clone(),
             })
             .collect(),
-    })
+        logsource: metadata
+            .logsource
+            .as_ref()
+            .map(|logsource| RuleCatalogLogSourceV2 {
+                product: logsource.product.clone(),
+                category: logsource.category.clone(),
+                service: logsource.service.clone(),
+            }),
+        behavior_fingerprint: definition.behavior_fingerprint(),
+        metadata_revision: Some(definition.metadata_revision()),
+    }
+}
+
+impl RuleCatalogEntry {
+    fn into_wire(self) -> RuleCatalogEntryV2 {
+        RuleCatalogEntryV2 {
+            kind: match self.kind {
+                RuleCatalogKind::Rule => "rule",
+                RuleCatalogKind::Modifier => "modifier",
+                RuleCatalogKind::ProcessChain => "process_chain",
+            }
+            .to_owned(),
+            id: self.id,
+            title: self.title,
+            explanation: self.explanation,
+            falsepositives: self.falsepositives,
+            category: self.category,
+            severity: self.severity,
+            session_score: self.session_score,
+            action_score: self.action_score,
+            action_ordered: self.action_ordered,
+            action_within_seconds: self.action_within_seconds,
+            action_link: self.action_link,
+            atlas_tags: self.atlas_tags,
+            attack_techniques: self.attack_techniques,
+            signal_type: self.signal_type,
+            tags: self.tags,
+            enabled: self.enabled,
+            when_all_categories: self.when_all_categories,
+            when_all_rule_ids: self.when_all_rule_ids,
+            package_id: self.package_id,
+            uuid: self.uuid,
+            status: self.status,
+            description: self.description,
+            references: self.references,
+            author: self.author,
+            license: self.license,
+            date: self.date,
+            modified: self.modified,
+            related: self.related,
+            logsource: self.logsource,
+            behavior_fingerprint: self.behavior_fingerprint,
+            metadata_revision: self.metadata_revision,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -328,7 +463,7 @@ mod tests {
                 .identity()
         );
         let wire = serde_json::to_vec(&document).unwrap();
-        assert_eq!(RuleCatalogV1::from_json(&wire).unwrap(), document);
+        assert_eq!(RuleCatalogV2::from_json(&wire).unwrap(), document);
     }
     #[test]
     fn startup_provenance_matches_detailed_scans_and_effective_policy() {
@@ -375,56 +510,62 @@ mod tests {
     #[test]
     fn catalog_preserves_display_metadata_without_executable_content() {
         let catalog = bundled_rule_catalog(&DetailedEvaluationOptions::default()).unwrap();
-        let raw = telltale_rules::bundled_default_rule_set().unwrap();
+        let raw = telltale_rules::bundled_default_rules().unwrap();
         let community = telltale_rules::package::bundled_community_package().unwrap();
         let community_definitions = community
             .documents()
             .iter()
-            .map(|document| document.rules.len() + document.modifiers.len())
+            .map(|document| document.definitions().len())
             .sum::<usize>();
-        assert_eq!(
-            catalog.len(),
-            raw.rules.len() + raw.modifiers.len() + community_definitions
-        );
+        let core = raw.definitions();
+        assert_eq!(catalog.len(), core.len() + community_definitions);
         assert_eq!(
             catalog
                 .iter()
                 .filter(|entry| entry.package_id().is_none())
                 .count(),
-            raw.rules.len() + raw.modifiers.len()
+            core.len()
         );
         assert!(catalog.windows(2).all(|pair| pair[0].id() < pair[1].id()));
-        for rule in raw.rules {
-            let entry = catalog.iter().find(|entry| entry.id() == rule.id).unwrap();
-            assert_eq!(entry.kind(), RuleCatalogKind::Rule);
-            assert_eq!(entry.title(), rule.title.as_deref());
-            assert_eq!(entry.explanation(), rule.explanation);
-            assert_eq!(entry.falsepositives(), rule.falsepositives);
-            assert_eq!(entry.category(), Some(rule.category.as_str()));
-            assert_eq!(entry.severity(), Some(rule.severity.as_str()));
-            assert_eq!(entry.session_score(), rule.score);
-            assert_eq!(entry.atlas_tags(), rule.atlas_tags);
-            assert_eq!(entry.signal_type(), rule.signal_type);
-            assert_eq!(entry.tags(), rule.tags);
-            assert_eq!(entry.enabled(), rule.enabled && raw.defaults.enabled);
-        }
-        for modifier in raw.modifiers {
+        for definition in core {
             let entry = catalog
                 .iter()
-                .find(|entry| entry.id() == modifier.id)
+                .find(|entry| entry.id() == definition.id())
                 .unwrap();
-            assert_eq!(entry.kind(), RuleCatalogKind::Modifier);
-            assert_eq!(entry.title(), None);
-            assert_eq!(entry.category(), None);
-            assert_eq!(entry.severity(), None);
-            assert_eq!(entry.explanation(), modifier.explanation);
-            assert_eq!(entry.falsepositives(), modifier.falsepositives);
-            assert_eq!(entry.session_score(), modifier.score);
-            assert_eq!(entry.atlas_tags(), modifier.atlas_tags);
-            assert_eq!(entry.signal_type(), modifier.signal_type);
-            assert_eq!(entry.enabled(), modifier.enabled && raw.defaults.enabled);
-            assert_eq!(entry.when_all_categories(), modifier.when_all_categories);
-            assert_eq!(entry.when_all_rule_ids(), modifier.when_all_rule_ids);
+            let metadata = definition.metadata();
+            // Core content is Rule v2: every rule and chain has a title and a UUID.
+            assert!(metadata.title.is_some(), "{}", definition.id());
+            assert_eq!(entry.title(), metadata.title.as_deref());
+            assert_eq!(entry.uuid(), definition.uuid());
+            assert!(entry.uuid().is_some());
+            assert_eq!(entry.explanation(), definition.explanation());
+            assert_eq!(entry.falsepositives(), metadata.falsepositives);
+            assert_eq!(entry.category(), definition.category());
+            assert_eq!(entry.severity(), definition.severity());
+            assert_eq!(entry.session_score(), definition.score());
+            assert_eq!(entry.atlas_tags(), definition.atlas_tags());
+            assert_eq!(entry.signal_type(), definition.signal_type());
+            assert_eq!(entry.enabled(), definition.enabled());
+            assert!(entry.behavior_fingerprint().is_some());
+            assert!(entry.metadata_revision().is_some());
+            match definition.kind() {
+                DefinitionKind::Rule => {
+                    assert_eq!(entry.kind(), RuleCatalogKind::Rule);
+                    assert!(entry.category().is_some());
+                    assert!(entry.severity().is_some());
+                    assert_eq!(entry.tags(), definition.tags());
+                }
+                DefinitionKind::Modifier => {
+                    assert_eq!(entry.kind(), RuleCatalogKind::Modifier);
+                    assert_eq!(entry.category(), None);
+                    assert_eq!(entry.severity(), None);
+                    assert_eq!(
+                        entry.when_all_categories(),
+                        definition.when_all_categories()
+                    );
+                    assert_eq!(entry.when_all_rule_ids(), definition.when_all_rule_ids());
+                }
+            }
         }
         // Field names only: pretty Debug puts each field at the start of a line,
         // so rule text that happens to contain these words cannot trip this.
@@ -440,6 +581,147 @@ mod tests {
             }
         }
     }
+
+    const UUID: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    fn v2_rule(name: &str, uuid: &str, extra: &str) -> String {
+        format!(
+            "title: Synthetic catalog rule\nid: {uuid}\nname: {name}\ntaxonomy: telltale\n\
+             status: stable\ndescription: Synthetic description.\nreferences:\n    - https://example.invalid/note\n\
+             author: Synthetic author\nlicense: Apache-2.0\ndate: 2026-11-18\n\
+             related:\n    - id: 9b2d6c8e-1f4a-4c3b-8d2e-5a6f7b8c9d0e\n      type: derived\n\
+             logsource:\n    product: ai_agent\n    category: tool_activity\n\
+             detection:\n    selection:\n        tool.command|contains: synthetic-catalog-marker\n    condition: selection\n\
+             falsepositives:\n    - Synthetic tests.\nlevel: medium\ntags:\n    - attack.t1105\n    - attack.execution\n{extra}\
+             telltale:\n    category: synthetic\n    score: 12\n    explanation: Synthetic explanation.\n"
+        )
+    }
+
+    #[test]
+    fn catalog_of_supplied_rule_v2_content_carries_its_metadata_and_validates() {
+        let pipeline = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(v2_rule("synthetic.catalog", UUID, ""))
+            .build()
+            .unwrap();
+        let options = DetailedEvaluationOptions::default();
+        let document = pipeline.rule_catalog_document(&options).unwrap();
+        let wire = serde_json::to_vec(&document).unwrap();
+        assert_eq!(RuleCatalogV2::from_json(&wire).unwrap(), document);
+        let [entry] = document.entries.as_slice() else {
+            panic!("one entry");
+        };
+        assert_eq!(entry.id, "synthetic.catalog");
+        assert_eq!(entry.uuid.as_deref(), Some(UUID));
+        assert_eq!(entry.status.as_deref(), Some("stable"));
+        assert_eq!(entry.title.as_deref(), Some("Synthetic catalog rule"));
+        assert_eq!(entry.attack_techniques, ["T1105"]);
+        assert_eq!(entry.references, ["https://example.invalid/note"]);
+        assert_eq!(entry.related[0].kind, "derived");
+        let logsource = entry.logsource.as_ref().unwrap();
+        assert_eq!(
+            (logsource.product.as_str(), logsource.category.as_str()),
+            ("ai_agent", "tool_activity")
+        );
+        assert!(entry.enabled);
+        assert_eq!(entry.action_score, Some(12));
+        assert_eq!(
+            entry.behavior_fingerprint.as_deref(),
+            Some(
+                telltale_rules::provenance::rule_v1_rule_fingerprint(
+                    &pipeline.rule_set.compatibility_export().rules()[0]
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            document.semantic_identity,
+            pipeline.semantic_provenance(&options).unwrap().identity()
+        );
+
+        // Prose changes only the metadata revision; behaviour only the
+        // fingerprint.
+        let revised = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(
+                v2_rule("synthetic.catalog", UUID, "")
+                    .replace("Synthetic description.", "Revised description."),
+            )
+            .build()
+            .unwrap()
+            .rule_catalog_document(&options)
+            .unwrap();
+        let rescored = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(
+                v2_rule("synthetic.catalog", UUID, "").replace("score: 12", "score: 13"),
+            )
+            .build()
+            .unwrap()
+            .rule_catalog_document(&options)
+            .unwrap();
+        assert_eq!(
+            revised.entries[0].behavior_fingerprint,
+            entry.behavior_fingerprint
+        );
+        assert_ne!(
+            revised.entries[0].metadata_revision,
+            entry.metadata_revision
+        );
+        assert_ne!(
+            rescored.entries[0].behavior_fingerprint,
+            entry.behavior_fingerprint
+        );
+        assert_eq!(
+            rescored.entries[0].metadata_revision,
+            entry.metadata_revision
+        );
+    }
+
+    #[test]
+    fn catalog_lists_policy_disabled_and_status_disabled_definitions() {
+        let deprecated = v2_rule(
+            "synthetic.deprecated",
+            "9b2d6c8e-1f4a-4c3b-8d2e-5a6f7b8c9d0e",
+            "",
+        )
+        .replace("status: stable", "status: deprecated")
+        .replace(
+            "related:\n    - id: 9b2d6c8e-1f4a-4c3b-8d2e-5a6f7b8c9d0e\n      type: derived\n",
+            "",
+        );
+        let pipeline = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(format!(
+                "{}---\n{}",
+                v2_rule("synthetic.catalog", UUID, ""),
+                deprecated
+            ))
+            .rules_document(v2_rule(
+                "synthetic.filtered",
+                "0d0c4f7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f",
+                "",
+            ))
+            .policy_document("disabled_rules: [synthetic.filtered]\n")
+            .build()
+            .unwrap();
+        let catalog = pipeline
+            .rule_catalog(&DetailedEvaluationOptions::default())
+            .unwrap();
+        let enabled = catalog
+            .iter()
+            .map(|entry| (entry.id(), entry.enabled(), entry.status()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            enabled,
+            [
+                ("synthetic.catalog", true, Some("stable")),
+                ("synthetic.deprecated", false, Some("deprecated")),
+                ("synthetic.filtered", false, Some("stable")),
+            ]
+        );
+    }
+
     #[test]
     fn catalog_reports_native_and_declared_link_semantics() {
         let mut options = DetailedEvaluationOptions::default();
@@ -549,7 +831,7 @@ mod tests {
 
         let document = rule_catalog_document(&options).unwrap();
         let wire = serde_json::to_vec(&document).unwrap();
-        assert_eq!(RuleCatalogV1::from_json(&wire).unwrap(), document);
+        assert_eq!(RuleCatalogV2::from_json(&wire).unwrap(), document);
         assert!(
             document
                 .entries

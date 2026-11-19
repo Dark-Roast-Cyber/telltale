@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use jsonschema::validator_for;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use telltale_rules::bundled_default_rule_set;
+use telltale_rules::bundled_default_rules;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::scoring::RiskContributionType;
 use telltale_sources::clients::supported_clients;
@@ -292,19 +292,12 @@ fn validate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<(), String
             manifest.version
         ));
     }
-    let rule_set = bundled_default_rule_set().map_err(|error| error.to_string())?;
+    let rule_set = bundled_default_rules().map_err(|error| error.to_string())?;
     let enabled_rule_ids = rule_set
-        .rules
+        .definitions()
         .iter()
-        .filter(|rule| rule.enabled && rule_set.defaults.enabled)
-        .map(|rule| rule.id.clone())
-        .chain(
-            rule_set
-                .modifiers
-                .iter()
-                .filter(|modifier| modifier.enabled && rule_set.defaults.enabled)
-                .map(|modifier| modifier.id.clone()),
-        )
+        .filter(|definition| definition.enabled())
+        .map(|definition| definition.id().to_owned())
         .collect::<BTreeSet<_>>();
     let mut case_ids = BTreeSet::new();
     for case in &manifest.cases {

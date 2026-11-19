@@ -514,8 +514,8 @@ fn delivery_aliases_survive_replay_withdrawal_and_match_copies() {
 fn catalog_document_and_mcp_servers_need_no_lower_level_crates() {
     let document = rule_catalog_document(&DetailedEvaluationOptions::default()).unwrap();
     let bytes = serde_json::to_vec(&document).unwrap();
-    let received = RuleCatalogV1::from_json(&bytes).unwrap();
-    assert_eq!(received.schema, RULE_CATALOG_V1_ID);
+    let received = RuleCatalogV2::from_json(&bytes).unwrap();
+    assert_eq!(received.schema, RULE_CATALOG_V2_ID);
     assert!(
         received
             .entries

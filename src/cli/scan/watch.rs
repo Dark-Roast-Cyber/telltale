@@ -374,6 +374,8 @@ pub(crate) fn run_watch(
         backfill: false,
         rebuild_baselines: false,
         max_sources: None,
+        // Diagnostics records cover `scan` only.
+        diagnostics: None,
     };
     let mut remaining = config.trigger.iterations;
     let mut last_scan_completed: Option<Instant> = None;

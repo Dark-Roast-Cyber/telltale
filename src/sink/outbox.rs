@@ -28,8 +28,8 @@ mod storage;
 pub(crate) use storage::WINDOWS_DURABLE_STORAGE_UNSUPPORTED;
 pub(crate) use storage::{
     acquire_admission_lock, current_platform_is_windows, ensure_durable_storage_supported,
-    ensure_durable_storage_supported_for_platform, validate_outbox_jsonl_paths,
-    validate_outbox_path_without_activation,
+    ensure_durable_storage_supported_for_platform, reserved_outbox_paths,
+    validate_outbox_jsonl_paths, validate_outbox_path_without_activation,
 };
 use storage::{storage_delivery_error, storage_error, storage_message};
 
