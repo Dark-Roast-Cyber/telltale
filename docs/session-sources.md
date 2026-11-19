@@ -376,7 +376,9 @@ Claude Code adapter notes:
   `cost-state`, `api-request`, `api-request-blob`, `api-request-shape`, `pr-link`,
   `artifact-autoreact-ledger`, `artifact-comment-monitor`, `continued-in`) are
   counted as other native records but not projected as conversation or tool
-  activity. API request replays are opaque bookkeeping, not another execution
+  activity. The local Agent SDK's `{type: "tag", tag, sessionId}` entries,
+  including a cleared tag, are also bookkeeping. Other `tag` shapes stay
+  quarantined. API request replays are opaque bookkeeping, not another execution
   of any tool calls they contain. Their nested text and tools contribute no
   activity facts. This is not inference-traffic normalization or a claim of
   full support for unpublished request schemas.
