@@ -209,6 +209,19 @@
   over the 64 KiB tool-result budget, not UTF-8, missing or outside the
   session's own directory keep the preview.
 
+- **`scan` can record where its time and resources go.** Two opt-in
+  categories, `scan_phases` and `process_resources`, each append to one
+  bounded diagnostics record per scan. Records go in a separate file, by
+  default `diagnostics/telltale-scan-diagnostics.jsonl` beside the state file.
+  They carry monotonic phase timings, CPU time, and an OS-named peak-memory
+  measure, and they hold no paths, identifiers or content. Enable them in a
+  `diagnostics:` settings section, with `TELLTALE_DIAGNOSTICS_*` variables, or
+  with `scan --diagnostics`. Off by default. When enabled, events, state, exit
+  statuses, Event 3.0 output and `scan_duration_ms` stay the same, and a failed
+  diagnostics write prints a fixed warning. `watch` does not write records.
+  Windows readings await native validation. See
+  [Opt-in diagnostics records](docs/telemetry-output.md#opt-in-diagnostics-records).
+
 - **Unknown tools are counted, and each harness's tool list is checked against
   its table.** The scan summary's `source_processing` gains two optional
   counts, `unclassified_tool_calls` (tool requests whose name no source tool
