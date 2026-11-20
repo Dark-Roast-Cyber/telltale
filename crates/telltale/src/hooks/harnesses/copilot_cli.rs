@@ -50,6 +50,9 @@ pub const CAMEL_EVENT_KEY: &str = "hookName";
 pub const CAN_ASK: bool = true;
 /// [`HookInput::hook_event`] for a payload that names no event and matches none.
 const UNRECOGNIZED: &str = "unknown";
+/// The keys of a call's tool arguments, in either dialect and in
+/// `permissionRequest`.
+const TOOL_ARGS: &[&str] = &["toolArgs", "tool_input", "toolInput"];
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -206,10 +209,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
         let tool_name = input
             .text(&["toolName", "tool_name"])
             .ok_or(ParseError::MissingField("toolName"))?;
-        let args = input
-            .get(&["toolArgs", "tool_input", "toolInput"])
-            .cloned()
-            .unwrap_or(Value::Null);
+        let args = input.get(TOOL_ARGS).cloned().unwrap_or(Value::Null);
         // `permissionRequest` carries a different input shape (`toolInput`
         // without `description`, edits as diffs), so a key over it would
         // never match the call's: it gets none.
@@ -223,6 +223,11 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
         })
     };
     let event = match hook_event.as_str() {
+        // Evaluated by its tool arguments, so a call without the key is
+        // unusable rather than an empty call.
+        "preToolUse" | "PreToolUse" if !input.has(TOOL_ARGS) => {
+            return Err(ParseError::MissingField("toolArgs"));
+        }
         "preToolUse" | "PreToolUse" => Event::ToolRequested(tool_call(true)?),
         "postToolUse" | "PostToolUse" => Event::ToolFinished {
             call: tool_call(true)?,

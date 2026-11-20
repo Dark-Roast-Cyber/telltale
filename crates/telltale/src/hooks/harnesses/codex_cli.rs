@@ -62,7 +62,8 @@ pub struct HookInput {
     pub permission_mode: Option<String>,
     #[serde(default)]
     pub tool_name: Option<String>,
-    #[serde(default)]
+    /// `None` only when the key is absent (`null` is an input).
+    #[serde(default, deserialize_with = "payload::present")]
     pub tool_input: Option<Value>,
     /// Model-supplied; unique only together with session, agent and turn.
     #[serde(default)]
@@ -214,6 +215,11 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
         can_ask: CAN_ASK,
     };
     let event = match input.hook_event_name.as_str() {
+        // Evaluated by its tool input, so a call without the key is
+        // unusable rather than an empty call.
+        PRE_TOOL_USE if input.tool_input.is_none() => {
+            return Err(ParseError::MissingField("tool_input"));
+        }
         PRE_TOOL_USE => Event::ToolRequested(tool_call(input)?),
         "PostToolUse" => {
             let call = tool_call(input)?;

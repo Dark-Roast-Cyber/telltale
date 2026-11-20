@@ -6,6 +6,17 @@
 //! before the rest of the CLI starts (`run` checks for it first), so a tool
 //! call never waits for the scanner's startup work, and the exit codes below
 //! are the hooks' own rather than the CLI's.
+//!
+//! A panic on the way to an answer is caught here and answered like a tool
+//! call the hook could not read. That needs unwinding, so a build that
+//! aborts on panic does not compile.
+
+// A profile, `RUSTFLAGS` or target that sets `panic = "abort"` would turn
+// every caught panic into a crash that most harnesses read as "run the call".
+#[cfg(not(panic = "unwind"))]
+compile_error!(
+    "telltale hooks needs panic = \"unwind\": it answers a panic with the strict failure policy"
+);
 
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -226,6 +237,7 @@ const HOOKS_CONFIG_FOLDERS: &[&str] = &[
 /// rule content and rule settings as `scan`. An error is described for stderr
 /// only, because it can name a path.
 fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
+    evaluator::panic_if_forced("config");
     let settings =
         crate::settings::load(config_dirs, false, &crate::settings::CliSettings::default())
             .map_err(|error| error.to_string())?;
@@ -283,6 +295,7 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
 /// when a file is not YAML. One such file is enough, so a broken file next to
 /// one that enforces cannot turn enforcement off.
 fn settings_declare_enforce(config_dirs: &[PathBuf]) -> bool {
+    evaluator::panic_if_forced("declare");
     crate::config::config_roots(config_dirs).iter().any(|root| {
         let Ok(entries) = std::fs::read_dir(root.join("settings.d")) else {
             return false;
@@ -424,21 +437,41 @@ fn unreadable_call_policy(config: &Config) -> OnError {
 /// when the payload is unreadable, the configuration is broken or the code
 /// panics. Only `hooks.mode: enforce` in a configuration that was read lets
 /// an answer through.
+///
+/// While enforcing, a panic gets the answer of a payload the hook could not
+/// read, with an `error` record (`hook_panicked`): during evaluation, the
+/// stricter of `on_error` and `on_unevaluable` for a tool call; while reading
+/// the payload, the block for one that names no event; while loading the
+/// configuration, the answer of a configuration that did not load.
 fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only: bool) -> i32 {
-    let loaded = load_config(config_dirs).map(|mut config| {
-        if detect_only {
-            config.mode = telltale_core::hooks::config::Mode::Observe;
-        }
-        config
-    });
+    // A panic anywhere before the answer is caught, since most harnesses read
+    // a crash as "run the call". A configuration whose loading panicked did
+    // not load.
+    let loaded = caught(|| load_config(config_dirs))
+        .unwrap_or_else(|| {
+            Err(format!(
+                "loading the configuration panicked ({HOOK_PANICKED})"
+            ))
+        })
+        .map(|mut config| {
+            if detect_only {
+                config.mode = telltale_core::hooks::config::Mode::Observe;
+            }
+            config
+        });
     let gate = if detect_only {
         Gate::DetectOnly
     } else {
-        Gate::for_config(&loaded, || settings_declare_enforce(config_dirs))
+        // A panic while asking whether a configuration that did not load
+        // asks for enforcement is no answer of "no": as with a broken file
+        // next to one that enforces, breakage cannot turn enforcement off.
+        caught(|| Gate::for_config(&loaded, || settings_declare_enforce(config_dirs)))
+            .unwrap_or(Gate::Enforce)
     };
     if gate == Gate::DetectOnly {
-        // Detached: the process exits when `hook` returns.
-        std::thread::spawn(|| {
+        // Detached: the process exits when `hook` returns. A thread that
+        // cannot start leaves the harness's own timeout.
+        let _ = std::thread::Builder::new().spawn(|| {
             std::thread::sleep(DETECT_ONLY_DEADLINE);
             eprintln!(
                 "telltale hooks: detect-only hook gave up after {} s without an answer",
@@ -447,30 +480,14 @@ fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only
             std::process::exit(0);
         });
     }
-    // What a tool call gets if evaluating it panics while enforcing: the
-    // policy for a failure an agent can bring about, not a crash that most
-    // harnesses read as "run the call".
-    let panic_policy = match &loaded {
-        Ok(config) => unreadable_call_policy(config),
-        Err(_) => OnError::Deny,
+    let config = caught(|| resolve_config(harness, loaded, gate)).unwrap_or(Err(()));
+    let answer = match caught(read_payload) {
+        Some(None) => Answer::exit(1),
+        Some(Some(bytes)) => caught(|| evaluate(harness, &config, &bytes, config_dirs))
+            .unwrap_or_else(|| unreadable_answer(harness, &config, HOOK_PANICKED, &bytes)),
+        // The payload is lost with the panic: it names no event.
+        None => unreadable_answer(harness, &config, HOOK_PANICKED, &[]),
     };
-    let Some(bytes) = read_payload() else {
-        return deliver(gate.release(Answer::exit(1)));
-    };
-    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        evaluate(harness, loaded, gate, &bytes, config_dirs)
-    }))
-    .unwrap_or_else(|_| {
-        eprintln!("telltale hooks: the hook panicked (hook_panicked)");
-        if harness.looks_like_pre_tool_use(&bytes) {
-            Answer::output(harness.render_verdict(
-                panic_policy,
-                "Telltale Hooks failed while evaluating this tool call (hook_panicked).",
-            ))
-        } else {
-            Answer::exit(1)
-        }
-    });
     let answer = gate.release(answer);
     if json_reply {
         // Optional subprocess framing, AFTER the gate. A no-op is explicit;
@@ -506,17 +523,40 @@ fn read_payload() -> Option<Vec<u8>> {
     if bytes.len() as u64 > MAX_PAYLOAD_BYTES {
         let _ = std::io::copy(&mut stdin, &mut std::io::sink());
     }
+    evaluator::panic_if_forced("read");
     Some(bytes)
 }
 
-/// Build the answer for one payload. Tries the long-lived evaluator, then
+/// The error code of a hook that panicked, recorded and named in its answer.
+const HOOK_PANICKED: &str = "hook_panicked";
+
+/// `f`'s value, or `None` if it panicked. Release builds unwind (the
+/// `compile_error!` above), so a panic reaches this rather than ending the
+/// process with a status the harness may read as "run the call".
+fn caught<T>(f: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
+/// [`Runtime::record_unhandled`] under `config`. A panic while recording is
+/// caught here, so it cannot change an answer already decided.
+fn record_unhandled(config: &Config, harness: Harness, hook_event: &str, code: &str) {
+    let recorded = caught(|| {
+        evaluator::panic_if_forced("record");
+        Runtime::new(config.clone()).record_unhandled(harness.name(), hook_event, code);
+    });
+    if recorded.is_none() {
+        eprintln!("telltale hooks: recording {code} panicked");
+    }
+}
+
+/// Build the answer for one payload under `config` (`Err` when it did not
+/// load and the gate is enforcing). Tries the long-lived evaluator, then
 /// evaluates in-process; an unanswered pre-execution event never turns into
 /// an allow. Writes nothing to stdout and exits nothing: the caller's gate
 /// releases the answer or does not.
 fn evaluate(
     harness: Harness,
-    loaded: Result<Config, String>,
-    gate: Gate,
+    config: &Result<Config, ()>,
     bytes: &[u8],
     config_dirs: &[PathBuf],
 ) -> Answer {
@@ -526,13 +566,12 @@ fn evaluate(
     } else {
         harness.parse(bytes)
     };
-    let config = resolve_config(harness, loaded, gate);
     // Split into the hook event name and either the runtime event or the
     // reason it is unusable; an unreadable payload is answered right here.
     let (hook_event, usable) = match parsed {
         Parsed::Event(ctx, event) => (ctx.hook_event.clone(), Ok((ctx, event))),
         Parsed::Unusable { hook_event, code } => (hook_event, Err(code)),
-        Parsed::Invalid(code) => return invalid_payload_answer(harness, &config, code, bytes),
+        Parsed::Invalid(code) => return unreadable_answer(harness, config, code, bytes),
     };
     let Ok(config) = config else {
         if harness.is_pre_tool_use(&hook_event) {
@@ -546,9 +585,9 @@ fn evaluate(
     };
     let (ctx, event) = match usable {
         Ok(pair) => pair,
-        Err(code) => return unusable_event_answer(harness, &config, &hook_event, code),
+        Err(code) => return unusable_event_answer(harness, config, &hook_event, code),
     };
-    answer_from_runtime(harness, config, ctx, event, bytes, config_dirs)
+    answer_from_runtime(harness, config.clone(), ctx, event, bytes, config_dirs)
 }
 
 /// The configuration an event is evaluated under, or `Err(())` when it did not
@@ -578,7 +617,7 @@ fn resolve_config(
                     env_path(crate::settings::STATE_DIR_ENV),
                     env_path(crate::settings::TELEMETRY_ENV),
                 );
-                Runtime::new(config.clone()).record_unhandled(harness.name(), "", "config_invalid");
+                record_unhandled(&config, harness, "", "config_invalid");
                 Ok(config)
             }
         }
@@ -586,47 +625,55 @@ fn resolve_config(
 }
 
 /// The answer for a payload that could not be parsed at all (oversized or
-/// malformed).
-fn invalid_payload_answer(
+/// malformed), or for one whose handling panicked (`hook_panicked`), under
+/// `config` (`Err` when it did not load and the gate is enforcing). Either is
+/// agent-influenced (a huge or damaged tool input, or one that makes the hook
+/// panic), so it gets the policy for a call the hook could not read rather
+/// than a non-blocking exit that the harness treats as allow.
+fn unreadable_answer(
     harness: Harness,
     config: &Result<Config, ()>,
     code: &'static str,
     bytes: &[u8],
 ) -> Answer {
-    eprintln!("telltale hooks: unusable hook payload ({code})");
-    if let Ok(config) = config {
-        Runtime::new(config.clone()).record_unhandled(harness.name(), "", code);
-    }
-    // An oversized or malformed payload is agent-influenced (a huge
-    // tool input), so a PreToolUse gets a verdict rather than a
-    // non-blocking exit that the harness treats as allow.
-    if harness.looks_like_pre_tool_use(bytes) {
-        let policy = match config {
-            Ok(config) => unreadable_call_policy(config),
-            Err(()) => OnError::Deny,
-        };
-        return Answer::output(harness.render_verdict(
-            policy,
+    let (call_reason, payload_reason) = if code == HOOK_PANICKED {
+        eprintln!("telltale hooks: the hook panicked ({code})");
+        let reason = "Telltale Hooks failed while evaluating this tool call (hook_panicked).";
+        (reason, reason)
+    } else {
+        eprintln!("telltale hooks: unusable hook payload ({code})");
+        (
             "Telltale Hooks could not read this tool call (payload too large or malformed).",
-        ));
-    }
-    let fail_closed = matches!(config, Ok(c) if c.on_error == OnError::Deny);
-    // A named event is not pre-execution by now, and exit 2 there is
-    // not a block: on a Stop it is a prompt to continue, so a damaged
-    // Stop would re-prompt the model without limit (Codex: E2E
-    // `damaged-stop-*`).
-    if !fail_closed || names_event(bytes) {
-        return Answer::exit(1);
-    }
-    // No event name: this could be a tool call, so block one without
-    // making a prompt of anything else.
-    match harness.adapter().nameless_block {
-        NamelessBlock::DenyOnStdout => Answer::output(harness.render_verdict(
-            OnError::Deny,
             "Telltale Hooks could not read this hook payload and fails closed.",
-        )),
-        NamelessBlock::Exit(status) => Answer::exit(status),
+        )
+    };
+    let policy = match config {
+        Ok(config) => unreadable_call_policy(config),
+        Err(()) => OnError::Deny,
+    };
+    let answer = if harness.looks_like_pre_tool_use(bytes) {
+        Answer::output(harness.render_verdict(policy, call_reason))
+    } else if policy == OnError::Allow || names_event(bytes) {
+        // A named event is not pre-execution by now, and exit 2 there is
+        // not a block: on a Stop it is a prompt to continue, so a damaged
+        // Stop would re-prompt the model without limit (Codex: E2E
+        // `damaged-stop-*`).
+        Answer::exit(1)
+    } else {
+        // No event name: this could be a tool call. Without its event it
+        // cannot be asked about, so `ask` blocks as `deny` does, with the
+        // harness's block that makes no prompt of anything else.
+        match harness.adapter().nameless_block {
+            NamelessBlock::DenyOnStdout => {
+                Answer::output(harness.render_verdict(OnError::Deny, payload_reason))
+            }
+            NamelessBlock::Exit(status) => Answer::exit(status),
+        }
+    };
+    if let Ok(config) = config {
+        record_unhandled(config, harness, "", code);
     }
+    answer
 }
 
 /// The answer for a payload that parsed but lacks what the event needs.
@@ -637,7 +684,7 @@ fn unusable_event_answer(
     code: &'static str,
 ) -> Answer {
     eprintln!("telltale hooks: unusable hook payload ({code})");
-    Runtime::new(config.clone()).record_unhandled(harness.name(), hook_event, code);
+    record_unhandled(config, harness, hook_event, code);
     if harness.is_pre_tool_use(hook_event) {
         return Answer::output(harness.render_event_verdict(
             hook_event,
@@ -697,6 +744,7 @@ fn answer_from_runtime(
     }
     let mut runtime = Runtime::new(config);
     runtime.set_evaluator("in_process", fallback);
+    evaluator::panic_if_forced("evaluate");
     let response = runtime.handle(&ctx, event);
     Answer::output(harness.render(&ctx.hook_event, &response))
 }
