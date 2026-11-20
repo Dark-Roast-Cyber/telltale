@@ -816,6 +816,66 @@ fn a_long_benign_session_keeps_a_chain_stage_of_any_age() {
     }
 }
 
+/// An object of `members` members `m0`, `m1`, ... beside a plain command, each
+/// holding `bytes` bytes.
+fn padded(members: usize, bytes: usize) -> Value {
+    let mut input = Map::new();
+    input.insert("command".to_owned(), json!("ls"));
+    for n in 0..members {
+        let unit = format!("{n:x}-");
+        let text = unit.repeat(bytes / unit.len() + 1);
+        input.insert(format!("m{n}"), json!(text[..bytes]));
+    }
+    Value::Object(input)
+}
+
+/// One call that Telltale excludes, projected or refused as unevaluable,
+/// between the stages of a chain costs the window one record, and the chain
+/// still fires, under every policy.
+#[test]
+fn a_chain_survives_one_excluded_call_between_its_stages() {
+    let deep = (0..12).fold(json!("x".repeat(3000)), |value, _| json!({"d": value}));
+    let shapes: [(&str, Value); 4] = [
+        ("one-long-value", padded(1, 2 * 1024 * 1024)),
+        ("many-members", padded(40, 3000)),
+        ("deep", json!({"command": "ls", "nested": deep})),
+        ("too-many-chunks", padded(1, 400 * 1024)),
+    ];
+    let mut failures = Vec::new();
+    for (policy, edit) in policies() {
+        for (shape, input) in &shapes {
+            let label = format!("{policy}/{shape}");
+            let mut h = Harness::with(edit);
+            pre(&mut h, true, "dl", command(DOWNLOAD));
+            pre(&mut h, true, "padded", input.clone());
+            let padded = h.decision_for("padded");
+            let excluded = limits(&padded)
+                .iter()
+                .any(|l| l == "pending_input_projected")
+                || padded["decision"]["basis"] == "unevaluable_input";
+            assert!(excluded, "{label}: not excluded: {padded:#}");
+            let run = pre(&mut h, true, "run", command(RUN_DOWNLOADED));
+            let record = h.decision_for("run");
+            if verdict(&run) != Some(Verdict::Ask)
+                || !rule_ids(&record).iter().any(|r| r == CHAIN_RULE)
+                || record["evaluation"]["window_records"] != 3
+                || record["evaluation"]["window_truncated"] != false
+                || limits(&record).iter().any(|l| l == HISTORY_LOST)
+            {
+                failures.push(format!(
+                    "{label}: returned {:?}, rules {:?}, window {} truncated {}, limits {:?}",
+                    verdict(&run),
+                    rule_ids(&record),
+                    record["evaluation"]["window_records"],
+                    record["evaluation"]["window_truncated"],
+                    limits(&record),
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 // ---- Bounds on waiting
 
 fn session_handle(h: &Harness) -> telltale_core::hooks::state::SessionHandle {
