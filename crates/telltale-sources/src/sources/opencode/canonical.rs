@@ -12,7 +12,9 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{
+    ResultText, ValueBounds, declare, replaced_arguments, with_source_arguments, with_source_result,
+};
 
 use super::native::{
     OpenCodeMessageContext, OpenCodeMessageNativeRecord, OpenCodeSqliteNativeRecord,
@@ -401,23 +403,17 @@ fn emit_tool_observation(
         metadata.push(("tool.name", FactProvenance::Reported));
     }
     if has_arguments && let Some(arguments) = arguments {
-        body = body.with_arguments(
-            JsonValue::try_from_source_tool_arguments(tool_name, arguments).map_err(|error| {
-                error.with_bound_category(
-                    telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
-                )
-            })?,
-        );
+        body = with_source_arguments(
+            super::tools::TOOLS,
+            tool_name,
+            body,
+            arguments,
+            ValueBounds::Replace,
+        )?;
         metadata.push(("tool.arguments", FactProvenance::Reported));
     }
     if has_result && let Some(result) = result {
-        body = body.with_result(JsonValue::try_from_source_tool_result(result).map_err(
-            |error| {
-                error.with_bound_category(
-                    telltale_schema::observation::CanonicalFieldCategory::ToolResult,
-                )
-            },
-        )?);
+        body = with_source_result(body, result, ResultText::Direct, ValueBounds::Replace)?;
         metadata.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = state.is_error {
@@ -476,6 +472,8 @@ fn emit_tool_observation(
             .or(context.occurrence_time.as_deref()),
         _ => context.occurrence_time.as_deref(),
     };
+    // No facet is built from an argument that was replaced.
+    let replaced = replaced_arguments(&body, &["command", "cmd", "file_path"]);
     let mut builder = common_builder(
         source_sequence,
         source_id,
@@ -490,7 +488,7 @@ fn emit_tool_observation(
     }
 
     if let Some(arguments) = arguments {
-        builder = with_argument_facets(builder, arguments)?;
+        builder = with_argument_facets(builder, arguments, &replaced)?;
     }
 
     if let Some(call_id) = call_id {
@@ -509,10 +507,14 @@ fn emit_tool_observation(
 pub(super) fn with_argument_facets(
     mut builder: ObservationBuilder,
     arguments: &Value,
+    replaced: &[&str],
 ) -> Result<ObservationBuilder, OpenCodeCanonicalError> {
     let parsed = parsed_argument_view(arguments);
-    if let Some(command) = argument_string(parsed.as_ref().or(Some(arguments)), "command")
-        .or_else(|| argument_string(parsed.as_ref().or(Some(arguments)), "cmd"))
+    let view = parsed.as_ref().or(Some(arguments));
+    let admitted = |key: &str| !replaced.contains(&key);
+    if let Some(command) = argument_string(view, "command")
+        .filter(|_| admitted("command"))
+        .or_else(|| argument_string(view, "cmd").filter(|_| admitted("cmd")))
     {
         builder = builder
             .facet(
@@ -521,7 +523,7 @@ pub(super) fn with_argument_facets(
             )?
             .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
     }
-    if let Some(path) = argument_string(parsed.as_ref().or(Some(arguments)), "file_path") {
+    if let Some(path) = argument_string(view, "file_path").filter(|_| admitted("file_path")) {
         builder = builder
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
             .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);

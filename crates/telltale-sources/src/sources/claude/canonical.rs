@@ -1,5 +1,6 @@
 //! Maps native Claude Code records to Canonical Observation v2, including
-//! per-unit quarantine. Reached only through the acquisition router.
+//! per-unit quarantine and replacement of over-bound tool values. Reached only
+//! through the acquisition router.
 
 use std::fmt;
 
@@ -11,9 +12,13 @@ use telltale_schema::observation::{
     SourceTimestamp, ToolObservation,
 };
 
-use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory};
+use telltale_schema::observation::CanonicalBoundContext;
 
-use crate::tool_operation::{ToolSpec, declare, table};
+use crate::tool_operation::{
+    BoundedRecord, ResultText, ToolSpec, ValueBounds, bounded_records, declare, table,
+    with_source_arguments, with_source_result,
+};
+use telltale_schema::observation::BoundedTarget;
 
 use super::native::{ClaudeContentBlock, ClaudeNativeRecord, is_known_claude_discriminator};
 
@@ -25,6 +30,8 @@ pub(crate) struct ClaudeCanonicalOptions {
     pub(crate) adapter: (&'static str, &'static str),
     /// The tool table that declares each tool call.
     pub(crate) tools: &'static [ToolSpec],
+    /// What a tool call's over-bound values do.
+    pub(crate) value_bounds: ValueBounds,
 }
 
 impl ClaudeCanonicalOptions {
@@ -34,6 +41,16 @@ impl ClaudeCanonicalOptions {
             scale: telltale_schema::observation::SourceScale::FLOOR,
             adapter: ("claude_code", "claude.projects"),
             tools: super::tools::TOOLS,
+            value_bounds: ValueBounds::Replace,
+        }
+    }
+
+    /// Quarantines a record whose tool values exceed a bound instead of
+    /// replacing them, as every record did before replacement existed.
+    pub(crate) fn with_strict_values(self) -> Self {
+        Self {
+            value_bounds: ValueBounds::Strict,
+            ..self
         }
     }
 
@@ -123,6 +140,8 @@ pub(crate) struct ClaudeProjection {
     pub(crate) observations: Vec<CanonicalObservationV2>,
     /// Records left out by themselves; every other record was still mapped.
     pub(crate) quarantined: Vec<ClaudeQuarantinedRecord>,
+    /// Records mapped with over-bound tool values replaced; never quarantined.
+    pub(crate) bounded: Vec<BoundedRecord>,
 }
 
 /// Coordinates of a record excluded from projection, never its content.
@@ -143,11 +162,14 @@ pub(crate) fn project_claude_native_records(
 ) -> Result<ClaudeProjection, ClaudeCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     let mut quarantined = Vec::new();
+    let mut bounded = Vec::new();
     for record in records {
         let mut unit = crate::acquisition::CanonicalCollector::default();
         match project_record(record, options, &mut unit) {
             Ok(()) => {
-                for observation in unit.finish() {
+                let unit = unit.finish();
+                bounded.extend(bounded_records(record.source_sequence, &unit));
+                for observation in unit {
                     observations.push(observation)?;
                 }
             }
@@ -167,6 +189,7 @@ pub(crate) fn project_claude_native_records(
     Ok(ClaudeProjection {
         observations: observations.finish(),
         quarantined,
+        bounded,
     })
 }
 
@@ -460,6 +483,9 @@ fn emit_tool(
         facts,
         resource_path,
     } = tool_body(block, options)?;
+    // A command whose argument was replaced is not built from the source.
+    let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
+    let (command_admitted, cmd_admitted) = (admitted("command"), admitted("cmd"));
     let mut builder = common_builder(
         record,
         options,
@@ -482,7 +508,13 @@ fn emit_tool(
         && let Some(command) = input
             .get("command")
             .and_then(serde_json::Value::as_str)
-            .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str))
+            .filter(|_| command_admitted)
+            .or_else(|| {
+                input
+                    .get("cmd")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|_| cmd_admitted)
+            })
     {
         builder = builder
             .facet(
@@ -520,11 +552,17 @@ fn tool_body(
             let mut paths = vec![("tool.name", FactProvenance::Reported)];
             let mut facet = None;
             if let Some(input) = input {
-                let input = JsonValue::try_from_source_tool_arguments(Some(name), input).map_err(
-                    |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
+                body = with_source_arguments(
+                    options.tools,
+                    Some(name),
+                    body,
+                    input,
+                    options.value_bounds,
                 )?;
-                facet = resource_path(&input).map(ToOwned::to_owned);
-                body = body.with_arguments(input);
+                facet = body
+                    .arguments()
+                    .and_then(resource_path)
+                    .map(ToOwned::to_owned);
                 paths.push(("tool.arguments", FactProvenance::Reported));
             }
             Ok(ToolBody {
@@ -549,12 +587,12 @@ fn tool_body(
             let mut paths = Vec::new();
             if let Some(content) = content {
                 let joined = joined_text_result(content);
-                body = body.with_result(
-                    JsonValue::try_from_source_tool_result(joined.as_ref().unwrap_or(content))
-                        .map_err(|error| {
-                            error.with_bound_category(CanonicalFieldCategory::ToolResult)
-                        })?,
-                );
+                body = with_source_result(
+                    body,
+                    joined.as_ref().unwrap_or(content),
+                    ResultText::Direct,
+                    options.value_bounds,
+                )?;
                 paths.push((
                     "tool.result",
                     if joined.is_some() {
@@ -1413,22 +1451,108 @@ mod tests {
         );
     }
 
+    fn project_lines_with(
+        lines: &[&str],
+        options: &ClaudeCanonicalOptions,
+    ) -> super::ClaudeProjection {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("session.jsonl");
+        fs::write(&path, lines.join("\n")).unwrap();
+        let source = Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".to_owned(),
+            path,
+        };
+        project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            options,
+        )
+        .unwrap()
+    }
+
+    /// An MCP-shaped call with one over-bound argument: the call, its name
+    /// and its admitted path are projected, the over-bound value is not, and
+    /// the record is reported as bounded rather than quarantined.
     #[test]
-    fn oversized_tool_arguments_quarantine_only_their_record() {
+    fn oversized_tool_arguments_are_replaced_not_quarantined() {
+        use telltale_schema::observation::{BoundDimension, BoundedTarget};
         let long = "z".repeat(5_000);
         let line = format!(
-            r#"{{"type":"assistant","sessionId":"s","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_x","name":"Grep","input":{{"pattern":"{long}"}}}}]}}}}"#
+            r#"{{"type":"assistant","sessionId":"s","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_x","name":"mcp__synthetic__run","input":{{"command":"{long}","file_path":"/synthetic/project/notes.txt"}}}}]}}}}"#
         );
-        let projection = project_lines(&[
-            &line,
-            r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic turn."}}"#,
-        ]);
+        let turn = r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic turn."}}"#;
+        let projection = project_lines(&[&line, turn]);
+        assert!(projection.quarantined.is_empty());
+        // The assistant record (its message and the call) and the turn
+        // after it are all projected.
+        assert_eq!(projection.observations.len(), 3);
+        assert!(matches!(
+            projection.observations[2].body(),
+            ObservationBody::Message(_)
+        ));
+        assert_eq!(
+            projection.observations[2].source().source_sequence(),
+            Some(1)
+        );
+        assert_eq!(
+            projection.bounded,
+            [crate::tool_operation::BoundedRecord {
+                source_sequence: 0,
+                target: BoundedTarget::Arguments,
+                dimension: BoundDimension::StringBytes,
+            }]
+        );
+        let call = projection
+            .observations
+            .iter()
+            .find(|observation| matches!(observation.body(), ObservationBody::Tool(_)))
+            .expect("the call is projected");
+        let ObservationBody::Tool(tool) = call.body() else {
+            unreachable!()
+        };
+        assert_eq!(tool.name(), Some("mcp__synthetic__run"));
+        let JsonValue::Object(arguments) = tool.arguments().unwrap() else {
+            panic!("arguments stay an object")
+        };
+        assert_eq!(arguments["command"], JsonValue::Null);
+        assert_eq!(
+            arguments["file_path"],
+            JsonValue::string("/synthetic/project/notes.txt")
+        );
+        assert_eq!(
+            call.facets()["resource.path"].value(),
+            &JsonValue::string("/synthetic/project/notes.txt")
+        );
+        assert!(!call.facets().contains_key("command.text"));
+        assert!(call.fact_metadata().contains_key("tool.bounded_values"));
+
+        // Strict values keep today's whole-record quarantine (hook journals).
+        let strict =
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()).with_strict_values();
+        let projection = project_lines_with(&[&line, turn], &strict);
+        assert!(projection.bounded.is_empty());
+        // Only the turn after the quarantined record survives.
         assert_eq!(projection.observations.len(), 1);
+        assert!(matches!(
+            projection.observations[0].body(),
+            ObservationBody::Message(_)
+        ));
+        assert_eq!(
+            projection.observations[0].source().source_sequence(),
+            Some(1)
+        );
         assert_eq!(projection.quarantined.len(), 1);
         assert_eq!(projection.quarantined[0].code, "unbounded_value");
         assert_eq!(
             projection.quarantined[0].bound.map(|bound| bound.category),
             Some(telltale_schema::observation::CanonicalFieldCategory::ToolArguments)
+        );
+        assert!(
+            projection
+                .observations
+                .iter()
+                .all(|observation| !matches!(observation.body(), ObservationBody::Tool(_)))
         );
     }
 }

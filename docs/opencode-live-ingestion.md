@@ -143,6 +143,9 @@ Direct `tool.result` strings share the existing message-text budget: 65,536 UTF-
 bytes, checked before and after NFC normalization. OpenCode uses this for output
 and error text, message-table fallback results and part lifecycle observations.
 Nested result strings retain ordinary bounds; objects are not converted to prose.
+A tool argument or result value over its bound no longer rejects the source: the
+value alone is replaced, the rest of the call is evaluated, the cursor moves on,
+and the unit is listed in `source_processing.bounded_value_units`.
 
 The exact `apply_patch` tool's direct `arguments.patchText` string also gets the
 65,536-byte text budget. OpenCode's [public tool schema](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/apply_patch.ts)
@@ -172,6 +175,11 @@ A v2 row whose own values still exceed a bound is **quarantined**, not fatal:
   the scan summary's `source_processing.quarantined_units`;
 - it marks the source with one degraded `scanner_error`;
 - the rest of the selection is evaluated, and the cursor moves past it.
+
+A v2 row whose only over-bound values are tool argument or result values is
+not quarantined: those values are replaced, the row's other facts are
+evaluated, and it is listed in `source_processing.bounded_value_units` with a
+`canonical_values_bounded` `scanner_error` instead.
 
 Malformed or unknown rows, identity failures and aggregate caps still fail the
 source. Padding a payload past the limits therefore produces a located finding

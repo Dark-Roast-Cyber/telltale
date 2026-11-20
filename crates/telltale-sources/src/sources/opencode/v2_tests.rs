@@ -18,9 +18,9 @@ use crate::acquisition::{
 };
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
-    BoundDimension, CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability,
-    CapabilityId, FactProvenance, JsonValue, MessageRole, ObservationBody, ObservationFamily,
-    ObservationStage, ObservedAt, SemanticReplayVerdict, ToolObservation, ToolStatus,
+    BoundDimension, CanonicalObservationV2, CapabilityAvailability, CapabilityId, FactProvenance,
+    JsonValue, MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
+    SemanticReplayVerdict, ToolObservation, ToolStatus,
 };
 use telltale_schema::source::Source;
 
@@ -1554,17 +1554,47 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
             T0,
         ),
     );
-    let quarantined_bound = |store: &Store| {
+    // A result over its bound is replaced and recorded; the row is projected.
+    let replaced_bound = |store: &Store, native_id: &str, marker: &str| {
         let batch = store.acquire_default();
-        assert!(batch.observations.is_empty());
-        let [unit] = batch.quarantined.as_slice() else {
-            panic!("expected one quarantined row")
+        assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+        let [unit] = batch.bounded.as_slice() else {
+            panic!("expected one bounded unit: {:?}", batch.bounded)
         };
-        unit.bound.unwrap()
+        assert_eq!(
+            (
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension
+            ),
+            (
+                native_id,
+                1,
+                telltale_schema::observation::BoundedTarget::Result,
+                BoundDimension::StringBytes
+            )
+        );
+        assert!(!format!("{:?}", batch.bounded).contains(marker));
+        let replaced = batch
+            .observations
+            .iter()
+            .filter_map(|observation| match observation.body() {
+                ObservationBody::Tool(tool) => Some(tool.bounded_values().to_vec()),
+                _ => None,
+            })
+            .flatten()
+            .map(|value| (value.target(), value.dimension()))
+            .collect::<Vec<_>>();
+        let [(target, dimension)] = replaced.as_slice() else {
+            panic!("expected one replaced value: {replaced:?}")
+        };
+        assert_eq!(*target, telltale_schema::observation::BoundedTarget::Result);
+        *dimension
     };
     assert_eq!(
-        quarantined_bound(&store).category,
-        CanonicalFieldCategory::ToolResult
+        replaced_bound(&store, "msg_parts", &"y".repeat(16)),
+        BoundDimension::StringBytes
     );
     let store = Store::v2();
     store.message(
@@ -1583,7 +1613,7 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
         ),
     );
     assert_eq!(
-        quarantined_bound(&store).dimension,
+        replaced_bound(&store, "msg_huge", &"x".repeat(16)),
         BoundDimension::StringBytes
     );
 }
@@ -1918,19 +1948,68 @@ fn oversized_rows_are_quarantined_without_blinding_the_source() {
         .into_iter()
         .map(|(id, ..)| id)
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(ids, ["msg_after", "msg_before"].map(str::to_owned).into());
-    let [unit] = batch.quarantined.as_slice() else {
-        panic!("{:?}", batch.quarantined)
-    };
-    assert_eq!(unit.native_id, "msg_padded");
-    assert_eq!(unit.session_id.as_deref(), Some("ses_synthetic"));
-    assert_eq!(unit.source_sequence, 2);
-    assert_eq!(unit.code, "unbounded_value");
-    assert!(unit.bound.is_some());
-    assert!(!format!("{unit:?}").contains(secret));
-    // The quarantined row is still a counted native unit, without tool facts.
+    // The padded command is over its text budget: it is replaced and
+    // recorded, never cut to a prefix, and the row is projected.
+    assert_eq!(
+        ids,
+        ["msg_after", "msg_before", "msg_padded"]
+            .map(str::to_owned)
+            .into()
+    );
+    assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    assert_eq!(
+        batch
+            .bounded
+            .iter()
+            .map(|unit| (
+                unit.session_id.as_deref(),
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension
+            ))
+            .collect::<Vec<_>>(),
+        [(
+            Some("ses_synthetic"),
+            "msg_padded",
+            2,
+            telltale_schema::observation::BoundedTarget::Arguments,
+            BoundDimension::StringBytes
+        )]
+    );
+    assert!(!format!("{:?}", batch.bounded).contains(secret));
+    let padded_calls = batch
+        .observations
+        .iter()
+        .filter_map(|observation| match observation.body() {
+            ObservationBody::Tool(tool) if !tool.bounded_values().is_empty() => {
+                Some((observation, tool))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!padded_calls.is_empty());
+    for (observation, tool) in padded_calls {
+        assert_eq!(tool.name(), Some("shell"));
+        assert_eq!(
+            tool.bounded_values()
+                .iter()
+                .map(|value| (value.target(), value.dimension(), value.pointer()))
+                .collect::<Vec<_>>(),
+            [(
+                telltale_schema::observation::BoundedTarget::Arguments,
+                telltale_schema::observation::BoundDimension::StringBytes,
+                "/command"
+            )]
+        );
+        assert!(!observation.facets().contains_key("command.text"));
+        assert!(!format!("{:?}", tool.arguments()).contains(secret));
+        assert!(!format!("{:?}", tool.bounded_values()).contains(secret));
+    }
     let counts = &batch.accounting.sessions[0].counts;
     assert_eq!(counts.native_units, 3);
+    // The row with a replaced value is a counted native unit without tool
+    // facts: nothing is derived from the value it no longer carries.
     assert_eq!(counts.contributions.tool_calls.get("shell"), Some(&1));
     assert!(counts.contributions.network_hosts.is_empty());
 
@@ -1945,6 +2024,44 @@ fn oversized_rows_are_quarantined_without_blinding_the_source() {
         mapping_code(store.acquire_default_error()),
         "invalid_assistant_content"
     );
+}
+
+/// A user shell command over the authored-text bound is replaced in the arguments,
+/// and the command facet, built from the same text, is left out: the row is
+/// admitted with the command replaced.
+#[test]
+fn user_shell_command_over_bound_is_replaced_and_admitted() {
+    let store = Store::v2();
+    let secret = "private-suffix";
+    let command = format!("{}{secret}", "z".repeat(70_000));
+    store.message(
+        "msg_sh_long",
+        1,
+        T0 + 1,
+        json!({"type": "shell", "shellID": "sh_long", "command": command, "status": "running", "time": {"created": T0}}),
+    );
+    let batch = store.acquire_default();
+    assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    assert_eq!(batch.bounded.len(), 1);
+    let observation = find(
+        &batch,
+        "msg_sh_long",
+        0,
+        ObservationStage::ToolExecutionStarted,
+    );
+    let tool = tool(observation);
+    assert_eq!(
+        tool.bounded_values()
+            .iter()
+            .map(|value| (value.target(), value.dimension()))
+            .collect::<Vec<_>>(),
+        [(
+            telltale_schema::observation::BoundedTarget::Arguments,
+            BoundDimension::StringBytes
+        )]
+    );
+    assert!(!observation.facets().contains_key("command.text"));
+    assert!(!format!("{:?}", batch.observations).contains(secret));
 }
 
 /// An incremental read stops before the row that would exceed its stored-byte

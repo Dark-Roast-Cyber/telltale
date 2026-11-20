@@ -242,6 +242,19 @@ otherwise ambiguous zero-detection result without exposing session content:
   cannot hold, such as a requested tool name with a line break),
   `oversized_native_cell` or `evaluation_capacity_exceeded`. These are coordinates only, never content. Quarantine makes
   `selected_source_coverage` `partial`.
+  `bounded_value_unit_count` counts native units evaluated with an
+  over-bound tool value replaced (the unit's other values are evaluated and
+  nothing is derived from the replaced one), once each even when an
+  overlapping window re-reads them, and `bounded_value_units` lists every
+  entry (one per replaced field and bound) of up to 1,000 units as `{source,
+  session_id, native_id, source_sequence, target, dimension}`, where `target`
+  is `arguments` or `result` and `dimension` is the bound; a count above the
+  distinct units listed means the list was cut. These are coordinates only,
+  never content, and also make `selected_source_coverage` `partial`. Each
+  evaluated window of such a source emits one `scanner_error` with `error`
+  evidence `canonical_values_bounded`, or `canonical_units_quarantined` when
+  a unit of the same window was also quarantined, so a source drained in
+  several windows can emit both.
   `unclassified_tool_calls` counts tool requests whose name no source tool
   table lists and that are not MCP-shaped, and `tool_operand_drift` counts
   declared requests whose table row names an operand (a command, file or URL

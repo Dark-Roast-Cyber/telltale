@@ -12,6 +12,7 @@ fn work_budget_control_rules_do_not_scan_unrelated_authored_arguments() {
                     ToolObservation::new()
                         .with_name("Bash")
                         .unwrap()
+                        .with_argument_text(ArgumentText::new().with_key("command"))
                         .with_arguments(
                             JsonValue::object([(
                                 "command".into(),
@@ -98,6 +99,7 @@ fn work_budget_scalar_controls_preserve_resolution_and_structured_fallback() {
                 ToolObservation::new()
                     .with_name("Bash")
                     .unwrap()
+                    .with_argument_text(ArgumentText::new().with_key("command"))
                     .with_arguments(
                         JsonValue::object([(
                             "command".into(),

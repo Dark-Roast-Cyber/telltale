@@ -3,10 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use super::value::non_empty;
+use super::value::{ArgumentText, BoundedTarget, BoundedValue, non_empty};
 use super::{
-    ContentPartKind, JsonValue, LocalReference, OTHER_REGISTRY_VERSION, ObservationError,
-    ObservationFamily, ObservationStage, ValidationCode, VersionedReference,
+    BOUNDED_VALUES_FIELD, ContentPartKind, JsonValue, LocalReference, OTHER_REGISTRY_VERSION,
+    ObservationError, ObservationFamily, ObservationStage, ValidationCode, VersionedReference,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,7 +122,11 @@ impl ObservationBody {
                 {
                     return Err(ObservationError::new(ValidationCode::FamilyMinimum));
                 }
-                Ok(())
+                super::value::validate_bounded_values(
+                    &body.bounded_values,
+                    body.arguments.as_ref(),
+                    body.result.as_ref(),
+                )
             }
             Self::ToolDefinition(body)
                 if body.change.is_some()
@@ -451,6 +455,8 @@ pub struct ToolObservation {
     is_error: Option<bool>,
     exit_code: Option<i64>,
     operation: Option<ToolOperation>,
+    argument_text: ArgumentText,
+    bounded_values: Vec<BoundedValue>,
 }
 
 impl ToolObservation {
@@ -465,6 +471,8 @@ impl ToolObservation {
             is_error: None,
             exit_code: None,
             operation: None,
+            argument_text: ArgumentText::new(),
+            bounded_values: Vec::new(),
         }
     }
 
@@ -539,6 +547,54 @@ impl ToolObservation {
     pub fn operation(&self) -> Option<&ToolOperation> {
         self.operation.as_ref()
     }
+    /// The argument text the source's own tool table declares for this call.
+    /// Validation admits declared authored text up to the direct-text budget;
+    /// it is not reported by the harness and is no semantic field.
+    pub fn with_argument_text(mut self, value: ArgumentText) -> Self {
+        self.argument_text = value;
+        self
+    }
+    pub fn argument_text(&self) -> &ArgumentText {
+        &self.argument_text
+    }
+    /// Record values a bounded conversion of this call's arguments or result
+    /// replaced by `null` (`JsonValue::try_from_source_*_bounded`). The list
+    /// stays sorted and unique; validation checks that each entry names a
+    /// replacement present in the field.
+    pub fn with_bounded_values(mut self, values: impl IntoIterator<Item = BoundedValue>) -> Self {
+        self.bounded_values.extend(values);
+        self.bounded_values.sort_by(|left, right| {
+            (left.target(), left.pointer()).cmp(&(right.target(), right.pointer()))
+        });
+        self.bounded_values.dedup_by(|left, right| {
+            left.target() == right.target() && left.pointer() == right.pointer()
+        });
+        self
+    }
+    pub fn bounded_values(&self) -> &[BoundedValue] {
+        &self.bounded_values
+    }
+    /// Whether a replacement covers the top-level member `key` of `target`,
+    /// so nothing derived from that member (a command or path facet) may be
+    /// built from the source value.
+    pub fn bounded_member(&self, target: BoundedTarget, key: &str) -> bool {
+        let root = match target {
+            BoundedTarget::Arguments => self.arguments.as_ref(),
+            BoundedTarget::Result => self.result.as_ref(),
+        };
+        let mut member = String::new();
+        super::value::push_segment(&mut member, key);
+        self.bounded_values
+            .iter()
+            .filter(|entry| entry.target() == target)
+            .any(|entry| {
+                (entry.pointer().is_empty() && matches!(root, Some(JsonValue::Null)))
+                    || entry
+                        .pointer()
+                        .strip_prefix(member.as_str())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+    }
 
     /// The declared operation is derived from the source's tool table, not
     /// reported by the harness, so it is no semantic field: it takes no part in
@@ -571,6 +627,19 @@ impl ToolObservation {
         }
         if let Some(value) = self.exit_code {
             fields.push(("tool.exit_code".to_owned(), JsonValue::Integer(value)));
+        }
+        // Absent unless a value was replaced, so an in-bound call keeps its
+        // identity and fingerprint.
+        if !self.bounded_values.is_empty() {
+            fields.push((
+                BOUNDED_VALUES_FIELD.to_owned(),
+                JsonValue::Array(
+                    self.bounded_values
+                        .iter()
+                        .map(BoundedValue::to_json)
+                        .collect(),
+                ),
+            ));
         }
         fields
     }

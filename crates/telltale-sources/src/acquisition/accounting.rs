@@ -268,6 +268,41 @@ pub(super) struct AccountingBuilder {
 }
 
 impl AccountingBuilder {
+    /// The checks `tool_usage` makes of a call's name and time, without
+    /// counting it: a unit with replaced values takes no part in accounting
+    /// but keeps the outcome of its labels.
+    pub(super) fn check_tool_usage(
+        &self,
+        session: Option<&str>,
+        kind: RecordKind,
+        name: Option<&str>,
+        timestamp: Option<&str>,
+    ) -> Result<(), AcquisitionError> {
+        let (true, Some(session), Some(name)) = (kind == RecordKind::ToolCall, session, name)
+        else {
+            return Ok(());
+        };
+        if name.len() > LOCAL_MAX_STRING_BYTES || name.chars().any(char::is_control) {
+            return Err(AcquisitionError::InvalidContribution);
+        }
+        let counts = &self
+            .sessions
+            .get(session)
+            .ok_or(AcquisitionError::InvalidAttestation)?
+            .counts;
+        let first_unset = counts
+            .tool_usage
+            .get(name)
+            .is_none_or(|usage| usage.first_timestamp.is_none());
+        if first_unset
+            && let Some(timestamp) = timestamp
+            && (timestamp.len() > LOCAL_MAX_STRING_BYTES || timestamp.chars().any(char::is_control))
+        {
+            return Err(AcquisitionError::InvalidContribution);
+        }
+        Ok(())
+    }
+
     pub(super) fn tool_usage(
         &mut self,
         session: Option<&str>,

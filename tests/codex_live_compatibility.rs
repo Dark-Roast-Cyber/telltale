@@ -85,6 +85,7 @@ fn transcript(suffix: bool) -> Vec<Value> {
             }
             values.push(value);
         }
+        // Output over its budget is replaced; the command is still evaluated.
         values.push(command("oversize", "x".repeat(65_537)));
         values.push(json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"supported neighbor survives"}]}}));
     }
@@ -211,7 +212,13 @@ fn suffix_and_quarantine_survive_acquisition_embedding_cli_and_replay() {
     for evaluation in &evaluations {
         assert!(evaluation.failure().is_none());
         assert_eq!(evaluation.coverage(), Some(SourceCoverage::Partial));
-        assert_eq!(evaluation.quarantined().len(), 4);
+        assert_eq!(evaluation.quarantined().len(), 3);
+        let [unit] = evaluation.bounded_units() else {
+            panic!("expected one bounded unit")
+        };
+        assert_eq!(unit.native_id, "oversize");
+        assert_eq!(unit.target.as_str(), "result");
+        assert_eq!(unit.dimension.as_str(), "string_bytes");
         assert!(evaluation.resume_token().is_none());
         let batch = acquire_source(
             &evaluation.source,
@@ -220,9 +227,9 @@ fn suffix_and_quarantine_survive_acquisition_embedding_cli_and_replay() {
         .unwrap();
         assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
         assert_eq!(batch.progress, AcquisitionProgress::None);
-        assert_eq!(batch.observations.len(), 4);
+        assert_eq!(batch.observations.len(), 5);
         assert_eq!(batch.observations[0].source().source_sequence(), Some(42));
-        assert_eq!(batch.quarantined.len(), 4);
+        assert_eq!(batch.quarantined.len(), 3);
         assert_eq!(
             batch
                 .quarantined
@@ -233,10 +240,16 @@ fn suffix_and_quarantine_survive_acquisition_embedding_cli_and_replay() {
                 "unsupported_completed_item",
                 "unsupported_completed_item",
                 "unsupported_completed_item",
-                "unbounded_value"
             ]
         );
-        assert!(!format!("{:?} {:?}", batch.observations, batch.quarantined).contains(PRIVATE));
+        assert_eq!(batch.bounded.len(), 1);
+        assert!(
+            !format!(
+                "{:?} {:?} {:?}",
+                batch.observations, batch.quarantined, batch.bounded
+            )
+            .contains(PRIVATE)
+        );
     }
     let partial = cli();
     assert_eq!(
@@ -253,8 +266,9 @@ fn suffix_and_quarantine_survive_acquisition_embedding_cli_and_replay() {
             .as_array()
             .unwrap()
             .len(),
-        12
+        9
     );
+    assert_eq!(partial["source_processing"]["bounded_value_unit_count"], 3);
     let partial_state: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
     for key in ["baseline_snapshots", "baseline_source_contributions"] {
         assert_eq!(complete_state[key], partial_state[key]);
@@ -381,7 +395,8 @@ fn native_watch_preserves_suffix_quarantine_and_supported_activity() {
     let summary: Value =
         serde_json::from_str(stdout.lines().find(|line| line.starts_with('{')).unwrap()).unwrap();
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["quarantined_unit_count"], 4);
+    assert_eq!(summary["source_processing"]["quarantined_unit_count"], 3);
+    assert_eq!(summary["source_processing"]["bounded_value_unit_count"], 1);
     assert_eq!(
         summary["source_processing"]["selected_source_coverage"],
         "partial"

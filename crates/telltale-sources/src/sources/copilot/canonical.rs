@@ -12,7 +12,7 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{ValueBounds, declare, replaced_arguments, with_declared_arguments};
 
 use super::native::{CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem};
 
@@ -84,7 +84,7 @@ impl From<ObservationError> for CopilotCanonicalError {
 }
 
 pub(crate) fn project_copilot_native_events(
-    events: Vec<CopilotNativeEvent>,
+    events: &[CopilotNativeEvent],
     options: &CopilotCanonicalOptions,
 ) -> Result<Vec<CanonicalObservationV2>, CopilotCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::default();
@@ -119,7 +119,7 @@ pub(crate) fn project_copilot_native_events(
                         "accumulated output has no active source session",
                     )
                 })?;
-                let ordinal = ordinal.ok_or_else(|| {
+                let ordinal = (*ordinal).ok_or_else(|| {
                     mapping(
                         "replay_unverifiable",
                         "accumulated output has no source session ordinal",
@@ -143,17 +143,17 @@ fn project_item(
     session_id: &str,
     ordinal: u64,
     timestamp: Option<&str>,
-    item: Box<CopilotOutputItem>,
+    item: &CopilotOutputItem,
     options: &CopilotCanonicalOptions,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CopilotCanonicalError> {
     match item.item_type.as_deref() {
         None | Some("") | Some("reasoning") => Ok(()),
         Some("function_call") => {
-            project_function_call(session_id, ordinal, timestamp, &item, options, observations)
+            project_function_call(session_id, ordinal, timestamp, item, options, observations)
         }
         Some("message") => {
-            project_message(session_id, ordinal, timestamp, &item, options, observations)
+            project_message(session_id, ordinal, timestamp, item, options, observations)
         }
         Some(_) => Err(mapping(
             "unknown_output_item_type",
@@ -191,19 +191,27 @@ fn project_function_call(
     if has_arguments {
         let arguments = item.arguments.as_deref().expect("checked");
         if let Ok(value) = serde_json::from_str::<Value>(arguments) {
-            body = body.with_arguments(value_to_json(
+            body = with_declared_arguments(
+                telltale_schema::observation::ArgumentText::new(),
+                body,
                 &value,
-                CanonicalFieldCategory::ToolArguments,
-            )?);
+                ValueBounds::Replace,
+            )?;
             metadata.push(("tool.arguments", FactProvenance::Parsed));
         } else {
             body = body.with_arguments(JsonValue::string(arguments));
             metadata.push(("tool.arguments", FactProvenance::Reported));
         }
-        body = body.with_searchable_arguments(arguments)?;
-        metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+        // Searchable text is the raw request; it is never kept beside
+        // arguments whose values were replaced.
+        if body.bounded_values().is_empty() {
+            body = body.with_searchable_arguments(arguments)?;
+            metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+        }
     }
 
+    // No facet is built from an argument that was replaced.
+    let replaced = replaced_arguments(&body, &["command", "cmd", "path", "file_path"]);
     let mut builder = common_builder(
         session_id,
         ordinal,
@@ -217,7 +225,7 @@ fn project_function_call(
     for (path, provenance) in metadata {
         builder = builder.fact_metadata(path, normal(provenance)?);
     }
-    add_argument_facets(&mut builder, item.arguments.as_deref())?;
+    add_argument_facets(&mut builder, item.arguments.as_deref(), &replaced)?;
     observations.push(builder.build()?)?;
 
     if item
@@ -344,6 +352,7 @@ fn common_builder(
 fn add_argument_facets(
     builder: &mut ObservationBuilder,
     arguments: Option<&str>,
+    replaced: &[&str],
 ) -> Result<(), CopilotCanonicalError> {
     let Some(arguments) = arguments else {
         return Ok(());
@@ -353,7 +362,8 @@ fn add_argument_facets(
     };
     if let Some(command) = fields
         .get("command")
-        .or_else(|| fields.get("cmd"))
+        .filter(|_| !replaced.contains(&"command"))
+        .or_else(|| fields.get("cmd").filter(|_| !replaced.contains(&"cmd")))
         .and_then(Value::as_str)
     {
         *builder = builder
@@ -366,7 +376,12 @@ fn add_argument_facets(
     }
     if let Some(path) = fields
         .get("path")
-        .or_else(|| fields.get("file_path"))
+        .filter(|_| !replaced.contains(&"path"))
+        .or_else(|| {
+            fields
+                .get("file_path")
+                .filter(|_| !replaced.contains(&"file_path"))
+        })
         .and_then(Value::as_str)
     {
         *builder = builder
@@ -400,14 +415,6 @@ fn normal(provenance: FactProvenance) -> Result<FactMetadata, CopilotCanonicalEr
             telltale_schema::observation::Sensitivity::Normal,
         )?,
     })
-}
-
-fn value_to_json(
-    value: &Value,
-    category: CanonicalFieldCategory,
-) -> Result<JsonValue, CopilotCanonicalError> {
-    Ok(JsonValue::try_from_source_value(value)
-        .map_err(|error| error.with_bound_category(category))?)
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> CopilotCanonicalError {
@@ -444,7 +451,7 @@ mod tests {
         path: std::path::PathBuf,
     ) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
         project_copilot_native_events(
-            extract_copilot_native_events(&source(path)).unwrap(),
+            &extract_copilot_native_events(&source(path)).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("Copilot canonical observations")
@@ -864,7 +871,7 @@ mod tests {
         )
         .unwrap();
         let error = project_copilot_native_events(
-            extract_copilot_native_events(&source(message)).unwrap(),
+            &extract_copilot_native_events(&source(message)).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
@@ -878,7 +885,7 @@ mod tests {
         )
         .unwrap();
         let error = project_copilot_native_events(
-            extract_copilot_native_events(&source(role)).unwrap(),
+            &extract_copilot_native_events(&source(role)).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
@@ -905,7 +912,7 @@ mod tests {
         )
         .unwrap();
         let error = project_copilot_native_events(
-            extract_copilot_native_events(&source(malformed)).unwrap(),
+            &extract_copilot_native_events(&source(malformed)).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
@@ -919,7 +926,7 @@ mod tests {
         )
         .unwrap();
         let error = project_copilot_native_events(
-            extract_copilot_native_events(&source(non_array)).unwrap(),
+            &extract_copilot_native_events(&source(non_array)).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
@@ -932,7 +939,7 @@ mod tests {
         )
         .unwrap();
         let error = project_copilot_native_events(
-            extract_copilot_native_events(&source(unknown.clone())).unwrap(),
+            &extract_copilot_native_events(&source(unknown.clone())).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
@@ -953,7 +960,7 @@ mod tests {
         )
         .unwrap();
         let error = project_copilot_native_events(
-            extract_copilot_native_events(&source(unscoped)).unwrap(),
+            &extract_copilot_native_events(&source(unscoped)).unwrap(),
             &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();

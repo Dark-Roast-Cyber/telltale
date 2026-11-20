@@ -283,7 +283,10 @@ Codex adapter notes:
 - An unknown record type, completed item or content part, or a record whose
   own values exceed a canonical bound, is quarantined by itself and reported
   by session, item or call id, sequence and bound, never content; the rest of
-  the rollout is still evaluated and coverage is reported as partial.
+  the rollout is still evaluated and coverage is reported as partial. A tool
+  call or result whose only over-bound values are its argument or result
+  values is evaluated instead, with those values replaced, and reported by the
+  same coordinates as a bounded unit.
   Coordinate, ownership and wrapper errors still fail the whole source.
 
 OpenCode adapter notes:
@@ -427,7 +430,10 @@ Claude Code adapter notes:
 - An unknown record type or content block, or a record whose own values
   exceed a canonical bound, is quarantined by itself and reported by session,
   record `uuid`, sequence and bound, never content; the rest of the
-  transcript is still evaluated and coverage is reported as partial.
+  transcript is still evaluated and coverage is reported as partial. A tool
+  call or result whose only over-bound values are its argument or result
+  values is evaluated instead, with those values replaced, and reported by the
+  same coordinates as a bounded unit.
 - An outer `sessionId` names the transcript and owns the record. Current
   Claude Code also writes an outer `session_id`, which can name a different
   session that shares the transcript (for example after a continuation).
@@ -472,9 +478,9 @@ Pi adapter notes:
   live once, on the tool observation. `bash` and `powershell` commands,
   `write` content and a top-level `edit` `oldText`/`newText` are authored
   text with the 64 KB budget. Current `edit` calls nest their text in an
-  `edits` array, which keeps the ordinary nested-value bounds: an edit with
-  a text over 4 KB is quarantined by itself, and its replaced and authored
-  text are not separated from the path.
+  `edits` array, which keeps the ordinary nested-value bounds: a nested
+  text over 4 KB is replaced, the call and its path are still evaluated, and
+  the call is reported as a bounded unit.
 - Install inventory checks the `pi` launcher on `PATH`, the
   `@earendil-works/pi-coding-agent` package, and the managed launcher in
   `~/.pi/agent/bin` (`pi-managed`).
