@@ -40,6 +40,22 @@ fn each(mut check: impl FnMut(&Source)) {
     }
 }
 
+/// The reported bounded units by coordinates, target and bound.
+fn bounded_units(batch: &AcquisitionBatch) -> Vec<(&str, u64, BoundedTarget, BoundDimension)> {
+    batch
+        .bounded
+        .iter()
+        .map(|unit| {
+            (
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension,
+            )
+        })
+        .collect()
+}
+
 fn acquire(
     source: &Source,
     values: &[Value],
@@ -558,6 +574,12 @@ fn completed_file_change_bounds_are_per_unit_content_free_and_not_truncated() {
             let result = format!("{:?}", tool.result());
             assert!(!result.contains(&"x".repeat(3500)) && !result.contains(&"x".repeat(65)));
             assert!(!format!("{:?}", tool.bounded_values()).contains("/synthetic"));
+            assert_eq!(
+                bounded_units(&batch),
+                [("patch-a", 2, BoundedTarget::Result, dimension)]
+            );
+            let reported = format!("{:?}", batch.bounded);
+            assert!(!reported.contains("/synthetic") && !reported.contains(&"x".repeat(16)));
             assert_eq!(batch.accounting.sessions[0].counts.native_units, 3);
         }
         // The assembled searchable projection is also bounded, never silently clipped.
@@ -872,6 +894,16 @@ fn completed_tool_bounds_missing_values_and_separate_stages() {
                     replaced(&batch),
                     [(BoundedTarget::Result, BoundDimension::StringBytes)]
                 );
+                assert_eq!(
+                    bounded_units(&batch),
+                    [(
+                        "call-a",
+                        2,
+                        BoundedTarget::Result,
+                        BoundDimension::StringBytes
+                    )]
+                );
+                assert!(!format!("{:?}", batch.bounded).contains(&"x".repeat(16)));
                 let ObservationBody::Tool(t) = batch.observations[1].body() else {
                     panic!("tool")
                 };
@@ -902,6 +934,11 @@ fn completed_tool_bounds_missing_values_and_separate_stages() {
                     .iter()
                     .all(|entry| *entry == (BoundedTarget::Arguments, dimension))
             );
+            assert_eq!(
+                bounded_units(&batch),
+                [("call-a", 2, BoundedTarget::Arguments, dimension)]
+            );
+            assert!(!format!("{:?}", batch.bounded).contains(&"x".repeat(16)));
             // No command text is rendered from an argv with replaced words.
             assert!(!batch.observations[1].facets().contains_key("command.text"));
         }
