@@ -186,7 +186,11 @@
   `error` record, and a tool input with no scalar value no longer crashes the
   hook
   ([ADR 0008](docs/hooks/adr/0008-detect-only-by-default.md)).
-  Generated settings call `telltale hooks <harness> hook`, and the long-lived
+  Generated settings call `telltale hooks <harness> hook`, pinning an existing
+  user config root with `--user-config-dir` so the harness environment cannot
+  move it (`check` lists the roots), and adding `--expect-enforce` when the
+  configuration enforces, so one that later does not load denies tool calls;
+  the long-lived
   evaluator autostarts by running the current executable as `hooks serve`.
   Hooks are configured like the rest of Telltale: the `hooks:` section of the
   `settings.d` YAML files (shown by `telltale config show`), from the same config

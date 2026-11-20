@@ -801,6 +801,15 @@ const VERSION_OR_HELP: &str =
     r#"^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$"#;
 const DRY_RUN_OR_HELP: &str = r#"^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$"#;
 
+// A harness launch: the program names an agent starts one by, after an optional quote
+// or directory, to the end of the word; the words that can stand before it in an
+// inline launch; and the variables that locate the Telltale config root, the hooks
+// state, or the home both derive from.
+const HARNESS_LAUNCHER: &str = r#"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["']?(?:[\s;&|)`]|$)"#;
+const LAUNCH_WRAPPERS: &str = r#"(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)"#;
+const CONFIG_LOCATION_VARS: &str =
+    r#"(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)"#;
+
 // The fail-safe rules: a writer word anywhere, matched without a list of what can wrap
 // it, and the words that work on what they are handed when the path comes first.
 const WRITER_ANYWHERE: &str = r#"(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-])"#;
@@ -823,6 +832,9 @@ const RULE_FRAGMENTS: &[(&str, &str)] = &[
     ("DRY_RUN_OR_HELP", DRY_RUN_OR_HELP),
     ("WRITER_ANYWHERE", WRITER_ANYWHERE),
     ("WRITER_AFTER", WRITER_AFTER),
+    ("HARNESS_LAUNCHER", HARNESS_LAUNCHER),
+    ("LAUNCH_WRAPPERS", LAUNCH_WRAPPERS),
+    ("CONFIG_LOCATION_VARS", CONFIG_LOCATION_VARS),
 ];
 
 /// What can stand before a path whose rule must not match the tail of a longer
