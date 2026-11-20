@@ -44,10 +44,17 @@ Other events are accepted and recorded as `lifecycle: other`.
   - A `PreToolUse`, even truncated or missing fields, gets the stricter of
     `on_error` and `on_unevaluable` on stdout.
   - Any other named event exits 1. Exit 2 on a `Stop` is a prompt to continue.
-  - A payload that names no event exits 1, or 2 when `on_error: deny`, since
-    only exit 2 blocks a call without knowing the event. Residual: if that
-    payload was a `Stop`, Claude Code documents exit 2 as continuing the turn.
-    Not run against real Claude Code.
+  - A named `PreToolUse` without its `tool_input` key is unusable and gets
+    the same answer. An empty or `null` input is evaluated.
+  - A payload that names no event exits 2 when the stricter of `on_error` and
+    `on_unevaluable` is `ask` or `deny` (the default is `ask`), or when a
+    configuration that asks for enforcement did not load, since only exit 2
+    blocks a call without knowing the event. It exits 1 only when both
+    policies are `allow`. Residual: if that payload was a `Stop`, Claude Code
+    documents exit 2 as continuing the turn. Not run against real Claude
+    Code.
+  - A panic in the hook is answered like a payload it could not read, with
+    an `error` record (`hook_panicked`).
 
 ## Installation choices
 

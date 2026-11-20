@@ -151,11 +151,16 @@ on exit 1, and turns exit 2 with stderr on a `Stop` into a prompt to continue
   explicit `allow`).
 - Any other named event exits 1, so a damaged `Stop` ends the turn normally (E2E:
   `damaged-stop-named`, `damaged-stop-mistyped`).
-- A payload naming no event gets a deny on stdout under `on_error: deny`. Codex
-  honors it on a `PreToolUse` and it has no effect on a `Stop` (E2E:
-  `damaged-pre-nameless`, `damaged-stop-nameless`, and `damaged-all-renamed`, which
-  renames the event key on every event). Under the default `on_error: allow` it
-  exits 1, so if that payload was a tool call, the call runs.
+- A payload naming no event gets a deny on stdout when the stricter of
+  `on_error` and `on_unevaluable` is `ask` or `deny` (the default is `ask`), or
+  when a configuration that asks for enforcement did not load. Codex honors it
+  on a `PreToolUse` and it has no effect on a `Stop` (E2E, run under
+  `on_error: deny`: `damaged-pre-nameless`, `damaged-stop-nameless`, and
+  `damaged-all-renamed`, which renames the event key on every event). Only when
+  both policies are `allow` does it exit 1, so if that payload was a tool call,
+  the call runs.
+- A named `PreToolUse` without its `tool_input` key is unusable and gets the
+  stricter policy on stdout. An empty or `null` input is evaluated.
 
 Exit 2 on a damaged `Stop` was not theoretical: before this rule, one run made
 3,586 model requests and was still looping when its 300 s limit ended it.

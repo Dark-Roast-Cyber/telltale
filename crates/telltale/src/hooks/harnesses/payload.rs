@@ -1,7 +1,15 @@
 //! Payload reading that several adapters share, for harnesses whose hook
 //! protocol follows the same conventions.
 
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+/// A field read as `Some` whenever its key is present, `null` included. With
+/// `#[serde(default, deserialize_with = "payload::present")]`, only an absent
+/// key is `None`, which plain `Option` cannot tell from `null`.
+pub fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
 
 /// Whether the bounded prefix of an unparseable payload holds `"key":
 /// "event"`: the test for a pre-execution event on a harness that writes its

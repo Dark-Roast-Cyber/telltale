@@ -23,6 +23,10 @@
 //! thread per connection (a trickling client cannot stall other hooks),
 //! connections are capped, connect has a timeout, both ends check the peer's
 //! UID, and the socket is removed only by the process that created it.
+//!
+//! A panic while serving a connection leaves that connection unanswered and
+//! retires the evaluator (`Connection::serve`): it never serves again from a
+//! runtime the panic may have left inconsistent.
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -482,20 +486,56 @@ pub fn serve(config: Config) -> Result<(), ServeError> {
             continue;
         }
         shared.last_activity.store(now_secs(), Ordering::Relaxed);
-        if shared.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
-            shared.active.fetch_sub(1, Ordering::SeqCst);
+        let Some(connection) = Connection::open(&shared) else {
             let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
             reply(&mut stream, &Response::status("busy"));
             continue;
-        }
-        let shared = Arc::clone(&shared);
-        std::thread::spawn(move || {
-            serve_connection(&shared, &mut stream);
-            shared.last_activity.store(now_secs(), Ordering::Relaxed);
-            shared.active.fetch_sub(1, Ordering::SeqCst);
-        });
+        };
+        // A thread that cannot start drops the connection unanswered; its
+        // client then evaluates in-process.
+        let _ =
+            std::thread::Builder::new().spawn(move || connection.serve(stream, serve_connection));
     }
     Ok(())
+}
+
+/// One connection being served. It counts in `Shared::active` until it is
+/// dropped, however it ends, a panic included, so the watchdog still sees
+/// the evaluator go idle or finish retiring.
+struct Connection(Arc<Shared>);
+
+impl Connection {
+    /// Count a new connection, or `None` when the evaluator already serves
+    /// as many as it may.
+    fn open(shared: &Arc<Shared>) -> Option<Self> {
+        let served = shared.active.fetch_add(1, Ordering::SeqCst);
+        let connection = Self(Arc::clone(shared));
+        (served < MAX_CONNECTIONS).then_some(connection)
+    }
+
+    /// Serve `stream` with `serve`. A panic leaves the connection unanswered:
+    /// its client reads that as a request delivered without an answer and
+    /// evaluates in-process, after checking what was recorded. The runtime
+    /// may be left inconsistent and its lock is poisoned, so the evaluator
+    /// retires, as on a configuration change: the socket goes, connections
+    /// still waiting for the runtime are told `busy` and evaluate in-process,
+    /// the watchdog exits once none is left, and the next hook starts a
+    /// fresh evaluator.
+    fn serve(self, mut stream: UnixStream, serve: impl FnOnce(&Shared, &mut UnixStream)) {
+        let served =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(&self.0, &mut stream)));
+        if served.is_err() {
+            drop(stream);
+            self.0.retire();
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.0.last_activity.store(now_secs(), Ordering::Relaxed);
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn watchdog(shared: &Shared, state_dir: &Path, idle: u64) {
@@ -648,6 +688,7 @@ fn handle(
     payload: &[u8],
     answer_by: u64,
 ) -> Result<Option<Value>, &'static str> {
+    super::panic_if_forced("daemon");
     let Parsed::Event(ctx, event) = harness.parse(payload) else {
         return Err("bad_request");
     };
@@ -798,6 +839,49 @@ mod tests {
             .find(|record| record["kind"] == "decision")
             .unwrap();
         assert_eq!(decision["harness"]["name"], "claude-code");
+    }
+
+    /// A panic while the runtime is held: the connection is closed without an
+    /// answer, it no longer counts as active (or the watchdog would never see
+    /// the evaluator idle), the evaluator retires, and a request still waiting
+    /// for the poisoned runtime is sent back to evaluate in-process.
+    #[test]
+    fn a_panic_retires_the_evaluator_and_still_ends_the_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = Arc::new(shared(dir.path(), "fp"));
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let connection = Connection::open(&shared).unwrap();
+        assert_eq!(shared.active.load(Ordering::SeqCst), 1);
+        let panicked = std::thread::spawn(move || {
+            connection.serve(server, |shared, _| {
+                let _runtime = shared.runtime.lock().unwrap();
+                panic!("synthetic panic while evaluating");
+            });
+        })
+        .join();
+        assert!(panicked.is_ok(), "the panic is caught on the connection");
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).unwrap();
+        assert!(rest.is_empty(), "no answer: {rest:?}");
+        assert_eq!(shared.active.load(Ordering::SeqCst), 0);
+        assert!(shared.retiring.load(Ordering::SeqCst));
+        assert!(shared.runtime.is_poisoned());
+        let response = exchange(&shared, &request("fp", now_ms() + 60_000));
+        assert_eq!(response.status, "busy");
+        assert!(!dir.path().join("state").exists(), "nothing recorded");
+    }
+
+    #[test]
+    fn connections_past_the_cap_are_refused_and_uncounted() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = Arc::new(shared(dir.path(), "fp"));
+        let open: Vec<_> = (0..MAX_CONNECTIONS)
+            .map(|_| Connection::open(&shared).unwrap())
+            .collect();
+        assert!(Connection::open(&shared).is_none());
+        assert_eq!(shared.active.load(Ordering::SeqCst), MAX_CONNECTIONS);
+        drop(open);
+        assert_eq!(shared.active.load(Ordering::SeqCst), 0);
     }
 
     #[test]
