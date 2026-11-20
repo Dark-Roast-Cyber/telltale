@@ -1,0 +1,266 @@
+{
+  "release_tag": "v0.7.3",
+  "source_commit": "7da3922168ab2173d652a38124b22ce326d66438",
+  "verification_workflow_commit": "d54e8f21b03cde0d84d2376f2fef6cc6f96be1d5",
+  "date": "2026-11-20",
+  "host": {
+    "os": "macOS",
+    "version": "27.2.1",
+    "architecture": "arm64",
+    "rosetta_translated": false,
+    "execution": "independent local host"
+  },
+  "binary_sha256": "1cd98b10132842c04423d6cf7f4d71a49b0bf7a5b0515dc02a9dadeb48797388",
+  "archive_sha256": "7850a1d02da79921e94049b1448b76c21e72e1a797b5b2708fdcf3c0d9cd815b",
+  "native_release_verifier": "PASS",
+  "github_native_run_url": "https://github.com/Dark-Roast-Cyber/telltale/actions/runs/44823131496",
+  "additional_checks": {
+    "passed": 18,
+    "failed": 1,
+    "results": [
+      {
+        "name": "native_identity",
+        "result": "PASS",
+        "details": {
+          "version": "telltale 0.7.3 (7da3922168ab)",
+          "rosetta_translated": false,
+          "binary_format": "Mach-O 64-bit executable arm64"
+        }
+      },
+      {
+        "name": "bundled_rules_and_configuration",
+        "result": "PASS",
+        "details": {
+          "rule_count": 31,
+          "rules_status": "ok",
+          "config_status": "ok"
+        }
+      },
+      {
+        "name": "deterministic_provenance",
+        "result": "PASS",
+        "details": {
+          "identical_bytes": true,
+          "producer_manifest_id": "sha256:198503ebdefacaad566af1662086312318bdb8bff642e34125cc282a98cfd770"
+        }
+      },
+      {
+        "name": "eight_source_identity_scan_and_event_schema",
+        "result": "PASS",
+        "details": {
+          "selected_sources": 61,
+          "parsed_records": 140,
+          "source_identities": 8,
+          "parse_errors": 0,
+          "event_counts": {
+            "health": 1,
+            "activity": 62,
+            "detection": 34,
+            "session_risk_summary": 62
+          },
+          "schema_validated": 159,
+          "coverage": "partial",
+          "visibility_limited_sources": 5
+        }
+      },
+      {
+        "name": "positive_and_negative_detection_contracts",
+        "result": "PASS",
+        "details": {
+          "mcp_positive_clients": [
+            "claude",
+            "codex",
+            "openclaw",
+            "opencode",
+            "qwen"
+          ],
+          "copilot_credential_publish": true,
+          "dns_exfiltration": true,
+          "negative_mcp_matches": 0,
+          "copilot_uc001": "documented capability gap retained"
+        }
+      },
+      {
+        "name": "persistent_duplicate_suppression",
+        "result": "PASS",
+        "details": {
+          "first_detection_count": 34,
+          "after_repeat": 34,
+          "newly_emitted_detections": 0
+        }
+      },
+      {
+        "name": "explicit_backfill",
+        "result": "PASS",
+        "details": {
+          "reemitted_detections": 34
+        }
+      },
+      {
+        "name": "stateless_history_preserves_state",
+        "result": "PASS",
+        "details": {
+          "detections": 34,
+          "state_unchanged": true,
+          "history": "all"
+        }
+      },
+      {
+        "name": "dry_run_has_no_writes",
+        "result": "PASS",
+        "details": {
+          "no_output_or_state_or_lock_directory": true,
+          "selected_sources": 61
+        }
+      },
+      {
+        "name": "unicode_and_space_paths",
+        "result": "PASS",
+        "details": {
+          "detection_count": 1,
+          "schema": "PASS"
+        }
+      },
+      {
+        "name": "missing_source_exit_status",
+        "result": "PASS",
+        "details": {
+          "exit_code": 3,
+          "no_state_or_event_writes": true,
+          "warnings": [
+            {
+              "basis": "source_discovery",
+              "classification": "observed_failure",
+              "code": "source_discovery_degraded"
+            },
+            {
+              "basis": "source_selection",
+              "classification": "suspicious_zero",
+              "code": "no_sources_selected"
+            },
+            {
+              "basis": "source_discovery",
+              "classification": "coverage_limitation",
+              "code": "session_store_environment_ignored"
+            }
+          ]
+        }
+      },
+      {
+        "name": "invalid_state_preserves_existing_data",
+        "result": "PASS",
+        "details": {
+          "rejected": true,
+          "state_preserved": true,
+          "no_event_append": true
+        }
+      },
+      {
+        "name": "jsonl_filtered_and_elastic_exports",
+        "result": "FAIL",
+        "details": "16 JSONL events and 16 Elastic documents fail Event 3.0; see export-validation-details.json"
+      },
+      {
+        "name": "status_is_read_only",
+        "result": "PASS",
+        "details": {
+          "read_only": true,
+          "status_fields": [
+            "active_policy_name",
+            "attention_reasons",
+            "attention_required",
+            "detection_count",
+            "durable_queue_health",
+            "emitted_count",
+            "health_check_name",
+            "health_check_status",
+            "health_component",
+            "last_scan_time",
+            "log_path",
+            "rule_count",
+            "scanner_error_count",
+            "source_counts",
+            "state_path",
+            "status",
+            "suppressed_count",
+            "threshold_config"
+          ]
+        }
+      },
+      {
+        "name": "native_filesystem_watch",
+        "result": "PASS",
+        "details": {
+          "readiness_observed": true,
+          "exit_code": 0,
+          "change_trigger": true,
+          "graceful_sigterm": false,
+          "idle_heartbeat": false
+        }
+      },
+      {
+        "name": "watch_graceful_shutdown",
+        "result": "PASS",
+        "details": {
+          "readiness_observed": true,
+          "exit_code": 0,
+          "change_trigger": false,
+          "graceful_sigterm": true,
+          "idle_heartbeat": false
+        }
+      },
+      {
+        "name": "idle_liveness_heartbeat",
+        "result": "PASS",
+        "details": {
+          "readiness_observed": true,
+          "exit_code": 0,
+          "change_trigger": false,
+          "graceful_sigterm": false,
+          "idle_heartbeat": true
+        }
+      },
+      {
+        "name": "native_log_rotation",
+        "result": "PASS",
+        "details": {
+          "active_and_rotated_files": 3,
+          "schema_valid_event_counts": [
+            2,
+            2,
+            2
+          ],
+          "retained_rotations": 2
+        }
+      },
+      {
+        "name": "unicode_output_alias_guard",
+        "result": "PASS",
+        "details": {
+          "exit_code": 1,
+          "writes_prevented": true,
+          "boundary": "macOS output-alias guard intentionally rejects differing non-ASCII filenames"
+        }
+      }
+    ]
+  },
+  "export_issue": {
+    "jsonl_documents": 318,
+    "invalid_jsonl_documents": 16,
+    "elastic_documents": 318,
+    "invalid_elastic_documents": 16,
+    "minimal_reproduction": {
+      "native_input_schema_exit_code": 0,
+      "export_exit_code": 0,
+      "exported_schema_exit_code": 1,
+      "native_rule_id": "credential.api_key.pattern",
+      "exported_nested_rule_id": "[redacted-secret].api_key.pattern"
+    }
+  },
+  "boundaries": [
+    "Synthetic fixtures only; no live session-store qualification.",
+    "Existing source capability gaps and partial coverage remain.",
+    "Differing non-ASCII output names are rejected by the macOS alias guard.",
+    "No runtime fix is included."
+  ]
+}
