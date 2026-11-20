@@ -29,8 +29,9 @@ use std::collections::BTreeMap;
 
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
-    ArgumentText, CanonicalObservationV2, JsonValue, ObservationBody, ObservationStage, ToolKind,
-    ToolObservation, ToolOperation,
+    ArgumentText, BoundDimension, BoundedTarget, BoundedValue, CanonicalFieldCategory,
+    CanonicalObservationV2, JsonValue, ObservationBody, ObservationError, ObservationStage,
+    SEMANTIC_MAX_TOTAL_BYTES, ToolKind, ToolObservation, ToolOperation,
 };
 
 use crate::acquisition::ToolTableCounts;
@@ -300,6 +301,26 @@ pub(crate) fn argument_text(table: &[ToolSpec], name: Option<&str>) -> ArgumentT
     declared
 }
 
+/// What a tool call's values over a canonical bound do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ValueBounds {
+    /// Replace each over-bound value by `null` and record it on the body, so
+    /// the call's name and admitted values are still evaluated.
+    #[default]
+    Replace,
+    /// Fail the call, so its unit is quarantined.
+    Strict,
+}
+
+/// The budget a tool result's direct text gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResultText {
+    /// A string result is direct output text ([`JsonValue::try_from_source_tool_result`]).
+    Direct,
+    /// Every result keeps the structured bounds ([`JsonValue::try_from_source_value`]).
+    Structured,
+}
+
 /// Convert a call's native arguments under the text `table` declares for
 /// `name`, and keep the declaration on the body for validation.
 pub(crate) fn with_source_arguments(
@@ -307,15 +328,122 @@ pub(crate) fn with_source_arguments(
     name: Option<&str>,
     body: ToolObservation,
     arguments: &serde_json::Value,
-) -> Result<ToolObservation, telltale_schema::observation::ObservationError> {
-    let declared = argument_text(table, name);
-    let arguments =
-        JsonValue::try_from_source_tool_arguments(&declared, arguments).map_err(|error| {
-            error.with_bound_category(
-                telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
-            )
-        })?;
-    Ok(body.with_arguments(arguments).with_argument_text(declared))
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    with_declared_arguments(argument_text(table, name), body, arguments, bounds)
+}
+
+/// Convert a call's native arguments under `declared` (no declaration keeps
+/// every argument on the structured bounds). See [`bounded_or_strict`].
+pub(crate) fn with_declared_arguments(
+    declared: ArgumentText,
+    body: ToolObservation,
+    arguments: &serde_json::Value,
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    let (value, replaced) = bounded_or_strict(
+        JsonValue::try_from_source_tool_arguments(&declared, arguments),
+        bounds,
+        || JsonValue::try_from_source_tool_arguments_bounded(&declared, arguments),
+    )
+    .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolArguments))?;
+    Ok(body
+        .with_arguments(value)
+        .with_argument_text(declared)
+        .with_bounded_values(replaced))
+}
+
+/// Convert a call's native result. See [`bounded_or_strict`].
+pub(crate) fn with_source_result(
+    body: ToolObservation,
+    result: &serde_json::Value,
+    text: ResultText,
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    let (value, replaced) = match text {
+        ResultText::Direct => bounded_or_strict(
+            JsonValue::try_from_source_tool_result(result),
+            bounds,
+            || JsonValue::try_from_source_tool_result_bounded(result),
+        ),
+        ResultText::Structured => {
+            bounded_or_strict(JsonValue::try_from_source_value(result), bounds, || {
+                JsonValue::try_from_source_value_bounded(BoundedTarget::Result, result)
+            })
+        }
+    }
+    .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?;
+    Ok(body.with_result(value).with_bounded_values(replaced))
+}
+
+/// The strict conversion decides every value it admits, so an in-bound call
+/// takes exactly today's path. Only a value it refuses on a bound, or whose
+/// encoded size alone exceeds the observation aggregate (a call that could
+/// never be built), takes the bounded conversion, which replaces the
+/// over-bound parts by `null` and records them. Other errors still fail.
+fn bounded_or_strict(
+    strict: Result<JsonValue, ObservationError>,
+    bounds: ValueBounds,
+    bounded: impl FnOnce() -> Result<(JsonValue, Vec<BoundedValue>), ObservationError>,
+) -> Result<(JsonValue, Vec<BoundedValue>), ObservationError> {
+    match strict {
+        Ok(value)
+            if bounds == ValueBounds::Strict
+                || value.encoded_byte_len()? <= SEMANTIC_MAX_TOTAL_BYTES =>
+        {
+            Ok((value, Vec::new()))
+        }
+        Err(error) if bounds == ValueBounds::Strict || error.bound_dimension().is_none() => {
+            Err(error)
+        }
+        _ => bounded(),
+    }
+}
+
+/// The argument keys among `keys` that a bounded conversion replaced, taken
+/// before the body moves into its builder, so no facet is built from them.
+pub(crate) fn replaced_arguments(
+    body: &ToolObservation,
+    keys: &[&'static str],
+) -> Vec<&'static str> {
+    keys.iter()
+        .copied()
+        .filter(|key| body.bounded_member(BoundedTarget::Arguments, key))
+        .collect()
+}
+
+/// Where a native unit was admitted with replaced tool values, and which
+/// field and bound: coordinates only, never content. Kept apart from
+/// quarantined units, since the unit itself was projected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoundedRecord {
+    pub(crate) source_sequence: u64,
+    pub(crate) target: BoundedTarget,
+    pub(crate) dimension: BoundDimension,
+}
+
+/// The distinct (field, bound) pairs one unit's observations replaced.
+pub(crate) fn bounded_records(
+    source_sequence: u64,
+    observations: &[CanonicalObservationV2],
+) -> Vec<BoundedRecord> {
+    let mut records: Vec<BoundedRecord> = Vec::new();
+    for observation in observations {
+        let ObservationBody::Tool(tool) = observation.body() else {
+            continue;
+        };
+        for value in tool.bounded_values() {
+            let record = BoundedRecord {
+                source_sequence,
+                target: value.target(),
+                dimension: value.dimension(),
+            };
+            if !records.contains(&record) {
+                records.push(record);
+            }
+        }
+    }
+    records
 }
 
 /// The table of one source's harness.

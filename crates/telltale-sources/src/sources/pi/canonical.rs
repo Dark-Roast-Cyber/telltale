@@ -13,7 +13,12 @@ use telltale_schema::observation::{
     ToolOperation,
 };
 
-use crate::tool_operation::{declare_in, with_source_arguments};
+use telltale_schema::observation::BoundedTarget;
+
+use crate::tool_operation::{
+    BoundedRecord, ResultText, ValueBounds, bounded_records, declare_in, with_source_arguments,
+    with_source_result,
+};
 
 use super::native::{
     METADATA_ENTRY_TYPES, METADATA_MESSAGE_ROLES, PiBashExecution, PiContentBlock, PiNativeRecord,
@@ -91,6 +96,8 @@ pub(crate) struct PiProjection {
     pub(crate) observations: Vec<CanonicalObservationV2>,
     /// Records left out by themselves; every other record was still mapped.
     pub(crate) quarantined: Vec<PiQuarantinedRecord>,
+    /// Records mapped with over-bound tool values replaced; never quarantined.
+    pub(crate) bounded: Vec<BoundedRecord>,
 }
 
 /// Coordinates of a record excluded from projection, never its content.
@@ -112,11 +119,14 @@ pub(crate) fn project_pi_native_records(
 ) -> Result<PiProjection, PiCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     let mut quarantined = Vec::new();
+    let mut bounded = Vec::new();
     for record in records {
         let mut unit = crate::acquisition::CanonicalCollector::default();
         match project_record(record, options, &mut unit) {
             Ok(()) => {
-                for observation in unit.finish() {
+                let unit = unit.finish();
+                bounded.extend(bounded_records(record.source_sequence, &unit));
+                for observation in unit {
                     observations.push(observation)?;
                 }
             }
@@ -136,6 +146,7 @@ pub(crate) fn project_pi_native_records(
     Ok(PiProjection {
         observations: observations.finish(),
         quarantined,
+        bounded,
     })
 }
 
@@ -355,7 +366,13 @@ fn emit_tool_call(
         paths.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(arguments) = call.arguments {
-        body = with_source_arguments(super::tools::TOOLS, call.name, body, arguments)?;
+        body = with_source_arguments(
+            super::tools::TOOLS,
+            call.name,
+            body,
+            arguments,
+            ValueBounds::Replace,
+        )?;
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if paths.is_empty() {
@@ -365,6 +382,9 @@ fn emit_tool_call(
         ));
     }
     let body = declare_in(super::tools::TOOLS, body, call.namespace);
+    // Facets are never built from an argument that was replaced.
+    let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
+    let (command_admitted, path_admitted) = (admitted("command"), admitted("path"));
     let mut builder = common_builder(
         record,
         options,
@@ -377,7 +397,11 @@ fn emit_tool_call(
         builder = builder.fact_metadata(path, normal(provenance)?);
     }
     if let Some(arguments) = call.arguments.and_then(Value::as_object) {
-        if let Some(command) = arguments.get("command").and_then(Value::as_str) {
+        if let Some(command) = arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .filter(|_| command_admitted)
+        {
             builder = builder
                 .facet(
                     "command.text",
@@ -385,7 +409,11 @@ fn emit_tool_call(
                 )?
                 .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
         }
-        if let Some(path) = arguments.get("path").and_then(Value::as_str) {
+        if let Some(path) = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|_| path_admitted)
+        {
             builder = builder
                 .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
                 .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
@@ -422,7 +450,7 @@ fn emit_tool_result(
         paths.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(content) = &result.content {
-        body = body.with_result(tool_result_json(content)?);
+        body = with_tool_result(body, content)?;
         paths.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = result.is_error {
@@ -470,7 +498,7 @@ fn emit_bash_execution(
     let mut body = ToolObservation::new().with_operation(ToolOperation::new(ToolKind::Shell));
     let mut paths = Vec::new();
     if let Some(output) = &bash.output {
-        body = body.with_result(tool_result_json(output)?);
+        body = with_tool_result(body, output)?;
         paths.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(exit_code) = bash.exit_code {
@@ -502,7 +530,10 @@ fn emit_bash_execution(
 /// Direct output text gets the tool-result text budget. Pi stores a tool's
 /// result as `[{"type":"text","text":...}]`; an all-text array is joined into
 /// one direct string, and any other shape keeps ordinary structured conversion.
-fn tool_result_json(result: &Value) -> Result<JsonValue, PiCanonicalError> {
+fn with_tool_result(
+    body: ToolObservation,
+    result: &Value,
+) -> Result<ToolObservation, PiCanonicalError> {
     let joined = result.as_array().and_then(|items| {
         let texts = items
             .iter()
@@ -513,10 +544,12 @@ fn tool_result_json(result: &Value) -> Result<JsonValue, PiCanonicalError> {
             .collect::<Option<Vec<_>>>()?;
         (!texts.is_empty()).then(|| Value::String(texts.join("\n")))
     });
-    Ok(
-        JsonValue::try_from_source_tool_result(joined.as_ref().unwrap_or(result))
-            .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?,
-    )
+    Ok(with_source_result(
+        body,
+        joined.as_ref().unwrap_or(result),
+        ResultText::Direct,
+        ValueBounds::Replace,
+    )?)
 }
 
 fn tool_correlation(call_id: Option<&str>) -> Result<Option<CorrelationIds>, PiCanonicalError> {

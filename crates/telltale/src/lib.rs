@@ -75,7 +75,9 @@ pub use telltale_schema::provenance::{
 };
 pub use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 pub use telltale_schema::source::Source;
-pub use telltale_sources::acquisition::{AcquisitionError, BoundedReadError, QuarantinedUnit};
+pub use telltale_sources::acquisition::{
+    AcquisitionError, BoundedReadError, BoundedUnit, QuarantinedUnit,
+};
 pub use telltale_sources::discovery::{
     DiscoveryError, discover_sources, discover_sources_best_effort,
     discover_watch_roots_for_clients,
@@ -214,6 +216,7 @@ pub struct SourceScan {
     failure: Option<SourceScanFailure>,
     visibility_limits: Vec<VisibilityLimit>,
     quarantined: Vec<QuarantinedUnit>,
+    bounded: Vec<BoundedUnit>,
     resume_token: Option<ResumeToken>,
 }
 
@@ -544,6 +547,14 @@ impl SourceScan {
         &self.quarantined
     }
 
+    /// Native units this successful scan evaluated with over-bound tool
+    /// values replaced: one entry per unit, field and bound, by coordinates
+    /// only. Their other values were evaluated; coverage is `Partial`.
+    /// Empty for failed sources.
+    pub fn bounded_units(&self) -> &[BoundedUnit] {
+        &self.bounded
+    }
+
     /// Typed failure; `Some` exactly when the source failed. Prefer this over
     /// matching Event 3 `event_type` strings or inferring from `completion`.
     pub fn failure(&self) -> Option<&SourceScanFailure> {
@@ -608,6 +619,7 @@ impl SourceScan {
                 failure: None,
                 visibility_limits: result.visibility_limits,
                 quarantined: result.quarantined,
+                bounded: result.bounded,
                 resume_token: resume_token(&source, result.progress, resumed_from),
                 source,
             },
@@ -625,6 +637,7 @@ impl SourceScan {
                 }),
                 visibility_limits: Vec::new(),
                 quarantined: Vec::new(),
+                bounded: Vec::new(),
                 resume_token: None,
             },
         }

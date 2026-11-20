@@ -11,7 +11,10 @@ use telltale_schema::observation::{
     SourceTimestamp, ToolObservation,
 };
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{
+    ResultText, ValueBounds, declare, replaced_arguments, with_declared_arguments,
+    with_source_result,
+};
 
 use super::native::{
     OpenClawContentBlock, OpenClawNativeRecord, OpenClawToolFields, is_known_openclaw_discriminator,
@@ -527,11 +530,16 @@ fn emit_tool(
         metadata.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(arguments) = &fields.arguments {
-        body = body.with_arguments(value_to_json(arguments)?);
+        body = with_declared_arguments(
+            telltale_schema::observation::ArgumentText::new(),
+            body,
+            arguments,
+            ValueBounds::Replace,
+        )?;
         metadata.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = result {
-        body = body.with_result(value_to_json(result)?);
+        body = with_source_result(body, result, ResultText::Structured, ValueBounds::Replace)?;
         metadata.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = fields.is_error {
@@ -545,6 +553,9 @@ fn emit_tool(
         ));
     }
 
+    // No facet is built from an argument that was replaced.
+    let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
+    let admitted = |key: &str| !replaced.contains(&key);
     let mut builder = common_builder(
         record,
         options,
@@ -558,8 +569,9 @@ fn emit_tool(
     }
 
     if let Some(arguments) = fields.arguments.as_ref().and_then(parsed_argument_view) {
-        if let Some(command) =
-            argument_string(arguments, "command").or_else(|| argument_string(arguments, "cmd"))
+        if let Some(command) = argument_string(arguments, "command")
+            .filter(|_| admitted("command"))
+            .or_else(|| argument_string(arguments, "cmd").filter(|_| admitted("cmd")))
         {
             builder = builder
                 .facet(
@@ -568,8 +580,9 @@ fn emit_tool(
                 )?
                 .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
         }
-        if let Some(path) =
-            argument_string(arguments, "file_path").or_else(|| argument_string(arguments, "path"))
+        if let Some(path) = argument_string(arguments, "file_path")
+            .filter(|_| admitted("file_path"))
+            .or_else(|| argument_string(arguments, "path").filter(|_| admitted("path")))
         {
             builder = builder
                 .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?

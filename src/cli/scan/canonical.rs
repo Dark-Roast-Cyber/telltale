@@ -14,7 +14,7 @@ use telltale_schema::observation::{MAX_CANONICAL_RETAINED_BYTES, ObservedAt};
 #[cfg(test)]
 use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 use telltale_sources::acquisition::{
-    AcquisitionProgress, OpenCodeSqliteReadOptions, QuarantinedUnit, SourceAccounting,
+    AcquisitionProgress, BoundedUnit, OpenCodeSqliteReadOptions, QuarantinedUnit, SourceAccounting,
 };
 
 use super::{
@@ -42,6 +42,8 @@ pub(super) struct CanonicalProcessingResult {
     >,
     /// Source ID and coordinates of units excluded for exceeding a size bound.
     pub quarantined: Vec<(String, QuarantinedUnit)>,
+    /// Source ID and coordinates of units evaluated with replaced tool values.
+    pub bounded: Vec<(String, BoundedUnit)>,
 }
 
 #[derive(Default)]
@@ -217,11 +219,15 @@ pub(super) fn process_canonical_source(
         let next = next.map(|mut next| {
             next.quarantined
                 .retain(|unit| !result.quarantined.iter().any(|(_, seen)| seen == unit));
+            // Likewise a re-read row with replaced values.
+            next.bounded
+                .retain(|unit| !result.bounded.iter().any(|(_, seen)| seen == unit));
             next
         });
         let next = adapt_result(source, next);
         result.events.extend(next.events);
         result.quarantined.extend(next.quarantined);
+        result.bounded.extend(next.bounded);
         result.accounting.extend(next.accounting);
         match next.failure {
             None => {
@@ -334,13 +340,24 @@ fn adapt_result(
         Ok(result) => CanonicalProcessingResult {
             events: {
                 let mut events = result.events;
+                // One scanner error per evaluated window: quarantine, the
+                // stronger condition, takes precedence over replaced values.
                 if !result.quarantined.is_empty() {
                     events.push(telltale_core::canonical_runtime::quarantine_event(source));
+                } else if !result.bounded.is_empty() {
+                    events.push(telltale_core::canonical_runtime::bounded_values_event(
+                        source,
+                    ));
                 }
                 events
             },
             quarantined: result
                 .quarantined
+                .into_iter()
+                .map(|unit| (source.source_id.clone(), unit))
+                .collect(),
+            bounded: result
+                .bounded
                 .into_iter()
                 .map(|unit| (source.source_id.clone(), unit))
                 .collect(),
@@ -362,6 +379,7 @@ fn adapt_result(
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
             quarantined: Vec::new(),
+            bounded: Vec::new(),
         },
     }
 }

@@ -214,10 +214,49 @@ telltale:
         1_775_000_200_000,
         &"x".repeat(65_537),
     );
-    let rejected = successful();
-    assert_eq!(rejected["source_processing"]["parse_error_source_count"], 1);
-    assert_eq!(rejected["source_processing"]["parsed_record_count"], 0);
-    assert_eq!(cursor(), recovered_cursor);
+    // An output over its budget is replaced, not a source failure: the row is
+    // evaluated, reported by coordinates, and the cursor moves past it.
+    let before = fs::read(&log).unwrap();
+    let bounded = successful();
+    let processing = &bounded["source_processing"];
+    assert_eq!(processing["parse_error_source_count"], 0);
+    assert_eq!(processing["selected_source_coverage"], "partial");
+    let unit = serde_json::json!([{
+        "source": "opencode.sqlite",
+        "session_id": "session-third",
+        "native_id": "oversized",
+        "source_sequence": 4,
+        "target": "result",
+        "dimension": "string_bytes",
+    }]);
+    assert_eq!(processing["bounded_value_unit_count"], 1);
+    assert_eq!(processing["bounded_value_units"], unit);
+    let bounded_cursor = cursor();
+    assert_ne!(bounded_cursor, recovered_cursor);
+    let appended = fs::read(&log).unwrap()[before.len()..].to_vec();
+    let errors = std::str::from_utf8(&appended)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event_type"] == "scanner_error")
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|evidence| evidence["field"] == "error"
+                && evidence["redacted_value"] == "canonical_values_bounded")
+    );
+    // A restarted scan re-reads the row in its resume overlap: the summary
+    // lists it again, but nothing is emitted twice and the cursor holds.
+    let bounded_log = fs::read(&log).unwrap();
+    let again = successful();
+    assert_eq!(again["emitted_count"], 0);
+    assert_eq!(again["source_processing"]["bounded_value_units"], unit);
+    assert_eq!(cursor(), bounded_cursor);
+    assert_eq!(fs::read(&log).unwrap(), bounded_log);
     writer
         .execute(
             "update part set data=?1 where id='oversized'",
