@@ -10,32 +10,46 @@ use telltale_schema::observation::ToolKind::{Delegate, FileRead, FileWrite, Othe
 use crate::tool_operation::ToolSpec;
 
 pub(crate) const TOOLS: &[ToolSpec] = &[
-    ToolSpec::new("bash", Shell).commands(&["command"]),
+    ToolSpec::new("bash", Shell)
+        .commands(&["command"])
+        .text(&["command"]),
     // v2 records a user shell command as the bare command text.
-    ToolSpec::new("shell", Shell).commands(&["command"]),
+    ToolSpec::new("shell", Shell)
+        .commands(&["command"])
+        .text(&["command"])
+        .whole_text(),
     ToolSpec::new("read", FileRead).read(&["filePath", "path"]),
     ToolSpec::new("glob", FileRead).read(&["path"]).optional(),
     ToolSpec::new("grep", FileRead).read(&["path"]).optional(),
     ToolSpec::new("list", FileRead).read(&["path"]).optional(),
-    ToolSpec::new("write", FileWrite).written(&["filePath", "path"]),
+    ToolSpec::new("write", FileWrite)
+        .written(&["filePath", "path"])
+        .text(&["content"]),
     // The text an edit writes is authored content; the text it replaces is not.
     ToolSpec::new("edit", FileWrite)
         .written(&["filePath", "path"])
         .authored(&["newString"])
-        .replaced(&["oldString"]),
+        .replaced(&["oldString"])
+        .text(&["oldString", "newString"]),
     ToolSpec::new("multiedit", FileWrite)
         .written(&["filePath", "path"])
         .authored(&["newString"])
         .replaced(&["oldString"]),
-    ToolSpec::new("patch", FileWrite).patch(&["patchText"]),
-    ToolSpec::new("apply_patch", FileWrite).patch(&["patchText"]),
+    ToolSpec::new("patch", FileWrite)
+        .patch(&["patchText"])
+        .text(&["patchText"]),
+    // A legacy store's patch text must be a string.
+    ToolSpec::new("apply_patch", FileWrite)
+        .patch(&["patchText"])
+        .text(&["patchText"])
+        .strict_text(),
     ToolSpec::new("webfetch", Web).urls(&["url"]),
     // A search carries a query, not a URL.
     ToolSpec::new("websearch", Web),
-    ToolSpec::new("task", Delegate),
-    ToolSpec::new("subagent", Delegate),
+    ToolSpec::new("task", Delegate).text(&["prompt"]),
+    ToolSpec::new("subagent", Delegate).text(&["prompt"]),
     // Runs a script that calls other tools; no operand is declared for it.
-    ToolSpec::new("execute", Other),
+    ToolSpec::new("execute", Other).text(&["code"]),
     ToolSpec::new("question", Other),
     ToolSpec::new("todowrite", Other),
     ToolSpec::new("skill", Other),

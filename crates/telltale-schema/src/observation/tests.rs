@@ -84,13 +84,41 @@ fn direct_tool_result_text_bounds_are_distinct_from_structured_values() {
     );
 }
 
+/// Synthetic declarations standing in for a source's tool table: the schema
+/// holds the mechanism, a source adapter declares which fields are text.
+fn declared(name: &str) -> ArgumentText {
+    let (keys, whole, strict): (&[&str], bool, bool) = match name {
+        "apply_patch" => (&["patchText"], true, true),
+        "patch" => (&["patchText"], false, false),
+        "shell" => (&["command"], true, false),
+        "bash" => (&["command"], false, false),
+        "write" => (&["content"], false, false),
+        "edit" => (&["oldString", "newString"], false, false),
+        "execute" => (&["code"], false, false),
+        "subagent" | "task" => (&["prompt"], false, false),
+        "exec" => (&[], true, false),
+        _ => (&[], false, false),
+    };
+    let mut text = keys
+        .iter()
+        .fold(ArgumentText::new(), |text, key| text.with_key(*key));
+    if whole {
+        text = text.with_whole();
+    }
+    if strict {
+        text = text.with_strict();
+    }
+    text
+}
+
 #[test]
 fn apply_patch_text_is_a_narrow_bounded_argument_exception() {
     let build = |name: &str, arguments: JsonValue, result: Option<JsonValue>| {
         let mut tool = ToolObservation::new()
             .with_name(name)
             .unwrap()
-            .with_arguments(arguments);
+            .with_arguments(arguments)
+            .with_argument_text(declared(name));
         if let Some(result) = &result {
             tool = tool.with_result(result.clone());
         }
@@ -114,20 +142,23 @@ fn apply_patch_text_is_a_narrow_bounded_argument_exception() {
     for (bytes, accepted) in [(9_493, true), (65_507, true), (65_508, false)] {
         let input = serde_json::json!({"patchText":"x".repeat(bytes)});
         let arguments =
-            JsonValue::try_from_source_tool_arguments(Some("apply_patch"), &input).unwrap();
+            JsonValue::try_from_source_tool_arguments(&declared("apply_patch"), &input).unwrap();
         assert_eq!(build("apply_patch", arguments, None).is_ok(), accepted);
     }
     let long = serde_json::json!({"patchText":"x".repeat(9_493)});
-    assert!(JsonValue::try_from_source_tool_arguments(Some("bash"), &long).is_err());
+    assert!(JsonValue::try_from_source_tool_arguments(&declared("bash"), &long).is_err());
     for input in [
         serde_json::json!({"patchText": ["ok"]}),
         serde_json::json!({"patchText":"x".repeat(65_537)}),
         serde_json::json!({"patchText":"ok", "command":"x".repeat(4_097)}),
         serde_json::json!({"nested":{"patchText":"x".repeat(4_097)}}),
     ] {
-        assert!(JsonValue::try_from_source_tool_arguments(Some("apply_patch"), &input).is_err());
+        assert!(
+            JsonValue::try_from_source_tool_arguments(&declared("apply_patch"), &input).is_err()
+        );
     }
-    let arguments = JsonValue::try_from_source_tool_arguments(Some("apply_patch"), &long).unwrap();
+    let arguments =
+        JsonValue::try_from_source_tool_arguments(&declared("apply_patch"), &long).unwrap();
     let error = build(
         "apply_patch",
         arguments,
@@ -135,7 +166,7 @@ fn apply_patch_text_is_a_narrow_bounded_argument_exception() {
     )
     .unwrap_err();
     assert_eq!(error.bound_dimension(), Some(BoundDimension::EncodedBytes));
-    // Direct embedding construction cannot bypass the tool-name gate.
+    // Direct embedding construction cannot bypass the declared fields.
     let arguments =
         JsonValue::object([("patchText".into(), JsonValue::string("x".repeat(9_493)))]).unwrap();
     assert!(build("bash", arguments, None).is_err());
@@ -149,7 +180,8 @@ fn authored_text_arguments_are_exact_tool_field_pairs() {
             ToolObservation::new()
                 .with_name(name)
                 .unwrap()
-                .with_arguments(arguments),
+                .with_arguments(arguments)
+                .with_argument_text(declared(name)),
         )
     };
     let build = |body: ObservationBody, command: Option<&str>| {
@@ -184,24 +216,24 @@ fn authored_text_arguments_are_exact_tool_field_pairs() {
         ("task", "prompt"),
     ] {
         let input = serde_json::json!({field: long, "path": "./a"});
-        let arguments = JsonValue::try_from_source_tool_arguments(Some(name), &input).unwrap();
+        let arguments = JsonValue::try_from_source_tool_arguments(&declared(name), &input).unwrap();
         assert!(
             build(tool_body(name, arguments), None).is_ok(),
             "{name}.{field}"
         );
         // The same field on another tool, or another field, keeps ordinary bounds.
-        assert!(JsonValue::try_from_source_tool_arguments(Some("exec"), &input).is_err());
+        assert!(JsonValue::try_from_source_tool_arguments(&declared("exec"), &input).is_err());
         let other = serde_json::json!({field: "ok", "path": long});
-        assert!(JsonValue::try_from_source_tool_arguments(Some(name), &other).is_err());
+        assert!(JsonValue::try_from_source_tool_arguments(&declared(name), &other).is_err());
     }
     // A non-string field keeps ordinary conversion instead of failing the call.
     let array = serde_json::json!({"command": ["sh", "-c", "true"]});
-    let arguments = JsonValue::try_from_source_tool_arguments(Some("shell"), &array).unwrap();
+    let arguments = JsonValue::try_from_source_tool_arguments(&declared("shell"), &array).unwrap();
     assert!(build(tool_body("shell", arguments), None).is_ok());
 
     // Command text keeps the direct-text budget only for an authored command.
     let shell = JsonValue::try_from_source_tool_arguments(
-        Some("shell"),
+        &declared("shell"),
         &serde_json::json!({"command": long}),
     )
     .unwrap();
@@ -216,7 +248,8 @@ fn authored_text_arguments_are_exact_tool_field_pairs() {
         serde_json::json!({"command": near}),
         serde_json::json!(near),
     ] {
-        let arguments = JsonValue::try_from_source_tool_arguments(Some("shell"), &input).unwrap();
+        let arguments =
+            JsonValue::try_from_source_tool_arguments(&declared("shell"), &input).unwrap();
         let observation = build(tool_body("shell", arguments.clone()), Some(&near)).unwrap();
         // Retained bytes still count both copies.
         assert!(
@@ -230,18 +263,18 @@ fn authored_text_arguments_are_exact_tool_field_pairs() {
     // A bare command string keeps the direct-text maximum, and only as the
     // v2 `shell` tool's arguments.
     let over = serde_json::json!("z".repeat(MESSAGE_MAX_TEXT_BYTES + 1));
-    assert!(JsonValue::try_from_source_tool_arguments(Some("shell"), &over).is_err());
+    assert!(JsonValue::try_from_source_tool_arguments(&declared("shell"), &over).is_err());
     let bare = serde_json::json!(long);
     for name in ["read", "bash"] {
-        assert!(JsonValue::try_from_source_tool_arguments(Some(name), &bare).is_err());
+        assert!(JsonValue::try_from_source_tool_arguments(&declared(name), &bare).is_err());
     }
     // Codex freeform custom tools take one authored string: an `exec` script
     // or an `apply_patch` patch. It gets the text budget but is not a command.
     for name in ["exec", "apply_patch"] {
-        let arguments = JsonValue::try_from_source_tool_arguments(Some(name), &bare).unwrap();
+        let arguments = JsonValue::try_from_source_tool_arguments(&declared(name), &bare).unwrap();
         assert!(build(tool_body(name, arguments.clone()), None).is_ok());
         assert!(build(tool_body(name, arguments), Some(&long)).is_err());
-        assert!(JsonValue::try_from_source_tool_arguments(Some(name), &over).is_err());
+        assert!(JsonValue::try_from_source_tool_arguments(&declared(name), &over).is_err());
         let direct = JsonValue::String("S".repeat(LOCAL_MAX_STRING_BYTES + 1));
         assert!(build(tool_body("read", direct), None).is_err());
     }

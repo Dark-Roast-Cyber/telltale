@@ -18,8 +18,8 @@ pub const LOCAL_MAX_OBJECT_MEMBERS: usize = 32;
 pub const LOCAL_MAX_SEARCHABLE_BYTES: usize = 1_024;
 pub const MESSAGE_MAX_TEXT_BYTES: usize = 65_536;
 /// Direct textual tool results share the message text budget. Nested result
-/// strings and ordinary arguments keep their structured bounds; only the exact
-/// apply_patch.patchText argument has the authored-text exception below.
+/// strings and ordinary arguments keep their structured bounds; only argument
+/// fields a source declares as authored text ([`ArgumentText`]) get this budget.
 pub const TOOL_RESULT_MAX_TEXT_BYTES: usize = MESSAGE_MAX_TEXT_BYTES;
 pub const TOOL_PATCH_MAX_TEXT_BYTES: usize = MESSAGE_MAX_TEXT_BYTES;
 pub const SEMANTIC_MAX_TOTAL_BYTES: usize = 65_536;
@@ -107,15 +107,15 @@ impl JsonValue {
         }
     }
 
-    /// Exact tool argument fields that carry authored text (patches, commands,
-    /// file bodies, prompts) rather than scalar controls get the direct-text
-    /// budget. Validate the ordinary skeleton before admitting text.
+    /// The argument fields `text` declares as authored text (patches, commands,
+    /// file bodies, prompts, messages) rather than scalar controls get the
+    /// direct-text budget. Validate the ordinary skeleton before admitting text.
     pub fn try_from_source_tool_arguments(
-        name: Option<&str>,
+        text: &ArgumentText,
         value: &serde_json::Value,
     ) -> Result<Self, ObservationError> {
         let authored = match value {
-            serde_json::Value::Object(members) => authored_text_fields(name, |field| {
+            serde_json::Value::Object(members) => authored_text_fields(text, |field| {
                 members.get(field).map(serde_json::Value::as_str)
             })?
             .map(|fields| (members, fields)),
@@ -156,10 +156,10 @@ impl JsonValue {
             }
             return Ok(Self::Object(converted));
         }
-        if let serde_json::Value::String(text) = value
-            && is_bare_text_tool(name)
+        if let serde_json::Value::String(whole) = value
+            && text.whole
         {
-            return Self::try_from_source_message_text(text);
+            return Self::try_from_source_message_text(whole);
         }
         Self::try_from_source_value(value)
     }
@@ -626,11 +626,11 @@ pub(crate) fn bounded_message_text_bytes(text: &str) -> Result<usize, Observatio
 }
 
 pub(crate) fn bounded_tool_arguments_bytes(
-    name: Option<&str>,
+    declared: &ArgumentText,
     value: &JsonValue,
 ) -> Result<usize, ObservationError> {
     let authored = match value {
-        JsonValue::Object(members) => authored_text_fields(name, |field| {
+        JsonValue::Object(members) => authored_text_fields(declared, |field| {
             members.get(field).map(|item| match item {
                 JsonValue::String(text) => Some(text.as_str()),
                 _ => None,
@@ -672,7 +672,7 @@ pub(crate) fn bounded_tool_arguments_bytes(
             .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes));
     }
     if let JsonValue::String(text) = value
-        && is_bare_text_tool(name)
+        && declared.whole
     {
         return bounded_message_text_bytes(text);
     }
@@ -683,90 +683,89 @@ pub(crate) fn bounded_tool_arguments_bytes(
     Ok(bytes)
 }
 
-/// The command a tool's arguments carry as authored text: its `command`
-/// member, or the whole arguments when they are the command string itself.
+/// The command a tool's arguments carry as authored text: its declared
+/// `command` member, or the whole arguments when they may be one authored
+/// string and that string is the command.
 pub(crate) fn authored_command<'a>(
-    name: Option<&str>,
+    declared: &ArgumentText,
     arguments: &'a JsonValue,
 ) -> Option<&'a str> {
+    if !declared.keys.iter().any(|key| key == "command") {
+        return None;
+    }
     match arguments {
-        JsonValue::String(text) if is_bare_command_tool(name) => Some(text),
-        JsonValue::Object(members) if is_authored_text_argument(name, "command") => {
-            match members.get("command") {
-                Some(JsonValue::String(text)) => Some(text),
-                _ => None,
-            }
-        }
+        JsonValue::String(text) if declared.whole => Some(text),
+        JsonValue::Object(members) => match members.get("command") {
+            Some(JsonValue::String(text)) => Some(text),
+            _ => None,
+        },
         _ => None,
     }
 }
 
-/// OpenCode v2 stores a user `!` command as `shell` arguments that are the
-/// command string itself. Legacy `bash` input must still be an object.
-fn is_bare_command_tool(name: Option<&str>) -> bool {
-    name == Some("shell")
+/// What a source's own tool table declares about the text in one call's
+/// arguments: the keys whose string values are authored text (commands, file
+/// bodies, patches, prompts, messages) and get the direct-text budget instead
+/// of the structured string bound; whether the whole argument may be one
+/// authored string; and whether a declared key that holds anything but a
+/// string makes the arguments invalid. Tool names and keys are harness data
+/// and come from the source adapter, never from this crate. Like the declared
+/// operation, the declaration is no semantic field: it changes which bound a
+/// value is checked against, never the value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArgumentText {
+    keys: Vec<String>,
+    whole: bool,
+    strict: bool,
 }
 
-/// Tools whose whole argument may be one authored string: the bare command
-/// tool, and the Codex freeform custom tools `exec` (a code-mode script) and
-/// `apply_patch` (a patch). Only a string argument gets the text budget; an
-/// object argument keeps the exact field pairs below.
-fn is_bare_text_tool(name: Option<&str>) -> bool {
-    is_bare_command_tool(name) || matches!(name, Some("exec" | "apply_patch"))
+impl ArgumentText {
+    /// No authored text: every argument keeps the structured bounds.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// An argument key whose string value is authored text. Repeats add nothing.
+    pub fn with_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        if !key.is_empty() && !self.keys.contains(&key) {
+            self.keys.push(key);
+        }
+        self
+    }
+    /// The whole argument may be one authored string. An object argument keeps
+    /// the declared keys.
+    pub fn with_whole(mut self) -> Self {
+        self.whole = true;
+        self
+    }
+    /// A declared key present with a value that is not a string is invalid.
+    pub fn with_strict(mut self) -> Self {
+        self.strict = true;
+        self
+    }
+    pub fn keys(&self) -> &[String] {
+        &self.keys
+    }
+    pub fn whole(&self) -> bool {
+        self.whole
+    }
+    pub fn strict(&self) -> bool {
+        self.strict
+    }
 }
 
-/// Exact `(tool, field)` pairs whose string values are authored text. Tool
-/// names are the OpenCode names (`apply_patch` for legacy stores; `patch`,
-/// `shell`, `write`, `edit`, `execute`, `subagent` for v2; `bash` and `task`
-/// as stored by earlier releases) and the capitalized Claude Code names
-/// (`Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`, `Task`, `Agent`).
-/// Pi shares the lowercase `bash`, `write` and `edit` names, and adds
-/// `powershell` and `edit`'s `oldText`/`newText`; other adapters do not use
-/// these names with string fields.
-const AUTHORED_TEXT_ARGUMENTS: &[(&str, &[&str])] = &[
-    ("apply_patch", &["patchText"]),
-    ("patch", &["patchText"]),
-    ("shell", &["command"]),
-    ("bash", &["command"]),
-    ("powershell", &["command"]),
-    ("write", &["content"]),
-    ("edit", &["oldString", "newString", "oldText", "newText"]),
-    ("execute", &["code"]),
-    ("subagent", &["prompt"]),
-    ("task", &["prompt"]),
-    ("Bash", &["command"]),
-    ("PowerShell", &["command"]),
-    ("Write", &["content"]),
-    ("Edit", &["old_string", "new_string"]),
-    ("NotebookEdit", &["new_source"]),
-    ("Task", &["prompt"]),
-    ("Agent", &["prompt"]),
-];
-
-pub(crate) fn is_authored_text_argument(name: Option<&str>, field: &str) -> bool {
-    AUTHORED_TEXT_ARGUMENTS
-        .iter()
-        .any(|(tool, fields)| Some(*tool) == name && fields.contains(&field))
-}
-
-/// The authored-text fields present as strings in these arguments, or `None`
-/// when none apply. A non-string field keeps ordinary conversion, except
-/// `apply_patch.patchText`, whose non-string value has always been invalid.
-fn authored_text_fields<'a>(
-    name: Option<&str>,
+/// The declared authored-text fields present as strings in these arguments,
+/// or `None` when none apply. A non-string field keeps ordinary conversion
+/// unless the declaration is strict.
+fn authored_text_fields<'a, 'k>(
+    declared: &'k ArgumentText,
     field_text: impl Fn(&str) -> Option<Option<&'a str>>,
-) -> Result<Option<Vec<&'static str>>, ObservationError> {
-    let Some((tool, fields)) = AUTHORED_TEXT_ARGUMENTS
-        .iter()
-        .find(|(tool, _)| Some(*tool) == name)
-    else {
-        return Ok(None);
-    };
+) -> Result<Option<Vec<&'k str>>, ObservationError> {
     let mut present = Vec::new();
-    for field in *fields {
+    for field in &declared.keys {
         match field_text(field) {
-            Some(Some(_)) => present.push(*field),
-            Some(None) if *tool == "apply_patch" => {
+            Some(Some(_)) => present.push(field.as_str()),
+            Some(None) if declared.strict => {
                 return Err(ObservationError::new(ValidationCode::InvalidBody));
             }
             _ => {}

@@ -8,6 +8,14 @@
 
 ### Compatibility and operator impact
 
+- **Claude Code agent-to-agent message calls over the structured string bound
+  are now emitted and evaluated instead of quarantined.** Their message text
+  gets the direct-text budget that commands, file bodies and patches already
+  had; it is not read as a command. Text over that budget is still
+  quarantined. Each source's tool table now declares which argument fields
+  hold authored text, so `JsonValue::try_from_source_tool_arguments` takes an
+  `ArgumentText` declaration instead of a tool name, and a `ToolObservation`
+  carries it (`with_argument_text`) for validation.
 - **Rule v2, Telltale's Sigma profile, is the rule format, and all shipped
   content uses it.** A Rule v2 document is a Sigma 2.1 rule marked
   `taxonomy: telltale` (or a chain, `correlation.type: telltale_chain`) with

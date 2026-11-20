@@ -17,7 +17,7 @@ use telltale_schema::observation::{
     SourceTimestamp, ToolObservation, ToolStatus,
 };
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{declare, with_source_arguments};
 
 use super::canonical::{
     OpenCodeCanonicalError, mapping, normal, normal_reported, require_source_id,
@@ -251,7 +251,7 @@ impl Context<'_> {
             let mut body = ToolObservation::new().with_name(name)?;
             let mut metadata = vec![("tool.name", FactProvenance::Reported)];
             if let Some(input) = &tool.input {
-                body = body.with_arguments(arguments(Some(name), input)?);
+                body = arguments(body, Some(name), input)?;
                 metadata.push(("tool.arguments", FactProvenance::Reported));
             }
             if outcome && let Some(result) = &tool.result {
@@ -381,12 +381,11 @@ impl Context<'_> {
         }
         for (stage, occurred_at) in stages {
             let outcome = stage != ObservationStage::ToolExecutionStarted;
-            let mut body = ToolObservation::new()
-                .with_name(SHELL_TOOL_NAME)?
-                .with_arguments(arguments(
-                    Some(SHELL_TOOL_NAME),
-                    &Value::String(command.to_owned()),
-                )?);
+            let mut body = arguments(
+                ToolObservation::new().with_name(SHELL_TOOL_NAME)?,
+                Some(SHELL_TOOL_NAME),
+                &Value::String(command.to_owned()),
+            )?;
             let mut metadata = vec![
                 ("tool.name", FactProvenance::Parsed),
                 ("tool.arguments", FactProvenance::Reported),
@@ -466,9 +465,17 @@ impl Context<'_> {
     }
 }
 
-fn arguments(name: Option<&str>, value: &Value) -> Result<JsonValue, OpenCodeCanonicalError> {
-    Ok(JsonValue::try_from_source_tool_arguments(name, value)
-        .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolArguments))?)
+fn arguments(
+    body: ToolObservation,
+    name: Option<&str>,
+    value: &Value,
+) -> Result<ToolObservation, OpenCodeCanonicalError> {
+    Ok(with_source_arguments(
+        super::tools::TOOLS,
+        name,
+        body,
+        value,
+    )?)
 }
 
 fn tool_result(value: &Value) -> Result<JsonValue, OpenCodeCanonicalError> {

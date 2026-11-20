@@ -13,7 +13,7 @@ use telltale_schema::observation::{
 
 use telltale_schema::observation::{CanonicalBoundContext, CanonicalFieldCategory};
 
-use crate::tool_operation::{ToolSpec, declare, table};
+use crate::tool_operation::{ToolSpec, declare, table, with_source_arguments};
 
 use super::native::{ClaudeContentBlock, ClaudeNativeRecord, is_known_claude_discriminator};
 
@@ -520,11 +520,11 @@ fn tool_body(
             let mut paths = vec![("tool.name", FactProvenance::Reported)];
             let mut facet = None;
             if let Some(input) = input {
-                let input = JsonValue::try_from_source_tool_arguments(Some(name), input).map_err(
-                    |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
-                )?;
-                facet = resource_path(&input).map(ToOwned::to_owned);
-                body = body.with_arguments(input);
+                body = with_source_arguments(options.tools, Some(name), body, input)?;
+                facet = body
+                    .arguments()
+                    .and_then(resource_path)
+                    .map(ToOwned::to_owned);
                 paths.push(("tool.arguments", FactProvenance::Reported));
             }
             Ok(ToolBody {
