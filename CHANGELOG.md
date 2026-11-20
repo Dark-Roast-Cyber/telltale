@@ -1,8 +1,17 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.2` is the current stable release and `v0.7.1` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.3` is the current stable release and `v0.7.2` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
+
+## 0.7.3 — published stable (2026-11-20)
+
+### Changes since 0.7.2
+
+- Windows device-namespace paths are now fully redacted. The privacy
+  sanitizer replaces each with the path marker in every sanitization context,
+  as it does drive and UNC paths. Other redacted output is unchanged, and
+  there is no change to detection, state or the Event 3.0 shape.
 
 ## 0.7.2 — published stable (2026-11-10)
 
