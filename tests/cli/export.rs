@@ -1166,6 +1166,103 @@ fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
     assert!(lines[1].get("index").is_none());
 }
 
+/// Every identifier position of an event that names a rule.
+fn rule_identifier_positions(event: &Value) -> Vec<Value> {
+    let mut found = vec![event["rule_ids"].clone()];
+    for (list, field) in [
+        ("risk_contributions", "id"),
+        ("evidence", "rule_id"),
+        ("timeline_anchors", "rule_ids"),
+    ] {
+        for item in event[list].as_array().into_iter().flatten() {
+            found.push(item[field].clone());
+        }
+    }
+    found.push(event["process"]["secondary_rule_ids"].clone());
+    found
+}
+
+#[test]
+fn export_of_a_fixture_scan_stays_schema_valid_and_keeps_rule_identifiers() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--emit-activity",
+            "--emit-session-risk-summary",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session_stores"))
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .expect("scan fixtures");
+    assert!(
+        scan.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
+    let native = fs::read_to_string(&log_path)
+        .expect("events")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("native event"))
+        .collect::<Vec<_>>();
+    // The corpus must hold the identifiers this test is about.
+    for rule_id in ["credential.api_key.pattern", "credential.cloud_harvest"] {
+        assert!(
+            native.iter().any(|event| {
+                event["event_type"] == "detection"
+                    && event["risk_contributions"]
+                        .as_array()
+                        .is_some_and(|items| items.iter().any(|item| item["id"] == rule_id))
+            }),
+            "no fixture detection for {rule_id}"
+        );
+    }
+    let validator = event_schema_validator();
+    for event in &native {
+        assert!(validator.is_valid(event), "native event: {event}");
+    }
+
+    for format in ["jsonl", "elastic-bulk"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .arg("export")
+            .arg("--log-path")
+            .arg(&log_path)
+            .args(["--format", format])
+            .output()
+            .expect("export");
+        assert!(
+            output.status.success(),
+            "{format} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let exported = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("exported line"))
+            // An Elastic bulk document follows its action line.
+            .filter(|line| line.get("index").is_none())
+            .collect::<Vec<_>>();
+        assert_eq!(exported.len(), native.len(), "{format}");
+        for (exported, native) in exported.iter().zip(&native) {
+            assert_eq!(exported["event_id"], native["event_id"], "{format}");
+            assert!(validator.is_valid(exported), "{format} event: {exported}");
+            assert_eq!(
+                rule_identifier_positions(exported),
+                rule_identifier_positions(native),
+                "{format} event: {exported}"
+            );
+        }
+    }
+}
+
 #[test]
 fn export_correlate_emits_cross_session_event() {
     let temp = tempdir().expect("tempdir");

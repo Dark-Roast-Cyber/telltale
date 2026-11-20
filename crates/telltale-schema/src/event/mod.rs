@@ -656,6 +656,11 @@ fn sanitize_serialized_value(
             if preserve_canonical_mitre {
                 return;
             }
+            // A rule identifier is structure, not prose: the terminal form is
+            // kept wherever one is expected, as it is at the top level.
+            if expected_marker == Some("rule") && terminal_rule_identifier(text) == *text {
+                return;
+            }
             if let Some(marker) = parse_canonical_opaque_identifier(text) {
                 if preserve_historical_markers && scope == SerializedValueScope::Extension
                     || expected_marker.is_some_and(|kind| kind == marker.kind())
@@ -885,7 +890,7 @@ fn serialized_field_marker_kind(field: &str) -> Option<&'static str> {
         "client" => Some("client"),
         "session_id" => Some("session"),
         "tool_name" => Some("tool"),
-        "rule_ids" | "rule_id" | "id" => Some("rule"),
+        "rule_ids" | "rule_id" | "id" | "secondary_rule_ids" => Some("rule"),
         "categories" => Some("category"),
         "field" | "evidence_fields" => Some("evidence-field"),
         "detection_classes" => Some("detection-class"),
@@ -6443,6 +6448,75 @@ mod tests {
             wrong["timeline_anchors"][0]["evidence_fields"][0],
             wrong_kind
         );
+    }
+
+    #[test]
+    fn serialized_sanitization_keeps_rule_identifiers_wherever_one_is_expected() {
+        let nested = |event: &serde_json::Value| {
+            [
+                event["rule_ids"][0].clone(),
+                event["risk_contributions"][0]["id"].clone(),
+                event["evidence"][0]["rule_id"].clone(),
+                event["timeline_anchors"][0]["rule_ids"][0].clone(),
+                event["process"]["secondary_rule_ids"][0].clone(),
+            ]
+        };
+        let event_with = |rule_id: &str| {
+            serde_json::json!({
+                "schema_version": "3.0",
+                "event_type": "detection",
+                "rule_ids": [rule_id],
+                "risk_contributions": [{
+                    "id": rule_id,
+                    "type": "deterministic_rule",
+                    "points": 40,
+                    "rationale": "synthetic",
+                }],
+                "evidence": [{ "field": "command", "redacted_value": "safe", "rule_id": rule_id }],
+                "timeline_anchors": [{
+                    "rule_ids": [rule_id],
+                    "categories": [],
+                    "evidence_fields": [],
+                }],
+                "process": { "secondary_rule_ids": [rule_id] },
+            })
+        };
+
+        // Identifiers that contain a word the prose sanitizer treats as a label.
+        for rule_id in [
+            "credential.api_key.pattern",
+            "credential.cloud_harvest",
+            "rule.test",
+        ] {
+            let mut event = event_with(rule_id);
+            sanitize_serialized_event(&mut event);
+            for value in nested(&event) {
+                assert_eq!(value, rule_id);
+            }
+            let once = event.clone();
+            sanitize_serialized_event(&mut event);
+            assert_eq!(event, once);
+        }
+
+        // Anything else in those positions is still replaced, in every one of them.
+        let token = format!("rule.ghp_{}", "a1b2c3d4".repeat(4));
+        for unsafe_value in [token.as_str(), "Credential Access"] {
+            let mut event = event_with(unsafe_value);
+            sanitize_serialized_event(&mut event);
+            for value in nested(&event) {
+                let value = value.as_str().expect("identifier");
+                assert_ne!(value, unsafe_value);
+                assert!(
+                    crate::scoring::is_canonical_contribution_id(value),
+                    "{value}"
+                );
+            }
+            assert!(!event.to_string().contains("ghp_"));
+            // A replacement stays what it is on a second pass.
+            let once = event.clone();
+            sanitize_serialized_event(&mut event);
+            assert_eq!(event, once);
+        }
     }
 
     #[test]

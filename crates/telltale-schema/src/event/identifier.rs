@@ -190,9 +190,13 @@ pub fn terminal_historical_identifier(kind: &str, value: &str) -> String {
 }
 
 /// Preserve canonical rule identifiers and replace every other value with a
-/// deterministic schema-compatible identifier.
+/// deterministic schema-compatible identifier. A replacement is itself kept,
+/// so a value that has been through here once does not change again.
 pub fn terminal_rule_identifier(value: &str) -> String {
-    if is_canonical_contribution_id(value) && !contains_credential_material(value) {
+    let replaced = value
+        .strip_prefix("redacted.")
+        .is_some_and(super::is_canonical_sha256_hex);
+    if replaced || is_canonical_contribution_id(value) && !contains_credential_material(value) {
         value.to_string()
     } else {
         format!("redacted.{}", evidence_hash(value))
