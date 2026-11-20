@@ -48,11 +48,18 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:\b[a-z][a-z0-9+.-]*:)?//[^\s<>\"']+"#).expect("URL regex")
 });
 
+/// Device-namespace (`\\?\`, `\\.\`), drive and UNC paths. The device branch
+/// comes first so it wins at a shared start: its first component may be a
+/// drive (`C:`) or a volume name with braces, which the UNC branch stops at.
 static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?i)(?:\b[A-Z]:\\(?:[^\s\\<>\"'`,;()\[\]{}:&|]+(?:\s+[^\s\\<>\"'`,;()\[\]{}:&|]+)*\\)*[^\s\\<>\"'`,;()\[\]{}:&|]+|\\\\[^\s\\<>\"'`,;()\[\]{}:&|]+\\(?:[^\s\\<>\"'`,;()\[\]{}:&|]+(?:\s+[^\s\\<>\"'`,;()\[\]{}:&|]+)*\\)*[^\s\\<>\"'`,;()\[\]{}:&|]+)"#,
-    )
-    .expect("Windows path regex")
+    const PART_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
+    const DEVICE_NAME_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]:&|]"#;
+    // Directories may hold spaces; the last component may not.
+    let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*\\)*{PART_CHAR}+");
+    let device = format!(r"\\\\[?.]\\(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:\\{tail})?");
+    let drive = format!(r"\b[A-Z]:\\{tail}");
+    let unc = format!(r"\\\\{PART_CHAR}+\\{tail}");
+    Regex::new(&format!("(?i){device}|{drive}|{unc}")).expect("Windows path regex")
 });
 
 static POSIX_PRIVATE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -3464,6 +3471,94 @@ safe=value"#,
             assert!(!redacted.contains("TT_PRIVACY_"));
             assert_eq!(redacted, "<path>");
         }
+    }
+
+    #[test]
+    fn windows_device_namespace_drive_paths_are_redacted_in_every_context() {
+        let path = r"\\?\C:\Users\example\AppData\Local\Temp\rules.yaml";
+        let sanitize = |context| PrivacySanitizer::sanitize(context, path);
+
+        assert_eq!(sanitize(SanitizationContext::Evidence), "[sensitive-path]");
+        assert_eq!(sanitize(SanitizationContext::Diagnostic), "<path>");
+        assert_eq!(sanitize(SanitizationContext::Url), "[sensitive-path]");
+        assert_eq!(sanitize(SanitizationContext::Path), "[sensitive-path]");
+        assert_eq!(
+            sanitize(SanitizationContext::CommandResult),
+            "[sensitive-path]"
+        );
+        assert_eq!(sanitize(SanitizationContext::Summary), "[sensitive-path]");
+        assert_eq!(sanitize(SanitizationContext::Metadata), "[sensitive-path]");
+    }
+
+    #[test]
+    fn windows_device_namespace_path_forms_are_redacted_whole() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(sanitize(r"\\.\C:\Users\example\notes.txt"), "<path>");
+        assert_eq!(sanitize(r"\\?\c:\users\example\notes.txt"), "<path>");
+        assert_eq!(sanitize(r"\\?\C:/Users/example/notes.txt"), "<path>");
+        assert_eq!(sanitize(r"\\.\D:\Users/example\notes.txt"), "<path>");
+        assert_eq!(sanitize(r"\\?\C:"), "<path>");
+        assert_eq!(
+            sanitize(r"\\?\C:\Users\example\Project Space\notes.txt"),
+            "<path>"
+        );
+        assert_eq!(
+            sanitize(r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\Users\example\notes.txt"),
+            "<path>"
+        );
+        assert_eq!(
+            sanitize(r"\\?\UNC\server\share\example\notes.txt"),
+            "<path>"
+        );
+        // Forward-slash spellings are read as scheme-relative URLs first.
+        assert_eq!(
+            sanitize(r"//?/C:/Users/example/notes.txt"),
+            "[redacted-url]"
+        );
+        assert_eq!(sanitize(r"//./C:/Users/example/notes.txt"), "//./<path>");
+        // The prefix alone, named in prose, is not a path.
+        assert_eq!(
+            sanitize(r"paths that start with \\?\ are verbatim"),
+            r"paths that start with \\?\ are verbatim"
+        );
+    }
+
+    #[test]
+    fn windows_device_namespace_paths_in_text_redact_only_the_path() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(
+            sanitize(r"failed to read \\?\C:\Users\example\notes.txt now"),
+            "failed to read <path> now"
+        );
+        assert_eq!(
+            sanitize(r#"open "\\?\C:\Users\example\notes.txt" failed"#),
+            r#"open "<path>" failed"#
+        );
+        assert_eq!(
+            sanitize(r"open '\\.\C:\Users\example\notes.txt' failed"),
+            "open '<path>' failed"
+        );
+        assert_eq!(
+            sanitize(r"explicit:\\?\C:\Users\example\AppData\Local\Temp\rules.yaml#document:0"),
+            "explicit:<path>:0"
+        );
+        assert_eq!(
+            sanitize(r"path=\\?\C:\Users\example\notes.txt"),
+            "path=<path>"
+        );
+        assert_eq!(sanitize(r"\\?\C:\Users\example\notes.txt:12"), "<path>:12");
+        assert_eq!(
+            sanitize(r"\\?\C:\Users\example\notes.txt#section"),
+            "<path>"
+        );
+        assert_eq!(
+            sanitize(
+                r"\\?\C:\Users\example\a.txt and \\.\D:\Data\example\b.txt and \\?\UNC\server\share\example\c.txt"
+            ),
+            "<path> and <path> and <path>"
+        );
     }
 
     #[test]
