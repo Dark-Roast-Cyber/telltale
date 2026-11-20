@@ -829,25 +829,65 @@ fn padded(members: usize, bytes: usize) -> Value {
     Value::Object(input)
 }
 
-/// One call that Telltale excludes, projected or refused as unevaluable,
-/// between the stages of a chain costs the window one record, and the chain
-/// still fires, under every policy.
-#[test]
-fn a_chain_survives_one_excluded_call_between_its_stages() {
+/// The journal lines the session holds, in order, as written.
+fn journal_lines(h: &Harness) -> Vec<String> {
+    std::fs::read_to_string(session_dir(h).join("journal.jsonl"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Encoded bytes of the tool input a journaled call line holds.
+fn journaled_input_bytes(line: &str) -> usize {
+    let line: Value = serde_json::from_str(line).unwrap();
+    line["message"]["content"][0]["input"].to_string().len()
+}
+
+/// The most encoded input Telltale evaluates whole as one call
+/// (`LOCAL_MAX_VALUE_BYTES`).
+const ORDINARY_INPUT_BYTES: usize = 16 * 1024;
+
+/// Calls Telltale excludes, projected or refused as unevaluable, in shapes
+/// that cost the window most: many members, deep nesting, one huge value,
+/// more chunks or variants than the projection takes, more leaves than it
+/// takes.
+fn excluded_shapes() -> Vec<(&'static str, Value)> {
     let deep = (0..12).fold(json!("x".repeat(3000)), |value, _| json!({"d": value}));
-    let shapes: [(&str, Value); 4] = [
+    vec![
         ("one-long-value", padded(1, 2 * 1024 * 1024)),
         ("many-members", padded(40, 3000)),
         ("deep", json!({"command": "ls", "nested": deep})),
         ("too-many-chunks", padded(1, 400 * 1024)),
-    ];
+        ("too-many-variants", padded(150, 20_000)),
+        ("too-many-leaves", padded(1100, 4000)),
+        ("too-many-short-leaves", padded(1100, 50)),
+    ]
+}
+
+/// One call that Telltale excludes, projected or refused as unevaluable,
+/// between the stages of a chain costs the window one record, no longer than
+/// the line of an ordinary call Telltale evaluates whole, and the chain still
+/// fires, under every policy. A refused call with many members used to write
+/// a line longer than the window and empty it, and the execute was allowed.
+#[test]
+fn a_chain_survives_one_excluded_call_between_its_stages() {
+    // An ordinary call near the bound, evaluated whole: its line, less its
+    // input, plus the most input such a call can hold.
+    let mut ordinary = Harness::new();
+    pre(&mut ordinary, true, "ordinary", padded(4, 4000));
+    let record = ordinary.decision_for("ordinary");
+    assert!(limits(&record).is_empty(), "{record:#}");
+    let line = &journal_lines(&ordinary)[0];
+    let ordinary_line = line.len() - journaled_input_bytes(line) + ORDINARY_INPUT_BYTES;
+
     let mut failures = Vec::new();
     for (policy, edit) in policies() {
-        for (shape, input) in &shapes {
+        for (shape, input) in excluded_shapes() {
             let label = format!("{policy}/{shape}");
             let mut h = Harness::with(edit);
             pre(&mut h, true, "dl", command(DOWNLOAD));
-            pre(&mut h, true, "padded", input.clone());
+            pre(&mut h, true, "padded", input);
             let padded = h.decision_for("padded");
             let excluded = limits(&padded)
                 .iter()
@@ -856,14 +896,18 @@ fn a_chain_survives_one_excluded_call_between_its_stages() {
             assert!(excluded, "{label}: not excluded: {padded:#}");
             let run = pre(&mut h, true, "run", command(RUN_DOWNLOADED));
             let record = h.decision_for("run");
+            let lines: Vec<usize> = journal_lines(&h).iter().map(String::len).collect();
             if verdict(&run) != Some(Verdict::Ask)
                 || !rule_ids(&record).iter().any(|r| r == CHAIN_RULE)
                 || record["evaluation"]["window_records"] != 3
                 || record["evaluation"]["window_truncated"] != false
                 || limits(&record).iter().any(|l| l == HISTORY_LOST)
+                || lines.len() != 3
+                || lines[1] > ordinary_line
             {
                 failures.push(format!(
-                    "{label}: returned {:?}, rules {:?}, window {} truncated {}, limits {:?}",
+                    "{label}: returned {:?}, rules {:?}, window {} truncated {}, limits {:?}, \
+                     journal lines {lines:?} against an ordinary {ordinary_line}",
                     verdict(&run),
                     rule_ids(&record),
                     record["evaluation"]["window_records"],
@@ -874,6 +918,50 @@ fn a_chain_survives_one_excluded_call_between_its_stages() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Whether an execute still meets the chain rule after `calls` calls of one
+/// input since the download.
+fn chain_survives(edit: ConfigEdit, input: &Value, calls: usize) -> bool {
+    let mut h = Harness::with(edit);
+    pre(&mut h, true, "dl", command(DOWNLOAD));
+    for n in 0..calls {
+        pre(&mut h, true, &format!("flood{n}"), input.clone());
+    }
+    pre(&mut h, true, "run", command(RUN_DOWNLOADED));
+    rule_ids(&h.decision_for("run"))
+        .iter()
+        .any(|r| r == CHAIN_RULE)
+}
+
+/// A flood of excluded calls pushes history out of the window no faster than a
+/// flood of ordinary calls near the bound Telltale evaluates whole.
+#[test]
+fn a_flood_of_excluded_calls_evicts_history_no_faster_than_ordinary_calls() {
+    let small: [(&str, ConfigEdit); 2] = [
+        ("default", |c| c.window.max_bytes = 128 * 1024),
+        ("fail-open", |c| {
+            c.window.max_bytes = 128 * 1024;
+            c.on_error = OnError::Allow;
+            c.on_unevaluable = OnError::Allow;
+        }),
+    ];
+    for (policy, edit) in small {
+        // The first count of ordinary calls that pushes the download out.
+        let ordinary = (1..=40)
+            .find(|&n| !chain_survives(edit, &padded(4, 4000), n))
+            .expect("40 ordinary calls push a download out of 128 KiB");
+        assert!(ordinary > 3, "{policy}: ordinary {ordinary}");
+        // One call of tolerance: the ordinary call does not quite fill the
+        // bound an excluded call is held to.
+        for (shape, input) in excluded_shapes() {
+            assert!(
+                chain_survives(edit, &input, ordinary - 2),
+                "{policy}/{shape}: lost within {} calls, ordinary after {ordinary}",
+                ordinary - 2
+            );
+        }
+    }
 }
 
 // ---- Bounds on waiting
