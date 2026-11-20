@@ -915,10 +915,7 @@ fn replacement_rule_content_builds_a_new_pipeline_or_fails_without_one() {
     }
     // Valid content that leaves no effective rule is refused, not built empty.
     let empty = format!("{}    enabled: false\n", rule("first-needle"));
-    assert!(matches!(
-        build(empty),
-        Err(PipelineError::EmptyRuleSet)
-    ));
+    assert!(matches!(build(empty), Err(PipelineError::EmptyRuleSet)));
     assert!(matches!(
         Pipeline::builder()
             .without_bundled_defaults()
