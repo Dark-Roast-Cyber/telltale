@@ -443,8 +443,11 @@ jobs:
         run: |
           consumer_root=$(mktemp -d "$RUNNER_TEMP/telltale-git-consumer.XXXXXX")
           export TELLTALE_GIT_CONSUMER_ROOT="$consumer_root"
-          mkdir -p "$consumer_root/tests/fixtures/session_stores/opencode" "$consumer_root/scripts"
+          mkdir -p "$consumer_root/tests/fixtures/session_stores/opencode" "$consumer_root/scripts" "$consumer_root/crates/telltale"
           cp -R tests/embedding-consumer "$consumer_root/tests/"
+          # The contract check reads telltale-core's default features from this
+          # manifest; the checkout is the exact source the consumer resolves.
+          cp crates/telltale/Cargo.toml "$consumer_root/crates/telltale/"
           cp tests/fixtures/session_stores/opencode/opencode.db "$consumer_root/tests/fixtures/session_stores/opencode/"
           cp scripts/embedding-contract-check "$consumer_root/scripts/"
           python3 - <<'PY'
