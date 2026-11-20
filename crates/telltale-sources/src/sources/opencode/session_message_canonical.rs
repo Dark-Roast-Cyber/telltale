@@ -277,6 +277,13 @@ impl Context<'_> {
                 }
                 // No facet is built from an argument that was replaced.
                 let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
+                // A result that is the source's error object carries the
+                // error type as a member: none is reported once it is replaced.
+                let error_type_admitted = !matches!(tool.result, Some(Value::Object(_)))
+                    || !body.bounded_member(
+                        telltale_schema::observation::BoundedTarget::Result,
+                        "type",
+                    );
                 let mut builder = self.builder(
                     ObservationBody::Tool(declare(super::tools::TOOLS, body)),
                     stage,
@@ -313,7 +320,10 @@ impl Context<'_> {
                         .fact_metadata("tool.executed", normal_reported()?);
                 }
                 let facts = tool.result_facts.as_deref().filter(|_| outcome);
-                if let Some(error_type) = facts.and_then(|facts| facts.error_type.as_deref()) {
+                if let Some(error_type) = facts
+                    .and_then(|facts| facts.error_type.as_deref())
+                    .filter(|_| error_type_admitted)
+                {
                     builder = builder
                         .facet(
                             "tool.error_type",

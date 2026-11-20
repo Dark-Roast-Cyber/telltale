@@ -922,8 +922,11 @@ impl BoundedValue {
     pub fn dimension(&self) -> BoundDimension {
         self.dimension
     }
-    /// The source size of what was replaced: a string's bytes, otherwise the
-    /// encoded length of the replaced value or the dropped members.
+    /// The size of what was replaced. A conversion records the source size:
+    /// a string's bytes, otherwise the encoded length of the replaced value
+    /// or the dropped members. A value replaced after conversion, to fit the
+    /// observation or to keep the cap, records its encoded length as
+    /// converted.
     pub fn bytes(&self) -> u64 {
         self.bytes
     }

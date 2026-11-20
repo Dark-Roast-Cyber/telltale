@@ -1930,3 +1930,43 @@ fn copilot_request_text_and_message_are_replaced_whole_over_their_bound() {
     assert_eq!(result.result(), Some(&JsonValue::Null));
     assert!(!format!("{:?}{:?}", batch.bounded, batch.observations).contains("yyyy"));
 }
+
+/// Copilot request text that is no JSON and the item's message text are held
+/// as the observation stores them, normalized: text whose normalized form is
+/// within its bound is kept, whatever its source length, as before these
+/// texts took the shared conversion.
+#[test]
+fn copilot_texts_within_their_bound_once_normalized_are_kept() {
+    // Each decomposed pair normalizes to one shorter character.
+    let request = format!("a{}", "e\u{301}".repeat(1_400));
+    let message = "e\u{301}".repeat(22_000);
+    assert!(request.len() > 4_096 && message.len() > 65_536);
+    let log = format!(
+        "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {}\n",
+        json!([{"type":"function_call","name":"exec","call_id":"call_synthetic","arguments":request,"message":message}])
+    );
+    let batch = acquire_input(
+        ClientId::Copilot,
+        "copilot.process_log",
+        SourceKind::CopilotProcessLog,
+        &log,
+    );
+    assert!(batch.bounded.is_empty(), "{:?}", batch.bounded);
+    assert!(batch.quarantined.is_empty());
+    let tools = batch
+        .observations
+        .iter()
+        .filter_map(|observation| match observation.body() {
+            ObservationBody::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [call, result] = tools.as_slice() else {
+        panic!("request and result")
+    };
+    assert_eq!(call.arguments(), Some(&JsonValue::string(&request)));
+    assert!(call.bounded_values().is_empty());
+    assert!(call.searchable_arguments().is_some());
+    assert_eq!(result.result(), Some(&JsonValue::string(&message)));
+    assert!(result.bounded_values().is_empty());
+}
