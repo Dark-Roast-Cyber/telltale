@@ -2501,3 +2501,42 @@ fn v2_tool_parts_and_shell_messages_declare_their_operations() {
     assert!(has(ToolKind::Shell, |o| o.commands(), "echo declared"));
     assert!(has(ToolKind::Shell, |o| o.commands(), "echo bare"));
 }
+
+/// An error type is reported beside a replaced error message, which it is
+/// not part of, but not once the error object that carries it as a member is
+/// replaced.
+#[test]
+fn an_error_type_inside_a_replaced_error_object_is_not_reported() {
+    use ObservationStage::*;
+    let store = Store::v2();
+    let finished = json!({"created": T0, "completed": T0 + 2_000});
+    let mut error = serde_json::Map::new();
+    error.insert("type".into(), json!("aborted"));
+    for index in 0..32 {
+        error.insert(format!("k{index}"), json!("xxxx"));
+    }
+    store.message(
+        "msg_error",
+        1,
+        T0,
+        assistant(
+            json!([
+                tool_entry("call_object", Some(false), json!({"status": "error", "input": {}, "error": error}), finished.clone()),
+                tool_entry("call_message", Some(false), json!({"status": "error", "input": {}, "error": {"type": "aborted", "message": "y".repeat(70_000)}}), finished),
+            ]),
+            T0,
+        ),
+    );
+    let batch = store.acquire_default();
+    let object = find(&batch, "msg_error", 0, ToolResultReturned);
+    assert_eq!(tool(object).result(), Some(&JsonValue::Null));
+    assert!(!tool(object).bounded_values().is_empty());
+    assert!(!object.facets().contains_key("tool.error_type"));
+    let message = find(&batch, "msg_error", 1, ToolResultReturned);
+    assert_eq!(tool(message).result(), Some(&JsonValue::Null));
+    assert_eq!(
+        message.facets()["tool.error_type"].value(),
+        &JsonValue::string("aborted")
+    );
+    assert!(!format!("{:?}{:?}", batch.bounded, batch.observations).contains("yyyy"));
+}

@@ -675,15 +675,6 @@ fn tool_observation(
             arguments,
             bounds,
         )?;
-        if hosted_search
-            // Searchable text is derived from validated values, never from a
-            // field with replaced values.
-            && !replaced_in(&body, BoundedTarget::Arguments)
-            && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
-        {
-            body = body.with_searchable_arguments(text)?;
-            paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
-        }
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
@@ -701,6 +692,15 @@ fn tool_observation(
     } else if let Some(error) = &fields.error {
         body = with_source_result(body, error, ResultText::Structured, bounds)?;
         paths.push(("tool.result", FactProvenance::Reported));
+    }
+    // Searchable text is derived from validated values, never from a field
+    // with replaced values; fitting the result can replace arguments too.
+    if hosted_search
+        && !replaced_in(&body, BoundedTarget::Arguments)
+        && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
+    {
+        body = body.with_searchable_arguments(text)?;
+        paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
     }
     if let Some(is_error) = fields.is_error {
         body = body.with_is_error(is_error);

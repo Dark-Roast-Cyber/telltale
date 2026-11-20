@@ -208,7 +208,7 @@ fn project_function_call(
                 body = with_declared_arguments(
                     telltale_schema::observation::ArgumentText::new(),
                     body,
-                    &Value::String(arguments.to_owned()),
+                    &normalized(arguments),
                     bounds,
                 )?;
                 metadata.push(("tool.arguments", FactProvenance::Reported));
@@ -246,7 +246,7 @@ fn project_function_call(
         .as_deref()
         .is_some_and(|value| !value.is_empty())
     {
-        let message = Value::String(item.message.clone().expect("checked"));
+        let message = normalized(item.message.as_deref().expect("checked"));
         let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
             let body =
                 with_source_result(ToolObservation::new(), &message, ResultText::Direct, bounds)?;
@@ -267,6 +267,15 @@ fn project_function_call(
         observations.push(observation)?;
     }
     Ok(())
+}
+
+/// A Copilot text the observation stores whole, normalized as it stores it,
+/// so its bound is decided on the normalized text.
+fn normalized(text: &str) -> Value {
+    match JsonValue::string(text) {
+        JsonValue::String(text) => Value::String(text),
+        _ => unreachable!("a string stays a string"),
+    }
 }
 
 fn project_message(
