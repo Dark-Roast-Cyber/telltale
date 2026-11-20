@@ -1,8 +1,24 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.3` is the current stable release and `v0.7.2` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.4` is the current stable release and `v0.7.3` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
+
+## 0.7.4 — published stable (2026-11-20)
+
+### Changes since 0.7.3
+
+- `telltale export` keeps rule identifiers valid. In JSONL and Elastic bulk
+  output, a rule identifier below the top level of an event could be rewritten
+  when it contained a word the sanitizer treats as a sensitive label (for
+  example `credential.api_key.pattern`), in `risk_contributions[].id`,
+  `evidence[].rule_id`, `timeline_anchors[].rule_ids` and
+  `process.secondary_rule_ids`. The exported document then failed Event 3.0
+  schema validation while export exited 0. An identifier already replaced at
+  emission was affected the same way, at the top level too. Directly emitted
+  events were never affected, and there is no change to detection, state or
+  the Event 3.0 shape. Re-export any earlier export that a strict Event 3.0
+  consumer rejected.
 
 ## 0.7.3 — published stable (2026-11-20)
 
