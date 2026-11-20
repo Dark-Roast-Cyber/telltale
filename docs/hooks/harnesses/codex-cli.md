@@ -80,6 +80,20 @@ Subagent calls add `agent_id` and `agent_type`. `permission_mode` is
 telltale hooks codex-cli settings > "${CODEX_HOME:-$HOME/.codex}/hooks.json"
 ```
 
+When a user config root (`$XDG_CONFIG_HOME/telltale`, else `~/.config/telltale`)
+exists, `settings` appends `--user-config-dir '<root>'` to the hook command, so the
+environment the harness is launched with (`HOME`, `XDG_CONFIG_HOME`) cannot move
+the settings the hook reads; the system root is still read first. Without one, the
+command is printed as given and stderr says it is not pinned. Generate the
+settings again after creating or moving that root, and to pin a command printed by
+an earlier version; `telltale hooks check --user-config-dir '<root>'` shows the
+roots that hook reads.
+When the configuration read then says `hooks.mode: enforce`, `settings` also
+appends `--expect-enforce`: if the configuration later does not load (a pinned
+root deleted, a broken file), tool calls are denied as misconfigured instead of
+running detect-only. The marker never enables enforcement for a configuration
+that loads. Generate the settings again after switching to enforce.
+
 `settings [COMMAND]` prints the `hooks.json` document on stdout (no matcher,
 which matches every tool; PreToolUse/PostToolUse timeout 30 s, SessionEnd
 3 s, Codex's maximum) and these steps on stderr:
@@ -151,11 +165,16 @@ on exit 1, and turns exit 2 with stderr on a `Stop` into a prompt to continue
   explicit `allow`).
 - Any other named event exits 1, so a damaged `Stop` ends the turn normally (E2E:
   `damaged-stop-named`, `damaged-stop-mistyped`).
-- A payload naming no event gets a deny on stdout under `on_error: deny`. Codex
-  honors it on a `PreToolUse` and it has no effect on a `Stop` (E2E:
-  `damaged-pre-nameless`, `damaged-stop-nameless`, and `damaged-all-renamed`, which
-  renames the event key on every event). Under the default `on_error: allow` it
-  exits 1, so if that payload was a tool call, the call runs.
+- A payload naming no event gets a deny on stdout when the stricter of
+  `on_error` and `on_unevaluable` is `ask` or `deny` (the default is `ask`), or
+  when a configuration that asks for enforcement did not load. Codex honors it
+  on a `PreToolUse` and it has no effect on a `Stop` (E2E, run under
+  `on_error: deny`: `damaged-pre-nameless`, `damaged-stop-nameless`, and
+  `damaged-all-renamed`, which renames the event key on every event). Only when
+  both policies are `allow` does it exit 1, so if that payload was a tool call,
+  the call runs.
+- A named `PreToolUse` without its `tool_input` key is unusable and gets the
+  stricter policy on stdout. An empty or `null` input is evaluated.
 
 Exit 2 on a damaged `Stop` was not theoretical: before this rule, one run made
 3,586 model requests and was still looping when its 300 s limit ended it.

@@ -841,6 +841,9 @@ mod hooks_generated_rule_paths;
 #[cfg(feature = "hooks")]
 #[path = "cli/hooks_opencode_contract.rs"]
 mod hooks_opencode_contract;
+#[cfg(all(feature = "hooks", unix))]
+#[path = "cli/hooks_pinned_config_root.rs"]
+mod hooks_pinned_config_root;
 #[cfg(feature = "hooks")]
 #[path = "cli/hooks_unreadable_payloads.rs"]
 mod hooks_unreadable_payloads;

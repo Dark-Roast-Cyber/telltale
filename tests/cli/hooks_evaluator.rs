@@ -107,8 +107,14 @@ impl Env {
     }
 
     fn serve(&self) -> Daemon {
+        self.serve_with(&[])
+    }
+
+    /// [`Self::serve`] with more environment for the evaluator.
+    fn serve_with(&self, env: &[(&str, &str)]) -> Daemon {
         let child = self
             .command(&self.config(), &["serve"])
+            .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -335,6 +341,39 @@ fn a_delivered_request_without_answer_is_evaluated_in_process() {
         records[0]["evaluation"]["evaluator_fallback"],
         "evaluator_no_answer"
     );
+}
+
+/// An evaluator that panics while evaluating (forced through the
+/// debug-build-only switch) leaves that connection unanswered, so its client
+/// evaluates in-process and keeps the call's own verdict. The evaluator then
+/// stops rather than serve from a runtime whose lock the panic poisoned: its
+/// socket goes and the process exits, so the next hook starts a fresh one.
+#[test]
+fn an_evaluator_that_panics_exits_and_its_client_evaluates_in_process() {
+    let env = Env::new("  on_error: allow\n  on_unevaluable: allow\n");
+    let mut daemon = env.serve_with(&[("TELLTALE_HOOKS_TEST_PANIC", "daemon")]);
+    let output = env
+        .hook(&pre("toolu_x", EXFIL))
+        .expect("the rule's verdict");
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    let answered = Instant::now();
+    wait_for(|| daemon.0.try_wait().unwrap().is_some());
+    // Well before the 20 s idle timeout, which would end it anyway.
+    assert!(answered.elapsed() < Duration::from_secs(10));
+    assert!(!env.socket().exists(), "socket left behind");
+    assert!(!env.state.join("evaluator.pid").exists());
+    assert_eq!(env.hook(&pre("toolu_y", "ls")), None);
+    let records = env.decisions();
+    assert_eq!(records.len(), 2, "{records:#?}");
+    for (record, fallback) in records
+        .iter()
+        .zip(["evaluator_no_answer", "evaluator_unreachable"])
+    {
+        assert_eq!(record["kind"], "decision", "{record:#}");
+        assert_eq!(record["evaluation"]["evaluator"], "in_process");
+        assert_eq!(record["evaluation"]["evaluator_fallback"], fallback);
+    }
+    assert_eq!(records[0]["decision"]["verdict"], "deny");
 }
 
 /// The call's own verdict: a benign call is not refused because the evaluator broke.

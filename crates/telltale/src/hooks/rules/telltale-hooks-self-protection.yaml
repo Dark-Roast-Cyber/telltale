@@ -866,7 +866,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:\bTELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=\S*[^;&|]*|\bexport\s+TELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b|\b(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)\s+)*(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$))'
+        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:\bTELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=\S*[^;&|]*|\bexport\s+TELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b|\b{{CONFIG_LOCATION_VARS}}=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|{{LAUNCH_WRAPPERS}}\s+)*{{HARNESS_LAUNCHER}})'
     filter_command:
         tool.command|re|i|recorded_exclusion: '{{TEXT_ONLY}}'
     condition: selection_command and not filter_command
@@ -889,7 +889,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '(?s)(?:\bexport\s+(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\bset\s+["'']?(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)=|\$env:(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)\s*=).*{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["'']?(?:[\s;&|)`]|$)'
+        tool.command|re|i|recorded_exclusion: '(?s)(?:\bexport\s+{{CONFIG_LOCATION_VARS}}=|\bset\s+["'']?{{CONFIG_LOCATION_VARS}}=|\$env:{{CONFIG_LOCATION_VARS}}\s*=).*{{COMMAND_START}}{{HARNESS_LAUNCHER}}'
     filter_command:
         tool.command|re|i|recorded_exclusion: '{{TEXT_ONLY}}'
     condition: selection_command and not filter_command
@@ -900,6 +900,52 @@ telltale:
     category: approval_bypass
     score: 90
     explanation: '`export XDG_CONFIG_HOME=/tmp/x; claude -p hi`, `export HOME=/tmp/x && codex`, cmd.exe `set` and PowerShell `$env:`: the export form of hook_env_override.'
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+---
+title: Agent launches a harness without the environment that locates Telltale Hooks configuration
+id: f08b3fa1-377c-4d9b-98a9-60d2c5433b7b
+name: tth.tamper.hook_env_unset
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|recorded_exclusion: '(?s){{COMMAND_START}}(?:env(?:\s+(?:-[a-z]*[cus]\s*\S+|--(?:chdir|split-string|unset)(?:=|\s+)\S+|-\S*|[^\s=]+=\S*))*\s+(?:-[a-z]*u\s*["'']?{{CONFIG_LOCATION_VARS}}|--unset(?:=|\s+)["'']?{{CONFIG_LOCATION_VARS}}|-[a-z]*i|--ignore-environment|-)["'']?(?:\s+(?:-[a-z]*[cus]\s*\S+|--(?:chdir|split-string|unset)(?:=|\s+)\S+|-\S*|[^\s=]+=\S*))*|exec(?:\s+-[a-z]*a\s*\S+|\s+-[a-z]+)*\s+-[a-z]*c[a-z]*)\s+(?:{{LAUNCH_WRAPPERS}}\s+)*{{HARNESS_LAUNCHER}}'
+    filter_command:
+        tool.command|re|i|recorded_exclusion: '{{TEXT_ONLY}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'Test harnesses that run a harness in an emptied environment on purpose.'
+level: high
+telltale:
+    category: approval_bypass
+    score: 90
+    explanation: 'The removal form of hook_env_override: a harness started with `HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `USERPROFILE`, `APPDATA` or `LOCALAPPDATA` removed (`env -u HOME claude`, `env --unset=XDG_CONFIG_HOME codex`) or in an emptied environment (`env -i claude`, `env - codex`, `exec -c copilot`). A hook command generated before the user config root was pinned then reads another root, or none, and a user-level `hooks.mode: enforce` is lost. Removing an unrelated variable, or one of these without a launch, does not match.'
+    tags: [self-protection, hooks, defense-evasion, nested-agent]
+---
+title: Agent unsets the environment that locates Telltale Hooks configuration and launches a harness
+id: 11991d75-4507-4f18-aabe-445897716d8f
+name: tth.tamper.hook_env_unset_builtin
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|recorded_exclusion: '(?s)(?:\bunset(?:env)?\s+(?:[^\s;&|]+\s+)*|\b(?:Remove-Item|ri|rm|del)\s+(?:-\S+\s+)*["'']?env:[\\/]?)["'']?{{CONFIG_LOCATION_VARS}}\b.*{{COMMAND_START}}{{HARNESS_LAUNCHER}}'
+    filter_command:
+        tool.command|re|i|recorded_exclusion: '{{TEXT_ONLY}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'Test harnesses that run a harness in an emptied environment on purpose.'
+level: high
+telltale:
+    category: approval_bypass
+    score: 90
+    explanation: 'The shell form of hook_env_unset: `unset HOME; claude`, `unset XDG_CONFIG_HOME && codex`, PowerShell `Remove-Item Env:USERPROFILE; copilot`, followed by a launch anywhere later in the command. Unsetting a variable without a launch in the same command is inert, as with an export.'
     tags: [self-protection, hooks, defense-evasion, nested-agent]
 ---
 title: Agent writes Telltale configuration for another home

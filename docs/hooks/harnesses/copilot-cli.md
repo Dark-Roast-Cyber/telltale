@@ -39,6 +39,22 @@ spaces must be invoked with the call operator, for example
 an unquoted path fails to start, which Copilot treats as a block on every
 tool call (closed, but a denial of service).
 
+When a user config root (`$XDG_CONFIG_HOME/telltale`, else `~/.config/telltale`)
+exists, `settings` appends `--user-config-dir '<root>'` to the hook command, so the
+environment the harness is launched with (`HOME`, `XDG_CONFIG_HOME`) cannot move
+the settings the hook reads; the system root is still read first. Without one, the
+command is printed as given and stderr says it is not pinned. Generate the
+settings again after creating or moving that root, and to pin a command printed by
+an earlier version; `telltale hooks check --user-config-dir '<root>'` shows the
+roots that hook reads.
+When the configuration read then says `hooks.mode: enforce`, `settings` also
+appends `--expect-enforce`: if the configuration later does not load (a pinned
+root deleted, a broken file), tool calls are denied as misconfigured instead of
+running detect-only. The marker never enables enforcement for a configuration
+that loads. Generate the settings again after switching to enforce.
+PowerShell and Git Bash both read the single-quoted root literally; a Windows root
+holding a quote is not pinned.
+
 Install it once. Hooks from every source run, so two installations (for
 example this file plus a Claude Code installation in the repository's
 `.claude/settings.json`) evaluate every call twice and double the session
@@ -135,7 +151,7 @@ turn ID, no permission mode, and **no per-call ID** in any hook payload.
 | Subagent prompt | A `userPromptSubmitted` inside a subagent is the task prompt the parent model wrote, so it is recorded as `other`, not journaled as user input | Capture |
 | Not registered | `permissionRequest` fires for every call before Copilot's permission service and carries no decision we need (parsed and recorded as `permission_prompt` if registered); `errorOccurred`, `notification`, `preCompact` and `userPromptTransformed` are recorded as `other` when the payload names them (`userPromptTransformed` is also inferred from its keys) | Capture, Docs |
 | Unrecognized payload | Valid JSON that names no event and matches none could be a `preToolUse` whose fields changed, so it exits 1 with nothing on stdout: Copilot blocks a `preToolUse` on that, and other events continue. This also applies to a nameless event that the hook file does not register, such as a camelCase `errorOccurred` | Contract tests; exit behavior E2E (`fail-exit1`, `fail-config`) |
-| Unusable payload | A `preToolUse` missing fields, or truncated, gets the stricter of `on_error` and `on_unevaluable` on stdout (exit 0), including through the Claude Code entry point. Any other unreadable payload exits 1, whatever `on_error` says. Residual: a truncated, nameless payload at the Claude Code entry point exits 2 under `on_error: deny`, and exit 2 on a stop event is untested here | Contract tests (`tests/cli/hooks_unreadable_payloads.rs`); the answer forms E2E |
+| Unusable payload | A `preToolUse` missing fields, or truncated, gets the stricter of `on_error` and `on_unevaluable` on stdout (exit 0), including through the Claude Code entry point. Any other unreadable payload exits 1, whatever `on_error` says. A `preToolUse` with none of its tool-argument keys is unusable in the same way; empty arguments are evaluated. Residual: a truncated, nameless payload at the Claude Code entry point exits 2 unless both policies are `allow`, and exit 2 on a stop event is untested here | Contract tests (`tests/cli/hooks_unreadable_payloads.rs`); the answer forms E2E |
 | Hook timeout | 60 s for tool events, 30 s for lifecycle events (Copilot's default is 30 s). Worst case is the evaluator's request deadline (10 s by default) or a cold in-process pipeline build (about 0.7 s) | Docs, E2E |
 | Input shapes | Passed through as reported (raw-string `apply_patch`, `file_text`, `view`); evaluated in that shape through Copilot's tool table | Capture |
 
