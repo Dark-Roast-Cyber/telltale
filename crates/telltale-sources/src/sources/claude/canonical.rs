@@ -1,5 +1,6 @@
 //! Maps native Claude Code records to Canonical Observation v2, including
-//! per-unit quarantine. Reached only through the acquisition router.
+//! per-unit quarantine and replacement of over-bound tool values. Reached only
+//! through the acquisition router.
 
 use std::fmt;
 

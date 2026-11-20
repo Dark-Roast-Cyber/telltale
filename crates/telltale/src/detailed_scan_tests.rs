@@ -615,7 +615,7 @@ fn action_identities_are_pinned_to_their_algorithm_versions() {
             startup.native_profile_version(),
             startup.replay_algorithm_version(),
         ),
-        (3, 7, 1)
+        (3, 8, 1)
     );
     // Identities exclude paths: two roots must produce the same values.
     let mut seen = Vec::new();
@@ -644,7 +644,7 @@ fn action_identities_are_pinned_to_their_algorithm_versions() {
     assert_eq!(semantic, startup.identity());
     assert_eq!(
         semantic,
-        "semantic:v1:sha256:590f225324a8084a5cc8a2c9bb7cf0447fa1b37ba01a7dcd0a98572f7749125c"
+        "semantic:v1:sha256:176498cc5535d8e693f59f161744fe722361c950d706e375adee952560b36bb3"
     );
     assert_eq!(
         coordinate,
@@ -1151,17 +1151,21 @@ fn opencode_v2_quarantined_rows_are_reported_by_coordinates_on_success() {
         INSERT INTO session_v2 VALUES ('ses', 'build', '{"id":"m","providerID":"p"}');"#,
     )
     .unwrap();
-    for (id, seq, command) in [
-        ("fits", 1, "ls".to_owned()),
+    // A value over a bound is replaced and reported; a name the canonical
+    // body cannot hold still quarantines the row.
+    for (id, seq, name, command) in [
+        ("fits", 1, "shell", "ls".to_owned()),
         (
             "padded",
             2,
+            "shell",
             format!("synthetic-padded-secret {}", "x ".repeat(100_000)),
         ),
+        ("odd", 3, "tool\nname", "synthetic-odd-secret".to_owned()),
     ] {
         let data = serde_json::json!({
             "agent": "build", "model": {"id": "m", "providerID": "p"}, "time": {"created": 1_789_603_200_000_i64},
-            "content": [{"type": "tool", "id": format!("call-{id}"), "name": "shell", "executed": false,
+            "content": [{"type": "tool", "id": format!("call-{id}"), "name": name, "executed": false,
                 "state": {"status": "running", "input": {"command": command}, "metadata": {}},
                 "time": {"created": 1_789_603_200_000_i64}}]
         });
@@ -1187,9 +1191,15 @@ fn opencode_v2_quarantined_rows_are_reported_by_coordinates_on_success() {
     let [unit] = scan.quarantined() else {
         panic!("{:?}", scan.quarantined())
     };
-    assert_eq!(unit.native_id, "padded");
-    assert_eq!(unit.source_sequence, 2);
-    assert!(!format!("{unit:?}").contains("synthetic-padded-secret"));
+    assert_eq!(unit.native_id, "odd");
+    assert_eq!(unit.source_sequence, 3);
+    assert!(!format!("{unit:?}").contains("synthetic-odd-secret"));
+    let [bounded] = scan.bounded_units() else {
+        panic!("{:?}", scan.bounded_units())
+    };
+    assert_eq!(bounded.native_id, "padded");
+    assert_eq!(bounded.source_sequence, 2);
+    assert!(!format!("{bounded:?}").contains("synthetic-padded-secret"));
 }
 
 #[test]
