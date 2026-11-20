@@ -13,7 +13,7 @@ use telltale_schema::observation::{
     ToolOperation,
 };
 
-use crate::tool_operation::declare_in;
+use crate::tool_operation::{declare_in, with_source_arguments};
 
 use super::native::{
     METADATA_ENTRY_TYPES, METADATA_MESSAGE_ROLES, PiBashExecution, PiContentBlock, PiNativeRecord,
@@ -355,11 +355,7 @@ fn emit_tool_call(
         paths.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(arguments) = call.arguments {
-        body = body.with_arguments(
-            JsonValue::try_from_source_tool_arguments(call.name, arguments).map_err(|error| {
-                error.with_bound_category(CanonicalFieldCategory::ToolArguments)
-            })?,
-        );
+        body = with_source_arguments(super::tools::TOOLS, call.name, body, arguments)?;
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if paths.is_empty() {

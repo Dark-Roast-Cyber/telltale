@@ -16,12 +16,20 @@
 //! key is still a command. A tool missing from a table is left undeclared, and
 //! so is a call whose arguments hold no operand. A name an MCP server gives
 //! its tools is never declared, whatever a table lists.
+//!
+//! A row also declares which argument keys hold authored text (commands, file
+//! bodies, patches, prompts, messages) and so keep the direct-text budget
+//! instead of the structured string bound when the call is converted
+//! ([`argument_text`]). A tool name's text declaration holds wherever that
+//! exact name is read, as the one shared list it replaces did: a hook journal
+//! reports some tools under another harness's spelling. It changes the bound
+//! only; detection reads a key as content only through `authored()`.
 
 use std::collections::BTreeMap;
 
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
-    CanonicalObservationV2, JsonValue, ObservationBody, ObservationStage, ToolKind,
+    ArgumentText, CanonicalObservationV2, JsonValue, ObservationBody, ObservationStage, ToolKind,
     ToolObservation, ToolOperation,
 };
 
@@ -50,6 +58,13 @@ pub(crate) struct ToolSpec {
     /// The call may legitimately name no operand, such as a search with no
     /// root: an empty operand is then no drift.
     optional: bool,
+    /// Argument keys whose string value is authored text with the direct-text
+    /// budget. This is a bound, not a reading: a command key stays a command.
+    text: &'static [&'static str],
+    /// The whole argument may be one authored string.
+    whole_text: bool,
+    /// A `text` key holding anything but a string makes the arguments invalid.
+    strict_text: bool,
 }
 
 impl ToolSpec {
@@ -65,7 +80,31 @@ impl ToolSpec {
             authored: &[],
             replaced: &[],
             optional: false,
+            text: &[],
+            whole_text: false,
+            strict_text: false,
         }
+    }
+
+    pub(crate) const fn text(mut self, keys: &'static [&'static str]) -> Self {
+        self.text = keys;
+        self
+    }
+
+    pub(crate) const fn whole_text(mut self) -> Self {
+        self.whole_text = true;
+        self
+    }
+
+    pub(crate) const fn strict_text(mut self) -> Self {
+        self.strict_text = true;
+        self
+    }
+
+    /// The authored-text declaration of this row: keys, whole, strict.
+    #[cfg(test)]
+    pub(crate) fn text_declaration(&self) -> (&'static [&'static str], bool, bool) {
+        (self.text, self.whole_text, self.strict_text)
     }
 
     pub(crate) const fn optional(mut self) -> Self {
@@ -227,6 +266,56 @@ pub(crate) fn declare_in(
         Some(operation) => body.with_operation(operation),
         None => body,
     }
+}
+
+/// The authored text declared for a call named `name`: its row in `table`
+/// together with every registered table's row of that exact name, so a name
+/// keeps its declaration wherever it is read (a hook journal can report a tool
+/// under another harness's spelling). A name no table lists, and a name MCP
+/// servers give their tools, declare none: their arguments keep the structured
+/// bounds.
+pub(crate) fn argument_text(table: &[ToolSpec], name: Option<&str>) -> ArgumentText {
+    let mut declared = ArgumentText::new();
+    let Some(name) = name.filter(|name| !mcp_shaped(name)) else {
+        return declared;
+    };
+    let registered = ClientId::ALL
+        .iter()
+        .filter_map(|client| self::table(*client));
+    for spec in std::iter::once(table)
+        .chain(registered)
+        .flatten()
+        .filter(|spec| spec.name == name)
+    {
+        for key in spec.text {
+            declared = declared.with_key(*key);
+        }
+        if spec.whole_text {
+            declared = declared.with_whole();
+        }
+        if spec.strict_text {
+            declared = declared.with_strict();
+        }
+    }
+    declared
+}
+
+/// Convert a call's native arguments under the text `table` declares for
+/// `name`, and keep the declaration on the body for validation.
+pub(crate) fn with_source_arguments(
+    table: &[ToolSpec],
+    name: Option<&str>,
+    body: ToolObservation,
+    arguments: &serde_json::Value,
+) -> Result<ToolObservation, telltale_schema::observation::ObservationError> {
+    let declared = argument_text(table, name);
+    let arguments =
+        JsonValue::try_from_source_tool_arguments(&declared, arguments).map_err(|error| {
+            error.with_bound_category(
+                telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
+            )
+        })?;
+    Ok(body.with_arguments(arguments).with_argument_text(declared))
 }
 
 /// The table of one source's harness.
@@ -458,6 +547,137 @@ mod tests {
 
     fn declared(table: &[ToolSpec], body: ToolObservation) -> ToolOperation {
         declare(table, body).operation().cloned().expect("declared")
+    }
+
+    type TextRow = (&'static str, &'static [&'static str], bool, bool);
+
+    /// Every row of `table` that declares authored text, as `(name, keys,
+    /// whole, strict)`.
+    fn text_rows(table: &[ToolSpec]) -> Vec<TextRow> {
+        table
+            .iter()
+            .filter_map(|spec| {
+                let (keys, whole, strict) = spec.text_declaration();
+                (!keys.is_empty() || whole || strict).then_some((spec.name(), keys, whole, strict))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn claude_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("Bash", &["command"], false, false),
+            ("PowerShell", &["command"], false, false),
+            ("Write", &["content"], false, false),
+            ("Edit", &["old_string", "new_string"], false, false),
+            ("NotebookEdit", &["new_source"], false, false),
+            ("Task", &["prompt"], false, false),
+            ("Agent", &["prompt"], false, false),
+            ("SendMessage", &["message"], false, false),
+            ("SubagentHandback", &["message"], false, false),
+        ];
+        assert_eq!(text_rows(claude::tools::TOOLS), expected);
+    }
+
+    #[test]
+    fn opencode_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("bash", &["command"], false, false),
+            ("shell", &["command"], true, false),
+            ("write", &["content"], false, false),
+            ("edit", &["oldString", "newString"], false, false),
+            ("patch", &["patchText"], false, false),
+            ("apply_patch", &["patchText"], false, true),
+            ("task", &["prompt"], false, false),
+            ("subagent", &["prompt"], false, false),
+            ("execute", &["code"], false, false),
+        ];
+        assert_eq!(text_rows(opencode::tools::TOOLS), expected);
+    }
+
+    #[test]
+    fn pi_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("bash", &["command"], false, false),
+            ("powershell", &["command"], false, false),
+            ("write", &["content"], false, false),
+            ("edit", &["oldText", "newText"], false, false),
+        ];
+        assert_eq!(text_rows(pi::tools::TOOLS), expected);
+    }
+
+    #[test]
+    fn codex_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("apply_patch", &[], true, false),
+            ("exec", &[], true, false),
+        ];
+        assert_eq!(text_rows(codex::tools::TOOLS), expected);
+    }
+
+    /// Copilot, Qwen and OpenClaw convert their own records with the structured
+    /// bounds and declare no text; their hook journals read shared spellings.
+    #[test]
+    fn copilot_qwen_and_openclaw_declare_no_authored_text() {
+        for table in [
+            copilot::tools::TOOLS,
+            qwen::tools::TOOLS,
+            openclaw::tools::TOOLS,
+        ] {
+            assert!(text_rows(table).is_empty());
+        }
+    }
+
+    /// The move from one shared list into the adapters keeps every name's
+    /// declaration wherever the name is read, including a hook journal read
+    /// with a table that has no row for it. The message tools are new.
+    #[test]
+    fn every_formerly_shared_declaration_holds_for_every_table() {
+        let expected: &[TextRow] = &[
+            ("apply_patch", &["patchText"], true, true),
+            ("patch", &["patchText"], false, false),
+            ("shell", &["command"], true, false),
+            ("bash", &["command"], false, false),
+            ("powershell", &["command"], false, false),
+            ("write", &["content"], false, false),
+            (
+                "edit",
+                &["oldString", "newString", "oldText", "newText"],
+                false,
+                false,
+            ),
+            ("execute", &["code"], false, false),
+            ("subagent", &["prompt"], false, false),
+            ("task", &["prompt"], false, false),
+            ("exec", &[], true, false),
+            ("Bash", &["command"], false, false),
+            ("PowerShell", &["command"], false, false),
+            ("Write", &["content"], false, false),
+            ("Edit", &["old_string", "new_string"], false, false),
+            ("NotebookEdit", &["new_source"], false, false),
+            ("Task", &["prompt"], false, false),
+            ("Agent", &["prompt"], false, false),
+            ("SendMessage", &["message"], false, false),
+            ("SubagentHandback", &["message"], false, false),
+        ];
+        for client in ClientId::ALL {
+            let own = table(*client).expect("every client has a table");
+            for (name, keys, whole, strict) in expected {
+                let declared = argument_text(own, Some(name));
+                let mut actual: Vec<&str> = declared.keys().iter().map(String::as_str).collect();
+                let mut keys = keys.to_vec();
+                actual.sort_unstable();
+                keys.sort_unstable();
+                assert_eq!(
+                    (actual, declared.whole(), declared.strict()),
+                    (keys, *whole, *strict),
+                    "{client:?} {name}"
+                );
+            }
+            for name in [None, Some("NoSuchTool"), Some("mcp__server__write")] {
+                assert_eq!(argument_text(own, name), ArgumentText::new());
+            }
+        }
     }
 
     #[test]

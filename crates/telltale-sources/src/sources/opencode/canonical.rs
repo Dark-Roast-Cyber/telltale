@@ -12,7 +12,7 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{declare, with_source_arguments};
 
 use super::native::{
     OpenCodeMessageContext, OpenCodeMessageNativeRecord, OpenCodeSqliteNativeRecord,
@@ -401,13 +401,7 @@ fn emit_tool_observation(
         metadata.push(("tool.name", FactProvenance::Reported));
     }
     if has_arguments && let Some(arguments) = arguments {
-        body = body.with_arguments(
-            JsonValue::try_from_source_tool_arguments(tool_name, arguments).map_err(|error| {
-                error.with_bound_category(
-                    telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
-                )
-            })?,
-        );
+        body = with_source_arguments(super::tools::TOOLS, tool_name, body, arguments)?;
         metadata.push(("tool.arguments", FactProvenance::Reported));
     }
     if has_result && let Some(result) = result {

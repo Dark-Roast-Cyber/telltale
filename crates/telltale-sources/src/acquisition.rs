@@ -1521,6 +1521,8 @@ mod tests {
                         if let Some(arguments) = tool.arguments() {
                             undeclared = undeclared.with_arguments(arguments.clone());
                         }
+                        // A name's argument text holds whichever table reads it.
+                        undeclared = undeclared.with_argument_text(tool.argument_text().clone());
                         let expected = crate::tool_operation::declare(
                             crate::tool_operation::table(client).unwrap_or(&[]),
                             undeclared,

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use super::value::non_empty;
+use super::value::{ArgumentText, non_empty};
 use super::{
     ContentPartKind, JsonValue, LocalReference, OTHER_REGISTRY_VERSION, ObservationError,
     ObservationFamily, ObservationStage, ValidationCode, VersionedReference,
@@ -451,6 +451,7 @@ pub struct ToolObservation {
     is_error: Option<bool>,
     exit_code: Option<i64>,
     operation: Option<ToolOperation>,
+    argument_text: ArgumentText,
 }
 
 impl ToolObservation {
@@ -465,6 +466,7 @@ impl ToolObservation {
             is_error: None,
             exit_code: None,
             operation: None,
+            argument_text: ArgumentText::new(),
         }
     }
 
@@ -538,6 +540,16 @@ impl ToolObservation {
     }
     pub fn operation(&self) -> Option<&ToolOperation> {
         self.operation.as_ref()
+    }
+    /// The argument text the source's own tool table declares for this call.
+    /// Validation admits declared authored text up to the direct-text budget;
+    /// it is not reported by the harness and is no semantic field.
+    pub fn with_argument_text(mut self, value: ArgumentText) -> Self {
+        self.argument_text = value;
+        self
+    }
+    pub fn argument_text(&self) -> &ArgumentText {
+        &self.argument_text
     }
 
     /// The declared operation is derived from the source's tool table, not

@@ -10,8 +10,12 @@ use telltale_schema::observation::ToolKind::{FileRead, FileWrite, Shell};
 use crate::tool_operation::ToolSpec;
 
 pub(crate) const TOOLS: &[ToolSpec] = &[
-    ToolSpec::new("bash", Shell).commands(&["command"]),
-    ToolSpec::new("powershell", Shell).commands(&["command"]),
+    ToolSpec::new("bash", Shell)
+        .commands(&["command"])
+        .text(&["command"]),
+    ToolSpec::new("powershell", Shell)
+        .commands(&["command"])
+        .text(&["command"]),
     ToolSpec::new("read", FileRead).read(&["path"]),
     // The search root is optional: a search names none to search the cwd.
     ToolSpec::new("grep", FileRead).read(&["path"]).optional(),
@@ -19,9 +23,11 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("ls", FileRead).read(&["path"]).optional(),
     ToolSpec::new("write", FileWrite)
         .written(&["path"])
-        .authored(&["content"]),
+        .authored(&["content"])
+        .text(&["content"]),
     ToolSpec::new("edit", FileWrite)
         .written(&["path"])
         .authored(&["newText"])
-        .replaced(&["oldText"]),
+        .replaced(&["oldText"])
+        .text(&["oldText", "newText"]),
 ];

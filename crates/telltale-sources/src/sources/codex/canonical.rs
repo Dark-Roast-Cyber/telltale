@@ -15,7 +15,7 @@ use telltale_schema::observation::{
 
 use telltale_schema::observation::CanonicalBoundContext;
 
-use crate::tool_operation::declare_in;
+use crate::tool_operation::{declare_in, with_source_arguments};
 
 use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
@@ -621,15 +621,13 @@ fn emit_tool(
         ));
     }
     if let Some(arguments) = &fields.arguments {
-        let arguments =
-            JsonValue::try_from_source_tool_arguments(fields.name.as_deref(), arguments).map_err(
-                |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
-            )?;
-        if hosted_search && let Some(text) = web_search_searchable_arguments(&arguments) {
+        body = with_source_arguments(super::tools::TOOLS, fields.name.as_deref(), body, arguments)?;
+        if hosted_search
+            && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
+        {
             body = body.with_searchable_arguments(text)?;
             paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
         }
-        body = body.with_arguments(arguments);
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {

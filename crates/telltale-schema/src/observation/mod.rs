@@ -40,11 +40,11 @@ pub use identity::{
     SemanticComparison, SemanticReplayVerdict, canonical_identity_json, valid_observation_id,
 };
 pub use value::{
-    JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH, LOCAL_MAX_ENTRIES, LOCAL_MAX_KEY_BYTES,
-    LOCAL_MAX_OBJECT_MEMBERS, LOCAL_MAX_SEARCHABLE_BYTES, LOCAL_MAX_STRING_BYTES,
-    LOCAL_MAX_TOTAL_BYTES, LOCAL_MAX_VALUE_BYTES, LocalEvidence, LocalReference, LocalValue,
-    MESSAGE_MAX_TEXT_BYTES, SEMANTIC_MAX_TOTAL_BYTES, SemanticFacet, TOOL_PATCH_MAX_TEXT_BYTES,
-    TOOL_RESULT_MAX_TEXT_BYTES,
+    ArgumentText, JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH, LOCAL_MAX_ENTRIES,
+    LOCAL_MAX_KEY_BYTES, LOCAL_MAX_OBJECT_MEMBERS, LOCAL_MAX_SEARCHABLE_BYTES,
+    LOCAL_MAX_STRING_BYTES, LOCAL_MAX_TOTAL_BYTES, LOCAL_MAX_VALUE_BYTES, LocalEvidence,
+    LocalReference, LocalValue, MESSAGE_MAX_TEXT_BYTES, SEMANTIC_MAX_TOTAL_BYTES, SemanticFacet,
+    TOOL_PATCH_MAX_TEXT_BYTES, TOOL_RESULT_MAX_TEXT_BYTES,
 };
 
 pub const OTHER_REGISTRY_VERSION: &str = "other-v1";
@@ -1804,7 +1804,7 @@ fn validate_semantic_json_bounds(
                 value::bounded_message_text_bytes(text)
             }
             (ObservationBody::Tool(tool), "tool.arguments", value) => {
-                value::bounded_tool_arguments_bytes(tool.name(), value)
+                value::bounded_tool_arguments_bytes(tool.argument_text(), value)
             }
             (ObservationBody::Message(message), "message.content_parts", _) => {
                 if message.content_parts().len() > LOCAL_MAX_ARRAY_ITEMS {
@@ -1845,7 +1845,7 @@ fn validate_semantic_json_bounds(
         let command = match (category, body) {
             (CanonicalFieldCategory::CommandText, ObservationBody::Tool(tool)) => tool
                 .arguments()
-                .and_then(|arguments| value::authored_command(tool.name(), arguments)),
+                .and_then(|arguments| value::authored_command(tool.argument_text(), arguments)),
             _ => None,
         };
         let bytes = match (command, facet.value()) {
