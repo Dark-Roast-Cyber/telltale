@@ -398,6 +398,8 @@ impl Context<'_> {
                 ("tool.name", FactProvenance::Parsed),
                 ("tool.arguments", FactProvenance::Reported),
             ];
+            // No facet is built from a command that was replaced.
+            let replaced = !replaced_arguments(&body, &["command"]).is_empty();
             if outcome {
                 if let Some(output) = &shell.output {
                     body = with_tool_result(body, &Value::String(output.clone()))?;
@@ -422,12 +424,14 @@ impl Context<'_> {
             for (path, provenance) in metadata {
                 builder = builder.fact_metadata(path, normal(provenance)?);
             }
-            builder = builder
-                .facet(
-                    "command.text",
-                    SemanticFacet::new(JsonValue::string(command)),
-                )?
-                .fact_metadata("command.text", normal_reported()?);
+            if !replaced {
+                builder = builder
+                    .facet(
+                        "command.text",
+                        SemanticFacet::new(JsonValue::string(command)),
+                    )?
+                    .fact_metadata("command.text", normal_reported()?);
+            }
             if let Some(shell_id) = &shell.shell_id {
                 builder = builder.correlation(
                     CorrelationIds::new().with_call_id(CorrelationId::source_reported(shell_id)?),

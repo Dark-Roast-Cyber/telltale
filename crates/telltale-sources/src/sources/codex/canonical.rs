@@ -734,10 +734,8 @@ fn emit_tool(
     };
     // Facets are never built from an argument that was replaced.
     let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
-    let (command_admitted, path_admitted) = (
-        admitted("command") && admitted("cmd"),
-        admitted("file_path"),
-    );
+    let admitted_keys = ["command", "cmd"].map(|key| (key, admitted(key)));
+    let path_admitted = admitted("file_path");
     let arguments_whole = !body
         .bounded_values()
         .iter()
@@ -790,8 +788,9 @@ fn emit_tool(
 
     let argument_view = fields.arguments.as_ref().and_then(parsed_argument_view);
     let command = fields.command.clone().or_else(|| {
-        argument_command(fields.arguments.as_ref(), argument_view.as_ref())
-            .filter(|_| command_admitted)
+        argument_command(fields.arguments.as_ref(), argument_view.as_ref(), |key| {
+            admitted_keys.contains(&(key, true))
+        })
     });
     let has_command = command.is_some();
     if let Some(command) = command {
@@ -1065,12 +1064,22 @@ fn parsed_argument_view(value: &Value) -> Option<Value> {
     }
 }
 
-fn argument_command(arguments: Option<&Value>, parsed: Option<&Value>) -> Option<String> {
-    parsed
-        .and_then(|arguments| argument_string(arguments, "command"))
-        .or_else(|| parsed.and_then(|arguments| argument_string(arguments, "cmd")))
-        .or_else(|| arguments.and_then(|arguments| argument_string(arguments, "command")))
-        .or_else(|| arguments.and_then(|arguments| argument_string(arguments, "cmd")))
+/// The command among the arguments, `command` before `cmd`, skipping a key
+/// whose value was replaced.
+fn argument_command(
+    arguments: Option<&Value>,
+    parsed: Option<&Value>,
+    admitted: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let command = |value: Option<&Value>, key| {
+        value
+            .filter(|_| admitted(key))
+            .and_then(|value| argument_string(value, key))
+    };
+    command(parsed, "command")
+        .or_else(|| command(parsed, "cmd"))
+        .or_else(|| command(arguments, "command"))
+        .or_else(|| command(arguments, "cmd"))
 }
 
 fn argument_string(value: &Value, key: &str) -> Option<String> {

@@ -1981,6 +1981,44 @@ fn oversized_rows_are_quarantined_without_blinding_the_source() {
     );
 }
 
+/// A user shell command over the authored-text bound is replaced in the arguments,
+/// and the command facet, built from the same text, is left out: the row is
+/// admitted with the command replaced.
+#[test]
+fn user_shell_command_over_bound_is_replaced_and_admitted() {
+    let store = Store::v2();
+    let secret = "private-suffix";
+    let command = format!("{}{secret}", "z".repeat(70_000));
+    store.message(
+        "msg_sh_long",
+        1,
+        T0 + 1,
+        json!({"type": "shell", "shellID": "sh_long", "command": command, "status": "running", "time": {"created": T0}}),
+    );
+    let batch = store.acquire_default();
+    assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    assert_eq!(batch.bounded.len(), 1);
+    let observation = find(
+        &batch,
+        "msg_sh_long",
+        0,
+        ObservationStage::ToolExecutionStarted,
+    );
+    let tool = tool(observation);
+    assert_eq!(
+        tool.bounded_values()
+            .iter()
+            .map(|value| (value.target(), value.dimension()))
+            .collect::<Vec<_>>(),
+        [(
+            telltale_schema::observation::BoundedTarget::Arguments,
+            BoundDimension::StringBytes
+        )]
+    );
+    assert!(!observation.facets().contains_key("command.text"));
+    assert!(!format!("{:?}", batch.observations).contains(secret));
+}
+
 /// An incremental read stops before the row that would exceed its stored-byte
 /// budget, reporting that row's `time_updated` as the next coordinate, so a
 /// large backlog is read a window at a time. The first row is always taken.
