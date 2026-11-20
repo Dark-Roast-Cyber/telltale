@@ -7,13 +7,14 @@ use std::time::Duration;
 
 use crate::ObservationStage;
 use serde_json::{Value, json};
+use telltale_schema::observation::LOCAL_MAX_VALUE_BYTES;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus, RecoveryBudget};
-use crate::hooks::journal::{Line, bound_value, cut_utf8};
+use crate::hooks::journal::{Line, bound_history, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
 use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
 use crate::hooks::telemetry::{
@@ -1388,13 +1389,17 @@ impl Runtime {
         // still informs how a later execute of the same artifact is judged.
         // History stays within Telltale's per-value bound so later scans
         // can use it; a projected call is journaled as its first variant.
-        let history_input = match projection {
-            Some(variants) => variants[0].clone(),
-            None => bound_value(
+        // Every call, projected or refused, costs the window at most what a
+        // call Telltale evaluates whole does. A variant's strings are
+        // already within Telltale's bound and stay as evaluated.
+        let (input, string_bytes) = match projection {
+            Some(variants) => (&variants[0], usize::MAX),
+            None => (
                 &call.input,
                 HISTORY_STRING_BYTES.min(self.config.window.max_result_bytes),
             ),
         };
+        let history_input = bound_history(input, string_bytes, LOCAL_MAX_VALUE_BYTES);
         let journaled = Line::tool_use(
             &ctx.session_id,
             &id.uuid,
