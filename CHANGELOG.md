@@ -358,6 +358,9 @@
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no
   replacement UI.
+- Windows device-namespace paths are now fully redacted. The privacy
+  sanitizer replaces each with the path marker in every sanitization context,
+  as it does drive and UNC paths. Other redacted output is unchanged.
 
 ## 0.7.2 — published stable (2026-11-10)
 
