@@ -1484,6 +1484,17 @@ mod tests {
         let turn = r#"{"type":"user","sessionId":"s","message":{"role":"user","content":"Synthetic turn."}}"#;
         let projection = project_lines(&[&line, turn]);
         assert!(projection.quarantined.is_empty());
+        // The assistant record (its message and the call) and the turn
+        // after it are all projected.
+        assert_eq!(projection.observations.len(), 3);
+        assert!(matches!(
+            projection.observations[2].body(),
+            ObservationBody::Message(_)
+        ));
+        assert_eq!(
+            projection.observations[2].source().source_sequence(),
+            Some(1)
+        );
         assert_eq!(
             projection.bounded,
             [crate::tool_operation::BoundedRecord {
@@ -1521,6 +1532,16 @@ mod tests {
             ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()).with_strict_values();
         let projection = project_lines_with(&[&line, turn], &strict);
         assert!(projection.bounded.is_empty());
+        // Only the turn after the quarantined record survives.
+        assert_eq!(projection.observations.len(), 1);
+        assert!(matches!(
+            projection.observations[0].body(),
+            ObservationBody::Message(_)
+        ));
+        assert_eq!(
+            projection.observations[0].source().source_sequence(),
+            Some(1)
+        );
         assert_eq!(projection.quarantined.len(), 1);
         assert_eq!(projection.quarantined[0].code, "unbounded_value");
         assert_eq!(

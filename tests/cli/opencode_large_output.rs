@@ -265,8 +265,31 @@ telltale:
         .unwrap();
     let repaired = successful();
     assert_eq!(repaired["source_processing"]["parse_error_source_count"], 0);
-    assert_ne!(cursor(), recovered_cursor);
+    // The repaired row is re-read in the resume overlap, so the cursor holds,
+    // and is now evaluated whole: no replaced value, and its result yields
+    // the detection the replaced value could not.
+    assert_eq!(repaired["source_processing"]["bounded_value_unit_count"], 0);
+    assert_eq!(
+        repaired["source_processing"]["bounded_value_units"],
+        serde_json::json!([])
+    );
+    assert_eq!(cursor(), bounded_cursor);
     let repaired_log = fs::read(&log).unwrap();
+    assert!(repaired_log.starts_with(&bounded_log));
+    let appended = std::str::from_utf8(&repaired_log[bounded_log.len()..])
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let [detection] = appended.as_slice() else {
+        panic!("expected one new event, got {}", appended.len())
+    };
+    assert_eq!(detection["event_type"], "detection");
+    assert_eq!(detection["session_id"], "session-third");
+    assert_eq!(
+        detection["rule_ids"],
+        serde_json::json!(["synthetic.output.second", "synthetic.output.suffix"])
+    );
     assert!(!String::from_utf8_lossy(&repaired_log).contains(secret));
     assert_eq!(successful()["emitted_count"], 0);
     assert_eq!(fs::read(&log).unwrap(), repaired_log);

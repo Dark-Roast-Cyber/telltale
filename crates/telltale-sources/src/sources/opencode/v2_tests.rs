@@ -1555,9 +1555,27 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
         ),
     );
     // A result over its bound is replaced and recorded; the row is projected.
-    let replaced_bound = |store: &Store| {
+    let replaced_bound = |store: &Store, native_id: &str, marker: &str| {
         let batch = store.acquire_default();
         assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+        let [unit] = batch.bounded.as_slice() else {
+            panic!("expected one bounded unit: {:?}", batch.bounded)
+        };
+        assert_eq!(
+            (
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension
+            ),
+            (
+                native_id,
+                1,
+                telltale_schema::observation::BoundedTarget::Result,
+                BoundDimension::StringBytes
+            )
+        );
+        assert!(!format!("{:?}", batch.bounded).contains(marker));
         let replaced = batch
             .observations
             .iter()
@@ -1574,7 +1592,10 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
         assert_eq!(*target, telltale_schema::observation::BoundedTarget::Result);
         *dimension
     };
-    assert_eq!(replaced_bound(&store), BoundDimension::StringBytes);
+    assert_eq!(
+        replaced_bound(&store, "msg_parts", &"y".repeat(16)),
+        BoundDimension::StringBytes
+    );
     let store = Store::v2();
     store.message(
         "msg_huge",
@@ -1591,7 +1612,10 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
             T0,
         ),
     );
-    assert_eq!(replaced_bound(&store), BoundDimension::StringBytes);
+    assert_eq!(
+        replaced_bound(&store, "msg_huge", &"x".repeat(16)),
+        BoundDimension::StringBytes
+    );
 }
 
 #[test]
@@ -1933,6 +1957,27 @@ fn oversized_rows_are_quarantined_without_blinding_the_source() {
             .into()
     );
     assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    assert_eq!(
+        batch
+            .bounded
+            .iter()
+            .map(|unit| (
+                unit.session_id.as_deref(),
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension
+            ))
+            .collect::<Vec<_>>(),
+        [(
+            Some("ses_synthetic"),
+            "msg_padded",
+            2,
+            telltale_schema::observation::BoundedTarget::Arguments,
+            BoundDimension::StringBytes
+        )]
+    );
+    assert!(!format!("{:?}", batch.bounded).contains(secret));
     let padded_calls = batch
         .observations
         .iter()

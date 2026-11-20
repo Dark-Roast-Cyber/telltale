@@ -1465,7 +1465,7 @@ struct SourceProcessingAccounting {
     /// Distinct native units evaluated with over-bound tool values replaced.
     bounded_value_unit_count: usize,
     /// One entry per unit, field and bound: coordinates only, never content;
-    /// listed up to the same bound as quarantined units.
+    /// every entry of up to the same number of units as quarantined units.
     bounded_value_units: Vec<serde_json::Value>,
 }
 
@@ -1479,6 +1479,38 @@ struct SourceFailureCategory {
     processing_code: Option<String>,
     bound_category: Option<String>,
     bound_dimension: Option<String>,
+}
+
+/// Counts each bounded unit once, however many fields, bounds or drain windows
+/// report it, and lists every entry of the first `max_units` units, so a count
+/// above the distinct units listed shows the list was cut.
+fn bounded_value_units<'a>(
+    entries: impl IntoIterator<Item = &'a (String, telltale_sources::acquisition::BoundedUnit)>,
+    max_units: usize,
+) -> (usize, Vec<serde_json::Value>) {
+    let mut units = BTreeSet::new();
+    let mut listed = BTreeSet::new();
+    let mut reported = Vec::new();
+    for (source_id, unit) in entries {
+        let key = (
+            source_id.as_str(),
+            unit.session_id.as_deref(),
+            unit.native_id.as_str(),
+            unit.source_sequence,
+        );
+        units.insert(key);
+        if listed.contains(&key) || (listed.len() < max_units && listed.insert(key)) {
+            reported.push(serde_json::json!({
+                "source": source_id,
+                "session_id": unit.session_id,
+                "native_id": unit.native_id,
+                "source_sequence": unit.source_sequence,
+                "target": unit.target.as_str(),
+                "dimension": unit.dimension.as_str(),
+            }));
+        }
+    }
+    (units.len(), reported)
 }
 
 fn source_processing_accounting(
@@ -1504,6 +1536,13 @@ fn source_processing_accounting(
         ..Default::default()
     };
 
+    (
+        accounting.bounded_value_unit_count,
+        accounting.bounded_value_units,
+    ) = bounded_value_units(
+        results.iter().flat_map(|result| &result.bounded),
+        MAX_REPORTED_QUARANTINED_UNITS,
+    );
     for result in results {
         use telltale_detect::v2::EvaluationCompletion;
         use telltale_sources::acquisition::AccountingCoverage;
@@ -1536,29 +1575,6 @@ fn source_processing_accounting(
                     "code": unit.code,
                     "bound_category": unit.bound.map(|bound| format!("{:?}", bound.category)),
                     "bound_dimension": unit.bound.map(|bound| format!("{:?}", bound.dimension)),
-                }));
-            }
-        }
-        let mut previous: Option<(&String, &telltale_sources::acquisition::BoundedUnit)> = None;
-        for (source_id, unit) in &result.bounded {
-            // Entries of one unit are adjacent; count each unit once.
-            if previous.is_none_or(|(seen_source, seen)| {
-                seen_source != source_id
-                    || seen.session_id != unit.session_id
-                    || seen.native_id != unit.native_id
-                    || seen.source_sequence != unit.source_sequence
-            }) {
-                accounting.bounded_value_unit_count += 1;
-            }
-            previous = Some((source_id, unit));
-            if accounting.bounded_value_units.len() < MAX_REPORTED_QUARANTINED_UNITS {
-                accounting.bounded_value_units.push(serde_json::json!({
-                    "source": source_id,
-                    "session_id": unit.session_id,
-                    "native_id": unit.native_id,
-                    "source_sequence": unit.source_sequence,
-                    "target": unit.target.as_str(),
-                    "dimension": unit.dimension.as_str(),
                 }));
             }
         }
@@ -3053,6 +3069,101 @@ mod tests {
             .json();
         assert_eq!(quiet["unclassified_tool_calls"], 0);
         assert_eq!(quiet["tool_operand_drift"], 0);
+    }
+
+    /// A bounded unit as an adapter reports it (the type is not
+    /// constructible outside its crate), moved to the given coordinates.
+    fn bounded_entry(
+        native_id: &str,
+        source_sequence: u64,
+        target: telltale_schema::observation::BoundedTarget,
+    ) -> (String, telltale_sources::acquisition::BoundedUnit) {
+        use telltale_schema::clients::{ClientId, SourceKind};
+        use telltale_schema::observation::ObservedAt;
+        use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = Source {
+            client: ClientId::Codex,
+            source_id: "codex.sessions".into(),
+            kind: SourceKind::Jsonl,
+            path: temp.path().join("synthetic-bounded.jsonl"),
+        };
+        let record = serde_json::json!({"type": "tool_result", "session_id": "synthetic",
+            "name": "exec", "output": ["x".repeat(4_097)]});
+        std::fs::write(&source.path, format!("{record}\n")).unwrap();
+        let options = AcquisitionOptions::new(ObservedAt::new("2026-09-18T12:00:00Z").unwrap());
+        let batch = acquire_source(&source, options).unwrap();
+        let [unit] = batch.bounded.as_slice() else {
+            panic!("expected one bounded unit: {:?}", batch.bounded)
+        };
+        let mut unit = unit.clone();
+        unit.native_id = native_id.to_string();
+        unit.source_sequence = source_sequence;
+        unit.target = target;
+        ("synthetic-source".to_string(), unit)
+    }
+
+    #[test]
+    fn bounded_value_units_count_each_unit_once_however_its_entries_are_spread() {
+        use telltale_schema::observation::BoundedTarget;
+
+        // A later drain window appends a second entry of `call-a` after the
+        // entry of another unit.
+        let entries = vec![
+            bounded_entry("call-a", 1, BoundedTarget::Arguments),
+            bounded_entry("call-b", 2, BoundedTarget::Result),
+            bounded_entry("call-a", 1, BoundedTarget::Result),
+        ];
+        let result = canonical::CanonicalProcessingResult {
+            events: vec![],
+            status: SourceProcessingStatus::Succeeded,
+            progress: AcquisitionProgress::None,
+            completion: None,
+            failure: None,
+            accounting: vec![SourceAccounting::default()],
+            baseline_replacement: BaselineReplacement::NoReplacement,
+            policy_accounting: None,
+            quarantined: Vec::new(),
+            bounded: entries.clone(),
+        };
+        let summary = source_processing_accounting(&[result]).unwrap().json();
+        assert_eq!(summary["bounded_value_unit_count"], 2);
+        let listed = summary["bounded_value_units"].as_array().unwrap();
+        let listed: Vec<_> = listed
+            .iter()
+            .map(|entry| {
+                (
+                    entry["native_id"].as_str().unwrap(),
+                    entry["target"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("call-a", "arguments"),
+                ("call-b", "result"),
+                ("call-a", "result")
+            ]
+        );
+
+        // The cap counts units, not entries: every entry of a listed unit is
+        // kept, and a count above the distinct units listed shows the cut.
+        let (count, reported) = bounded_value_units(&entries, 1);
+        assert_eq!(count, 2);
+        let reported: Vec<_> = reported
+            .iter()
+            .map(|entry| {
+                (
+                    entry["native_id"].as_str().unwrap(),
+                    entry["target"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(reported, [("call-a", "arguments"), ("call-a", "result")]);
+        let (count, reported) = bounded_value_units(&entries, 2);
+        assert_eq!((count, reported.len()), (2, 3));
     }
 
     fn warning_codes(warnings: &[serde_json::Value]) -> Vec<&str> {

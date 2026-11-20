@@ -8,21 +8,22 @@
 
 ### Compatibility and operator impact
 
-- **A tool call or result with a value over a canonical bound is now emitted
+- **A tool call or result with a value over its own canonical bound is now emitted
   and evaluated instead of dropped whole.** Before, the whole call was
   quarantined, or the whole source failed in an adapter that reads a source
   as one unit (such as legacy OpenCode), so its tool name, paths and other
   arguments went unevaluated. Now the over-bound value alone is
   replaced, the call's other facts are evaluated, and nothing is derived
   from the replaced value. The unit is reported, never hidden: the source
-  gets one content-free `scanner_error` with the new `error` value
-  `canonical_values_bounded` (only when no unit of that source window was
+  gets one content-free `scanner_error` per evaluated window with the new
+  `error` value `canonical_values_bounded` (only when no unit of that window was
   also quarantined, which keeps `canonical_units_quarantined`), coverage is
   partial, and the scan summary's `source_processing` gains
   `bounded_value_unit_count` and `bounded_value_units` (coordinates, target
   and bound dimension, never content). A call in bounds produces the same
-  output as before. Messages, failures that are not a value bound, and a
-  call that cannot be held even with its values replaced keep quarantine;
+  output as before. Messages and failures that are not a value bound keep
+  quarantine, and a call that cannot be held even with its values replaced
+  keeps today's handling;
   hook journals keep strict conversion. Claude Code
   agent-to-agent message text now gets the direct-text budget that commands,
   file bodies and patches already had; it is not read as a command.

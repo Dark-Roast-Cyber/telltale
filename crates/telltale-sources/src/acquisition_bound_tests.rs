@@ -4,6 +4,22 @@ use telltale_schema::observation::{
     BoundDimension, BoundedTarget, CanonicalFieldCategory, JsonValue, ObservationBody,
 };
 
+/// The reported bounded units by coordinates, target and bound.
+fn bounded_units(batch: &AcquisitionBatch) -> Vec<(&str, u64, BoundedTarget, BoundDimension)> {
+    batch
+        .bounded
+        .iter()
+        .map(|unit| {
+            (
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension,
+            )
+        })
+        .collect()
+}
+
 fn options() -> AcquisitionOptions {
     AcquisitionOptions::new(ObservedAt::new("2026-09-18T12:00:00Z").unwrap())
 }
@@ -252,6 +268,21 @@ fn qwen_and_copilot_conversion_sites_report_field_category_and_dimension() {
                 .map(|value| value.dimension())
                 .collect::<Vec<_>>();
             assert_eq!(replaced, [dimension], "{label}");
+            let target = if category == CanonicalFieldCategory::ToolArguments {
+                BoundedTarget::Arguments
+            } else {
+                BoundedTarget::Result
+            };
+            // A line-based record without a native id reports its line.
+            assert_eq!(
+                bounded_units(&batch),
+                [("", 0, target, dimension)],
+                "{label}"
+            );
+            assert!(
+                !format!("{:?}", batch.bounded).contains("private-suffix"),
+                "{label}"
+            );
             continue;
         }
         let error = acquire_source(&source, options())
@@ -548,9 +579,8 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
     let mut ids = None;
     // Include realistic multiline output and exact encoded aggregate boundaries:
     // name 'bash' costs six bytes and result JSON quotes cost two bytes.
-    // Text over its own budget is replaced and recorded. Text within it that
-    // overflows the aggregate only together with the tool name is still
-    // refused, as before.
+    // Text over its own budget is replaced and recorded; the aggregate
+    // boundary cases below behave as before.
     for (text, accepted) in [
         ("build output\n".repeat(4_000), true),
         ("x".repeat(65_528), true),
@@ -646,6 +676,8 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
             )
             .unwrap();
         let batch = acquire_source(&source, options()).expect("replaced, not refused");
+        assert_eq!(bounded_units(&batch), [("output", 4, target, dimension)]);
+        assert!(!format!("{:?}", batch.bounded).contains("xxxx"));
         let tools = batch
             .observations
             .iter()
@@ -965,6 +997,16 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
                 );
                 let diagnostic = format!("{:?}", tool.bounded_values());
                 assert!(!diagnostic.contains("synthetic_key") && !diagnostic.contains('é'));
+                // A legacy record without a native id reports its line.
+                assert_eq!(
+                    bounded_units(&batch),
+                    [("", 1, target, *dimension)],
+                    "{category:?}"
+                );
+                let reported = format!("{:?}", batch.bounded);
+                for forbidden in ["synthetic_key", "synthetic-bound", "exec", "é", "\u{1}"] {
+                    assert!(!reported.contains(forbidden), "source content retained");
+                }
             }
         }
         for (record, category, dimension) in [
@@ -1161,7 +1203,45 @@ fn in_bound_tool_calls_keep_identity_and_semantic_content() {
         line.extend(observation.semantic_comparison().to_string().bytes());
         line
     };
+    // The accounting a batch carries for its units: an in-bound call wrongly
+    // treated as replaced would drop out of these counts.
+    let accounting = |batch: &AcquisitionBatch| {
+        let counts = |counts: &NativeCounts| {
+            format!(
+                "{}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                counts.native_units,
+                counts.record_counts,
+                counts.contributions.tool_calls,
+                counts.contributions.path_classes,
+                counts.contributions.network_hosts,
+                counts
+                    .tool_usage
+                    .iter()
+                    .map(|(name, usage)| (
+                        name,
+                        usage.count,
+                        usage.first_order,
+                        &usage.first_timestamp
+                    ))
+                    .collect::<Vec<_>>()
+            )
+        };
+        let mut text = format!(
+            "{:?}|{:?}|{}",
+            batch.accounting.coverage,
+            batch.accounting.tool_table,
+            counts(&batch.accounting.unscoped)
+        );
+        for session in &batch.accounting.sessions {
+            text.push('|');
+            text.push_str(&counts(&session.counts));
+        }
+        text
+    };
     let mut absorb_batch = |batch: &AcquisitionBatch, lines: &mut Vec<Vec<u8>>| {
+        // In bounds nothing is replaced, so no unit is reported as bounded.
+        assert!(batch.bounded.is_empty(), "{:?}", batch.bounded);
+        lines.push(format!("{:?}|{}", batch.bounded, accounting(batch)).into_bytes());
         for observation in &batch.observations {
             tools += usize::from(matches!(observation.body(), ObservationBody::Tool(_)));
             lines.push(absorb(observation));
@@ -1214,7 +1294,7 @@ fn in_bound_tool_calls_keep_identity_and_semantic_content() {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     assert_eq!(
-        digest, "6e1f07c60e8aaf0bcb2be8cc6aa07395fef25f0c1926e6598ca2ce64677abf66",
+        digest, "11a9b9396fd9fa4215fee16777a7621180029223cbf7fb815497372bd78c95c5",
         "in-bound projection changed"
     );
 }
