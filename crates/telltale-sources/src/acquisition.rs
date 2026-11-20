@@ -608,11 +608,10 @@ fn acquire_source_impl(
                         source.client.hook_journal_source_id(),
                     )
                     .with_tool_table(source.client)
-                    // The hooks runtime projects a call whose unit is
-                    // quarantined and evaluates every byte of it. Until it
-                    // treats a call with replaced values the same way, a
-                    // journal call keeps today's strict quarantine, so a
-                    // padded call can never read as evaluated and clean.
+                    // Strict on purpose: the hooks runtime projects a call it
+                    // cannot evaluate whole, so a journal call over a bound is
+                    // quarantined and never read as evaluated with a value
+                    // replaced.
                     .with_strict_values()
             } else {
                 canonical
@@ -1742,6 +1741,42 @@ mod tests {
                         .all(|o| o.observation_id() != other.observation_id())
                 );
             }
+        }
+    }
+
+    /// A hook journal converts strictly: a call over a value bound is
+    /// quarantined, never admitted with the value replaced, while the session
+    /// reading of the same window admits it.
+    #[test]
+    #[cfg(feature = "hook-journal")]
+    fn hook_journal_quarantines_a_call_over_a_value_bound() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("window.jsonl");
+        let call = serde_json::json!({"type":"assistant","sessionId":"synthetic-window","uuid":"a1","timestamp":"2026-11-04T00:00:00.002Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"mcp__synthetic__run","input":{"query":"z ".repeat(2_500),"file_path":"/synthetic/project/notes.txt"}}]}});
+        std::fs::write(&path, format!("{call}\n")).unwrap();
+        let tool_calls = |batch: &super::AcquisitionBatch| {
+            batch
+                .observations
+                .iter()
+                .filter(|observation| matches!(observation.body(), ObservationBody::Tool(_)))
+                .count()
+        };
+        let session = super::acquire_source(
+            &journal_source(ClientId::Claude, "claude.projects", &path),
+            options(),
+        )
+        .unwrap();
+        assert_eq!((session.bounded.len(), session.quarantined.len()), (1, 0));
+        assert_eq!(tool_calls(&session), 1);
+        for &client in ClientId::ALL {
+            let source = journal_source(client, client.hook_journal_source_id(), &path);
+            let journal = super::acquire_source(&source, options()).unwrap();
+            assert_eq!(
+                (journal.bounded.len(), journal.quarantined.len()),
+                (0, 1),
+                "{client:?}"
+            );
+            assert_eq!(tool_calls(&journal), 0, "{client:?}");
         }
     }
 
