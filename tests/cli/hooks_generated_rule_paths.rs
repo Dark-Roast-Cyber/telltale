@@ -539,6 +539,7 @@ fn with_no_state_directory_and_no_temporary_directory_the_strict_policy_applies(
 // ---- A long state directory under the home
 
 /// A state directory `length` bytes below the home, in nested 19-byte names.
+#[cfg(not(windows))]
 fn below_home(length: usize) -> String {
     let mut rest = String::from("s_");
     while rest.len() < length {
