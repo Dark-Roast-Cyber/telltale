@@ -8,14 +8,39 @@
 
 ### Compatibility and operator impact
 
-- **Claude Code agent-to-agent message calls over the structured string bound
-  are now emitted and evaluated instead of quarantined.** Their message text
-  gets the direct-text budget that commands, file bodies and patches already
-  had; it is not read as a command. Text over that budget is still
-  quarantined. Each source's tool table now declares which argument fields
-  hold authored text, so `JsonValue::try_from_source_tool_arguments` takes an
-  `ArgumentText` declaration instead of a tool name, and a `ToolObservation`
-  carries it (`with_argument_text`) for validation.
+- **A tool call or result with a value over a canonical bound is now emitted
+  and evaluated instead of dropped whole.** Before, the whole call was
+  quarantined, or the whole source failed in an adapter that reads a source
+  as one unit (such as legacy OpenCode), so its tool name, paths and other
+  arguments went unevaluated. Now the over-bound value alone is
+  replaced, the call's other facts are evaluated, and nothing is derived
+  from the replaced value. The unit is reported, never hidden: the source
+  gets one content-free `scanner_error` with the new `error` value
+  `canonical_values_bounded` (only when no unit of that source window was
+  also quarantined, which keeps `canonical_units_quarantined`), coverage is
+  partial, and the scan summary's `source_processing` gains
+  `bounded_value_unit_count` and `bounded_value_units` (coordinates, target
+  and bound dimension, never content). A call in bounds produces the same
+  output as before. Messages, failures that are not a value bound, and a
+  call that cannot be held even with its values replaced keep quarantine;
+  hook journals keep strict conversion. Claude Code
+  agent-to-agent message text now gets the direct-text budget that commands,
+  file bodies and patches already had; it is not read as a command.
+  Detections for sessions holding such calls can appear once after upgrade
+  on a full-history scan, and the native action profile moves to 8, so
+  every `semantic_identity` changes (replay identities do not); rebaseline
+  as after a rule change. Event 3.0 and the JSON schemas are unchanged. API:
+  each source's tool table declares which argument fields hold authored
+  text, so `JsonValue::try_from_source_tool_arguments` takes an
+  `ArgumentText` declaration instead of a tool name and a `ToolObservation`
+  carries it (`with_argument_text`) for validation; `telltale-schema` adds
+  `try_from_source_tool_arguments_bounded`,
+  `try_from_source_tool_result_bounded`, `BoundedValue`, `BoundedTarget`,
+  `TOOL_MAX_BOUNDED_VALUES` and the semantic field `tool.bounded_values`
+  (present only when a value was replaced); `telltale-sources` adds
+  `BoundedUnit` and `AcquisitionBatch::bounded`; core re-exports
+  `BoundedUnit` and adds `SourceScan::bounded_units()`. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md#over-bound-tool-values).
 - **Rule v2, Telltale's Sigma profile, is the rule format, and all shipped
   content uses it.** A Rule v2 document is a Sigma 2.1 rule marked
   `taxonomy: telltale` (or a chain, `correlation.type: telltale_chain`) with
