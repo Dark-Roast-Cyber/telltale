@@ -4,8 +4,8 @@
 #![cfg(feature = "hooks")]
 
 use serde_json::json;
-use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::config::{Config, Mode};
+use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::Runtime;
 
 fn decide(mode: Mode, command: &str) -> Option<serde_json::Value> {
