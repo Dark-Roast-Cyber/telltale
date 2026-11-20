@@ -219,9 +219,9 @@ fn qwen_and_copilot_conversion_sites_report_field_category_and_dimension() {
             copilot(
                 json!([{"type":"function_call","name":"exec","arguments":format!("{{\"note\":\"{}\"}}", over_structured)}]),
             ),
-            // The raw argument text is also kept as searchable text, whose
-            // ordinary bound still fails the source before replacement helps.
-            CanonicalFieldCategory::SemanticField,
+            // The raw argument text is not kept as searchable text beside
+            // replaced values, so the call is admitted.
+            CanonicalFieldCategory::ToolArguments,
             BoundDimension::StringBytes,
         ),
     ];
@@ -1284,4 +1284,193 @@ fn replaced_tool_values_admit_the_unit_and_contribute_nothing() {
         );
         assert_eq!(counts.native_units, 2);
     }
+}
+
+/// Copilot keeps the raw request text as searchable text. Beside arguments
+/// with a replaced value it is omitted, or it would carry what was replaced.
+#[test]
+fn copilot_drops_searchable_text_beside_replaced_arguments() {
+    let items = (0..65).map(|_| json!("replaced-item")).collect::<Vec<_>>();
+    let arguments = json!({"items": items, "path": "/synthetic/kept"}).to_string();
+    assert!(arguments.len() < 4_096);
+    let log = format!(
+        "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {}\n",
+        json!([{"type":"function_call","name":"exec","call_id":"call_synthetic","arguments":arguments}])
+    );
+    let batch = acquire_input(
+        ClientId::Copilot,
+        "copilot.process_log",
+        SourceKind::CopilotProcessLog,
+        &log,
+    );
+    let ObservationBody::Tool(tool) = batch.observations[0].body() else {
+        panic!("expected the call")
+    };
+    assert_eq!(
+        tool.bounded_values()
+            .iter()
+            .map(|value| (value.target(), value.dimension()))
+            .collect::<Vec<_>>(),
+        [(BoundedTarget::Arguments, BoundDimension::ArrayItems)]
+    );
+    assert_eq!(tool.searchable_arguments(), None);
+    assert!(!format!("{:?}", batch.observations).contains("replaced-item"));
+    assert!(format!("{:?}", tool.arguments()).contains("/synthetic/kept"));
+    assert_eq!(batch.bounded.len(), 1);
+}
+
+/// The contribution labels are checked for every call, with or without
+/// replaced values: a call whose name or time is not a valid label keeps
+/// exactly the outcome it has with in-bound values.
+#[test]
+fn replaced_values_keep_the_contribution_label_checks() {
+    let name = "exec\u{1}tool";
+    let outcome = |client: ClientId, source_id: &str, input: String| {
+        let directory = tempfile::tempdir().unwrap();
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind: SourceKind::Jsonl,
+            path: directory.path().join("synthetic-label.jsonl"),
+        };
+        std::fs::write(&source.path, input).unwrap();
+        match acquire_source(&source, options()) {
+            Ok(batch) => format!(
+                "ok observations={} quarantined={:?} bounded={}",
+                batch.observations.len(),
+                batch
+                    .quarantined
+                    .iter()
+                    .map(|unit| unit.code)
+                    .collect::<Vec<_>>(),
+                batch.bounded.len()
+            ),
+            Err(error) => format!("error {}", error.code()),
+        }
+    };
+    for value in ["small".to_owned(), "z".repeat(5_000)] {
+        let claude = format!(
+            "{}\n",
+            json!({"type":"assistant","sessionId":"synthetic","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic","name":name,"input":{"note":value}}]}})
+        );
+        let qwen = format!(
+            "{}\n",
+            json!({"type":"tool_call","sessionId":"synthetic","tool_name":name,"arguments":{"note":value}})
+        );
+        // A per-record adapter quarantines the call; a whole-source adapter
+        // fails the source, with or without a replaced value.
+        assert_eq!(
+            outcome(ClientId::Claude, "claude.projects", claude),
+            "ok observations=0 quarantined=[\"invalid_native_contribution\"] bounded=0",
+            "{}",
+            value.len()
+        );
+        assert_eq!(
+            outcome(ClientId::Qwen, "qwen.projects", qwen),
+            "error invalid_native_contribution",
+            "{}",
+            value.len()
+        );
+    }
+}
+
+/// A call whose operand was replaced for its size is counted as replaced,
+/// not as a call whose table row lost its operand.
+#[test]
+fn a_replaced_operand_is_not_tool_table_drift() {
+    let call = |input: Value| {
+        format!(
+            "{}\n",
+            json!({"type":"assistant","sessionId":"synthetic","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic","name":"Bash","input":input}]}})
+        )
+    };
+    let drift = |input: Value| {
+        let batch = acquire_input(
+            ClientId::Claude,
+            "claude.projects",
+            SourceKind::Jsonl,
+            &call(input),
+        );
+        (
+            batch.bounded.len(),
+            batch.accounting.tool_table.tool_operand_drift,
+        )
+    };
+    // Without its command the row has drifted; a replaced command has not.
+    assert_eq!(drift(json!({"description": "synthetic"})), (0, 1));
+    assert_eq!(drift(json!({"command": "z ".repeat(40_000)})), (1, 0));
+}
+
+/// The command facet is decided per argument key: a replaced `command` does
+/// not hide an in-bound `cmd`, and `command` stays preferred when admitted.
+#[test]
+fn codex_command_facet_is_decided_per_argument_key() {
+    let command_text = |arguments: Value| {
+        let input = format!(
+            "{}\n",
+            json!({"type":"tool_call","session_id":"synthetic","name":"exec_command","arguments":arguments})
+        );
+        let batch = acquire_input(ClientId::Codex, "codex.sessions", SourceKind::Jsonl, &input);
+        let observation = &batch.observations[0];
+        (
+            batch.bounded.len(),
+            observation
+                .facets()
+                .get("command.text")
+                .map(|facet| format!("{:?}", facet.value())),
+        )
+    };
+    let over = "z ".repeat(40_000);
+    assert_eq!(
+        command_text(json!({"command": over, "cmd": "synthetic fallback"})),
+        (
+            1,
+            Some(format!("{:?}", JsonValue::string("synthetic fallback")))
+        )
+    );
+    assert_eq!(
+        command_text(json!({"command": "printf synthetic", "cmd": over})),
+        (
+            1,
+            Some(format!("{:?}", JsonValue::string("printf synthetic")))
+        )
+    );
+    assert_eq!(
+        command_text(json!({"command": "printf synthetic", "cmd": "synthetic fallback"})),
+        (
+            0,
+            Some(format!("{:?}", JsonValue::string("printf synthetic")))
+        )
+    );
+    assert_eq!(command_text(json!({"command": over})), (1, None));
+}
+
+/// A Copilot call with a replaced value is matched to its native item by the
+/// session id the observation carries, so a session id the projection
+/// normalizes still keeps that call out of contribution accounting.
+#[test]
+fn copilot_replaced_call_in_a_normalized_session_contributes_nothing() {
+    let items = (0..65).map(|_| json!("item")).collect::<Vec<_>>();
+    let calls = |session: &str| {
+        let log = format!(
+            "Workspace initialized: {session} (checkpoints: 0)\nAccumulated output items (1): {}\n",
+            json!([{"type":"function_call","name":"exec","call_id":"call_synthetic","arguments":json!({"items": items}).to_string()}])
+        );
+        let batch = acquire_input(
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+            &log,
+        );
+        assert_eq!(batch.bounded.len(), 1, "{session}");
+        batch
+            .accounting
+            .sessions
+            .iter()
+            .map(|session| session.counts.contributions.tool_calls.get("exec").copied())
+            .collect::<Vec<_>>()
+    };
+    // Composed and decomposed spellings of one session id.
+    assert_eq!(calls("synthetic-caf\u{e9}"), [None]);
+    assert_eq!(calls("synthetic-cafe\u{301}"), [None]);
 }

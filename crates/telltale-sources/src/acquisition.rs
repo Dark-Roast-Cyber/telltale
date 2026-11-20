@@ -16,8 +16,8 @@ use std::path::Path;
 
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
-    BoundDimension, BoundedTarget, CanonicalBoundContext, CanonicalObservationV2, ObservedAt,
-    SourceScale,
+    BoundDimension, BoundedTarget, CanonicalBoundContext, CanonicalObservationV2, CorrelationId,
+    ObservedAt, SourceScale,
 };
 
 use crate::tool_operation::{BoundedRecord, bounded_records};
@@ -632,11 +632,16 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
-                    && !replaced.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
-                        record.contribution_strings().iter().map(String::as_str),
+                        // A unit with replaced values keeps its label check
+                        // but contributes no text.
+                        record
+                            .contribution_strings()
+                            .iter()
+                            .map(String::as_str)
+                            .filter(|_| !replaced.contains_key(&record.source_sequence)),
                         &mut keys,
                     )
                 {
@@ -664,6 +669,13 @@ fn acquire_source_impl(
                     // Nothing is derived from a value the observation does
                     // not carry: like an excluded unit, a unit with replaced
                     // values takes no part in contribution accounting.
+                    // Its call's name and time are still checked.
+                    accounting.check_tool_usage(
+                        record.session_id.as_deref(),
+                        record.accounting_kind(),
+                        record.accounting_tool_name(),
+                        record.timestamp.as_deref(),
+                    )?;
                     bounded.extend(records.iter().map(|replaced| {
                         BoundedUnit::new(
                             record.session_id.clone(),
@@ -732,11 +744,16 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
-                    && !replaced.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
-                        record.contribution_strings().iter().map(String::as_str),
+                        // A unit with replaced values keeps its label check
+                        // but contributes no text.
+                        record
+                            .contribution_strings()
+                            .iter()
+                            .map(String::as_str)
+                            .filter(|_| !replaced.contains_key(&record.source_sequence)),
                         &mut keys,
                     )
                 {
@@ -764,6 +781,13 @@ fn acquire_source_impl(
                     // Nothing is derived from a value the observation does
                     // not carry: like an excluded unit, a unit with replaced
                     // values takes no part in contribution accounting.
+                    // Its call's name and time are still checked.
+                    accounting.check_tool_usage(
+                        record.effective_session_id.as_deref(),
+                        record.accounting_kind(),
+                        record.accounting_tool_name(),
+                        record.timestamp.as_deref(),
+                    )?;
                     bounded.extend(records.iter().map(|replaced| {
                         BoundedUnit::new(
                             record.effective_session_id.clone(),
@@ -818,14 +842,11 @@ fn acquire_source_impl(
             .map_err(map_openclaw_error)?;
             bounded = bounded_units(&observations);
             for record in &records {
-                if bounded
-                    .iter()
-                    .any(|unit| unit.source_sequence == record.source_sequence)
-                {
-                    continue;
-                }
                 account_activity(
                     &mut accounting,
+                    bounded
+                        .iter()
+                        .any(|unit| unit.source_sequence == record.source_sequence),
                     record.session_id.as_deref(),
                     record.accounting_kind(),
                     record.accounting_tool_name(),
@@ -853,14 +874,11 @@ fn acquire_source_impl(
             .map_err(map_qwen_error)?;
             bounded = bounded_units(&observations);
             for record in &records {
-                if bounded
-                    .iter()
-                    .any(|unit| unit.source_sequence == record.source_sequence)
-                {
-                    continue;
-                }
                 account_activity(
                     &mut accounting,
+                    bounded
+                        .iter()
+                        .any(|unit| unit.source_sequence == record.source_sequence),
                     record.session_id.as_deref(),
                     record.accounting_kind(),
                     record.accounting_tool_name(),
@@ -901,11 +919,16 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
-                    && !replaced.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
-                        record.contribution_strings().iter().map(String::as_str),
+                        // A unit with replaced values keeps its label check
+                        // but contributes no text.
+                        record
+                            .contribution_strings()
+                            .iter()
+                            .map(String::as_str)
+                            .filter(|_| !replaced.contains_key(&record.source_sequence)),
                         &mut keys,
                     )
                 {
@@ -933,6 +956,13 @@ fn acquire_source_impl(
                     // Nothing is derived from a value the observation does
                     // not carry: like an excluded unit, a unit with replaced
                     // values takes no part in contribution accounting.
+                    // Its call's name and time are still checked.
+                    accounting.check_tool_usage(
+                        record.session_id.as_deref(),
+                        record.accounting_kind(),
+                        record.accounting_tool_name(),
+                        record.timestamp.as_deref(),
+                    )?;
                     bounded.extend(records.iter().map(|replaced| {
                         BoundedUnit::new(
                             record.session_id.clone(),
@@ -1023,12 +1053,27 @@ fn acquire_source_impl(
                 else {
                     continue;
                 };
-                // Ordinals number the items of one session.
+                // Ordinals number the items of one session. The observation
+                // carries the session id as projection normalized it.
+                let session = canonical_session_id
+                    .as_deref()
+                    .and_then(|id| CorrelationId::source_reported(id).ok());
                 let replaced = bounded.iter().any(|unit| {
-                    unit.session_id == *canonical_session_id
+                    unit.session_id.as_deref() == session.as_ref().map(CorrelationId::value)
                         && Some(unit.source_sequence) == *ordinal
                 });
-                if item.item_type.as_deref() != Some("function_call") || replaced {
+                if item.item_type.as_deref() != Some("function_call") {
+                    continue;
+                }
+                if replaced {
+                    // Its labels are still checked; nothing is counted.
+                    accounting.check_tool_usage(
+                        canonical_session_id.as_deref(),
+                        RecordKind::ToolCall,
+                        item.name.as_deref(),
+                        timestamp.as_deref(),
+                    )?;
+                    contributions::check_name(item.name.as_deref())?;
                     continue;
                 }
                 accounting.tool_usage(
@@ -1153,15 +1198,14 @@ pub fn acquire_opencode_sqlite(
                 bounded = bounded_units(&observations);
                 for record in &extraction.records {
                     let (sequence, native_id) = record.coordinates();
-                    if bounded.iter().any(|unit| {
+                    let replaced = bounded.iter().any(|unit| {
                         unit.source_sequence == sequence
                             && unit.native_id == native_id.unwrap_or_default()
-                    }) {
-                        continue;
-                    }
+                    });
                     let facts = record.accounting();
                     account_activity(
                         &mut accounting,
+                        replaced,
                         facts.session_id,
                         facts.kind,
                         facts.tool_name,
@@ -1194,22 +1238,25 @@ pub fn acquire_opencode_sqlite(
                     let mut outcome = match projector.row(record).map_err(map_canonical_error)? {
                         RowProjection::Mapped(observations) => {
                             // A row with replaced values takes no part in
-                            // contribution accounting, so it is not checked.
+                            // contribution accounting.
                             let replaced = bounded_records(record.seq, &observations);
                             // Check this row's request input alone before any
                             // shared accounting changes, so a rejected token
                             // quarantines the row instead of half-counting it.
                             let mut keys = 0;
-                            match tools.iter().filter(|_| replaced.is_empty()).try_for_each(
-                                |tool| {
-                                    ActivityContributions::default().observe(
-                                        tool.name,
-                                        None,
-                                        tool.contribution_strings.iter().map(String::as_str),
-                                        &mut keys,
-                                    )
-                                },
-                            ) {
+                            // A row with replaced values keeps its label
+                            // checks but contributes no text.
+                            match tools.iter().try_for_each(|tool| {
+                                ActivityContributions::default().observe(
+                                    tool.name,
+                                    None,
+                                    tool.contribution_strings
+                                        .iter()
+                                        .map(String::as_str)
+                                        .filter(|_| replaced.is_empty()),
+                                    &mut keys,
+                                )
+                            }) {
                                 Ok(()) => Ok((observations, replaced)),
                                 Err(AcquisitionError::InvalidContribution) => {
                                     Err(("invalid_native_contribution", None))
@@ -1331,6 +1378,14 @@ pub fn acquire_opencode_sqlite(
                     match outcome {
                         Ok((observations, replaced)) => {
                             let activity = if replaced.is_empty() { &tools[..] } else { &[] };
+                            for tool in tools.iter().filter(|_| !replaced.is_empty()) {
+                                accounting.check_tool_usage(
+                                    session,
+                                    RecordKind::ToolCall,
+                                    tool.name,
+                                    tool.timestamp,
+                                )?;
+                            }
                             bounded.extend(replaced.into_iter().map(|replaced| {
                                 BoundedUnit::new(
                                     record.session_id.clone(),
@@ -1397,14 +1452,24 @@ pub fn acquire_opencode_sqlite(
 
 /// Tool usage and request-input contributions of one unit of a source
 /// projected as a whole, after every unit was counted and projection passed.
+/// A unit with replaced values is not counted, but its labels are checked
+/// exactly as when it is.
 fn account_activity(
     accounting: &mut AccountingBuilder,
+    replaced: bool,
     session: Option<&str>,
     kind: RecordKind,
     tool_name: Option<&str>,
     timestamp: Option<&str>,
     texts: &[String],
 ) -> Result<(), AcquisitionError> {
+    if replaced {
+        accounting.check_tool_usage(session, kind, tool_name, timestamp)?;
+        if kind == RecordKind::ToolCall {
+            contributions::check_name(tool_name)?;
+        }
+        return Ok(());
+    }
     accounting.tool_usage(session, kind, tool_name, timestamp)?;
     accounting.contribute(
         session,

@@ -105,6 +105,11 @@ impl ActivityContributions {
     }
 }
 
+/// The label check `observe` makes of a call's name, without its texts.
+pub(super) fn check_name(name: Option<&str>) -> Result<(), AcquisitionError> {
+    validate_label(name.unwrap_or("unknown"))
+}
+
 fn validate_label(value: &str) -> Result<(), AcquisitionError> {
     if value.len() > LOCAL_MAX_STRING_BYTES || value.chars().any(char::is_control) {
         return Err(AcquisitionError::InvalidContribution);

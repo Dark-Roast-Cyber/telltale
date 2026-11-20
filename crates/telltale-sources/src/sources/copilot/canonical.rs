@@ -202,8 +202,12 @@ fn project_function_call(
             body = body.with_arguments(JsonValue::string(arguments));
             metadata.push(("tool.arguments", FactProvenance::Reported));
         }
-        body = body.with_searchable_arguments(arguments)?;
-        metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+        // Searchable text is the raw request; it is never kept beside
+        // arguments whose values were replaced.
+        if body.bounded_values().is_empty() {
+            body = body.with_searchable_arguments(arguments)?;
+            metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+        }
     }
 
     // No facet is built from an argument that was replaced.

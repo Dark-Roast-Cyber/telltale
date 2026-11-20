@@ -488,7 +488,14 @@ pub(crate) fn count(client: ClientId, observations: &[CanonicalObservationV2]) -
             None if !mcp_shaped(name) => {
                 counts.unclassified_tool_calls = counts.unclassified_tool_calls.saturating_add(1);
             }
-            Some(spec) if body.operation().is_some_and(|op| spec.drifted(op)) => {
+            // An operand replaced for its size is not drift.
+            Some(spec)
+                if !body
+                    .bounded_values()
+                    .iter()
+                    .any(|value| value.target() == BoundedTarget::Arguments)
+                    && body.operation().is_some_and(|op| spec.drifted(op)) =>
+            {
                 counts.tool_operand_drift = counts.tool_operand_drift.saturating_add(1);
             }
             _ => {}
