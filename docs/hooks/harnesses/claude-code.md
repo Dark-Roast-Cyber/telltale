@@ -44,10 +44,17 @@ Other events are accepted and recorded as `lifecycle: other`.
   - A `PreToolUse`, even truncated or missing fields, gets the stricter of
     `on_error` and `on_unevaluable` on stdout.
   - Any other named event exits 1. Exit 2 on a `Stop` is a prompt to continue.
-  - A payload that names no event exits 1, or 2 when `on_error: deny`, since
-    only exit 2 blocks a call without knowing the event. Residual: if that
-    payload was a `Stop`, Claude Code documents exit 2 as continuing the turn.
-    Not run against real Claude Code.
+  - A named `PreToolUse` without its `tool_input` key is unusable and gets
+    the same answer. An empty or `null` input is evaluated.
+  - A payload that names no event exits 2 when the stricter of `on_error` and
+    `on_unevaluable` is `ask` or `deny` (the default is `ask`), or when a
+    configuration that asks for enforcement did not load, since only exit 2
+    blocks a call without knowing the event. It exits 1 only when both
+    policies are `allow`. Residual: if that payload was a `Stop`, Claude Code
+    documents exit 2 as continuing the turn. Not run against real Claude
+    Code.
+  - A panic in the hook is answered like a payload it could not read, with
+    an `error` record (`hook_panicked`).
 
 ## Installation choices
 
@@ -63,6 +70,20 @@ with `-` prints the usage and exits 64 on every harness, so a typo cannot silent
 drop `onFailure`. `--fail-closed` places
 `onFailure: "block"` on the PreToolUse **hook entry**; placed on the matcher
 it is silently ignored (verified).
+
+When a user config root (`$XDG_CONFIG_HOME/telltale`, else `~/.config/telltale`)
+exists, `settings` appends `--user-config-dir '<root>'` to the hook command, so the
+environment the harness is launched with (`HOME`, `XDG_CONFIG_HOME`) cannot move
+the settings the hook reads; the system root is still read first. Without one, the
+command is printed as given and stderr says it is not pinned. Generate the
+settings again after creating or moving that root, and to pin a command printed by
+an earlier version; `telltale hooks check --user-config-dir '<root>'` shows the
+roots that hook reads.
+When the configuration read then says `hooks.mode: enforce`, `settings` also
+appends `--expect-enforce`: if the configuration later does not load (a pinned
+root deleted, a broken file), tool calls are denied as misconfigured instead of
+running detect-only. The marker never enables enforcement for a configuration
+that loads. Generate the settings again after switching to enforce.
 
 ## Verified behaviors (2.1.318)
 

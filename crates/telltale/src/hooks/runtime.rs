@@ -7,13 +7,14 @@ use std::time::Duration;
 
 use crate::ObservationStage;
 use serde_json::{Value, json};
+use telltale_schema::observation::LOCAL_MAX_VALUE_BYTES;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus, RecoveryBudget};
-use crate::hooks::journal::{Line, bound_value, cut_utf8};
+use crate::hooks::journal::{Line, bound_history, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
 use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
 use crate::hooks::telemetry::{
@@ -236,6 +237,9 @@ pub struct Runtime {
 pub const STATE_LOCK_TIMEOUT: &str = "state_lock_timeout";
 /// The evaluator finished after its client stopped waiting; nothing was recorded.
 pub const ANSWER_TOO_LATE: &str = "evaluator_answer_too_late";
+/// No state directory resolves. On a tool request it is also the visibility
+/// limit of a call evaluated without its session (`Runtime::tool_requested`).
+pub const STATE_DIR_UNRESOLVED: &str = "state_dir_unresolved";
 
 /// Journaled tool-input strings stay under Telltale's 4,096-byte value bound.
 const HISTORY_STRING_BYTES: usize = 4000;
@@ -519,7 +523,18 @@ impl Runtime {
         let path = match self.config.resolved_telemetry_path() {
             Ok(path) => path,
             Err(error) => {
-                eprintln!("telltale hooks: telemetry disabled: {error}");
+                // Nowhere to record: one line says what is lost.
+                let what = match (&record.error_code, &record.decision) {
+                    (Some(code), _) => format!(" ({code})"),
+                    (None, Some(decision)) => {
+                        format!(" ({}, basis {})", decision.verdict, decision.basis)
+                    }
+                    (None, None) => String::new(),
+                };
+                eprintln!(
+                    "telltale hooks: telemetry disabled: {error}; {} record not written{what}",
+                    record.kind.as_str()
+                );
                 return;
             }
         };
@@ -667,18 +682,28 @@ impl Runtime {
         self.emit(&record);
     }
 
-    /// Failures the agent can bring about: session files; rule content that
-    /// the configuration validated at load time and that has since become
-    /// unreadable; and any pipeline build that fails. A pipeline that cannot
-    /// build evaluates nothing, and operator files are not the only cause: an
+    /// Failures the agent can bring about: session files; a state directory
+    /// that does not resolve (an agent can launch its harness with an empty
+    /// `HOME`); rule content that the configuration validated at load time and
+    /// that has since become unreadable; any pipeline build that fails; and a
+    /// scan that fails or returns nothing. A pipeline that cannot build
+    /// evaluates nothing, and operator files are not the only cause: an
     /// environment value reaches the generated rules. Load-time validation stops
     /// at existence and file type: test-building the pipeline on every hook
     /// invocation would cost each event the full build, so broken content is
-    /// caught here instead.
+    /// caught here instead. No input is known to fail a scan, and none is known
+    /// not to: the scan reads model-controlled input.
     fn is_strict_failure(&self, code: &str) -> bool {
         is_session_file_failure(code)
-            || code == "rule_content_unreadable"
-            || code == "pipeline_build_failed"
+            || matches!(
+                code,
+                STATE_DIR_UNRESOLVED
+                    | "rule_content_unreadable"
+                    | "pipeline_build_failed"
+                    | "semantic_provenance_failed"
+                    | "scan_failed"
+                    | "scan_returned_no_result"
+            )
     }
 
     /// Record that `event` could not be handled and answer per `on_error`.
@@ -746,9 +771,14 @@ impl Runtime {
         let dir = self
             .config
             .resolved_state_dir()
-            .map_err(|_| "state_dir_unresolved")?;
+            .map_err(|_| STATE_DIR_UNRESOLVED)?;
+        self.open_in(ctx, &dir)
+    }
+
+    /// The session of `ctx` under state directory `dir`.
+    fn open_in(&self, ctx: &Context, dir: &std::path::Path) -> Result<SessionHandle, &'static str> {
         let session =
-            SessionHandle::open_within(&dir, ctx.harness, &ctx.session_id, self.session_lock_wait)
+            SessionHandle::open_within(dir, ctx.harness, &ctx.session_id, self.session_lock_wait)
                 .map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
         // call is still evaluated) but never silent.
@@ -983,7 +1013,23 @@ impl Runtime {
     }
 
     fn tool_requested(&mut self, ctx: &Context, call: &ToolCall) -> Result<Response, &'static str> {
-        let mut session = self.open(ctx)?;
+        // With no state directory (an agent can launch its harness with an empty
+        // `HOME`) the call is still evaluated, alone, in a directory of its own
+        // that is removed afterwards: a rule's verdict holds, and what history
+        // would have added is floored at the strict policy (`decide_request`).
+        // Where that directory cannot be made, the strict policy answers. It
+        // outlives the session, whose files are closed before it is removed.
+        let scratch = match self.config.resolved_state_dir() {
+            Ok(_) => None,
+            Err(_) => {
+                Some(crate::hooks::state::ScratchDir::create().map_err(|_| STATE_DIR_UNRESOLVED)?)
+            }
+        };
+        let mut session = match &scratch {
+            Some(scratch) => self.open_in(ctx, scratch.path())?,
+            None => self.open(ctx)?,
+        };
+        let stateless = scratch.is_some();
         let id = RequestIdentity::next(&mut session, call);
         // The call is evaluated as the harness reported it (ADR 0002): the
         // journal reader declares it with that harness's own tool table.
@@ -994,7 +1040,12 @@ impl Runtime {
             return Err(ANSWER_TOO_LATE);
         }
         let name_malformed = crate::hooks::journal::tool_name_is_malformed(&call.tool_name);
-        let evaluation_info = self.request_evaluation_info(&evaluated, call, name_malformed);
+        let mut evaluation_info = self.request_evaluation_info(&evaluated, call, name_malformed);
+        if stateless {
+            evaluation_info
+                .visibility_limits
+                .push(STATE_DIR_UNRESOLVED.to_owned());
+        }
         let strict_failure = self.report_evaluation_failure(ctx, call, &evaluated.result);
         let mut decision = self.decide_request(
             ctx,
@@ -1003,6 +1054,7 @@ impl Runtime {
             evaluated.separated,
             name_malformed,
             strict_failure,
+            stateless,
         );
         apply_decision(&mut session, &decision);
         self.journal_request(ctx, &session, &id, call, evaluated.projection.as_deref())?;
@@ -1023,6 +1075,7 @@ impl Runtime {
         );
         session.save().map_err(|error| error.code())?;
         drop(session);
+        drop(scratch);
 
         self.emit_decision(ctx, call, &id.record_id, evaluation_info, &mut decision);
 
@@ -1037,6 +1090,7 @@ impl Runtime {
             &decision.rule_ids,
             &id.record_id,
             name_malformed,
+            stateless,
         );
         Ok(Response::decision(
             ctx.can_ask,
@@ -1200,7 +1254,10 @@ impl Runtime {
     }
 
     /// The policy decision for a request, taken against the session's scores
-    /// as they are before this call.
+    /// as they are before this call. A `stateless` call was evaluated without
+    /// its session (no state directory): no history, scores or denials, so
+    /// whatever they would have added is floored at the strict policy.
+    #[allow(clippy::too_many_arguments)]
     fn decide_request(
         &self,
         ctx: &Context,
@@ -1209,10 +1266,11 @@ impl Runtime {
         separated: bool,
         name_malformed: bool,
         strict_failure: bool,
+        stateless: bool,
     ) -> RequestDecision {
         let session_before = session.state.cumulative_score;
         let denied_before = session.state.denied_attempts;
-        let (outcome, rule_ids, categories, telltale) = match result {
+        let (mut outcome, rule_ids, categories, telltale) = match result {
             Ok(evaluation) if evaluation.status != EvalStatus::NotEvaluated => {
                 let outcome = self.scored_outcome(
                     &evaluation,
@@ -1255,6 +1313,11 @@ impl Runtime {
                 Vec::new(),
             ),
         };
+        let strict = verdict_floor(self.strict_failure_policy());
+        if stateless && rank(strict) > rank(outcome.verdict) {
+            outcome.verdict = strict;
+            outcome.basis = Basis::EvaluationGap;
+        }
         let action_score = outcome.session_score_after - session_before;
         let returned = self.config.mode == Mode::Enforce && outcome.verdict != Verdict::Allow;
         // What the harness is given when the policy verdict cannot be put to
@@ -1326,13 +1389,17 @@ impl Runtime {
         // still informs how a later execute of the same artifact is judged.
         // History stays within Telltale's per-value bound so later scans
         // can use it; a projected call is journaled as its first variant.
-        let history_input = match projection {
-            Some(variants) => variants[0].clone(),
-            None => bound_value(
+        // Every call, projected or refused, costs the window at most what a
+        // call Telltale evaluates whole does. A variant's strings are
+        // already within Telltale's bound and stay as evaluated.
+        let (input, string_bytes) = match projection {
+            Some(variants) => (&variants[0], usize::MAX),
+            None => (
                 &call.input,
                 HISTORY_STRING_BYTES.min(self.config.window.max_result_bytes),
             ),
         };
+        let history_input = bound_history(input, string_bytes, LOCAL_MAX_VALUE_BYTES);
         let journaled = Line::tool_use(
             &ctx.session_id,
             &id.uuid,
@@ -1396,6 +1463,7 @@ impl Runtime {
         rule_ids: &[String],
         record_id: &str,
         name_malformed: bool,
+        stateless: bool,
     ) -> String {
         if self.config.reason_detail == ReasonDetail::Minimal {
             return minimal_reason(verdict, record_id);
@@ -1426,6 +1494,9 @@ impl Runtime {
             ),
             Basis::EvaluationGap if self.engine_error == Some("pipeline_build_failed") => {
                 "the rules did not build (`telltale hooks check` shows why)".to_owned()
+            }
+            Basis::EvaluationGap if stateless => {
+                "there is no state directory, so the call was evaluated without its session's history (`telltale hooks check` shows why)".to_owned()
             }
             Basis::EvaluationGap => "the call could not be evaluated".to_owned(),
             Basis::UnevaluableInput if name_malformed => {
@@ -1881,6 +1952,28 @@ mod tests {
         let runtime = Runtime::new(Config::default());
         assert!(runtime.is_strict_failure("pipeline_build_failed"));
         assert!(!runtime.is_strict_failure("telemetry_write_failed"));
+    }
+
+    /// No input is known to fail a scan and none is known not to, and an agent
+    /// can launch its harness with no state directory: none of these is an
+    /// allow by default.
+    #[test]
+    fn scan_failures_and_an_unresolved_state_directory_are_strict() {
+        let runtime = Runtime::new(Config::default());
+        for code in [
+            STATE_DIR_UNRESOLVED,
+            "scan_failed",
+            "semantic_provenance_failed",
+            "scan_returned_no_result",
+        ] {
+            assert!(runtime.is_strict_failure(code), "{code}");
+        }
+        for error in [
+            crate::hooks::engine::EngineError::NoResult,
+            crate::hooks::engine::EngineError::Window(std::io::ErrorKind::Other.into()),
+        ] {
+            assert!(runtime.is_strict_failure(error.code()), "{error}");
+        }
     }
 
     #[test]

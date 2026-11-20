@@ -801,6 +801,15 @@ const VERSION_OR_HELP: &str =
     r#"^(?:(?:-y|--yes|[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--version|-V|--help|-h) *$"#;
 const DRY_RUN_OR_HELP: &str = r#"^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*) +)*(?:--dry-run|--version|-V|--help|-h)(?: +(?:--scope[ =])?[A-Za-z0-9_./:=@~+][-A-Za-z0-9_./:=@~+]*)* *$"#;
 
+// A harness launch: the program names an agent starts one by, after an optional quote
+// or directory, to the end of the word; the words that can stand before it in an
+// inline launch; and the variables that locate the Telltale config root, the hooks
+// state, or the home both derive from.
+const HARNESS_LAUNCHER: &str = r#"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["']?(?:[\s;&|)`]|$)"#;
+const LAUNCH_WRAPPERS: &str = r#"(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)"#;
+const CONFIG_LOCATION_VARS: &str =
+    r#"(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)"#;
+
 // The fail-safe rules: a writer word anywhere, matched without a list of what can wrap
 // it, and the words that work on what they are handed when the path comes first.
 const WRITER_ANYWHERE: &str = r#"(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln|tee|tar|rsync|touch|truncate|unlink|shred|trash|gio|install|ch(?:mod|own|attr)|xargs|eval|checkout|reset|restore|clean|del|erase|copy|move|ren(?:ame)?|rd|ri|mi|cpi|sc|ac|(?:Remove|Move|Copy|Rename|New)-Item|(?:Set|Add|Clear)-Content|Out-File|rmtree|rmSync|rm_rf|rimraf|remove_dir_all|removeSync)\b|(?:^|[^-2&=])>(?:[^&]|$)|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|\B-delete\b|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-])"#;
@@ -823,6 +832,9 @@ const RULE_FRAGMENTS: &[(&str, &str)] = &[
     ("DRY_RUN_OR_HELP", DRY_RUN_OR_HELP),
     ("WRITER_ANYWHERE", WRITER_ANYWHERE),
     ("WRITER_AFTER", WRITER_AFTER),
+    ("HARNESS_LAUNCHER", HARNESS_LAUNCHER),
+    ("LAUNCH_WRAPPERS", LAUNCH_WRAPPERS),
+    ("CONFIG_LOCATION_VARS", CONFIG_LOCATION_VARS),
 ];
 
 /// What can stand before a path whose rule must not match the tail of a longer
@@ -861,10 +873,20 @@ pub struct GeneratedCoverage {
     /// Protected paths, custom harness homes and the binary.
     pub paths: usize,
     pub rules: usize,
-    /// Paths matched by their last bytes only.
+    /// Paths matched by their last bytes only; a spelling from the user's home
+    /// as `~` and the rest of the path.
     pub reduced: Vec<String>,
     /// Paths with no generated rule because they are not UTF-8.
     pub unrepresentable: Vec<String>,
+}
+
+impl GeneratedCoverage {
+    /// `path`, or a spelling of it, is matched by its last bytes only.
+    fn report_reduced(&mut self, path: &str) {
+        if !self.reduced.iter().any(|known| known == path) {
+            self.reduced.push(path.to_owned());
+        }
+    }
 }
 
 /// One generated document's literal paths and rule names.
@@ -914,8 +936,9 @@ fn path_pieces(text: &str) -> Vec<String> {
 }
 
 /// One path as regexes followed by `suffix`: its literal text, or its last bytes
-/// if that does not fit one rule, and its spelling from the user's home. Nothing for
-/// a path with nothing in it to match: that would match everything.
+/// if that does not fit one rule, and its spelling from the user's home, reduced
+/// the same way. Nothing for a path with nothing in it to match: that would match
+/// everything.
 fn path_fragments(path: &Path, suffix: &str, coverage: &mut GeneratedCoverage) -> Vec<String> {
     let Some(text) = path.to_str() else {
         let path = path.display().to_string();
@@ -931,6 +954,38 @@ fn path_fragments(path: &Path, suffix: &str, coverage: &mut GeneratedCoverage) -
     }
     let limit = FRAGMENT_BUDGET - suffix.len();
     let pieces = path_pieces(text);
+    let (literal, whole) = last_bytes(&pieces, limit);
+    if !whole {
+        coverage.report_reduced(text);
+    }
+    let mut fragments = vec![literal + suffix];
+    let home = crate::hooks::config::user_home();
+    let rest = home
+        .as_deref()
+        .and_then(Path::to_str)
+        .and_then(|home| text.strip_prefix(home.trim_end_matches(is_separator)))
+        .filter(|rest| rest.is_empty() || rest.starts_with(is_separator));
+    if let Some(rest) = rest {
+        let spelled = format!("(?:{HOME_SPELLINGS})");
+        let pieces = path_pieces(rest);
+        let fragment = match last_bytes(&pieces, limit.saturating_sub(spelled.len())) {
+            (rest, true) => spelled + &rest,
+            // Matched by the last bytes of what follows the home, which a command
+            // written from the home contains. The literal path's last bytes can
+            // hold characters of the home that such a command does not.
+            _ => {
+                coverage.report_reduced(&format!("~{rest}"));
+                last_bytes(&pieces, limit).0
+            }
+        };
+        fragments.push(fragment + suffix);
+    }
+    fragments
+}
+
+/// The last of `pieces` that fit in `limit` bytes, joined, and whether that is
+/// all of them.
+fn last_bytes(pieces: &[String], limit: usize) -> (String, bool) {
     let mut used = 0;
     let mut kept: Vec<&str> = pieces
         .iter()
@@ -941,21 +996,9 @@ fn path_fragments(path: &Path, suffix: &str, coverage: &mut GeneratedCoverage) -
             used <= limit
         })
         .collect();
-    if kept.len() < pieces.len() && !coverage.reduced.iter().any(|known| known == text) {
-        coverage.reduced.push(text.to_owned());
-    }
+    let whole = kept.len() == pieces.len();
     kept.reverse();
-    let mut fragments = vec![kept.concat() + suffix];
-    let home = crate::hooks::config::user_home();
-    let spelled = home
-        .as_deref()
-        .and_then(Path::to_str)
-        .and_then(|home| text.strip_prefix(home.trim_end_matches(is_separator)))
-        .filter(|rest| rest.is_empty() || rest.starts_with(is_separator))
-        .map(|rest| format!("(?:{HOME_SPELLINGS}){}{suffix}", path_pieces(rest).concat()))
-        .filter(|fragment| fragment.len() <= FRAGMENT_BUDGET);
-    fragments.extend(spelled);
-    fragments
+    (kept.concat(), whole)
 }
 
 /// Paths inside another listed directory are dropped; the directory covers them.

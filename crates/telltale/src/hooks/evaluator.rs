@@ -18,6 +18,26 @@ pub use unix::{PROTOCOL_VERSION, peer_uid, request, serve, spawn_detached, trust
 #[cfg(not(unix))]
 pub use unsupported::{UNSUPPORTED_PLATFORM, request, serve, spawn_detached};
 
+/// Test-only fault injection: with debug assertions, a hook or evaluator
+/// process whose environment names `site` in this variable (comma-separated)
+/// panics there, so the binary tests can drive the panic handling of the hook
+/// and of the evaluator through the real executable. Release builds compile
+/// the check out and never read the variable.
+pub const FORCE_PANIC_ENV: &str = "TELLTALE_HOOKS_TEST_PANIC";
+
+/// Panic if [`FORCE_PANIC_ENV`] names `site` (debug builds only).
+#[doc(hidden)]
+pub fn panic_if_forced(site: &str) {
+    #[cfg(debug_assertions)]
+    if std::env::var(FORCE_PANIC_ENV)
+        .is_ok_and(|sites| sites.split(',').any(|forced| forced == site))
+    {
+        panic!("{FORCE_PANIC_ENV}: forced panic at {site}");
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = site;
+}
+
 /// What a hook learned from trying the evaluator.
 #[derive(Debug, PartialEq)]
 pub enum ClientOutcome {

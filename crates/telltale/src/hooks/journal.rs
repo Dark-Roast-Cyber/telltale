@@ -10,7 +10,7 @@
 //! than detection needs. The journal holds only hook-reported facts.
 
 use std::collections::BTreeSet;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -202,24 +202,139 @@ impl Line {
     }
 }
 
-/// Recursively cut long strings so one journaled record stays small. Used for
-/// history context only; the pending action is always evaluated unmodified.
-pub fn bound_value(value: &Value, max_string_bytes: usize) -> Value {
-    match value {
-        Value::String(text) => Value::String(cut_utf8(text, max_string_bytes).to_owned()),
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .map(|item| bound_value(item, max_string_bytes))
-                .collect(),
-        ),
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, item)| (key.clone(), bound_value(item, max_string_bytes)))
-                .collect(),
-        ),
-        other => other.clone(),
+/// A tool input as history, so one journaled record stays small: every
+/// string cut to `max_string_bytes`, and the whole within `max_bytes` as the
+/// journal line encodes it, so no call costs the window more than one
+/// Telltale evaluates whole. Cutting strings alone leaves an excluded input
+/// (too many members, leaves or variants) able to outgrow the window. Used
+/// for history only; the pending action is always evaluated unmodified.
+///
+/// Short top-level scalars go in first, shortest first: a call's command,
+/// path or URL, which Telltale reads by member name. Then the rest in order,
+/// a string cut and a member left out where the budget ends. Only an input
+/// Telltale did not evaluate whole loses more than its long strings' ends,
+/// and its record already says so (`pending_input_projected` or an
+/// `unevaluable_input` basis). Sizes are counted as the value is built; no
+/// second encoding.
+pub fn bound_history(value: &Value, max_string_bytes: usize, max_bytes: usize) -> Value {
+    let mut budget = max_bytes;
+    let Value::Object(map) = value else {
+        return within(value, max_string_bytes, &mut budget).unwrap_or(Value::Null);
+    };
+    let short = |item: &Value| match item {
+        Value::String(text) => Some(escaped_len(cut_utf8(text, max_string_bytes))),
+        Value::Object(_) | Value::Array(_) => None,
+        other => Some(other.to_string().len()),
+    };
+    let mut order: Vec<(Option<usize>, usize)> = map
+        .values()
+        .enumerate()
+        .map(|(n, item)| (short(item).filter(|len| *len <= SHORT_HISTORY_BYTES), n))
+        .collect();
+    // Short scalars first (`Some` sorts after `None`, hence the key).
+    order.sort_by_key(|(len, n)| (len.is_none(), *len, *n));
+    let members: Vec<(&String, &Value)> = map.iter().collect();
+    budget = budget.saturating_sub(2);
+    let mut kept = Map::new();
+    for (_, n) in order {
+        let (key, item) = members[n];
+        if let Some(item) =
+            member_within(key, item, !kept.is_empty(), max_string_bytes, &mut budget)
+        {
+            kept.insert(key.clone(), item);
+        }
     }
+    Value::Object(kept)
+}
+
+/// A top-level scalar up to this many encoded bytes goes into history first.
+const SHORT_HISTORY_BYTES: usize = 1024;
+
+/// `"key":value`, with a comma ahead of it unless it is the first member,
+/// within `budget`; `None` leaves `budget` untouched.
+fn member_within(
+    key: &str,
+    item: &Value,
+    comma: bool,
+    max_string_bytes: usize,
+    budget: &mut usize,
+) -> Option<Value> {
+    let mut room = budget.checked_sub(usize::from(comma) + escaped_len(key) + 3)?;
+    let item = within(item, max_string_bytes, &mut room)?;
+    *budget = room;
+    Some(item)
+}
+
+/// `value` with strings cut to `max_string_bytes`, cut to fit `budget`
+/// encoded bytes and charged to it; `None` (and `budget` untouched) when not
+/// even an empty form fits.
+fn within(value: &Value, max_string_bytes: usize, budget: &mut usize) -> Option<Value> {
+    match value {
+        Value::String(text) => {
+            let room = budget.checked_sub(2)?;
+            let text = cut_escaped(cut_utf8(text, max_string_bytes), room);
+            *budget = room - escaped_len(text);
+            Some(Value::String(text.to_owned()))
+        }
+        Value::Array(items) => {
+            let mut room = budget.checked_sub(2)?;
+            let mut kept = Vec::new();
+            for item in items {
+                let Some(mut left) = room.checked_sub(usize::from(!kept.is_empty())) else {
+                    break;
+                };
+                if let Some(item) = within(item, max_string_bytes, &mut left) {
+                    kept.push(item);
+                    room = left;
+                }
+            }
+            *budget = room;
+            Some(Value::Array(kept))
+        }
+        Value::Object(map) => {
+            let mut room = budget.checked_sub(2)?;
+            let mut kept = Map::new();
+            for (key, item) in map {
+                if let Some(item) =
+                    member_within(key, item, !kept.is_empty(), max_string_bytes, &mut room)
+                {
+                    kept.insert(key.clone(), item);
+                }
+            }
+            *budget = room;
+            Some(Value::Object(kept))
+        }
+        other => {
+            *budget = budget.checked_sub(other.to_string().len())?;
+            Some(other.clone())
+        }
+    }
+}
+
+/// Bytes `c` takes inside a JSON string as `serde_json` writes it.
+fn escaped_char_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if c < ' ' => 6,
+        c => c.len_utf8(),
+    }
+}
+
+/// Bytes `text` takes inside a JSON string, quotes not counted.
+fn escaped_len(text: &str) -> usize {
+    text.chars().map(escaped_char_len).sum()
+}
+
+/// Longest prefix of `text` that takes at most `max` bytes escaped.
+fn cut_escaped(text: &str, max: usize) -> &str {
+    let mut used = 0;
+    for (at, c) in text.char_indices() {
+        used += escaped_char_len(c);
+        if used > max {
+            return &text[..at];
+        }
+    }
+    text
 }
 
 /// Longest prefix of `text` within `max` bytes that ends on a char boundary.
@@ -252,8 +367,13 @@ impl Journal {
         file.write_all(line.to_jsonl().as_bytes())
     }
 
-    /// The most recent complete lines, bounded by count and by bytes read
-    /// from the end of the file. Unparseable lines are skipped and counted.
+    /// The most recent complete lines, bounded by count and by their bytes.
+    /// Unparseable lines are skipped and counted. A line longer than
+    /// `max_bytes` on its own (written by an older version, which did not
+    /// bound every call) is skipped and counted too, and older lines fill the
+    /// budget in its place: one line cannot empty the window. Stepping over
+    /// such lines reads at most [`OVERSIZED_SCAN_FACTOR`] times `max_bytes`
+    /// more; past that the window ends there.
     pub fn tail(&self, max_records: usize, max_bytes: u64) -> std::io::Result<Tail> {
         let mut file = match open_regular(OpenOptions::new().read(true), &self.path) {
             Ok(file) => file,
@@ -262,23 +382,44 @@ impl Journal {
             }
             Err(error) => return Err(error),
         };
-        let len = file.metadata()?.len();
-        let start = len.saturating_sub(max_bytes);
-        file.seek(SeekFrom::Start(start))?;
-        let mut bytes = Vec::with_capacity((len - start) as usize);
-        file.read_to_end(&mut bytes)?;
-        let text = String::from_utf8_lossy(&bytes);
-        let mut lines: Vec<&str> = text.split('\n').collect();
-        // A cut start lands mid-line; the trailing element is empty or partial.
-        if start > 0 && !lines.is_empty() {
-            lines.remove(0);
+        let mut tail = Tail::default();
+        let mut end = file.metadata()?.len();
+        let mut budget = max_bytes;
+        let mut scan_left = max_bytes.saturating_mul(OVERSIZED_SCAN_FACTOR);
+        // Spans of whole lines, newest first.
+        let mut spans: Vec<Vec<u8>> = Vec::new();
+        loop {
+            let start = end.saturating_sub(budget);
+            file.seek(SeekFrom::Start(start))?;
+            let mut bytes = Vec::with_capacity((end - start) as usize);
+            (&mut file).take(end - start).read_to_end(&mut bytes)?;
+            if start == 0 {
+                spans.push(bytes);
+                break;
+            }
+            // A cut start lands mid-line: leave that line's part out.
+            tail.truncated = true;
+            let cut = bytes
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(bytes.len(), |at| at + 1);
+            let line_end = start + cut as u64;
+            budget -= end - line_end;
+            spans.push(bytes.split_off(cut));
+            match line_start(&mut file, start, &mut scan_left)? {
+                Some(line_begin) if line_end - line_begin > max_bytes => {
+                    tail.skipped += 1;
+                    end = line_begin;
+                    if end == 0 || budget == 0 {
+                        break;
+                    }
+                }
+                _ => break,
+            }
         }
-        let truncated_by_bytes = start > 0;
-        let mut tail = Tail {
-            truncated: truncated_by_bytes,
-            ..Tail::default()
-        };
-        for line in lines.into_iter().filter(|line| !line.trim().is_empty()) {
+        let bytes: Vec<u8> = spans.into_iter().rev().flatten().collect();
+        let text = String::from_utf8_lossy(&bytes);
+        for line in text.split('\n').filter(|line| !line.trim().is_empty()) {
             match serde_json::from_str::<Value>(line) {
                 Ok(value) => tail.lines.push(Line(value)),
                 Err(_) => tail.skipped += 1,
@@ -293,12 +434,42 @@ impl Journal {
     }
 }
 
+/// How far past its byte budget [`Journal::tail`] reads to step over lines
+/// longer than the budget, as a multiple of the budget.
+pub const OVERSIZED_SCAN_FACTOR: u64 = 4;
+const SCAN_CHUNK: u64 = 64 * 1024;
+
+/// Where the line holding the byte before `pos` starts: just past the last
+/// line break before `pos`, or the start of the file. `None` when that is
+/// more than `scan_left` bytes back, which is charged for what is read.
+fn line_start(file: &mut File, mut pos: u64, scan_left: &mut u64) -> std::io::Result<Option<u64>> {
+    let mut chunk = vec![0; SCAN_CHUNK.min(pos) as usize];
+    while pos > 0 {
+        let n = SCAN_CHUNK.min(pos).min(*scan_left);
+        if n == 0 {
+            return Ok(None);
+        }
+        pos -= n;
+        let chunk = &mut chunk[..n as usize];
+        file.seek(SeekFrom::Start(pos))?;
+        file.read_exact(chunk)?;
+        if let Some(at) = chunk.iter().rposition(|byte| *byte == b'\n') {
+            // Charged for the line's own bytes only.
+            *scan_left -= n - at as u64 - 1;
+            return Ok(Some(pos + at as u64 + 1));
+        }
+        *scan_left -= n;
+    }
+    Ok(Some(0))
+}
+
 #[derive(Debug, Default)]
 pub struct Tail {
     pub lines: Vec<Line>,
     /// Older journal history exists outside this window.
     pub truncated: bool,
-    /// Lines that did not parse (for example, a torn write).
+    /// Lines left out: one that did not parse (for example, a torn write) or
+    /// one longer than the whole byte budget.
     pub skipped: usize,
 }
 
@@ -423,9 +594,93 @@ mod tests {
     }
 
     #[test]
-    fn bound_value_cuts_on_char_boundaries() {
+    fn bound_history_cuts_on_char_boundaries() {
         let value = json!({"a": "ééé", "b": [ "abcdef" ], "n": 5});
-        let bounded = bound_value(&value, 3);
+        let bounded = bound_history(&value, 3, 1 << 20);
         assert_eq!(bounded, json!({"a": "é", "b": ["abc"], "n": 5}));
+    }
+
+    /// An input within the budget is only string-cut; any other is cut to the
+    /// budget exactly as the line encodes it, short top-level values first.
+    #[test]
+    fn bound_history_fits_the_budget_and_keeps_short_top_level_values() {
+        let ordinary = json!({"command": "ls -la", "description": "x".repeat(5000)});
+        assert_eq!(
+            bound_history(&ordinary, 4000, 16 * 1024),
+            json!({"command": "ls -la", "description": "x".repeat(4000)})
+        );
+        let members = |n: usize, text: &str| {
+            let mut map: Map<String, Value> =
+                (0..n).map(|i| (format!("a{i:04}"), json!(text))).collect();
+            map.insert("url".to_owned(), json!("https://example.invalid/x"));
+            map.insert("command".to_owned(), json!("sh /tmp/x.sh"));
+            Value::Object(map)
+        };
+        let deep = (0..100).fold(json!("q\"\u{1}é".repeat(2000)), |v, _| json!({"d": [v, 1]}));
+        let cases = [
+            members(1100, &"m".repeat(4000)),
+            members(2000, "m"),
+            members(3, &"\u{1}\"\\é".repeat(4000)),
+            json!({"command": "ls", "nested": deep}),
+            json!([deep, "x".repeat(4000), "y".repeat(4000)]),
+            json!("z".repeat(100_000)),
+        ];
+        for budget in [16 * 1024, 300, 40, 2] {
+            for (n, value) in cases.iter().enumerate() {
+                let bounded = bound_history(value, 4000, budget);
+                let written = bounded.to_string().len();
+                assert!(written <= budget, "{written} > {budget}");
+                // Long padding members do not crowd out the short values.
+                if budget >= 300
+                    && (n == 0 || n == 2)
+                    && let Some(map) = value.as_object()
+                {
+                    assert_eq!(bounded["command"], map["command"]);
+                    assert_eq!(bounded["url"], map["url"]);
+                }
+            }
+        }
+        // Filled close to the budget, not left far short of it.
+        let bounded = bound_history(&cases[0], 4000, 16 * 1024);
+        assert!(bounded.to_string().len() > 16 * 1024 - 4100);
+    }
+
+    /// A line longer than the whole budget is skipped, not left to empty the
+    /// window: the lines before it fill the budget in its place.
+    #[test]
+    fn tail_steps_over_a_line_longer_than_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = Journal::new(dir.path().join("j.jsonl"));
+        let prompt =
+            |uuid: &str, text: &str| Line::user_prompt("s", uuid, "2026-01-01T00:00:00.000Z", text);
+        let one_line = prompt("u0", "hi").to_jsonl().len() as u64;
+        for i in 0..5 {
+            journal.append(&prompt(&format!("u{i}"), "hi")).unwrap();
+        }
+        let budget = one_line * 3 + 5;
+        // Longer than the budget, within the bytes read to step over it.
+        let big = "b".repeat(budget as usize * 2);
+        journal.append(&prompt("big", &big)).unwrap();
+        journal.append(&prompt("u5", "hi")).unwrap();
+        let tail = journal.tail(100, budget).unwrap();
+        let uuids: Vec<&Value> = tail.lines.iter().map(|line| &line.0["uuid"]).collect();
+        assert_eq!(uuids, [&json!("u3"), &json!("u4"), &json!("u5")]);
+        assert!(tail.truncated);
+        assert_eq!(tail.skipped, 1);
+
+        // The oversized line last, and alone.
+        journal.append(&prompt("big2", &big)).unwrap();
+        let tail = journal.tail(100, budget).unwrap();
+        let uuids: Vec<&Value> = tail.lines.iter().map(|line| &line.0["uuid"]).collect();
+        assert_eq!(uuids, [&json!("u3"), &json!("u4"), &json!("u5")]);
+        assert_eq!(tail.skipped, 2);
+
+        // Stepping over is bounded: past the bytes it may read, the window
+        // ends there.
+        journal
+            .append(&prompt("huge", &"h".repeat(budget as usize * 10)))
+            .unwrap();
+        let tail = journal.tail(100, budget).unwrap();
+        assert!(tail.lines.is_empty() && tail.truncated);
     }
 }

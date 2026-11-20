@@ -1058,6 +1058,81 @@ fn hook_dropping_launch_forms_are_denied() {
     );
 }
 
+/// A harness launched with the variables that locate the Telltale config root
+/// or the hooks state removed, or in an emptied environment, for every
+/// launcher: `tth.tamper.hook_env_unset` and `_builtin`, the removal form of the env
+/// override rules.
+#[test]
+fn launches_without_the_config_location_are_denied() {
+    let cases: &[(&str, &str)] = &[
+        ("env-u", "env -u HOME claude -p hi"),
+        ("env-u-joined", "env -uHOME claude -p hi"),
+        ("env-u-xdg", "env -u XDG_CONFIG_HOME codex exec hi"),
+        ("env-u-state", "env -u XDG_STATE_HOME copilot -p hi"),
+        ("env-u-second", "env -u FOO -u HOME opencode run hi"),
+        ("env-unset-eq", "env --unset=HOME claude -p hi"),
+        ("env-unset-space", "env --unset HOME gemini -p hi"),
+        ("env-u-path", "env -u HOME /usr/local/bin/claude -p hi"),
+        ("env-u-assign", "env -u HOME FOO=1 codex exec hi"),
+        ("env-u-shell", "env -u HOME bash -c 'claude -p hi'"),
+        ("env-u-sudo", "sudo env -u HOME claude -p hi"),
+        ("env-u-abs", "/usr/bin/env -u HOME claude -p hi"),
+        ("env-u-userprofile", "env -u USERPROFILE copilot.exe -p hi"),
+        (
+            "env-u-appdata",
+            "env -u APPDATA -u LOCALAPPDATA codex exec hi",
+        ),
+        ("env-i", "env -i claude -p hi"),
+        ("env-i-path", "env -i PATH=/usr/bin codex exec hi"),
+        ("env-dash", "env - copilot -p hi"),
+        ("env-ignore", "env --ignore-environment claude -p hi"),
+        ("exec-c", "exec -c claude -p hi"),
+        ("unset", "unset HOME; claude -p hi"),
+        ("unset-and", "unset XDG_CONFIG_HOME && codex exec hi"),
+        ("unset-v", "unset -v HOME FOO; copilot -p hi"),
+        ("unset-subshell", "(unset HOME; claude -p hi)"),
+        ("unset-nested", "bash -c 'unset HOME; codex exec hi'"),
+        ("ps-remove", "Remove-Item Env:USERPROFILE; copilot -p hi"),
+        ("ps-remove-path", "Remove-Item -Path env:HOME; claude -p hi"),
+    ];
+    let mut failures = Vec::new();
+    for (label, verdict, rules) in decide(cases) {
+        if verdict.as_deref() != Some("deny")
+            || !rules
+                .iter()
+                .any(|rule| rule.starts_with("tth.tamper.hook_env_unset"))
+        {
+            failures.push(format!("{label}: got {verdict:?} {rules:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The twins of the cases above: a mention of a variable, an unrelated
+/// variable removed, one of these removed with no launch, and a launcher's
+/// name as an argument.
+#[test]
+fn removing_unrelated_variables_or_launching_nothing_is_not_denied() {
+    assert_all(
+        &[
+            ("echo-home", "echo $HOME; claude --version"),
+            ("env-u-other", "env -u FOO claude -p hi"),
+            ("env-u-lookalike", "env -u HOMEBREW_PREFIX claude -p hi"),
+            ("env-u-suffix", "env -u MYHOME codex exec hi"),
+            ("env-u-no-launch", "env -u HOME printenv"),
+            ("env-i-no-launch", "env -i PATH=/usr/bin make test"),
+            ("env-u-arg", "env -u HOME python run.py --model claude"),
+            ("unset-only", "unset HOME"),
+            ("unset-other", "unset HOMEBREW_PREFIX; claude -p hi"),
+            ("unset-then-build", "unset XDG_CONFIG_HOME; cargo test"),
+            ("ps-remove-other", "Remove-Item Env:FOO; copilot -p hi"),
+            ("exec-plain", "exec claude -p hi"),
+            ("grep-docs", "grep -n 'env -u HOME' docs/notes.md"),
+        ],
+        None,
+    );
+}
+
 /// Reads, look-alikes and mentions. A plain read and a plain commit are
 /// silent, whatever they name; any other mention follows the reference rules.
 #[test]

@@ -81,7 +81,9 @@ pub struct Adapter {
     /// What `telltale hooks <name> settings` prints.
     pub install: Install,
     /// What blocks a tool call when the payload names no event and the
-    /// operator chose `on_error: deny`.
+    /// policy for a call the hook could not read (the stricter of `on_error`
+    /// and `on_unevaluable`) is `ask` or `deny`, or a configuration that asks
+    /// for enforcement did not load.
     pub nameless_block: NamelessBlock,
     /// The environment variable that relocates the harness's config home, if
     /// it has one.

@@ -161,8 +161,9 @@ a harness means:
      the operator, and what `--fail-closed` means: honored, a note that it
      changes nothing, or a refusal when the harness cannot fail closed.
    - `nameless_block`: what blocks a tool call when the payload names no
-     event under `on_error: deny`. What it does on a stop event matters as
-     much as what it does on a tool call.
+     event and the stricter of `on_error` and `on_unevaluable` is `ask` or
+     `deny`, or a configuration that asks for enforcement did not load. What
+     it does on a stop event matters as much as what it does on a tool call.
    - Tool shapes are not declared here: the harness's built-in tools belong
      in its source's tool table (`crates/telltale-sources/src/sources/<agent>/tools.rs`),
      with parity cases and benign twins in
@@ -247,9 +248,13 @@ group; failed cleanup cannot release a still-live slot.
 - A configuration that does not load denies tool calls when it asks for
   enforcement (an operator error should be loud), and is detect-only on the
   defaults when it does not.
-- A panic while evaluating is caught at the process boundary: a tool call gets
-  the stricter of `on_error` and `on_unevaluable` while enforcing, and nothing
-  in detect-only mode.
+- A panic on the way to an answer is caught at the process boundary and
+  answered like a payload the hook could not read, with an `error` record
+  (`hook_panicked`): a tool call gets the stricter of `on_error` and
+  `on_unevaluable` while enforcing, and nothing in detect-only mode. A panic
+  in the evaluator leaves that connection unanswered and retires the
+  evaluator; the client evaluates in-process and the next hook starts a fresh
+  one.
 - Telemetry write failures go to stderr and never change a verdict.
 - Telltale fails a source as a whole, and tool input can cause that. A failed
   scan is retried on a reduced window (`Engine::evaluate`, ADR 0002 addendum):
