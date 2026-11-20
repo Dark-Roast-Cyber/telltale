@@ -546,7 +546,12 @@ fn binary_settings_print_hooks_json_and_refuse_fail_closed() {
     let (code, stdout, stderr) = binary(&["codex-cli", "settings"], b"", dir.path());
     assert_eq!(code, 0);
     let doc: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(doc, codex_cli::hooks_file("telltale hooks codex-cli hook"));
+    // The state directory in use is pinned on the command.
+    let pin = format!(" --state-dir '{}'", dir.path().display());
+    assert_eq!(
+        doc,
+        codex_cli::hooks_file(&format!("telltale hooks codex-cli hook{pin}"))
+    );
     assert!(stderr.contains("hooks.json") && stderr.contains("Trust all and continue"));
 
     let (code, stdout, _) = binary(&["codex-cli", "settings", "/opt/tth hook"], b"", dir.path());
@@ -554,7 +559,7 @@ fn binary_settings_print_hooks_json_and_refuse_fail_closed() {
     let doc: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "/opt/tth hook"
+        format!("/opt/tth hook{pin}")
     );
 
     let (code, stdout, stderr) =

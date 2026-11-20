@@ -560,19 +560,47 @@ impl ToolObservation {
     /// Record values a bounded conversion of this call's arguments or result
     /// replaced by `null` (`JsonValue::try_from_source_*_bounded`). The list
     /// stays sorted and unique; validation checks that each entry names a
-    /// replacement present in the field.
+    /// replacement present in the field. Set the field first: when the two
+    /// fields' entries together exceed the cap, the field with more entries
+    /// (ties: the arguments) is replaced whole and recorded by one entry.
     pub fn with_bounded_values(mut self, values: impl IntoIterator<Item = BoundedValue>) -> Self {
         self.bounded_values.extend(values);
-        self.bounded_values.sort_by(|left, right| {
-            (left.target(), left.pointer()).cmp(&(right.target(), right.pointer()))
-        });
-        self.bounded_values.dedup_by(|left, right| {
-            left.target() == right.target() && left.pointer() == right.pointer()
-        });
+        super::value::cap_tool_values(
+            &mut self.arguments,
+            &mut self.result,
+            &mut self.bounded_values,
+        );
         self
     }
     pub fn bounded_values(&self) -> &[BoundedValue] {
         &self.bounded_values
+    }
+    /// Fit the arguments and result together into the room a bounded
+    /// conversion leaves for them in the observation aggregate, replacing the
+    /// largest top-level values by `null` and recording each replacement as
+    /// the bounded conversions do. For a call whose observation failed its
+    /// aggregate bound although each value was admitted; values that already
+    /// fit are kept as they are.
+    pub fn with_fitted_values(mut self) -> Result<Self, ObservationError> {
+        super::value::fit_tool_values(
+            &mut self.arguments,
+            &mut self.result,
+            &mut self.bounded_values,
+            false,
+        )?;
+        Ok(self)
+    }
+    /// Replace the arguments and the result whole by `null`, each recorded by
+    /// one entry for its root: for a call whose observation fails its bounds
+    /// even with its values fitted.
+    pub fn with_replaced_values(mut self) -> Result<Self, ObservationError> {
+        super::value::fit_tool_values(
+            &mut self.arguments,
+            &mut self.result,
+            &mut self.bounded_values,
+            true,
+        )?;
+        Ok(self)
     }
     /// Whether a replacement covers the top-level member `key` of `target`,
     /// so nothing derived from that member (a command or path facet) may be

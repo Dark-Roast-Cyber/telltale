@@ -261,7 +261,10 @@ second detector or an Event 3 conversion loop.
   (`JsonValue::try_from_source_tool_arguments_bounded`,
   `try_from_source_tool_result_bounded`) return the replaced value with its
   `BoundedValue` list, which the observation emits as `tool.bounded_values`
-  only when it is not empty.
+  only when it is not empty. `ToolObservation::with_fitted_values` replaces
+  the largest values of a converted call's arguments and result until both
+  fit the room the observation leaves them, and `with_replaced_values`
+  replaces both whole; each records its replacements the same way.
 
 ### Source size
 

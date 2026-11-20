@@ -15,8 +15,8 @@ use telltale_schema::observation::{
 use telltale_schema::observation::CanonicalBoundContext;
 
 use crate::tool_operation::{
-    BoundedRecord, ResultText, ToolSpec, ValueBounds, bounded_records, declare, table,
-    with_source_arguments, with_source_result,
+    BoundedRecord, ResultText, ToolSpec, ValueBounds, bounded_records, build_fitted, declare,
+    table, with_source_arguments, with_source_result,
 };
 use telltale_schema::observation::BoundedTarget;
 
@@ -478,11 +478,28 @@ fn emit_tool(
     child_ordinal: &mut usize,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
+    let observation = build_fitted(
+        options.value_bounds,
+        |error| matches!(error, ClaudeCanonicalError::Observation(error) if error.bound_dimension().is_some()),
+        |bounds| tool_observation(record, options, block, *child_ordinal, bounds),
+    )?;
+    observations.push(observation)?;
+    *child_ordinal += 1;
+    Ok(())
+}
+
+fn tool_observation(
+    record: &ClaudeNativeRecord,
+    options: &ClaudeCanonicalOptions,
+    block: &ClaudeContentBlock,
+    child_ordinal: usize,
+    bounds: ValueBounds,
+) -> Result<CanonicalObservationV2, ClaudeCanonicalError> {
     let ToolBody {
         body,
         facts,
         resource_path,
-    } = tool_body(block, options)?;
+    } = tool_body(block, options, bounds)?;
     // A command whose argument was replaced is not built from the source.
     let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
     let (command_admitted, cmd_admitted) = (admitted("command"), admitted("cmd"));
@@ -496,7 +513,7 @@ fn emit_tool(
             _ => unreachable!(),
         },
         tool_call_id(block)?,
-        *child_ordinal,
+        child_ordinal,
     )?;
     for (path, provenance) in facts {
         builder = builder.fact_metadata(path, normal(provenance)?);
@@ -528,9 +545,7 @@ fn emit_tool(
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
             .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
     }
-    observations.push(builder.build()?)?;
-    *child_ordinal += 1;
-    Ok(())
+    Ok(builder.build()?)
 }
 
 struct ToolBody {
@@ -542,6 +557,7 @@ struct ToolBody {
 fn tool_body(
     block: &ClaudeContentBlock,
     options: &ClaudeCanonicalOptions,
+    bounds: ValueBounds,
 ) -> Result<ToolBody, ClaudeCanonicalError> {
     match block {
         ClaudeContentBlock::ToolUse { id: _, name, input } => {
@@ -552,13 +568,7 @@ fn tool_body(
             let mut paths = vec![("tool.name", FactProvenance::Reported)];
             let mut facet = None;
             if let Some(input) = input {
-                body = with_source_arguments(
-                    options.tools,
-                    Some(name),
-                    body,
-                    input,
-                    options.value_bounds,
-                )?;
+                body = with_source_arguments(options.tools, Some(name), body, input, bounds)?;
                 facet = body
                     .arguments()
                     .and_then(resource_path)
@@ -591,7 +601,7 @@ fn tool_body(
                     body,
                     joined.as_ref().unwrap_or(content),
                     ResultText::Direct,
-                    options.value_bounds,
+                    bounds,
                 )?;
                 paths.push((
                     "tool.result",

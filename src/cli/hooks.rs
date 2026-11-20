@@ -68,6 +68,9 @@ content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan
 --user-config-dir DIR replaces only the user root, which must then exist; settings
 adds it to the hook command when the user root exists, so the environment a harness
 is launched with cannot move it.
+--state-dir DIR sets the state directory, and the environment no longer decides it;
+settings adds it to the hook command with the state directory in use, which a hook
+creates owner-only when it is missing.
 hook also accepts --json-reply: frame the gated native output (including null)
 as telltale.hook-reply.v1 for subprocess adapters, not native command hooks.
 --detect-only can only restrict the loaded mode, never enable enforcement.
@@ -171,13 +174,13 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
     // A user-level install is found through HOME or XDG_CONFIG_HOME, which a
     // harness can be launched without; pin the root the hook reads now. A
     // command that names its own roots is the operator's.
-    let (pinned, pin_note) = if command.contains("--config-dir")
-        || command.contains("--user-config-dir")
-    {
+    let own_roots = command.contains("--config-dir") || command.contains(USER_CONFIG_DIR);
+    let loaded = (!own_roots).then(|| load_config(&[]));
+    let (pinned, pin_note) = if own_roots {
         (None, None)
     } else {
         match user_root_to_pin() {
-                Some(root) => match pin_command(command, &root, cfg!(windows)) {
+                Some(root) => match pin_command(command, USER_CONFIG_DIR, &root, cfg!(windows)) {
                     Some(pinned) => (
                         Some(pinned),
                         Some(format!(
@@ -201,13 +204,10 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
     };
     // An enforcing configuration that later does not load must not fall to
     // detect-only: the command says enforcement was expected.
-    let (expect_enforce, enforce_note) = if command.contains("--config-dir")
-        || command.contains("--user-config-dir")
-        || command.contains(EXPECT_ENFORCE)
-    {
-        (false, None)
-    } else {
-        match load_config(&[]) {
+    let (expect_enforce, enforce_note) = match &loaded {
+        None => (false, None),
+        Some(_) if command.contains(EXPECT_ENFORCE) => (false, None),
+        Some(loaded) => match loaded {
             Ok(config) if Gate::for_mode(config.mode) == Gate::Enforce => (
                 true,
                 Some(
@@ -226,9 +226,51 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
                     "telltale hooks: the configuration does not load, so the hook command carries no --expect-enforce; fix it (telltale hooks check) and run settings again",
                 ),
             ),
-        }
+        },
     };
     let mut generated = pinned.unwrap_or_else(|| command.to_owned());
+    // Session history and records follow the state-locating variables, which
+    // a harness can be launched with moved; pin the directory the hook uses
+    // now, so the environment never decides it. A command that names its own
+    // roots pins the directory the configuration in those roots resolves.
+    let own_loaded = (own_roots && !command.contains(STATE_DIR))
+        .then(|| command_roots(command))
+        .map(|roots| {
+            roots.map(|(dirs, user)| {
+                if let Some(user) = user {
+                    crate::config::pin_user_config_root(user);
+                }
+                load_config(&dirs)
+            })
+        });
+    let state_loaded = match (&loaded, &own_loaded) {
+        (Some(loaded), _) | (_, Some(Some(loaded))) => Some(loaded),
+        _ => None,
+    };
+    let state_note = match state_loaded {
+        _ if command.contains(STATE_DIR) => None,
+        None => Some(format!(
+            "telltale hooks: the config roots this command names cannot be read plainly, so its state directory is not pinned and the hook follows {STATE_LOCATING}; add --state-dir DIR to the command"
+        )),
+        Some(loaded) => Some(match state_dir_to_pin(loaded) {
+            Some(dir) => match pin_command(&generated, STATE_DIR, &dir, cfg!(windows)) {
+                Some(with_state) => {
+                    generated = with_state;
+                    format!(
+                        "telltale hooks: the hook keeps session state in {} whatever {STATE_LOCATING} is when the harness starts; run settings again to move it",
+                        dir.display()
+                    )
+                }
+                None => format!(
+                    "telltale hooks: the state directory {} cannot be quoted for the hook command; it is not pinned, so the hook follows {STATE_LOCATING}",
+                    dir.display()
+                ),
+            },
+            None => format!(
+                "telltale hooks: no state directory resolves, so the hook command is not pinned and the hook follows {STATE_LOCATING}; run settings again after setting one"
+            ),
+        }),
+    };
     if expect_enforce {
         generated.push(' ');
         generated.push_str(EXPECT_ENFORCE);
@@ -241,7 +283,12 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
             if let Some(notes) = output.notes {
                 eprintln!("{notes}");
             }
-            for note in pin_note.iter().map(String::as_str).chain(enforce_note) {
+            for note in pin_note
+                .iter()
+                .chain(&state_note)
+                .map(String::as_str)
+                .chain(enforce_note)
+            {
                 eprintln!("{note}");
             }
             output.document
@@ -261,11 +308,30 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
 /// The hook switch `settings` adds when the configuration enforces.
 const EXPECT_ENFORCE: &str = "--expect-enforce";
 
-/// `parse` of `flags` without one `--user-config-dir DIR` (or `=DIR`), which
-/// pins the user config root for this process. `None` for a repeated or empty
-/// pin, or a pin beside `--config-dir`, which replaces every root.
+/// The switch that pins the user config root.
+const USER_CONFIG_DIR: &str = "--user-config-dir";
+
+/// The switch that pins the hooks state directory.
+const STATE_DIR: &str = "--state-dir";
+
+/// What a state directory that is not pinned follows.
+#[cfg(not(windows))]
+const STATE_LOCATING: &str = "TELLTALE_HOOKS_STATE_DIR, XDG_STATE_HOME and HOME";
+#[cfg(windows)]
+const STATE_LOCATING: &str = "TELLTALE_HOOKS_STATE_DIR and LOCALAPPDATA";
+
+/// The hooks state directory `--state-dir` pinned for this process. It
+/// replaces every other source of the state directory: the environment never
+/// decides it.
+static PINNED_STATE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// `parse` of `flags` without one `--user-config-dir DIR` and one
+/// `--state-dir DIR` (or `=DIR`), which pin the user config root and the state
+/// directory for this process. `None` for a repeated or empty pin, or a user
+/// root pin beside `--config-dir`, which replaces every root.
 fn pinned<T>(flags: &[&str], parse: impl Fn(&[&str]) -> Option<T>) -> Option<T> {
-    let (rest, user) = split_user_root(flags)?;
+    let (rest, user) = split_pin(flags, USER_CONFIG_DIR)?;
+    let (rest, state) = split_pin(&rest, STATE_DIR)?;
     let explicit = rest.iter().any(|flag| flag.starts_with("--config-dir"));
     let parsed = parse(&rest)?;
     if let Some(user) = user {
@@ -274,31 +340,121 @@ fn pinned<T>(flags: &[&str], parse: impl Fn(&[&str]) -> Option<T>) -> Option<T> 
         }
         crate::config::pin_user_config_root(user);
     }
+    if let Some(state) = state {
+        let _ = PINNED_STATE_DIR.set(std::path::absolute(&state).unwrap_or(state));
+    }
     Some(parsed)
 }
 
-/// `flags` without its `--user-config-dir`, and that root. A `--config-dir`
-/// value is passed over, so a directory named like the switch is not one.
-fn split_user_root<'a>(flags: &[&'a str]) -> Option<(Vec<&'a str>, Option<PathBuf>)> {
-    let (mut rest, mut user) = (Vec::new(), None);
+/// `flags` without its `switch DIR` (or `switch=DIR`), and that directory. The
+/// value of another switch that takes a directory is passed over, so a
+/// directory named like the switch is not one.
+fn split_pin<'a>(flags: &[&'a str], switch: &str) -> Option<(Vec<&'a str>, Option<PathBuf>)> {
+    let (mut rest, mut pin) = (Vec::new(), None);
     let mut flags = flags.iter().copied();
     while let Some(flag) = flags.next() {
-        let value = match flag.strip_prefix("--user-config-dir") {
+        let value = match flag.strip_prefix(switch) {
             Some("") => flags.next()?,
             Some(value) => value.strip_prefix('=')?,
             None => {
                 rest.push(flag);
-                if flag == "--config-dir" {
+                if ["--config-dir", USER_CONFIG_DIR, STATE_DIR].contains(&flag) {
                     rest.push(flags.next()?);
                 }
                 continue;
             }
         };
-        if value.is_empty() || user.replace(PathBuf::from(value)).is_some() {
+        if value.is_empty() || pin.replace(PathBuf::from(value)).is_some() {
             return None;
         }
     }
-    Some((rest, user))
+    Some((rest, pin))
+}
+
+/// The state directory the hook uses now, to pin in a generated hook
+/// command: the configured one, else the one the environment names. One
+/// that does not exist yet is pinned too; the hook creates it owner-only.
+fn state_dir_to_pin(loaded: &Result<Config, String>) -> Option<PathBuf> {
+    let dir = match loaded {
+        Ok(config) => config.resolved_state_dir(),
+        // What a hook whose configuration did not load uses.
+        Err(_) => Config::detect_only_fallback(env_path(crate::settings::STATE_DIR_ENV), None)
+            .resolved_state_dir(),
+    };
+    std::path::absolute(dir.ok()?).ok()
+}
+
+/// The `--config-dir` roots and the `--user-config-dir` root a hook command
+/// names. `None` when a word of the command is not plainly readable
+/// ([`plain_words`]), or when the roots are not ones a hook would accept.
+fn command_roots(command: &str) -> Option<(Vec<PathBuf>, Option<PathBuf>)> {
+    let words = plain_words(command)?;
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let (rest, user) = split_pin(&words, USER_CONFIG_DIR)?;
+    let mut dirs = Vec::new();
+    let mut rest = rest.into_iter();
+    while let Some(word) = rest.next() {
+        let dir = match word.strip_prefix("--config-dir") {
+            Some("") => rest.next()?,
+            Some(value) => value.strip_prefix('=')?,
+            None => continue,
+        };
+        if dir.is_empty() {
+            return None;
+        }
+        dirs.push(PathBuf::from(dir));
+    }
+    if user.is_some() && !dirs.is_empty() {
+        return None;
+    }
+    Some((dirs, user))
+}
+
+/// The words of `command` as every shell a harness runs it with reads them
+/// alike (POSIX sh, PowerShell, Git Bash): plain characters and
+/// single-quoted strings. `None` for anything those shells read differently
+/// or expand (other quotes, escapes, variables, globs, operators).
+fn plain_words(command: &str) -> Option<Vec<String>> {
+    // Not `@` or `,`, which PowerShell reads as splatting and arrays.
+    const PLAIN: &[char] = &['/', '.', '_', '-', '=', ':'];
+    const QUOTES: &[char] = &['\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'];
+    let (mut words, mut word, mut started) = (Vec::new(), String::new(), false);
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            started = true;
+            loop {
+                match chars.next()? {
+                    '\'' => break,
+                    c if QUOTES.contains(&c) => return None,
+                    c => word.push(c),
+                }
+            }
+            // `''` is a quote inside PowerShell's single quotes, nothing in sh.
+            if chars.peek() == Some(&'\'') {
+                return None;
+            }
+        } else if c == ' ' || c == '\t' {
+            if started {
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+        } else if c.is_alphanumeric() || PLAIN.contains(&c) {
+            started = true;
+            word.push(c);
+        } else {
+            return None;
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// The pinned state directory, if `--state-dir` pinned one.
+fn pinned_state_dir() -> Option<PathBuf> {
+    PINNED_STATE_DIR.get().cloned()
 }
 
 /// The user config root to pin in a generated hook command: the one the
@@ -309,11 +465,16 @@ fn user_root_to_pin() -> Option<PathBuf> {
     crate::config::user_config_root().filter(|root| std::fs::symlink_metadata(root).is_ok())
 }
 
-/// `command` with `--user-config-dir root` appended, quoted for the shell the
-/// harness runs it with: POSIX sh, or on Windows PowerShell or Git Bash,
-/// where single quotes are literal in both (`None` when `root` holds a quote
-/// there, or is not UTF-8).
-fn pin_command(command: &str, root: &std::path::Path, windows: bool) -> Option<String> {
+/// `command` with `switch root` appended, quoted for the shell the harness
+/// runs it with: POSIX sh, or on Windows PowerShell or Git Bash, where single
+/// quotes are literal in both (`None` when `root` holds a quote there, or is
+/// not UTF-8).
+fn pin_command(
+    command: &str,
+    switch: &str,
+    root: &std::path::Path,
+    windows: bool,
+) -> Option<String> {
     let root = root.to_str()?;
     let quoted = if windows {
         if root.contains(['\'', '‘', '’', '‚', '‛']) {
@@ -323,7 +484,7 @@ fn pin_command(command: &str, root: &std::path::Path, windows: bool) -> Option<S
     } else {
         format!("'{}'", root.replace('\'', r"'\''"))
     };
-    Some(format!("{command} --user-config-dir {quoted}"))
+    Some(format!("{command} {switch} {quoted}"))
 }
 
 /// `--config-dir DIR` or `--config-dir=DIR`, repeated; `None` for anything else.
@@ -437,6 +598,9 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
     config.sources = roots;
     config.sources.extend(settings.files().iter().cloned());
     config.sources.extend(targets);
+    if let Some(state) = pinned_state_dir() {
+        config.state_dir = Some(state);
+    }
     config.validate().map_err(|error| error.to_string())?;
     config.make_paths_absolute();
     Ok(config)
@@ -557,7 +721,12 @@ fn check(config_dirs: &[PathBuf]) -> i32 {
                 config.resolved_telemetry_path(),
             ) {
                 (Ok(state), Ok(telemetry)) => {
-                    println!("state dir: {}", state.display());
+                    let origin = if pinned_state_dir().is_some() {
+                        "pinned".to_owned()
+                    } else {
+                        format!("from hooks.state_dir or {STATE_LOCATING}: not pinned")
+                    };
+                    println!("state dir: {} ({origin})", state.display());
                     println!("telemetry: {}", telemetry.display());
                 }
                 (Err(error), _) | (_, Err(error)) => {
@@ -800,7 +969,7 @@ fn resolve_config(
                     "telltale hooks: the configuration did not load and does not set hooks.mode: enforce: detect-only with the defaults"
                 );
                 let config = Config::detect_only_fallback(
-                    env_path(crate::settings::STATE_DIR_ENV),
+                    pinned_state_dir().or_else(|| env_path(crate::settings::STATE_DIR_ENV)),
                     env_path(crate::settings::TELEMETRY_ENV),
                 );
                 record_unhandled(&config, harness, "", "config_invalid");
@@ -949,12 +1118,16 @@ fn serve_args(config_dirs: &[PathBuf]) -> Vec<OsString> {
         );
     }
     if let Some(root) = crate::config::pinned_user_config_root() {
-        args.push(OsString::from("--user-config-dir"));
+        args.push(OsString::from(USER_CONFIG_DIR));
         args.push(
             std::path::absolute(root)
                 .unwrap_or_else(|_| root.to_path_buf())
                 .into_os_string(),
         );
+    }
+    if let Some(state) = pinned_state_dir() {
+        args.push(OsString::from(STATE_DIR));
+        args.push(state.into_os_string());
     }
     args
 }
@@ -998,59 +1171,111 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        config_dirs, declares_enforce, hook_flags, load_config, pin_command, split_user_root,
+        STATE_DIR, USER_CONFIG_DIR, command_roots, config_dirs, declares_enforce, hook_flags,
+        load_config, pin_command, split_pin,
     };
 
     #[test]
-    fn the_user_root_pin_is_one_value_and_passes_over_config_dir_values() {
-        assert_eq!(
-            split_user_root(&["--json-reply", "--user-config-dir", "/a b"]),
-            Some((vec!["--json-reply"], Some(PathBuf::from("/a b"))))
-        );
-        assert_eq!(
-            split_user_root(&["--config-dir", "--user-config-dir"]),
-            Some((vec!["--config-dir", "--user-config-dir"], None))
-        );
-        assert_eq!(
-            split_user_root(&["--user-config-dir=/a"]),
-            Some((Vec::new(), Some(PathBuf::from("/a"))))
-        );
-        for refused in [
-            &["--user-config-dir"][..],
-            &["--user-config-dir="],
-            &["--user-config-dir", ""],
-            &["--user-config-dir", "/a", "--user-config-dir", "/b"],
-            &["--user-config-dirx"],
-        ] {
-            assert_eq!(split_user_root(refused), None, "{refused:?}");
+    fn each_pin_is_one_value_and_passes_over_other_directory_values() {
+        for switch in [USER_CONFIG_DIR, STATE_DIR] {
+            assert_eq!(
+                split_pin(&["--json-reply", switch, "/a b"], switch),
+                Some((vec!["--json-reply"], Some(PathBuf::from("/a b")))),
+                "{switch}"
+            );
+            assert_eq!(
+                split_pin(&["--config-dir", switch], switch),
+                Some((vec!["--config-dir", switch], None)),
+                "{switch}"
+            );
+            let joined = format!("{switch}=/a");
+            assert_eq!(
+                split_pin(&[joined.as_str()], switch),
+                Some((Vec::new(), Some(PathBuf::from("/a")))),
+                "{switch}"
+            );
+            let (empty, glued) = (format!("{switch}="), format!("{switch}x"));
+            for refused in [
+                &[switch][..],
+                &[empty.as_str()],
+                &[switch, ""],
+                &[switch, "/a", switch, "/b"],
+                &[glued.as_str()],
+            ] {
+                assert_eq!(split_pin(refused, switch), None, "{refused:?}");
+            }
         }
+        // Either pin's value may be spelled like the other switch.
+        assert_eq!(
+            split_pin(&[STATE_DIR, USER_CONFIG_DIR], USER_CONFIG_DIR),
+            Some((vec![STATE_DIR, USER_CONFIG_DIR], None))
+        );
+        assert_eq!(
+            split_pin(&[USER_CONFIG_DIR, STATE_DIR], STATE_DIR),
+            Some((vec![USER_CONFIG_DIR, STATE_DIR], None))
+        );
     }
 
     /// POSIX sh reads `'\''` as a quote inside single quotes; PowerShell and Git
     /// Bash both read single quotes literally, and have no common escape for
-    /// one, so a Windows root holding a quote is not pinned.
+    /// one, so a Windows path holding a quote is not pinned.
     #[test]
     fn the_pin_is_quoted_for_the_harness_shell() {
-        assert_eq!(
-            pin_command(
-                "t hooks claude-code hook",
-                Path::new("/h/it's a $dir"),
-                false
-            )
-            .as_deref(),
-            Some(r"t hooks claude-code hook --user-config-dir '/h/it'\''s a $dir'")
-        );
-        assert_eq!(
-            pin_command(
-                "t hooks copilot-cli hook",
-                Path::new(r"C:\Users\a b\.config\telltale"),
-                true
-            )
-            .as_deref(),
-            Some(r"t hooks copilot-cli hook --user-config-dir 'C:\Users\a b\.config\telltale'")
-        );
+        for switch in [USER_CONFIG_DIR, STATE_DIR] {
+            assert_eq!(
+                pin_command(
+                    "t hooks claude-code hook",
+                    switch,
+                    Path::new("/h/it's a $dir"),
+                    false
+                ),
+                Some(format!(
+                    r"t hooks claude-code hook {switch} '/h/it'\''s a $dir'"
+                ))
+            );
+            assert_eq!(
+                pin_command(
+                    "t hooks copilot-cli hook",
+                    switch,
+                    Path::new(r"C:\Users\a b\AppData\Local\telltale"),
+                    true
+                ),
+                Some(format!(
+                    r"t hooks copilot-cli hook {switch} 'C:\Users\a b\AppData\Local\telltale'"
+                ))
+            );
+        }
         for quoted in [r"C:\Users\o'b\.config", "C:\\Users\\o\u{2019}b\\.config"] {
-            assert_eq!(pin_command("t", Path::new(quoted), true), None, "{quoted}");
+            for switch in [USER_CONFIG_DIR, STATE_DIR] {
+                let pinned = pin_command("t", switch, Path::new(quoted), true);
+                assert_eq!(pinned, None, "{quoted}");
+            }
+        }
+    }
+
+    /// Only what every harness shell reads alike names a command's roots.
+    #[test]
+    fn a_command_names_its_roots_only_when_every_shell_reads_them_alike() {
+        assert_eq!(
+            command_roots("'/opt/t b' hooks x hook --config-dir '/a b' --config-dir=/c"),
+            Some((vec![PathBuf::from("/a b"), PathBuf::from("/c")], None))
+        );
+        assert_eq!(
+            command_roots(r"'C:\t.exe' hooks x hook --user-config-dir 'C:\u r'"),
+            Some((Vec::new(), Some(PathBuf::from(r"C:\u r"))))
+        );
+        for unreadable in [
+            "t hook --config-dir \"/a b\"",
+            r"t hook --config-dir /a\ b",
+            "t hook --config-dir $HOME/c",
+            "t hook --config-dir '/it'\\''s'",
+            "t hook --config-dir 'a''b'",
+            "t hook --config-dir '/a",
+            "t hook --config-dir /a; rm x",
+            "t hook --config-dir",
+            "t hook --config-dir /a --user-config-dir /b",
+        ] {
+            assert_eq!(command_roots(unreadable), None, "{unreadable}");
         }
     }
 
