@@ -1,7 +1,10 @@
-use crate::acquisition::{AcquisitionOptions, AcquisitionProgress, acquire_source};
+use crate::acquisition::{
+    AcquisitionBatch, AcquisitionOptions, AcquisitionProgress, acquire_source,
+};
 use serde_json::{Value, json};
 use telltale_schema::observation::{
-    JsonValue, MessageRole, ObservationBody, ObservationStage, ObservedAt, ToolStatus,
+    BoundDimension, BoundedTarget, JsonValue, MessageRole, ObservationBody, ObservationStage,
+    ObservedAt, ToolStatus,
 };
 use telltale_schema::{
     clients::{ClientId, SourceKind},
@@ -35,6 +38,22 @@ fn each(mut check: impl FnMut(&Source)) {
             path: dir.path().join("synthetic.jsonl"),
         });
     }
+}
+
+/// The reported bounded units by coordinates, target and bound.
+fn bounded_units(batch: &AcquisitionBatch) -> Vec<(&str, u64, BoundedTarget, BoundDimension)> {
+    batch
+        .bounded
+        .iter()
+        .map(|unit| {
+            (
+                unit.native_id.as_str(),
+                unit.source_sequence,
+                unit.target,
+                unit.dimension,
+            )
+        })
+        .collect()
 }
 
 fn acquire(
@@ -526,20 +545,41 @@ fn completed_file_change_bounds_are_per_unit_content_free_and_not_truncated() {
                 BoundDimension::EncodedBytes,
             ),
         ] {
+            // The over-bound part of the change is replaced and recorded;
+            // the unit is projected next to its neighbor, not quarantined.
+            assert_eq!(category, CanonicalFieldCategory::ToolResult);
             let batch = acquire(source, &[meta(), good.clone(), value]).unwrap();
-            assert_eq!(batch.observations.len(), 1);
-            assert_eq!(batch.quarantined.len(), 1);
-            let q = &batch.quarantined[0];
-            assert_eq!(q.code, "unbounded_value");
-            assert_eq!(q.native_id, "patch-a");
-            assert_eq!(
-                q.bound,
-                Some(telltale_schema::observation::CanonicalBoundContext {
-                    category,
-                    dimension
+            assert!(batch.quarantined.is_empty());
+            assert_eq!(batch.observations.len(), 2);
+            let tool = batch
+                .observations
+                .iter()
+                .find_map(|observation| match observation.body() {
+                    ObservationBody::Tool(tool) => Some(tool),
+                    _ => None,
                 })
+                .expect("the change is projected");
+            let replaced = tool
+                .bounded_values()
+                .iter()
+                .map(|value| (value.target(), value.dimension()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                replaced,
+                [(
+                    telltale_schema::observation::BoundedTarget::Result,
+                    dimension
+                )]
             );
-            assert!(!format!("{q:?}").contains("/synthetic"));
+            let result = format!("{:?}", tool.result());
+            assert!(!result.contains(&"x".repeat(3500)) && !result.contains(&"x".repeat(65)));
+            assert!(!format!("{:?}", tool.bounded_values()).contains("/synthetic"));
+            assert_eq!(
+                bounded_units(&batch),
+                [("patch-a", 2, BoundedTarget::Result, dimension)]
+            );
+            let reported = format!("{:?}", batch.bounded);
+            assert!(!reported.contains("/synthetic") && !reported.contains(&"x".repeat(16)));
             assert_eq!(batch.accounting.sessions[0].counts.native_units, 3);
         }
         // The assembled searchable projection is also bounded, never silently clipped.
@@ -826,32 +866,81 @@ fn completed_tool_bounds_missing_values_and_separate_stages() {
         null["payload"]["item"]["aggregated_output"] = Value::Null;
         assert!(acquire(source, &[meta(), null]).unwrap().observations.len() == 1);
         // Command output past the ordinary 4 KB string bound is a direct
-        // result with the tool-result text budget; past that budget the
-        // record alone is quarantined.
+        // result with the tool-result text budget; past that budget it is
+        // replaced and recorded, and the call is still projected.
+        let replaced = |batch: &AcquisitionBatch| {
+            assert!(batch.quarantined.is_empty());
+            assert_eq!(batch.observations.len(), 2);
+            let ObservationBody::Tool(t) = batch.observations[1].body() else {
+                panic!("tool")
+            };
+            t.bounded_values()
+                .iter()
+                .map(|value| (value.target(), value.dimension()))
+                .collect::<Vec<_>>()
+        };
         for (bytes, kept) in [(20_000, true), (65_537, false)] {
             let mut v = command(json!(["echo"]));
             v["payload"]["item"]["aggregated_output"] = json!("x".repeat(bytes));
             let batch = acquire(source, &[meta(), completed("AgentMessage", "valid"), v]).unwrap();
-            assert_eq!(batch.observations.len(), if kept { 2 } else { 1 });
-            assert_eq!(batch.quarantined.len(), usize::from(!kept));
             if kept {
+                assert!(batch.quarantined.is_empty());
                 let ObservationBody::Tool(t) = batch.observations[1].body() else {
                     panic!("tool")
                 };
                 assert_eq!(t.result(), Some(&JsonValue::string("x".repeat(bytes))));
             } else {
-                assert_eq!(batch.quarantined[0].code, "unbounded_value");
-                assert_eq!(batch.quarantined[0].native_id, "call-a");
+                assert_eq!(
+                    replaced(&batch),
+                    [(BoundedTarget::Result, BoundDimension::StringBytes)]
+                );
+                assert_eq!(
+                    bounded_units(&batch),
+                    [(
+                        "call-a",
+                        2,
+                        BoundedTarget::Result,
+                        BoundDimension::StringBytes
+                    )]
+                );
+                assert!(!format!("{:?}", batch.bounded).contains(&"x".repeat(16)));
+                let ObservationBody::Tool(t) = batch.observations[1].body() else {
+                    panic!("tool")
+                };
+                assert_eq!(t.result(), Some(&JsonValue::Null));
+                assert_eq!(
+                    t.arguments(),
+                    Some(&JsonValue::array(vec![JsonValue::string("echo")]))
+                );
             }
         }
-        for argv in [json!(["x".repeat(4097)]), json!(vec!["x".repeat(4096); 5])] {
+        for (argv, dimension) in [
+            (json!(["x".repeat(4097)]), BoundDimension::StringBytes),
+            (
+                json!(vec!["x".repeat(4096); 5]),
+                BoundDimension::EncodedBytes,
+            ),
+        ] {
             let batch = acquire(
                 source,
                 &[meta(), completed("AgentMessage", "valid"), command(argv)],
             )
             .unwrap();
-            assert_eq!(batch.observations.len(), 1);
-            assert_eq!(batch.quarantined[0].code, "unbounded_value");
+            // Oversized words go whole, largest first, until the argv fits.
+            let entries = replaced(&batch);
+            assert!(!entries.is_empty());
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| *entry == (BoundedTarget::Arguments, dimension))
+            );
+            assert_eq!(
+                bounded_units(&batch),
+                [("call-a", 2, BoundedTarget::Arguments, dimension)]
+            );
+            assert!(!format!("{:?}", batch.bounded).contains(&"x".repeat(16)));
+            // No command text is rendered from an argv with replaced words.
+            assert!(!batch.observations[1].facets().contains_key("command.text"));
         }
         for argv in [json!("echo joined"), json!([42])] {
             assert!(

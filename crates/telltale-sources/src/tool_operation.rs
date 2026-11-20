@@ -16,13 +16,22 @@
 //! key is still a command. A tool missing from a table is left undeclared, and
 //! so is a call whose arguments hold no operand. A name an MCP server gives
 //! its tools is never declared, whatever a table lists.
+//!
+//! A row also declares which argument keys hold authored text (commands, file
+//! bodies, patches, prompts, messages) and so keep the direct-text budget
+//! instead of the structured string bound when the call is converted
+//! ([`argument_text`]). A tool name's text declaration holds wherever that
+//! exact name is read, as the one shared list it replaces did: a hook journal
+//! reports some tools under another harness's spelling. It changes the bound
+//! only; detection reads a key as content only through `authored()`.
 
 use std::collections::BTreeMap;
 
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
-    CanonicalObservationV2, JsonValue, ObservationBody, ObservationStage, ToolKind,
-    ToolObservation, ToolOperation,
+    ArgumentText, BoundDimension, BoundedTarget, BoundedValue, CanonicalFieldCategory,
+    CanonicalObservationV2, JsonValue, ObservationBody, ObservationError, ObservationStage,
+    SEMANTIC_MAX_TOTAL_BYTES, ToolKind, ToolObservation, ToolOperation,
 };
 
 use crate::acquisition::ToolTableCounts;
@@ -50,6 +59,13 @@ pub(crate) struct ToolSpec {
     /// The call may legitimately name no operand, such as a search with no
     /// root: an empty operand is then no drift.
     optional: bool,
+    /// Argument keys whose string value is authored text with the direct-text
+    /// budget. This is a bound, not a reading: a command key stays a command.
+    text: &'static [&'static str],
+    /// The whole argument may be one authored string.
+    whole_text: bool,
+    /// A `text` key holding anything but a string makes the arguments invalid.
+    strict_text: bool,
 }
 
 impl ToolSpec {
@@ -65,7 +81,31 @@ impl ToolSpec {
             authored: &[],
             replaced: &[],
             optional: false,
+            text: &[],
+            whole_text: false,
+            strict_text: false,
         }
+    }
+
+    pub(crate) const fn text(mut self, keys: &'static [&'static str]) -> Self {
+        self.text = keys;
+        self
+    }
+
+    pub(crate) const fn whole_text(mut self) -> Self {
+        self.whole_text = true;
+        self
+    }
+
+    pub(crate) const fn strict_text(mut self) -> Self {
+        self.strict_text = true;
+        self
+    }
+
+    /// The authored-text declaration of this row: keys, whole, strict.
+    #[cfg(test)]
+    pub(crate) fn text_declaration(&self) -> (&'static [&'static str], bool, bool) {
+        (self.text, self.whole_text, self.strict_text)
     }
 
     pub(crate) const fn optional(mut self) -> Self {
@@ -229,6 +269,183 @@ pub(crate) fn declare_in(
     }
 }
 
+/// The authored text declared for a call named `name`: its row in `table`
+/// together with every registered table's row of that exact name, so a name
+/// keeps its declaration wherever it is read (a hook journal can report a tool
+/// under another harness's spelling). A name no table lists, and a name MCP
+/// servers give their tools, declare none: their arguments keep the structured
+/// bounds.
+pub(crate) fn argument_text(table: &[ToolSpec], name: Option<&str>) -> ArgumentText {
+    let mut declared = ArgumentText::new();
+    let Some(name) = name.filter(|name| !mcp_shaped(name)) else {
+        return declared;
+    };
+    let registered = ClientId::ALL
+        .iter()
+        .filter_map(|client| self::table(*client));
+    for spec in std::iter::once(table)
+        .chain(registered)
+        .flatten()
+        .filter(|spec| spec.name == name)
+    {
+        for key in spec.text {
+            declared = declared.with_key(*key);
+        }
+        if spec.whole_text {
+            declared = declared.with_whole();
+        }
+        if spec.strict_text {
+            declared = declared.with_strict();
+        }
+    }
+    declared
+}
+
+/// What a tool call's values over a canonical bound do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ValueBounds {
+    /// Replace each over-bound value by `null` and record it on the body, so
+    /// the call's name and admitted values are still evaluated.
+    #[default]
+    Replace,
+    /// Fail the call, so its unit is quarantined.
+    Strict,
+}
+
+/// The budget a tool result's direct text gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResultText {
+    /// A string result is direct output text ([`JsonValue::try_from_source_tool_result`]).
+    Direct,
+    /// Every result keeps the structured bounds ([`JsonValue::try_from_source_value`]).
+    Structured,
+}
+
+/// Convert a call's native arguments under the text `table` declares for
+/// `name`, and keep the declaration on the body for validation.
+pub(crate) fn with_source_arguments(
+    table: &[ToolSpec],
+    name: Option<&str>,
+    body: ToolObservation,
+    arguments: &serde_json::Value,
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    with_declared_arguments(argument_text(table, name), body, arguments, bounds)
+}
+
+/// Convert a call's native arguments under `declared` (no declaration keeps
+/// every argument on the structured bounds). See [`bounded_or_strict`].
+pub(crate) fn with_declared_arguments(
+    declared: ArgumentText,
+    body: ToolObservation,
+    arguments: &serde_json::Value,
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    let (value, replaced) = bounded_or_strict(
+        JsonValue::try_from_source_tool_arguments(&declared, arguments),
+        bounds,
+        || JsonValue::try_from_source_tool_arguments_bounded(&declared, arguments),
+    )
+    .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolArguments))?;
+    Ok(body
+        .with_arguments(value)
+        .with_argument_text(declared)
+        .with_bounded_values(replaced))
+}
+
+/// Convert a call's native result. See [`bounded_or_strict`].
+pub(crate) fn with_source_result(
+    body: ToolObservation,
+    result: &serde_json::Value,
+    text: ResultText,
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    let (value, replaced) = match text {
+        ResultText::Direct => bounded_or_strict(
+            JsonValue::try_from_source_tool_result(result),
+            bounds,
+            || JsonValue::try_from_source_tool_result_bounded(result),
+        ),
+        ResultText::Structured => {
+            bounded_or_strict(JsonValue::try_from_source_value(result), bounds, || {
+                JsonValue::try_from_source_value_bounded(BoundedTarget::Result, result)
+            })
+        }
+    }
+    .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?;
+    Ok(body.with_result(value).with_bounded_values(replaced))
+}
+
+/// The strict conversion decides every value it admits, so an in-bound call
+/// takes exactly today's path. Only a value it refuses on a bound, or whose
+/// encoded size alone exceeds the observation aggregate (a call that could
+/// never be built), takes the bounded conversion, which replaces the
+/// over-bound parts by `null` and records them. Other errors still fail.
+fn bounded_or_strict(
+    strict: Result<JsonValue, ObservationError>,
+    bounds: ValueBounds,
+    bounded: impl FnOnce() -> Result<(JsonValue, Vec<BoundedValue>), ObservationError>,
+) -> Result<(JsonValue, Vec<BoundedValue>), ObservationError> {
+    match strict {
+        Ok(value)
+            if bounds == ValueBounds::Strict
+                || value.encoded_byte_len()? <= SEMANTIC_MAX_TOTAL_BYTES =>
+        {
+            Ok((value, Vec::new()))
+        }
+        Err(error) if bounds == ValueBounds::Strict || error.bound_dimension().is_none() => {
+            Err(error)
+        }
+        _ => bounded(),
+    }
+}
+
+/// The argument keys among `keys` that a bounded conversion replaced, taken
+/// before the body moves into its builder, so no facet is built from them.
+pub(crate) fn replaced_arguments(
+    body: &ToolObservation,
+    keys: &[&'static str],
+) -> Vec<&'static str> {
+    keys.iter()
+        .copied()
+        .filter(|key| body.bounded_member(BoundedTarget::Arguments, key))
+        .collect()
+}
+
+/// Where a native unit was admitted with replaced tool values, and which
+/// field and bound: coordinates only, never content. Kept apart from
+/// quarantined units, since the unit itself was projected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoundedRecord {
+    pub(crate) source_sequence: u64,
+    pub(crate) target: BoundedTarget,
+    pub(crate) dimension: BoundDimension,
+}
+
+/// The distinct (field, bound) pairs one unit's observations replaced.
+pub(crate) fn bounded_records(
+    source_sequence: u64,
+    observations: &[CanonicalObservationV2],
+) -> Vec<BoundedRecord> {
+    let mut records: Vec<BoundedRecord> = Vec::new();
+    for observation in observations {
+        let ObservationBody::Tool(tool) = observation.body() else {
+            continue;
+        };
+        for value in tool.bounded_values() {
+            let record = BoundedRecord {
+                source_sequence,
+                target: value.target(),
+                dimension: value.dimension(),
+            };
+            if !records.contains(&record) {
+                records.push(record);
+            }
+        }
+    }
+    records
+}
+
 /// The table of one source's harness.
 pub(crate) fn table(client: ClientId) -> Option<&'static [ToolSpec]> {
     Some(match client {
@@ -271,7 +488,14 @@ pub(crate) fn count(client: ClientId, observations: &[CanonicalObservationV2]) -
             None if !mcp_shaped(name) => {
                 counts.unclassified_tool_calls = counts.unclassified_tool_calls.saturating_add(1);
             }
-            Some(spec) if body.operation().is_some_and(|op| spec.drifted(op)) => {
+            // An operand replaced for its size is not drift.
+            Some(spec)
+                if !body
+                    .bounded_values()
+                    .iter()
+                    .any(|value| value.target() == BoundedTarget::Arguments)
+                    && body.operation().is_some_and(|op| spec.drifted(op)) =>
+            {
                 counts.tool_operand_drift = counts.tool_operand_drift.saturating_add(1);
             }
             _ => {}
@@ -458,6 +682,137 @@ mod tests {
 
     fn declared(table: &[ToolSpec], body: ToolObservation) -> ToolOperation {
         declare(table, body).operation().cloned().expect("declared")
+    }
+
+    type TextRow = (&'static str, &'static [&'static str], bool, bool);
+
+    /// Every row of `table` that declares authored text, as `(name, keys,
+    /// whole, strict)`.
+    fn text_rows(table: &[ToolSpec]) -> Vec<TextRow> {
+        table
+            .iter()
+            .filter_map(|spec| {
+                let (keys, whole, strict) = spec.text_declaration();
+                (!keys.is_empty() || whole || strict).then_some((spec.name(), keys, whole, strict))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn claude_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("Bash", &["command"], false, false),
+            ("PowerShell", &["command"], false, false),
+            ("Write", &["content"], false, false),
+            ("Edit", &["old_string", "new_string"], false, false),
+            ("NotebookEdit", &["new_source"], false, false),
+            ("Task", &["prompt"], false, false),
+            ("Agent", &["prompt"], false, false),
+            ("SendMessage", &["message"], false, false),
+            ("SubagentHandback", &["message"], false, false),
+        ];
+        assert_eq!(text_rows(claude::tools::TOOLS), expected);
+    }
+
+    #[test]
+    fn opencode_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("bash", &["command"], false, false),
+            ("shell", &["command"], true, false),
+            ("write", &["content"], false, false),
+            ("edit", &["oldString", "newString"], false, false),
+            ("patch", &["patchText"], false, false),
+            ("apply_patch", &["patchText"], false, true),
+            ("task", &["prompt"], false, false),
+            ("subagent", &["prompt"], false, false),
+            ("execute", &["code"], false, false),
+        ];
+        assert_eq!(text_rows(opencode::tools::TOOLS), expected);
+    }
+
+    #[test]
+    fn pi_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("bash", &["command"], false, false),
+            ("powershell", &["command"], false, false),
+            ("write", &["content"], false, false),
+            ("edit", &["oldText", "newText"], false, false),
+        ];
+        assert_eq!(text_rows(pi::tools::TOOLS), expected);
+    }
+
+    #[test]
+    fn codex_declares_its_authored_text_arguments() {
+        let expected: &[TextRow] = &[
+            ("apply_patch", &[], true, false),
+            ("exec", &[], true, false),
+        ];
+        assert_eq!(text_rows(codex::tools::TOOLS), expected);
+    }
+
+    /// Copilot, Qwen and OpenClaw convert their own records with the structured
+    /// bounds and declare no text; their hook journals read shared spellings.
+    #[test]
+    fn copilot_qwen_and_openclaw_declare_no_authored_text() {
+        for table in [
+            copilot::tools::TOOLS,
+            qwen::tools::TOOLS,
+            openclaw::tools::TOOLS,
+        ] {
+            assert!(text_rows(table).is_empty());
+        }
+    }
+
+    /// The move from one shared list into the adapters keeps every name's
+    /// declaration wherever the name is read, including a hook journal read
+    /// with a table that has no row for it. The message tools are new.
+    #[test]
+    fn every_formerly_shared_declaration_holds_for_every_table() {
+        let expected: &[TextRow] = &[
+            ("apply_patch", &["patchText"], true, true),
+            ("patch", &["patchText"], false, false),
+            ("shell", &["command"], true, false),
+            ("bash", &["command"], false, false),
+            ("powershell", &["command"], false, false),
+            ("write", &["content"], false, false),
+            (
+                "edit",
+                &["oldString", "newString", "oldText", "newText"],
+                false,
+                false,
+            ),
+            ("execute", &["code"], false, false),
+            ("subagent", &["prompt"], false, false),
+            ("task", &["prompt"], false, false),
+            ("exec", &[], true, false),
+            ("Bash", &["command"], false, false),
+            ("PowerShell", &["command"], false, false),
+            ("Write", &["content"], false, false),
+            ("Edit", &["old_string", "new_string"], false, false),
+            ("NotebookEdit", &["new_source"], false, false),
+            ("Task", &["prompt"], false, false),
+            ("Agent", &["prompt"], false, false),
+            ("SendMessage", &["message"], false, false),
+            ("SubagentHandback", &["message"], false, false),
+        ];
+        for client in ClientId::ALL {
+            let own = table(*client).expect("every client has a table");
+            for (name, keys, whole, strict) in expected {
+                let declared = argument_text(own, Some(name));
+                let mut actual: Vec<&str> = declared.keys().iter().map(String::as_str).collect();
+                let mut keys = keys.to_vec();
+                actual.sort_unstable();
+                keys.sort_unstable();
+                assert_eq!(
+                    (actual, declared.whole(), declared.strict()),
+                    (keys, *whole, *strict),
+                    "{client:?} {name}"
+                );
+            }
+            for name in [None, Some("NoSuchTool"), Some("mcp__server__write")] {
+                assert_eq!(argument_text(own, name), ArgumentText::new());
+            }
+        }
     }
 
     #[test]

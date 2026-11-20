@@ -6,8 +6,12 @@ use telltale_schema::observation::ToolKind::{Delegate, FileRead, FileWrite, Othe
 use crate::tool_operation::ToolSpec;
 
 pub(crate) const TOOLS: &[ToolSpec] = &[
-    ToolSpec::new("Bash", Shell).commands(&["command"]),
-    ToolSpec::new("PowerShell", Shell).commands(&["command"]),
+    ToolSpec::new("Bash", Shell)
+        .commands(&["command"])
+        .text(&["command"]),
+    ToolSpec::new("PowerShell", Shell)
+        .commands(&["command"])
+        .text(&["command"]),
     ToolSpec::new("Read", FileRead).read(&["file_path"]),
     ToolSpec::new("NotebookRead", FileRead).read(&["notebook_path"]),
     // The search root is optional: a search names none to search the working
@@ -16,15 +20,23 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("Grep", FileRead).read(&["path"]).optional(),
     // Lists a directory by pattern: no file is read by name, so kind other.
     ToolSpec::new("LS", Other),
-    ToolSpec::new("Write", FileWrite).written(&["file_path"]),
-    ToolSpec::new("Edit", FileWrite).written(&["file_path"]),
+    ToolSpec::new("Write", FileWrite)
+        .written(&["file_path"])
+        .text(&["content"]),
+    ToolSpec::new("Edit", FileWrite)
+        .written(&["file_path"])
+        .text(&["old_string", "new_string"]),
     ToolSpec::new("MultiEdit", FileWrite).written(&["file_path"]),
-    ToolSpec::new("NotebookEdit", FileWrite).written(&["notebook_path"]),
+    ToolSpec::new("NotebookEdit", FileWrite)
+        .written(&["notebook_path"])
+        .text(&["new_source"]),
     ToolSpec::new("WebFetch", Web).urls(&["url"]),
     ToolSpec::new("WebSearch", Web),
-    ToolSpec::new("Task", Delegate),
-    ToolSpec::new("Agent", Delegate),
-    ToolSpec::new("SendMessage", Delegate),
+    ToolSpec::new("Task", Delegate).text(&["prompt"]),
+    ToolSpec::new("Agent", Delegate).text(&["prompt"]),
+    // Message text to another agent keeps the direct-text budget. It has no
+    // role: it is no command and no file content.
+    ToolSpec::new("SendMessage", Delegate).text(&["message"]),
     ToolSpec::new("Workflow", Delegate),
     ToolSpec::new("Artifact", Other),
     ToolSpec::new("AskUserQuestion", Other),
@@ -49,7 +61,7 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("SendUserFile", Other),
     ToolSpec::new("ShareOnboardingGuide", Other),
     ToolSpec::new("Skill", Other),
-    ToolSpec::new("SubagentHandback", Other),
+    ToolSpec::new("SubagentHandback", Other).text(&["message"]),
     ToolSpec::new("TaskCreate", Other),
     ToolSpec::new("TaskGet", Other),
     ToolSpec::new("TaskList", Other),

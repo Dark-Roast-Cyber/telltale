@@ -11,10 +11,12 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec::new("shell_command", Shell).commands(&["command"]),
     ToolSpec::new("exec_command", Shell).commands(&["cmd"]),
     // A patch arrives as freeform text or under one of these keys.
-    ToolSpec::new("apply_patch", FileWrite).patch(&["input", "command", "patch"]),
+    ToolSpec::new("apply_patch", FileWrite)
+        .patch(&["input", "command", "patch"])
+        .whole_text(),
     // The code-mode script tools run a script that calls other tools. They
     // are kind other until their script reading moves into this module.
-    ToolSpec::new("exec", Other),
+    ToolSpec::new("exec", Other).whole_text(),
     ToolSpec::new("multi_tool_use.parallel", Other),
     // A hosted search carries the action it ran: only opening a page has a URL.
     ToolSpec::new("web_search", Web).urls(&["url"]).optional(),

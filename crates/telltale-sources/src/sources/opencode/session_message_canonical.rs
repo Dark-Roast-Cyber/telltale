@@ -10,14 +10,15 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 use telltale_schema::observation::{
-    CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
-    CapabilityId, CorrelationId, CorrelationIds, FactProvenance, Fidelity, IngestionMode,
-    JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
-    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
-    SourceTimestamp, ToolObservation, ToolStatus,
+    CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, CorrelationId,
+    CorrelationIds, FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation,
+    MessageRole, ObservationBody, ObservationBuilder, ObservationError, ObservationStage,
+    ObservedAt, SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
-use crate::tool_operation::declare;
+use crate::tool_operation::{
+    ResultText, ValueBounds, declare, replaced_arguments, with_source_arguments, with_source_result,
+};
 
 use super::canonical::{
     OpenCodeCanonicalError, mapping, normal, normal_reported, require_source_id,
@@ -251,11 +252,11 @@ impl Context<'_> {
             let mut body = ToolObservation::new().with_name(name)?;
             let mut metadata = vec![("tool.name", FactProvenance::Reported)];
             if let Some(input) = &tool.input {
-                body = body.with_arguments(arguments(Some(name), input)?);
+                body = arguments(body, Some(name), input)?;
                 metadata.push(("tool.arguments", FactProvenance::Reported));
             }
             if outcome && let Some(result) = &tool.result {
-                body = body.with_result(tool_result(result)?);
+                body = with_tool_result(body, result)?;
                 metadata.push(("tool.result", FactProvenance::Reported));
             }
             let settlement = tool.shell_settlement.as_ref().filter(|_| outcome);
@@ -272,6 +273,8 @@ impl Context<'_> {
                 body = body.with_reported_status(ToolStatus::Failed);
                 metadata.push(("tool.reported_status", FactProvenance::Reported));
             }
+            // No facet is built from an argument that was replaced.
+            let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
             let mut builder = self.builder(
                 ObservationBody::Tool(declare(super::tools::TOOLS, body)),
                 stage,
@@ -283,10 +286,15 @@ impl Context<'_> {
                 builder = builder.fact_metadata(path, normal(provenance)?);
             }
             if let Some(Value::Object(input)) = &tool.input {
-                builder = with_argument_facets(builder, tool.input.as_ref().expect("checked"))?;
+                builder = with_argument_facets(
+                    builder,
+                    tool.input.as_ref().expect("checked"),
+                    &replaced,
+                )?;
                 // v2 file tools name the file `path`; other tools' `path` is a
                 // search root or working directory, not the resource acted on.
                 if V2_FILE_TOOLS.contains(&name)
+                    && !replaced.contains(&"path")
                     && let Some(Value::String(path)) = input.get("path")
                 {
                     builder = builder
@@ -381,19 +389,20 @@ impl Context<'_> {
         }
         for (stage, occurred_at) in stages {
             let outcome = stage != ObservationStage::ToolExecutionStarted;
-            let mut body = ToolObservation::new()
-                .with_name(SHELL_TOOL_NAME)?
-                .with_arguments(arguments(
-                    Some(SHELL_TOOL_NAME),
-                    &Value::String(command.to_owned()),
-                )?);
+            let mut body = arguments(
+                ToolObservation::new().with_name(SHELL_TOOL_NAME)?,
+                Some(SHELL_TOOL_NAME),
+                &Value::String(command.to_owned()),
+            )?;
             let mut metadata = vec![
                 ("tool.name", FactProvenance::Parsed),
                 ("tool.arguments", FactProvenance::Reported),
             ];
+            // No facet is built from a command that was replaced.
+            let replaced = !replaced_arguments(&body, &["command"]).is_empty();
             if outcome {
                 if let Some(output) = &shell.output {
-                    body = body.with_result(tool_result(&Value::String(output.clone()))?);
+                    body = with_tool_result(body, &Value::String(output.clone()))?;
                     metadata.push(("tool.result", FactProvenance::Reported));
                 }
                 if let Some(exit) = shell.exit {
@@ -415,12 +424,14 @@ impl Context<'_> {
             for (path, provenance) in metadata {
                 builder = builder.fact_metadata(path, normal(provenance)?);
             }
-            builder = builder
-                .facet(
-                    "command.text",
-                    SemanticFacet::new(JsonValue::string(command)),
-                )?
-                .fact_metadata("command.text", normal_reported()?);
+            if !replaced {
+                builder = builder
+                    .facet(
+                        "command.text",
+                        SemanticFacet::new(JsonValue::string(command)),
+                    )?
+                    .fact_metadata("command.text", normal_reported()?);
+            }
             if let Some(shell_id) = &shell.shell_id {
                 builder = builder.correlation(
                     CorrelationIds::new().with_call_id(CorrelationId::source_reported(shell_id)?),
@@ -466,12 +477,28 @@ impl Context<'_> {
     }
 }
 
-fn arguments(name: Option<&str>, value: &Value) -> Result<JsonValue, OpenCodeCanonicalError> {
-    Ok(JsonValue::try_from_source_tool_arguments(name, value)
-        .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolArguments))?)
+fn arguments(
+    body: ToolObservation,
+    name: Option<&str>,
+    value: &Value,
+) -> Result<ToolObservation, OpenCodeCanonicalError> {
+    Ok(with_source_arguments(
+        super::tools::TOOLS,
+        name,
+        body,
+        value,
+        ValueBounds::Replace,
+    )?)
 }
 
-fn tool_result(value: &Value) -> Result<JsonValue, OpenCodeCanonicalError> {
-    Ok(JsonValue::try_from_source_tool_result(value)
-        .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?)
+fn with_tool_result(
+    body: ToolObservation,
+    value: &Value,
+) -> Result<ToolObservation, OpenCodeCanonicalError> {
+    Ok(with_source_result(
+        body,
+        value,
+        ResultText::Direct,
+        ValueBounds::Replace,
+    )?)
 }

@@ -603,7 +603,9 @@ fn recovery_cost_is_bounded_at_the_window_limits() {
 /// same pipeline excludes one native record for one problem and fails the whole
 /// source for another, taking every other record's finding with it. A host can
 /// already tell capacity from a line's fault through `failure()`; the last part
-/// pins that, because `Engine::evaluate` relies on it.
+/// pins that, because `Engine::evaluate` relies on it. The source is the hook
+/// journal the engine scans: a session source replaces an over-bound tool
+/// value instead of excluding its record.
 #[test]
 fn upstream_one_record_fails_a_whole_source_where_a_bound_only_excludes_it() {
     use telltale_core::{
@@ -628,7 +630,7 @@ fn upstream_one_record_fails_a_whole_source_where_a_bound_only_excludes_it() {
         let source = Source {
             client: ClientId::Claude,
             kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_owned(),
+            source_id: ClientId::Claude.hook_journal_source_id().to_owned(),
             path,
         };
         pipeline
@@ -644,6 +646,7 @@ fn upstream_one_record_fails_a_whole_source_where_a_bound_only_excludes_it() {
     let bound = scan(json!({"command": "ls", "padding": "p ".repeat(4000)}));
     assert!(bound.failure().is_none());
     assert!(!bound.quarantined().is_empty());
+    assert!(bound.bounded_units().is_empty());
     assert!(!bound.action_records().is_empty());
 
     // Colliding keys: the whole source fails, and the exfil is not found.

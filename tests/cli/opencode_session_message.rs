@@ -700,9 +700,9 @@ const HOUR: i64 = 3_600_000;
 
 /// A forensic scan must not be blinded by one oversized row. A long command
 /// within the direct-text budget is still detected through its full text; a
-/// padded row beyond it is quarantined, reported by coordinates without
-/// content, and marked by a degraded `scanner_error`. The cursor still
-/// advances, since rescanning cannot make the row fit.
+/// padded command beyond it is replaced, the row is still evaluated, reported
+/// by coordinates without content, and marked by a degraded `scanner_error`.
+/// The cursor still advances, since rescanning cannot make the value fit.
 #[test]
 fn opencode_v2_quarantines_oversized_rows_and_still_detects_the_rest() {
     let harness = Harness::new();
@@ -744,17 +744,18 @@ fn opencode_v2_quarantines_oversized_rows_and_still_detects_the_rest() {
     let summary = harness.successful();
     let processing = &summary["source_processing"];
     assert_eq!(processing["selected_source_coverage"], "partial");
-    assert_eq!(processing["quarantined_unit_count"], 1);
+    assert_eq!(processing["quarantined_unit_count"], 0);
+    assert_eq!(processing["quarantined_units"], serde_json::json!([]));
+    assert_eq!(processing["bounded_value_unit_count"], 1);
     assert_eq!(
-        processing["quarantined_units"],
+        processing["bounded_value_units"],
         serde_json::json!([{
             "source": "opencode.sqlite",
             "session_id": "ses_forensic",
             "native_id": "msg_padded",
             "source_sequence": 2,
-            "code": "unbounded_value",
-            "bound_category": "ToolArguments",
-            "bound_dimension": "StringBytes",
+            "target": "arguments",
+            "dimension": "string_bytes",
         }])
     );
     let events = harness.events();
@@ -762,13 +763,7 @@ fn opencode_v2_quarantines_oversized_rows_and_still_detects_the_rest() {
         assert!(event_schema_validator().is_valid(event), "{event}");
     }
     assert_eq!(detections(&events, "synthetic.v2.command"), 1);
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event["event_type"] == "scanner_error")
-            .count(),
-        1
-    );
+    assert_eq!(scanner_errors(&events), ["canonical_values_bounded"]);
     for bytes in [
         fs::read(&harness.log).unwrap(),
         serde_json::to_vec(&summary).unwrap(),
@@ -1435,8 +1430,8 @@ fn opencode_v2_correlation_straddling_a_window_cut_is_detected_once() {
     assert_eq!(correlations(&events), 1);
 }
 
-/// A quarantined row in the re-read tail of a cut window is quarantined again
-/// by the next window, but it is still one excluded unit.
+/// A row with a replaced value in the re-read tail of a cut window is mapped
+/// again by the next window, but it is still one bounded unit.
 #[test]
 fn opencode_v2_quarantined_row_in_a_reread_tail_is_reported_once() {
     let harness = Harness::new();
@@ -1444,7 +1439,7 @@ fn opencode_v2_quarantined_row_in_a_reread_tail_is_reported_once() {
     writer.execute_batch(SESSION_SCHEMA).unwrap();
     session(&writer, "ses_tail");
     // The same two-window layout as the straddling correlation above, with
-    // the oversized row inside window 1's re-read tail.
+    // the row with the over-bound command inside window 1's re-read tail.
     let patch = format!("*** Begin Patch\n{}", "+line\n".repeat(7_000));
     let padded = format!("printf {}", "x ".repeat(100_000));
     let rows = 96;
@@ -1471,13 +1466,20 @@ fn opencode_v2_quarantined_row_in_a_reread_tail_is_reported_once() {
     let reported_once = |summary: &Value| {
         let processing = &summary["source_processing"];
         assert_eq!(processing["evaluated_window_count"], 2, "{processing}");
-        assert_eq!(processing["quarantined_unit_count"], 1, "{processing}");
+        assert_eq!(processing["quarantined_unit_count"], 0, "{processing}");
+        assert_eq!(processing["bounded_value_unit_count"], 1, "{processing}");
         assert_eq!(
-            processing["quarantined_units"].as_array().unwrap().len(),
-            1,
+            processing["bounded_value_units"],
+            serde_json::json!([{
+                "source": "opencode.sqlite",
+                "session_id": "ses_tail",
+                "native_id": "msg_081",
+                "source_sequence": 81,
+                "target": "arguments",
+                "dimension": "string_bytes",
+            }]),
             "{processing}"
         );
-        assert_eq!(processing["quarantined_units"][0]["native_id"], "msg_081");
     };
 
     reported_once(&harness.successful());
@@ -1489,4 +1491,22 @@ fn opencode_v2_quarantined_row_in_a_reread_tail_is_reported_once() {
         String::from_utf8_lossy(&result.stderr)
     );
     reported_once(&serde_json::from_slice(&result.stdout).unwrap());
+}
+
+/// The closed codes of the `scanner_error` events, in log order.
+fn scanner_errors(events: &[Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| event["event_type"] == "scanner_error")
+        .map(|event| {
+            event["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|evidence| evidence["field"] == "error")
+                .and_then(|evidence| evidence["redacted_value"].as_str())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
 }

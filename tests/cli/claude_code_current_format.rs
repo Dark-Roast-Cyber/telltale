@@ -145,8 +145,8 @@ fn transcript() -> Vec<String> {
                  "input": {"file_path": "C:\\Users\\synthetic\\repo\\synthetic-claude-path-marker.txt", "content": body}}
             ]),
         ),
-        // A search pattern is not authored text: over 4 KB it is quarantined
-        // by itself, and the records after it still map.
+        // A search pattern is not authored text: over 4 KB it is replaced and
+        // recorded, the call is still evaluated, and later records still map.
         assistant(
             "m4",
             serde_json::json!([
@@ -230,16 +230,19 @@ fn current_claude_code_transcript_is_parsed_and_detected() {
     assert_eq!(processing["parse_success_source_count"], 1, "{summary}");
     assert_eq!(processing["parse_error_source_count"], 0, "{summary}");
     assert_eq!(processing["selected_source_coverage"], "partial");
+    assert_eq!(processing["accounting_partial_source_count"], 1);
+    assert_eq!(processing["quarantined_unit_count"], 0);
+    assert_eq!(processing["quarantined_units"], serde_json::json!([]));
+    assert_eq!(processing["bounded_value_unit_count"], 1);
     assert_eq!(
-        processing["quarantined_units"],
+        processing["bounded_value_units"],
         serde_json::json!([{
             "source": "claude.projects",
             "session_id": SESSION,
             "native_id": "m4",
             "source_sequence": 8,
-            "code": "unbounded_value",
-            "bound_category": "ToolArguments",
-            "bound_dimension": "StringBytes",
+            "target": "arguments",
+            "dimension": "string_bytes",
         }])
     );
 
@@ -273,13 +276,19 @@ fn current_claude_code_transcript_is_parsed_and_detected() {
             .any(|event| event["event_type"] == "activity" && event["session_id"] == SESSION),
         "the session reports activity"
     );
-    assert_eq!(
-        events
+    let errors = events
+        .iter()
+        .filter(|event| event["event_type"] == "scanner_error")
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1, "one content-free replaced-values marker");
+    assert!(
+        errors[0]["evidence"]
+            .as_array()
+            .unwrap()
             .iter()
-            .filter(|event| event["event_type"] == "scanner_error")
-            .count(),
-        1,
-        "one content-free quarantine marker"
+            .any(|evidence| evidence["redacted_value"] == "canonical_values_bounded"),
+        "{}",
+        errors[0]
     );
     for bytes in [
         fs::read(&log).unwrap(),
@@ -289,6 +298,88 @@ fn current_claude_code_transcript_is_parsed_and_detected() {
         assert!(!text.contains(SECRET));
         assert!(!text.contains("Synthetic private reasoning"));
     }
+}
+
+/// One source with both a quarantined unit and a call with a replaced value
+/// reports both lists, and only the stronger `scanner_error`: quarantine.
+#[test]
+fn quarantined_and_bounded_units_report_both_lists_and_one_quarantine_error() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("home");
+    let project = root.join(".claude/projects/C--Users-synthetic-repo");
+    fs::create_dir_all(&project).unwrap();
+    let mut records = transcript();
+    records.push(record(
+        "Future",
+        "excluded-record",
+        serde_json::json!({"opaque": "synthetic"}),
+    ));
+    fs::write(
+        project.join(format!("{SESSION}.jsonl")),
+        records.join("\n") + "\n",
+    )
+    .unwrap();
+    let rules = temp.path().join("rules.yaml");
+    fs::write(&rules, RULES).unwrap();
+    let log = temp.path().join("events.jsonl");
+    let result = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--client",
+            "claude",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--no-default-rules",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--rules")
+        .arg(&rules)
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let processing = &summary["source_processing"];
+    assert_eq!(processing["selected_source_coverage"], "partial");
+    assert_eq!(processing["quarantined_unit_count"], 1, "{processing}");
+    assert_eq!(
+        processing["quarantined_units"][0]["native_id"],
+        "excluded-record"
+    );
+    assert_eq!(
+        processing["quarantined_units"][0]["code"],
+        "unknown_discriminator"
+    );
+    assert_eq!(processing["bounded_value_unit_count"], 1, "{processing}");
+    assert_eq!(processing["bounded_value_units"][0]["native_id"], "m4");
+    let errors = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event_type"] == "scanner_error")
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|evidence| evidence["field"] == "error"
+                && evidence["redacted_value"] == "canonical_units_quarantined"),
+        "{}",
+        errors[0]
+    );
 }
 
 #[test]
@@ -778,4 +869,126 @@ fn claude_config_dir_relocated_transcripts_are_discovered() {
     let processing = &relocated["source_processing"];
     assert_eq!(processing["selected_source_count"], 1, "{relocated}");
     assert_eq!(processing["parse_success_source_count"], 1, "{relocated}");
+}
+
+/// Agent-to-agent message text over the structured string bound keeps the
+/// direct-text budget: the call is emitted and evaluated, and a command the
+/// message quotes is no command. Text over that budget still quarantines.
+#[test]
+fn claude_agent_message_text_is_evaluated_and_not_a_command() {
+    let message_rules = RULES.to_owned()
+        + r#"---
+title: Synthetic Claude agent message
+id: 0c9d8e7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f
+name: synthetic.claude.message
+taxonomy: telltale
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_tool:
+        tool.name:
+            - SubagentHandback
+            - SendMessage
+    condition: selection_tool
+level: low
+telltale:
+    category: synthetic
+    score: 10
+    explanation: 'Synthetic test.'
+    tags: [synthetic]
+"#;
+    let quoted = format!(
+        "Report: ran `synthetic-claude-command-marker --flag` earlier.\n{}",
+        "detail ".repeat(1_500)
+    );
+    assert!(quoted.len() > 10_000);
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("home");
+    let project = root.join(".claude/projects/synthetic-messages");
+    fs::create_dir_all(&project).unwrap();
+    let transcript = [
+        user("u1", serde_json::json!("Delegate the synthetic audit.")),
+        assistant(
+            "m1",
+            serde_json::json!([{"type": "tool_use", "id": "toolu_handback", "name": "SubagentHandback",
+                "input": {"message": quoted}}]),
+        ),
+        assistant(
+            "m2",
+            serde_json::json!([{"type": "tool_use", "id": "toolu_send", "name": "SendMessage",
+                "input": {"to": "synthetic-peer", "message": quoted}}]),
+        ),
+        assistant(
+            "m3",
+            serde_json::json!([{"type": "tool_use", "id": "toolu_over", "name": "SendMessage",
+                "input": {"to": "synthetic-peer", "message": "o".repeat(65_537)}}]),
+        ),
+    ];
+    fs::write(
+        project.join(format!("{SESSION}.jsonl")),
+        transcript.join("\n") + "\n",
+    )
+    .unwrap();
+    let rules = temp.path().join("rules.yaml");
+    fs::write(&rules, message_rules).unwrap();
+    let log = temp.path().join("events.jsonl");
+    let result = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--client",
+            "claude",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--no-default-rules",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--rules")
+        .arg(&rules)
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&result.stdout).unwrap();
+    // Only the call over the direct-text budget has its message replaced; it
+    // is still evaluated, and nothing is quarantined.
+    let processing = &summary["source_processing"];
+    assert_eq!(processing["quarantined_units"], serde_json::json!([]));
+    let bounded = processing["bounded_value_units"].as_array().unwrap();
+    assert_eq!(bounded.len(), 1, "{summary}");
+    assert_eq!(bounded[0]["native_id"], "m3");
+    assert_eq!(bounded[0]["target"], "arguments");
+    assert_eq!(bounded[0]["dimension"], "string_bytes");
+    let events = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let detected = |rule: &str| {
+        events
+            .iter()
+            .filter(|event| {
+                event["event_type"] == "detection"
+                    && event["evidence"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|evidence| evidence["rule_id"] == rule)
+            })
+            .count()
+    };
+    // The message calls reach detection; the command they quote is no command.
+    assert!(detected("synthetic.claude.message") >= 1, "{events:#?}");
+    assert_eq!(detected("synthetic.claude.command"), 0);
 }

@@ -13,9 +13,12 @@ use telltale_schema::observation::{
     ToolStatus,
 };
 
-use telltale_schema::observation::CanonicalBoundContext;
+use telltale_schema::observation::{BoundedTarget, CanonicalBoundContext};
 
-use crate::tool_operation::declare_in;
+use crate::tool_operation::{
+    BoundedRecord, ResultText, ValueBounds, bounded_records, declare_in, with_source_arguments,
+    with_source_result,
+};
 
 use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
@@ -104,6 +107,8 @@ pub(crate) struct CodexProjection {
     pub(crate) observations: Vec<CanonicalObservationV2>,
     /// Records left out by themselves; every other record was still mapped.
     pub(crate) quarantined: Vec<CodexQuarantinedRecord>,
+    /// Records mapped with over-bound tool values replaced; never quarantined.
+    pub(crate) bounded: Vec<BoundedRecord>,
 }
 
 /// Coordinates of a record excluded from projection, never its content.
@@ -125,14 +130,27 @@ pub(crate) fn project_codex_native_records(
 ) -> Result<CodexProjection, CodexCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::scaled(options.scale);
     let mut quarantined = Vec::new();
+    let mut bounded = Vec::new();
     let mut index = 0;
     while index < records.len() {
         if let Some((raw, end)) = legacy_message_group(records, index) {
-            if !project_unit(&records[raw], options, &mut observations, &mut quarantined)? {
+            if !project_unit(
+                &records[raw],
+                options,
+                &mut observations,
+                &mut quarantined,
+                &mut bounded,
+            )? {
                 // A quarantined raw message cannot hide usable legacy text.
                 for (offset, record) in records[index..end].iter().enumerate() {
                     if index + offset != raw {
-                        project_unit(record, options, &mut observations, &mut quarantined)?;
+                        project_unit(
+                            record,
+                            options,
+                            &mut observations,
+                            &mut quarantined,
+                            &mut bounded,
+                        )?;
                     }
                 }
             }
@@ -150,15 +168,23 @@ pub(crate) fn project_codex_native_records(
                 index + 1
             };
             for record in &records[index..end] {
-                project_unit(record, options, &mut observations, &mut quarantined)?;
+                project_unit(
+                    record,
+                    options,
+                    &mut observations,
+                    &mut quarantined,
+                    &mut bounded,
+                )?;
             }
             index = end;
         }
     }
     quarantined.sort_by_key(|record| record.source_sequence);
+    bounded.sort_by_key(|record| record.source_sequence);
     Ok(CodexProjection {
         observations: observations.finish(),
         quarantined,
+        bounded,
     })
 }
 
@@ -167,11 +193,14 @@ fn project_unit(
     options: &CodexCanonicalOptions,
     observations: &mut crate::acquisition::CanonicalCollector,
     quarantined: &mut Vec<CodexQuarantinedRecord>,
+    bounded: &mut Vec<BoundedRecord>,
 ) -> Result<bool, CodexCanonicalError> {
     let mut unit = crate::acquisition::CanonicalCollector::default();
     match project_record(record, options, &mut unit) {
         Ok(()) => {
-            for observation in unit.finish() {
+            let unit = unit.finish();
+            bounded.extend(bounded_records(record.source_sequence, &unit));
+            for observation in unit {
                 observations.push(observation)?;
             }
             Ok(true)
@@ -621,29 +650,38 @@ fn emit_tool(
         ));
     }
     if let Some(arguments) = &fields.arguments {
-        let arguments =
-            JsonValue::try_from_source_tool_arguments(fields.name.as_deref(), arguments).map_err(
-                |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
-            )?;
-        if hosted_search && let Some(text) = web_search_searchable_arguments(&arguments) {
+        body = with_source_arguments(
+            super::tools::TOOLS,
+            fields.name.as_deref(),
+            body,
+            arguments,
+            ValueBounds::Replace,
+        )?;
+        if hosted_search
+            // Searchable text is derived from validated values, never from a
+            // field with replaced values.
+            && !replaced_in(&body, BoundedTarget::Arguments)
+            && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
+        {
             body = body.with_searchable_arguments(text)?;
             paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
         }
-        body = body.with_arguments(arguments);
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
-        let result = tool_result_json(result)?;
-        if fields.completed_file_change
-            && let Some(text) = file_change_searchable_result(&result)
-        {
+        body = with_tool_result(body, result)?;
+        let searchable = body
+            .result()
+            .filter(|_| fields.completed_file_change)
+            .filter(|_| !replaced_in(&body, BoundedTarget::Result))
+            .and_then(file_change_searchable_result);
+        if let Some(text) = searchable {
             body = body.with_searchable_result(text)?;
             paths.push(("tool.searchable_result", FactProvenance::Parsed));
         }
-        body = body.with_result(result);
         paths.push(("tool.result", FactProvenance::Reported));
     } else if let Some(error) = &fields.error {
-        body = body.with_result(value_to_json(error, CanonicalFieldCategory::ToolResult)?);
+        body = with_source_result(body, error, ResultText::Structured, ValueBounds::Replace)?;
         paths.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = fields.is_error {
@@ -694,6 +732,14 @@ fn emit_tool(
     } else {
         declare_in(super::tools::TOOLS, body, fields.namespace.as_deref())
     };
+    // Facets are never built from an argument that was replaced.
+    let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
+    let admitted_keys = ["command", "cmd"].map(|key| (key, admitted(key)));
+    let path_admitted = admitted("file_path");
+    let arguments_whole = !body
+        .bounded_values()
+        .iter()
+        .any(|value| value.target() == BoundedTarget::Arguments);
     let mut builder = common_builder(
         record,
         options,
@@ -741,10 +787,11 @@ fn emit_tool(
     }
 
     let argument_view = fields.arguments.as_ref().and_then(parsed_argument_view);
-    let command = fields
-        .command
-        .clone()
-        .or_else(|| argument_command(fields.arguments.as_ref(), argument_view.as_ref()));
+    let command = fields.command.clone().or_else(|| {
+        argument_command(fields.arguments.as_ref(), argument_view.as_ref(), |key| {
+            admitted_keys.contains(&(key, true))
+        })
+    });
     let has_command = command.is_some();
     if let Some(command) = command {
         builder = builder
@@ -756,6 +803,7 @@ fn emit_tool(
     }
     if let Some(path) = argument_view
         .as_ref()
+        .filter(|_| path_admitted)
         .and_then(|arguments| argument_string(arguments, "file_path"))
     {
         builder = builder
@@ -766,7 +814,7 @@ fn emit_tool(
     // Completed commands report argv only. A shell-quoted rendering gives
     // command selectors a view of it; argv stays structured, and a rendering
     // that does not fit the bounds is omitted rather than rejecting the result.
-    let derived = if fields.completed_command && !has_command {
+    let derived = if fields.completed_command && !has_command && arguments_whole {
         fields
             .arguments
             .as_ref()
@@ -818,6 +866,13 @@ fn shell_quote(word: &str) -> String {
     } else {
         format!("'{}'", word.replace('\'', r"'\''"))
     }
+}
+
+/// Whether a bounded conversion replaced any value of `target`.
+fn replaced_in(body: &ToolObservation, target: BoundedTarget) -> bool {
+    body.bounded_values()
+        .iter()
+        .any(|value| value.target() == target)
 }
 
 fn web_search_searchable_arguments(action: &JsonValue) -> Option<String> {
@@ -1009,12 +1064,22 @@ fn parsed_argument_view(value: &Value) -> Option<Value> {
     }
 }
 
-fn argument_command(arguments: Option<&Value>, parsed: Option<&Value>) -> Option<String> {
-    parsed
-        .and_then(|arguments| argument_string(arguments, "command"))
-        .or_else(|| parsed.and_then(|arguments| argument_string(arguments, "cmd")))
-        .or_else(|| arguments.and_then(|arguments| argument_string(arguments, "command")))
-        .or_else(|| arguments.and_then(|arguments| argument_string(arguments, "cmd")))
+/// The command among the arguments, `command` before `cmd`, skipping a key
+/// whose value was replaced.
+fn argument_command(
+    arguments: Option<&Value>,
+    parsed: Option<&Value>,
+    admitted: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let command = |value: Option<&Value>, key| {
+        value
+            .filter(|_| admitted(key))
+            .and_then(|value| argument_string(value, key))
+    };
+    command(parsed, "command")
+        .or_else(|| command(parsed, "cmd"))
+        .or_else(|| command(arguments, "command"))
+        .or_else(|| command(arguments, "cmd"))
 }
 
 fn argument_string(value: &Value, key: &str) -> Option<String> {
@@ -1037,12 +1102,17 @@ fn value_to_json(
 /// tool output as `[{"type":"input_text","text":...}]`; an all-text array is
 /// joined into one direct string, and any other shape keeps ordinary
 /// structured conversion.
-fn tool_result_json(result: &Value) -> Result<JsonValue, CodexCanonicalError> {
+fn with_tool_result(
+    body: ToolObservation,
+    result: &Value,
+) -> Result<ToolObservation, CodexCanonicalError> {
     let joined = joined_text_result(result);
-    Ok(
-        JsonValue::try_from_source_tool_result(joined.as_ref().unwrap_or(result))
-            .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?,
-    )
+    Ok(with_source_result(
+        body,
+        joined.as_ref().unwrap_or(result),
+        ResultText::Direct,
+        ValueBounds::Replace,
+    )?)
 }
 
 fn joined_text_result(result: &Value) -> Option<Value> {
@@ -1141,18 +1211,46 @@ mod tests {
             BoundDimension, CanonicalBoundContext, CanonicalFieldCategory,
         };
         let marker = "SYNTHETIC-PRIVATE-CANONICAL-";
+        let options = CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap());
+        // A tool call's over-bound argument is replaced: the record is
+        // projected and reported by coordinates, with no content.
         let value = format!("{marker}{}", "x".repeat(4097));
         let input = serde_json::json!({"type":"tool_call", "session_id":marker, "name":marker, "arguments":{marker:value}});
         let (_directory, source) =
             temp_source("codex.sessions", SourceKind::Jsonl, &input.to_string());
         let records = super::super::native::extract_codex_native_records(&source).unwrap();
-        let options = CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap());
+        let projection = project_codex_native_records(&records, &options).unwrap();
+        assert!(projection.quarantined.is_empty());
+        assert_eq!(projection.observations.len(), 1);
+        assert_eq!(
+            projection.bounded,
+            [crate::tool_operation::BoundedRecord {
+                source_sequence: 0,
+                target: telltale_schema::observation::BoundedTarget::Arguments,
+                dimension: BoundDimension::StringBytes,
+            }]
+        );
+        let ObservationBody::Tool(tool) = projection.observations[0].body() else {
+            panic!("expected tool")
+        };
+        for rendered in [
+            format!("{:?}", projection.bounded),
+            format!("{:?}", tool.bounded_values()),
+        ] {
+            assert!(!rendered.contains(marker), "controlled content leaked");
+        }
+        // Message text over its budget still fails its record.
+        let value = format!("{marker}{}", "x".repeat(65_537));
+        let input = serde_json::json!({"type":"user", "session_id":marker, "content":value});
+        let (_directory, source) =
+            temp_source("codex.sessions", SourceKind::Jsonl, &input.to_string());
+        let records = super::super::native::extract_codex_native_records(&source).unwrap();
         let error = project_one(&records[0]).unwrap_err();
         let super::CodexCanonicalError::Observation(observation) = &error else {
             panic!("expected canonical validation")
         };
         let bound = Some(CanonicalBoundContext {
-            category: CanonicalFieldCategory::ToolArguments,
+            category: CanonicalFieldCategory::MessageContent,
             dimension: BoundDimension::StringBytes,
         });
         assert_eq!(observation.bound_context(), bound);
