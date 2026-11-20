@@ -69,6 +69,16 @@ fn check(base: &Path, source: &Source) -> std::process::Output {
 
 /// The verdict and reason for a Bash call; no verdict means the call is allowed.
 fn hook(base: &Path, source: &Source, command: &str) -> (Option<String>, String) {
+    let (verdict, reason, _) = hook_with_stderr(base, source, command);
+    (verdict, reason)
+}
+
+/// [`hook`], and what the hook wrote to stderr.
+fn hook_with_stderr(
+    base: &Path,
+    source: &Source,
+    command: &str,
+) -> (Option<String>, String, String) {
     let mut payload = common::template("PreToolUse", Some("Bash"));
     payload["tool_use_id"] = "toolu_generated".into();
     payload["tool_input"] = json!({"command": command});
@@ -86,8 +96,9 @@ fn hook(base: &Path, source: &Source, command: &str) -> (Option<String>, String)
         .unwrap();
     let out = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if stdout.trim().is_empty() {
-        return (None, String::new());
+        return (None, String::new(), stderr);
     }
     let output: Value = serde_json::from_str(stdout.trim()).unwrap();
     let decision = &output["hookSpecificOutput"];
@@ -97,6 +108,7 @@ fn hook(base: &Path, source: &Source, command: &str) -> (Option<String>, String)
             .as_str()
             .unwrap_or_default()
             .to_owned(),
+        stderr,
     )
 }
 
@@ -374,4 +386,217 @@ fn a_build_failure_names_check_and_no_environment_value() {
     assert!(!check.status.success());
     let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(stderr.contains("pipeline_build_failed"), "{stderr}");
+}
+
+// ---- No state directory
+
+/// A config root that enforces with more of the `hooks:` section in `hooks`, and an
+/// environment where no state directory resolves: `HOME` and `LOCALAPPDATA` are empty
+/// and nothing else names one. An agent can launch its harness that way. The
+/// temporary directory is `temp`; with `telemetry`, records go to that file.
+fn no_state_dir(base: &Path, hooks: &str, temp: &Path, telemetry: Option<&Path>) -> Source {
+    let mut source = config(base, hooks);
+    for var in ["HOME", "LOCALAPPDATA"] {
+        source.env.push((var, PathBuf::new()));
+    }
+    for var in ["TMPDIR", "TEMP", "TMP"] {
+        source.env.push((var, temp.to_owned()));
+    }
+    if let Some(path) = telemetry {
+        source
+            .env
+            .push(("TELLTALE_HOOKS_TELEMETRY", path.to_owned()));
+    }
+    source
+}
+
+fn records(telemetry: &Path, kind: &str) -> Vec<Value> {
+    std::fs::read_to_string(telemetry)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["kind"] == kind)
+        .collect()
+}
+
+/// The two policies a hook is tested under, as `hooks:` lines, with what a call
+/// that cannot be evaluated gets under each.
+const POLICIES: [(&str, &str, Option<&str>); 2] = [
+    ("default", "", Some("ask")),
+    ("fail-open", "  on_unevaluable: allow\n", None),
+];
+
+/// With no state directory the call is still evaluated, alone, in a fresh
+/// owner-only directory under the temporary directory, which is removed
+/// afterwards. A rule's deny stays a deny under every policy, and a clean call
+/// gets the stricter of `on_error` and `on_unevaluable`: it was evaluated without
+/// its session's history. Before, both were allowed with no record.
+#[cfg(unix)]
+#[test]
+fn with_no_state_directory_a_rule_deny_stays_a_deny() {
+    for (policy, hooks, clean) in POLICIES {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("tmp");
+        std::fs::create_dir(&temp).unwrap();
+        let telemetry = dir.path().join("records").join("telemetry.jsonl");
+        let source = no_state_dir(dir.path(), hooks, &temp, Some(&telemetry));
+        assert!(!check(dir.path(), &source).status.success(), "{policy}");
+
+        let (verdict, reason, stderr) = hook_with_stderr(dir.path(), &source, DENIED);
+        assert_eq!(
+            verdict.as_deref(),
+            Some("deny"),
+            "{policy}: {reason} {stderr}"
+        );
+        assert!(reason.contains("tth.tamper."), "{policy}: {reason}");
+        let (verdict, reason, stderr) = hook_with_stderr(dir.path(), &source, "ls");
+        assert_eq!(verdict.as_deref(), clean, "{policy}: {reason} {stderr}");
+        if clean.is_some() {
+            assert!(reason.contains("no state directory"), "{policy}: {reason}");
+        }
+        // Nothing is left under the temporary directory.
+        let left: Vec<_> = std::fs::read_dir(&temp).unwrap().collect();
+        assert!(left.is_empty(), "{policy}: {left:?}");
+
+        // Both calls are recorded, and the records say why.
+        let decisions = records(&telemetry, "decision");
+        assert_eq!(decisions.len(), 2, "{policy}: {decisions:#?}");
+        for record in &decisions {
+            let limits = record["evaluation"]["visibility_limits"].to_string();
+            assert!(
+                limits.contains("state_dir_unresolved"),
+                "{policy}: {record:#}"
+            );
+        }
+        assert_eq!(decisions[0]["decision"]["verdict"], "deny", "{policy}");
+        assert_eq!(
+            decisions[0]["decision"]["basis"], "action_score",
+            "{policy}"
+        );
+        let (verdict, basis) = match clean {
+            Some(_) => ("ask", "evaluation_gap"),
+            None => ("allow", "no_finding"),
+        };
+        assert_eq!(decisions[1]["decision"]["verdict"], verdict, "{policy}");
+        assert_eq!(decisions[1]["decision"]["basis"], basis, "{policy}");
+    }
+}
+
+/// With no state directory and no telemetry path, the decision cannot be
+/// recorded anywhere: one line on stderr says so, and what was decided.
+#[cfg(unix)]
+#[test]
+fn with_no_state_directory_and_no_record_location_stderr_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let temp = dir.path().join("tmp");
+    std::fs::create_dir(&temp).unwrap();
+    let source = no_state_dir(dir.path(), "", &temp, None);
+    for (command, verdict) in [(DENIED, "deny"), ("ls", "ask")] {
+        let (returned, _, stderr) = hook_with_stderr(dir.path(), &source, command);
+        assert_eq!(returned.as_deref(), Some(verdict), "{stderr}");
+        let lines: Vec<&str> = stderr.lines().collect();
+        assert_eq!(lines.len(), 1, "{stderr}");
+        assert!(lines[0].contains("no state directory"), "{stderr}");
+        assert!(lines[0].contains(verdict), "{stderr}");
+    }
+}
+
+/// Where no fresh temporary directory can be made (here: the temporary directory
+/// does not exist; on Windows always, see `ScratchDir`), the call is not
+/// evaluated and gets the stricter of `on_error` and `on_unevaluable`, a rule's
+/// deny included. Never a silent allow by default, and never unrecorded: an
+/// `error` record, or a line on stderr when there is nowhere to write one.
+#[test]
+fn with_no_state_directory_and_no_temporary_directory_the_strict_policy_applies() {
+    for (policy, hooks, strict) in POLICIES {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("missing");
+        let telemetry = dir.path().join("records").join("telemetry.jsonl");
+        let source = no_state_dir(dir.path(), hooks, &temp, Some(&telemetry));
+        for command in [DENIED, "ls"] {
+            let (verdict, reason, stderr) = hook_with_stderr(dir.path(), &source, command);
+            assert_eq!(verdict.as_deref(), strict, "{policy}: {reason} {stderr}");
+        }
+        let errors = records(&telemetry, "error");
+        assert_eq!(errors.len(), 2, "{policy}: {errors:#?}");
+        for record in &errors {
+            assert_eq!(record["error_code"], "state_dir_unresolved", "{policy}");
+        }
+        assert!(!temp.exists(), "{policy}");
+
+        let source = no_state_dir(dir.path(), hooks, &temp, None);
+        let (verdict, _, stderr) = hook_with_stderr(dir.path(), &source, DENIED);
+        assert_eq!(verdict.as_deref(), strict, "{policy}");
+        let lines: Vec<&str> = stderr.lines().collect();
+        assert_eq!(lines.len(), 1, "{policy}: {stderr}");
+        assert!(
+            lines[0].contains("state_dir_unresolved"),
+            "{policy}: {stderr}"
+        );
+    }
+}
+
+// ---- A long state directory under the home
+
+/// A state directory `length` bytes below the home, in nested 19-byte names.
+fn below_home(length: usize) -> String {
+    let mut rest = String::from("s_");
+    while rest.len() < length {
+        rest.push_str("/dddddddddddddddddd");
+    }
+    rest.truncate(length);
+    rest.trim_end_matches('/').to_owned()
+}
+
+/// A state directory under the home is also written from it (`~/...`,
+/// `$HOME/...`). Past what one rule holds, that spelling is matched by its last
+/// bytes like the literal path, and `check` lists it. It used to be dropped
+/// silently once it no longer fit one rule, so a write through `~/` went
+/// unmatched for lengths about one home path wide.
+#[cfg(not(windows))]
+#[test]
+fn a_long_state_dir_under_the_home_is_covered_in_every_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let failures = std::sync::Mutex::new(Vec::new());
+    let lengths: Vec<usize> = (100..=420).step_by(8).collect();
+    std::thread::scope(|scope| {
+        for chunk in lengths.chunks(lengths.len().div_ceil(8)) {
+            let (dir, home, failures) = (&dir, &home, &failures);
+            scope.spawn(move || {
+                for &length in chunk {
+                    let rest = below_home(length);
+                    let state = home.join(&rest);
+                    let source = env(vec![("TELLTALE_HOOKS_STATE_DIR", state.clone())]);
+                    for command in [
+                        format!("rm -f ~/{rest}/x"),
+                        format!("rm -f $HOME/{rest}/x"),
+                        format!("rm -f {}/x", state.display()),
+                    ] {
+                        let (verdict, reason) = hook(dir.path(), &source, &command);
+                        if verdict.as_deref() != Some("deny") {
+                            let spelling = &command[..8];
+                            failures
+                                .lock()
+                                .unwrap()
+                                .push(format!("{length} bytes, {spelling}: {verdict:?} {reason}"));
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let failures = failures.into_inner().unwrap();
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+
+    let rest = below_home(420);
+    let source = env(vec![("TELLTALE_HOOKS_STATE_DIR", home.join(&rest))]);
+    let check = check(dir.path(), &source);
+    let stdout = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("matched by its last bytes") && line.contains("\"~/s_")),
+        "{stdout}"
+    );
 }

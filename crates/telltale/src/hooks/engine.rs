@@ -861,10 +861,20 @@ pub struct GeneratedCoverage {
     /// Protected paths, custom harness homes and the binary.
     pub paths: usize,
     pub rules: usize,
-    /// Paths matched by their last bytes only.
+    /// Paths matched by their last bytes only; a spelling from the user's home
+    /// as `~` and the rest of the path.
     pub reduced: Vec<String>,
     /// Paths with no generated rule because they are not UTF-8.
     pub unrepresentable: Vec<String>,
+}
+
+impl GeneratedCoverage {
+    /// `path`, or a spelling of it, is matched by its last bytes only.
+    fn report_reduced(&mut self, path: &str) {
+        if !self.reduced.iter().any(|known| known == path) {
+            self.reduced.push(path.to_owned());
+        }
+    }
 }
 
 /// One generated document's literal paths and rule names.
@@ -914,8 +924,9 @@ fn path_pieces(text: &str) -> Vec<String> {
 }
 
 /// One path as regexes followed by `suffix`: its literal text, or its last bytes
-/// if that does not fit one rule, and its spelling from the user's home. Nothing for
-/// a path with nothing in it to match: that would match everything.
+/// if that does not fit one rule, and its spelling from the user's home, reduced
+/// the same way. Nothing for a path with nothing in it to match: that would match
+/// everything.
 fn path_fragments(path: &Path, suffix: &str, coverage: &mut GeneratedCoverage) -> Vec<String> {
     let Some(text) = path.to_str() else {
         let path = path.display().to_string();
@@ -931,6 +942,38 @@ fn path_fragments(path: &Path, suffix: &str, coverage: &mut GeneratedCoverage) -
     }
     let limit = FRAGMENT_BUDGET - suffix.len();
     let pieces = path_pieces(text);
+    let (literal, whole) = last_bytes(&pieces, limit);
+    if !whole {
+        coverage.report_reduced(text);
+    }
+    let mut fragments = vec![literal + suffix];
+    let home = crate::hooks::config::user_home();
+    let rest = home
+        .as_deref()
+        .and_then(Path::to_str)
+        .and_then(|home| text.strip_prefix(home.trim_end_matches(is_separator)))
+        .filter(|rest| rest.is_empty() || rest.starts_with(is_separator));
+    if let Some(rest) = rest {
+        let spelled = format!("(?:{HOME_SPELLINGS})");
+        let pieces = path_pieces(rest);
+        let fragment = match last_bytes(&pieces, limit.saturating_sub(spelled.len())) {
+            (rest, true) => spelled + &rest,
+            // Matched by the last bytes of what follows the home, which a command
+            // written from the home contains. The literal path's last bytes can
+            // hold characters of the home that such a command does not.
+            _ => {
+                coverage.report_reduced(&format!("~{rest}"));
+                last_bytes(&pieces, limit).0
+            }
+        };
+        fragments.push(fragment + suffix);
+    }
+    fragments
+}
+
+/// The last of `pieces` that fit in `limit` bytes, joined, and whether that is
+/// all of them.
+fn last_bytes(pieces: &[String], limit: usize) -> (String, bool) {
     let mut used = 0;
     let mut kept: Vec<&str> = pieces
         .iter()
@@ -941,21 +984,9 @@ fn path_fragments(path: &Path, suffix: &str, coverage: &mut GeneratedCoverage) -
             used <= limit
         })
         .collect();
-    if kept.len() < pieces.len() && !coverage.reduced.iter().any(|known| known == text) {
-        coverage.reduced.push(text.to_owned());
-    }
+    let whole = kept.len() == pieces.len();
     kept.reverse();
-    let mut fragments = vec![kept.concat() + suffix];
-    let home = crate::hooks::config::user_home();
-    let spelled = home
-        .as_deref()
-        .and_then(Path::to_str)
-        .and_then(|home| text.strip_prefix(home.trim_end_matches(is_separator)))
-        .filter(|rest| rest.is_empty() || rest.starts_with(is_separator))
-        .map(|rest| format!("(?:{HOME_SPELLINGS}){}{suffix}", path_pieces(rest).concat()))
-        .filter(|fragment| fragment.len() <= FRAGMENT_BUDGET);
-    fragments.extend(spelled);
-    fragments
+    (kept.concat(), whole)
 }
 
 /// Paths inside another listed directory are dropped; the directory covers them.
