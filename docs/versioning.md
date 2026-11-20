@@ -7,9 +7,9 @@ format.
 
 ## Current Series
 
-- `v0.7.2` is the current stable GitHub Release; `v0.7.1` is the previous stable.
+- `v0.7.3` is the current stable GitHub Release; `v0.7.2` is the previous stable.
   See the [migration guide](migrations/0.7.0.md) before upgrading from 0.6.x, and
-  the 0.7.1 and 0.7.2 changelog entries before upgrading from 0.7.0. The 0.8 line
+  the 0.7.1, 0.7.2 and 0.7.3 changelog entries before upgrading from 0.7.0. The 0.8 line
   replaces Rule v1 with Rule v2; see the [0.8.0 migration guide](migrations/0.8.0.md).
 - The final prerelease is `v0.7.0-rc.4`. Each release's source SHA, artifacts
   and qualification results are recorded on its
@@ -27,12 +27,12 @@ format.
 - Event3 schema version stays `3.0` and the rule format is versioned by its own
   name (Rule v2, a [Sigma profile](rule-format.md)); neither follows the package
   version.
-- Published v0.7.2 contains six functional Cargo packages: `telltale-schema`,
+- Published v0.7.3 contains six functional Cargo packages: `telltale-schema`,
   `telltale-rules`, `telltale-sources`, `telltale-detect`, `telltale-core`, and
   `telltale-cli`. The current workspace adds the publishable `telltale-discover`
   package for independent local inventory and shared filesystem discovery. It
   participates in package verification and the next release's publication order,
-  but is not part of the already published v0.7.2 artifacts.
+  but is not part of the already published v0.7.3 artifacts.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
@@ -93,7 +93,7 @@ The Cargo/package version is not the version of every data contract:
   Event3, with its own pinned `catalog_revision`. It reports metadata indicators,
   not installation or usage totals; see the
   [inventory guide](../crates/telltale-discover/README.md). It is not part of the
-  published 0.7.2 contract.
+  published 0.7.3 contract.
 - **Configuration version:** configuration documents such as `version: 1` have
   their own migration rules. A package release does not automatically change a
   configuration version.
@@ -192,7 +192,7 @@ availability immediately before publication, then publish in the gate's order,
 waiting after each until it resolves from the index without a local patch.
 After all six are available, remove every local `patch.crates-io` override and
 confirm the clean consumers and CLI installation using only pinned
-`=0.7.2` registry dependencies while that remains the workspace package
+`=0.7.3` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version. Do not
 declare publication complete before those unpatched checks pass, and do not
 publish credentials or local release state.
