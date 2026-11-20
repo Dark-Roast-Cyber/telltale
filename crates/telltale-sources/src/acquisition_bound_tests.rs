@@ -1724,6 +1724,7 @@ fn values_over_the_observation_aggregate_are_replaced_and_reported() {
 /// A hook journal keeps strict values: where a session source replaces a
 /// value over the observation aggregate, the journal quarantines the call,
 /// and nothing is reported as replaced.
+#[cfg(feature = "hook-journal")]
 #[test]
 fn a_hook_journal_keeps_quarantining_values_over_the_aggregate() {
     let directory = tempfile::tempdir().unwrap();
