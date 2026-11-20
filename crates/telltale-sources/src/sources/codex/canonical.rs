@@ -16,8 +16,8 @@ use telltale_schema::observation::{
 use telltale_schema::observation::{BoundedTarget, CanonicalBoundContext};
 
 use crate::tool_operation::{
-    BoundedRecord, ResultText, ValueBounds, bounded_records, declare_in, with_source_arguments,
-    with_source_result,
+    BoundedRecord, ResultText, ValueBounds, bounded_records, build_fitted, declare_in,
+    with_source_arguments, with_source_result,
 };
 
 use super::native::{
@@ -607,6 +607,24 @@ fn emit_tool(
     child_ordinal: &mut usize,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CodexCanonicalError> {
+    let observation = build_fitted(
+        ValueBounds::Replace,
+        |error| matches!(error, CodexCanonicalError::Observation(error) if error.bound_dimension().is_some()),
+        |bounds| tool_observation(record, options, &fields, stage, *child_ordinal, bounds),
+    )?;
+    observations.push(observation)?;
+    *child_ordinal += 1;
+    Ok(())
+}
+
+fn tool_observation(
+    record: &CodexNativeRecord,
+    options: &CodexCanonicalOptions,
+    fields: &CodexToolFields,
+    stage: ObservationStage,
+    child_ordinal: usize,
+    bounds: ValueBounds,
+) -> Result<CanonicalObservationV2, CodexCanonicalError> {
     if fields.is_error_present && fields.is_error.is_none() {
         return Err(mapping(
             "invalid_tool_result",
@@ -655,21 +673,12 @@ fn emit_tool(
             fields.name.as_deref(),
             body,
             arguments,
-            ValueBounds::Replace,
+            bounds,
         )?;
-        if hosted_search
-            // Searchable text is derived from validated values, never from a
-            // field with replaced values.
-            && !replaced_in(&body, BoundedTarget::Arguments)
-            && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
-        {
-            body = body.with_searchable_arguments(text)?;
-            paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
-        }
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
-        body = with_tool_result(body, result)?;
+        body = with_tool_result(body, result, bounds)?;
         let searchable = body
             .result()
             .filter(|_| fields.completed_file_change)
@@ -681,8 +690,17 @@ fn emit_tool(
         }
         paths.push(("tool.result", FactProvenance::Reported));
     } else if let Some(error) = &fields.error {
-        body = with_source_result(body, error, ResultText::Structured, ValueBounds::Replace)?;
+        body = with_source_result(body, error, ResultText::Structured, bounds)?;
         paths.push(("tool.result", FactProvenance::Reported));
+    }
+    // Searchable text is derived from validated values, never from a field
+    // with replaced values; fitting the result can replace arguments too.
+    if hosted_search
+        && !replaced_in(&body, BoundedTarget::Arguments)
+        && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
+    {
+        body = body.with_searchable_arguments(text)?;
+        paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
     }
     if let Some(is_error) = fields.is_error {
         body = body.with_is_error(is_error);
@@ -746,7 +764,7 @@ fn emit_tool(
         ObservationBody::Tool(body),
         stage,
         tool_correlation(fields.call_id.as_deref())?,
-        *child_ordinal,
+        child_ordinal,
     )?;
     for (path, provenance) in paths {
         builder = builder.fact_metadata(path, normal(provenance)?);
@@ -828,7 +846,7 @@ fn emit_tool(
     } else {
         None
     };
-    let observation = match derived {
+    Ok(match derived {
         Some(with_command) => match with_command
             .fact_metadata("command.text", normal(FactProvenance::Derived)?)
             .build()
@@ -838,10 +856,7 @@ fn emit_tool(
             Err(error) => return Err(error.into()),
         },
         None => builder.build()?,
-    };
-    observations.push(observation)?;
-    *child_ordinal += 1;
-    Ok(())
+    })
 }
 
 /// POSIX shell quoting: safe words unchanged, the empty word as `''`, and any
@@ -1105,13 +1120,14 @@ fn value_to_json(
 fn with_tool_result(
     body: ToolObservation,
     result: &Value,
+    bounds: ValueBounds,
 ) -> Result<ToolObservation, CodexCanonicalError> {
     let joined = joined_text_result(result);
     Ok(with_source_result(
         body,
         joined.as_ref().unwrap_or(result),
         ResultText::Direct,
-        ValueBounds::Replace,
+        bounds,
     )?)
 }
 

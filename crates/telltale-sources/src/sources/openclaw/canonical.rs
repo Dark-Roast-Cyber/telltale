@@ -12,7 +12,7 @@ use telltale_schema::observation::{
 };
 
 use crate::tool_operation::{
-    ResultText, ValueBounds, declare, replaced_arguments, with_declared_arguments,
+    ResultText, ValueBounds, build_fitted, declare, replaced_arguments, with_declared_arguments,
     with_source_result,
 };
 
@@ -523,74 +523,77 @@ fn emit_tool(
         ));
     }
 
-    let mut body = ToolObservation::new();
-    let mut metadata = Vec::new();
-    if let Some(name) = &fields.name {
-        body = body.with_name(name)?;
-        metadata.push(("tool.name", FactProvenance::Reported));
-    }
-    if let Some(arguments) = &fields.arguments {
-        body = with_declared_arguments(
-            telltale_schema::observation::ArgumentText::new(),
-            body,
-            arguments,
-            ValueBounds::Replace,
+    let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+        let mut body = ToolObservation::new();
+        let mut metadata = Vec::new();
+        if let Some(name) = &fields.name {
+            body = body.with_name(name)?;
+            metadata.push(("tool.name", FactProvenance::Reported));
+        }
+        if let Some(arguments) = &fields.arguments {
+            body = with_declared_arguments(
+                telltale_schema::observation::ArgumentText::new(),
+                body,
+                arguments,
+                bounds,
+            )?;
+            metadata.push(("tool.arguments", FactProvenance::Reported));
+        }
+        if let Some(result) = result {
+            body = with_source_result(body, result, ResultText::Structured, bounds)?;
+            metadata.push(("tool.result", FactProvenance::Reported));
+        }
+        if let Some(is_error) = fields.is_error {
+            body = body.with_is_error(is_error);
+            metadata.push(("tool.is_error", FactProvenance::Reported));
+        }
+        if metadata.is_empty() {
+            return Err(mapping(
+                "invalid_tool_request",
+                "OpenClaw tool record has no canonical tool fact",
+            ));
+        }
+
+        // No facet is built from an argument that was replaced.
+        let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
+        let admitted = |key: &str| !replaced.contains(&key);
+        let mut builder = common_builder(
+            record,
+            options,
+            ObservationBody::Tool(declare(super::tools::TOOLS, body)),
+            stage,
+            tool_correlation(fields.call_id.as_deref())?,
+            *child_ordinal,
         )?;
-        metadata.push(("tool.arguments", FactProvenance::Reported));
-    }
-    if let Some(result) = result {
-        body = with_source_result(body, result, ResultText::Structured, ValueBounds::Replace)?;
-        metadata.push(("tool.result", FactProvenance::Reported));
-    }
-    if let Some(is_error) = fields.is_error {
-        body = body.with_is_error(is_error);
-        metadata.push(("tool.is_error", FactProvenance::Reported));
-    }
-    if metadata.is_empty() {
-        return Err(mapping(
-            "invalid_tool_request",
-            "OpenClaw tool record has no canonical tool fact",
-        ));
-    }
-
-    // No facet is built from an argument that was replaced.
-    let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
-    let admitted = |key: &str| !replaced.contains(&key);
-    let mut builder = common_builder(
-        record,
-        options,
-        ObservationBody::Tool(declare(super::tools::TOOLS, body)),
-        stage,
-        tool_correlation(fields.call_id.as_deref())?,
-        *child_ordinal,
-    )?;
-    for (path, provenance) in metadata {
-        builder = builder.fact_metadata(path, normal(provenance)?);
-    }
-
-    if let Some(arguments) = fields.arguments.as_ref().and_then(parsed_argument_view) {
-        if let Some(command) = argument_string(arguments, "command")
-            .filter(|_| admitted("command"))
-            .or_else(|| argument_string(arguments, "cmd").filter(|_| admitted("cmd")))
-        {
-            builder = builder
-                .facet(
-                    "command.text",
-                    SemanticFacet::new(JsonValue::string(command)),
-                )?
-                .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+        for (path, provenance) in metadata {
+            builder = builder.fact_metadata(path, normal(provenance)?);
         }
-        if let Some(path) = argument_string(arguments, "file_path")
-            .filter(|_| admitted("file_path"))
-            .or_else(|| argument_string(arguments, "path").filter(|_| admitted("path")))
-        {
-            builder = builder
-                .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
-        }
-    }
 
-    observations.push(builder.build()?)?;
+        if let Some(arguments) = fields.arguments.as_ref().and_then(parsed_argument_view) {
+            if let Some(command) = argument_string(arguments, "command")
+                .filter(|_| admitted("command"))
+                .or_else(|| argument_string(arguments, "cmd").filter(|_| admitted("cmd")))
+            {
+                builder = builder
+                    .facet(
+                        "command.text",
+                        SemanticFacet::new(JsonValue::string(command)),
+                    )?
+                    .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+            }
+            if let Some(path) = argument_string(arguments, "file_path")
+                .filter(|_| admitted("file_path"))
+                .or_else(|| argument_string(arguments, "path").filter(|_| admitted("path")))
+            {
+                builder = builder
+                    .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
+                    .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+            }
+        }
+
+        Ok(builder.build()?)
+    })?;
+    observations.push(observation)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -692,6 +695,12 @@ fn value_to_json(value: &serde_json::Value) -> Result<JsonValue, OpenClawCanonic
 
 fn mapping(code: &'static str, detail: &'static str) -> OpenClawCanonicalError {
     OpenClawCanonicalError::Mapping { code, detail }
+}
+
+/// A failure of a call's observation on a value bound: [`build_fitted`] then
+/// builds it again with the call's values fitted.
+fn value_bound(error: &OpenClawCanonicalError) -> bool {
+    matches!(error, OpenClawCanonicalError::Observation(error) if error.bound_dimension().is_some())
 }
 
 #[cfg(test)]

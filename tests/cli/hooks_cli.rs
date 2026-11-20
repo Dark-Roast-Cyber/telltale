@@ -1114,8 +1114,14 @@ fn settings_refuses_an_unknown_flag_on_every_entry_point() {
 #[test]
 fn the_cli_lists_and_serves_every_registered_harness() {
     use telltale_core::hooks::harness::Harness;
+    // Never created: `settings` only names it in the command it prints.
+    let state = std::env::temp_dir().join("telltale-registry-state");
     let run = |args: &[&str]| {
-        let out = isolated().args(args).output().unwrap();
+        let out = isolated()
+            .env("TELLTALE_HOOKS_STATE_DIR", &state)
+            .args(args)
+            .output()
+            .unwrap();
         (
             out.status.code(),
             String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -1146,7 +1152,11 @@ fn the_cli_lists_and_serves_every_registered_harness() {
             "{name}"
         );
         let (code, document) = run(&[name, "settings"]);
-        match (adapter.install.output)(&format!("telltale hooks {name} hook"), false) {
+        let pinned = format!(
+            "telltale hooks {name} hook --state-dir '{}'",
+            state.display()
+        );
+        match (adapter.install.output)(&pinned, false) {
             Ok(expected) => {
                 assert_eq!(code, Some(0), "{name}");
                 let document: Value = serde_json::from_str(&document).unwrap();

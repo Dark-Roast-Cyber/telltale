@@ -596,12 +596,20 @@ fn completed_file_change_bounds_are_per_unit_content_free_and_not_truncated() {
             &[meta(), good, file_change(changes(max_content + 1))],
         )
         .unwrap();
-        assert_eq!(large.observations.len(), 1);
-        assert_eq!(large.quarantined[0].code, "unbounded_value");
+        // Over that bound the change is held with its values replaced whole.
+        assert_eq!(large.observations.len(), 2);
+        assert!(large.quarantined.is_empty());
         assert_eq!(
-            large.quarantined[0].bound.unwrap().category,
-            CanonicalFieldCategory::SemanticField
+            bounded_units(&large),
+            [(
+                "patch-a",
+                2,
+                BoundedTarget::Result,
+                BoundDimension::EncodedBytes
+            )]
         );
+        let reported = format!("{:?}{:?}", large.bounded, large.observations);
+        assert!(!reported.contains("/synthetic") && !reported.contains(&"x".repeat(16)));
         for changes in [
             json!({"x".repeat(64):{"type":"add","content":""}}),
             Value::Object(

@@ -16,8 +16,8 @@ use telltale_schema::observation::{
 use telltale_schema::observation::BoundedTarget;
 
 use crate::tool_operation::{
-    BoundedRecord, ResultText, ValueBounds, bounded_records, declare_in, with_source_arguments,
-    with_source_result,
+    BoundedRecord, ResultText, ValueBounds, bounded_records, build_fitted, declare_in,
+    with_source_arguments, with_source_result,
 };
 
 use super::native::{
@@ -359,67 +359,64 @@ fn emit_tool_call(
     child_ordinal: &mut usize,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), PiCanonicalError> {
-    let mut body = ToolObservation::new();
-    let mut paths = Vec::new();
-    if let Some(name) = call.name {
-        body = body.with_name(name)?;
-        paths.push(("tool.name", FactProvenance::Reported));
-    }
-    if let Some(arguments) = call.arguments {
-        body = with_source_arguments(
-            super::tools::TOOLS,
-            call.name,
-            body,
-            arguments,
-            ValueBounds::Replace,
+    let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+        let mut body = ToolObservation::new();
+        let mut paths = Vec::new();
+        if let Some(name) = call.name {
+            body = body.with_name(name)?;
+            paths.push(("tool.name", FactProvenance::Reported));
+        }
+        if let Some(arguments) = call.arguments {
+            body = with_source_arguments(super::tools::TOOLS, call.name, body, arguments, bounds)?;
+            paths.push(("tool.arguments", FactProvenance::Reported));
+        }
+        if paths.is_empty() {
+            return Err(mapping(
+                "invalid_tool_request",
+                "Pi tool call has no name or arguments",
+            ));
+        }
+        let body = declare_in(super::tools::TOOLS, body, call.namespace);
+        // Facets are never built from an argument that was replaced.
+        let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
+        let (command_admitted, path_admitted) = (admitted("command"), admitted("path"));
+        let mut builder = common_builder(
+            record,
+            options,
+            ObservationBody::Tool(body),
+            ObservationStage::ToolRequested,
+            tool_correlation(call.id)?,
+            *child_ordinal,
         )?;
-        paths.push(("tool.arguments", FactProvenance::Reported));
-    }
-    if paths.is_empty() {
-        return Err(mapping(
-            "invalid_tool_request",
-            "Pi tool call has no name or arguments",
-        ));
-    }
-    let body = declare_in(super::tools::TOOLS, body, call.namespace);
-    // Facets are never built from an argument that was replaced.
-    let admitted = |key: &str| !body.bounded_member(BoundedTarget::Arguments, key);
-    let (command_admitted, path_admitted) = (admitted("command"), admitted("path"));
-    let mut builder = common_builder(
-        record,
-        options,
-        ObservationBody::Tool(body),
-        ObservationStage::ToolRequested,
-        tool_correlation(call.id)?,
-        *child_ordinal,
-    )?;
-    for (path, provenance) in paths {
-        builder = builder.fact_metadata(path, normal(provenance)?);
-    }
-    if let Some(arguments) = call.arguments.and_then(Value::as_object) {
-        if let Some(command) = arguments
-            .get("command")
-            .and_then(Value::as_str)
-            .filter(|_| command_admitted)
-        {
-            builder = builder
-                .facet(
-                    "command.text",
-                    SemanticFacet::new(JsonValue::string(command)),
-                )?
-                .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+        for (path, provenance) in paths {
+            builder = builder.fact_metadata(path, normal(provenance)?);
         }
-        if let Some(path) = arguments
-            .get("path")
-            .and_then(Value::as_str)
-            .filter(|_| path_admitted)
-        {
-            builder = builder
-                .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+        if let Some(arguments) = call.arguments.and_then(Value::as_object) {
+            if let Some(command) = arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|_| command_admitted)
+            {
+                builder = builder
+                    .facet(
+                        "command.text",
+                        SemanticFacet::new(JsonValue::string(command)),
+                    )?
+                    .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+            }
+            if let Some(path) = arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|_| path_admitted)
+            {
+                builder = builder
+                    .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
+                    .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+            }
         }
-    }
-    observations.push(builder.build()?)?;
+        Ok(builder.build()?)
+    })?;
+    observations.push(observation)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -443,32 +440,35 @@ fn emit_tool_result(
             "Pi tool result has no returned value or error state",
         ));
     }
-    let mut body = ToolObservation::new();
-    let mut paths = Vec::new();
-    if let Some(name) = &result.name {
-        body = body.with_name(name)?;
-        paths.push(("tool.name", FactProvenance::Reported));
-    }
-    if let Some(content) = &result.content {
-        body = with_tool_result(body, content)?;
-        paths.push(("tool.result", FactProvenance::Reported));
-    }
-    if let Some(is_error) = result.is_error {
-        body = body.with_is_error(is_error);
-        paths.push(("tool.is_error", FactProvenance::Reported));
-    }
-    let mut builder = common_builder(
-        record,
-        options,
-        ObservationBody::Tool(body),
-        ObservationStage::ToolResultReturned,
-        tool_correlation(result.call_id.as_deref())?,
-        *child_ordinal,
-    )?;
-    for (path, provenance) in paths {
-        builder = builder.fact_metadata(path, normal(provenance)?);
-    }
-    observations.push(builder.build()?)?;
+    let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+        let mut body = ToolObservation::new();
+        let mut paths = Vec::new();
+        if let Some(name) = &result.name {
+            body = body.with_name(name)?;
+            paths.push(("tool.name", FactProvenance::Reported));
+        }
+        if let Some(content) = &result.content {
+            body = with_tool_result(body, content, bounds)?;
+            paths.push(("tool.result", FactProvenance::Reported));
+        }
+        if let Some(is_error) = result.is_error {
+            body = body.with_is_error(is_error);
+            paths.push(("tool.is_error", FactProvenance::Reported));
+        }
+        let mut builder = common_builder(
+            record,
+            options,
+            ObservationBody::Tool(body),
+            ObservationStage::ToolResultReturned,
+            tool_correlation(result.call_id.as_deref())?,
+            *child_ordinal,
+        )?;
+        for (path, provenance) in paths {
+            builder = builder.fact_metadata(path, normal(provenance)?);
+        }
+        Ok(builder.build()?)
+    })?;
+    observations.push(observation)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -495,34 +495,37 @@ fn emit_bash_execution(
             "Pi shell execution exit code is not an integer",
         ));
     }
-    let mut body = ToolObservation::new().with_operation(ToolOperation::new(ToolKind::Shell));
-    let mut paths = Vec::new();
-    if let Some(output) = &bash.output {
-        body = with_tool_result(body, output)?;
-        paths.push(("tool.result", FactProvenance::Reported));
-    }
-    if let Some(exit_code) = bash.exit_code {
-        body = body.with_exit_code(exit_code);
-        paths.push(("tool.exit_code", FactProvenance::Reported));
-    }
-    let mut builder = common_builder(
-        record,
-        options,
-        ObservationBody::Tool(body),
-        ObservationStage::ToolResultReturned,
-        None,
-        *child_ordinal,
-    )?;
-    for (path, provenance) in paths {
-        builder = builder.fact_metadata(path, normal(provenance)?);
-    }
-    builder = builder
-        .facet(
-            "command.text",
-            SemanticFacet::new(JsonValue::string(command)),
-        )?
-        .fact_metadata("command.text", normal(FactProvenance::Reported)?);
-    observations.push(builder.build()?)?;
+    let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+        let mut body = ToolObservation::new().with_operation(ToolOperation::new(ToolKind::Shell));
+        let mut paths = Vec::new();
+        if let Some(output) = &bash.output {
+            body = with_tool_result(body, output, bounds)?;
+            paths.push(("tool.result", FactProvenance::Reported));
+        }
+        if let Some(exit_code) = bash.exit_code {
+            body = body.with_exit_code(exit_code);
+            paths.push(("tool.exit_code", FactProvenance::Reported));
+        }
+        let mut builder = common_builder(
+            record,
+            options,
+            ObservationBody::Tool(body),
+            ObservationStage::ToolResultReturned,
+            None,
+            *child_ordinal,
+        )?;
+        for (path, provenance) in paths {
+            builder = builder.fact_metadata(path, normal(provenance)?);
+        }
+        builder = builder
+            .facet(
+                "command.text",
+                SemanticFacet::new(JsonValue::string(command)),
+            )?
+            .fact_metadata("command.text", normal(FactProvenance::Reported)?);
+        Ok(builder.build()?)
+    })?;
+    observations.push(observation)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -533,6 +536,7 @@ fn emit_bash_execution(
 fn with_tool_result(
     body: ToolObservation,
     result: &Value,
+    bounds: ValueBounds,
 ) -> Result<ToolObservation, PiCanonicalError> {
     let joined = result.as_array().and_then(|items| {
         let texts = items
@@ -548,8 +552,14 @@ fn with_tool_result(
         body,
         joined.as_ref().unwrap_or(result),
         ResultText::Direct,
-        ValueBounds::Replace,
+        bounds,
     )?)
+}
+
+/// A failure of a call's observation on a value bound: [`build_fitted`] then
+/// builds it again with the call's values fitted.
+fn value_bound(error: &PiCanonicalError) -> bool {
+    matches!(error, PiCanonicalError::Observation(error) if error.bound_dimension().is_some())
 }
 
 fn tool_correlation(call_id: Option<&str>) -> Result<Option<CorrelationIds>, PiCanonicalError> {

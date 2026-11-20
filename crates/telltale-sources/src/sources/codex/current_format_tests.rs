@@ -1137,10 +1137,27 @@ fn hosted_search_text_folds_newlines_and_enforces_assembled_bounds() {
                 ],
             )
             .unwrap();
-            assert_eq!(batch.observations.len(), if kept { 2 } else { 1 });
-            assert_eq!(batch.quarantined.len(), usize::from(!kept));
-            if !kept {
-                assert_eq!(batch.quarantined[0].code, "unbounded_value");
+            // Over the view's bound the search is held with its arguments
+            // replaced whole, and the unit is reported.
+            assert_eq!(batch.observations.len(), 2);
+            assert!(batch.quarantined.is_empty());
+            let bounded = batch
+                .bounded
+                .iter()
+                .map(|unit| (unit.source_sequence, unit.target, unit.dimension))
+                .collect::<Vec<_>>();
+            if kept {
+                assert!(bounded.is_empty());
+            } else {
+                assert_eq!(
+                    bounded,
+                    [(
+                        2,
+                        telltale_schema::observation::BoundedTarget::Arguments,
+                        BoundDimension::EncodedBytes
+                    )]
+                );
+                assert!(!format!("{:?}{:?}", batch.bounded, batch.observations).contains("xxxx"));
             }
         }
         let batch = acquire(
@@ -1154,8 +1171,28 @@ fn hosted_search_text_folds_newlines_and_enforces_assembled_bounds() {
             ],
         )
         .unwrap();
-        assert_eq!(batch.observations.len(), 1);
-        assert_eq!(batch.quarantined[0].code, "unbounded_value");
+        // Held with its arguments replaced: no searchable text and no
+        // activity accounting is derived from them.
+        assert_eq!(batch.observations.len(), 2);
+        assert!(batch.quarantined.is_empty());
+        assert_eq!(
+            batch
+                .bounded
+                .iter()
+                .map(|unit| (unit.source_sequence, unit.target, unit.dimension))
+                .collect::<Vec<_>>(),
+            [(
+                2,
+                telltale_schema::observation::BoundedTarget::Arguments,
+                BoundDimension::EncodedBytes
+            )]
+        );
+        let ObservationBody::Tool(tool) = batch.observations[1].body() else {
+            panic!("tool")
+        };
+        assert_eq!(tool.searchable_arguments(), None);
+        assert_eq!(tool.arguments(), Some(&JsonValue::Null));
+        assert!(!format!("{:?}{:?}", batch.bounded, batch.observations).contains("xxxx"));
         assert!(
             batch.accounting.sessions[0]
                 .counts
