@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::{Value, json};
 use telltale_schema::observation::{
-    BoundDimension, CanonicalFieldCategory, JsonValue, ObservationBody,
+    BoundDimension, BoundedTarget, CanonicalFieldCategory, JsonValue, ObservationBody,
 };
 
 fn options() -> AcquisitionOptions {
@@ -219,7 +219,9 @@ fn qwen_and_copilot_conversion_sites_report_field_category_and_dimension() {
             copilot(
                 json!([{"type":"function_call","name":"exec","arguments":format!("{{\"note\":\"{}\"}}", over_structured)}]),
             ),
-            CanonicalFieldCategory::ToolArguments,
+            // The raw argument text is also kept as searchable text, whose
+            // ordinary bound still fails the source before replacement helps.
+            CanonicalFieldCategory::SemanticField,
             BoundDimension::StringBytes,
         ),
     ];
@@ -231,6 +233,27 @@ fn qwen_and_copilot_conversion_sites_report_field_category_and_dimension() {
             path: directory.path().join("synthetic-conversion.log"),
         };
         std::fs::write(&source.path, &input).unwrap();
+        // A tool call's own over-bound value is replaced and recorded; the
+        // call is admitted. Message content keeps the source-level failure.
+        if matches!(
+            category,
+            CanonicalFieldCategory::ToolArguments | CanonicalFieldCategory::ToolResult
+        ) {
+            let batch = acquire_source(&source, options())
+                .unwrap_or_else(|error| panic!("{label}: {error} {:?}", error.bound_context()));
+            let replaced = batch
+                .observations
+                .iter()
+                .filter_map(|observation| match observation.body() {
+                    ObservationBody::Tool(tool) => Some(tool.bounded_values()),
+                    _ => None,
+                })
+                .flatten()
+                .map(|value| value.dimension())
+                .collect::<Vec<_>>();
+            assert_eq!(replaced, [dimension], "{label}");
+            continue;
+        }
         let error = acquire_source(&source, options())
             .err()
             .expect("bound failure must not return a partial batch");
@@ -399,7 +422,7 @@ fn claude_tool_result_value_and_provenance_follow_native_representation() {
 }
 
 #[test]
-fn claude_tool_result_bounds_preserve_quarantine_and_valid_prefix() {
+fn claude_tool_result_bounds_replace_values_and_keep_valid_prefix() {
     let directory = tempfile::tempdir().unwrap();
     let source = Source {
         client: ClientId::Claude,
@@ -469,31 +492,33 @@ fn claude_tool_result_bounds_preserve_quarantine_and_valid_prefix() {
         assert_eq!(batch.progress, AcquisitionProgress::None);
         assert_eq!(batch.accounting.sessions[0].counts.native_units, 2);
         if let Some(dimension) = failure {
+            // The result is replaced and recorded, and the source reads as
+            // partly evaluated; the valid prefix survives either way.
             assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
-            assert_eq!(
-                batch.observations.len(),
-                1,
-                "{case}: valid prefix must survive"
-            );
+            assert_eq!(batch.observations.len(), 2, "{case}");
             assert!(matches!(
                 batch.observations[0].body(),
                 ObservationBody::Message(_)
             ));
-            assert_eq!(batch.quarantined.len(), 1);
-            let excluded = &batch.quarantined[0];
-            assert_eq!(excluded.source_sequence, 1);
-            assert_eq!(excluded.code, "unbounded_value");
-            assert_eq!(
-                excluded.bound.unwrap().category,
-                CanonicalFieldCategory::ToolResult
-            );
-            assert_eq!(excluded.bound.unwrap().dimension, dimension);
+            assert!(batch.quarantined.is_empty(), "{case}");
+            let [unit] = batch.bounded.as_slice() else {
+                panic!("{case}: expected one bounded unit")
+            };
+            assert_eq!(unit.source_sequence, 1);
+            assert_eq!(unit.session_id.as_deref(), Some("synthetic"));
+            assert_eq!(unit.target, BoundedTarget::Result);
+            assert_eq!(unit.dimension, dimension, "{case}");
+            let ObservationBody::Tool(tool) = batch.observations[1].body() else {
+                panic!("{case}: expected result")
+            };
+            assert!(!format!("{:?}", tool.result()).contains("xxxx"), "{case}");
         } else {
             assert_eq!(
                 batch.accounting.coverage,
                 AccountingCoverage::CompleteSource
             );
             assert!(batch.quarantined.is_empty());
+            assert!(batch.bounded.is_empty());
             assert_eq!(batch.observations.len(), 2);
             let ObservationBody::Tool(tool) = batch.observations[1].body() else {
                 panic!("{case}: expected result")
@@ -523,11 +548,13 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
     let mut ids = None;
     // Include realistic multiline output and exact encoded aggregate boundaries:
     // name 'bash' costs six bytes and result JSON quotes cost two bytes.
+    // Text over its own budget is replaced and recorded. Text within it that
+    // overflows the aggregate only together with the tool name is still
+    // refused, as before.
     for (text, accepted) in [
         ("build output\n".repeat(4_000), true),
         ("x".repeat(65_528), true),
         ("x".repeat(65_529), false),
-        ("x".repeat(65_537), false),
     ] {
         writer.execute("insert or replace into part values ('output','synthetic',20,?1)",
             [json!({"type":"tool","tool":"bash","state":{"status":"completed","output":text}}).to_string()]).unwrap();
@@ -581,11 +608,10 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
             assert!(!format!("{error:?}").contains("synthetic"));
         }
     }
+    // Rows that are not a tool call's values still fail atomically.
     for data in [
         json!({"type":"tool","tool":"bash","state":[]}),
         json!({"type":"tool","tool":"bash","state":{"status":5,"output":"ok"}}),
-        json!({"type":"tool","tool":"bash","state":{"status":"completed","output":{"text":"x".repeat(4_097)}}}),
-        json!({"type":"tool","tool":"bash","state":{"status":"completed","input":"x".repeat(4_097),"output":"ok"}}),
     ] {
         writer
             .execute(
@@ -594,6 +620,55 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
             )
             .unwrap();
         assert!(acquire_source(&source, options()).is_err());
+    }
+    // A tool value over its bound is replaced; the call stays visible.
+    for (data, target, dimension) in [
+        (
+            json!({"type":"tool","tool":"bash","state":{"status":"completed","output":"x".repeat(65_537)}}),
+            BoundedTarget::Result,
+            BoundDimension::StringBytes,
+        ),
+        (
+            json!({"type":"tool","tool":"bash","state":{"status":"completed","output":{"text":"x".repeat(4_097)}}}),
+            BoundedTarget::Result,
+            BoundDimension::StringBytes,
+        ),
+        (
+            json!({"type":"tool","tool":"bash","state":{"status":"completed","input":"x".repeat(4_097),"output":"ok"}}),
+            BoundedTarget::Arguments,
+            BoundDimension::StringBytes,
+        ),
+    ] {
+        writer
+            .execute(
+                "update part set data=?1 where id='output'",
+                [data.to_string()],
+            )
+            .unwrap();
+        let batch = acquire_source(&source, options()).expect("replaced, not refused");
+        let tools = batch
+            .observations
+            .iter()
+            .filter_map(|observation| match observation.body() {
+                ObservationBody::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!tools.is_empty());
+        for tool in tools {
+            assert_eq!(tool.name(), Some("bash"));
+            let replaced = tool
+                .bounded_values()
+                .iter()
+                .map(|value| (value.target(), value.dimension()))
+                .collect::<Vec<_>>();
+            assert_eq!(replaced, [(target, dimension)]);
+            let retained = match target {
+                BoundedTarget::Arguments => tool.arguments(),
+                BoundedTarget::Result => tool.result(),
+            };
+            assert!(!format!("{retained:?}").contains("xxxx"));
+        }
     }
 }
 
@@ -862,13 +937,34 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
                     retained == Some(&JsonValue::try_from_source_value(exact).unwrap()),
                     "payload changed"
                 );
-                assert_eq!(
-                    quarantined(record(excess)),
-                    Some(CanonicalBoundContext {
-                        category,
-                        dimension: *dimension
-                    })
+                // One past the bound, the call is still projected: the
+                // over-bound value is replaced and recorded, not quarantined.
+                let batch = acquire(record(excess)).expect("replaced, not refused");
+                assert!(batch.quarantined.is_empty(), "{category:?}");
+                assert_eq!(batch.observations.len(), 2);
+                let ObservationBody::Tool(tool) = batch.observations[1].body() else {
+                    panic!("expected tool")
+                };
+                assert_eq!(tool.name(), Some("exec"));
+                let (target, retained) = if key == "arguments" {
+                    (BoundedTarget::Arguments, tool.arguments())
+                } else {
+                    (BoundedTarget::Result, tool.result())
+                };
+                assert!(
+                    tool.bounded_values()
+                        .iter()
+                        .all(|value| value.target() == target && value.dimension() == *dimension),
+                    "{category:?}"
                 );
+                assert_eq!(tool.bounded_values().len(), 1, "{category:?}");
+                assert!(
+                    retained.unwrap().encoded_byte_len().unwrap()
+                        < serde_json::to_string(excess).unwrap().len(),
+                    "over-bound value retained"
+                );
+                let diagnostic = format!("{:?}", tool.bounded_values());
+                assert!(!diagnostic.contains("synthetic_key") && !diagnostic.contains('é'));
             }
         }
         for (record, category, dimension) in [
@@ -935,5 +1031,257 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
             .expect("invalid attestation");
         assert_eq!(error, AcquisitionError::InvalidAttestation);
         assert_eq!(error.bound_context(), None);
+    }
+}
+
+/// One synthetic tool call and its result for each adapter whose generic
+/// record shape the router accepts.
+fn tool_call_corpus(
+    name: &str,
+    arguments: &Value,
+    result: &Value,
+) -> Vec<(ClientId, &'static str, SourceKind, String)> {
+    let claude = format!(
+        "{}\n{}\n",
+        json!({"type":"assistant","sessionId":"synthetic","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic","name":name,"input":arguments}]}}),
+        json!({"type":"user","sessionId":"synthetic","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_synthetic","content":result}]}}),
+    );
+    let codex = format!(
+        "{}\n{}\n",
+        json!({"type":"tool_call","session_id":"synthetic","name":name,"arguments":arguments}),
+        json!({"type":"tool_result","session_id":"synthetic","name":name,"output":result}),
+    );
+    let qwen = format!(
+        "{}\n{}\n",
+        json!({"type":"tool_call","sessionId":"synthetic","tool_name":name,"arguments":arguments}),
+        json!({"type":"tool_result","sessionId":"synthetic","content":result}),
+    );
+    let copilot = format!(
+        "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {}\n",
+        json!([{"type":"function_call","name":name,"call_id":"call_synthetic","arguments":arguments.to_string()}])
+    );
+    vec![
+        (
+            ClientId::Claude,
+            "claude.projects",
+            SourceKind::Jsonl,
+            claude,
+        ),
+        (ClientId::Codex, "codex.sessions", SourceKind::Jsonl, codex),
+        (
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            qwen.clone(),
+        ),
+        (
+            ClientId::OpenClaw,
+            "openclaw.agents",
+            SourceKind::Jsonl,
+            qwen,
+        ),
+        (
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+            copilot,
+        ),
+    ]
+}
+
+fn acquire_input(
+    client: ClientId,
+    source_id: &str,
+    kind: SourceKind,
+    input: &str,
+) -> AcquisitionBatch {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client,
+        source_id: source_id.into(),
+        kind,
+        path: directory.path().join("synthetic-input.log"),
+    };
+    std::fs::write(&source.path, input).unwrap();
+    acquire_source(&source, options()).unwrap_or_else(|error| panic!("{client:?}: {error}"))
+}
+
+/// Exactly-at-bound tool values keep their observation ids and semantic
+/// content byte for byte in every adapter with tool calls. The pin is a
+/// digest, so the corpus outcome stays reviewable without listing it.
+#[test]
+fn in_bound_tool_calls_keep_identity_and_semantic_content() {
+    use sha2::{Digest, Sha256};
+    use telltale_schema::observation::{CanonicalObservationV2, canonical_identity_json};
+    let nested = |count| (0..count).fold(Value::Null, |value, _| json!([value]));
+    let members = |count| {
+        Value::Object(
+            (0..count)
+                .map(|index| (format!("k{index}"), json!(index)))
+                .collect(),
+        )
+    };
+    let mut cases = [
+        json!({"note":"s".repeat(4096), "path":"/synthetic/project/file.txt"}),
+        json!({"tree":nested(4)}),
+        json!({"items":vec![json!(1); 64]}),
+        members(32),
+        json!({"k".repeat(64): "v"}),
+        json!(["\u{1}".repeat(2730)]),
+    ]
+    .map(|arguments| (arguments, json!({"structured":"ok"})))
+    .to_vec();
+    cases.push((json!({"command":"x".repeat(64)}), json!("x".repeat(4096))));
+    let mut lines: Vec<Vec<u8>> = Vec::new();
+    let mut tools = 0;
+    let absorb = |observation: &CanonicalObservationV2| {
+        let mut line = observation.observation_id().as_bytes().to_vec();
+        line.extend(format!("|{:?}|{:?}|", observation.kind(), observation.stage()).bytes());
+        if let ObservationBody::Tool(tool) = observation.body() {
+            line.extend(tool.name().unwrap_or("").bytes());
+            for value in [tool.arguments(), tool.result()].into_iter().flatten() {
+                line.extend(canonical_identity_json(value).unwrap());
+                line.push(b'|');
+            }
+        }
+        for (name, facet) in observation.facets() {
+            line.extend(name.bytes());
+            line.extend(canonical_identity_json(facet.value()).unwrap());
+        }
+        for (path, metadata) in observation.fact_metadata() {
+            line.extend(
+                format!(
+                    "{path}:{:?}:{:?}",
+                    metadata.provenance(),
+                    metadata.sensitivity()
+                )
+                .bytes(),
+            );
+        }
+        line.extend(observation.semantic_comparison().to_string().bytes());
+        line
+    };
+    let mut absorb_batch = |batch: &AcquisitionBatch, lines: &mut Vec<Vec<u8>>| {
+        for observation in &batch.observations {
+            tools += usize::from(matches!(observation.body(), ObservationBody::Tool(_)));
+            lines.push(absorb(observation));
+        }
+    };
+    for (arguments, result) in &cases {
+        for (client, source_id, kind, input) in
+            tool_call_corpus("mcp__synthetic__probe", arguments, result)
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let source = Source {
+                client,
+                source_id: source_id.into(),
+                kind,
+                path: directory.path().join("synthetic-input.log"),
+            };
+            std::fs::write(&source.path, input).unwrap();
+            // Pin what each adapter does today, a refusal included.
+            match acquire_source(&source, options()) {
+                Ok(batch) => {
+                    lines.push(format!("{client:?}:{:?}", batch.quarantined).into_bytes());
+                    absorb_batch(&batch, &mut lines);
+                }
+                Err(error) => lines.push(format!("{client:?}:{error}").into_bytes()),
+            }
+        }
+    }
+    // A Claude command over the structured string bound keeps the
+    // authored-text budget.
+    let input = format!(
+        "{}\n",
+        json!({"type":"assistant","sessionId":"synthetic","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_authored","name":"Bash","input":{"command":"x".repeat(65_000),"description":"synthetic"}}]}})
+    );
+    let batch = acquire_input(
+        ClientId::Claude,
+        "claude.projects",
+        SourceKind::Jsonl,
+        &input,
+    );
+    assert!(batch.quarantined.is_empty());
+    absorb_batch(&batch, &mut lines);
+    assert!(tools >= 45, "corpus produced {tools} tool observations");
+    let mut digest = Sha256::new();
+    for line in &lines {
+        digest.update(Sha256::digest(line));
+    }
+    let digest: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        digest, "6e1f07c60e8aaf0bcb2be8cc6aa07395fef25f0c1926e6598ca2ce64677abf66",
+        "in-bound projection changed"
+    );
+}
+
+/// The router admits a call whose over-bound value was replaced. Nothing is
+/// derived from a value the observation does not carry: like a quarantined
+/// unit, the call takes no part in contribution accounting, so a long
+/// path-like token in the replaced value can no longer quarantine it. A
+/// neighbouring call with whole values is still counted.
+#[test]
+fn replaced_tool_values_admit_the_unit_and_contribute_nothing() {
+    let call = |id: &str, value: String| {
+        format!(
+            "{}\n",
+            json!({"type":"assistant","sessionId":"synthetic","message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"mcp__synthetic__run","input":{"query":value,"file_path":"/synthetic/project/notes.txt"}}]}})
+        )
+    };
+    let neighbour = call(
+        "toolu_neighbour",
+        "ok https://neighbour.example.test/".into(),
+    );
+    for value in ["z ".repeat(2_500), "synthetic/".repeat(500)] {
+        let batch = acquire_input(
+            ClientId::Claude,
+            "claude.projects",
+            SourceKind::Jsonl,
+            &format!("{}{neighbour}", call("toolu_synthetic", value)),
+        );
+        assert!(batch.quarantined.is_empty());
+        assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+        let [unit] = batch.bounded.as_slice() else {
+            panic!("expected one bounded unit: {:?}", batch.bounded)
+        };
+        assert_eq!(
+            (unit.source_sequence, unit.target, unit.dimension),
+            (0, BoundedTarget::Arguments, BoundDimension::StringBytes)
+        );
+        let (observation, tool) = batch
+            .observations
+            .iter()
+            .find_map(|observation| match observation.body() {
+                ObservationBody::Tool(tool) if !tool.bounded_values().is_empty() => {
+                    Some((observation, tool))
+                }
+                _ => None,
+            })
+            .expect("the call is projected");
+        assert_eq!(tool.name(), Some("mcp__synthetic__run"));
+        assert!(observation.facets().contains_key("resource.path"));
+        // Only the neighbour contributes: one call, its host, no path of the
+        // replaced value.
+        let counts = &batch.accounting.sessions[0].counts;
+        assert_eq!(
+            counts.contributions.tool_calls.values().sum::<u64>(),
+            1,
+            "{:?}",
+            counts.contributions
+        );
+        assert_eq!(counts.contributions.network_hosts.len(), 1);
+        assert_eq!(
+            counts
+                .tool_usage
+                .values()
+                .map(|usage| usage.count)
+                .sum::<u64>(),
+            1
+        );
+        assert_eq!(counts.native_units, 2);
     }
 }

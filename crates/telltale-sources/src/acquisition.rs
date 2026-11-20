@@ -16,8 +16,11 @@ use std::path::Path;
 
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
-    CanonicalBoundContext, CanonicalObservationV2, ObservedAt, SourceScale,
+    BoundDimension, BoundedTarget, CanonicalBoundContext, CanonicalObservationV2, ObservedAt,
+    SourceScale,
 };
+
+use crate::tool_operation::{BoundedRecord, bounded_records};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -76,6 +79,10 @@ pub struct AcquisitionBatch {
     /// Native units excluded because their own values exceed a size bound.
     /// Every other unit was still mapped; progress still covers these units.
     pub quarantined: Vec<QuarantinedUnit>,
+    /// Native units mapped with over-bound tool values replaced, one entry per
+    /// replaced field and bound. They are evaluated without those values and
+    /// take no part in contribution accounting.
+    pub bounded: Vec<BoundedUnit>,
     /// For a cut OpenCode v2 window: the lowest `time_updated` a next window
     /// may re-read so that it repeats at most half of this window's retained
     /// bytes. Re-reading from there lets a next window extend back past this
@@ -101,6 +108,52 @@ pub struct QuarantinedUnit {
     pub code: &'static str,
     /// The canonical field category and dimension, when the bound reports one.
     pub bound: Option<CanonicalBoundContext>,
+}
+
+/// Where a native unit with replaced tool values is, which field and which
+/// bound. It carries coordinates only, never source content or the place of
+/// the replaced value inside the field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct BoundedUnit {
+    pub session_id: Option<String>,
+    pub native_id: String,
+    pub source_sequence: u64,
+    pub target: BoundedTarget,
+    pub dimension: BoundDimension,
+}
+
+impl BoundedUnit {
+    fn new(session_id: Option<String>, native_id: String, record: BoundedRecord) -> Self {
+        Self {
+            session_id,
+            native_id,
+            source_sequence: record.source_sequence,
+            target: record.target,
+            dimension: record.dimension,
+        }
+    }
+}
+
+/// Bounded units of a source projected as a whole, by the coordinates of the
+/// observations that carry replaced values.
+fn bounded_units(observations: &[CanonicalObservationV2]) -> Vec<BoundedUnit> {
+    let mut units: Vec<BoundedUnit> = Vec::new();
+    for observation in observations {
+        let source = observation.source();
+        let sequence = source.source_sequence().unwrap_or_default();
+        for record in bounded_records(sequence, std::slice::from_ref(observation)) {
+            let unit = BoundedUnit::new(
+                observation.session_id().map(|id| id.value().to_owned()),
+                source.native_id().unwrap_or_default().to_owned(),
+                record,
+            );
+            if !units.contains(&unit) {
+                units.push(unit);
+            }
+        }
+    }
+    units
 }
 
 /// One source projection owns this collector; capacity is checked before each
@@ -530,6 +583,7 @@ fn acquire_source_impl(
 
     let mut accounting = AccountingBuilder::default();
     let mut quarantined = Vec::new();
+    let mut bounded = Vec::new();
     let mut source_scale = SourceScale::FLOOR;
     let observations = match reader {
         ClientId::Claude => {
@@ -554,11 +608,18 @@ fn acquire_source_impl(
                         source.client.hook_journal_source_id(),
                     )
                     .with_tool_table(source.client)
+                    // The hooks runtime projects a call whose unit is
+                    // quarantined and evaluates every byte of it. Until it
+                    // treats a call with replaced values the same way, a
+                    // journal call keeps today's strict quarantine, so a
+                    // padded call can never read as evaluated and clean.
+                    .with_strict_values()
             } else {
                 canonical
             };
             let projection =
                 project_claude_native_records(&records, &canonical).map_err(map_claude_error)?;
+            let replaced = replaced_by_sequence(projection.bounded);
             let mut excluded = projection
                 .quarantined
                 .iter()
@@ -572,6 +633,7 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
+                    && !replaced.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
@@ -597,6 +659,19 @@ fn acquire_source_impl(
                         code,
                         bound: *bound,
                     });
+                    continue;
+                }
+                if let Some(records) = replaced.get(&record.source_sequence) {
+                    // Nothing is derived from a value the observation does
+                    // not carry: like an excluded unit, a unit with replaced
+                    // values takes no part in contribution accounting.
+                    bounded.extend(records.iter().map(|replaced| {
+                        BoundedUnit::new(
+                            record.session_id.clone(),
+                            record.native_id.clone().unwrap_or_default(),
+                            replaced.clone(),
+                        )
+                    }));
                     continue;
                 }
                 let session = record.session_id.as_deref();
@@ -644,6 +719,7 @@ fn acquire_source_impl(
                 &CodexCanonicalOptions::new(options.observed_at).with_scale(source_scale),
             )
             .map_err(map_codex_error)?;
+            let replaced = replaced_by_sequence(projection.bounded);
             let mut excluded = projection
                 .quarantined
                 .iter()
@@ -657,6 +733,7 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
+                    && !replaced.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
@@ -682,6 +759,19 @@ fn acquire_source_impl(
                         code,
                         bound: *bound,
                     });
+                    continue;
+                }
+                if let Some(records) = replaced.get(&record.source_sequence) {
+                    // Nothing is derived from a value the observation does
+                    // not carry: like an excluded unit, a unit with replaced
+                    // values takes no part in contribution accounting.
+                    bounded.extend(records.iter().map(|replaced| {
+                        BoundedUnit::new(
+                            record.effective_session_id.clone(),
+                            record.quarantine_native_id(),
+                            replaced.clone(),
+                        )
+                    }));
                     continue;
                 }
                 let session = record.effective_session_id.as_deref();
@@ -716,44 +806,70 @@ fn acquire_source_impl(
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
-                let kind = record.accounting_kind();
-                account_unit(
-                    &mut accounting,
+                accounting.record(
                     record.session_id.as_deref(),
                     &record.attestation,
-                    &[kind],
+                    &[record.accounting_kind()],
+                )?;
+            }
+            let observations = project_openclaw_native_records(
+                &records,
+                &OpenClawCanonicalOptions::new(options.observed_at).with_scale(source_scale),
+            )
+            .map_err(map_openclaw_error)?;
+            bounded = bounded_units(&observations);
+            for record in &records {
+                if bounded
+                    .iter()
+                    .any(|unit| unit.source_sequence == record.source_sequence)
+                {
+                    continue;
+                }
+                account_activity(
+                    &mut accounting,
+                    record.session_id.as_deref(),
+                    record.accounting_kind(),
                     record.accounting_tool_name(),
                     record.source_timestamp.as_deref(),
                     record.contribution_strings(),
                 )?;
             }
-            project_openclaw_native_records(
-                &records,
-                &OpenClawCanonicalOptions::new(options.observed_at).with_scale(source_scale),
-            )
-            .map_err(map_openclaw_error)?
+            observations
         }
         ClientId::Qwen => {
             let (records, bytes) = extract_qwen_native_records_with_limits(source, access)
                 .map_err(|error| map_source_read(error, limits))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
-                let kind = record.accounting_kind();
-                account_unit(
-                    &mut accounting,
+                accounting.record(
                     record.session_id.as_deref(),
                     &record.attestation,
-                    &[kind],
+                    &[record.accounting_kind()],
+                )?;
+            }
+            let observations = project_qwen_native_records(
+                &records,
+                &QwenCanonicalOptions::new(options.observed_at).with_scale(source_scale),
+            )
+            .map_err(map_qwen_error)?;
+            bounded = bounded_units(&observations);
+            for record in &records {
+                if bounded
+                    .iter()
+                    .any(|unit| unit.source_sequence == record.source_sequence)
+                {
+                    continue;
+                }
+                account_activity(
+                    &mut accounting,
+                    record.session_id.as_deref(),
+                    record.accounting_kind(),
                     record.accounting_tool_name(),
                     record.source_timestamp.as_deref(),
                     record.contribution_strings(),
                 )?;
             }
-            project_qwen_native_records(
-                &records,
-                &QwenCanonicalOptions::new(options.observed_at).with_scale(source_scale),
-            )
-            .map_err(map_qwen_error)?
+            observations
         }
         ClientId::Pi => {
             let (records, bytes) = extract_pi_native_records_with_limits(source, access)
@@ -773,6 +889,7 @@ fn acquire_source_impl(
                 &PiCanonicalOptions::new(options.observed_at).with_scale(source_scale),
             )
             .map_err(map_pi_error)?;
+            let replaced = replaced_by_sequence(projection.bounded);
             let mut excluded = projection
                 .quarantined
                 .iter()
@@ -785,6 +902,7 @@ fn acquire_source_impl(
                 let mut keys = 0;
                 if record.accounting_kind() == RecordKind::ToolCall
                     && !excluded.contains_key(&record.source_sequence)
+                    && !replaced.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
@@ -810,6 +928,19 @@ fn acquire_source_impl(
                         code,
                         bound: *bound,
                     });
+                    continue;
+                }
+                if let Some(records) = replaced.get(&record.source_sequence) {
+                    // Nothing is derived from a value the observation does
+                    // not carry: like an excluded unit, a unit with replaced
+                    // values takes no part in contribution accounting.
+                    bounded.extend(records.iter().map(|replaced| {
+                        BoundedUnit::new(
+                            record.session_id.clone(),
+                            record.native_id.clone().unwrap_or_default(),
+                            replaced.clone(),
+                        )
+                    }));
                     continue;
                 }
                 let session = record.session_id.as_deref();
@@ -864,7 +995,6 @@ fn acquire_source_impl(
                     }
                     CopilotNativeEvent::AccumulatedOutputItem {
                         canonical_session_id,
-                        timestamp,
                         item,
                         ..
                     } => {
@@ -873,35 +1003,54 @@ fn acquire_source_impl(
                             &item.attestation,
                             item.record_kinds(),
                         )?;
-                        if item.item_type.as_deref() == Some("function_call") {
-                            accounting.tool_usage(
-                                canonical_session_id.as_deref(),
-                                RecordKind::ToolCall,
-                                item.name.as_deref(),
-                                timestamp.as_deref(),
-                            )?;
-                            accounting.contribute(
-                                canonical_session_id.as_deref(),
-                                RecordKind::ToolCall,
-                                item.name.as_deref(),
-                                item.arguments.as_deref(),
-                                // punctuation carries no path or host facts.
-                                [
-                                    item.name.as_deref().unwrap_or("unknown"),
-                                    item.call_id.as_deref().unwrap_or_default(),
-                                ],
-                            )?;
-                        }
                     }
                     CopilotNativeEvent::SessionCompleted
                     | CopilotNativeEvent::MalformedStructuredOutput { .. } => {}
                 }
             }
-            project_copilot_native_events(
-                events,
+            let observations = project_copilot_native_events(
+                &events,
                 &CopilotCanonicalOptions::new(options.observed_at),
             )
-            .map_err(map_copilot_error)?
+            .map_err(map_copilot_error)?;
+            bounded = bounded_units(&observations);
+            for event in &events {
+                let CopilotNativeEvent::AccumulatedOutputItem {
+                    canonical_session_id,
+                    ordinal,
+                    timestamp,
+                    item,
+                } = event
+                else {
+                    continue;
+                };
+                // Ordinals number the items of one session.
+                let replaced = bounded.iter().any(|unit| {
+                    unit.session_id == *canonical_session_id
+                        && Some(unit.source_sequence) == *ordinal
+                });
+                if item.item_type.as_deref() != Some("function_call") || replaced {
+                    continue;
+                }
+                accounting.tool_usage(
+                    canonical_session_id.as_deref(),
+                    RecordKind::ToolCall,
+                    item.name.as_deref(),
+                    timestamp.as_deref(),
+                )?;
+                accounting.contribute(
+                    canonical_session_id.as_deref(),
+                    RecordKind::ToolCall,
+                    item.name.as_deref(),
+                    item.arguments.as_deref(),
+                    // punctuation carries no path or host facts.
+                    [
+                        item.name.as_deref().unwrap_or("unknown"),
+                        item.call_id.as_deref().unwrap_or_default(),
+                    ],
+                )?;
+            }
+            observations
         }
         _ => unreachable!("exact acquisition identity was validated"),
     };
@@ -910,7 +1059,9 @@ fn acquire_source_impl(
             BoundedReadError::LimitExceeded,
         ));
     }
-    let mut accounting = accounting.finish(if quarantined.is_empty() {
+    // A unit evaluated without some of its values leaves evidence
+    // unevaluated, as a quarantined unit does.
+    let mut accounting = accounting.finish(if quarantined.is_empty() && bounded.is_empty() {
         AccountingCoverage::CompleteSource
     } else {
         AccountingCoverage::PartialSource
@@ -922,9 +1073,24 @@ fn acquire_source_impl(
         // Quarantined units were counted as records but not as activity.
         accounting,
         quarantined,
+        bounded,
         message_overlap_from: None,
         source_scale,
     })
+}
+
+/// Replaced (field, bound) pairs of a per-record projection, by record.
+fn replaced_by_sequence(
+    bounded: Vec<BoundedRecord>,
+) -> std::collections::BTreeMap<u64, Vec<BoundedRecord>> {
+    let mut replaced = std::collections::BTreeMap::<_, Vec<_>>::new();
+    for record in bounded {
+        replaced
+            .entry(record.source_sequence)
+            .or_default()
+            .push(record);
+    }
+    replaced
 }
 
 fn map_source_read(error: SourceReadError, limits: Option<DirectReadLimits>) -> AcquisitionError {
@@ -974,24 +1140,38 @@ pub fn acquire_opencode_sqlite(
             })?;
         let mut accounting = AccountingBuilder::default();
         let mut quarantined = Vec::new();
+        let mut bounded = Vec::new();
         let mut message_overlap_from = None;
         let (observations, progress) = match extraction {
             OpenCodeNativeExtraction::Legacy(extraction) => {
                 for record in &extraction.records {
                     let facts = record.accounting();
-                    account_unit(
+                    accounting.record(facts.session_id, facts.attestation, &[facts.kind])?;
+                }
+                let observations =
+                    project_opencode_native_records(&extraction.records, &options.observed_at)
+                        .map_err(map_canonical_error)?;
+                bounded = bounded_units(&observations);
+                for record in &extraction.records {
+                    let (sequence, native_id) = record.coordinates();
+                    if bounded.iter().any(|unit| {
+                        unit.source_sequence == sequence
+                            && unit.native_id == native_id.unwrap_or_default()
+                    }) {
+                        continue;
+                    }
+                    let facts = record.accounting();
+                    account_activity(
                         &mut accounting,
                         facts.session_id,
-                        facts.attestation,
-                        &[facts.kind],
+                        facts.kind,
                         facts.tool_name,
                         facts.timestamp,
                         &facts.contribution_strings,
                     )?;
                 }
                 (
-                    project_opencode_native_records(&extraction.records, &options.observed_at)
-                        .map_err(map_canonical_error)?,
+                    observations,
                     AcquisitionProgress::OpenCodeSqlite {
                         part_max_time_updated: extraction.sqlite_part_max_time_updated,
                     },
@@ -1014,19 +1194,24 @@ pub fn acquire_opencode_sqlite(
                     let tools = record.tool_accounting();
                     let mut outcome = match projector.row(record).map_err(map_canonical_error)? {
                         RowProjection::Mapped(observations) => {
+                            // A row with replaced values takes no part in
+                            // contribution accounting, so it is not checked.
+                            let replaced = bounded_records(record.seq, &observations);
                             // Check this row's request input alone before any
                             // shared accounting changes, so a rejected token
                             // quarantines the row instead of half-counting it.
                             let mut keys = 0;
-                            match tools.iter().try_for_each(|tool| {
-                                ActivityContributions::default().observe(
-                                    tool.name,
-                                    None,
-                                    tool.contribution_strings.iter().map(String::as_str),
-                                    &mut keys,
-                                )
-                            }) {
-                                Ok(()) => Ok(observations),
+                            match tools.iter().filter(|_| replaced.is_empty()).try_for_each(
+                                |tool| {
+                                    ActivityContributions::default().observe(
+                                        tool.name,
+                                        None,
+                                        tool.contribution_strings.iter().map(String::as_str),
+                                        &mut keys,
+                                    )
+                                },
+                            ) {
+                                Ok(()) => Ok((observations, replaced)),
                                 Err(AcquisitionError::InvalidContribution) => {
                                     Err(("invalid_native_contribution", None))
                                 }
@@ -1038,7 +1223,7 @@ pub fn acquire_opencode_sqlite(
                         }
                         RowProjection::OversizedCell => Err(("oversized_native_cell", None)),
                     };
-                    if let Ok(observations) = &outcome {
+                    if let Ok((observations, _)) = &outcome {
                         let bytes = observations
                             .iter()
                             .map(CanonicalObservationV2::retained_byte_len)
@@ -1101,8 +1286,8 @@ pub fn acquire_opencode_sqlite(
                     // Whole `time_updated` groups from the end, while they
                     // hold at most half of this window's rows and of what it
                     // retained.
-                    let bytes = |outcome: &Result<Vec<CanonicalObservationV2>, _>| {
-                        outcome.as_ref().map_or(0, |observations| {
+                    let bytes = |outcome: &Result<(Vec<CanonicalObservationV2>, _), _>| {
+                        outcome.as_ref().map_or(0, |(observations, _)| {
                             observations
                                 .iter()
                                 .map(CanonicalObservationV2::retained_byte_len)
@@ -1145,8 +1330,16 @@ pub fn acquire_opencode_sqlite(
                     let session = record.session_id.as_deref();
                     accounting.record(session, &record.attestation, &record.accounting_kinds())?;
                     match outcome {
-                        Ok(observations) => {
-                            for tool in &tools {
+                        Ok((observations, replaced)) => {
+                            let activity = if replaced.is_empty() { &tools[..] } else { &[] };
+                            bounded.extend(replaced.into_iter().map(|replaced| {
+                                BoundedUnit::new(
+                                    record.session_id.clone(),
+                                    record.source_id.clone().unwrap_or_default(),
+                                    replaced,
+                                )
+                            }));
+                            for tool in activity {
                                 accounting.tool_usage(
                                     session,
                                     RecordKind::ToolCall,
@@ -1194,6 +1387,7 @@ pub fn acquire_opencode_sqlite(
             observations,
             progress,
             quarantined,
+            bounded,
             message_overlap_from,
             // OpenCode reads bounded windows; its bounds stay at the floor.
             source_scale: SourceScale::FLOOR,
@@ -1202,27 +1396,24 @@ pub fn acquire_opencode_sqlite(
     }
 }
 
-fn account_unit(
+/// Tool usage and request-input contributions of one unit of a source
+/// projected as a whole, after every unit was counted and projection passed.
+fn account_activity(
     accounting: &mut AccountingBuilder,
     session: Option<&str>,
-    attestation: &Result<SessionMetadata, AcquisitionError>,
-    kinds: &[RecordKind],
+    kind: RecordKind,
     tool_name: Option<&str>,
     timestamp: Option<&str>,
     texts: &[String],
 ) -> Result<(), AcquisitionError> {
-    accounting.record(session, attestation, kinds)?;
-    for &kind in kinds {
-        accounting.tool_usage(session, kind, tool_name, timestamp)?;
-        accounting.contribute(
-            session,
-            kind,
-            tool_name,
-            None,
-            texts.iter().map(String::as_str),
-        )?;
-    }
-    Ok(())
+    accounting.tool_usage(session, kind, tool_name, timestamp)?;
+    accounting.contribute(
+        session,
+        kind,
+        tool_name,
+        None,
+        texts.iter().map(String::as_str),
+    )
 }
 
 fn map_observation_error(
@@ -2086,7 +2277,7 @@ mod tests {
             let acquired = super::acquire_source(&source, options()).unwrap();
             let replay = super::acquire_source(&source, options()).unwrap();
             let reference = super::project_copilot_native_events(
-                crate::sources::copilot::native::extract_copilot_native_events(&source).unwrap(),
+                &crate::sources::copilot::native::extract_copilot_native_events(&source).unwrap(),
                 &super::CopilotCanonicalOptions::new(options().observed_at),
             )
             .unwrap();

@@ -1462,6 +1462,11 @@ struct SourceProcessingAccounting {
     evaluated_window_count: usize,
     /// Coordinates only, never content; listed up to a fixed bound.
     quarantined_units: Vec<serde_json::Value>,
+    /// Distinct native units evaluated with over-bound tool values replaced.
+    bounded_value_unit_count: usize,
+    /// One entry per unit, field and bound: coordinates only, never content;
+    /// listed up to the same bound as quarantined units.
+    bounded_value_units: Vec<serde_json::Value>,
 }
 
 /// Quarantined units listed in one summary; the count is always complete.
@@ -1531,6 +1536,29 @@ fn source_processing_accounting(
                     "code": unit.code,
                     "bound_category": unit.bound.map(|bound| format!("{:?}", bound.category)),
                     "bound_dimension": unit.bound.map(|bound| format!("{:?}", bound.dimension)),
+                }));
+            }
+        }
+        let mut previous: Option<(&String, &telltale_sources::acquisition::BoundedUnit)> = None;
+        for (source_id, unit) in &result.bounded {
+            // Entries of one unit are adjacent; count each unit once.
+            if previous.is_none_or(|(seen_source, seen)| {
+                seen_source != source_id
+                    || seen.session_id != unit.session_id
+                    || seen.native_id != unit.native_id
+                    || seen.source_sequence != unit.source_sequence
+            }) {
+                accounting.bounded_value_unit_count += 1;
+            }
+            previous = Some((source_id, unit));
+            if accounting.bounded_value_units.len() < MAX_REPORTED_QUARANTINED_UNITS {
+                accounting.bounded_value_units.push(serde_json::json!({
+                    "source": source_id,
+                    "session_id": unit.session_id,
+                    "native_id": unit.native_id,
+                    "source_sequence": unit.source_sequence,
+                    "target": unit.target.as_str(),
+                    "dimension": unit.dimension.as_str(),
                 }));
             }
         }
@@ -2094,6 +2122,7 @@ impl SourceProcessingAccounting {
             "no_sources"
         } else if self.parse_error_source_count > 0
             || self.quarantined_unit_count > 0
+            || self.bounded_value_unit_count > 0
             || self.incomplete_window_source_count > 0
             || self.visibility_limited_source_count > 0
             || self.accounting_partial_source_count > 0
@@ -2136,6 +2165,8 @@ impl SourceProcessingAccounting {
             "evaluated_window_count": self.evaluated_window_count,
             "quarantined_unit_count": self.quarantined_unit_count,
             "quarantined_units": self.quarantined_units,
+            "bounded_value_unit_count": self.bounded_value_unit_count,
+            "bounded_value_units": self.bounded_value_units,
             "unclassified_tool_calls": self.unclassified_tool_calls,
             "tool_operand_drift": self.tool_operand_drift,
         })
@@ -3010,6 +3041,7 @@ mod tests {
                 baseline_replacement: BaselineReplacement::NoReplacement,
                 policy_accounting: None,
                 quarantined: Vec::new(),
+                bounded: Vec::new(),
             };
         let summary = source_processing_accounting(&[result(2, 1), result(3, 0)])
             .unwrap()
@@ -3048,6 +3080,7 @@ mod tests {
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
             quarantined: Vec::new(),
+            bounded: Vec::new(),
         };
         let mut nonempty = SourceAccounting::default();
         nonempty.sessions.push(SessionAccounting {

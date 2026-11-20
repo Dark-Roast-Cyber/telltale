@@ -149,6 +149,15 @@ impl OpenCodeSqliteNativeRecord {
         }
     }
 
+    /// The source sequence and native id its canonical observations carry.
+    pub(crate) fn coordinates(&self) -> (u64, Option<&str>) {
+        match self {
+            Self::Message(record) => (record.source_sequence, record.source_id.as_deref()),
+            Self::Text(record) => (record.source_rowid as u64, record.source_id.as_deref()),
+            Self::Tool(record) => (record.source_rowid as u64, record.source_id.as_deref()),
+        }
+    }
+
     fn context(&self) -> &OpenCodeMessageContext {
         match self {
             Self::Message(record) => &record.context,

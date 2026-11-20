@@ -5,10 +5,7 @@ use crate::acquisition::{
     AccountingCoverage, AcquisitionBatch, AcquisitionError, AcquisitionOptions, acquire_source,
 };
 use serde_json::{Value, json};
-use telltale_schema::observation::{
-    BoundDimension, CanonicalBoundContext, CanonicalFieldCategory, JsonValue, ObservationBody,
-    ObservedAt,
-};
+use telltale_schema::observation::{BoundDimension, JsonValue, ObservationBody, ObservedAt};
 use telltale_schema::{
     clients::{ClientId, SourceKind},
     source::Source,
@@ -448,7 +445,8 @@ fn exec_scripts_and_text_array_outputs_keep_the_direct_text_budget() {
             Some(&JsonValue::string(format!("Script completed\n{output}")))
         );
 
-        // Past the direct-text budget each record is quarantined by itself.
+        // Past the direct-text budget each value is replaced and recorded;
+        // both records are admitted and the source reads as partly evaluated.
         let over = "x".repeat(65_537);
         let values = vec![
             meta(json!({})),
@@ -457,33 +455,32 @@ fn exec_scripts_and_text_array_outputs_keep_the_direct_text_budget() {
             user("synthetic after"),
         ];
         let batch = acquire(source, &values).unwrap();
-        assert_eq!(batch.observations.len(), 1);
-        let bounds = batch
-            .quarantined
-            .iter()
-            .map(|unit| (unit.code, unit.native_id.as_str(), unit.bound))
-            .collect::<Vec<_>>();
-        let bound = |category| {
-            Some(CanonicalBoundContext {
-                category,
-                dimension: BoundDimension::StringBytes,
-            })
+        assert!(batch.quarantined.is_empty());
+        assert_eq!(batch.observations.len(), 3);
+        let ObservationBody::Tool(call) = batch.observations[0].body() else {
+            panic!("tool call")
         };
+        assert_eq!(call.name(), Some("exec"));
         assert_eq!(
-            bounds,
+            batch
+                .bounded
+                .iter()
+                .map(|unit| (unit.native_id.as_str(), unit.target, unit.dimension))
+                .collect::<Vec<_>>(),
             [
                 (
-                    "unbounded_value",
                     "call-b",
-                    bound(CanonicalFieldCategory::ToolArguments)
+                    telltale_schema::observation::BoundedTarget::Arguments,
+                    BoundDimension::StringBytes
                 ),
                 (
-                    "unbounded_value",
                     "call-b",
-                    bound(CanonicalFieldCategory::ToolResult)
+                    telltale_schema::observation::BoundedTarget::Result,
+                    BoundDimension::StringBytes
                 ),
             ]
         );
+        assert!(!format!("{:?}", batch.bounded).contains("xxxx"));
         assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
     });
 }
@@ -992,7 +989,25 @@ fn record_gaps_keep_malformed_bounds_and_unknown_failures_visible() {
             ],
         )
         .unwrap();
-        assert_eq!(batch.observations.len(), 1);
+        // The search call's over-bound query is replaced and the call is
+        // projected; the unknown action, the plan text and the message text
+        // stay quarantined.
+        assert_eq!(batch.observations.len(), 2);
+        let ObservationBody::Tool(search) = batch.observations[1].body() else {
+            panic!("search call")
+        };
+        assert_eq!(
+            search
+                .bounded_values()
+                .iter()
+                .map(|value| (value.target(), value.dimension()))
+                .collect::<Vec<_>>(),
+            [(
+                telltale_schema::observation::BoundedTarget::Arguments,
+                BoundDimension::StringBytes
+            )]
+        );
+        assert_eq!(search.searchable_arguments(), None);
         assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
         assert_eq!(
             batch
@@ -1002,12 +1017,13 @@ fn record_gaps_keep_malformed_bounds_and_unknown_failures_visible() {
                 .collect::<Vec<_>>(),
             [
                 (2, "unknown_discriminator"),
-                (3, "unbounded_value"),
                 (4, "unbounded_value"),
                 (5, "unbounded_value")
             ]
         );
         assert!(!private(&batch));
+        // Neither the quarantined units nor the call with a replaced value
+        // contribute.
         assert!(
             batch.accounting.sessions[0]
                 .counts

@@ -214,6 +214,7 @@ fn pre_policy_compatibility_retention_failure_remains_diagnostic_only() {
         &CorrelationId::source_reported("instance").unwrap(),
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             observations,
@@ -264,6 +265,7 @@ fn pre_policy_true_shared_work_exhaustion_discards_authoritative_success() {
         &CorrelationId::source_reported("instance").unwrap(),
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             observations,
@@ -576,6 +578,7 @@ telltale:
         &instance,
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             observations,
@@ -650,6 +653,7 @@ fn mcp_projection_is_atomic_with_late_activity_failure() {
         &CorrelationId::new("instance", CorrelationOrigin::TelltaleOriginated).unwrap(),
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             observations: vec![message("one", Some("s"))],
@@ -695,6 +699,7 @@ fn activity_failure_discards_successful_source_output() {
         &CorrelationId::source_reported("instance").unwrap(),
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             observations: vec![message("one", Some("s"))],
@@ -772,6 +777,7 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
             &instance,
             AcquisitionBatch {
                 quarantined: Vec::new(),
+                bounded: Vec::new(),
                 message_overlap_from: None,
                 source_scale: telltale_schema::observation::SourceScale::FLOOR,
                 accounting: SourceAccounting::default(),
@@ -803,6 +809,7 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
         &instance,
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             accounting: SourceAccounting::default(),
@@ -834,6 +841,7 @@ fn metadata_origin_must_match_not_just_visible_session_id() {
         &instance,
         AcquisitionBatch {
             quarantined: Vec::new(),
+            bounded: Vec::new(),
             message_overlap_from: None,
             source_scale: telltale_schema::observation::SourceScale::FLOOR,
             observations: vec![message("one", Some("s"))],

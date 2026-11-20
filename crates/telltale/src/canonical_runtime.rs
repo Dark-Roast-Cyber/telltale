@@ -15,7 +15,7 @@ use telltale_rules::process_chain::CompiledProcessChainRules;
 use telltale_schema::event::path_hash;
 use telltale_schema::observation::{CorrelationId, CorrelationOrigin, ObservedAt};
 use telltale_sources::acquisition::{
-    AcquisitionBatch, AcquisitionError, AcquisitionOptions, AcquisitionProgress,
+    AcquisitionBatch, AcquisitionError, AcquisitionOptions, AcquisitionProgress, BoundedUnit,
     OpenCodeSqliteReadOptions, QuarantinedUnit, SourceAccounting, acquire_opencode_sqlite,
     acquire_resolved_source,
 };
@@ -33,6 +33,9 @@ pub struct SourceResult {
     pub policy_accounting: Option<Result<PolicyMatchAccounting, PolicyMatchAccountingError>>,
     /// Native units excluded for exceeding a size bound; the rest were evaluated.
     pub quarantined: Vec<QuarantinedUnit>,
+    /// Native units evaluated with over-bound tool values replaced, one entry
+    /// per replaced field and bound.
+    pub bounded: Vec<BoundedUnit>,
     /// The OpenCode v2 window budget this result fit in, when the read set
     /// one or evaluation had to shrink it; a caller draining further windows
     /// starts from it.
@@ -45,8 +48,17 @@ pub struct SourceResult {
 /// Content-free `scanner_error` marking a source that was evaluated without
 /// its quarantined units. Coordinates stay in the caller's local report.
 pub fn quarantine_event(source: &Source) -> Event {
-    let mut event =
-        telltale_schema::event::scanner_error_event(source, &"canonical_units_quarantined");
+    canonical_scanner_error(source, "canonical_units_quarantined")
+}
+
+/// Content-free `scanner_error` marking a source that was evaluated with some
+/// over-bound tool values replaced. Coordinates stay in the caller's report.
+pub fn bounded_values_event(source: &Source) -> Event {
+    canonical_scanner_error(source, "canonical_values_bounded")
+}
+
+fn canonical_scanner_error(source: &Source, code: &'static str) -> Event {
+    let mut event = telltale_schema::event::scanner_error_event(source, &code);
     for evidence in &mut event.evidence {
         if evidence.field == "source_path" {
             evidence.redacted_value = "canonical source".into();
@@ -278,6 +290,9 @@ fn process_verified(
                 processing: None,
             })?;
             batch.observations.clear();
+            // Every row of the window is quarantined, including any whose
+            // values were replaced.
+            batch.bounded.clear();
             batch.quarantined.extend(units);
             return finish_batch_with_work(
                 source,
@@ -501,6 +516,7 @@ fn finish_batch_with_work(
         baseline_replacement: activity.replacement,
         policy_accounting,
         quarantined: batch.quarantined,
+        bounded: batch.bounded,
         window_bytes: None,
         message_overlap_from: batch.message_overlap_from,
     })
