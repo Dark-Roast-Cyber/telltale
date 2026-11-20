@@ -65,9 +65,15 @@ hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
 config roots instead of the default ones (/etc/telltale, on Windows %ProgramData%\\telltale,
 then $XDG_CONFIG_HOME/telltale or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
 content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan.
+--user-config-dir DIR replaces only the user root, which must then exist; settings
+adds it to the hook command when the user root exists, so the environment a harness
+is launched with cannot move it.
 hook also accepts --json-reply: frame the gated native output (including null)
 as telltale.hook-reply.v1 for subprocess adapters, not native command hooks.
 --detect-only can only restrict the loaded mode, never enable enforcement.
+--expect-enforce (added by settings when the configuration enforces) treats a
+configuration that does not load as one that enforces; it never changes the mode
+of a configuration that loads, and is refused beside --detect-only.
 
 environment:
   TELLTALE_HOOKS_STATE_DIR  per-session journals and state (hooks.state_dir), default:
@@ -104,23 +110,23 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
                 64
             }
         },
-        [name, "hook", flags @ ..] => match (Harness::from_name(name), hook_flags(flags)) {
-            (Some(harness), Some((dirs, json_reply, detect_only))) => {
-                hook(harness, &dirs, json_reply, detect_only)
+        [name, "hook", flags @ ..] => match (Harness::from_name(name), pinned(flags, hook_flags)) {
+            (Some(harness), Some((dirs, json_reply, detect_only, expect_enforce))) => {
+                hook(harness, &dirs, json_reply, detect_only, expect_enforce)
             }
             _ => {
                 eprintln!("{}", usage());
                 64
             }
         },
-        ["check", flags @ ..] => match config_dirs(flags) {
+        ["check", flags @ ..] => match pinned(flags, config_dirs) {
             Some(dirs) => check(&dirs),
             None => {
                 eprintln!("{}", usage());
                 64
             }
         },
-        ["serve", flags @ ..] => match config_dirs(flags) {
+        ["serve", flags @ ..] => match pinned(flags, config_dirs) {
             Some(dirs) => serve(&dirs),
             None => {
                 eprintln!("{}", usage());
@@ -162,12 +168,81 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
             return 64;
         }
     };
+    // A user-level install is found through HOME or XDG_CONFIG_HOME, which a
+    // harness can be launched without; pin the root the hook reads now. A
+    // command that names its own roots is the operator's.
+    let (pinned, pin_note) = if command.contains("--config-dir")
+        || command.contains("--user-config-dir")
+    {
+        (None, None)
+    } else {
+        match user_root_to_pin() {
+                Some(root) => match pin_command(command, &root, cfg!(windows)) {
+                    Some(pinned) => (
+                        Some(pinned),
+                        Some(format!(
+                            "telltale hooks: the hook reads the user config root {} whatever HOME or XDG_CONFIG_HOME is when the harness starts; run settings again if it moves",
+                            root.display()
+                        )),
+                    ),
+                    None => (
+                        None,
+                        Some(format!(
+                            "telltale hooks: the user config root {} cannot be quoted for the hook command; it is not pinned, so the hook follows HOME and XDG_CONFIG_HOME",
+                            root.display()
+                        )),
+                    ),
+                },
+                None => (
+                    None,
+                    Some("telltale hooks: no user config root exists, so the hook command is not pinned and the hook follows HOME and XDG_CONFIG_HOME; run settings again after creating one".to_owned()),
+                ),
+            }
+    };
+    // An enforcing configuration that later does not load must not fall to
+    // detect-only: the command says enforcement was expected.
+    let (expect_enforce, enforce_note) = if command.contains("--config-dir")
+        || command.contains("--user-config-dir")
+        || command.contains(EXPECT_ENFORCE)
+    {
+        (false, None)
+    } else {
+        match load_config(&[]) {
+            Ok(config) if Gate::for_mode(config.mode) == Gate::Enforce => (
+                true,
+                Some(
+                    "telltale hooks: the configuration says hooks.mode: enforce, so the hook command carries --expect-enforce: if the configuration later does not load, tool calls are denied (config_invalid) rather than run detect-only",
+                ),
+            ),
+            Ok(_) => (
+                false,
+                Some(
+                    "telltale hooks: the configuration does not say hooks.mode: enforce, so the hook command carries no --expect-enforce; run settings again after enabling enforcement",
+                ),
+            ),
+            Err(_) => (
+                false,
+                Some(
+                    "telltale hooks: the configuration does not load, so the hook command carries no --expect-enforce; fix it (telltale hooks check) and run settings again",
+                ),
+            ),
+        }
+    };
+    let mut generated = pinned.unwrap_or_else(|| command.to_owned());
+    if expect_enforce {
+        generated.push(' ');
+        generated.push_str(EXPECT_ENFORCE);
+    }
+    let command = generated.as_str();
     // An adapter that cannot honor the request prints nothing and fails rather
     // than pretending. Install and trust notes go to stderr.
     let fragment = match (harness.adapter().install.output)(command, fail_closed) {
         Ok(output) => {
             if let Some(notes) = output.notes {
                 eprintln!("{notes}");
+            }
+            for note in pin_note.iter().map(String::as_str).chain(enforce_note) {
+                eprintln!("{note}");
             }
             output.document
         }
@@ -181,6 +256,74 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
         serde_json::to_string_pretty(&fragment).unwrap_or_default()
     );
     0
+}
+
+/// The hook switch `settings` adds when the configuration enforces.
+const EXPECT_ENFORCE: &str = "--expect-enforce";
+
+/// `parse` of `flags` without one `--user-config-dir DIR` (or `=DIR`), which
+/// pins the user config root for this process. `None` for a repeated or empty
+/// pin, or a pin beside `--config-dir`, which replaces every root.
+fn pinned<T>(flags: &[&str], parse: impl Fn(&[&str]) -> Option<T>) -> Option<T> {
+    let (rest, user) = split_user_root(flags)?;
+    let explicit = rest.iter().any(|flag| flag.starts_with("--config-dir"));
+    let parsed = parse(&rest)?;
+    if let Some(user) = user {
+        if explicit {
+            return None;
+        }
+        crate::config::pin_user_config_root(user);
+    }
+    Some(parsed)
+}
+
+/// `flags` without its `--user-config-dir`, and that root. A `--config-dir`
+/// value is passed over, so a directory named like the switch is not one.
+fn split_user_root<'a>(flags: &[&'a str]) -> Option<(Vec<&'a str>, Option<PathBuf>)> {
+    let (mut rest, mut user) = (Vec::new(), None);
+    let mut flags = flags.iter().copied();
+    while let Some(flag) = flags.next() {
+        let value = match flag.strip_prefix("--user-config-dir") {
+            Some("") => flags.next()?,
+            Some(value) => value.strip_prefix('=')?,
+            None => {
+                rest.push(flag);
+                if flag == "--config-dir" {
+                    rest.push(flags.next()?);
+                }
+                continue;
+            }
+        };
+        if value.is_empty() || user.replace(PathBuf::from(value)).is_some() {
+            return None;
+        }
+    }
+    Some((rest, user))
+}
+
+/// The user config root to pin in a generated hook command: the one the
+/// environment names now, if it exists. One that does not exist is not pinned,
+/// because most installs have no config and a pinned root that is missing does
+/// not load.
+fn user_root_to_pin() -> Option<PathBuf> {
+    crate::config::user_config_root().filter(|root| std::fs::symlink_metadata(root).is_ok())
+}
+
+/// `command` with `--user-config-dir root` appended, quoted for the shell the
+/// harness runs it with: POSIX sh, or on Windows PowerShell or Git Bash,
+/// where single quotes are literal in both (`None` when `root` holds a quote
+/// there, or is not UTF-8).
+fn pin_command(command: &str, root: &std::path::Path, windows: bool) -> Option<String> {
+    let root = root.to_str()?;
+    let quoted = if windows {
+        if root.contains(['\'', '‘', '’', '‚', '‛']) {
+            return None;
+        }
+        format!("'{root}'")
+    } else {
+        format!("'{}'", root.replace('\'', r"'\''"))
+    };
+    Some(format!("{command} --user-config-dir {quoted}"))
 }
 
 /// `--config-dir DIR` or `--config-dir=DIR`, repeated; `None` for anything else.
@@ -203,14 +346,15 @@ fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
 
 /// Hook-only switches, without mistaking a config directory's spelling for
 /// a switch. The common parser still owns config-root validation.
-fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool)> {
+fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool, bool)> {
     let mut roots = Vec::new();
-    let (mut json_reply, mut detect_only) = (false, false);
+    let (mut json_reply, mut detect_only, mut expect_enforce) = (false, false, false);
     let mut flags = flags.iter().copied();
     while let Some(flag) = flags.next() {
         match flag {
             "--json-reply" => json_reply = true,
             "--detect-only" => detect_only = true,
+            EXPECT_ENFORCE => expect_enforce = true,
             "--config-dir" => {
                 roots.push(flag);
                 roots.push(flags.next()?);
@@ -218,7 +362,16 @@ fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool)> {
             _ => roots.push(flag),
         }
     }
-    Some((config_dirs(&roots)?, json_reply, detect_only))
+    // One asks for less than the configuration says, the other for more.
+    if detect_only && expect_enforce {
+        return None;
+    }
+    Some((
+        config_dirs(&roots)?,
+        json_reply,
+        detect_only,
+        expect_enforce,
+    ))
 }
 
 /// The folders of a config root that hooks read (src/config.rs discovery).
@@ -341,6 +494,26 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The config roots `check` read, in precedence order, and where each comes
+/// from. A user root that is not pinned follows the environment, so a hook
+/// launched in another one can read another root.
+fn print_config_roots(config_dirs: &[PathBuf]) {
+    let pinned = crate::config::pinned_user_config_root();
+    for root in crate::config::config_roots(config_dirs) {
+        let origin = if !config_dirs.is_empty() {
+            "--config-dir"
+        } else if pinned == Some(root.as_path()) {
+            "user, pinned"
+        } else if crate::config::user_config_root().as_ref() == Some(&root) {
+            "user, from XDG_CONFIG_HOME or HOME: not pinned"
+        } else {
+            "system"
+        };
+        let missing = if root.exists() { "" } else { ", absent" };
+        println!("config root: {} ({origin}{missing})", root.display());
+    }
+}
+
 fn check(config_dirs: &[PathBuf]) -> i32 {
     let config = match load_config(config_dirs) {
         Ok(config) => config,
@@ -351,6 +524,7 @@ fn check(config_dirs: &[PathBuf]) -> i32 {
     };
     match Engine::new(&config.rules, &config.protected_paths()) {
         Ok(engine) => {
+            print_config_roots(config_dirs);
             println!("build revision: {}", identity::revision());
             println!("semantic identity: {}", engine.semantic_identity());
             println!("pipeline build: {} ms", engine.build_ms);
@@ -443,7 +617,13 @@ fn unreadable_call_policy(config: &Config) -> OnError {
 /// stricter of `on_error` and `on_unevaluable` for a tool call; while reading
 /// the payload, the block for one that names no event; while loading the
 /// configuration, the answer of a configuration that did not load.
-fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only: bool) -> i32 {
+fn hook(
+    harness: Harness,
+    config_dirs: &[PathBuf],
+    json_reply: bool,
+    detect_only: bool,
+    expect_enforce: bool,
+) -> i32 {
     // A panic anywhere before the answer is caught, since most harnesses read
     // a crash as "run the call". A configuration whose loading panicked did
     // not load.
@@ -465,8 +645,14 @@ fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only
         // A panic while asking whether a configuration that did not load
         // asks for enforcement is no answer of "no": as with a broken file
         // next to one that enforces, breakage cannot turn enforcement off.
-        caught(|| Gate::for_config(&loaded, || settings_declare_enforce(config_dirs)))
-            .unwrap_or(Gate::Enforce)
+        // `--expect-enforce` counts only for a configuration that did not
+        // load, like a settings file that says `hooks.mode: enforce`.
+        caught(|| {
+            Gate::for_config(&loaded, || {
+                expect_enforce || settings_declare_enforce(config_dirs)
+            })
+        })
+        .unwrap_or(Gate::Enforce)
     };
     if gate == Gate::DetectOnly {
         // Detached: the process exits when `hook` returns. A thread that
@@ -762,6 +948,14 @@ fn serve_args(config_dirs: &[PathBuf]) -> Vec<OsString> {
                 .into_os_string(),
         );
     }
+    if let Some(root) = crate::config::pinned_user_config_root() {
+        args.push(OsString::from("--user-config-dir"));
+        args.push(
+            std::path::absolute(root)
+                .unwrap_or_else(|_| root.to_path_buf())
+                .into_os_string(),
+        );
+    }
     args
 }
 
@@ -803,19 +997,79 @@ fn serve(config_dirs: &[PathBuf]) -> i32 {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{config_dirs, declares_enforce, hook_flags, load_config};
+    use super::{
+        config_dirs, declares_enforce, hook_flags, load_config, pin_command, split_user_root,
+    };
+
+    #[test]
+    fn the_user_root_pin_is_one_value_and_passes_over_config_dir_values() {
+        assert_eq!(
+            split_user_root(&["--json-reply", "--user-config-dir", "/a b"]),
+            Some((vec!["--json-reply"], Some(PathBuf::from("/a b"))))
+        );
+        assert_eq!(
+            split_user_root(&["--config-dir", "--user-config-dir"]),
+            Some((vec!["--config-dir", "--user-config-dir"], None))
+        );
+        assert_eq!(
+            split_user_root(&["--user-config-dir=/a"]),
+            Some((Vec::new(), Some(PathBuf::from("/a"))))
+        );
+        for refused in [
+            &["--user-config-dir"][..],
+            &["--user-config-dir="],
+            &["--user-config-dir", ""],
+            &["--user-config-dir", "/a", "--user-config-dir", "/b"],
+            &["--user-config-dirx"],
+        ] {
+            assert_eq!(split_user_root(refused), None, "{refused:?}");
+        }
+    }
+
+    /// POSIX sh reads `'\''` as a quote inside single quotes; PowerShell and Git
+    /// Bash both read single quotes literally, and have no common escape for
+    /// one, so a Windows root holding a quote is not pinned.
+    #[test]
+    fn the_pin_is_quoted_for_the_harness_shell() {
+        assert_eq!(
+            pin_command(
+                "t hooks claude-code hook",
+                Path::new("/h/it's a $dir"),
+                false
+            )
+            .as_deref(),
+            Some(r"t hooks claude-code hook --user-config-dir '/h/it'\''s a $dir'")
+        );
+        assert_eq!(
+            pin_command(
+                "t hooks copilot-cli hook",
+                Path::new(r"C:\Users\a b\.config\telltale"),
+                true
+            )
+            .as_deref(),
+            Some(r"t hooks copilot-cli hook --user-config-dir 'C:\Users\a b\.config\telltale'")
+        );
+        for quoted in [r"C:\Users\o'b\.config", "C:\\Users\\o\u{2019}b\\.config"] {
+            assert_eq!(pin_command("t", Path::new(quoted), true), None, "{quoted}");
+        }
+    }
 
     #[test]
     fn hook_switches_do_not_consume_a_config_directory_named_like_a_switch() {
         assert_eq!(
             hook_flags(&["--json-reply", "--config-dir", "--detect-only"]),
-            Some((vec![PathBuf::from("--detect-only")], true, false))
+            Some((vec![PathBuf::from("--detect-only")], true, false, false))
         );
         assert_eq!(
             hook_flags(&["--detect-only", "--config-dir=root", "--json-reply"]),
-            Some((vec![PathBuf::from("root")], true, true))
+            Some((vec![PathBuf::from("root")], true, true, false))
         );
         assert_eq!(hook_flags(&["--json-reply", "--config-dir"]), None);
+        assert_eq!(
+            hook_flags(&["--expect-enforce"]),
+            Some((Vec::new(), false, false, true))
+        );
+        assert_eq!(hook_flags(&["--expect-enforce", "--detect-only"]), None);
     }
 
     #[test]

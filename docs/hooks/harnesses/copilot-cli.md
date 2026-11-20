@@ -39,6 +39,22 @@ spaces must be invoked with the call operator, for example
 an unquoted path fails to start, which Copilot treats as a block on every
 tool call (closed, but a denial of service).
 
+When a user config root (`$XDG_CONFIG_HOME/telltale`, else `~/.config/telltale`)
+exists, `settings` appends `--user-config-dir '<root>'` to the hook command, so the
+environment the harness is launched with (`HOME`, `XDG_CONFIG_HOME`) cannot move
+the settings the hook reads; the system root is still read first. Without one, the
+command is printed as given and stderr says it is not pinned. Generate the
+settings again after creating or moving that root, and to pin a command printed by
+an earlier version; `telltale hooks check --user-config-dir '<root>'` shows the
+roots that hook reads.
+When the configuration read then says `hooks.mode: enforce`, `settings` also
+appends `--expect-enforce`: if the configuration later does not load (a pinned
+root deleted, a broken file), tool calls are denied as misconfigured instead of
+running detect-only. The marker never enables enforcement for a configuration
+that loads. Generate the settings again after switching to enforce.
+PowerShell and Git Bash both read the single-quoted root literally; a Windows root
+holding a quote is not pinned.
+
 Install it once. Hooks from every source run, so two installations (for
 example this file plus a Claude Code installation in the repository's
 `.claude/settings.json`) evaluate every call twice and double the session
