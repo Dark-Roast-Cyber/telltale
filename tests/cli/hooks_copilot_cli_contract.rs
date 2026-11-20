@@ -675,9 +675,11 @@ fn settings_prints_the_hook_file() {
     let (code, stdout, stderr) = binary(&["copilot-cli", "settings"], None, dir.path());
     assert_eq!(code, 0, "{stderr}");
     let file: Value = serde_json::from_str(&stdout).unwrap();
+    // The state directory in use is pinned on the command.
+    let pin = format!(" --state-dir '{}'", dir.path().display());
     assert_eq!(
         file,
-        copilot_cli::hooks_file("telltale hooks copilot-cli hook")
+        copilot_cli::hooks_file(&format!("telltale hooks copilot-cli hook{pin}"))
     );
     let (code, closed, note) = binary(
         &[
@@ -691,13 +693,16 @@ fn settings_prints_the_hook_file() {
     );
     assert_eq!(code, 0);
     let file: Value = serde_json::from_str(&closed).unwrap();
-    assert_eq!(file, copilot_cli::hooks_file("/opt/tth copilot-cli hook"));
+    assert_eq!(
+        file,
+        copilot_cli::hooks_file(&format!("/opt/tth copilot-cli hook{pin}"))
+    );
     assert!(note.contains("changes nothing"), "{note}");
     // The Claude Code fragment is unchanged by the generalized subcommand.
     let (_, claude, _) = binary(&["claude-code", "settings"], None, dir.path());
     let fragment: Value = serde_json::from_str(&claude).unwrap();
     assert_eq!(
         fragment,
-        claude_code::settings_fragment("telltale hooks claude-code hook", false)
+        claude_code::settings_fragment(&format!("telltale hooks claude-code hook{pin}"), false)
     );
 }

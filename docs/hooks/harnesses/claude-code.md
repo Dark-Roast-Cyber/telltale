@@ -79,6 +79,17 @@ command is printed as given and stderr says it is not pinned. Generate the
 settings again after creating or moving that root, and to pin a command printed by
 an earlier version; `telltale hooks check --user-config-dir '<root>'` shows the
 roots that hook reads.
+`settings` also appends `--state-dir '<dir>'` with the state directory in use then
+(`TELLTALE_HOOKS_STATE_DIR`, else `hooks.state_dir`, else the default under
+`XDG_STATE_HOME` or `HOME`, on Windows `LOCALAPPDATA`), so a harness launched with
+those moved keeps its session history and writes its journal, session state and
+records there. A command that names its own config roots pins the state directory
+the configuration in those roots resolves. The flag replaces every other source:
+a later change to `hooks.state_dir` or the variable takes effect after generating
+the settings again. A pinned directory that is missing is created owner-only; one
+that cannot be used gets the stricter of `on_error` and `on_unevaluable`, never a
+directory the environment names. `telltale hooks check --state-dir '<dir>'` shows
+it as pinned.
 When the configuration read then says `hooks.mode: enforce`, `settings` also
 appends `--expect-enforce`: if the configuration later does not load (a pinned
 root deleted, a broken file), tool calls are denied as misconfigured instead of
