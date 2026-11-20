@@ -1277,9 +1277,8 @@ fn in_bound_tool_calls_keep_identity_and_semantic_content() {
             match acquire_source(&source, options()) {
                 Ok(batch) => {
                     // In bounds nothing is replaced, so no unit is reported as
-                    // bounded. Copilot keeps the raw request as searchable
-                    // text: for these two cases that text is over its bound,
-                    // so the call is held with its arguments replaced whole.
+                    // bounded. Two Copilot cases were refusals before: each
+                    // is now held with its arguments replaced and reported.
                     if client == ClientId::Copilot && matches!(case, 0 | 5) {
                         assert_eq!(
                             bounded_units(&batch),
