@@ -6,6 +6,17 @@
 //! before the rest of the CLI starts (`run` checks for it first), so a tool
 //! call never waits for the scanner's startup work, and the exit codes below
 //! are the hooks' own rather than the CLI's.
+//!
+//! A panic on the way to an answer is caught here and answered like a tool
+//! call the hook could not read. That needs unwinding, so a build that
+//! aborts on panic does not compile.
+
+// A profile, `RUSTFLAGS` or target that sets `panic = "abort"` would turn
+// every caught panic into a crash that most harnesses read as "run the call".
+#[cfg(not(panic = "unwind"))]
+compile_error!(
+    "telltale hooks needs panic = \"unwind\": it answers a panic with the strict failure policy"
+);
 
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -54,9 +65,15 @@ hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
 config roots instead of the default ones (/etc/telltale, on Windows %ProgramData%\\telltale,
 then $XDG_CONFIG_HOME/telltale or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
 content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan.
+--user-config-dir DIR replaces only the user root, which must then exist; settings
+adds it to the hook command when the user root exists, so the environment a harness
+is launched with cannot move it.
 hook also accepts --json-reply: frame the gated native output (including null)
 as telltale.hook-reply.v1 for subprocess adapters, not native command hooks.
 --detect-only can only restrict the loaded mode, never enable enforcement.
+--expect-enforce (added by settings when the configuration enforces) treats a
+configuration that does not load as one that enforces; it never changes the mode
+of a configuration that loads, and is refused beside --detect-only.
 
 environment:
   TELLTALE_HOOKS_STATE_DIR  per-session journals and state (hooks.state_dir), default:
@@ -93,23 +110,23 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
                 64
             }
         },
-        [name, "hook", flags @ ..] => match (Harness::from_name(name), hook_flags(flags)) {
-            (Some(harness), Some((dirs, json_reply, detect_only))) => {
-                hook(harness, &dirs, json_reply, detect_only)
+        [name, "hook", flags @ ..] => match (Harness::from_name(name), pinned(flags, hook_flags)) {
+            (Some(harness), Some((dirs, json_reply, detect_only, expect_enforce))) => {
+                hook(harness, &dirs, json_reply, detect_only, expect_enforce)
             }
             _ => {
                 eprintln!("{}", usage());
                 64
             }
         },
-        ["check", flags @ ..] => match config_dirs(flags) {
+        ["check", flags @ ..] => match pinned(flags, config_dirs) {
             Some(dirs) => check(&dirs),
             None => {
                 eprintln!("{}", usage());
                 64
             }
         },
-        ["serve", flags @ ..] => match config_dirs(flags) {
+        ["serve", flags @ ..] => match pinned(flags, config_dirs) {
             Some(dirs) => serve(&dirs),
             None => {
                 eprintln!("{}", usage());
@@ -151,12 +168,81 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
             return 64;
         }
     };
+    // A user-level install is found through HOME or XDG_CONFIG_HOME, which a
+    // harness can be launched without; pin the root the hook reads now. A
+    // command that names its own roots is the operator's.
+    let (pinned, pin_note) = if command.contains("--config-dir")
+        || command.contains("--user-config-dir")
+    {
+        (None, None)
+    } else {
+        match user_root_to_pin() {
+                Some(root) => match pin_command(command, &root, cfg!(windows)) {
+                    Some(pinned) => (
+                        Some(pinned),
+                        Some(format!(
+                            "telltale hooks: the hook reads the user config root {} whatever HOME or XDG_CONFIG_HOME is when the harness starts; run settings again if it moves",
+                            root.display()
+                        )),
+                    ),
+                    None => (
+                        None,
+                        Some(format!(
+                            "telltale hooks: the user config root {} cannot be quoted for the hook command; it is not pinned, so the hook follows HOME and XDG_CONFIG_HOME",
+                            root.display()
+                        )),
+                    ),
+                },
+                None => (
+                    None,
+                    Some("telltale hooks: no user config root exists, so the hook command is not pinned and the hook follows HOME and XDG_CONFIG_HOME; run settings again after creating one".to_owned()),
+                ),
+            }
+    };
+    // An enforcing configuration that later does not load must not fall to
+    // detect-only: the command says enforcement was expected.
+    let (expect_enforce, enforce_note) = if command.contains("--config-dir")
+        || command.contains("--user-config-dir")
+        || command.contains(EXPECT_ENFORCE)
+    {
+        (false, None)
+    } else {
+        match load_config(&[]) {
+            Ok(config) if Gate::for_mode(config.mode) == Gate::Enforce => (
+                true,
+                Some(
+                    "telltale hooks: the configuration says hooks.mode: enforce, so the hook command carries --expect-enforce: if the configuration later does not load, tool calls are denied (config_invalid) rather than run detect-only",
+                ),
+            ),
+            Ok(_) => (
+                false,
+                Some(
+                    "telltale hooks: the configuration does not say hooks.mode: enforce, so the hook command carries no --expect-enforce; run settings again after enabling enforcement",
+                ),
+            ),
+            Err(_) => (
+                false,
+                Some(
+                    "telltale hooks: the configuration does not load, so the hook command carries no --expect-enforce; fix it (telltale hooks check) and run settings again",
+                ),
+            ),
+        }
+    };
+    let mut generated = pinned.unwrap_or_else(|| command.to_owned());
+    if expect_enforce {
+        generated.push(' ');
+        generated.push_str(EXPECT_ENFORCE);
+    }
+    let command = generated.as_str();
     // An adapter that cannot honor the request prints nothing and fails rather
     // than pretending. Install and trust notes go to stderr.
     let fragment = match (harness.adapter().install.output)(command, fail_closed) {
         Ok(output) => {
             if let Some(notes) = output.notes {
                 eprintln!("{notes}");
+            }
+            for note in pin_note.iter().map(String::as_str).chain(enforce_note) {
+                eprintln!("{note}");
             }
             output.document
         }
@@ -170,6 +256,74 @@ fn print_settings(harness: Harness, args: &[&str]) -> i32 {
         serde_json::to_string_pretty(&fragment).unwrap_or_default()
     );
     0
+}
+
+/// The hook switch `settings` adds when the configuration enforces.
+const EXPECT_ENFORCE: &str = "--expect-enforce";
+
+/// `parse` of `flags` without one `--user-config-dir DIR` (or `=DIR`), which
+/// pins the user config root for this process. `None` for a repeated or empty
+/// pin, or a pin beside `--config-dir`, which replaces every root.
+fn pinned<T>(flags: &[&str], parse: impl Fn(&[&str]) -> Option<T>) -> Option<T> {
+    let (rest, user) = split_user_root(flags)?;
+    let explicit = rest.iter().any(|flag| flag.starts_with("--config-dir"));
+    let parsed = parse(&rest)?;
+    if let Some(user) = user {
+        if explicit {
+            return None;
+        }
+        crate::config::pin_user_config_root(user);
+    }
+    Some(parsed)
+}
+
+/// `flags` without its `--user-config-dir`, and that root. A `--config-dir`
+/// value is passed over, so a directory named like the switch is not one.
+fn split_user_root<'a>(flags: &[&'a str]) -> Option<(Vec<&'a str>, Option<PathBuf>)> {
+    let (mut rest, mut user) = (Vec::new(), None);
+    let mut flags = flags.iter().copied();
+    while let Some(flag) = flags.next() {
+        let value = match flag.strip_prefix("--user-config-dir") {
+            Some("") => flags.next()?,
+            Some(value) => value.strip_prefix('=')?,
+            None => {
+                rest.push(flag);
+                if flag == "--config-dir" {
+                    rest.push(flags.next()?);
+                }
+                continue;
+            }
+        };
+        if value.is_empty() || user.replace(PathBuf::from(value)).is_some() {
+            return None;
+        }
+    }
+    Some((rest, user))
+}
+
+/// The user config root to pin in a generated hook command: the one the
+/// environment names now, if it exists. One that does not exist is not pinned,
+/// because most installs have no config and a pinned root that is missing does
+/// not load.
+fn user_root_to_pin() -> Option<PathBuf> {
+    crate::config::user_config_root().filter(|root| std::fs::symlink_metadata(root).is_ok())
+}
+
+/// `command` with `--user-config-dir root` appended, quoted for the shell the
+/// harness runs it with: POSIX sh, or on Windows PowerShell or Git Bash,
+/// where single quotes are literal in both (`None` when `root` holds a quote
+/// there, or is not UTF-8).
+fn pin_command(command: &str, root: &std::path::Path, windows: bool) -> Option<String> {
+    let root = root.to_str()?;
+    let quoted = if windows {
+        if root.contains(['\'', '‘', '’', '‚', '‛']) {
+            return None;
+        }
+        format!("'{root}'")
+    } else {
+        format!("'{}'", root.replace('\'', r"'\''"))
+    };
+    Some(format!("{command} --user-config-dir {quoted}"))
 }
 
 /// `--config-dir DIR` or `--config-dir=DIR`, repeated; `None` for anything else.
@@ -192,14 +346,15 @@ fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
 
 /// Hook-only switches, without mistaking a config directory's spelling for
 /// a switch. The common parser still owns config-root validation.
-fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool)> {
+fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool, bool)> {
     let mut roots = Vec::new();
-    let (mut json_reply, mut detect_only) = (false, false);
+    let (mut json_reply, mut detect_only, mut expect_enforce) = (false, false, false);
     let mut flags = flags.iter().copied();
     while let Some(flag) = flags.next() {
         match flag {
             "--json-reply" => json_reply = true,
             "--detect-only" => detect_only = true,
+            EXPECT_ENFORCE => expect_enforce = true,
             "--config-dir" => {
                 roots.push(flag);
                 roots.push(flags.next()?);
@@ -207,7 +362,16 @@ fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool)> {
             _ => roots.push(flag),
         }
     }
-    Some((config_dirs(&roots)?, json_reply, detect_only))
+    // One asks for less than the configuration says, the other for more.
+    if detect_only && expect_enforce {
+        return None;
+    }
+    Some((
+        config_dirs(&roots)?,
+        json_reply,
+        detect_only,
+        expect_enforce,
+    ))
 }
 
 /// The folders of a config root that hooks read (src/config.rs discovery).
@@ -226,6 +390,7 @@ const HOOKS_CONFIG_FOLDERS: &[&str] = &[
 /// rule content and rule settings as `scan`. An error is described for stderr
 /// only, because it can name a path.
 fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
+    evaluator::panic_if_forced("config");
     let settings =
         crate::settings::load(config_dirs, false, &crate::settings::CliSettings::default())
             .map_err(|error| error.to_string())?;
@@ -283,6 +448,7 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
 /// when a file is not YAML. One such file is enough, so a broken file next to
 /// one that enforces cannot turn enforcement off.
 fn settings_declare_enforce(config_dirs: &[PathBuf]) -> bool {
+    evaluator::panic_if_forced("declare");
     crate::config::config_roots(config_dirs).iter().any(|root| {
         let Ok(entries) = std::fs::read_dir(root.join("settings.d")) else {
             return false;
@@ -328,6 +494,26 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The config roots `check` read, in precedence order, and where each comes
+/// from. A user root that is not pinned follows the environment, so a hook
+/// launched in another one can read another root.
+fn print_config_roots(config_dirs: &[PathBuf]) {
+    let pinned = crate::config::pinned_user_config_root();
+    for root in crate::config::config_roots(config_dirs) {
+        let origin = if !config_dirs.is_empty() {
+            "--config-dir"
+        } else if pinned == Some(root.as_path()) {
+            "user, pinned"
+        } else if crate::config::user_config_root().as_ref() == Some(&root) {
+            "user, from XDG_CONFIG_HOME or HOME: not pinned"
+        } else {
+            "system"
+        };
+        let missing = if root.exists() { "" } else { ", absent" };
+        println!("config root: {} ({origin}{missing})", root.display());
+    }
+}
+
 fn check(config_dirs: &[PathBuf]) -> i32 {
     let config = match load_config(config_dirs) {
         Ok(config) => config,
@@ -338,6 +524,7 @@ fn check(config_dirs: &[PathBuf]) -> i32 {
     };
     match Engine::new(&config.rules, &config.protected_paths()) {
         Ok(engine) => {
+            print_config_roots(config_dirs);
             println!("build revision: {}", identity::revision());
             println!("semantic identity: {}", engine.semantic_identity());
             println!("pipeline build: {} ms", engine.build_ms);
@@ -424,21 +611,53 @@ fn unreadable_call_policy(config: &Config) -> OnError {
 /// when the payload is unreadable, the configuration is broken or the code
 /// panics. Only `hooks.mode: enforce` in a configuration that was read lets
 /// an answer through.
-fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only: bool) -> i32 {
-    let loaded = load_config(config_dirs).map(|mut config| {
-        if detect_only {
-            config.mode = telltale_core::hooks::config::Mode::Observe;
-        }
-        config
-    });
+///
+/// While enforcing, a panic gets the answer of a payload the hook could not
+/// read, with an `error` record (`hook_panicked`): during evaluation, the
+/// stricter of `on_error` and `on_unevaluable` for a tool call; while reading
+/// the payload, the block for one that names no event; while loading the
+/// configuration, the answer of a configuration that did not load.
+fn hook(
+    harness: Harness,
+    config_dirs: &[PathBuf],
+    json_reply: bool,
+    detect_only: bool,
+    expect_enforce: bool,
+) -> i32 {
+    // A panic anywhere before the answer is caught, since most harnesses read
+    // a crash as "run the call". A configuration whose loading panicked did
+    // not load.
+    let loaded = caught(|| load_config(config_dirs))
+        .unwrap_or_else(|| {
+            Err(format!(
+                "loading the configuration panicked ({HOOK_PANICKED})"
+            ))
+        })
+        .map(|mut config| {
+            if detect_only {
+                config.mode = telltale_core::hooks::config::Mode::Observe;
+            }
+            config
+        });
     let gate = if detect_only {
         Gate::DetectOnly
     } else {
-        Gate::for_config(&loaded, || settings_declare_enforce(config_dirs))
+        // A panic while asking whether a configuration that did not load
+        // asks for enforcement is no answer of "no": as with a broken file
+        // next to one that enforces, breakage cannot turn enforcement off.
+        // `--expect-enforce` counts only for a configuration that did not
+        // load, like a settings file that says `hooks.mode: enforce`.
+        caught(|| {
+            Gate::for_config(&loaded, || {
+                expect_enforce || settings_declare_enforce(config_dirs)
+            })
+        })
+        .unwrap_or(Gate::Enforce)
     };
     if gate == Gate::DetectOnly {
-        // Detached: the process exits when `hook` returns.
-        std::thread::spawn(|| {
+        // Detached: the process exits when `hook` returns. A thread that
+        // cannot start leaves the harness's own timeout.
+        let _ = std::thread::Builder::new().spawn(|| {
             std::thread::sleep(DETECT_ONLY_DEADLINE);
             eprintln!(
                 "telltale hooks: detect-only hook gave up after {} s without an answer",
@@ -447,30 +666,14 @@ fn hook(harness: Harness, config_dirs: &[PathBuf], json_reply: bool, detect_only
             std::process::exit(0);
         });
     }
-    // What a tool call gets if evaluating it panics while enforcing: the
-    // policy for a failure an agent can bring about, not a crash that most
-    // harnesses read as "run the call".
-    let panic_policy = match &loaded {
-        Ok(config) => unreadable_call_policy(config),
-        Err(_) => OnError::Deny,
+    let config = caught(|| resolve_config(harness, loaded, gate)).unwrap_or(Err(()));
+    let answer = match caught(read_payload) {
+        Some(None) => Answer::exit(1),
+        Some(Some(bytes)) => caught(|| evaluate(harness, &config, &bytes, config_dirs))
+            .unwrap_or_else(|| unreadable_answer(harness, &config, HOOK_PANICKED, &bytes)),
+        // The payload is lost with the panic: it names no event.
+        None => unreadable_answer(harness, &config, HOOK_PANICKED, &[]),
     };
-    let Some(bytes) = read_payload() else {
-        return deliver(gate.release(Answer::exit(1)));
-    };
-    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        evaluate(harness, loaded, gate, &bytes, config_dirs)
-    }))
-    .unwrap_or_else(|_| {
-        eprintln!("telltale hooks: the hook panicked (hook_panicked)");
-        if harness.looks_like_pre_tool_use(&bytes) {
-            Answer::output(harness.render_verdict(
-                panic_policy,
-                "Telltale Hooks failed while evaluating this tool call (hook_panicked).",
-            ))
-        } else {
-            Answer::exit(1)
-        }
-    });
     let answer = gate.release(answer);
     if json_reply {
         // Optional subprocess framing, AFTER the gate. A no-op is explicit;
@@ -506,17 +709,40 @@ fn read_payload() -> Option<Vec<u8>> {
     if bytes.len() as u64 > MAX_PAYLOAD_BYTES {
         let _ = std::io::copy(&mut stdin, &mut std::io::sink());
     }
+    evaluator::panic_if_forced("read");
     Some(bytes)
 }
 
-/// Build the answer for one payload. Tries the long-lived evaluator, then
+/// The error code of a hook that panicked, recorded and named in its answer.
+const HOOK_PANICKED: &str = "hook_panicked";
+
+/// `f`'s value, or `None` if it panicked. Release builds unwind (the
+/// `compile_error!` above), so a panic reaches this rather than ending the
+/// process with a status the harness may read as "run the call".
+fn caught<T>(f: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
+/// [`Runtime::record_unhandled`] under `config`. A panic while recording is
+/// caught here, so it cannot change an answer already decided.
+fn record_unhandled(config: &Config, harness: Harness, hook_event: &str, code: &str) {
+    let recorded = caught(|| {
+        evaluator::panic_if_forced("record");
+        Runtime::new(config.clone()).record_unhandled(harness.name(), hook_event, code);
+    });
+    if recorded.is_none() {
+        eprintln!("telltale hooks: recording {code} panicked");
+    }
+}
+
+/// Build the answer for one payload under `config` (`Err` when it did not
+/// load and the gate is enforcing). Tries the long-lived evaluator, then
 /// evaluates in-process; an unanswered pre-execution event never turns into
 /// an allow. Writes nothing to stdout and exits nothing: the caller's gate
 /// releases the answer or does not.
 fn evaluate(
     harness: Harness,
-    loaded: Result<Config, String>,
-    gate: Gate,
+    config: &Result<Config, ()>,
     bytes: &[u8],
     config_dirs: &[PathBuf],
 ) -> Answer {
@@ -526,13 +752,12 @@ fn evaluate(
     } else {
         harness.parse(bytes)
     };
-    let config = resolve_config(harness, loaded, gate);
     // Split into the hook event name and either the runtime event or the
     // reason it is unusable; an unreadable payload is answered right here.
     let (hook_event, usable) = match parsed {
         Parsed::Event(ctx, event) => (ctx.hook_event.clone(), Ok((ctx, event))),
         Parsed::Unusable { hook_event, code } => (hook_event, Err(code)),
-        Parsed::Invalid(code) => return invalid_payload_answer(harness, &config, code, bytes),
+        Parsed::Invalid(code) => return unreadable_answer(harness, config, code, bytes),
     };
     let Ok(config) = config else {
         if harness.is_pre_tool_use(&hook_event) {
@@ -546,9 +771,9 @@ fn evaluate(
     };
     let (ctx, event) = match usable {
         Ok(pair) => pair,
-        Err(code) => return unusable_event_answer(harness, &config, &hook_event, code),
+        Err(code) => return unusable_event_answer(harness, config, &hook_event, code),
     };
-    answer_from_runtime(harness, config, ctx, event, bytes, config_dirs)
+    answer_from_runtime(harness, config.clone(), ctx, event, bytes, config_dirs)
 }
 
 /// The configuration an event is evaluated under, or `Err(())` when it did not
@@ -578,7 +803,7 @@ fn resolve_config(
                     env_path(crate::settings::STATE_DIR_ENV),
                     env_path(crate::settings::TELEMETRY_ENV),
                 );
-                Runtime::new(config.clone()).record_unhandled(harness.name(), "", "config_invalid");
+                record_unhandled(&config, harness, "", "config_invalid");
                 Ok(config)
             }
         }
@@ -586,47 +811,55 @@ fn resolve_config(
 }
 
 /// The answer for a payload that could not be parsed at all (oversized or
-/// malformed).
-fn invalid_payload_answer(
+/// malformed), or for one whose handling panicked (`hook_panicked`), under
+/// `config` (`Err` when it did not load and the gate is enforcing). Either is
+/// agent-influenced (a huge or damaged tool input, or one that makes the hook
+/// panic), so it gets the policy for a call the hook could not read rather
+/// than a non-blocking exit that the harness treats as allow.
+fn unreadable_answer(
     harness: Harness,
     config: &Result<Config, ()>,
     code: &'static str,
     bytes: &[u8],
 ) -> Answer {
-    eprintln!("telltale hooks: unusable hook payload ({code})");
-    if let Ok(config) = config {
-        Runtime::new(config.clone()).record_unhandled(harness.name(), "", code);
-    }
-    // An oversized or malformed payload is agent-influenced (a huge
-    // tool input), so a PreToolUse gets a verdict rather than a
-    // non-blocking exit that the harness treats as allow.
-    if harness.looks_like_pre_tool_use(bytes) {
-        let policy = match config {
-            Ok(config) => unreadable_call_policy(config),
-            Err(()) => OnError::Deny,
-        };
-        return Answer::output(harness.render_verdict(
-            policy,
+    let (call_reason, payload_reason) = if code == HOOK_PANICKED {
+        eprintln!("telltale hooks: the hook panicked ({code})");
+        let reason = "Telltale Hooks failed while evaluating this tool call (hook_panicked).";
+        (reason, reason)
+    } else {
+        eprintln!("telltale hooks: unusable hook payload ({code})");
+        (
             "Telltale Hooks could not read this tool call (payload too large or malformed).",
-        ));
-    }
-    let fail_closed = matches!(config, Ok(c) if c.on_error == OnError::Deny);
-    // A named event is not pre-execution by now, and exit 2 there is
-    // not a block: on a Stop it is a prompt to continue, so a damaged
-    // Stop would re-prompt the model without limit (Codex: E2E
-    // `damaged-stop-*`).
-    if !fail_closed || names_event(bytes) {
-        return Answer::exit(1);
-    }
-    // No event name: this could be a tool call, so block one without
-    // making a prompt of anything else.
-    match harness.adapter().nameless_block {
-        NamelessBlock::DenyOnStdout => Answer::output(harness.render_verdict(
-            OnError::Deny,
             "Telltale Hooks could not read this hook payload and fails closed.",
-        )),
-        NamelessBlock::Exit(status) => Answer::exit(status),
+        )
+    };
+    let policy = match config {
+        Ok(config) => unreadable_call_policy(config),
+        Err(()) => OnError::Deny,
+    };
+    let answer = if harness.looks_like_pre_tool_use(bytes) {
+        Answer::output(harness.render_verdict(policy, call_reason))
+    } else if policy == OnError::Allow || names_event(bytes) {
+        // A named event is not pre-execution by now, and exit 2 there is
+        // not a block: on a Stop it is a prompt to continue, so a damaged
+        // Stop would re-prompt the model without limit (Codex: E2E
+        // `damaged-stop-*`).
+        Answer::exit(1)
+    } else {
+        // No event name: this could be a tool call. Without its event it
+        // cannot be asked about, so `ask` blocks as `deny` does, with the
+        // harness's block that makes no prompt of anything else.
+        match harness.adapter().nameless_block {
+            NamelessBlock::DenyOnStdout => {
+                Answer::output(harness.render_verdict(OnError::Deny, payload_reason))
+            }
+            NamelessBlock::Exit(status) => Answer::exit(status),
+        }
+    };
+    if let Ok(config) = config {
+        record_unhandled(config, harness, "", code);
     }
+    answer
 }
 
 /// The answer for a payload that parsed but lacks what the event needs.
@@ -637,7 +870,7 @@ fn unusable_event_answer(
     code: &'static str,
 ) -> Answer {
     eprintln!("telltale hooks: unusable hook payload ({code})");
-    Runtime::new(config.clone()).record_unhandled(harness.name(), hook_event, code);
+    record_unhandled(config, harness, hook_event, code);
     if harness.is_pre_tool_use(hook_event) {
         return Answer::output(harness.render_event_verdict(
             hook_event,
@@ -697,6 +930,7 @@ fn answer_from_runtime(
     }
     let mut runtime = Runtime::new(config);
     runtime.set_evaluator("in_process", fallback);
+    evaluator::panic_if_forced("evaluate");
     let response = runtime.handle(&ctx, event);
     Answer::output(harness.render(&ctx.hook_event, &response))
 }
@@ -711,6 +945,14 @@ fn serve_args(config_dirs: &[PathBuf]) -> Vec<OsString> {
         args.push(
             std::path::absolute(dir)
                 .unwrap_or_else(|_| dir.clone())
+                .into_os_string(),
+        );
+    }
+    if let Some(root) = crate::config::pinned_user_config_root() {
+        args.push(OsString::from("--user-config-dir"));
+        args.push(
+            std::path::absolute(root)
+                .unwrap_or_else(|_| root.to_path_buf())
                 .into_os_string(),
         );
     }
@@ -755,19 +997,79 @@ fn serve(config_dirs: &[PathBuf]) -> i32 {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{config_dirs, declares_enforce, hook_flags, load_config};
+    use super::{
+        config_dirs, declares_enforce, hook_flags, load_config, pin_command, split_user_root,
+    };
+
+    #[test]
+    fn the_user_root_pin_is_one_value_and_passes_over_config_dir_values() {
+        assert_eq!(
+            split_user_root(&["--json-reply", "--user-config-dir", "/a b"]),
+            Some((vec!["--json-reply"], Some(PathBuf::from("/a b"))))
+        );
+        assert_eq!(
+            split_user_root(&["--config-dir", "--user-config-dir"]),
+            Some((vec!["--config-dir", "--user-config-dir"], None))
+        );
+        assert_eq!(
+            split_user_root(&["--user-config-dir=/a"]),
+            Some((Vec::new(), Some(PathBuf::from("/a"))))
+        );
+        for refused in [
+            &["--user-config-dir"][..],
+            &["--user-config-dir="],
+            &["--user-config-dir", ""],
+            &["--user-config-dir", "/a", "--user-config-dir", "/b"],
+            &["--user-config-dirx"],
+        ] {
+            assert_eq!(split_user_root(refused), None, "{refused:?}");
+        }
+    }
+
+    /// POSIX sh reads `'\''` as a quote inside single quotes; PowerShell and Git
+    /// Bash both read single quotes literally, and have no common escape for
+    /// one, so a Windows root holding a quote is not pinned.
+    #[test]
+    fn the_pin_is_quoted_for_the_harness_shell() {
+        assert_eq!(
+            pin_command(
+                "t hooks claude-code hook",
+                Path::new("/h/it's a $dir"),
+                false
+            )
+            .as_deref(),
+            Some(r"t hooks claude-code hook --user-config-dir '/h/it'\''s a $dir'")
+        );
+        assert_eq!(
+            pin_command(
+                "t hooks copilot-cli hook",
+                Path::new(r"C:\Users\a b\.config\telltale"),
+                true
+            )
+            .as_deref(),
+            Some(r"t hooks copilot-cli hook --user-config-dir 'C:\Users\a b\.config\telltale'")
+        );
+        for quoted in [r"C:\Users\o'b\.config", "C:\\Users\\o\u{2019}b\\.config"] {
+            assert_eq!(pin_command("t", Path::new(quoted), true), None, "{quoted}");
+        }
+    }
 
     #[test]
     fn hook_switches_do_not_consume_a_config_directory_named_like_a_switch() {
         assert_eq!(
             hook_flags(&["--json-reply", "--config-dir", "--detect-only"]),
-            Some((vec![PathBuf::from("--detect-only")], true, false))
+            Some((vec![PathBuf::from("--detect-only")], true, false, false))
         );
         assert_eq!(
             hook_flags(&["--detect-only", "--config-dir=root", "--json-reply"]),
-            Some((vec![PathBuf::from("root")], true, true))
+            Some((vec![PathBuf::from("root")], true, true, false))
         );
         assert_eq!(hook_flags(&["--json-reply", "--config-dir"]), None);
+        assert_eq!(
+            hook_flags(&["--expect-enforce"]),
+            Some((Vec::new(), false, false, true))
+        );
+        assert_eq!(hook_flags(&["--expect-enforce", "--detect-only"]), None);
     }
 
     #[test]

@@ -116,7 +116,17 @@ fn active_config_roots(
     }
     let mut roots = Vec::new();
     for root in candidates {
-        let Some(metadata) = config_metadata(&root, optional)? else {
+        // A pinned user root was there when the hook command was generated.
+        let pinned = pinned_user_config_root() == Some(root.as_path());
+        let metadata = config_metadata(&root, optional && !pinned).map_err(|error| {
+            if pinned {
+                format!("the pinned user config root (--user-config-dir) is unavailable: {error}; restore it or generate the hook settings again")
+                    .into()
+            } else {
+                Box::<dyn std::error::Error>::from(error)
+            }
+        })?;
+        let Some(metadata) = metadata else {
             continue;
         };
         if !metadata.is_dir() {
@@ -226,13 +236,34 @@ pub(crate) fn config_roots(explicit_roots: &[PathBuf]) -> Vec<PathBuf> {
 
 fn default_config_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = system_config_root().into_iter().collect();
-    if let Some(user_root) = user_config_root() {
+    if let Some(user_root) = pinned_user_config_root()
+        .map(Path::to_path_buf)
+        .or_else(user_config_root)
+    {
         roots.push(user_root);
     }
     roots
 }
 
-fn user_config_root() -> Option<PathBuf> {
+/// The user config root `telltale hooks … --user-config-dir` pinned for this
+/// process. It stands in for the one the environment names, in the same place
+/// after the system root, and must exist: the hook command that carries it was
+/// generated while it did.
+static PINNED_USER_CONFIG_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Pin the user config root for the rest of this process (first pin wins).
+#[cfg(feature = "hooks")]
+pub(crate) fn pin_user_config_root(root: PathBuf) {
+    let _ = PINNED_USER_CONFIG_ROOT.set(root);
+}
+
+pub(crate) fn pinned_user_config_root() -> Option<&'static Path> {
+    PINNED_USER_CONFIG_ROOT.get().map(PathBuf::as_path)
+}
+
+/// The user config root the environment names (`XDG_CONFIG_HOME`, else
+/// `HOME` or on Windows `USERPROFILE`), ignoring any pin.
+pub(crate) fn user_config_root() -> Option<PathBuf> {
     // Windows rarely sets HOME; USERPROFILE is where Git Bash and similar shells point it.
     let profile = if cfg!(windows) {
         std::env::var_os("USERPROFILE")

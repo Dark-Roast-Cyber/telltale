@@ -41,6 +41,19 @@ pub enum Kind {
     Error,
 }
 
+impl Kind {
+    /// The name the record carries in `kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decision => "decision",
+            Self::Outcome => "outcome",
+            Self::ResultFinding => "result_finding",
+            Self::Lifecycle => "lifecycle",
+            Self::Error => "error",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Producer {
     pub name: &'static str,
