@@ -12,7 +12,10 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
-use crate::tool_operation::{ValueBounds, declare, replaced_arguments, with_declared_arguments};
+use crate::tool_operation::{
+    ResultText, ValueBounds, build_fitted, declare, replaced_arguments, with_declared_arguments,
+    with_source_result,
+};
 
 use super::native::{CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem};
 
@@ -182,71 +185,86 @@ fn project_function_call(
         ));
     }
 
-    let mut body = ToolObservation::new();
-    let mut metadata = Vec::new();
-    if has_name {
-        body = body.with_name(item.name.as_deref().expect("checked"))?;
-        metadata.push(("tool.name", FactProvenance::Reported));
-    }
-    if has_arguments {
-        let arguments = item.arguments.as_deref().expect("checked");
-        if let Ok(value) = serde_json::from_str::<Value>(arguments) {
-            body = with_declared_arguments(
-                telltale_schema::observation::ArgumentText::new(),
-                body,
-                &value,
-                ValueBounds::Replace,
-            )?;
-            metadata.push(("tool.arguments", FactProvenance::Parsed));
-        } else {
-            body = body.with_arguments(JsonValue::string(arguments));
-            metadata.push(("tool.arguments", FactProvenance::Reported));
+    let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+        let mut body = ToolObservation::new();
+        let mut metadata = Vec::new();
+        if has_name {
+            body = body.with_name(item.name.as_deref().expect("checked"))?;
+            metadata.push(("tool.name", FactProvenance::Reported));
         }
-        // Searchable text is the raw request; it is never kept beside
-        // arguments whose values were replaced.
-        if body.bounded_values().is_empty() {
-            body = body.with_searchable_arguments(arguments)?;
-            metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+        if has_arguments {
+            let arguments = item.arguments.as_deref().expect("checked");
+            if let Ok(value) = serde_json::from_str::<Value>(arguments) {
+                body = with_declared_arguments(
+                    telltale_schema::observation::ArgumentText::new(),
+                    body,
+                    &value,
+                    bounds,
+                )?;
+                metadata.push(("tool.arguments", FactProvenance::Parsed));
+            } else {
+                // Request text that is no JSON is one string value, kept
+                // whole or replaced whole.
+                body = with_declared_arguments(
+                    telltale_schema::observation::ArgumentText::new(),
+                    body,
+                    &Value::String(arguments.to_owned()),
+                    bounds,
+                )?;
+                metadata.push(("tool.arguments", FactProvenance::Reported));
+            }
+            // Searchable text is the raw request; it is never kept beside
+            // arguments whose values were replaced.
+            if body.bounded_values().is_empty() {
+                body = body.with_searchable_arguments(arguments)?;
+                metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+            }
         }
-    }
 
-    // No facet is built from an argument that was replaced.
-    let replaced = replaced_arguments(&body, &["command", "cmd", "path", "file_path"]);
-    let mut builder = common_builder(
-        session_id,
-        ordinal,
-        timestamp,
-        ObservationBody::Tool(declare(super::tools::TOOLS, body)),
-        ObservationStage::ToolRequested,
-        0,
-        item.call_id.as_deref(),
-        options,
-    )?;
-    for (path, provenance) in metadata {
-        builder = builder.fact_metadata(path, normal(provenance)?);
-    }
-    add_argument_facets(&mut builder, item.arguments.as_deref(), &replaced)?;
-    observations.push(builder.build()?)?;
+        // No facet is built from an argument that was replaced.
+        let replaced = replaced_arguments(&body, &["command", "cmd", "path", "file_path"]);
+        let mut builder = common_builder(
+            session_id,
+            ordinal,
+            timestamp,
+            ObservationBody::Tool(declare(super::tools::TOOLS, body)),
+            ObservationStage::ToolRequested,
+            0,
+            item.call_id.as_deref(),
+            options,
+        )?;
+        for (path, provenance) in metadata {
+            builder = builder.fact_metadata(path, normal(provenance)?);
+        }
+        add_argument_facets(&mut builder, item.arguments.as_deref(), &replaced)?;
+        Ok(builder.build()?)
+    })?;
+    observations.push(observation)?;
 
     if item
         .message
         .as_deref()
         .is_some_and(|value| !value.is_empty())
     {
-        let body = ToolObservation::new()
-            .with_result(JsonValue::string(item.message.as_deref().expect("checked")));
-        let mut builder = common_builder(
-            session_id,
-            ordinal,
-            timestamp,
-            ObservationBody::Tool(body),
-            ObservationStage::ToolResultReturned,
-            1,
-            item.call_id.as_deref(),
-            options,
-        )?;
-        builder = builder.fact_metadata("tool.result", normal_reported()?);
-        observations.push(builder.build()?)?;
+        let message = Value::String(item.message.clone().expect("checked"));
+        let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+            let body =
+                with_source_result(ToolObservation::new(), &message, ResultText::Direct, bounds)?;
+            let builder = common_builder(
+                session_id,
+                ordinal,
+                timestamp,
+                ObservationBody::Tool(body),
+                ObservationStage::ToolResultReturned,
+                1,
+                item.call_id.as_deref(),
+                options,
+            )?;
+            Ok(builder
+                .fact_metadata("tool.result", normal_reported()?)
+                .build()?)
+        })?;
+        observations.push(observation)?;
     }
     Ok(())
 }
@@ -419,6 +437,12 @@ fn normal(provenance: FactProvenance) -> Result<FactMetadata, CopilotCanonicalEr
 
 fn mapping(code: &'static str, detail: &'static str) -> CopilotCanonicalError {
     CopilotCanonicalError::Mapping { code, detail }
+}
+
+/// A failure of a call's observation on a value bound: [`build_fitted`] then
+/// builds it again with the call's values fitted.
+fn value_bound(error: &CopilotCanonicalError) -> bool {
+    matches!(error, CopilotCanonicalError::Observation(error) if error.bound_dimension().is_some())
 }
 
 #[cfg(test)]

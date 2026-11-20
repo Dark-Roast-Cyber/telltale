@@ -308,8 +308,41 @@ pub(crate) enum ValueBounds {
     /// the call's name and admitted values are still evaluated.
     #[default]
     Replace,
+    /// [`ValueBounds::Replace`], then fit the arguments and result together
+    /// into the room the rest of the observation leaves
+    /// ([`ToolObservation::with_fitted_values`]). Only [`build_fitted`] asks
+    /// for it, after the call's observation failed a value bound.
+    Fit,
+    /// [`ValueBounds::Replace`], then replace the arguments and the result
+    /// whole ([`ToolObservation::with_replaced_values`]): [`build_fitted`]'s
+    /// last attempt.
+    Whole,
     /// Fail the call, so its unit is quarantined.
     Strict,
+}
+
+/// Build a tool call's observation with `build`, converting its values under
+/// `bounds`. When that fails on a value bound and `bounds` replaces values,
+/// build it again with the values fitted ([`ValueBounds::Fit`]): each value
+/// may be admitted on its own and still overflow the observation together
+/// with the other value, the tool name or the facets. Should that fail on a
+/// bound as well, a last attempt replaces both values whole
+/// ([`ValueBounds::Whole`]). A call that builds takes exactly its first
+/// attempt; one that no attempt builds keeps the first attempt's error.
+/// `bound` names a value-bound failure in the adapter's error.
+pub(crate) fn build_fitted<T, E>(
+    bounds: ValueBounds,
+    bound: impl Fn(&E) -> bool,
+    mut build: impl FnMut(ValueBounds) -> Result<T, E>,
+) -> Result<T, E> {
+    let error = match build(bounds) {
+        Err(error) if bounds == ValueBounds::Replace && bound(&error) => error,
+        outcome => return outcome,
+    };
+    match build(ValueBounds::Fit) {
+        Err(fitted) if bound(&fitted) => build(ValueBounds::Whole).map_err(|_| error),
+        outcome => outcome.map_err(|_| error),
+    }
 }
 
 /// The budget a tool result's direct text gets.
@@ -347,10 +380,21 @@ pub(crate) fn with_declared_arguments(
         || JsonValue::try_from_source_tool_arguments_bounded(&declared, arguments),
     )
     .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolArguments))?;
-    Ok(body
-        .with_arguments(value)
-        .with_argument_text(declared)
-        .with_bounded_values(replaced))
+    fitted(
+        body.with_arguments(value)
+            .with_argument_text(declared)
+            .with_bounded_values(replaced),
+        bounds,
+    )
+}
+
+/// The body as converted, or with its values fitted under [`ValueBounds::Fit`].
+fn fitted(body: ToolObservation, bounds: ValueBounds) -> Result<ToolObservation, ObservationError> {
+    match bounds {
+        ValueBounds::Fit => body.with_fitted_values(),
+        ValueBounds::Whole => body.with_replaced_values(),
+        ValueBounds::Replace | ValueBounds::Strict => Ok(body),
+    }
 }
 
 /// Convert a call's native result. See [`bounded_or_strict`].
@@ -373,7 +417,10 @@ pub(crate) fn with_source_result(
         }
     }
     .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?;
-    Ok(body.with_result(value).with_bounded_values(replaced))
+    fitted(
+        body.with_result(value).with_bounded_values(replaced),
+        bounds,
+    )
 }
 
 /// The strict conversion decides every value it admits, so an in-bound call

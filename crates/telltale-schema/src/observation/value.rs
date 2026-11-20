@@ -215,7 +215,7 @@ impl JsonValue {
             let mut converted = Vec::with_capacity(members.len());
             let mut dropped = 0usize;
             for (key, item) in members {
-                if key.len() > LOCAL_MAX_KEY_BYTES {
+                if key.len() > LOCAL_MAX_KEY_BYTES || nfc(key).len() > LOCAL_MAX_KEY_BYTES {
                     dropped = dropped.saturating_add(member_source_bytes(key, item));
                     continue;
                 }
@@ -1026,8 +1026,15 @@ impl Bounder {
         pointer: &mut String,
     ) -> Result<JsonValue, ObservationError> {
         match value {
-            serde_json::Value::String(text) if text.len() > LOCAL_MAX_STRING_BYTES => {
-                Ok(self.replace(pointer, BoundDimension::StringBytes, text.len()))
+            // The bound holds for the normalized text, which can be longer
+            // than the source.
+            serde_json::Value::String(text) => {
+                let normalized = nfc(text);
+                if text.len() > LOCAL_MAX_STRING_BYTES || normalized.len() > LOCAL_MAX_STRING_BYTES
+                {
+                    return Ok(self.replace(pointer, BoundDimension::StringBytes, text.len()));
+                }
+                Ok(JsonValue::String(normalized))
             }
             serde_json::Value::Array(items) => {
                 if items.len() > LOCAL_MAX_ARRAY_ITEMS {
@@ -1062,12 +1069,12 @@ impl Bounder {
                 }
                 let mut converted = Vec::with_capacity(members.len());
                 let mut dropped = 0usize;
-                for (key, item) in members {
-                    if key.len() > LOCAL_MAX_KEY_BYTES {
-                        dropped = dropped.saturating_add(member_source_bytes(key, item));
+                for (source_key, item) in members {
+                    let key = nfc(source_key);
+                    if source_key.len() > LOCAL_MAX_KEY_BYTES || key.len() > LOCAL_MAX_KEY_BYTES {
+                        dropped = dropped.saturating_add(member_source_bytes(source_key, item));
                         continue;
                     }
-                    let key = nfc(key);
                     let length = pointer.len();
                     push_segment(pointer, &key);
                     let item = self.convert(item, depth + 1, pointer)?;
@@ -1179,6 +1186,170 @@ impl Bounder {
         }
         (value, self.entries)
     }
+}
+
+/// Fit a call's converted arguments and result together into the room a
+/// bounded conversion leaves in the observation aggregate: replace the
+/// largest top-level value of either field (a member, an item, or a field
+/// that is no container) by `null` until both fit, recording each replacement
+/// with the entries the fields already carry. With `whole`, each field is
+/// replaced whole instead. The entries then keep the cap
+/// ([`cap_tool_values`]).
+pub(crate) fn fit_tool_values(
+    arguments: &mut Option<JsonValue>,
+    result: &mut Option<JsonValue>,
+    entries: &mut Vec<BoundedValue>,
+    whole: bool,
+) -> Result<(), ObservationError> {
+    if whole {
+        for (target, field) in [
+            (BoundedTarget::Arguments, &mut *arguments),
+            (BoundedTarget::Result, &mut *result),
+        ] {
+            // A `null` field holds nothing to replace, and one replaced
+            // whole already has its entry.
+            let Some(value) = field
+                .as_mut()
+                .filter(|value| !matches!(value, JsonValue::Null))
+            else {
+                continue;
+            };
+            let bytes = value.encoded_byte_len()?;
+            entries.retain(|entry| entry.target != target);
+            entries.push(BoundedValue::new(
+                target,
+                "",
+                BoundDimension::EncodedBytes,
+                bytes,
+            ));
+            *value = JsonValue::Null;
+        }
+        sort_entries(entries);
+        return Ok(());
+    }
+    let fields = [
+        (BoundedTarget::Arguments, arguments),
+        (BoundedTarget::Result, result),
+    ];
+    let mut bounders = fields.each_ref().map(|(target, _)| Bounder {
+        target: *target,
+        entries: entries
+            .iter()
+            .filter(|entry| entry.target == *target)
+            .cloned()
+            .collect(),
+    });
+    loop {
+        let mut size = 0usize;
+        let mut largest: Option<(usize, usize, Option<String>)> = None;
+        for (index, (_, field)) in fields.iter().enumerate() {
+            let Some(value) = field.as_ref() else {
+                continue;
+            };
+            size = size.saturating_add(value.encoded_byte_len()?);
+            let mut consider = |bytes: usize, segment: Option<String>| {
+                if largest.as_ref().is_none_or(|(most, _, _)| bytes > *most) {
+                    largest = Some((bytes, index, segment));
+                }
+            };
+            match value {
+                JsonValue::Null => {}
+                JsonValue::Object(members) => {
+                    for (key, item) in members {
+                        if !matches!(item, JsonValue::Null) {
+                            consider(item.encoded_byte_len()?, Some(key.clone()));
+                        }
+                    }
+                }
+                JsonValue::Array(items) => {
+                    for (position, item) in items.iter().enumerate() {
+                        if !matches!(item, JsonValue::Null) {
+                            consider(item.encoded_byte_len()?, Some(position.to_string()));
+                        }
+                    }
+                }
+                other => consider(other.encoded_byte_len()?, None),
+            }
+        }
+        if size <= BOUNDED_AGGREGATE_BYTES {
+            break;
+        }
+        let Some((bytes, index, segment)) = largest else {
+            break;
+        };
+        let bounder = &mut bounders[index];
+        let field = fields[index].1.as_mut().expect("a candidate's field");
+        let Some(segment) = segment else {
+            *field = bounder.replace("", BoundDimension::EncodedBytes, bytes);
+            continue;
+        };
+        let mut pointer = String::new();
+        push_segment(&mut pointer, &segment);
+        let placeholder = bounder.replace(&pointer, BoundDimension::EncodedBytes, bytes);
+        match field {
+            JsonValue::Object(members) => {
+                members.insert(segment, placeholder);
+            }
+            JsonValue::Array(items) => {
+                let position: usize = segment.parse().expect("array index segment");
+                items[position] = placeholder;
+            }
+            _ => unreachable!("only containers have members"),
+        }
+    }
+    entries.clear();
+    for bounder in bounders {
+        entries.extend(bounder.entries);
+    }
+    let [(_, arguments), (_, result)] = fields;
+    cap_tool_values(arguments, result, entries);
+    Ok(())
+}
+
+/// Keep one observation's entries within [`TOOL_MAX_BOUNDED_VALUES`] where
+/// the two fields' entries meet: while there are more, the field with more
+/// entries (ties: the arguments) is replaced whole and recorded by one entry
+/// for its root. Entries within the cap are only sorted.
+pub(crate) fn cap_tool_values(
+    arguments: &mut Option<JsonValue>,
+    result: &mut Option<JsonValue>,
+    entries: &mut Vec<BoundedValue>,
+) {
+    sort_entries(entries);
+    while entries.len() > TOOL_MAX_BOUNDED_VALUES {
+        let count = |target| {
+            entries
+                .iter()
+                .filter(|entry| entry.target == target)
+                .count()
+        };
+        let (target, field) = if count(BoundedTarget::Result) > count(BoundedTarget::Arguments) {
+            (BoundedTarget::Result, &mut *result)
+        } else {
+            (BoundedTarget::Arguments, &mut *arguments)
+        };
+        let dimension = entries
+            .iter()
+            .find(|entry| entry.target == target)
+            .expect("the field with more entries has one")
+            .dimension;
+        let bytes = field
+            .as_ref()
+            .and_then(|value| value.encoded_byte_len().ok())
+            .unwrap_or(0);
+        if let Some(value) = field.as_mut() {
+            *value = JsonValue::Null;
+        }
+        entries.retain(|entry| entry.target != target);
+        entries.push(BoundedValue::new(target, "", dimension, bytes));
+        sort_entries(entries);
+    }
+}
+
+fn sort_entries(entries: &mut Vec<BoundedValue>) {
+    entries
+        .sort_by(|left, right| (left.target, &left.pointer).cmp(&(right.target, &right.pointer)));
+    entries.dedup_by(|left, right| left.target == right.target && left.pointer == right.pointer);
 }
 
 fn item_bytes(

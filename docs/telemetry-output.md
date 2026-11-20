@@ -244,8 +244,13 @@ otherwise ambiguous zero-detection result without exposing session content:
   `selected_source_coverage` `partial`.
   `bounded_value_unit_count` counts native units evaluated with an
   over-bound tool value replaced (the unit's other values are evaluated and
-  nothing is derived from the replaced one), once each even when an
-  overlapping window re-reads them, and `bounded_value_units` lists every
+  nothing is derived from the replaced one): a value over its own bound, or
+  tool values the observation cannot hold together with the call's other
+  fields or the fields derived from them, where the largest are replaced
+  until the call fits and, when that is not enough, every tool value of the
+  call. A call that cannot be held even with its values replaced keeps the
+  handling above. Each unit is counted once even when an
+  overlapping window re-reads it, and `bounded_value_units` lists every
   entry (one per replaced field and bound) of up to 1,000 units as `{source,
   session_id, native_id, source_sequence, target, dimension}`, where `target`
   is `arguments` or `result` and `dimension` is the bound; a count above the
