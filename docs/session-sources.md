@@ -380,6 +380,21 @@ Claude Code adapter notes:
   of any tool calls they contain. Their nested text and tools contribute no
   activity facts. This is not inference-traffic normalization or a claim of
   full support for unpublished request schemas.
+- Additional bookkeeping accepts only these exact envelopes with a non-empty
+  `sessionId` and payload strings of at most 4,096 UTF-8 bytes:
+  - `{type: "tag", tag, sessionId}`; an empty tag clears it.
+  - `{type: "bridge-session", sessionId, bridgeSessionId, lastSequenceNum,
+    ownerAccountUuid, ownerOrganizationUuid}`; `lastSequenceNum` is an unsigned
+    64-bit integer.
+  - `{type: "tools-used", sessionId, tools}`; `tools` is an array of at most
+    64 strings, not tool-call activity.
+  - `{type: "session-owner", sessionId, accountUuid, organizationUuid}` and
+    `{type: "agent-setting", sessionId, agentSetting}`; their identifiers must
+    also be non-empty. These two shapes are observation-backed, not defined by
+    published upstream source.
+
+  Extra or missing keys, invalid types and over-bound values stay quarantined.
+  Bookkeeping values are not projected.
 - `thinking`, `redacted_thinking`, `image`, and `document` blocks are dropped
   from messages; reasoning text is not retained.
 - A message's `tool_use`/`tool_result` part keeps only its call id, name and

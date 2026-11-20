@@ -319,6 +319,17 @@ fn persisted_claude_baseline_survives_quarantine_and_malformed_then_replaces_on_
                 {"type":"text","text":format!("synthetic-claude-result-marker initial token={SECRET}")}
             ]}]),
         ),
+        serde_json::json!({"type":"tag","sessionId":SESSION,"tag":EXCLUDED}).to_string(),
+        serde_json::json!({"type":"bridge-session","sessionId":SESSION,
+            "bridgeSessionId":EXCLUDED,"lastSequenceNum":7,
+            "ownerAccountUuid":EXCLUDED,"ownerOrganizationUuid":EXCLUDED})
+        .to_string(),
+        serde_json::json!({"type":"tools-used","sessionId":SESSION,"tools":[EXCLUDED]}).to_string(),
+        serde_json::json!({"type":"session-owner","sessionId":SESSION,
+            "accountUuid":EXCLUDED,"organizationUuid":EXCLUDED})
+        .to_string(),
+        serde_json::json!({"type":"agent-setting","sessionId":SESSION,"agentSetting":EXCLUDED})
+            .to_string(),
     ];
     let partial = vec![
         user(
@@ -482,7 +493,7 @@ fn persisted_claude_baseline_survives_quarantine_and_malformed_then_replaces_on_
     };
     let initial_expected = serde_json::json!({
         "key":{"client":"claude","agent":null,"model":"claude-synthetic","provider":null},
-        "observations":{"records":3,"user_messages":1,"assistant_messages":0,"tool_calls":1,"tool_results":1,"session_meta":0,"other":0},
+        "observations":{"records":8,"user_messages":1,"assistant_messages":0,"tool_calls":1,"tool_results":1,"session_meta":0,"other":5},
         "tool_call_counts":{"powershell":1},"path_class_counts":{},"network_host_counts":{}
     });
     let repaired_expected = serde_json::json!({
@@ -496,8 +507,8 @@ fn persisted_claude_baseline_survives_quarantine_and_malformed_then_replaces_on_
         (
             "complete",
             initial,
-            3,
-            serde_json::json!({"user_message":1,"assistant_message":0,"tool_call":1,"tool_result":1,"session_meta":0,"other":0}),
+            8,
+            serde_json::json!({"user_message":1,"assistant_message":0,"tool_call":1,"tool_result":1,"session_meta":0,"other":5}),
             vec!["synthetic.claude.command", "synthetic.claude.result"],
             None,
         ),

@@ -154,6 +154,11 @@
 
 ### Changes
 
+- Claude Code transcripts: recognize exact `tag`, `bridge-session`, `tools-used`,
+  `session-owner` and `agent-setting` bookkeeping envelopes with bounded values.
+  Count them as other native records without projecting their values or tool
+  activity. Unknown, invalid and over-bound shapes still quarantine per record.
+
 - **Unknown tools are counted, and each harness's tool list is checked against
   its table.** The scan summary's `source_processing` gains two optional
   counts, `unclassified_tool_calls` (tool requests whose name no source tool
