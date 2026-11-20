@@ -228,7 +228,10 @@
   ([ADR 0008](docs/hooks/adr/0008-detect-only-by-default.md)).
   Generated settings call `telltale hooks <harness> hook`, pinning an existing
   user config root with `--user-config-dir` so the harness environment cannot
-  move it (`check` lists the roots), and adding `--expect-enforce` when the
+  move it (`check` lists the roots), pinning the state directory in use with
+  `--state-dir` so a harness launched with the state-locating variables moved
+  keeps its session history and records (`check` says whether it is pinned),
+  and adding `--expect-enforce` when the
   configuration enforces, so one that later does not load denies tool calls;
   the long-lived
   evaluator autostarts by running the current executable as `hooks serve`.
