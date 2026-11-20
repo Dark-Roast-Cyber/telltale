@@ -2516,3 +2516,262 @@ fn operands_take_the_arguments_normal_form_and_never_exceed_them() {
         assert!(operation.written_paths().is_empty());
     }
 }
+
+fn bounded(value: &serde_json::Value) -> (JsonValue, Vec<BoundedValue>) {
+    JsonValue::try_from_source_value_bounded(BoundedTarget::Arguments, value).unwrap()
+}
+
+fn replacements(values: &[BoundedValue]) -> Vec<(&str, BoundDimension)> {
+    values
+        .iter()
+        .map(|value| (value.pointer(), value.dimension()))
+        .collect()
+}
+
+#[test]
+fn bounded_conversion_replaces_only_the_value_over_each_bound() {
+    use serde_json::{Value, json};
+    let nested = |count| (0..count).fold(Value::Null, |value, _| json!([value]));
+    let members = |count| {
+        Value::Object(
+            (0..count)
+                .map(|index| (format!("k{index}"), json!(index)))
+                .collect(),
+        )
+    };
+    for (value, pointer, dimension) in [
+        (
+            json!({"a":"x".repeat(4097), "path":"/p"}),
+            "/a",
+            BoundDimension::StringBytes,
+        ),
+        (
+            json!({"a":nested(5), "path":"/p"}),
+            "/a/0/0/0/0",
+            BoundDimension::Depth,
+        ),
+        (
+            json!({"a":vec![json!(1); 65], "path":"/p"}),
+            "/a",
+            BoundDimension::ArrayItems,
+        ),
+        (
+            json!({"a":members(33), "path":"/p"}),
+            "/a",
+            BoundDimension::ObjectMembers,
+        ),
+        (
+            json!({"a":{"k".repeat(65):1, "b":2}, "path":"/p"}),
+            "/a",
+            BoundDimension::KeyBytes,
+        ),
+    ] {
+        let strict = JsonValue::try_from_source_value(&value).unwrap_err();
+        assert_eq!(strict.bound_dimension(), Some(dimension));
+        let (converted, replaced) = bounded(&value);
+        assert_eq!(replacements(&replaced), [(pointer, dimension)]);
+        assert!(
+            replaced
+                .iter()
+                .all(|entry| entry.target() == BoundedTarget::Arguments)
+        );
+        let JsonValue::Object(fields) = &converted else {
+            panic!("arguments stay an object")
+        };
+        assert_eq!(fields["path"], JsonValue::string("/p"));
+        super::value::validate_bounded_values(&replaced, Some(&converted), None).unwrap();
+    }
+    // An over-long key drops only its member; its siblings stay.
+    let (converted, _) = bounded(&json!({"a":{"k".repeat(65):1, "b":2}}));
+    assert_eq!(
+        converted,
+        JsonValue::try_from_source_value(&json!({"a":{"b":2}})).unwrap()
+    );
+    // At each bound the value converts as strictly and records nothing.
+    for value in [
+        json!({"a":"x".repeat(4096)}),
+        json!({"a":nested(4)}),
+        json!({"a":vec![json!(1); 64]}),
+        json!({"a":members(32)}),
+        json!({"k".repeat(64):1}),
+        json!(["\u{1}".repeat(2730)]),
+    ] {
+        let (converted, replaced) = bounded(&value);
+        assert!(replaced.is_empty());
+        assert_eq!(converted, JsonValue::try_from_source_value(&value).unwrap());
+    }
+}
+
+#[test]
+fn bounded_conversion_replaces_the_largest_members_until_the_value_fits() {
+    use serde_json::json;
+    let value = json!({"a":["\u{1}".repeat(2000)], "b":["\u{1}".repeat(1000)], "c":"/p"});
+    assert_eq!(
+        JsonValue::try_from_source_value(&value)
+            .unwrap_err()
+            .bound_dimension(),
+        Some(BoundDimension::EncodedBytes)
+    );
+    let (converted, replaced) = bounded(&value);
+    assert_eq!(
+        replacements(&replaced),
+        [("/a", BoundDimension::EncodedBytes)]
+    );
+    let JsonValue::Object(fields) = &converted else {
+        panic!("arguments stay an object")
+    };
+    assert_eq!(fields["a"], JsonValue::Null);
+    assert!(matches!(fields["b"], JsonValue::Array(_)));
+    assert_eq!(fields["c"], JsonValue::string("/p"));
+
+    // Declared text keeps its budget; when the texts together overflow the
+    // aggregate, the largest goes whole and the rest stays whole.
+    let declared = ArgumentText::new().with_key("old").with_key("new");
+    let value = json!({"old":"x".repeat(40_000), "new":"y".repeat(30_000), "path":"/p"});
+    let (converted, replaced) =
+        JsonValue::try_from_source_tool_arguments_bounded(&declared, &value).unwrap();
+    assert_eq!(
+        replacements(&replaced),
+        [("/old", BoundDimension::EncodedBytes)]
+    );
+    let JsonValue::Object(fields) = &converted else {
+        panic!("arguments stay an object")
+    };
+    assert_eq!(fields["new"], JsonValue::string("y".repeat(30_000)));
+    // Text over its own budget is replaced, never shortened.
+    let value = json!({"old":"x".repeat(65_537), "path":"/p"});
+    let (converted, replaced) =
+        JsonValue::try_from_source_tool_arguments_bounded(&declared, &value).unwrap();
+    assert_eq!(
+        replacements(&replaced),
+        [("/old", BoundDimension::StringBytes)]
+    );
+    assert_eq!(replaced[0].bytes(), 65_537);
+    let JsonValue::Object(fields) = &converted else {
+        panic!("arguments stay an object")
+    };
+    assert_eq!(fields["old"], JsonValue::Null);
+    assert_eq!(fields["path"], JsonValue::string("/p"));
+    // A direct result over the text budget is replaced whole.
+    let (converted, replaced) =
+        JsonValue::try_from_source_tool_result_bounded(&json!("x".repeat(65_537))).unwrap();
+    assert_eq!(converted, JsonValue::Null);
+    assert_eq!(replacements(&replaced), [("", BoundDimension::StringBytes)]);
+    assert_eq!(replaced[0].target(), BoundedTarget::Result);
+}
+
+#[test]
+fn bounded_conversion_over_the_entry_cap_replaces_the_whole_field() {
+    use serde_json::{Value, json};
+    let over = |count| {
+        Value::Object(
+            (0..count)
+                .map(|index| (format!("k{index}"), json!("x".repeat(4097))))
+                .collect(),
+        )
+    };
+    let (converted, replaced) = bounded(&over(TOOL_MAX_BOUNDED_VALUES));
+    assert_eq!(replaced.len(), TOOL_MAX_BOUNDED_VALUES);
+    assert!(matches!(converted, JsonValue::Object(_)));
+    let value = over(TOOL_MAX_BOUNDED_VALUES + 1);
+    let (converted, replaced) = bounded(&value);
+    assert_eq!(converted, JsonValue::Null);
+    assert_eq!(replacements(&replaced), [("", BoundDimension::StringBytes)]);
+    assert_eq!(
+        replaced[0].bytes(),
+        serde_json::to_string(&value).unwrap().len() as u64
+    );
+}
+
+#[test]
+fn bounded_values_are_a_side_list_source_data_cannot_forge() {
+    use serde_json::json;
+    let paths = [
+        ("tool.name", FactProvenance::Reported),
+        ("tool.arguments", FactProvenance::Reported),
+    ];
+    let tool = |arguments: JsonValue| {
+        ToolObservation::new()
+            .with_name("synthetic")
+            .unwrap()
+            .with_arguments(arguments)
+    };
+    // A model-supplied null, or an object shaped like an entry, is data.
+    let forged = json!({"a":null, "tool.bounded_values":[{"target":"arguments","pointer":"/a","dimension":"string_bytes","bytes":9}]});
+    let (arguments, replaced) = bounded(&forged);
+    assert!(replaced.is_empty());
+    let observation = build_with_provenance(
+        ObservationBody::Tool(tool(arguments)),
+        ObservationStage::ToolRequested,
+        &paths,
+    )
+    .unwrap();
+    assert!(
+        !observation
+            .fact_metadata()
+            .contains_key("tool.bounded_values")
+    );
+    assert!(
+        observation
+            .body()
+            .semantic_fields()
+            .iter()
+            .all(|(path, _)| path != "tool.bounded_values")
+    );
+
+    // A real replacement is emitted with fixed metadata.
+    let (arguments, replaced) = bounded(&json!({"private_member":"x".repeat(4097), "path":"/p"}));
+    let replaced_tool = tool(arguments).with_bounded_values(replaced.clone());
+    assert!(replaced_tool.bounded_member(BoundedTarget::Arguments, "private_member"));
+    assert!(!replaced_tool.bounded_member(BoundedTarget::Arguments, "path"));
+    assert!(!replaced_tool.bounded_member(BoundedTarget::Result, "private_member"));
+    let observation = build_with_provenance(
+        ObservationBody::Tool(replaced_tool.clone()),
+        ObservationStage::ToolRequested,
+        &paths,
+    )
+    .unwrap();
+    assert_eq!(
+        observation.fact_metadata()["tool.bounded_values"].provenance(),
+        FactProvenance::Derived
+    );
+    let field = observation
+        .body()
+        .semantic_fields()
+        .into_iter()
+        .find(|(path, _)| path == "tool.bounded_values")
+        .unwrap()
+        .1;
+    assert_eq!(
+        field,
+        JsonValue::try_from_source_value(&json!([{"bytes":4097, "dimension":"string_bytes", "pointer":"/private_member", "target":"arguments"}])).unwrap()
+    );
+    // Source metadata for the list is refused.
+    let error = build_with_provenance(
+        ObservationBody::Tool(replaced_tool),
+        ObservationStage::ToolRequested,
+        &[
+            paths[0],
+            paths[1],
+            ("tool.bounded_values", FactProvenance::Reported),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), ValidationCode::InvalidMetadata.as_str());
+    // An entry must name a replacement that is there.
+    let moved = tool(JsonValue::try_from_source_value(&json!({"private_member":"short"})).unwrap())
+        .with_bounded_values(replaced.clone());
+    let error = build_with_provenance(
+        ObservationBody::Tool(moved),
+        ObservationStage::ToolRequested,
+        &paths,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), ValidationCode::InvalidBody.as_str());
+    // Diagnostics carry neither the keys nor the replaced content.
+    let debug = format!("{replaced:?}");
+    assert!(
+        !debug.contains("private") && !debug.contains("xxx"),
+        "{debug}"
+    );
+}

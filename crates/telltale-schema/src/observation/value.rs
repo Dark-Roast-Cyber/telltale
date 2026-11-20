@@ -164,6 +164,90 @@ impl JsonValue {
         Self::try_from_source_value(value)
     }
 
+    /// [`Self::try_from_source_value`] for a tool field that failed it on a
+    /// bound: each over-bound value is replaced by `null` and recorded, never
+    /// truncated (see [`BoundedValue`]). Errors that are no bound still fail.
+    /// Run it only after the strict conversion failed, so an in-bound value
+    /// always takes the strict path.
+    pub fn try_from_source_value_bounded(
+        target: BoundedTarget,
+        value: &serde_json::Value,
+    ) -> Result<(Self, Vec<BoundedValue>), ObservationError> {
+        let mut bounder = Bounder::new(target);
+        let mut converted = bounder.convert(value, 1, &mut String::new())?;
+        bounder.fit(&mut converted, LOCAL_MAX_VALUE_BYTES, &[], true)?;
+        Ok(bounder.finish(converted, value))
+    }
+
+    /// [`Self::try_from_source_tool_result`], bounded as
+    /// [`Self::try_from_source_value_bounded`] is.
+    pub fn try_from_source_tool_result_bounded(
+        value: &serde_json::Value,
+    ) -> Result<(Self, Vec<BoundedValue>), ObservationError> {
+        let serde_json::Value::String(text) = value else {
+            return Self::try_from_source_value_bounded(BoundedTarget::Result, value);
+        };
+        let mut bounder = Bounder::new(BoundedTarget::Result);
+        let converted = bounder.text(text)?;
+        Ok(bounder.finish(converted, value))
+    }
+
+    /// [`Self::try_from_source_tool_arguments`], bounded as
+    /// [`Self::try_from_source_value_bounded`] is. Declared authored text keeps
+    /// its own budget; over-long text is replaced, not shortened.
+    pub fn try_from_source_tool_arguments_bounded(
+        text: &ArgumentText,
+        value: &serde_json::Value,
+    ) -> Result<(Self, Vec<BoundedValue>), ObservationError> {
+        let authored = match value {
+            serde_json::Value::Object(members) => authored_text_fields(text, |field| {
+                members.get(field).map(serde_json::Value::as_str)
+            })?
+            .map(|fields| (members, fields)),
+            _ => None,
+        };
+        let mut bounder = Bounder::new(BoundedTarget::Arguments);
+        if let Some((members, fields)) = authored {
+            if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
+                let root = bounder.replace("", BoundDimension::ObjectMembers, source_bytes(value));
+                return Ok(bounder.finish(root, value));
+            }
+            let mut converted = Vec::with_capacity(members.len());
+            let mut dropped = 0usize;
+            for (key, item) in members {
+                if key.len() > LOCAL_MAX_KEY_BYTES {
+                    dropped = dropped.saturating_add(member_source_bytes(key, item));
+                    continue;
+                }
+                let mut pointer = String::new();
+                push_segment(&mut pointer, &nfc(key));
+                let item = match item.as_str().filter(|_| fields.contains(&key.as_str())) {
+                    Some(source) => match Self::try_from_source_message_text(source) {
+                        Ok(text) => text,
+                        Err(error) if error.bound_dimension().is_some() => {
+                            bounder.replace(&pointer, BoundDimension::StringBytes, source.len())
+                        }
+                        Err(error) => return Err(error),
+                    },
+                    None => bounder.convert(item, 2, &mut pointer)?,
+                };
+                converted.push((key.clone(), item));
+            }
+            bounder.dropped("", dropped);
+            let mut converted = Self::object(converted)?;
+            bounder.fit(&mut converted, LOCAL_MAX_VALUE_BYTES, &fields, true)?;
+            bounder.fit(&mut converted, BOUNDED_AGGREGATE_BYTES, &fields, false)?;
+            return Ok(bounder.finish(converted, value));
+        }
+        if let serde_json::Value::String(whole) = value
+            && text.whole
+        {
+            let converted = bounder.text(whole)?;
+            return Ok(bounder.finish(converted, value));
+        }
+        Self::try_from_source_value_bounded(BoundedTarget::Arguments, value)
+    }
+
     pub fn try_from_source_message_text(text: &str) -> Result<Self, ObservationError> {
         bounded_message_text_bytes(text)?;
         let text = nfc(text);
@@ -752,6 +836,14 @@ impl ArgumentText {
     pub fn strict(&self) -> bool {
         self.strict
     }
+    /// The declaration without strictness, for arguments in which a bounded
+    /// conversion may have replaced a declared text field by `null`.
+    pub(crate) fn lenient(&self) -> Self {
+        Self {
+            strict: false,
+            ..self.clone()
+        }
+    }
 }
 
 /// The declared authored-text fields present as strings in these arguments,
@@ -772,6 +864,452 @@ fn authored_text_fields<'a, 'k>(
         }
     }
     Ok((!present.is_empty()).then_some(present))
+}
+
+/// Most values one tool observation records as replaced. A conversion that
+/// would need more replaces the whole field instead.
+pub const TOOL_MAX_BOUNDED_VALUES: usize = 16;
+
+/// Room a bounded conversion leaves in the observation aggregate for the tool
+/// name, facets and the replacement list itself.
+const BOUNDED_AGGREGATE_BYTES: usize = SEMANTIC_MAX_TOTAL_BYTES - 16_384;
+
+/// The tool field a [`BoundedValue`] was replaced in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BoundedTarget {
+    Arguments,
+    Result,
+}
+
+impl BoundedTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Arguments => "arguments",
+            Self::Result => "result",
+        }
+    }
+}
+
+/// One over-bound value a bounded tool conversion replaced by `null`. The
+/// side list on [`super::ToolObservation`] is the only marker: a `null` or an
+/// object of this shape in source data is ordinary data, and only the bounded
+/// converters create an entry. It holds coordinates and sizes, never content:
+/// the pointer (RFC 6901, over keys already admitted) names where the
+/// replaced value sat, or the object an over-long key was dropped from.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BoundedValue {
+    target: BoundedTarget,
+    pointer: String,
+    dimension: BoundDimension,
+    bytes: u64,
+}
+
+impl BoundedValue {
+    fn new(target: BoundedTarget, pointer: &str, dimension: BoundDimension, bytes: usize) -> Self {
+        Self {
+            target,
+            pointer: pointer.to_owned(),
+            dimension,
+            bytes: u64::try_from(bytes).unwrap_or(u64::MAX),
+        }
+    }
+    pub fn target(&self) -> BoundedTarget {
+        self.target
+    }
+    pub fn pointer(&self) -> &str {
+        &self.pointer
+    }
+    pub fn dimension(&self) -> BoundDimension {
+        self.dimension
+    }
+    /// The source size of what was replaced: a string's bytes, otherwise the
+    /// encoded length of the replaced value or the dropped members.
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+    pub(crate) fn to_json(&self) -> JsonValue {
+        JsonValue::Object(BTreeMap::from([
+            // Spelled as source conversion spells the number.
+            (
+                "bytes".to_owned(),
+                i64::try_from(self.bytes)
+                    .map(JsonValue::Integer)
+                    .unwrap_or(JsonValue::Unsigned(self.bytes)),
+            ),
+            (
+                "dimension".to_owned(),
+                JsonValue::String(self.dimension.as_str().to_owned()),
+            ),
+            (
+                "pointer".to_owned(),
+                JsonValue::String(self.pointer.clone()),
+            ),
+            (
+                "target".to_owned(),
+                JsonValue::String(self.target.as_str().to_owned()),
+            ),
+        ]))
+    }
+}
+
+/// Keys in a pointer are source content, so diagnostics show only its depth.
+impl std::fmt::Debug for BoundedValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BoundedValue")
+            .field("target", &self.target)
+            .field("segments", &self.pointer.matches('/').count())
+            .field("dimension", &self.dimension)
+            .field("bytes", &self.bytes)
+            .finish()
+    }
+}
+
+/// Collects the replacements of one bounded conversion.
+struct Bounder {
+    target: BoundedTarget,
+    entries: Vec<BoundedValue>,
+}
+
+impl Bounder {
+    fn new(target: BoundedTarget) -> Self {
+        Self {
+            target,
+            entries: Vec::new(),
+        }
+    }
+
+    /// Replace the value at `pointer`; this covers anything recorded beneath it.
+    fn replace(&mut self, pointer: &str, dimension: BoundDimension, bytes: usize) -> JsonValue {
+        self.entries
+            .retain(|entry| !within(&entry.pointer, pointer));
+        self.entries
+            .push(BoundedValue::new(self.target, pointer, dimension, bytes));
+        JsonValue::Null
+    }
+
+    /// Record members with over-long keys dropped from the object at `pointer`.
+    fn dropped(&mut self, pointer: &str, bytes: usize) {
+        if bytes > 0 {
+            self.entries.push(BoundedValue::new(
+                self.target,
+                pointer,
+                BoundDimension::KeyBytes,
+                bytes,
+            ));
+        }
+    }
+
+    /// A whole field that is direct text: kept whole or replaced whole.
+    fn text(&mut self, text: &str) -> Result<JsonValue, ObservationError> {
+        match JsonValue::try_from_source_message_text(text) {
+            Ok(JsonValue::String(converted))
+                if escaped_string_bytes(&converted) <= BOUNDED_AGGREGATE_BYTES =>
+            {
+                Ok(JsonValue::String(converted))
+            }
+            Ok(_) => Ok(self.replace("", BoundDimension::EncodedBytes, escaped_string_bytes(text))),
+            Err(error) if error.bound_dimension().is_some() => {
+                Ok(self.replace("", BoundDimension::StringBytes, text.len()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Ordinary conversion, except that a value over a structural bound is
+    /// replaced: an over-long string, an over-full array or object, or a
+    /// container at the deepest level whose children would exceed the depth.
+    fn convert(
+        &mut self,
+        value: &serde_json::Value,
+        depth: usize,
+        pointer: &mut String,
+    ) -> Result<JsonValue, ObservationError> {
+        match value {
+            serde_json::Value::String(text) if text.len() > LOCAL_MAX_STRING_BYTES => {
+                Ok(self.replace(pointer, BoundDimension::StringBytes, text.len()))
+            }
+            serde_json::Value::Array(items) => {
+                if items.len() > LOCAL_MAX_ARRAY_ITEMS {
+                    return Ok(self.replace(
+                        pointer,
+                        BoundDimension::ArrayItems,
+                        source_bytes(value),
+                    ));
+                }
+                if depth >= LOCAL_MAX_DEPTH && !items.is_empty() {
+                    return Ok(self.replace(pointer, BoundDimension::Depth, source_bytes(value)));
+                }
+                let mut converted = Vec::with_capacity(items.len());
+                for (index, item) in items.iter().enumerate() {
+                    let length = pointer.len();
+                    push_segment(pointer, &index.to_string());
+                    converted.push(self.convert(item, depth + 1, pointer)?);
+                    pointer.truncate(length);
+                }
+                Ok(JsonValue::Array(converted))
+            }
+            serde_json::Value::Object(members) => {
+                if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
+                    return Ok(self.replace(
+                        pointer,
+                        BoundDimension::ObjectMembers,
+                        source_bytes(value),
+                    ));
+                }
+                if depth >= LOCAL_MAX_DEPTH && !members.is_empty() {
+                    return Ok(self.replace(pointer, BoundDimension::Depth, source_bytes(value)));
+                }
+                let mut converted = Vec::with_capacity(members.len());
+                let mut dropped = 0usize;
+                for (key, item) in members {
+                    if key.len() > LOCAL_MAX_KEY_BYTES {
+                        dropped = dropped.saturating_add(member_source_bytes(key, item));
+                        continue;
+                    }
+                    let key = nfc(key);
+                    let length = pointer.len();
+                    push_segment(pointer, &key);
+                    let item = self.convert(item, depth + 1, pointer)?;
+                    pointer.truncate(length);
+                    converted.push((key, item));
+                }
+                self.dropped(pointer, dropped);
+                JsonValue::object(converted)
+            }
+            _ => JsonValue::convert_source_value(value, depth),
+        }
+    }
+
+    /// Replace the largest top-level members (ties in pointer order) until
+    /// the value fits `budget`; with nothing left to replace, the whole value.
+    /// The skeleton pass counts declared text as `null` and never replaces it.
+    fn fit(
+        &mut self,
+        value: &mut JsonValue,
+        budget: usize,
+        authored: &[&str],
+        skeleton: bool,
+    ) -> Result<(), ObservationError> {
+        loop {
+            let size = match value {
+                JsonValue::Object(members) => {
+                    let mut size = 2usize;
+                    for (index, (key, item)) in members.iter().enumerate() {
+                        size = size.saturating_add(
+                            escaped_string_bytes(key)
+                                + 1
+                                + item_bytes(key, item, authored, skeleton)?
+                                + usize::from(index != 0),
+                        );
+                    }
+                    size
+                }
+                _ => bounded_json_bytes(value, 1)?,
+            };
+            if size <= budget {
+                return Ok(());
+            }
+            let mut largest: Option<(usize, String)> = None;
+            let mut consider = |bytes: usize, segment: &dyn Fn() -> String| {
+                if largest.as_ref().is_none_or(|(most, _)| bytes > *most) {
+                    largest = Some((bytes, segment()));
+                }
+            };
+            match value {
+                JsonValue::Object(members) => {
+                    for (key, item) in members.iter() {
+                        let text = matches!(item, JsonValue::String(_))
+                            && authored.contains(&key.as_str());
+                        if !matches!(item, JsonValue::Null) && !(skeleton && text) {
+                            consider(item_bytes(key, item, authored, skeleton)?, &|| key.clone());
+                        }
+                    }
+                }
+                JsonValue::Array(items) => {
+                    for (index, item) in items.iter().enumerate() {
+                        if !matches!(item, JsonValue::Null) {
+                            consider(bounded_json_bytes(item, 2)?, &|| index.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            let Some((bytes, segment)) = largest else {
+                *value = self.replace("", BoundDimension::EncodedBytes, size);
+                return Ok(());
+            };
+            let mut pointer = String::new();
+            push_segment(&mut pointer, &segment);
+            let placeholder = self.replace(&pointer, BoundDimension::EncodedBytes, bytes);
+            match value {
+                JsonValue::Object(members) => {
+                    members.insert(segment, placeholder);
+                }
+                JsonValue::Array(items) => {
+                    let index: usize = segment.parse().expect("array index segment");
+                    items[index] = placeholder;
+                }
+                _ => unreachable!("only containers have members"),
+            }
+        }
+    }
+
+    /// The sorted, unique list; more than the cap replaces the whole field.
+    fn finish(
+        mut self,
+        value: JsonValue,
+        source: &serde_json::Value,
+    ) -> (JsonValue, Vec<BoundedValue>) {
+        self.entries
+            .sort_by(|left, right| left.pointer.cmp(&right.pointer));
+        self.entries
+            .dedup_by(|left, right| left.pointer == right.pointer);
+        if self.entries.len() > TOOL_MAX_BOUNDED_VALUES {
+            let dimension = self.entries[0].dimension;
+            return (
+                JsonValue::Null,
+                vec![BoundedValue::new(
+                    self.target,
+                    "",
+                    dimension,
+                    source_bytes(source),
+                )],
+            );
+        }
+        (value, self.entries)
+    }
+}
+
+fn item_bytes(
+    key: &str,
+    item: &JsonValue,
+    authored: &[&str],
+    skeleton: bool,
+) -> Result<usize, ObservationError> {
+    match item {
+        JsonValue::String(text) if authored.contains(&key) => Ok(if skeleton {
+            4
+        } else {
+            escaped_string_bytes(text)
+        }),
+        _ => bounded_json_bytes(item, 2),
+    }
+}
+
+/// Whether `pointer` is `ancestor` or lies beneath it.
+fn within(pointer: &str, ancestor: &str) -> bool {
+    pointer
+        .strip_prefix(ancestor)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+pub(crate) fn push_segment(pointer: &mut String, segment: &str) {
+    pointer.push('/');
+    for character in segment.chars() {
+        match character {
+            '~' => pointer.push_str("~0"),
+            '/' => pointer.push_str("~1"),
+            character => pointer.push(character),
+        }
+    }
+}
+
+fn pointer_segments(pointer: &str) -> Option<Vec<String>> {
+    if pointer.is_empty() {
+        return Some(Vec::new());
+    }
+    pointer
+        .strip_prefix('/')?
+        .split('/')
+        .map(|escaped| {
+            let mut segment = String::new();
+            let mut characters = escaped.chars();
+            while let Some(character) = characters.next() {
+                match character {
+                    '~' => match characters.next()? {
+                        '0' => segment.push('~'),
+                        '1' => segment.push('/'),
+                        _ => return None,
+                    },
+                    character => segment.push(character),
+                }
+            }
+            Some(segment)
+        })
+        .collect()
+}
+
+/// The source encoded length of a value, counted without allocating it.
+fn source_bytes(value: &serde_json::Value) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    let _ = serde_json::to_writer(&mut count, value);
+    count.0
+}
+
+fn member_source_bytes(key: &str, value: &serde_json::Value) -> usize {
+    escaped_string_bytes(key)
+        .saturating_add(1)
+        .saturating_add(source_bytes(value))
+}
+
+/// Each entry names a replacement that is really there: a sorted, unique,
+/// capped list whose pointers resolve to `null`, or to the object an
+/// over-long key was dropped from.
+pub(crate) fn validate_bounded_values(
+    values: &[BoundedValue],
+    arguments: Option<&JsonValue>,
+    result: Option<&JsonValue>,
+) -> Result<(), ObservationError> {
+    let invalid = || ObservationError::new(ValidationCode::InvalidBody);
+    if values.len() > TOOL_MAX_BOUNDED_VALUES
+        || values
+            .windows(2)
+            .any(|pair| (pair[0].target, &pair[0].pointer) >= (pair[1].target, &pair[1].pointer))
+    {
+        return Err(invalid());
+    }
+    for value in values {
+        let mut node = match value.target {
+            BoundedTarget::Arguments => arguments,
+            BoundedTarget::Result => result,
+        }
+        .ok_or_else(invalid)?;
+        let segments = pointer_segments(&value.pointer).ok_or_else(invalid)?;
+        if segments.len() >= LOCAL_MAX_DEPTH {
+            return Err(invalid());
+        }
+        for segment in &segments {
+            if segment.len() > LOCAL_MAX_KEY_BYTES {
+                return Err(invalid());
+            }
+            node = match node {
+                JsonValue::Object(members) => members.get(segment.as_str()),
+                JsonValue::Array(items) => segment
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|index| index.to_string() == *segment)
+                    .and_then(|index| items.get(index)),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+        }
+        match (node, value.dimension) {
+            (JsonValue::Null, _) | (JsonValue::Object(_), BoundDimension::KeyBytes) => {}
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn escaped_string_bytes(value: &str) -> usize {

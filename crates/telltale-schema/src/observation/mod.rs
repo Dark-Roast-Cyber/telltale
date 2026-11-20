@@ -40,14 +40,16 @@ pub use identity::{
     SemanticComparison, SemanticReplayVerdict, canonical_identity_json, valid_observation_id,
 };
 pub use value::{
-    ArgumentText, JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH, LOCAL_MAX_ENTRIES,
-    LOCAL_MAX_KEY_BYTES, LOCAL_MAX_OBJECT_MEMBERS, LOCAL_MAX_SEARCHABLE_BYTES,
+    ArgumentText, BoundedTarget, BoundedValue, JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH,
+    LOCAL_MAX_ENTRIES, LOCAL_MAX_KEY_BYTES, LOCAL_MAX_OBJECT_MEMBERS, LOCAL_MAX_SEARCHABLE_BYTES,
     LOCAL_MAX_STRING_BYTES, LOCAL_MAX_TOTAL_BYTES, LOCAL_MAX_VALUE_BYTES, LocalEvidence,
     LocalReference, LocalValue, MESSAGE_MAX_TEXT_BYTES, SEMANTIC_MAX_TOTAL_BYTES, SemanticFacet,
-    TOOL_PATCH_MAX_TEXT_BYTES, TOOL_RESULT_MAX_TEXT_BYTES,
+    TOOL_MAX_BOUNDED_VALUES, TOOL_PATCH_MAX_TEXT_BYTES, TOOL_RESULT_MAX_TEXT_BYTES,
 };
 
 pub const OTHER_REGISTRY_VERSION: &str = "other-v1";
+/// The semantic field listing the values a bounded tool conversion replaced.
+pub(crate) const BOUNDED_VALUES_FIELD: &str = "tool.bounded_values";
 /// The canonical retention floor for one source; see [`SourceScale`].
 pub const MAX_CANONICAL_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 /// A per-source bound grows by its floor for each this many bytes read.
@@ -1041,6 +1043,19 @@ pub enum BoundDimension {
     KeyBytes,
 }
 
+impl BoundDimension {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StringBytes => "string_bytes",
+            Self::EncodedBytes => "encoded_bytes",
+            Self::Depth => "depth",
+            Self::ArrayItems => "array_items",
+            Self::ObjectMembers => "object_members",
+            Self::KeyBytes => "key_bytes",
+        }
+    }
+}
+
 /// Closed semantic categories; arbitrary source keys and facet names are excluded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CanonicalFieldCategory {
@@ -1322,6 +1337,17 @@ impl ObservationBuilder {
         store: Option<&dyn AssignmentStore>,
     ) -> Result<CanonicalObservationV2, ObservationError> {
         let mut builder = self;
+        // The replacement list is Telltale's own record, never a source fact,
+        // so its metadata is fixed here rather than by each adapter.
+        if let ObservationBody::Tool(tool) = &builder.body
+            && !tool.bounded_values().is_empty()
+            && !builder.fact_metadata.contains_key(BOUNDED_VALUES_FIELD)
+        {
+            builder.fact_metadata.insert(
+                BOUNDED_VALUES_FIELD.to_owned(),
+                FactMetadata::new(FactProvenance::Derived, Sensitivity::Normal)?,
+            );
+        }
         builder.canonicalize_json()?;
         builder.build_with_store_canonical(store)
     }
@@ -1782,6 +1808,13 @@ fn validate_metadata_coverage(
         if path.starts_with("native.") || path.is_empty() {
             return Err(ObservationError::new(ValidationCode::InvalidMetadata));
         }
+        if path == BOUNDED_VALUES_FIELD
+            && (item.provenance() != FactProvenance::Derived
+                || item.sensitivity() != Sensitivity::Normal
+                || item.fidelity_override().is_some())
+        {
+            return Err(ObservationError::new(ValidationCode::InvalidMetadata));
+        }
     }
     Ok(())
 }
@@ -1804,7 +1837,16 @@ fn validate_semantic_json_bounds(
                 value::bounded_message_text_bytes(text)
             }
             (ObservationBody::Tool(tool), "tool.arguments", value) => {
-                value::bounded_tool_arguments_bytes(tool.argument_text(), value)
+                // A replaced declared text field is `null`, not a string.
+                if tool
+                    .bounded_values()
+                    .iter()
+                    .any(|entry| entry.target() == BoundedTarget::Arguments)
+                {
+                    value::bounded_tool_arguments_bytes(&tool.argument_text().lenient(), value)
+                } else {
+                    value::bounded_tool_arguments_bytes(tool.argument_text(), value)
+                }
             }
             (ObservationBody::Message(message), "message.content_parts", _) => {
                 if message.content_parts().len() > LOCAL_MAX_ARRAY_ITEMS {
