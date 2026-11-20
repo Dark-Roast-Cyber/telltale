@@ -17,7 +17,8 @@ use telltale_schema::observation::{
 };
 
 use crate::tool_operation::{
-    ResultText, ValueBounds, declare, replaced_arguments, with_source_arguments, with_source_result,
+    ResultText, ValueBounds, build_fitted, declare, replaced_arguments, with_source_arguments,
+    with_source_result,
 };
 
 use super::canonical::{
@@ -249,98 +250,102 @@ impl Context<'_> {
                 stage,
                 ObservationStage::ToolExecutionCompleted | ObservationStage::ToolResultReturned
             );
-            let mut body = ToolObservation::new().with_name(name)?;
-            let mut metadata = vec![("tool.name", FactProvenance::Reported)];
-            if let Some(input) = &tool.input {
-                body = arguments(body, Some(name), input)?;
-                metadata.push(("tool.arguments", FactProvenance::Reported));
-            }
-            if outcome && let Some(result) = &tool.result {
-                body = with_tool_result(body, result)?;
-                metadata.push(("tool.result", FactProvenance::Reported));
-            }
-            let settlement = tool.shell_settlement.as_ref().filter(|_| outcome);
-            if let Some(exit) = settlement.and_then(|settlement| settlement.exit) {
-                body = body.with_exit_code(exit);
-                metadata.push(("tool.exit_code", FactProvenance::Reported));
-            }
-            // An exit code alone is neither success nor failure; a reported
-            // timeout fails the call like a timed-out user shell command.
-            if outcome
-                && (tool.status == OpenCodeToolStatus::Error
-                    || settlement.is_some_and(|settlement| settlement.timeout))
-            {
-                body = body.with_reported_status(ToolStatus::Failed);
-                metadata.push(("tool.reported_status", FactProvenance::Reported));
-            }
-            // No facet is built from an argument that was replaced.
-            let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
-            let mut builder = self.builder(
-                ObservationBody::Tool(declare(super::tools::TOOLS, body)),
-                stage,
-                child,
-                occurred_at,
-                CapabilityAvailability::Unknown,
-            )?;
-            for (path, provenance) in metadata {
-                builder = builder.fact_metadata(path, normal(provenance)?);
-            }
-            if let Some(Value::Object(input)) = &tool.input {
-                builder = with_argument_facets(
-                    builder,
-                    tool.input.as_ref().expect("checked"),
-                    &replaced,
+            let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+                let mut body = ToolObservation::new().with_name(name)?;
+                let mut metadata = vec![("tool.name", FactProvenance::Reported)];
+                if let Some(input) = &tool.input {
+                    body = arguments(body, Some(name), input, bounds)?;
+                    metadata.push(("tool.arguments", FactProvenance::Reported));
+                }
+                if outcome && let Some(result) = &tool.result {
+                    body = with_tool_result(body, result, bounds)?;
+                    metadata.push(("tool.result", FactProvenance::Reported));
+                }
+                let settlement = tool.shell_settlement.as_ref().filter(|_| outcome);
+                if let Some(exit) = settlement.and_then(|settlement| settlement.exit) {
+                    body = body.with_exit_code(exit);
+                    metadata.push(("tool.exit_code", FactProvenance::Reported));
+                }
+                // An exit code alone is neither success nor failure; a reported
+                // timeout fails the call like a timed-out user shell command.
+                if outcome
+                    && (tool.status == OpenCodeToolStatus::Error
+                        || settlement.is_some_and(|settlement| settlement.timeout))
+                {
+                    body = body.with_reported_status(ToolStatus::Failed);
+                    metadata.push(("tool.reported_status", FactProvenance::Reported));
+                }
+                // No facet is built from an argument that was replaced.
+                let replaced = replaced_arguments(&body, &["command", "cmd", "file_path", "path"]);
+                let mut builder = self.builder(
+                    ObservationBody::Tool(declare(super::tools::TOOLS, body)),
+                    stage,
+                    child,
+                    occurred_at,
+                    CapabilityAvailability::Unknown,
                 )?;
-                // v2 file tools name the file `path`; other tools' `path` is a
-                // search root or working directory, not the resource acted on.
-                if V2_FILE_TOOLS.contains(&name)
-                    && !replaced.contains(&"path")
-                    && let Some(Value::String(path)) = input.get("path")
+                for (path, provenance) in metadata {
+                    builder = builder.fact_metadata(path, normal(provenance)?);
+                }
+                if let Some(Value::Object(input)) = &tool.input {
+                    builder = with_argument_facets(
+                        builder,
+                        tool.input.as_ref().expect("checked"),
+                        &replaced,
+                    )?;
+                    // v2 file tools name the file `path`; other tools' `path` is a
+                    // search root or working directory, not the resource acted on.
+                    if V2_FILE_TOOLS.contains(&name)
+                        && !replaced.contains(&"path")
+                        && let Some(Value::String(path)) = input.get("path")
+                    {
+                        builder = builder
+                            .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
+                            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+                    }
+                }
+                if let Some(executed) = tool.executed {
+                    builder = builder
+                        .facet(
+                            "tool.executed",
+                            SemanticFacet::new(JsonValue::Bool(executed)),
+                        )?
+                        .fact_metadata("tool.executed", normal_reported()?);
+                }
+                let facts = tool.result_facts.as_deref().filter(|_| outcome);
+                if let Some(error_type) = facts.and_then(|facts| facts.error_type.as_deref()) {
+                    builder = builder
+                        .facet(
+                            "tool.error_type",
+                            SemanticFacet::new(JsonValue::string(error_type)),
+                        )?
+                        .fact_metadata("tool.error_type", normal_reported()?);
+                }
+                if let Some(omitted) = facts.and_then(|facts| facts.omitted_bytes) {
+                    builder = builder
+                        .facet(
+                            "tool.result.omitted_bytes",
+                            SemanticFacet::new(JsonValue::Integer(
+                                i64::try_from(omitted).unwrap_or(i64::MAX),
+                            )),
+                        )?
+                        .fact_metadata(
+                            "tool.result.omitted_bytes",
+                            normal(FactProvenance::Derived)?,
+                        );
+                }
+                if let Some(signal) = settlement.and_then(|settlement| settlement.signal.as_deref())
                 {
                     builder = builder
-                        .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                        .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+                        .facet("tool.signal", SemanticFacet::new(JsonValue::string(signal)))?
+                        .fact_metadata("tool.signal", normal_reported()?);
                 }
-            }
-            if let Some(executed) = tool.executed {
-                builder = builder
-                    .facet(
-                        "tool.executed",
-                        SemanticFacet::new(JsonValue::Bool(executed)),
-                    )?
-                    .fact_metadata("tool.executed", normal_reported()?);
-            }
-            let facts = tool.result_facts.as_deref().filter(|_| outcome);
-            if let Some(error_type) = facts.and_then(|facts| facts.error_type.as_deref()) {
-                builder = builder
-                    .facet(
-                        "tool.error_type",
-                        SemanticFacet::new(JsonValue::string(error_type)),
-                    )?
-                    .fact_metadata("tool.error_type", normal_reported()?);
-            }
-            if let Some(omitted) = facts.and_then(|facts| facts.omitted_bytes) {
-                builder = builder
-                    .facet(
-                        "tool.result.omitted_bytes",
-                        SemanticFacet::new(JsonValue::Integer(
-                            i64::try_from(omitted).unwrap_or(i64::MAX),
-                        )),
-                    )?
-                    .fact_metadata(
-                        "tool.result.omitted_bytes",
-                        normal(FactProvenance::Derived)?,
-                    );
-            }
-            if let Some(signal) = settlement.and_then(|settlement| settlement.signal.as_deref()) {
-                builder = builder
-                    .facet("tool.signal", SemanticFacet::new(JsonValue::string(signal)))?
-                    .fact_metadata("tool.signal", normal_reported()?);
-            }
-            builder = builder.correlation(
-                CorrelationIds::new().with_call_id(CorrelationId::source_reported(call_id)?),
-            );
-            observations.push(builder.build()?);
+                builder = builder.correlation(
+                    CorrelationIds::new().with_call_id(CorrelationId::source_reported(call_id)?),
+                );
+                Ok(builder.build()?)
+            })?;
+            observations.push(observation);
         }
         Ok(())
     }
@@ -389,55 +394,61 @@ impl Context<'_> {
         }
         for (stage, occurred_at) in stages {
             let outcome = stage != ObservationStage::ToolExecutionStarted;
-            let mut body = arguments(
-                ToolObservation::new().with_name(SHELL_TOOL_NAME)?,
-                Some(SHELL_TOOL_NAME),
-                &Value::String(command.to_owned()),
-            )?;
-            let mut metadata = vec![
-                ("tool.name", FactProvenance::Parsed),
-                ("tool.arguments", FactProvenance::Reported),
-            ];
-            // No facet is built from a command that was replaced.
-            let replaced = !replaced_arguments(&body, &["command"]).is_empty();
-            if outcome {
-                if let Some(output) = &shell.output {
-                    body = with_tool_result(body, &Value::String(output.clone()))?;
-                    metadata.push(("tool.result", FactProvenance::Reported));
+            let observation = build_fitted(ValueBounds::Replace, value_bound, |bounds| {
+                let mut body = arguments(
+                    ToolObservation::new().with_name(SHELL_TOOL_NAME)?,
+                    Some(SHELL_TOOL_NAME),
+                    &Value::String(command.to_owned()),
+                    bounds,
+                )?;
+                let mut metadata = vec![
+                    ("tool.name", FactProvenance::Parsed),
+                    ("tool.arguments", FactProvenance::Reported),
+                ];
+                if outcome {
+                    if let Some(output) = &shell.output {
+                        body = with_tool_result(body, &Value::String(output.clone()), bounds)?;
+                        metadata.push(("tool.result", FactProvenance::Reported));
+                    }
+                    if let Some(exit) = shell.exit {
+                        body = body.with_exit_code(exit);
+                        metadata.push(("tool.exit_code", FactProvenance::Reported));
+                    }
+                    if let Some(status) = status {
+                        body = body.with_reported_status(status);
+                        metadata.push(("tool.reported_status", FactProvenance::Reported));
+                    }
                 }
-                if let Some(exit) = shell.exit {
-                    body = body.with_exit_code(exit);
-                    metadata.push(("tool.exit_code", FactProvenance::Reported));
+                // No facet is built from a command that was replaced, the result
+                // conversion included.
+                let replaced = !replaced_arguments(&body, &["command"]).is_empty();
+                let mut builder = self.builder(
+                    ObservationBody::Tool(declare(super::tools::TOOLS, body)),
+                    stage,
+                    0,
+                    occurred_at,
+                    CapabilityAvailability::Supported,
+                )?;
+                for (path, provenance) in metadata {
+                    builder = builder.fact_metadata(path, normal(provenance)?);
                 }
-                if let Some(status) = status {
-                    body = body.with_reported_status(status);
-                    metadata.push(("tool.reported_status", FactProvenance::Reported));
+                if !replaced {
+                    builder = builder
+                        .facet(
+                            "command.text",
+                            SemanticFacet::new(JsonValue::string(command)),
+                        )?
+                        .fact_metadata("command.text", normal_reported()?);
                 }
-            }
-            let mut builder = self.builder(
-                ObservationBody::Tool(declare(super::tools::TOOLS, body)),
-                stage,
-                0,
-                occurred_at,
-                CapabilityAvailability::Supported,
-            )?;
-            for (path, provenance) in metadata {
-                builder = builder.fact_metadata(path, normal(provenance)?);
-            }
-            if !replaced {
-                builder = builder
-                    .facet(
-                        "command.text",
-                        SemanticFacet::new(JsonValue::string(command)),
-                    )?
-                    .fact_metadata("command.text", normal_reported()?);
-            }
-            if let Some(shell_id) = &shell.shell_id {
-                builder = builder.correlation(
-                    CorrelationIds::new().with_call_id(CorrelationId::source_reported(shell_id)?),
-                );
-            }
-            observations.push(builder.build()?);
+                if let Some(shell_id) = &shell.shell_id {
+                    builder = builder.correlation(
+                        CorrelationIds::new()
+                            .with_call_id(CorrelationId::source_reported(shell_id)?),
+                    );
+                }
+                Ok(builder.build()?)
+            })?;
+            observations.push(observation);
         }
         Ok(())
     }
@@ -481,24 +492,27 @@ fn arguments(
     body: ToolObservation,
     name: Option<&str>,
     value: &Value,
+    bounds: ValueBounds,
 ) -> Result<ToolObservation, OpenCodeCanonicalError> {
     Ok(with_source_arguments(
         super::tools::TOOLS,
         name,
         body,
         value,
-        ValueBounds::Replace,
+        bounds,
     )?)
 }
 
 fn with_tool_result(
     body: ToolObservation,
     value: &Value,
+    bounds: ValueBounds,
 ) -> Result<ToolObservation, OpenCodeCanonicalError> {
-    Ok(with_source_result(
-        body,
-        value,
-        ResultText::Direct,
-        ValueBounds::Replace,
-    )?)
+    Ok(with_source_result(body, value, ResultText::Direct, bounds)?)
+}
+
+/// A failure of a call's observation on a value bound: [`build_fitted`] then
+/// builds it again with the call's values fitted.
+fn value_bound(error: &OpenCodeCanonicalError) -> bool {
+    matches!(error, OpenCodeCanonicalError::Observation(error) if error.bound_dimension().is_some())
 }

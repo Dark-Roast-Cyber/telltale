@@ -2775,3 +2775,191 @@ fn bounded_values_are_a_side_list_source_data_cannot_forge() {
         "{debug}"
     );
 }
+
+fn entries(tool: &ToolObservation) -> Vec<(BoundedTarget, String, BoundDimension)> {
+    tool.bounded_values()
+        .iter()
+        .map(|value| {
+            (
+                value.target(),
+                value.pointer().to_owned(),
+                value.dimension(),
+            )
+        })
+        .collect()
+}
+
+const TOOL_PATHS: [(&str, FactProvenance); 3] = [
+    ("tool.name", FactProvenance::Reported),
+    ("tool.arguments", FactProvenance::Reported),
+    ("tool.result", FactProvenance::Reported),
+];
+
+fn tool_with(arguments: JsonValue, result: JsonValue) -> ToolObservation {
+    ToolObservation::new()
+        .with_name("synthetic")
+        .unwrap()
+        .with_arguments(arguments)
+        .with_result(result)
+}
+
+#[test]
+fn fitted_values_replace_the_largest_value_of_either_field_first() {
+    let text = |bytes: usize| JsonValue::try_from_source_message_text(&"x".repeat(bytes)).unwrap();
+    let object = |members: Vec<(&str, JsonValue)>| {
+        JsonValue::object(
+            members
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value)),
+        )
+        .unwrap()
+    };
+    // A tie goes to the arguments; the other field is kept whole.
+    let tool = tool_with(object(vec![("a", text(30_000))]), text(30_000))
+        .with_fitted_values()
+        .unwrap();
+    assert_eq!(
+        entries(&tool),
+        [(
+            BoundedTarget::Arguments,
+            "/a".to_owned(),
+            BoundDimension::EncodedBytes
+        )]
+    );
+    assert_eq!(tool.result(), Some(&text(30_000)));
+    // Otherwise the largest value goes first, and no more than needed.
+    let tool = tool_with(
+        object(vec![("a", text(20_000)), ("b", text(10_000))]),
+        text(25_000),
+    )
+    // Authored text, so the kept arguments keep the direct-text budget.
+    .with_argument_text(ArgumentText::new().with_key("a").with_key("b"))
+    .with_fitted_values()
+    .unwrap();
+    assert_eq!(
+        entries(&tool),
+        [(
+            BoundedTarget::Result,
+            String::new(),
+            BoundDimension::EncodedBytes
+        )]
+    );
+    assert_eq!(tool.result(), Some(&JsonValue::Null));
+    let observation = build_with_provenance(
+        ObservationBody::Tool(tool),
+        ObservationStage::ToolResultReturned,
+        &TOOL_PATHS,
+    )
+    .unwrap();
+    assert!(!format!("{observation:?}").contains("xxxx"));
+    // Values that already fit are kept as they are.
+    let small = tool_with(object(vec![("a", text(100))]), text(100));
+    assert_eq!(small.clone().with_fitted_values().unwrap(), small);
+}
+
+#[test]
+fn replaced_values_cover_earlier_entries_and_skip_null_fields() {
+    let (arguments, replaced) =
+        bounded(&serde_json::json!({"long": "z".repeat(4097), "short": "kept"}));
+    assert_eq!(replaced.len(), 1);
+    let tool = tool_with(arguments, JsonValue::Null)
+        .with_bounded_values(replaced)
+        .with_replaced_values()
+        .unwrap();
+    // One entry for the replaced arguments covers the earlier one; the
+    // `null` result holds nothing to replace.
+    assert_eq!(
+        entries(&tool),
+        [(
+            BoundedTarget::Arguments,
+            String::new(),
+            BoundDimension::EncodedBytes
+        )]
+    );
+    assert_eq!(tool.arguments(), Some(&JsonValue::Null));
+    let observation = build_with_provenance(
+        ObservationBody::Tool(tool.clone()),
+        ObservationStage::ToolResultReturned,
+        &TOOL_PATHS,
+    )
+    .unwrap();
+    assert!(!format!("{observation:?}").contains("kept"));
+    // Replacing again records nothing new.
+    assert_eq!(tool.clone().with_replaced_values().unwrap(), tool);
+}
+
+/// Each field keeps the cap on its own; together they may exceed it. The
+/// field with more entries (ties: the arguments) is then replaced whole.
+#[test]
+fn entries_over_the_cap_replace_the_field_with_more_entries() {
+    let members = |count: usize| {
+        serde_json::Value::Object(
+            (0..count)
+                .map(|index| (format!("k{index}"), serde_json::json!("z".repeat(4097))))
+                .collect(),
+        )
+    };
+    for (arguments, result, expected) in [
+        (16, 1, (BoundedTarget::Arguments, 2)),
+        (1, 16, (BoundedTarget::Result, 2)),
+        (9, 9, (BoundedTarget::Arguments, 10)),
+    ] {
+        let (arguments_value, arguments_entries) = bounded(&members(arguments));
+        let (result_value, result_entries) =
+            JsonValue::try_from_source_value_bounded(BoundedTarget::Result, &members(result))
+                .unwrap();
+        let tool = ToolObservation::new()
+            .with_name("synthetic")
+            .unwrap()
+            .with_arguments(arguments_value)
+            .with_bounded_values(arguments_entries)
+            .with_result(result_value)
+            .with_bounded_values(result_entries);
+        let (whole, count) = expected;
+        assert_eq!(tool.bounded_values().len(), count);
+        assert!(
+            entries(&tool)
+                .iter()
+                .any(|(target, pointer, _)| *target == whole && pointer.is_empty())
+        );
+        build_with_provenance(
+            ObservationBody::Tool(tool),
+            ObservationStage::ToolResultReturned,
+            &TOOL_PATHS,
+        )
+        .unwrap();
+    }
+}
+
+/// The bounded conversion decides on the normalized text: a string or key
+/// within its bound at the source whose normalized form is over it is
+/// replaced or dropped and recorded, like one over it at the source.
+#[test]
+fn bounded_conversion_decides_on_the_normalized_size() {
+    // Each character normalizes to two, of twice its length.
+    let expanding = |count: usize| "\u{958}".repeat(count);
+    let source = serde_json::json!({"q": expanding(1_365), expanding(21): 1, "kept": "ok"});
+    assert!(JsonValue::try_from_source_value(&source).is_err());
+    let (value, replaced) = bounded(&source);
+    assert_eq!(
+        replacements(&replaced),
+        [
+            ("", BoundDimension::KeyBytes),
+            ("/q", BoundDimension::StringBytes)
+        ]
+    );
+    assert_eq!(replaced[1].bytes(), 4_095);
+    let JsonValue::Object(members) = &value else {
+        panic!("object")
+    };
+    assert_eq!(members.len(), 2);
+    assert_eq!(members["q"], JsonValue::Null);
+    assert_eq!(members["kept"], JsonValue::string("ok"));
+    // Within the bound once normalized, the string is kept normalized.
+    let (value, replaced) = bounded(&serde_json::json!({"q": expanding(600)}));
+    assert!(replaced.is_empty());
+    assert_eq!(
+        value,
+        JsonValue::try_from_source_value(&serde_json::json!({"q": expanding(600)})).unwrap()
+    );
+}

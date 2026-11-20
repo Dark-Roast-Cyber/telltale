@@ -14,7 +14,12 @@
   as one unit (such as legacy OpenCode), so its tool name, paths and other
   arguments went unevaluated. Now the over-bound value alone is
   replaced, the call's other facts are evaluated, and nothing is derived
-  from the replaced value. The unit is reported, never hidden: the source
+  from the replaced value. A tool value within its own bound that the
+  observation cannot hold together with the call's other fields, or with
+  the fields derived from its values, is handled the same way: the largest
+  tool values are replaced until the call fits, and when that is not enough
+  every tool value of the call is replaced. A string whose normalized form
+  is over its bound counts as over it. The unit is reported, never hidden: the source
   gets one content-free `scanner_error` per evaluated window with the new
   `error` value `canonical_values_bounded` (only when no unit of that window was
   also quarantined, which keeps `canonical_units_quarantined`), coverage is
@@ -37,7 +42,8 @@
   carries it (`with_argument_text`) for validation; `telltale-schema` adds
   `try_from_source_tool_arguments_bounded`,
   `try_from_source_tool_result_bounded`, `BoundedValue`, `BoundedTarget`,
-  `TOOL_MAX_BOUNDED_VALUES` and the semantic field `tool.bounded_values`
+  `TOOL_MAX_BOUNDED_VALUES`, `ToolObservation::with_fitted_values` and
+  `with_replaced_values`, and the semantic field `tool.bounded_values`
   (present only when a value was replaced); `telltale-sources` adds
   `BoundedUnit` and `AcquisitionBatch::bounded`; core re-exports
   `BoundedUnit` and adds `SourceScan::bounded_units()`. See the

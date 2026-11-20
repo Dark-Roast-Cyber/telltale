@@ -13,7 +13,8 @@ use telltale_schema::observation::{
 };
 
 use crate::tool_operation::{
-    ResultText, ValueBounds, declare, replaced_arguments, with_source_arguments, with_source_result,
+    ResultText, ValueBounds, build_fitted, declare, replaced_arguments, with_source_arguments,
+    with_source_result,
 };
 
 use super::native::{
@@ -396,6 +397,49 @@ fn emit_tool_observation(
     observed_at: &ObservedAt,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), OpenCodeCanonicalError> {
+    let observation = build_fitted(
+        ValueBounds::Replace,
+        |error| matches!(error, OpenCodeCanonicalError::Observation(error) if error.bound_dimension().is_some()),
+        |bounds| {
+            tool_observation(
+                source_sequence,
+                source_id,
+                context,
+                tool_name,
+                call_id,
+                state,
+                arguments,
+                has_arguments,
+                result,
+                has_result,
+                explicit_failure,
+                stage,
+                observed_at,
+                bounds,
+            )
+        },
+    )?;
+    observations.push(observation)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tool_observation(
+    source_sequence: u64,
+    source_id: Option<&str>,
+    context: &OpenCodeMessageContext,
+    tool_name: Option<&str>,
+    call_id: Option<&str>,
+    state: &OpenCodeToolState,
+    arguments: Option<&Value>,
+    has_arguments: bool,
+    result: Option<&Value>,
+    has_result: bool,
+    explicit_failure: bool,
+    stage: ObservationStage,
+    observed_at: &ObservedAt,
+    bounds: ValueBounds,
+) -> Result<CanonicalObservationV2, OpenCodeCanonicalError> {
     let mut body = ToolObservation::new();
     let mut metadata = Vec::new();
     if let Some(name) = tool_name {
@@ -403,17 +447,11 @@ fn emit_tool_observation(
         metadata.push(("tool.name", FactProvenance::Reported));
     }
     if has_arguments && let Some(arguments) = arguments {
-        body = with_source_arguments(
-            super::tools::TOOLS,
-            tool_name,
-            body,
-            arguments,
-            ValueBounds::Replace,
-        )?;
+        body = with_source_arguments(super::tools::TOOLS, tool_name, body, arguments, bounds)?;
         metadata.push(("tool.arguments", FactProvenance::Reported));
     }
     if has_result && let Some(result) = result {
-        body = with_source_result(body, result, ResultText::Direct, ValueBounds::Replace)?;
+        body = with_source_result(body, result, ResultText::Direct, bounds)?;
         metadata.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = state.is_error {
@@ -498,8 +536,7 @@ fn emit_tool_observation(
             ),
         );
     }
-    observations.push(builder.build()?)?;
-    Ok(())
+    Ok(builder.build()?)
 }
 
 /// Clear command and file-path arguments become Parsed facets; they never
