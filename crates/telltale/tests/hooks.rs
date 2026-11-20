@@ -22,6 +22,8 @@ mod host_rule_integrity;
 mod journal_id_safety;
 #[path = "hooks/native_parity.rs"]
 mod native_parity;
+#[path = "hooks/projection_padding.rs"]
+mod projection_padding;
 #[path = "hooks/scenarios.rs"]
 mod scenarios;
 #[path = "hooks/self_protection_corpus.rs"]

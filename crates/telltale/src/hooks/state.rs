@@ -486,6 +486,64 @@ impl SessionHandle {
     }
 }
 
+/// A directory of its own for one evaluation when no state directory resolves:
+/// created fresh under the system temporary directory, owner-only (0700), and
+/// removed with everything in it when dropped. The location is the
+/// environment's choice, so creation is exclusive: it fails if anything exists
+/// at the name, a link included, and a new random-looking name is tried; a few
+/// names taken in a row fail creation. Unix only: on Windows a new directory takes
+/// its parent's ACL, and nothing here can make it owner-only, so creation fails
+/// and the caller falls back to its failure policy.
+pub struct ScratchDir {
+    path: PathBuf,
+}
+
+impl ScratchDir {
+    #[cfg(unix)]
+    pub fn create() -> std::io::Result<Self> {
+        use std::os::unix::fs::DirBuilderExt;
+        let base = std::env::temp_dir();
+        if !base.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the temporary directory is not an absolute path",
+            ));
+        }
+        for _ in 0..8 {
+            let id = crate::hooks::telemetry::new_record_id();
+            let name = format!("telltale-hooks-{}", id.trim_start_matches("tth:"));
+            let path = base.join(name);
+            // Not recursive: `mkdir` fails on any existing entry and never
+            // follows a link at the name.
+            match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::ErrorKind::AlreadyExists.into())
+    }
+
+    #[cfg(not(unix))]
+    pub fn create() -> std::io::Result<Self> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no owner-only temporary directory on this platform",
+        ))
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        // Removes links found inside, never what they point to.
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {

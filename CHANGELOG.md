@@ -186,7 +186,11 @@
   `error` record, and a tool input with no scalar value no longer crashes the
   hook
   ([ADR 0008](docs/hooks/adr/0008-detect-only-by-default.md)).
-  Generated settings call `telltale hooks <harness> hook`, and the long-lived
+  Generated settings call `telltale hooks <harness> hook`, pinning an existing
+  user config root with `--user-config-dir` so the harness environment cannot
+  move it (`check` lists the roots), and adding `--expect-enforce` when the
+  configuration enforces, so one that later does not load denies tool calls;
+  the long-lived
   evaluator autostarts by running the current executable as `hooks serve`.
   Hooks are configured like the rest of Telltale: the `hooks:` section of the
   `settings.d` YAML files (shown by `telltale config show`), from the same config
@@ -358,6 +362,9 @@
   viewer, not part of the scanner, release archives, or Event 3.0 contract.
   `LocalEventFeed` remains the read-only local journal API. There is no
   replacement UI.
+- Windows device-namespace paths are now fully redacted. The privacy
+  sanitizer replaces each with the path marker in every sanitization context,
+  as it does drive and UNC paths. Other redacted output is unchanged.
 
 ## 0.7.2 — published stable (2026-11-10)
 
