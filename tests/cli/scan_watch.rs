@@ -1781,7 +1781,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
             "other": 2,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 144);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 152);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 44);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -2448,14 +2448,17 @@ fn scan_once_emits_token_injection_and_install_detections() {
         .iter()
         .find(|event| event["session_id"] == "tool-result-injection")
         .expect("tool result detection");
+    // The URL is only named in the tool result: a zero-point reference, no
+    // exfiltration finding and no egress chain.
+    let ids = tool_result["rule_ids"].as_array().expect("rule ids");
     assert!(
-        tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
+        ids.iter()
+            .any(|rule| rule == "network.controlled_test_domain.mention")
+    );
+    assert!(
+        !ids.iter()
             .any(|rule| rule == "network.controlled_test_domain.darkroast")
     );
-    // The URL is only named in the tool result, so no egress chain links.
     assert!(
         !tool_result["rule_ids"]
             .as_array()
@@ -3289,7 +3292,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 35);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        144
+        152
     );
     assert!(
         !second_summary["diagnostic_warnings"]

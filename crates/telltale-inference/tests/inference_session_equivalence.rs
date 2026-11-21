@@ -1305,7 +1305,7 @@ fn real_detectors_match_command_text_across_paths_not_returned_execution() {
                         | "credential.api_key.pattern"
                         | "mcp.server_enumeration"
                         | "mcp.tool_metadata.prompt_injection"
-                        | "network.controlled_test_domain.darkroast"
+                        | "network.controlled_test_domain.mention"
                         | "prompt_injection.instruction_override"
                         | "secret.env.read"
                         | "tool.injection.shape"

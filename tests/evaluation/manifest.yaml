@@ -1286,14 +1286,11 @@ cases:
       unavailable_fields: [pid, parent_pid]
     expected_detection:
       rule_expectations:
-        - rule_id: network.controlled_test_domain.darkroast
+        - rule_id: network.controlled_test_domain.mention
           expectation: expected_match
       exact_rule_set: true
-      expected_score: 45
-      expected_contributions:
-        - id: network.controlled_test_domain.darkroast
-          type: deterministic_rule
-          points: 45
+      expected_score: 0
+      expected_contributions: []
     tags: [benign_confounder, efficacy, characterization]
 
   - id: RX-PIPE-EXEC-001
