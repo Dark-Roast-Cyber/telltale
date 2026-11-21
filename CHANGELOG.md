@@ -374,6 +374,14 @@
 
 ### Changes
 
+- **`watch` re-checks SQLite stores briefly after a change.** A commit that
+  becomes visible to readers only after its write notification is now read
+  without waiting for the next change to the store. After a scan of a changed
+  SQLite store, watch re-reads a small part of the store's shared-memory file
+  a few times over about ten seconds and scans the store again only if a
+  commit was published meanwhile; that scan can consume an `--iterations`
+  count. Unchanged stores are not rescanned.
+
 - **An embedded pipeline can describe its effective configuration.**
   `Pipeline::effective_configuration` returns a versioned, strict
   `telltale.effective_configuration.v1` document: rule packages and the

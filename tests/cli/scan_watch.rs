@@ -5626,6 +5626,144 @@ fn append_relocated_opencode(connection: &rusqlite::Connection, sequence: i64) {
         .unwrap();
 }
 
+/// Wait for the summary that reads every committed row. A scan woken by a
+/// commit's WAL write can read the snapshot from before SQLite publishes that
+/// commit, so one earlier summary may report one row fewer; watch re-checks
+/// and reads the commit. No summary may report more rows than are committed.
+fn receive_committed_rows(receive: &std::sync::mpsc::Receiver<Value>, committed: u64) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let summary = receive
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("watch must read every committed row");
+        let count = summary["source_processing"]["parsed_record_count"]
+            .as_u64()
+            .unwrap();
+        assert!((committed - 1..=committed).contains(&count), "{summary}");
+        if count == committed {
+            return summary;
+        }
+    }
+}
+
+/// Test-only SQLite VFS that can hold one writer inside the WAL sync of a
+/// commit: its frames are already written to the WAL, but SQLite has not yet
+/// published the commit to new readers.
+mod wal_sync_gate {
+    use rusqlite::ffi;
+    use std::ffi::c_int;
+    use std::sync::{Condvar, Mutex, Once, OnceLock};
+    use std::time::Duration;
+
+    pub(super) const NAME: &str = "telltale-test-wal-sync-gate";
+
+    type OpenFn = unsafe extern "C" fn(
+        *mut ffi::sqlite3_vfs,
+        ffi::sqlite3_filename,
+        *mut ffi::sqlite3_file,
+        c_int,
+        *mut c_int,
+    ) -> c_int;
+    type SyncFn = unsafe extern "C" fn(*mut ffi::sqlite3_file, c_int) -> c_int;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Open,
+        Armed,
+        Holding,
+    }
+
+    static STATE: Mutex<State> = Mutex::new(State::Open);
+    static CHANGED: Condvar = Condvar::new();
+    static BASE_OPEN: OnceLock<OpenFn> = OnceLock::new();
+    static BASE_SYNC: OnceLock<SyncFn> = OnceLock::new();
+    /// Addresses of the base WAL methods and of the leaked gated copy.
+    static WAL_METHODS: OnceLock<(usize, usize)> = OnceLock::new();
+
+    pub(super) fn register() {
+        static REGISTERED: Once = Once::new();
+        REGISTERED.call_once(|| {
+            // SAFETY: the default VFS lives for the process; the copy is leaked
+            // so SQLite may keep its registered pointer forever.
+            unsafe {
+                let base = ffi::sqlite3_vfs_find(std::ptr::null());
+                assert!(!base.is_null());
+                let mut vfs = *base;
+                BASE_OPEN.set(vfs.xOpen.unwrap()).unwrap();
+                vfs.pNext = std::ptr::null_mut();
+                vfs.zName = c"telltale-test-wal-sync-gate".as_ptr();
+                vfs.xOpen = Some(open);
+                assert_eq!(
+                    ffi::sqlite3_vfs_register(Box::leak(Box::new(vfs)), 0),
+                    ffi::SQLITE_OK
+                );
+            }
+        });
+    }
+
+    unsafe extern "C" fn open(
+        vfs: *mut ffi::sqlite3_vfs,
+        name: ffi::sqlite3_filename,
+        file: *mut ffi::sqlite3_file,
+        flags: c_int,
+        out_flags: *mut c_int,
+    ) -> c_int {
+        // SAFETY: SQLite passes the arguments of its own xOpen call through.
+        let result = unsafe { BASE_OPEN.get().unwrap()(vfs, name, file, flags, out_flags) };
+        if result == ffi::SQLITE_OK && flags & ffi::SQLITE_OPEN_WAL != 0 {
+            // SAFETY: a successfully opened file carries its base methods; the
+            // gated copy differs only in xSync and is leaked for the process.
+            unsafe {
+                let base = (*file).pMethods;
+                let (expected, gated) = *WAL_METHODS.get_or_init(|| {
+                    let mut methods = *base;
+                    BASE_SYNC.set(methods.xSync.unwrap()).unwrap();
+                    methods.xSync = Some(sync);
+                    (
+                        base as usize,
+                        Box::leak(Box::new(methods)) as *const _ as usize,
+                    )
+                });
+                assert_eq!(base as usize, expected);
+                (*file).pMethods = gated as *const ffi::sqlite3_io_methods;
+            }
+        }
+        result
+    }
+
+    unsafe extern "C" fn sync(file: *mut ffi::sqlite3_file, flags: c_int) -> c_int {
+        let mut state = STATE.lock().unwrap();
+        if *state == State::Armed {
+            *state = State::Holding;
+            CHANGED.notify_all();
+            state = CHANGED
+                .wait_while(state, |state| *state == State::Holding)
+                .unwrap();
+        }
+        drop(state);
+        // SAFETY: SQLite passes its own WAL file handle and sync flags through.
+        unsafe { BASE_SYNC.get().unwrap()(file, flags) }
+    }
+
+    /// Hold the next WAL sync of a connection opened through this VFS.
+    pub(super) fn arm() {
+        *STATE.lock().unwrap() = State::Armed;
+    }
+
+    pub(super) fn wait_until_holding(timeout: Duration) -> bool {
+        let state = STATE.lock().unwrap();
+        let (state, _) = CHANGED
+            .wait_timeout_while(state, timeout, |state| *state != State::Holding)
+            .unwrap();
+        *state == State::Holding
+    }
+
+    pub(super) fn release() {
+        *STATE.lock().unwrap() = State::Open;
+        CHANGED.notify_all();
+    }
+}
+
 fn relocated_opencode_command(home: &Path, work: &Path, subcommand: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
     command
@@ -5787,14 +5925,7 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
     let mut command = relocated_opencode_command(&home, &work, "watch");
     command
         .arg("--emit-activity")
-        .args([
-            "--iterations",
-            "2",
-            "--debounce-ms",
-            "100",
-            "--min-scan-interval-ms",
-            "0",
-        ])
+        .args(["--debounce-ms", "100", "--min-scan-interval-ms", "0"])
         .env("OPENCODE_DB", &database)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -5824,7 +5955,7 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
                     .contains(&inotify_directory_identity(&nested))
             );
             append_relocated_opencode(&writer, 2);
-            let first = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+            let first = receive_committed_rows(&receive, 2);
             assert_eq!(
                 first["source_processing"]["selected_source_count"], 1,
                 "{first}"
@@ -5850,6 +5981,14 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
                 2
             );
             drop(read_only);
+            // A commit published between the watcher's pre-scan sample and its
+            // read is read once more by the re-check; let that settle first.
+            if let Ok(extra) = receive.recv_timeout(Duration::from_secs(1)) {
+                assert_eq!(
+                    extra["source_processing"]["parsed_record_count"], 2,
+                    "{extra}"
+                );
+            }
             let mut shm = database.as_os_str().to_os_string();
             shm.push("-shm");
             fs::OpenOptions::new()
@@ -5869,20 +6008,9 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
             );
             assert!(child.try_wait().unwrap().is_none());
             append_relocated_opencode(&writer, 3);
-            let second = receive.recv_timeout(Duration::from_secs(30)).unwrap();
-            assert_eq!(
-                second["source_processing"]["parsed_record_count"], 3,
-                "{second}"
-            );
+            let second = receive_committed_rows(&receive, 3);
             assert_eq!(second["source_processing"]["parse_error_source_count"], 0);
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while child.try_wait().unwrap().is_none() {
-                if Instant::now() >= deadline {
-                    fail_watch(&mut child, "relocated watcher did not exit");
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-            assert!(child.wait().unwrap().success());
+            assert!(child.try_wait().unwrap().is_none());
             let log = fs::read_to_string(work.join("events.jsonl")).unwrap();
             assert!(!log.contains("PRIVATE-RELOCATION"));
             assert!(!log.is_empty());
@@ -5902,6 +6030,115 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
     let stderr = stderr_lines.join().unwrap().join("\n");
     if let Err(panic) = result {
         eprintln!("synthetic existing-WAL child status: {status:?}; stderr: {stderr}");
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// SQLite writes a commit's WAL frames, which notify the watcher, before it
+/// publishes the commit to readers, which notifies nothing. A scan that reads
+/// in between sees the previous snapshot; watch must still read the commit
+/// without waiting for a later write, and must then settle.
+#[test]
+fn opencode_relocation_watch_reads_a_commit_published_after_its_scan() {
+    use std::io::BufRead;
+    let _guard = watch_process_guard();
+    wal_sync_gate::register();
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let home = root.join("home");
+    let work = root.join("work");
+    let store = root.join("PRIVATE-RELOCATION");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    let database = store.join("held-commit.sqlite");
+    drop(seed_relocated_opencode(&database));
+    let writer = rusqlite::Connection::open_with_flags_and_vfs(
+        &database,
+        rusqlite::OpenFlags::default(),
+        wal_sync_gate::NAME,
+    )
+    .unwrap();
+    // Every commit syncs the WAL; the dirty-and-restore commit creates the
+    // sidecars before the watch starts.
+    writer
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA synchronous=FULL;
+             BEGIN IMMEDIATE;
+             UPDATE session_message SET seq = seq + 1;
+             UPDATE session_message SET seq = seq - 1;
+             COMMIT;",
+        )
+        .unwrap();
+    let mut command = relocated_opencode_command(&home, &work, "watch");
+    command
+        .args(["--debounce-ms", "100", "--min-scan-interval-ms", "0"])
+        .env("OPENCODE_DB", &database)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            if let Ok(summary) = serde_json::from_str::<Value>(&line.unwrap()) {
+                let _ = send.send(summary);
+            }
+        }
+    });
+    let (ready, stderr_lines) = watch_ready_line(&mut child);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ready
+            .recv_timeout(Duration::from_secs(60))
+            .expect("watch must report readiness");
+        #[cfg(target_os = "linux")]
+        wait_for_watch_ready(&mut child, &store);
+        wal_sync_gate::arm();
+        let append = thread::spawn(move || {
+            append_relocated_opencode(&writer, 2);
+            writer
+        });
+        assert!(
+            wal_sync_gate::wait_until_holding(Duration::from_secs(30)),
+            "writer never reached its WAL sync"
+        );
+        let held = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!(
+            held["source_processing"]["parsed_record_count"], 1,
+            "{held}"
+        );
+        wal_sync_gate::release();
+        // Keep the writer open: closing the last connection checkpoints and
+        // removes the WAL, which is itself a change.
+        let _writer = append.join().unwrap();
+        let published = receive
+            .recv_timeout(Duration::from_secs(30))
+            .expect("watch must read a commit published after its scan");
+        assert_eq!(
+            published["source_processing"]["parsed_record_count"], 2,
+            "{published}"
+        );
+        assert!(
+            matches!(
+                receive.recv_timeout(Duration::from_secs(2)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "an unchanged store must not be scanned again"
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "watch exited unexpectedly"
+        );
+    }));
+    // Never leave the writer held, even when an assertion failed.
+    wal_sync_gate::release();
+    if child.try_wait().unwrap().is_none() {
+        let _ = child.kill();
+    }
+    let status = child.wait().unwrap();
+    reader.join().unwrap();
+    let stderr = stderr_lines.join().unwrap().join("\n");
+    if let Err(panic) = result {
+        eprintln!("synthetic held-commit child status: {status:?}; stderr: {stderr}");
         std::panic::resume_unwind(panic);
     }
 }
