@@ -10,4 +10,7 @@ schemas/action-record-v1.schema.json text eol=lf
 crates/telltale-schema/data/action-record-v1.schema.json text eol=lf
 schemas/rule-catalog-v2.schema.json text eol=lf
 crates/telltale-schema/data/rule-catalog-v2.schema.json text eol=lf
+schemas/effective-configuration-v1.schema.json text eol=lf
+crates/telltale-schema/data/effective-configuration-v1.schema.json text eol=lf
+crates/telltale/tests/fixtures/effective-configuration-v1.json text eol=lf
 crates/telltale/src/hooks/rules/*.yaml text eol=lf
