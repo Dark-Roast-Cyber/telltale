@@ -144,8 +144,10 @@ impl ScanState {
     ) -> bool {
         // Summaries must not re-emit when only evidence or event time changed.
         // Activities and other non-detection events still hash every evidence
-        // item through `detection_fingerprint`. Detections use a posture
-        // fingerprint plus evidence not known to be routine low-severity activity.
+        // item through `detection_fingerprint`, except that canonical process
+        // correlations omit their regenerated supporting Event3 links.
+        // Detections use a posture fingerprint plus evidence not known to be
+        // routine low-severity activity.
         if event.event_type == "session_risk_summary" {
             return self.should_emit_session_risk_summary(source, event);
         }
@@ -157,6 +159,15 @@ impl ScanState {
                 source_fingerprint,
                 event,
                 "detection_emission",
+                &posture,
+            );
+        }
+        if let Some(posture) = process_correlation_emission_fingerprint(event, &source_fingerprint)
+        {
+            return self.should_emit_posture(
+                source_fingerprint,
+                event,
+                "process_correlation_emission",
                 &posture,
             );
         }
@@ -1089,6 +1100,47 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
         hash_evidence_item(&mut hasher, evidence);
     }
     hex::encode(hasher.finalize())
+}
+
+/// Dedup identity for canonical process-chain correlations. Their supporting
+/// Event3 IDs (`correlated_event_ids`) are regenerated on every projection, so
+/// they are not new evidence. Only links attributed to one of the event's rules
+/// that also carries that rule's `canonical_observation_id` and
+/// `correlation_process_step` evidence are omitted; every other item is
+/// hashed. `None` keeps full-evidence [`detection_fingerprint`] dedup.
+fn process_correlation_emission_fingerprint(
+    event: &Event,
+    source_fingerprint: &str,
+) -> Option<String> {
+    if event.event_type != "process_chain"
+        || !event.signal_types.iter().any(|kind| kind == "correlation")
+    {
+        return None;
+    }
+    let generated_link = |item: &Evidence| {
+        item.field == "correlated_event_ids"
+            && item.rule_id.as_ref().is_some_and(|rule_id| {
+                event.rule_ids.contains(rule_id)
+                    && ["canonical_observation_id", "correlation_process_step"]
+                        .iter()
+                        .all(|field| {
+                            event.evidence.iter().any(|support| {
+                                support.field == *field && support.rule_id.as_ref() == Some(rule_id)
+                            })
+                        })
+            })
+    };
+    if !event.evidence.iter().any(generated_link) {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hash_event_posture(&mut hasher, event, source_fingerprint);
+    for item in &event.evidence {
+        if !generated_link(item) {
+            hash_evidence_item(&mut hasher, item);
+        }
+    }
+    Some(hex::encode(hasher.finalize()))
 }
 
 /// Dedup identity for `detection` emission only. Posture is always included:

@@ -21,6 +21,16 @@
   Safety Net, with a pinned
   reference and its notice retained in the bundled rule source. This is
   unreleased 0.8-line content, not a change to any 0.7.x artifact.
+
+- **An unchanged process-chain correlation is no longer emitted again on every
+  scan.** Its supporting Event 3 IDs (`correlated_event_ids`) are regenerated
+  each scan, and scanner state counted them as new evidence. Scanner state now
+  leaves out those links when the same rule's canonical observation and
+  process-step evidence backs them; new occurrences and changed evidence still
+  emit. No state migration and no Event 3 change; the first scan after an
+  upgrade can emit a previously seen correlation once. `--backfill` still
+  bypasses scanner-state deduplication.
+
 - **A tool call or result with a value over its own canonical bound is now emitted
   and evaluated instead of dropped whole.** Before, the whole call was
   quarantined, or the whole source failed in an adapter that reads a source
