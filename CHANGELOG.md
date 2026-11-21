@@ -18,12 +18,17 @@
   floors the decision at `on_unevaluable` (recorded as
   `pending_input_separated`). An input of 1,025 to 2,048 values, previously
   unevaluable, is now projected in full. The work per call stays bounded by
-  the same variant limit; a call with no session history is no longer scanned
-  twice ahead of the piece loop, a call past the projection budget goes
-  straight to the piece loop (its command's pieces first) instead of first
-  being scanned whole, and a projected call whose evaluation has already
-  passed the piece time limit is not scanned there at all: it records
-  `pending_pieces_unscanned` and follows `on_unevaluable`.
+  the same variant limit:
+  - a call with no session history is no longer scanned twice ahead of the
+    piece loop;
+  - a call past the projection budget goes straight to the piece loop, its
+    command's pieces first, instead of first being scanned whole;
+  - a projected call whose evaluation has already passed the piece time limit
+    is not scanned there at all: it records `pending_pieces_unscanned` and
+    follows `on_unevaluable`.
+
+  A host that calls `telltale_core::hooks::Engine::evaluate` directly passes
+  the new `past_budget` argument (`false` for a call evaluated whole).
 
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
