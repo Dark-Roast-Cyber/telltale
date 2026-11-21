@@ -567,13 +567,18 @@ fn no_poisoning_input_raises_a_hook_error() {
     assert_eq!(h.records("error"), Vec::<Value>::new());
 }
 
-/// The evaluation fits in the evaluator's margin, even with a full window of lines
-/// that make every scan slow or fail, because no scan starts that is forecast to
-/// end past the budget. The bound is wall-clock time on a machine that runs this
-/// test beside the long corpus tests, so it is set well above the 2 s measured
-/// alone and well below the tens of seconds an unbounded search takes.
+/// The recovery budget bounds what a call spends on its history, counted in
+/// scans: once it is spent, even a full window of lines that make every scan
+/// slow or fail costs the call one scan, of its own line, which keeps its rule
+/// deny. The window is not scanned whole and no history goes back, and the
+/// record says history was lost. (When a scan is admitted before the budget is
+/// spent is the forecast's unit tests' subject, in `engine.rs`.)
 #[test]
 fn recovery_cost_is_bounded_at_the_window_limits() {
+    let spent = Limits {
+        recovery: std::time::Duration::ZERO,
+        ..common::generous()
+    };
     let shapes: [(&str, Vec<Value>); 2] = [
         (
             "every-line-poison",
@@ -585,18 +590,16 @@ fn recovery_cost_is_bounded_at_the_window_limits() {
         ),
     ];
     for (shape, lines) in shapes {
-        let mut h = Harness::new();
+        let mut h = Harness::with_limits(spent, |_| {});
         pre(&mut h, true, "first", command("ls"));
         seed(&h, lines);
-        let started = std::time::Instant::now();
         let later = pre(&mut h, true, "later", command(EXFIL));
-        let took = started.elapsed();
-        assert_eq!(
-            rule_deny_failure(shape, &h.decision_for("later"), &later),
-            None
-        );
-        assert!(took.as_secs() < 12, "{shape} took {took:?}");
-        eprintln!("{shape}: {took:?}");
+        let record = h.decision_for("later");
+        assert_eq!(rule_deny_failure(shape, &record, &later), None);
+        let scans = &record["evaluation"]["scans"];
+        assert_eq!(scans["whole"], "skipped_budget", "{shape}: {scans}");
+        assert_eq!(scans["together"], "passed", "{shape}: {scans}");
+        assert!(limits(&record).iter().any(|l| l == HISTORY_LOST), "{shape}");
     }
 }
 
@@ -727,7 +730,9 @@ fn a_flood_does_not_displace_a_short_chain_stage() {
             .collect::<Vec<_>>()
     });
     for history in exact.chain(filler_then_flood) {
-        let mut h = Harness::new();
+        // Within generous limits: the order lines go back in decides this,
+        // not how many scans the host fits in the recovery budget.
+        let mut h = Harness::with_limits(common::generous(), |_| {});
         pre(&mut h, true, "first", command(DOWNLOAD));
         seed(&h, history);
         pre(&mut h, true, "run", command(RUN_DOWNLOADED));

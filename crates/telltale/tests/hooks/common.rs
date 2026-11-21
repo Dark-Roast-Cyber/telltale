@@ -79,6 +79,17 @@ pub fn template(event: &str, tool: Option<&str>) -> Value {
         .unwrap_or_else(|| panic!("no captured {event} payload"))
 }
 
+/// Time limits no host's load reaches. A test of what an evaluation covers
+/// (that a deny is found) runs within these, so the runner's speed cannot
+/// decide it; what a call gets when time runs out is tested with tiny limits.
+pub fn generous() -> Limits {
+    Limits {
+        recovery: std::time::Duration::from_secs(3600),
+        piece_scan: std::time::Duration::from_secs(3600),
+        ..Limits::default()
+    }
+}
+
 pub struct Harness {
     pub dir: tempfile::TempDir,
     pub runtime: Runtime,
