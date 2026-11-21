@@ -17,7 +17,7 @@ use telltale_schema::observation::{BoundedTarget, CanonicalBoundContext};
 
 use crate::tool_operation::{
     BoundedRecord, ResultText, ValueBounds, bounded_records, build_fitted, declare_in,
-    with_source_arguments, with_source_result,
+    with_searchable_text, with_source_arguments, with_source_result,
 };
 
 use super::native::{
@@ -685,8 +685,10 @@ fn tool_observation(
             .filter(|_| !replaced_in(&body, BoundedTarget::Result))
             .and_then(file_change_searchable_result);
         if let Some(text) = searchable {
-            body = body.with_searchable_result(text)?;
-            paths.push(("tool.searchable_result", FactProvenance::Parsed));
+            body = with_searchable_text(body, BoundedTarget::SearchableResult, &text, bounds)?;
+            if body.searchable_result().is_some() {
+                paths.push(("tool.searchable_result", FactProvenance::Parsed));
+            }
         }
         paths.push(("tool.result", FactProvenance::Reported));
     } else if let Some(error) = &fields.error {
@@ -694,13 +696,16 @@ fn tool_observation(
         paths.push(("tool.result", FactProvenance::Reported));
     }
     // Searchable text is derived from validated values, never from a field
-    // with replaced values; fitting the result can replace arguments too.
+    // with replaced values; fitting the result can replace arguments too. A
+    // text over its own bound is omitted and recorded.
     if hosted_search
         && !replaced_in(&body, BoundedTarget::Arguments)
         && let Some(text) = body.arguments().and_then(web_search_searchable_arguments)
     {
-        body = body.with_searchable_arguments(text)?;
-        paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
+        body = with_searchable_text(body, BoundedTarget::SearchableArguments, &text, bounds)?;
+        if body.searchable_arguments().is_some() {
+            paths.push(("tool.searchable_arguments", FactProvenance::Parsed));
+        }
     }
     if let Some(is_error) = fields.is_error {
         body = body.with_is_error(is_error);

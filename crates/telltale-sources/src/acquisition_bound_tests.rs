@@ -714,6 +714,7 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
             let retained = match target {
                 BoundedTarget::Arguments => tool.arguments(),
                 BoundedTarget::Result => tool.result(),
+                other => unreachable!("{other:?} is no tool value"),
             };
             assert!(!format!("{retained:?}").contains("xxxx"));
         }
@@ -1277,24 +1278,33 @@ fn in_bound_tool_calls_keep_identity_and_semantic_content() {
             match acquire_source(&source, options()) {
                 Ok(batch) => {
                     // In bounds nothing is replaced, so no unit is reported as
-                    // bounded. Two Copilot cases were refusals before: each
-                    // is now held with its arguments replaced and reported.
+                    // bounded. In two Copilot cases the raw request text is
+                    // over its own bound: the call keeps its arguments, only
+                    // that searchable text is omitted, and the unit is
+                    // reported.
                     if client == ClientId::Copilot && matches!(case, 0 | 5) {
                         assert_eq!(
                             bounded_units(&batch),
                             [(
                                 "",
                                 0,
-                                BoundedTarget::Arguments,
-                                BoundDimension::EncodedBytes
+                                BoundedTarget::SearchableArguments,
+                                BoundDimension::StringBytes
                             )],
                             "{case}"
                         );
-                        let debug = format!("{:?}", batch.observations);
-                        assert!(
-                            !debug.contains("sss") && !debug.contains("\\u{1}"),
+                        let [call] = batch.observations.as_slice() else {
+                            panic!("{case}: one call")
+                        };
+                        let ObservationBody::Tool(tool) = call.body() else {
+                            panic!("{case}: a tool call")
+                        };
+                        assert_eq!(
+                            tool.arguments(),
+                            Some(&JsonValue::try_from_source_value(arguments).unwrap()),
                             "{case}"
                         );
+                        assert_eq!(tool.searchable_arguments(), None, "{case}");
                     } else {
                         assert!(
                             batch.bounded.is_empty(),
@@ -1335,7 +1345,7 @@ fn in_bound_tool_calls_keep_identity_and_semantic_content() {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     assert_eq!(
-        digest, "1182b3928be25ac0b388f54a2c7936cfd455d3c436cacfeaec42b2e0aa18a850",
+        digest, "7606363534c6b600d99e01aa2d237beaa2bd99450633228a4c573e72e1318f93",
         "in-bound projection changed"
     );
 }
@@ -1443,6 +1453,95 @@ fn copilot_drops_searchable_text_beside_replaced_arguments() {
 /// The contribution labels are checked for every call, with or without
 /// replaced values: a call whose name or time is not a valid label keeps
 /// exactly the outcome it has with in-bound values.
+fn copilot_call(arguments: &str) -> AcquisitionBatch {
+    let log = format!(
+        "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {}\n",
+        json!([{"type":"function_call","name":"exec","call_id":"call_synthetic","arguments":arguments}])
+    );
+    acquire_input(
+        ClientId::Copilot,
+        "copilot.process_log",
+        SourceKind::CopilotProcessLog,
+        &log,
+    )
+}
+
+/// A Copilot call whose values are each within their bounds keeps them when
+/// its raw request text is over its own bound: only that searchable text is
+/// omitted, the command facet is built from the kept argument, and the unit
+/// is reported with the searchable target.
+#[test]
+fn copilot_keeps_in_bound_arguments_beside_an_omitted_request_text() {
+    let arguments = |note: usize| json!({"command":"echo synthetic", "path":"/synthetic/kept", "note":"n".repeat(note), "more":"m".repeat(1_200)});
+    let long = arguments(3_000).to_string();
+    assert!(long.len() > 4_096);
+    let batch = copilot_call(&long);
+    assert!(batch.quarantined.is_empty());
+    assert_eq!(
+        bounded_units(&batch),
+        [(
+            "",
+            0,
+            BoundedTarget::SearchableArguments,
+            BoundDimension::StringBytes
+        )]
+    );
+    let [call] = batch.observations.as_slice() else {
+        panic!("one call")
+    };
+    let ObservationBody::Tool(tool) = call.body() else {
+        panic!("a tool call")
+    };
+    assert_eq!(
+        tool.arguments(),
+        Some(&JsonValue::try_from_source_value(&arguments(3_000)).unwrap())
+    );
+    assert_eq!(tool.searchable_arguments(), None);
+    assert!(
+        !call
+            .fact_metadata()
+            .contains_key("tool.searchable_arguments")
+    );
+    assert_eq!(
+        tool.bounded_values()
+            .iter()
+            .map(|value| (value.target().as_str(), value.pointer()))
+            .collect::<Vec<_>>(),
+        [("searchable_arguments", "")]
+    );
+    // The facets are those of the same call with a short request text.
+    let short = copilot_call(&arguments(10).to_string());
+    assert!(short.bounded.is_empty());
+    assert_eq!(call.facets(), short.observations[0].facets());
+    assert!(call.facets().contains_key("command.text"));
+}
+
+/// A Copilot call with a replaced argument value keeps today's outcome even
+/// when its raw request text is also over its bound: the value is replaced,
+/// no searchable text is kept, and no omission is recorded beside it.
+#[test]
+fn copilot_replaced_arguments_record_no_omitted_request_text() {
+    let items = (0..65).map(|_| json!("replaced-item")).collect::<Vec<_>>();
+    let arguments =
+        json!({"items": items, "path": "/synthetic/kept", "note":"n".repeat(4_000)}).to_string();
+    assert!(arguments.len() > 4_096);
+    let batch = copilot_call(&arguments);
+    assert_eq!(
+        bounded_units(&batch),
+        [("", 0, BoundedTarget::Arguments, BoundDimension::ArrayItems)]
+    );
+    let ObservationBody::Tool(tool) = batch.observations[0].body() else {
+        panic!("expected the call")
+    };
+    assert_eq!(tool.searchable_arguments(), None);
+    assert!(
+        tool.bounded_values()
+            .iter()
+            .all(|value| value.target() == BoundedTarget::Arguments)
+    );
+    assert!(format!("{:?}", tool.arguments()).contains("/synthetic/kept"));
+}
+
 #[test]
 fn replaced_values_keep_the_contribution_label_checks() {
     let name = "exec\u{1}tool";

@@ -320,3 +320,153 @@ fn a_member_no_declaration_names_reads_as_it_did() {
     let plain = with(Some(write_operation().with_written_path("/p/a")));
     assert_eq!(reading(&plain), reading(&undeclared));
 }
+
+/// A call whose searchable text was omitted for its size: every selector that
+/// reads that text, alone or before the value it would fall back to, has no
+/// visibility into the call. A condition on it is not evaluated, and a
+/// not-exists condition does not match.
+#[test]
+fn selectors_reading_an_omitted_searchable_text_are_not_evaluated() {
+    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason, SelectorPresence};
+    let observation = |omitted: bool| omitted_text_call(omitted, "kept output");
+    let omitted = observation(true);
+    let kept = observation(false);
+    for name in [
+        "tool.searchable_arguments",
+        "tool.arguments.text",
+        "compat.v1.arguments",
+        "tool.searchable_result",
+        "tool.result.text",
+        "compat.v1.tool_result",
+    ] {
+        let selector = SelectorId::parse(name).unwrap();
+        let resolution = SelectorRegistry::new().resolve(selector, &omitted).unwrap();
+        assert_eq!(
+            resolution.presence(),
+            SelectorPresence::UnavailableVisibility,
+            "{name}"
+        );
+        assert_eq!(resolution.value(), None, "{name}");
+        let resolution = SelectorRegistry::new().resolve(selector, &kept).unwrap();
+        assert!(resolution.is_present(), "{name}");
+    }
+    let insufficient = MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility);
+    for name in [
+        "tool.searchable_arguments",
+        "tool.arguments.text",
+        "tool.searchable_result",
+        "tool.result.text",
+    ] {
+        for matcher in [
+            MatcherSpec::not_exists(name),
+            MatcherSpec::contains(name, JsonValue::string("kept")),
+            MatcherSpec::predicate(
+                name,
+                MatcherOperator::NotEquals,
+                Some(JsonValue::string("other")),
+            ),
+            MatcherSpec::predicate(
+                name,
+                MatcherOperator::NotIn,
+                Some(JsonValue::array(vec![JsonValue::string("other")])),
+            ),
+            MatcherSpec::not(MatcherSpec::contains(name, JsonValue::string("other"))),
+        ] {
+            let state = matcher.compile().unwrap().evaluate(&omitted).unwrap();
+            assert_eq!(state.state(), &insufficient, "{name}");
+        }
+        let state = MatcherSpec::not_exists(name)
+            .compile()
+            .unwrap()
+            .evaluate(&kept)
+            .unwrap();
+        assert_eq!(state.state(), &MatchState::NoMatch, "{name}");
+    }
+}
+
+/// The Rule v1 content matcher reads `tool_result` through its borrowed
+/// output view: with the searchable texts omitted, neither the kept result
+/// nor the kept arguments string is read in their place, so a pattern that
+/// both hold is not evaluated rather than matched.
+#[test]
+fn rule_v1_content_on_an_omitted_searchable_text_is_not_evaluated() {
+    use super::{MatchState, NonEvaluationReason};
+    let matcher = telltale_rules::load_default_rule_set()
+        .unwrap()
+        .compatibility_export()
+        .rules()
+        .iter()
+        .find(|rule| rule.id == "credential.api_key.pattern")
+        .unwrap()
+        .compile_content_matcher()
+        .unwrap();
+    let token = "AKIA2E0A8F3B244C9986";
+    let targets = ["tool_result".to_owned(), "arguments".to_owned()];
+    let evaluate = |omitted| {
+        super::rule_v1::evaluate_content_matcher(
+            &matcher,
+            &targets,
+            &omitted_text_call(omitted, token),
+            &mut super::session::RetentionBudget::new(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        evaluate(true),
+        (
+            MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility),
+            Vec::new()
+        )
+    );
+    // The same call with short searchable texts kept is read from them.
+    assert_eq!(evaluate(false).0, MatchState::NoMatch);
+}
+
+/// A tool call with string arguments and result holding `kept`, and searchable
+/// texts that are short, or over their bound and so omitted.
+fn omitted_text_call(omitted: bool, kept: &str) -> CanonicalObservationV2 {
+    let metadata = |provenance| FactMetadata::new(provenance, Sensitivity::Normal).unwrap();
+    {
+        let text = if omitted {
+            "x".repeat(4_097)
+        } else {
+            "short".to_owned()
+        };
+        let tool = ToolObservation::new()
+            .with_name("synthetic")
+            .unwrap()
+            .with_arguments(JsonValue::string(kept))
+            .with_result(JsonValue::string(kept))
+            .with_bounded_searchable_arguments(&text)
+            .unwrap()
+            .with_bounded_searchable_result(&text)
+            .unwrap();
+        let mut builder = CanonicalObservationV2::builder(
+            ObservationBody::Tool(tool),
+            ObservationStage::ToolResultReturned,
+            ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+            SourceProvenance::new(
+                IngestionMode::SessionStore,
+                "synthetic",
+                "synthetic.store",
+                Fidelity::FullNative,
+            )
+            .unwrap()
+            .with_native_id("call")
+            .unwrap(),
+        )
+        .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+        .capability_context(
+            CapabilityContext::new()
+                .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+        );
+        let mut paths = vec!["tool.name", "tool.arguments", "tool.result"];
+        if !omitted {
+            paths.extend(["tool.searchable_arguments", "tool.searchable_result"]);
+        }
+        for path in paths {
+            builder = builder.fact_metadata(path, metadata(FactProvenance::Reported));
+        }
+        builder.build().unwrap()
+    }
+}

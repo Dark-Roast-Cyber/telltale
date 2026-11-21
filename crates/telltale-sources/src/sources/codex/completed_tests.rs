@@ -596,7 +596,8 @@ fn completed_file_change_bounds_are_per_unit_content_free_and_not_truncated() {
             &[meta(), good, file_change(changes(max_content + 1))],
         )
         .unwrap();
-        // Over that bound the change is held with its values replaced whole.
+        // Over that bound the change keeps its result; only the searchable
+        // text is omitted, and the unit is reported.
         assert_eq!(large.observations.len(), 2);
         assert!(large.quarantined.is_empty());
         assert_eq!(
@@ -604,11 +605,26 @@ fn completed_file_change_bounds_are_per_unit_content_free_and_not_truncated() {
             [(
                 "patch-a",
                 2,
-                BoundedTarget::Result,
-                BoundDimension::EncodedBytes
+                BoundedTarget::SearchableResult,
+                BoundDimension::StringBytes
             )]
         );
-        let reported = format!("{:?}{:?}", large.bounded, large.observations);
+        let ObservationBody::Tool(tool) = large.observations[1].body() else {
+            panic!("tool")
+        };
+        assert_eq!(tool.searchable_result(), None);
+        assert!(
+            tool.bounded_values()
+                .iter()
+                .all(|value| value.pointer().is_empty())
+        );
+        assert!(format!("{:?}", tool.result()).contains(&"x".repeat(max_content + 1)));
+        assert!(
+            !large.observations[1]
+                .fact_metadata()
+                .contains_key("tool.searchable_result")
+        );
+        let reported = format!("{:?}", large.bounded);
         assert!(!reported.contains("/synthetic") && !reported.contains(&"x".repeat(16)));
         for changes in [
             json!({"x".repeat(64):{"type":"add","content":""}}),

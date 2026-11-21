@@ -18,13 +18,20 @@
   observation cannot hold together with the call's other fields, or with
   the fields derived from its values, is handled the same way: the largest
   tool values are replaced until the call fits, and when that is not enough
-  every tool value of the call is replaced. A string whose normalized form
-  is over its bound counts as over it. The unit is reported, never hidden: the source
+  every tool value of the call is replaced. A searchable text derived from a
+  call (`tool.searchable_arguments`, `tool.searchable_result`) that is over
+  its own bound is omitted before the values are fitted or replaced whole;
+  values within their own bounds are kept unless the cap on recorded
+  replacements is reached. A rule condition that reads an omitted
+  searchable text is not evaluated for that call (insufficient visibility)
+  rather than read as absent. A string whose normalized form is over its
+  bound counts as over it. The unit is reported, never hidden: the source
   gets one content-free `scanner_error` per evaluated window with the new
   `error` value `canonical_values_bounded` (only when no unit of that window was
   also quarantined, which keeps `canonical_units_quarantined`), coverage is
   partial, and the scan summary's `source_processing` gains
   `bounded_value_unit_count` and `bounded_value_units` (coordinates, target
+  — `arguments`, `result`, `searchable_arguments` or `searchable_result` —
   and bound dimension, never content). A call in bounds produces the same
   output as before. Messages and failures that are not a value bound keep
   quarantine, and a call that cannot be held even with its values replaced
@@ -33,7 +40,7 @@
   agent-to-agent message text now gets the direct-text budget that commands,
   file bodies and patches already had; it is not read as a command.
   Detections for sessions holding such calls can appear once after upgrade
-  on a full-history scan, and the native action profile moves to 8, so
+  on a full-history scan, and the native action profile moves to 9, so
   every `semantic_identity` changes (replay identities do not); rebaseline
   as after a rule change. Event 3.0 and the JSON schemas are unchanged. API:
   each source's tool table declares which argument fields hold authored
@@ -42,9 +49,11 @@
   carries it (`with_argument_text`) for validation; `telltale-schema` adds
   `try_from_source_tool_arguments_bounded`,
   `try_from_source_tool_result_bounded`, `BoundedValue`, `BoundedTarget`,
-  `TOOL_MAX_BOUNDED_VALUES`, `ToolObservation::with_fitted_values` and
-  `with_replaced_values`, and the semantic field `tool.bounded_values`
-  (present only when a value was replaced); `telltale-sources` adds
+  `TOOL_MAX_BOUNDED_VALUES`, `ToolObservation::with_fitted_values`,
+  `with_replaced_values`, `with_bounded_searchable_arguments` and
+  `with_bounded_searchable_result`, and the semantic field
+  `tool.bounded_values` (present only when a value was replaced or a
+  searchable text omitted); `telltale-sources` adds
   `BoundedUnit` and `AcquisitionBatch::bounded`; core re-exports
   `BoundedUnit` and adds `SourceScan::bounded_units()`. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md#over-bound-tool-values).
