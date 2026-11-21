@@ -126,6 +126,10 @@ impl ObservationBody {
                     &body.bounded_values,
                     body.arguments.as_ref(),
                     body.result.as_ref(),
+                    [
+                        body.searchable_arguments.is_some(),
+                        body.searchable_result.is_some(),
+                    ],
                 )
             }
             Self::ToolDefinition(body)
@@ -502,6 +506,47 @@ impl ToolObservation {
         self.searchable_result = Some(non_empty(value.as_ref(), ValidationCode::InvalidBody)?);
         Ok(self)
     }
+    /// [`Self::with_searchable_arguments`], except that a text over the bound
+    /// of a semantic string is omitted and recorded by one
+    /// [`BoundedTarget::SearchableArguments`] entry; the arguments are kept.
+    pub fn with_bounded_searchable_arguments(
+        self,
+        value: impl AsRef<str>,
+    ) -> Result<Self, ObservationError> {
+        self.with_bounded_searchable(BoundedTarget::SearchableArguments, value.as_ref())
+    }
+    /// [`Self::with_searchable_result`], except that a text over the bound of
+    /// a semantic string is omitted and recorded by one
+    /// [`BoundedTarget::SearchableResult`] entry; the result is kept.
+    pub fn with_bounded_searchable_result(
+        self,
+        value: impl AsRef<str>,
+    ) -> Result<Self, ObservationError> {
+        self.with_bounded_searchable(BoundedTarget::SearchableResult, value.as_ref())
+    }
+    fn with_bounded_searchable(
+        mut self,
+        target: BoundedTarget,
+        value: &str,
+    ) -> Result<Self, ObservationError> {
+        let text = non_empty(value, ValidationCode::InvalidBody)?;
+        // The bound validation applies to the field, decided on the text as
+        // stored.
+        let bytes = text.len();
+        let text = JsonValue::String(text);
+        if let Err(error) = super::bounded_semantic_value_bytes(&text) {
+            let dimension = error.bound_dimension().ok_or(error)?;
+            return Ok(self.with_bounded_values([BoundedValue::new(target, "", dimension, bytes)]));
+        }
+        let JsonValue::String(text) = text else {
+            unreachable!("a string stays a string")
+        };
+        match target {
+            BoundedTarget::SearchableArguments => self.searchable_arguments = Some(text),
+            _ => self.searchable_result = Some(text),
+        }
+        Ok(self)
+    }
     pub fn with_reported_status(mut self, value: super::ToolStatus) -> Self {
         self.reported_status = Some(value);
         self
@@ -609,6 +654,8 @@ impl ToolObservation {
         let root = match target {
             BoundedTarget::Arguments => self.arguments.as_ref(),
             BoundedTarget::Result => self.result.as_ref(),
+            // A searchable text is no value with members.
+            BoundedTarget::SearchableArguments | BoundedTarget::SearchableResult => return false,
         };
         let mut member = String::new();
         super::value::push_segment(&mut member, key);

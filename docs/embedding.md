@@ -264,7 +264,14 @@ second detector or an Event 3 conversion loop.
   only when it is not empty. `ToolObservation::with_fitted_values` replaces
   the largest values of a converted call's arguments and result until both
   fit the room the observation leaves them, and `with_replaced_values`
-  replaces both whole; each records its replacements the same way.
+  replaces both whole; each records its replacements the same way. A
+  searchable text over its own bound is omitted before the values are
+  fitted or replaced whole (`with_bounded_searchable_arguments`,
+  `with_bounded_searchable_result`); values within their own bounds are kept
+  unless the cap on recorded replacements is reached. Its
+  entry and `BoundedUnit` carry the target `SearchableArguments` or
+  `SearchableResult`, and a rule condition that reads an omitted searchable
+  text is not evaluated for that call (insufficient visibility).
 
 ### Source size
 
@@ -406,7 +413,7 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (3), the native action profile version (6),
+  `ACTION_SEMANTICS_VERSION` (3), the native action profile version (9),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
