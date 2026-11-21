@@ -267,10 +267,20 @@ group; failed cleanup cannot release a still-live slot.
   but goes straight to its pieces, a longer command's first, and a projected call's
   variants are not scanned at all once the piece limit has passed
   (`pending_pieces_unscanned`, then `on_unevaluable`).
-- Waiting is bounded. A call waits 10 s for its session's lock, then gets the
-  strict policy. The evaluator never records what its client stopped waiting for,
-  and a client that gets no answer returns what was recorded or evaluates in-process
-  (ADR 0003).
+- Waiting is bounded, by one deadline per hook: 25 s from the hook's start
+  (`HOOK_DEADLINE`, below the 30 s timeout the hook is installed with). Every
+  later wait is cut to what is left of it: the wait for the evaluator, the wait
+  for the session's lock (10 s at most), the recovery budget and the piece time
+  limit (`Limits::within`). A call waits for its session's lock, then gets the
+  strict policy (`state_lock_timeout`). A call that reaches the deadline before
+  its decision is recorded records none and journals nothing; it gets the strict
+  policy and one `error` record (`hook_deadline`). One scan already in flight is
+  not interrupted, so a single slow scan can still run past the deadline. The
+  evaluator never records what its client stopped waiting for, and a client that
+  gets no answer returns what was recorded or evaluates in-process (ADR 0003).
+  The limits are values the runtime is built with (`engine::Limits`, defaults
+  only in production); tests use generous ones to prove coverage and tiny ones
+  to prove the degraded outcome.
 - State and journal are written by the same OS user as the agent. They are
   integrity-relevant but not tamper-proof; self-protection rules raise the
   bar, and managed settings plus out-of-user placement are the real fix.

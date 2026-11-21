@@ -112,7 +112,8 @@ a `deny` instead, and a headless run treats an ask as a denial.
 | The hook panics | While enforcing, a panic is answered like a payload the hook could not read, with an `error` record (`hook_panicked`) that cannot change the answer: a tool call gets the stricter of `on_error` and `on_unevaluable` on stdout, a payload lost to the panic gets the nameless block, other events exit 1. A panic while loading the configuration is a configuration that did not load. The evaluator leaves a panicking connection unanswered (its client evaluates in-process) and retires, so the next hook starts a fresh one. Builds that abort on panic do not compile | Raise either |
 | Evaluator unreachable, untrusted, or on another configuration | In-process evaluation (correct, slower) | `hooks.evaluator.enabled: false` |
 | Evaluator received the request but did not answer before the deadline | The decision it recorded, if any; otherwise in-process evaluation, which keeps the rule verdict unless that times out on the session's lock | none |
-| A session's lock stays taken for the 10 s a call waits (`state_lock_timeout`) | Stricter of `on_error` and `on_unevaluable` (default `ask`); `error` record | Raise either |
+| A session's lock stays taken for the 10 s a call waits, or until the hook's deadline if that comes first (`state_lock_timeout`) | Stricter of `on_error` and `on_unevaluable` (default `ask`); `error` record | Raise either |
+| A call reaches the hook's 25 s deadline. Every wait is cut to what is left of that one deadline; one scan already in flight is not interrupted, so a single slow scan can still run past it and into the harness's timeout, which runs the call | Reached before the decision is recorded: no decision recorded, nothing journaled; stricter of `on_error` and `on_unevaluable` (default `ask`); `error` record (`hook_deadline`) | Raise either |
 
 ## Confounds in testing
 

@@ -11,6 +11,20 @@
 - **The native action profile is 15.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
+
+- **Each hook has one deadline.** A hook's waits are now bounded together:
+  25 s from its start, below the 30 s timeout it is installed with. The wait
+  for the evaluator, the wait for the session's lock, the recovery budget and
+  the piece time limit are each cut to what is left of it. A tool call that
+  reaches the deadline before its decision is recorded records no decision
+  and journals nothing; it gets the stricter of `on_error` and
+  `on_unevaluable` (default `ask`) and one `error` record with the new code
+  `hook_deadline`. One scan already in flight is not interrupted.
+
+- **Hooks embedding API: time limits are built in.** `Runtime::with_limits`
+  (with `engine::Limits`) replaces `Runtime::set_session_lock_wait`, and
+  `RecoveryBudget::start` takes the `Limits` to work within.
+
 - **Override reasons are bounded.** An override entry's `reason`, in
   `overrides.d` or a builder override document, must be at most 256
   characters without control or invisible formatting characters other than
