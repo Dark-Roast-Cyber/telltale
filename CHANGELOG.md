@@ -378,8 +378,8 @@
   becomes visible to readers only after its write notification is now read
   without waiting for the next change to the store. After a scan of a changed
   SQLite store, watch re-reads a small part of the store's shared-memory file
-  a few times over about ten seconds and scans the store again only if a
-  commit was published meanwhile; that scan can consume an `--iterations`
+  a few times over about ten seconds and scans the store again only if its
+  shared-memory header changed; that scan can consume an `--iterations`
   count. Unchanged stores are not rescanned.
 
 - **An embedded pipeline can describe its effective configuration.**

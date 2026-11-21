@@ -5982,8 +5982,12 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
             );
             drop(read_only);
             // A commit published between the watcher's pre-scan sample and its
-            // read is read once more by the re-check; let that settle first.
-            if let Ok(extra) = receive.recv_timeout(Duration::from_secs(1)) {
+            // read is read once more by a re-check. Outlast every re-check
+            // window (the last delay is 10 s after a scan) before the quiet phase.
+            let mut extras = 0;
+            while let Ok(extra) = receive.recv_timeout(Duration::from_secs(11)) {
+                extras += 1;
+                assert!(extras <= 2, "re-checks kept rescanning: {extra}");
                 assert_eq!(
                     extra["source_processing"]["parsed_record_count"], 2,
                     "{extra}"
@@ -6110,13 +6114,7 @@ fn opencode_relocation_watch_reads_a_commit_published_after_its_scan() {
         // Keep the writer open: closing the last connection checkpoints and
         // removes the WAL, which is itself a change.
         let _writer = append.join().unwrap();
-        let published = receive
-            .recv_timeout(Duration::from_secs(30))
-            .expect("watch must read a commit published after its scan");
-        assert_eq!(
-            published["source_processing"]["parsed_record_count"], 2,
-            "{published}"
-        );
+        receive_committed_rows(&receive, 2);
         assert!(
             matches!(
                 receive.recv_timeout(Duration::from_secs(2)),
