@@ -21,12 +21,11 @@ mod segment;
 
 pub use content::{
     CompiledDefinition, DefinitionKind, DefinitionMetadata, LoadedDefinition, LoadedRules,
-    RelatedRule, RuleLogSource,
+    RelatedRule, RuleLogSource, RuleOverrideError,
 };
 pub use segment::{unquoted, unquoted_with_origin};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -731,28 +730,21 @@ fn policy_name(policy: Option<&RulePolicy>) -> Option<String> {
     })
 }
 
-fn validate_rule_override_entry(
-    entry: &RuleOverrideEntry,
-    path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_rule_override_entry(entry: &RuleOverrideEntry, source: &str) -> Result<(), String> {
     if entry.rule_id.trim().is_empty() {
-        return Err(format!("rule override in {} has empty rule_id", path.display()).into());
+        return Err(format!("rule override in {source} has empty rule_id"));
     }
     if entry.reason.trim().is_empty() {
         return Err(format!(
-            "rule override for '{}' in {} requires a non-empty reason",
-            entry.rule_id,
-            path.display()
-        )
-        .into());
+            "rule override for '{}' in {source} requires a non-empty reason",
+            entry.rule_id
+        ));
     }
     if entry.enabled.is_none() && entry.score.is_none() {
         return Err(format!(
-            "rule override for '{}' in {} must set enabled or score",
-            entry.rule_id,
-            path.display()
-        )
-        .into());
+            "rule override for '{}' in {source} must set enabled or score",
+            entry.rule_id
+        ));
     }
     Ok(())
 }
@@ -1219,7 +1211,6 @@ mod test_rules;
 mod tests {
     use super::test_rules::{chain, file, rule};
     use super::{LoadedRules, RuleOverrideDocument, RulePolicy, load_rule_set_from_documents};
-    use std::path::Path;
 
     /// Two case-insensitive selections, on assistant text and tool results,
     /// for `hidden instruction`.
@@ -1253,7 +1244,7 @@ mod tests {
         let overrides: RuleOverrideDocument =
             serde_yaml::from_str(&format!("version: 1\noverrides:\n{entries}")).unwrap();
         loaded
-            .apply_override_document(&overrides, Path::new("synthetic-overrides.yaml"))
+            .apply_override_document(&overrides, "synthetic-overrides.yaml")
             .unwrap();
         loaded.compile(None).unwrap()
     }
