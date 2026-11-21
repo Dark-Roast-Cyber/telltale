@@ -9,12 +9,14 @@
 use std::net::IpAddr;
 
 /// Download clients, by normalized command word.
-const DOWNLOAD_CLIENTS: [&str; 6] = [
+const DOWNLOAD_CLIENTS: [&str; 8] = [
     "curl",
     "wget",
     "aria2c",
     "invoke-webrequest",
     "iwr",
+    "invoke-restmethod",
+    "irm",
     "fetch",
 ];
 
@@ -147,7 +149,7 @@ pub(crate) fn windows_client(tokens: &[String]) -> bool {
         command[0].to_ascii_lowercase().ends_with(".exe")
             || matches!(
                 client_name(&command[0]).as_str(),
-                "invoke-webrequest" | "iwr"
+                "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm"
             )
     })
 }

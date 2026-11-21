@@ -2875,7 +2875,9 @@ fn downloaded_artifacts(
                                         && !token.starts_with("--")
                                         && token[1..].contains('O'))
                             }
-                            "invoke-webrequest" | "iwr" => token.eq_ignore_ascii_case("-OutFile"),
+                            "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm" => {
+                                token.eq_ignore_ascii_case("-OutFile")
+                            }
                             _ => false,
                         }
                 })
@@ -2944,7 +2946,9 @@ fn downloaded_artifacts(
                             break;
                         }
                     }
-                    "invoke-webrequest" | "iwr" if token.eq_ignore_ascii_case("-OutFile") => {
+                    "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm"
+                        if token.eq_ignore_ascii_case("-OutFile") =>
+                    {
                         artifact = next();
                         break;
                     }
@@ -3094,7 +3098,58 @@ fn piped_execution(
             }
         }
     }
+    inline_execution(view, budget)
+}
+/// The byte range of a command that runs, as code, what a download inside one
+/// of its words prints: `bash <(curl …)`, `source <(…)`, `eval "$(…)"`,
+/// `sh -c "$(…)"` or `iex (iwr …)`. A download in any other word is data.
+fn inline_execution(
+    view: &ActionView,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
+    for (outer, tokens) in view.stage_spans.iter().zip(&view.commands) {
+        charge_tokens(tokens, budget)?;
+        let Some(program) = inline_code(tokens) else {
+            continue;
+        };
+        for (inner, inner_tokens) in view.stage_spans.iter().zip(&view.commands) {
+            if inner.start > outer.start
+                && inner.end <= outer.end
+                && inner_tokens.first().is_some_and(|word| word == program)
+                && is_download(inner_tokens, budget)?
+                && download_stdout(inner_tokens, budget)?
+            {
+                return Ok(Some(outer.clone()));
+            }
+        }
+    }
     Ok(None)
+}
+/// The program of the substitution that a command runs as its code: the script
+/// operand of a shell or `source`, the script after a shell's `-c`, or what
+/// `eval` or `iex` evaluates.
+fn inline_code(tokens: &[String]) -> Option<&str> {
+    let args = tokens.get(1..)?;
+    let (word, openers): (&String, &[&str]) =
+        match super::http::client_name(tokens.first()?).as_str() {
+            "source" | "." => (args.first()?, &["<("]),
+            "eval" => (args.first()?, &["$(", "`"]),
+            "iex" | "invoke-expression" => (args.first()?, &["(", "$("]),
+            shell if super::shell_text::SHELLS.contains(&shell) => {
+                match args
+                    .iter()
+                    .position(|word| super::shell_text::script_flag(word))
+                {
+                    Some(flag) => (args.get(flag + 1)?, &["$(", "`"]),
+                    None => (args.iter().find(|word| !word.starts_with('-'))?, &["<("]),
+                }
+            }
+            _ => return None,
+        };
+    openers
+        .iter()
+        .find_map(|opener| word.strip_prefix(opener))
+        .and_then(|code| code.split_whitespace().next())
 }
 fn download_stdout(
     tokens: &[String],
@@ -3107,7 +3162,15 @@ fn download_stdout(
     if artifacts.iter().any(|(path, _)| path == "-") {
         return Ok(true);
     }
-    if super::http::client_name(&tokens[0]) != "curl" {
+    let client = super::http::client_name(&tokens[0]);
+    // A PowerShell web cmdlet without `-OutFile` passes the response on.
+    if matches!(
+        client.as_str(),
+        "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm"
+    ) {
+        return Ok(artifacts.is_empty());
+    }
+    if client != "curl" {
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;

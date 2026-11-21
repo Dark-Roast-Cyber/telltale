@@ -8,6 +8,23 @@
 
 ### Compatibility and operator impact
 
+- **Inline remote-script execution now links `chain.download_then_execute`.**
+  A download whose output the same command runs as code now links like a
+  download piped to an interpreter: a shell or `source` reading a process
+  substitution, `eval` or `sh -c` of a command substitution, and PowerShell
+  `iex` of `iwr` or `irm`, wrapped or piped. A download saved to a file and
+  not run still does not link. `network.download` also recognises
+  `Invoke-RestMethod`/`irm`. Rule names, UUIDs and declared scores are
+  unchanged; behaviour fingerprints change, so affected sessions can emit
+  once after upgrade.
+- **GitHub CLI publication of a cloud credential file is credential harvest.**
+  `credential.cloud_harvest` now matches `gh gist create` with a cloud
+  credential file operand and `gh issue comment` or `gh pr comment` with that
+  file as `-F`/`--body-file`. Publishing ordinary files, listing or viewing
+  gists, and inline comment bodies stay unmatched. A match is a requested
+  publication, not proof it ran. The rule keeps its name, UUID and score; its
+  behaviour fingerprint changes, so affected sessions can emit once after
+  upgrade.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean
