@@ -301,6 +301,14 @@
   bytes. When a call's input is bounded for history, the members Telltale
   reads as its command are kept first. Existing journals read unchanged.
 
+- **Windows paths are now redacted in more spellings.** The privacy sanitizer
+  replaces drive, UNC and device-namespace paths written with escaped
+  backslashes, as inside a JSON string, and forward-slash UNC paths
+  (`//server/share/...`) with the path marker in every sanitization context,
+  and recognizes more drive-path boundaries. A device-namespace drive root is
+  replaced whole. URLs and other `//` text keep their treatment, and there is
+  no change to detection, state or the Event 3.0 shape.
+
 - **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
   acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions
   (session format version 3) from `~/.pi/agent/sessions`. User and assistant
