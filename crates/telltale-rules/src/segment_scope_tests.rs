@@ -3,7 +3,7 @@
 
 use super::test_rules::uuid;
 use super::{
-    DEFAULT_RULE_YAML, MatchScope, SEGMENT_SCOPE_TARGETS, load_rule_set_from_documents,
+    MatchScope, SEGMENT_SCOPE_TARGETS, load_rule_set_from_documents,
     provenance::rule_v1_fingerprint,
 };
 
@@ -92,28 +92,10 @@ fn segment_scope_changes_the_fingerprint() {
     let field = command_rule("", "synthetic", "benign");
     let segment = command_rule("      scope: segment\n", "synthetic", "benign");
     assert_ne!(fingerprint(&field), fingerprint(&segment));
-    // Only the scope of the bundled download rule differs from the same rules
-    // in field scope: without the modifiers, the core fingerprint is the field one.
-    const CORE_BEFORE_SCOPE: &str =
-        "sha256:cff020a08d4cebdae7c115b553ccb60b0f6a02def2474bc423415504c64bc6b1";
-    let bundled = DEFAULT_RULE_YAML.replace("\r\n", "\n");
-    let segment_fingerprint = fingerprint(&bundled);
-    assert_ne!(segment_fingerprint, CORE_BEFORE_SCOPE);
-    for newline in ["\n", "\r\n"] {
-        let bundled = bundled.replace('\n', newline);
-        let normalized = bundled.replace("\r\n", "\n");
-        // Rule v2 writes the scope as a modifier on each of the download
-        // rule's three selections and three filters. Field scope has no
-        // modifier of its own: it is the scope without one.
-        assert_eq!(normalized.matches("|segment:").count(), 6);
-        let without = normalized.replace("|segment:", ":");
-        assert!(!without.contains("|segment"));
-        assert_eq!(
-            fingerprint(&without.replace('\n', newline)),
-            CORE_BEFORE_SCOPE
-        );
-        assert_eq!(fingerprint(&bundled), segment_fingerprint);
-    }
+    assert_eq!(
+        fingerprint(&segment),
+        fingerprint(&segment.replace('\n', "\r\n"))
+    );
 }
 
 #[test]

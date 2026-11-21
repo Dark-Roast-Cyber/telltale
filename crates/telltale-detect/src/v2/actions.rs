@@ -532,9 +532,13 @@ pub(crate) fn compile(
                 // content owner. Target-local exclusions remain unchanged.
                 // Native fields are already the profile's own units (one
                 // command stage for the HTTP rules), so each exclusion applies
-                // to its native field whatever the session scope.
+                // to its native field whatever the session scope. Recorded
+                // exclusions must keep judging the recorded text, not the
+                // quote-free reading used by their selection.
                 for matcher in &mut content.matchers {
-                    matcher.scope = telltale_rules::MatchScope::Field;
+                    if matcher.scope != telltale_rules::MatchScope::RecordedExclusion {
+                        matcher.scope = telltale_rules::MatchScope::Field;
+                    }
                 }
                 let selection = match rule.id.as_str() {
                     "network.download" | "exfil.outbound_upload" | "exfil.encoded_http" | "mcp.server_enumeration" => Some(r"(?s:.+)"),
@@ -2105,10 +2109,11 @@ pub(crate) fn evaluate(
         let mut contributions = Vec::new();
         let mut correlation_support = BTreeMap::new();
         // What a rule with `recorded_exclusion` scope also selects from, read once
-        // for the observation. Bundled rules read their native fields instead.
+        // for the observation. Native rules can use the same scope when their
+        // field is the whole recorded command.
         let quote_free = if compiled
             .iter()
-            .any(|rule| !rule.native && rule.matcher.reads_quote_free_text())
+            .any(|rule| rule.matcher.reads_quote_free_text())
         {
             view.quote_free_readings(budget)?
         } else {
@@ -2179,7 +2184,7 @@ pub(crate) fn evaluate(
                 let mut matched = Vec::new();
                 for (name, value, hit) in compiled.matcher.try_matching_spans_reading(
                     &mapped,
-                    if compiled.native { &[] } else { &readings },
+                    &readings,
                     &mut |bytes| budget.charge(bytes),
                 )? {
                     for (field, text, offset, counted) in &fields {

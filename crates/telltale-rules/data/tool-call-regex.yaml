@@ -612,18 +612,55 @@ telltale:
     signal_type: atomic
     tags: [destructive, filesystem]
 ---
+# Git command-case inspiration: CC Safety Net, revision
+# ab95df55d26cca52f49326980be0ef9f81e1406c, src/gate/analyzer/git/rules.ts.
+# Telltale's patterns are independently implemented; no upstream runtime is used.
+# The upstream notice is retained with the bundled content and its examples:
+#
+# MIT License
+#
+# Copyright (c) 2026 J Liew
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 title: Git command discards work, deletes a branch or stash, or rewrites history
 id: eda02825-3ae5-4bb2-9190-a52692183b9a
 name: destructive.git_discard
 taxonomy: telltale
 status: stable
+description: Recorded Git command text requests a destructive operation; it does not establish authorization or successful execution.
+references:
+    - https://github.com/kenryu42/cc-safety-net/blob/ab95df55d26cca52f49326980be0ef9f81e1406c/src/gate/analyzer/git/rules.ts
+    - https://git-scm.com/docs/git-clean
+    - https://git-scm.com/docs/git-restore
+modified: 2026-11-20
 logsource:
     product: ai_agent
     category: tool_activity
 detection:
     selection:
-        - tool.command|re|i: '(\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*push\b[^;&|\n]*\s(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--delete|-d|\+[\w./-]+|:[\w./-]+)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*reset\b[^;&|\n]*\s--hard\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*clean\b(?:\s+-[a-z]*)*\s+-[a-z]*f|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:checkout\s+(?:--\s+)?|restore\s+(?:--worktree\s+)?)\.(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*branch\b[^;&|\n]*\s(?-i:-D)(?:$|[\s;&|)])|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*stash\s+(?:drop|clear)\b|\bgit\s+(?:-c\s+\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:filter-branch|filter-repo)\b)'
-    condition: selection
+        tool.command|re|i|recorded_exclusion: '\bgit(?:\.exe)?\s+(?:-[cC]\s*\S+\s+|--[a-z-]+(?:=\S+)?\s+)*(?:push\b[^;&|\n]*\s(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--delete|-d|\+[\w./-]+|:[\w./-]+)(?:$|[\s;&|)])|reset\b[^;&|\n]*\s--hard\b|clean\b(?:\s+-[a-z]*)*\s+(?:--force\b|-[a-z]*f)|checkout(?:\s+\.(?:$|[\s;&|)])|\b[^;&|\n]*\s(?:--force|-f|--)\s+\S+)|restore\s+(?:--worktree\s+)?(?:--\s+)?[^\s;&|-]|switch\b[^;&|\n]*\s(?:--discard-changes|--force|-f)(?:$|[\s;&|)])|worktree\s+remove\b[^;&|\n]*\s(?:--force|-f)(?:$|[\s;&|)])|branch\b[^;&|\n]*\s(?-i:-D)(?:$|[\s;&|)])|stash\s+(?:drop|clear)\b|(?:filter-branch|filter-repo)\b)'
+    # Exempt only whole plain invocations with known valueless options. In particular,
+    # -e/-o values, a preceding --, quoting, substitutions and option negation
+    # cannot prove that a dry-run/help flag is active.
+    filter:
+        tool.command|re|i|recorded_exclusion: '^(?:[A-Za-z0-9_./:-]+/)?git(?:\.exe)?[ \t]+(?:-[cC][ \t]*[A-Za-z0-9_./:=+-]+[ \t]+|--(?:no-pager|no-optional-locks)[ \t]+)*(?:(?:clean|push)[ \t]+(?:-[dfnqxXvu]+[ \t]+|--(?:force|mirror|delete|all|tags|prune|quiet|verbose|dry-run)[ \t]+)*(?:--dry-run|-[dfnqxXvu]*n[dfnqxXvu]*)(?:[ \t]+(?:-[dfnqxXvu]+|--(?:force|mirror|delete|all|tags|prune|quiet|verbose|dry-run)|[A-Za-z0-9_./:@+][A-Za-z0-9_./:@=+-]*))*|(?:reset|clean|push|checkout|restore|switch|branch|stash|filter-branch|filter-repo)[ \t]+(?:--(?:hard|force|discard-changes|worktree)[ \t]+|-[fdqvSW]+[ \t]+)*(?:--help|-h))$'
+    condition: selection and not filter
 falsepositives:
     - 'Developers often reset, clean or force-push their own branches deliberately; confirm the branch and the request.'
 level: high

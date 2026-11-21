@@ -13,6 +13,13 @@ catalog metadata, not its frontend. Its packaged
 exact source and modifications. Standalone binaries retain that notice through
 `telltale discover --licenses`, which inspects no host data.
 
+The destructive Git rule's command-case distinctions are informed by
+[CC Safety Net](https://github.com/kenryu42/cc-safety-net/tree/ab95df55d26cca52f49326980be0ef9f81e1406c)
+(MIT, Copyright © 2026 J Liew). No upstream runtime is imported. Its full MIT
+notice accompanies the independently implemented rule in both
+`config/rules/tool-call-regex.yaml` and the packaged, embedded copy at
+`crates/telltale-rules/data/tool-call-regex.yaml`.
+
 ## Apache-2.0 Core Boundary
 
 The open-source core includes the local batch scanner and the files needed to
