@@ -17,14 +17,16 @@
   `Invoke-RestMethod`/`irm`. Rule names, UUIDs and declared scores are
   unchanged; behaviour fingerprints change, so affected sessions can emit
   once after upgrade.
-- **GitHub CLI publication of a cloud credential file is credential harvest.**
-  `credential.cloud_harvest` now matches `gh gist create` with a cloud
-  credential file operand and `gh issue comment` or `gh pr comment` with that
-  file as `-F`/`--body-file`. Publishing ordinary files, listing or viewing
-  gists, and inline comment bodies stay unmatched. A match is a requested
-  publication, not proof it ran. The rule keeps its name, UUID and score; its
-  behaviour fingerprint changes, so affected sessions can emit once after
-  upgrade.
+- **GitHub CLI publication of a cloud credential file is credential harvest
+  and an outbound upload.** `credential.cloud_harvest` and
+  `exfil.outbound_upload` now match `gh gist create` with a cloud credential
+  file operand (a secret gist is unlisted, not private) and `gh issue comment`
+  or `gh pr comment` with that file as `-F`/`--body-file`, so
+  `chain.harvest_then_exfil` links on the one call. Publishing ordinary files,
+  listing or viewing gists, and inline comment bodies stay unmatched. A match
+  is a requested publication, not proof it ran. Both rules keep their names,
+  UUIDs and scores; their behaviour fingerprints change, so affected sessions
+  can emit once after upgrade.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean

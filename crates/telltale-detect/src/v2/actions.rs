@@ -1620,11 +1620,12 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
         return Ok(true);
     }
     let client = command_word(tokens).to_ascii_lowercase();
-    if !matches!(client.as_str(), "aws" | "gsutil" | "rclone" | "az") {
+    if !matches!(client.as_str(), "aws" | "gsutil" | "rclone" | "az" | "gh") {
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;
     Ok(match client.as_str() {
+        "gh" => publishes_cloud_credential(tokens),
         "aws" | "gsutil" | "rclone" => tokens
             .iter()
             .position(|s| matches!(s.as_str(), "cp" | "copy"))
@@ -1642,6 +1643,33 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
             .any(|w| w[0] == "storage" && w[1] == "blob" && w[2] == "upload"),
         _ => false,
     })
+}
+/// Whether a GitHub CLI call publishes a cloud credential file: a file operand of
+/// `gist create`, or the body file of an `issue` or `pr` `comment`. A secret gist
+/// is unlisted, not private, so either is readable by others. Ordinary files are
+/// routine publication and do not count. The files are those the rule's own
+/// pattern names, so the session and action readings agree.
+fn publishes_cloud_credential(tokens: &[String]) -> bool {
+    static CREDENTIAL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\.aws[/\\](?:credentials|config)|\.kube[/\\]config|\.docker[/\\]config\.json|(?:credentials|service-account)\.json|accessTokens\.json|credentials\.db").unwrap()
+    });
+    let words = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    let rest = words.get(3..).unwrap_or_default();
+    match words.get(1..3) {
+        Some(["gist", "create"]) => rest
+            .iter()
+            .any(|word| !word.starts_with('-') && CREDENTIAL.is_match(word)),
+        Some(["issue" | "pr", "comment"]) => rest.iter().enumerate().any(|(at, word)| {
+            let file = match *word {
+                "-F" | "--body-file" => rest.get(at + 1).copied(),
+                _ => word
+                    .strip_prefix("--body-file=")
+                    .or_else(|| word.strip_prefix("-F").filter(|file| !file.is_empty())),
+            };
+            file.is_some_and(|file| CREDENTIAL.is_match(file))
+        }),
+        _ => false,
+    }
 }
 fn remote(value: &str) -> bool {
     value.starts_with("s3://")
