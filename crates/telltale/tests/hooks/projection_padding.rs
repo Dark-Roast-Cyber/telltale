@@ -207,3 +207,93 @@ fn thirty_one_siblings_cannot_lower_a_deny() {
     }
     assert_denied(&cases);
 }
+
+/// Inputs past each limit of the projection budget, `command` beside the
+/// padding: more values than the variants hold (nested, and top-level members
+/// that sort ahead of the command), more variants than the budget, a value of
+/// more chunks than the budget, and more pieces than the budget.
+fn past_the_budget(command: &str) -> Vec<(String, Value)> {
+    let tiny = |prefix: &str, n: usize| -> Vec<(String, Value)> {
+        (0..n)
+            .map(|i| (format!("{prefix}{i:04}"), json!("x")))
+            .collect()
+    };
+    let mut flat = json!({ "command": command });
+    for (key, value) in tiny("a", 3000) {
+        flat[key] = value;
+    }
+    vec![
+        (
+            "values nested".to_owned(),
+            json!({ "command": command, "meta": Value::Object(tiny("k", 3000).into_iter().collect()) }),
+        ),
+        ("values at the top level".to_owned(), flat),
+        (
+            "variants".to_owned(),
+            padded(command, Shape::Nested, 2000, 100, 'p'),
+        ),
+        (
+            "chunks".to_owned(),
+            json!({ "command": command, "description": "d".repeat(400_000) }),
+        ),
+        (
+            "pieces".to_owned(),
+            padded(command, Shape::Nested, 20, 300_000, 'p'),
+        ),
+    ]
+}
+
+/// The decision record of a Bash call with `input`, in a session of its own.
+fn decision(h: &mut Harness, label: &str, input: Value) -> Value {
+    h.session_id = format!("budget-{label}");
+    let id = format!("toolu_{label}");
+    h.pre("Bash", &id, input);
+    h.decision_for(&id)
+}
+
+/// Past the projection budget a bounded set of variants is evaluated, the
+/// short command in every one: a deny still decides, under both policies.
+#[test]
+fn padding_past_the_projection_budget_cannot_lower_a_deny() {
+    assert_denied(&past_the_budget(DENIED));
+}
+
+/// What could not be evaluated is not an allow: the same padding beside a
+/// command no rule denies gets `on_unevaluable`, whatever it is set to.
+#[test]
+fn padding_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
+    let mut failures = Vec::new();
+    for (policy, mut h, expected) in [
+        ("default", Harness::new(), "ask"),
+        (
+            "deny",
+            Harness::with(|c| c.on_unevaluable = OnError::Deny),
+            "deny",
+        ),
+    ] {
+        for (n, (label, input)) in past_the_budget("ls -la").into_iter().enumerate() {
+            let (verdict, basis) = decide(&mut h, &format!("benign-{policy}-{n}"), input);
+            if verdict.as_deref() != Some(expected) || basis != "unevaluable_input" {
+                failures.push(format!("{policy} {label}: {verdict:?} ({basis})"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// However large the input, a call past the budget evaluates at most 128
+/// variants: its window holds no more records than that.
+#[test]
+fn a_call_past_the_projection_budget_evaluates_a_bounded_number_of_variants() {
+    let mut h = Harness::new();
+    let mut failures = Vec::new();
+    for (n, (label, input)) in past_the_budget(DENIED).into_iter().enumerate() {
+        let record = decision(&mut h, &format!("bound-{n}"), input);
+        let evaluation = &record["evaluation"];
+        let records = evaluation["window_records"].as_u64().unwrap();
+        if !(1..=128).contains(&records) || evaluation["status"] == "not_evaluated" {
+            failures.push(format!("{label}: {evaluation}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -8,6 +8,15 @@
 
 ### Compatibility and operator impact
 
+- **A hooks tool call past the projection budget is still evaluated.** A tool
+  input with more values or bytes than the bounded projection variants hold
+  used to be unevaluable as a whole and got `on_unevaluable`. It is now
+  evaluated on a bounded set of variants, a command and other short top-level
+  values first: a rule finding there keeps its force, and the unprojected
+  remainder floors the decision at `on_unevaluable` (recorded as
+  `pending_input_separated`). The work per call stays bounded by the same
+  variant limit.
+
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean
