@@ -410,10 +410,11 @@
   replaces drive, UNC and device-namespace paths written with escaped
   backslashes, as inside a JSON string, paths that mix escaped and plain
   separators in any order after their start (plain then escaped, escaped then
-  plain, or alternating component by component), and forward-slash UNC paths (`//server/share/...`) whole with
-  the path marker in every sanitization context, and recognizes more
-  drive-path boundaries. URLs and other `//` text keep their treatment, and
-  there is no change to detection, state or the Event 3.0 shape.
+  plain, or alternating component by component), and forward-slash UNC paths
+  (`//server/share/...`) whole with the path marker in every sanitization
+  context, and recognizes more drive-path boundaries. URLs and other `//` text
+  keep their treatment, and there is no change to detection, state or the
+  Event 3.0 shape.
 
 - **The embedding builder accepts the CLI's organization and override rule
   tiers.** `Pipeline::builder()` gains `organization_rules_document` (a
