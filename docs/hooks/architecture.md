@@ -268,18 +268,20 @@ group; failed cleanup cannot release a still-live slot.
   variants are not scanned at all once the piece limit has passed
   (`pending_pieces_unscanned`, then `on_unevaluable`).
 - Waiting is bounded, by one deadline per hook: 25 s from the hook's start
-  (`HOOK_DEADLINE`, below the 30 s timeout the hook is installed with). Every
-  later wait is cut to what is left of it: the wait for the evaluator, the wait
-  for the session's lock (10 s at most), the recovery budget and the piece time
-  limit (`Limits::within`). A call waits for its session's lock, then gets the
+  (`HOOK_DEADLINE`, below the timeouts of 30 s or more that the tool-call hooks
+  are installed with). Every later wait is cut to what is left of it: the wait
+  for the evaluator, the wait for the session's lock (10 s at most), the
+  recovery budget and the piece time limit (`Limits::within`). The default
+  waits fit in it; a `hooks.evaluator.request_timeout_ms` raised well above its
+  default can use it up. A call waits for its session's lock, then gets the
   strict policy (`state_lock_timeout`). A call that has no time left before its
   evaluation starts is not evaluated: it records no decision and journals
   nothing, and gets the strict policy and one `error` record (`hook_deadline`).
   A decision already evaluated is always recorded and delivered, however late.
   One scan already in flight is not interrupted, so a single slow scan can
-  still run past the deadline. The
-  evaluator never records what its client stopped waiting for, and a client that
-  gets no answer returns what was recorded or evaluates in-process (ADR 0003).
+  still run past the deadline. The evaluator never records what its client
+  stopped waiting for, and a client that gets no answer returns what was
+  recorded or evaluates in-process (ADR 0003).
   The limits are values the runtime is built with (`engine::Limits`, defaults
   only in production); tests use generous ones to prove coverage and tiny ones
   to prove the degraded outcome.

@@ -748,9 +748,9 @@ pub struct Limits {
 /// Time from the start of a hook after which nothing more is waited for: every
 /// later wait is cut to what remains of it ([`Limits::within`]), and a call with
 /// none left before its evaluation starts is not evaluated. A verdict already
-/// evaluated is always recorded and delivered. A harness kills a hook
-/// at 30 s (the shortest timeout installed) and then runs the call; this leaves
-/// room for one scan already in flight, which is not interrupted, and for the
+/// evaluated is always recorded and delivered. The hooks that evaluate tool
+/// calls are installed with a timeout of 30 s or more; this leaves room before
+/// it for one scan already in flight, which is not interrupted, and for the
 /// process to exit.
 pub const HOOK_DEADLINE: Duration = Duration::from_secs(25);
 

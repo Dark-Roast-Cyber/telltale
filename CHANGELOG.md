@@ -13,9 +13,12 @@
   identities do not); rebaseline as after a rule change.
 
 - **Each hook has one deadline.** A hook's waits are now bounded together:
-  25 s from its start, below the 30 s timeout it is installed with. The wait
-  for the evaluator, the wait for the session's lock, the recovery budget and
-  the piece time limit are each cut to what is left of it. A tool call that
+  25 s from its start, below the timeouts of 30 s or more that the tool-call
+  hooks are installed with. The wait for the evaluator, the wait for the
+  session's lock, the recovery budget and the piece time limit are each cut
+  to what is left of it; the default waits fit in it, and a
+  `hooks.evaluator.request_timeout_ms` raised well above its default can use
+  it up. A tool call that
   has no time left before its evaluation starts is not evaluated: it records
   no decision and journals nothing, and gets the stricter of `on_error` and
   `on_unevaluable` (default `ask`) and one `error` record with the new code
@@ -24,7 +27,11 @@
 
 - **Hooks embedding API: time limits are built in.** `Runtime::with_limits`
   (with `engine::Limits`) replaces `Runtime::set_session_lock_wait`, and
-  `RecoveryBudget::start` takes the `Limits` to work within.
+  `RecoveryBudget::start` takes the `Limits` to work within. New:
+  `Runtime::started_at` (the hook's start, from which its deadline counts),
+  `engine::HOOK_DEADLINE` and `Limits::within`. An embedder that never calls
+  `started_at` gets the deadline counted per call from `Runtime::handle`, the
+  engine's first build included.
 
 - **Override reasons are bounded.** An override entry's `reason`, in
   `overrides.d` or a builder override document, must be at most 256
@@ -42,9 +49,9 @@
   remain. A rule finding there keeps its force, and the unprojected remainder
   floors the decision at `on_unevaluable` (recorded as
   `pending_input_truncated`, distinct from `pending_input_separated` for an
-  input evaluated in full but in parts kept apart). An input of 1,025 to 2,048 values, previously
-  unevaluable, is now projected in full. The work per call stays bounded by
-  the same variant limit:
+  input evaluated in full but in parts kept apart). An input of 1,025 to
+  2,048 values, previously unevaluable, is now projected in full. The work
+  per call stays bounded by the same variant limit:
   - a call with no session history is no longer scanned twice ahead of the
     piece loop;
   - a call past the projection budget goes straight to the piece loop, its

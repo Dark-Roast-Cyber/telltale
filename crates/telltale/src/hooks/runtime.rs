@@ -654,8 +654,12 @@ impl Runtime {
     /// so once this hook holds that lock the evaluator either has recorded the
     /// call or never will. A recorded decision is answered as recorded, so the
     /// harness gets what telemetry says. Otherwise the call is evaluated here,
-    /// as when the evaluator is busy: a stalled evaluator costs time, not the
-    /// call's verdict, and cannot turn a deny into a failure policy's allow.
+    /// as when the evaluator is busy. With the default waits a stalled
+    /// evaluator costs time, not the call's verdict: the evaluator wait, the
+    /// lock wait and the piece limit fit in the hook's deadline. With
+    /// `request_timeout_ms` raised so far that the evaluator wait and the lock
+    /// wait use up the deadline, the call is not evaluated here and gets the
+    /// stricter of `on_error` and `on_unevaluable` instead (`hook_deadline`).
     /// A call with no correlation id cannot be looked up and is evaluated here:
     /// if its answer was only delayed, the session then has a second decision,
     /// the later one being what the harness was told.
