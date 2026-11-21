@@ -336,18 +336,21 @@ impl Engine {
     /// that is past capacity, because nothing else secures the verdict. Those
     /// stop at [`PIECE_SCAN_LIMIT`] instead, and so does the scan of a
     /// projection's lines together: past it, a projected call is not scanned.
-    /// A projection `past_budget` goes straight to the scans of its lines.
-    #[allow(clippy::too_many_arguments)]
+    /// A projection past its budget ([`PendingScan::PiecesOnly`]) goes
+    /// straight to the scans of its lines.
     pub fn evaluate(
         &self,
-        client: ClientId,
-        window_path: &Path,
-        history: &[Line],
-        pending: &[Line],
-        focus: &[Focus],
-        past_budget: bool,
+        request: Request<'_>,
         budget: &mut RecoveryBudget,
     ) -> Result<Evaluation, EngineError> {
+        let Request {
+            client,
+            window_path,
+            history,
+            pending,
+            focus,
+            scan,
+        } = request;
         let sizes: Vec<usize> = history.iter().map(|line| line.to_jsonl().len()).collect();
         let pending_bytes = pending.iter().map(|line| line.to_jsonl().len()).sum();
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
@@ -357,7 +360,7 @@ impl Engine {
         // A projection past its budget holds more than Telltale takes in one
         // scan: it is not scanned whole nor its variants together, so the
         // time goes to its pieces, the command's first.
-        let pieces_only = past_budget && pending.len() > 1;
+        let pieces_only = scan == PendingScan::PiecesOnly && pending.len() > 1;
         if !pieces_only && budget.admits(whole_bytes) {
             let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
@@ -739,6 +742,30 @@ impl RecoveryBudget {
 }
 
 /// What a recovery scan is made of.
+/// What [`Engine::evaluate`] scans: the call's `pending` lines (and `focus`,
+/// one per pending line) with as much of `history` as Telltale accepts,
+/// written to `window_path` as one hook-journal source of `client`.
+#[derive(Clone, Copy, Debug)]
+pub struct Request<'a> {
+    pub client: ClientId,
+    pub window_path: &'a Path,
+    pub history: &'a [Line],
+    pub pending: &'a [Line],
+    pub focus: &'a [Focus],
+    pub scan: PendingScan,
+}
+
+/// How the pending lines of a [`Request`] may be scanned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingScan {
+    /// Whole, with history, and together before one by one: a call, or a
+    /// projection within its budget.
+    Together,
+    /// Each line on its own only: a projection past its budget holds more
+    /// than Telltale takes in one scan.
+    PiecesOnly,
+}
+
 struct Window<'a> {
     client: ClientId,
     path: &'a Path,
@@ -2010,27 +2037,25 @@ mod recovery_tests {
         lines: (Vec<Line>, Vec<Focus>),
         used: Duration,
     ) -> (Evaluation, usize) {
-        evaluate_lines(lines, used, false)
+        evaluate_lines(lines, used, PendingScan::Together)
     }
 
     fn evaluate_lines(
         (lines, focus): (Vec<Line>, Vec<Focus>),
         used: Duration,
-        past_budget: bool,
+        scan: PendingScan,
     ) -> (Evaluation, usize) {
         let (dir, engine) = engine();
         let mut budget = budget_used(used, 0.0);
-        let evaluation = engine
-            .evaluate(
-                ClientId::Claude,
-                &dir.path().join("window.jsonl"),
-                &[],
-                &lines,
-                &focus,
-                past_budget,
-                &mut budget,
-            )
-            .unwrap();
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("window.jsonl"),
+            history: &[],
+            pending: &lines,
+            focus: &focus,
+            scan,
+        };
+        let evaluation = engine.evaluate(request, &mut budget).unwrap();
         (evaluation, lines.len())
     }
 
@@ -2184,7 +2209,8 @@ mod recovery_tests {
     /// and a deny in the last of them is found.
     #[test]
     fn a_projection_past_the_budget_goes_straight_to_its_pieces() {
-        let (evaluation, lines) = evaluate_lines(past_the_budget(), Duration::ZERO, true);
+        let (evaluation, lines) =
+            evaluate_lines(past_the_budget(), Duration::ZERO, PendingScan::PiecesOnly);
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
         assert_eq!(
@@ -2204,7 +2230,8 @@ mod recovery_tests {
     /// the piece loop, which finds the deny.
     #[test]
     fn variants_past_the_budget_are_never_scanned_together() {
-        let (evaluation, lines) = evaluate_lines(split_command(), Duration::ZERO, true);
+        let (evaluation, lines) =
+            evaluate_lines(split_command(), Duration::ZERO, PendingScan::PiecesOnly);
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(
             evaluation.unevaluated_focus, lines,
@@ -2215,7 +2242,8 @@ mod recovery_tests {
     /// The same variants within the budget are scanned together, as before.
     #[test]
     fn variants_within_the_budget_are_scanned_together() {
-        let (evaluation, _) = evaluate_lines(split_command(), Duration::ZERO, false);
+        let (evaluation, _) =
+            evaluate_lines(split_command(), Duration::ZERO, PendingScan::Together);
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(evaluation.unevaluated_focus, 0, "scanned together");
     }

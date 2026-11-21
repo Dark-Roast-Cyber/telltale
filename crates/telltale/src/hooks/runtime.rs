@@ -13,7 +13,9 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
-use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus, RecoveryBudget};
+use crate::hooks::engine::{
+    Engine, EvalStatus, Evaluation, Focus, PendingScan, RecoveryBudget, Request,
+};
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
 use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
@@ -939,7 +941,7 @@ impl Runtime {
         session: &SessionHandle,
         pending: Vec<Line>,
         focus: &[Focus],
-        past_budget: bool,
+        scan: PendingScan,
         budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
         let window = &self.config.window;
@@ -957,17 +959,19 @@ impl Runtime {
             self.engine(),
         ) {
             (None, _) => Err("harness_unregistered"),
-            (Some(harness), Ok(engine)) => engine
-                .evaluate(
-                    harness.adapter().client,
-                    &window_path,
-                    &tail.lines,
-                    &pending,
+            (Some(harness), Ok(engine)) => {
+                let request = Request {
+                    client: harness.adapter().client,
+                    window_path: &window_path,
+                    history: &tail.lines,
+                    pending: &pending,
                     focus,
-                    past_budget,
-                    budget,
-                )
-                .map_err(|error| error.code()),
+                    scan,
+                };
+                engine
+                    .evaluate(request, budget)
+                    .map_err(|error| error.code())
+            }
             (Some(_), Err(code)) => Err(code),
         };
         // What was actually scanned: recovery from a failed source can leave
@@ -1129,7 +1133,7 @@ impl Runtime {
             session,
             vec![pending],
             std::slice::from_ref(&focus),
-            false,
+            PendingScan::Together,
             &mut budget,
         );
         // Telltale excluded the call (oversized or too deeply nested input):
@@ -1189,7 +1193,12 @@ impl Runtime {
                 native_id: variant_id,
             });
         }
-        self.evaluate(ctx, session, lines, &focuses, projected.past_budget, budget)
+        let scan = if projected.past_budget {
+            PendingScan::PiecesOnly
+        } else {
+            PendingScan::Together
+        };
+        self.evaluate(ctx, session, lines, &focuses, scan, budget)
     }
 
     /// The evaluation's telemetry, with every limit on what it could see.
@@ -1589,7 +1598,7 @@ impl Runtime {
             session,
             vec![line],
             std::slice::from_ref(&focus),
-            false,
+            PendingScan::Together,
             &mut RecoveryBudget::start(),
         );
         session

@@ -3260,14 +3260,17 @@ fn evaluate_with(
         stage: telltale_core::ObservationStage::ToolRequested,
         native_id: uuid,
     };
+    let request = telltale_core::hooks::engine::Request {
+        client: telltale_core::ClientId::Claude,
+        window_path: window,
+        history: &[],
+        pending: std::slice::from_ref(&line),
+        focus: std::slice::from_ref(&focus),
+        scan: telltale_core::hooks::engine::PendingScan::Together,
+    };
     engine
         .evaluate(
-            telltale_core::ClientId::Claude,
-            window,
-            &[],
-            &[line],
-            std::slice::from_ref(&focus),
-            false,
+            request,
             &mut telltale_core::hooks::engine::RecoveryBudget::start(),
         )
         .unwrap()

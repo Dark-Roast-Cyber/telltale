@@ -44,8 +44,11 @@
   one command text) evaluates each command in variants without the others,
   first chunks first, and floors the decision at `on_unevaluable`.
 
-  A host that calls `telltale_core::hooks::Engine::evaluate` directly passes
-  the new `past_budget` argument (`false` for a call evaluated whole).
+  A host that calls `telltale_core::hooks::Engine::evaluate` directly now
+  passes a named `engine::Request` (client, window path, history, pending
+  lines, focus and `scan`) and the budget. `scan` is
+  `PendingScan::Together` for a call evaluated whole, and
+  `PendingScan::PiecesOnly` for a projection past its budget.
 
 - **Inline remote-script execution now links `chain.download_then_execute`.**
   A download whose output the same command runs as code now links like a
