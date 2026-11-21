@@ -831,6 +831,35 @@ fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
     assert!(!stderr.contains(&second_root.display().to_string()));
 }
 
+/// The builder reports a Rule v1 document as a coded error with the input's
+/// name alone; the CLI is where the reason and the migration pointer are shown.
+#[test]
+fn rules_validate_explains_a_rule_v1_document() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("v1.yaml");
+    fs::write(
+        &path,
+        concat!(
+            "version: 1\ndescription: synthetic\n",
+            "defaults: {case_insensitive: true, enabled: true}\nrules: []\nmodifiers: []\n",
+        ),
+    )
+    .expect("Rule v1 document");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "validate", "--no-local-config", "--rules"])
+        .arg(&path)
+        .output()
+        .expect("run telltale rules validate");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Rule v1 is no longer supported")
+            && stderr.contains("docs/migrations/0.8.0.md"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn rules_validate_rejects_more_definitions_than_a_rule_catalog_holds() {
     let temp = tempdir().expect("tempdir");
