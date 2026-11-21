@@ -8,6 +8,9 @@
 
 ### Compatibility and operator impact
 
+- **The native action profile is 15.** Several changes below change what the
+  native action reader records, so every `semantic_identity` changes (replay
+  identities do not); rebaseline as after a rule change.
 - **Override reasons are bounded.** An override entry's `reason`, in
   `overrides.d` or a builder override document, must be at most 256
   characters without control or invisible formatting characters other than
@@ -74,8 +77,8 @@
   rules' behaviour fingerprints change, so affected sessions can emit once
   after upgrade. Fixes #178.
 - **Object-storage uploads are matched by transfer direction.**
-  `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. Its
-  session rule and native action now agree. An `aws s3 cp` or `gsutil cp`
+  `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. An
+  `aws s3 cp` or `gsutil cp`
   request is excluded when its first operand is an `s3://` or `gs://`
   location, and an `rclone copy` request when the word after the subcommand
   is a remote, so a local source before a remote destination still matches.
@@ -84,10 +87,37 @@
   copies between two remote locations that name the remote source first,
   and storage inventory or settings commands such as
   `az storage account list`, no longer match, and a command run in the
-  background beside one of them is still read on its own. The native action
-  profile version rises to 11, which also covers the inline-execution and
-  GitHub CLI changes above. The rule's behaviour fingerprint changes, so
+  background beside one of them is still read on its own. The rule's
+  behaviour fingerprint changes, so
   affected sessions can emit once after upgrade. Fixes #179.
+- **Rule v1 segments and native statements share one separator rule.** A
+  background `&` now ends a `detection.scope: segment` or `exclusion_segment`
+  segment, as it ends a native statement, and `|&` is one separator. The `&`
+  of a redirection (`2>&1`, `&>`, `>&2`, `<&3`) ends neither, so the native
+  reader no longer splits a statement there. A custom segment-scoped rule whose
+  pattern spanned a background `&` matches each side on its own. The
+  evaluation corpus gains three
+  segment-boundary characterization cases.
+- **Native actions read storage and GitHub CLI commands as they read HTTP
+  clients.** The native `exfil.outbound_upload` reading finds `aws`,
+  `gsutil`, `rclone`, `az` and `gh` after leading assignments, wrappers such
+  as `sudo`, and a `.exe` suffix, and reads past global options, option
+  clusters, `--option=value` and the values of options that take one, and
+  finds the command group and verb among the operands, so the operand after
+  the verb is the copy source. An `aws` copy is read in the `s3` command
+  group and needs a source and a destination. An rclone long option that is
+  not a known flag takes the next word as its value, unless that leaves no
+  complete transfer, in which case it is read as a flag; a gsutil letter
+  that takes a value as a global option is a flag after the verb.
+  `az storage copy` reads a remote source when a storage-account source
+  option names it and no local source is given. GitHub CLI publication
+  finds its subcommand after global options such as `-R` and also reads the
+  body file of `issue create` and `pr create`.
+- **Native actions read object-storage moves and syncs like copies.**
+  `aws s3 mv` and `aws s3 sync`, `gsutil mv` and `gsutil rsync`, and
+  `rclone sync` and `rclone move` are read by the copy rule: a local source
+  is an upload, and a remote source, to a local or a remote destination, is
+  not.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean
@@ -152,9 +182,8 @@
   agent-to-agent message text now gets the direct-text budget that commands,
   file bodies and patches already had; it is not read as a command.
   Detections for sessions holding such calls can appear once after upgrade
-  on a full-history scan, and the native action profile moves to 10, so
-  every `semantic_identity` changes (replay identities do not); rebaseline
-  as after a rule change. Event 3.0 and the JSON schemas are unchanged. API:
+  on a full-history scan, and the native action profile changes (see
+  above). Event 3.0 and the JSON schemas are unchanged. API:
   each source's tool table declares which argument fields hold authored
   text, so `JsonValue::try_from_source_tool_arguments` takes an
   `ArgumentText` declaration instead of a tool name and a `ToolObservation`

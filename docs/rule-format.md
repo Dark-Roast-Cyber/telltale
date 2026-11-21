@@ -298,7 +298,7 @@ whole field (field scope).
 
 | Modifier | What the selection and its filter read |
 | --- | --- |
-| `segment` | Each shell command segment of the field, split outside quotes on `;`, `\|`, `\|\|`, `&&` and line breaks. The field matches when one segment matches the selection and that same segment does not match the filter. |
+| `segment` | Each shell command segment of the field, split outside quotes on `;`, `\|`, `\|\|`, `\|&`, `&&`, a background `&` and line breaks; the `&` of a redirection such as `2>&1` does not split. The field matches when one segment matches the selection and that same segment does not match the filter. |
 | `exclusion_segment` | The selection reads the whole field. A selection match is dropped only when the segment holding it matches the filter. |
 | `recorded_exclusion` | Field scope. For `tool.command`, the selection also reads the command with the quotes around its words removed, and the filter is judged on the recorded text alone. |
 

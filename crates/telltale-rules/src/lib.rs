@@ -23,7 +23,7 @@ pub use content::{
     AppliedOverride, CompiledDefinition, DefinitionKind, DefinitionMetadata, LoadedDefinition,
     LoadedRules, MAX_APPLIED_OVERRIDES, RelatedRule, RuleLogSource, RuleOverrideError,
 };
-pub use segment::{unquoted, unquoted_with_origin};
+pub use segment::{statement_separator, unquoted, unquoted_with_origin};
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -415,8 +415,8 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (3), the native action profile version (10),
-  `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
+  `ACTION_SEMANTICS_VERSION`, the native action profile version,
+  `REPLAY_ALGORITHM_VERSION`, the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
   revision separately. `ProducerProvenanceManifestV1` has a different scope; see

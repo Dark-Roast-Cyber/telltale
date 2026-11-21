@@ -292,7 +292,9 @@ pub(crate) fn split_statements(command_line: &str) -> Vec<String> {
 }
 
 /// Byte ranges of [`split_statements`] in `command_line`: each statement is
-/// the text between two separators. A quote after `#` that does not close on
+/// the text between two separators, as [`telltale_rules::statement_separator`]
+/// finds them, so a background `&` splits and a redirection `&` does not. A
+/// carriage return also ends a statement. A quote after `#` that does not close on
 /// its line opens nothing, because a POSIX shell reads it as a comment.
 /// Separators there still split, because other shells run what follows the `#`.
 pub(crate) fn statement_spans(command_line: &str) -> Vec<std::ops::Range<usize>> {
@@ -329,20 +331,23 @@ pub(crate) fn statement_spans(command_line: &str) -> Vec<std::ops::Range<usize>>
                 comment = true;
                 continue;
             }
-            // `&&`, `||`, and single `|` all end a statement.
-            '|' | '&' if chars.peek().map(|(_, next)| *next) == Some(character) => {
-                chars.next();
-                2
-            }
-            '\n' | '\r' => {
+            '\r' => {
                 comment = false;
                 1
             }
-            ';' | '|' | '&' => 1,
-            _ => {
-                word_start = character.is_whitespace();
-                continue;
-            }
+            _ => match telltale_rules::statement_separator(command_line.as_bytes(), offset) {
+                Some(length) => {
+                    comment &= character != '\n';
+                    for _ in 1..length {
+                        chars.next();
+                    }
+                    length
+                }
+                None => {
+                    word_start = character.is_whitespace();
+                    continue;
+                }
+            },
         };
         word_start = true;
         spans.push(start..offset);

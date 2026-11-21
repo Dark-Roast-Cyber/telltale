@@ -132,3 +132,13 @@ fn statement_spans_locate_each_statement_in_the_command() {
     let spans = statement_spans(multibyte);
     assert_eq!(&multibyte[spans[1].clone()], " wc");
 }
+
+#[test]
+fn statement_spans_split_a_background_job_but_not_a_redirection() {
+    let command = "a 2>&1 &> log >&2 0<&3 & b |& c";
+    let statements: Vec<&str> = statement_spans(command)
+        .into_iter()
+        .map(|span| &command[span])
+        .collect();
+    assert_eq!(statements, ["a 2>&1 &> log >&2 0<&3 ", " b ", " c"]);
+}
