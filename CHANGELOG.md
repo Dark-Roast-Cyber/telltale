@@ -12,12 +12,14 @@
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
 
-- **A chain's exfiltration step needs a network request.** A URL named only
-  in assistant text or a tool result still raises its own finding, but no
-  longer completes `chain.secret_then_network`,
-  `chain.mcp_injection_then_egress` or `chain.harvest_then_exfil`; a tool
-  call that sends data still does. Session scores and action findings both
-  follow this.
+- **A chain's exfiltration step comes from a tool call.** In a chain that
+  declares `within_calls`, as `chain.secret_then_network`,
+  `chain.mcp_injection_then_egress` and `chain.harvest_then_exfil` do, an
+  exfiltration match supplies the step when a matched exfiltration or
+  download rule reads no message or tool-result text, or when the call names
+  a destination URL in its own arguments. A URL named only in assistant text
+  or a tool result still raises its own finding but no longer completes such
+  a chain. Session scores and action findings both follow this.
 
 - **Each hook has one deadline.** A hook's waits are now bounded together:
   25 s from its start, below the timeouts of 30 s or more that the tool-call

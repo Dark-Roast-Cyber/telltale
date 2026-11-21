@@ -463,12 +463,13 @@ Three scores exist and must stay distinct: native finding risk
   Native profile 7 adds the `tool_kind` target to the action view for rules that
   select it; the bundled predicates read as in profile 6, and semantic
   identities change from profile 6 while replay identities do not.
-  Native profile 16 links the exfiltration step of a declared chain only from
-  a call that shows network use: one of its matched exfiltration or download
-  rules reads tool-call fields alone (`command`, `arguments`, `url`). A URL
-  named only in assistant text or a tool result keeps its own finding but
-  completes no chain, in action findings and session scores alike. Semantic
-  identities change from profile 15; replay identities do not.
+  Native profile 16 links the exfiltration step of a chain that declares
+  `within_calls` only from a tool call: one of its matched exfiltration or
+  download rules reads no message or tool-result text, or the call names a
+  destination URL in its own arguments. A URL named only in assistant text or
+  a tool result keeps its own finding but supplies no such step, in action
+  findings and session scores alike. Semantic identities change from profile
+  15; replay identities do not.
   Action semantics 3 adds the rule scope `recorded_exclusion`: a custom rule with
   it on `command` selects from the quote-free reading (and each inner command's)
   and judges its exclusion on the recorded text, so a separator or quote inside a
