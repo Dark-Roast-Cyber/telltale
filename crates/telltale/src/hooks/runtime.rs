@@ -1103,18 +1103,36 @@ impl Runtime {
             None => self.open(ctx)?,
         };
         let stateless = scratch.is_some();
+        // No time left before the evaluation starts (the lock wait can use it
+        // up): the call is not evaluated, and nothing is recorded but why.
+        if self.remaining().is_zero() {
+            return Err(HOOK_DEADLINE_PASSED);
+        }
         let id = RequestIdentity::next(&mut session, call);
         // The call is evaluated as the harness reported it (ADR 0002): the
         // journal reader declares it with that harness's own tool table.
         let evaluated = self.evaluate_request(ctx, &mut session, &id, call);
+        self.record_request(ctx, session, scratch, id, call, evaluated, stateless)
+    }
+
+    /// Record and answer a request whose evaluation has finished: its decision,
+    /// journal line and pending decision, then the decision record.
+    #[allow(clippy::too_many_arguments)]
+    fn record_request(
+        &mut self,
+        ctx: &Context,
+        mut session: SessionHandle,
+        scratch: Option<crate::hooks::state::ScratchDir>,
+        id: RequestIdentity,
+        call: &ToolCall,
+        evaluated: RequestEvaluation,
+        stateless: bool,
+    ) -> Result<Response, &'static str> {
         // The evaluator's client has stopped waiting and will evaluate this call
-        // itself, or the hook's deadline has passed. Nothing has been recorded
-        // yet, and no decision is.
+        // itself. Nothing has been recorded yet, and nothing is. The hook's
+        // deadline is not asked here: a finished verdict is always delivered.
         if self.answer_by.is_some_and(|by| now_ms() > by) {
             return Err(ANSWER_TOO_LATE);
-        }
-        if self.remaining().is_zero() {
-            return Err(HOOK_DEADLINE_PASSED);
         }
         let name_malformed = crate::hooks::journal::tool_name_is_malformed(&call.tool_name);
         let mut evaluation_info = self.request_evaluation_info(&evaluated, call, name_malformed);
@@ -2229,6 +2247,62 @@ mod tests {
             assert_eq!(decision.outcome.verdict, expected);
             assert_eq!(decision.outcome.basis, Basis::UnevaluableInput);
         }
+    }
+
+    /// The deadline bounds waits and work not yet started: a call whose
+    /// evaluation has finished is recorded and answered with its verdict even
+    /// when the deadline passed while it was being evaluated.
+    #[test]
+    fn a_call_evaluated_before_the_deadline_keeps_its_verdict_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = dir.path().join("telemetry.jsonl");
+        let mut runtime = Runtime::new(Config {
+            mode: Mode::Enforce,
+            state_dir: Some(dir.path().join("state")),
+            telemetry_path: Some(telemetry.clone()),
+            ..Config::default()
+        });
+        runtime.start_call();
+        let ctx = Context {
+            harness: "claude-code",
+            hook_event: "PreToolUse".to_owned(),
+            session_id: "s".to_owned(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: true,
+        };
+        let call = ToolCall {
+            tool_use_id: Some("toolu_1".to_owned()),
+            tool_name: "Bash".to_owned(),
+            input: json!({"command": "rm -f ~/.claude/settings.json"}),
+        };
+        let mut session = runtime.open(&ctx).unwrap();
+        let id = RequestIdentity::next(&mut session, &call);
+        let evaluated = runtime.evaluate_request(&ctx, &mut session, &id, &call);
+
+        runtime.deadline = Instant::now() - Duration::from_secs(1);
+        let response = runtime
+            .record_request(&ctx, session, None, id, &call, evaluated, false)
+            .unwrap();
+
+        let Response::Decision(decision) = response else {
+            panic!("{response:?}");
+        };
+        assert_eq!(decision.verdict(), Verdict::Deny);
+        let records: Vec<Value> = std::fs::read_to_string(&telemetry)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let kinds: Vec<&str> = records
+            .iter()
+            .map(|r| r["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["decision"]);
+        assert_eq!(records[0]["decision"]["verdict"], "deny");
     }
 
     #[test]
