@@ -665,9 +665,8 @@ fn sample_sqlite_sources(
     let full_scan = full_scan || pending.saw_rescan || pending.saw_remove;
     let indexed = source_index
         .iter()
-        .filter(|(_, source)| source.kind == SourceKind::Sqlite)
-        .map(|(key, _)| key.clone())
-        .filter(|_| full_scan);
+        .filter(|(_, source)| full_scan && source.kind == SourceKind::Sqlite)
+        .map(|(key, _)| key.clone());
     let changed = pending
         .paths
         .iter()
