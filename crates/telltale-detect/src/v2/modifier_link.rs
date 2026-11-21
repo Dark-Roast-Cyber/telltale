@@ -100,32 +100,54 @@ pub(super) fn session_steps(
             step.categories.extend(category.clone());
         }
     }
-    for step in steps.values_mut() {
-        step.categories = link_categories(export, &step.ids, std::mem::take(&mut step.categories));
+    for (&(_, index), step) in &mut steps {
+        let observation = observations[index];
+        if step.categories.contains("exfiltration") {
+            // Reading a call's destination URLs parses its arguments.
+            budget.charge(observation.retained_byte_len())?;
+        }
+        step.categories = link_categories(
+            export,
+            &step.ids,
+            std::mem::take(&mut step.categories),
+            observation,
+        );
     }
     Ok(steps)
 }
 
-/// The categories an observation that matched `ids` supplies to a link. It
-/// supplies `exfiltration` only when it shows network use: one of its rules
-/// in the exfiltration or download category reads tool-call fields alone
-/// (command, arguments, URL). A rule that also reads message or tool-result
-/// text can match a URL that is only named there, so on its own it keeps its
-/// atomic finding but completes no chain.
+/// The categories `observation`, which matched `ids`, supplies to a link. It
+/// supplies `exfiltration` only when it shows network use: one of its rules in
+/// the exfiltration or download category reads no message or tool-result
+/// text, or it is a tool call that names a destination URL in its own
+/// arguments. A rule that also reads message or tool-result text can match a
+/// URL that is only named there, so on its own it keeps its atomic finding but
+/// completes no chain.
 pub(super) fn link_categories(
     export: &RuleV1CompatibilityExport,
     ids: &BTreeSet<String>,
     mut categories: BTreeSet<String>,
+    observation: &CanonicalObservationV2,
 ) -> BTreeSet<String> {
     let network_use = || {
-        export.rules().iter().any(|rule| {
-            ids.contains(&rule.id)
-                && matches!(rule.category.as_str(), "exfiltration" | "download")
-                && !rule.matchers.is_empty()
-                && rule.matchers.iter().all(|matcher| {
-                    matches!(matcher.target.as_str(), "command" | "arguments" | "url")
-                })
-        })
+        let names_destination = match observation.body() {
+            ObservationBody::Tool(tool) => {
+                !super::tool_arguments::tool_argument_urls(tool, true).is_empty()
+            }
+            _ => false,
+        };
+        names_destination
+            || export.rules().iter().any(|rule| {
+                ids.contains(&rule.id)
+                    && matches!(rule.category.as_str(), "exfiltration" | "download")
+                    && !rule.matchers.is_empty()
+                    && !rule.matchers.iter().any(|matcher| {
+                        matches!(
+                            matcher.target.as_str(),
+                            "assistant_context" | "user_context" | "tool_result"
+                        )
+                    })
+            })
     };
     if categories.contains("exfiltration") && !network_use() {
         categories.remove("exfiltration");

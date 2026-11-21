@@ -2580,6 +2580,7 @@ pub(crate) fn evaluate(
                         export,
                         &atomic_ids,
                         categories.clone(),
+                        observation,
                     ),
                 },
             );
