@@ -9,6 +9,8 @@ use telltale_core::{
 };
 
 const GOLDEN: &str = include_str!("fixtures/effective-configuration-v1.json");
+const GOLDEN_IDENTITY: &str =
+    "semantic:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 fn rule(name: &str, uuid: &str, marker: &str, score: u64) -> String {
     format!(
@@ -22,7 +24,7 @@ fn rule(name: &str, uuid: &str, marker: &str, score: u64) -> String {
 /// A package rule replaced at the organization tier, an additive document, an
 /// override and a policy.
 fn synthetic_document() -> EffectiveConfigurationV1 {
-    let mut document = Pipeline::builder()
+    let pipeline = Pipeline::builder()
         .without_bundled_defaults()
         .rule_package(format!(
             "format: telltale-rule-package/v2\nid: syn.pack\ntitle: Synthetic pack\n\
@@ -49,10 +51,17 @@ fn synthetic_document() -> EffectiveConfigurationV1 {
         )
         .policy_document("version: 1\ndisabled_rules: [syn.other]\n")
         .build()
-        .unwrap()
-        .effective_configuration(&DetailedEvaluationOptions::default())
         .unwrap();
-    // The release version is the one field every release changes.
+    let options = DetailedEvaluationOptions::default();
+    let mut document = pipeline.effective_configuration(&options).unwrap();
+    // The identity is the pipeline's semantic identity, which the engine's
+    // native profile changes and the detailed scan tests pin; the release
+    // version changes with every release. Neither is this document's format.
+    assert_eq!(
+        document.semantic_identity,
+        pipeline.semantic_provenance(&options).unwrap().identity()
+    );
+    document.semantic_identity = GOLDEN_IDENTITY.into();
     document.telltale_version = "0.0.0-golden".into();
     document
 }

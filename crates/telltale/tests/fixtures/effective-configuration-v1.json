@@ -1,7 +1,7 @@
 {
   "schema": "telltale.effective_configuration.v1",
   "telltale_version": "0.0.0-golden",
-  "semantic_identity": "semantic:v1:sha256:d0bd63e934150201c9578cf01c0db25e71c3fb7bd300a36e83851405bc2ab8bf",
+  "semantic_identity": "semantic:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "packages": [
     {
       "id": "syn.pack",
