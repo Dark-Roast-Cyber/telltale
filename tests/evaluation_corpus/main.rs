@@ -773,13 +773,13 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                     }
                 }
             } else if is_positive {
-                if !evaluation.sessions().iter().any(|session| {
+                let Some(attack) = evaluation.sessions().iter().find(|session| {
                     session.rule_score()
                         >= u64::from(evaluate::CANONICAL_EVALUATION_THRESHOLDS.critical)
                         && uc001_rules
                             .iter()
                             .all(|rule| session.rule_ids().iter().any(|id| id == rule))
-                }) {
+                }) else {
                     return Err(format!(
                         "{context}: expected critical MCP injection + controlled egress in one session; got {:?}",
                         evaluation
@@ -788,7 +788,7 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                             .map(|session| (session.rule_score(), session.rule_ids()))
                             .collect::<Vec<_>>()
                     ));
-                }
+                };
                 // Its twin without the transfer call names the URL only in
                 // the injected text: both findings stay, the chain does not.
                 let mention_only = observations
@@ -806,8 +806,14 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                     .cloned()
                     .collect::<Vec<_>>();
                 let twin = evaluate_observations(&mention_only)?;
+                // The attack session itself, not any session of the source.
+                let twin_attack = twin
+                    .sessions()
+                    .iter()
+                    .find(|session| session.session_id() == attack.session_id());
                 if mention_only.len() == observations.len()
-                    || !twin.sessions().iter().any(|session| {
+                    || attack.session_id().is_none()
+                    || !twin_attack.is_some_and(|session| {
                         uc001_rules[..2]
                             .iter()
                             .all(|rule| session.rule_ids().iter().any(|id| id == rule))

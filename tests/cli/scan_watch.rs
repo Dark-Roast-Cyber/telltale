@@ -5078,6 +5078,64 @@ fn project_config_failures_are_aggregated_without_path_or_error_leakage() {
 }
 
 #[test]
+fn scan_once_warns_when_a_source_has_no_tool_records() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("messages-only.jsonl"),
+        concat!(
+            r#"{"type":"session_meta","session_id":"messages-only","timestamp":"2026-04-03T00:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-04-03T00:00:01Z","payload":{"type":"user_message","message":"Summarize the README."}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-04-03T00:00:02Z","payload":{"type":"assistant_message","message":"The README describes a synthetic fixture."}}"#,
+            "\n",
+        ),
+    )
+    .expect("message-only fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--install-inventory-disabled", "--log-path"])
+        .arg(temp.path().join("telltale-events.jsonl"))
+        .args(["--state-path"])
+        .arg(temp.path().join("telltale-state.json"))
+        .output()
+        .expect("run telltale");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(
+        summary["source_processing"]["parse_success_source_count"],
+        1
+    );
+    assert!(
+        summary["diagnostic_warnings"]
+            .as_array()
+            .expect("warnings")
+            .contains(&serde_json::json!({
+                "code": "no_tool_records_observed",
+                "classification": "suspicious_zero",
+                "basis": "source_processing"
+            })),
+        "{}",
+        summary["diagnostic_warnings"]
+    );
+}
+
+#[test]
 fn scan_once_continues_after_malformed_source() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
