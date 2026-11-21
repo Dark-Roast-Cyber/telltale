@@ -67,13 +67,11 @@ fn unsupported_detection_severities_fail_shared_compilation_for_documents_and_pa
         ] {
             let error = builder.build().err().expect("unsupported severity");
             assert!(matches!(error, PipelineError::Compilation(_)));
-            let message = error.source().unwrap().to_string();
-            assert!(
-                message.ends_with(&format!(
-                    "rule custom.error_contract uses unsupported level '{severity}'; supported values: {}",
-                    telltale_schema::event::VALID_DETECTION_SEVERITIES.join(", ")
-                )),
-                "{message}"
+            // A document or package that does not load is a coded error
+            // without document text.
+            assert_eq!(
+                error.source().unwrap().to_string(),
+                "rule_content_invalid_document"
             );
         }
     }
@@ -90,23 +88,12 @@ fn pipeline_error_characterization_builder_diagnostics() {
     assert_eq!(error.to_string(), "pipeline_no_rule_documents");
     assert!(error.source().is_none());
 
-    for (document, expected) in [
-        (
-            format!("version: 1\n{RULE}"),
-            "rule document 1: Rule v1 is no longer supported",
-        ),
-        (
-            RULE.replace("tool.arguments|re", "tool.unknown|re"),
-            "rule document 1: rule 'custom.error_contract': search identifier `selection`: unknown field `tool.unknown`",
-        ),
-        (
-            RULE.replace("'needle'", "'['"),
-            "rule document 1: rule 'custom.error_contract':",
-        ),
-        (
-            RULE.replace("level: low", "level: catastrophic"),
-            "rule document 1: rule custom.error_contract uses unsupported level 'catastrophic'; supported values:",
-        ),
+    // Rule v1, an unknown field, an invalid regex and an unsupported level.
+    for document in [
+        format!("version: 1\n{RULE}"),
+        RULE.replace("tool.arguments|re", "tool.unknown|re"),
+        RULE.replace("'needle'", "'['"),
+        RULE.replace("level: low", "level: catastrophic"),
     ] {
         let error = Pipeline::builder()
             .without_bundled_defaults()
@@ -116,9 +103,9 @@ fn pipeline_error_characterization_builder_diagnostics() {
             .expect("invalid rules");
         assert!(matches!(error, PipelineError::Compilation(_)));
         assert_eq!(error.to_string(), "pipeline_compilation_failed");
-        assert!(
-            error.source().unwrap().to_string().starts_with(expected),
-            "{error:?}"
+        assert_eq!(
+            format!("{:?}", error.source().unwrap()),
+            "RuleContentError { code: InvalidDocument, document: Some(\"explicit:1\") }"
         );
     }
     let duplicate = Pipeline::builder()

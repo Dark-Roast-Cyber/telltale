@@ -269,7 +269,8 @@
   a top-level `version` key) in any rule tier, `--rules` file, package or
   `Pipeline::rules_document` fails to load with "Rule v1 is no longer
   supported", pointing to `docs/rule-format.md` and the
-  [0.8.0 migration guide](docs/migrations/0.8.0.md); it fails even when a
+  [0.8.0 migration guide](docs/migrations/0.8.0.md) (the builder reports
+  `rule_content_invalid_document` instead); it fails even when a
   higher tier replaces it or it is disabled. A `telltale-rule-package/v1`
   package fails the same way. Compiled-form names (`RuleV1Compatibility*`,
   `compile_rule_v1`, the `rule_v1_*` fingerprints, detector version 1 and the
@@ -509,9 +510,11 @@
   policy), each with a `labeled_` variant; inputs are text, never paths. The
   CLI, hooks and the builder now share one tier resolution. CLI messages are
   unchanged; when several inputs fail at once, the CLI now reports a file it
-  cannot read before a parse or merge error in another file. Label, organization and override parse, override version and
-  entry, unknown `rule_id` and repeated-ID failures are a `RuleContentError`
-  with a closed `RuleContentErrorCode` and no document text; a repeated ID
+  cannot read before a parse or merge error in another file. Label failures,
+  a `rules_document`, organization or override document, rule package or
+  policy that does not parse, override version and entry, unknown `rule_id`
+  and repeated-ID failures are a `RuleContentError` with a closed
+  `RuleContentErrorCode` and no document text; a repeated ID
   among `rules_document` inputs now reports `rule_content_duplicate_id`
   instead of naming the rule. See
   [replacing rule content](docs/embedding.md#replacing-rule-content).

@@ -182,7 +182,8 @@ pub enum RuleContentErrorCode {
     /// An input label is empty, longer than 64 characters, has a character
     /// outside `A-Z a-z 0-9 . _ -`, or names two inputs of one kind.
     InvalidLabel,
-    /// An organization rule document or an override document does not parse.
+    /// A rule document, rule package, override document or policy does not
+    /// parse.
     InvalidDocument,
     /// An override document declares a version other than 1.
     UnsupportedVersion,
@@ -238,7 +239,8 @@ impl RuleContentError {
     /// The input the failure concerns, as `<kind>:<label>`: `organization` or
     /// `override` with the caller's label or the input's 1-based position among
     /// its kind, `explicit:<n>` for the n-th `rules_document`, `package:<n>`
-    /// for the n-th `rule_package` itself, `builtin:telltale.default`,
+    /// for the n-th `rule_package` itself, `policy:1` for the policy,
+    /// `builtin:telltale.default`,
     /// or `package:<id>@<version>:<origin>#document:<n>` with the ID and
     /// version the package declares for one of its rule documents. `None` when
     /// no single input is to blame.
@@ -314,7 +316,8 @@ pub(crate) struct RuleContent {
     pub(crate) documents: Vec<(InputName, LoadedRules)>,
     /// Override documents: (name, text), applied in order.
     pub(crate) overrides: Vec<(InputName, String)>,
-    pub(crate) policy: Option<String>,
+    /// The policy: (name, text).
+    pub(crate) policy: Option<(InputName, String)>,
 }
 
 /// An input's source name, for diagnostics and errors, and the label the
@@ -404,7 +407,14 @@ pub fn resolve_rule_set(
             .map(|(source, rules)| (InputName::unlabeled(source), rules))
             .collect(),
         overrides,
-        policy: policy_path.map(read).transpose()?,
+        policy: policy_path
+            .map(|path| {
+                Ok::<_, std::io::Error>((
+                    InputName::unlabeled(path.display().to_string()),
+                    read(path)?,
+                ))
+            })
+            .transpose()?,
     })
 }
 
@@ -427,7 +437,17 @@ pub(crate) fn resolve_rule_content(
     if documents.is_empty() {
         return Err(Box::new(NoRuleDocuments));
     }
-    let policy = policy.as_deref().map(parse_rule_policy).transpose()?;
+    let policy = policy
+        .map(|(name, raw)| {
+            parse_rule_policy(&raw).map_err(|error| {
+                ContentFailure::new(
+                    RuleContentErrorCode::InvalidDocument,
+                    Some(&name.source),
+                    error.to_string(),
+                )
+            })
+        })
+        .transpose()?;
     let (mut content, mut diagnostics) = merge_rule_documents(documents)?;
     // A rule catalog lists every definition, and the bundled process-chain
     // rules when a query enables them, which loading cannot know.
@@ -556,11 +576,17 @@ fn load_package_documents(
     };
     let installed = packages
         .iter()
-        .map(|(location, raw)| {
-            RulePackage::parse(raw)
-                .map_err(|error| format!("invalid rule package '{location}': {error}").into())
+        .enumerate()
+        .map(|(index, (location, raw))| {
+            RulePackage::parse(raw).map_err(|error| {
+                ContentFailure::new(
+                    RuleContentErrorCode::InvalidDocument,
+                    Some(&package_input(index)),
+                    format!("invalid rule package '{location}': {error}"),
+                )
+            })
         })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let resolved = resolve_rule_packages(community, installed)?;
     if let Some(extra) = resolved.get(MAX_RULE_PACKAGES) {
         let source = match extra.origin {

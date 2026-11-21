@@ -528,13 +528,14 @@ An unlabelled input is named by its 1-based position among inputs of its kind.
 These failures are `PipelineError::Compilation` whose `source()` is a
 `RuleContentError`: a closed `RuleContentErrorCode` (a `#[non_exhaustive]`
 enum) and the name of the input, such as `organization:<label>`,
-`override:<label>` or `explicit:<n>` for a `rules_document`. It never holds
-document text, rule IDs, or paths. `Display` is the code's text.
+`override:<label>`, `explicit:<n>` for a `rules_document`, `package:<n>` for
+the n-th `rule_package`, or `policy:1`. It never holds document text, rule
+IDs, or paths. `Display` is the code's text.
 
 | Code | Failure |
 | --- | --- |
 | `InvalidLabel` | a label outside the allowed form, or one name for two inputs |
-| `InvalidDocument` | an organization or override document that does not parse |
+| `InvalidDocument` | a rules, organization or override document, rule package or policy that does not parse, or whose rule fails its own validation (such as Rule v1, an unknown field, an invalid pattern or an unsupported level) |
 | `UnsupportedVersion` | an override document whose `version` is not 1 |
 | `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
 | `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, a `reason` over 256 characters or with control or invisible formatting characters other than tab and newline, or that sets nothing |
@@ -561,9 +562,10 @@ match Pipeline::builder()
 }
 ```
 
-Other `Compilation` causes are untyped: a `rules_document`, package, or
-policy that does not parse, whose text can name rule IDs and quote document
-values, and a rule that fails validation when the merged content compiles.
+Other `Compilation` causes are untyped, and their text can name rule IDs and
+quote document values: rule packages that parse but conflict, such as two
+with one ID or namespace, and a rule that fails validation when the merged
+content compiles.
 
 Telltale does not fetch, sign, or schedule rule content. Obtaining and
 authenticating documents is the host's job.

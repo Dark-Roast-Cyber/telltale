@@ -214,6 +214,37 @@ fn unparsable_organization_document_fails_with_a_closed_code() {
 }
 
 #[test]
+fn unparsable_rules_document_fails_with_a_closed_code_and_no_document_text() {
+    let error = rejected(base_builder().rules_document("title: [secret-text\n"));
+    assert_eq!(
+        format!("{error} {error:?}"),
+        "rule_content_invalid_document RuleContentError { code: InvalidDocument, document: Some(\"explicit:2\") }"
+    );
+}
+
+#[test]
+fn unparsable_rule_package_fails_with_a_closed_code_and_no_document_text() {
+    let error =
+        rejected(base_builder().rule_package(
+            "format: telltale-rule-package/v2\nid: syn.secret\ntitle: [secret-text\n",
+        ));
+    assert_eq!(
+        format!("{error} {error:?}"),
+        "rule_content_invalid_document RuleContentError { code: InvalidDocument, document: Some(\"package:2\") }"
+    );
+}
+
+#[test]
+fn unparsable_policy_fails_with_a_closed_code_and_no_document_text() {
+    let error =
+        rejected(base_builder().policy_document("version: 1\ndisabled_rule: [secret-text]\n"));
+    assert_eq!(
+        format!("{error} {error:?}"),
+        "rule_content_invalid_document RuleContentError { code: InvalidDocument, document: Some(\"policy:1\") }"
+    );
+}
+
+#[test]
 fn labels_outside_the_allowed_form_or_repeated_fail() {
     let document = rule(BASE, BASE_UUID, "syn-gamma", 35);
     let tune = overrides("  - rule_id: syn.base\n    reason: Synthetic.\n    score: 5\n");
