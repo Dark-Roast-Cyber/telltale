@@ -535,11 +535,25 @@ fn encoded_payload_requires_an_observable_execution_step() {
             "source <(base64 -d payload.b64)",
             "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)))",
             "base64 -d payload.b64 > /tmp/run.sh && bash /tmp/run.sh",
-            "base64 -d payload.b64 > tool; chmod +x tool; ./tool",
+            "base64 -d payload.b64 > /tmp/tool; chmod +x /tmp/tool; /tmp/tool",
             "base64 -d payload.b64 2>&1 | sh",
             "p=$(echo U1lOVEhFVElD | base64 -d); eval \"$p\"",
             "base64 -d payload.b64 > run.py && python3 run.py",
             "base64 -d payload.b64 > run.ps1; pwsh -File run.ps1",
+            "echo U1lOVEhFVElD | base64 -d | bash 2>/dev/null",
+            "echo U1lOVEhFVElD | base64 -d | sh >/tmp/log",
+            "echo U1lOVEhFVElD | base64 -d | bash -s stable",
+            "echo U1lOVEhFVElD | base64 -d | sudo -E bash",
+            "echo U1lOVEhFVElD | base64 -d | fish",
+            "echo U1lOVEhFVElD | base64 -d | php",
+            "echo U1lOVEhFVElD | base64 -d | python3 2>/dev/null",
+            "fish -c \"$(base64 -d payload.b64)\"",
+            "base64 -d payload.b64 > /tmp/p; /tmp/p",
+            "base64 -d payload.b64 > p.sh && chmod +x p.sh && ./p.sh",
+            "certutil -decode cert.b64 cert.cer",
+            "certutil -decode a.b64 a.exe && a.exe",
+            "certutil -decode a.b64 a.exe & start a.exe",
+            "certutil.exe -decode a.b64 a.ps1 && powershell -File a.ps1",
         ],
         &[
             "base64 --decode documented-fixture.b64",
@@ -549,14 +563,21 @@ fn encoded_payload_requires_an_observable_execution_step() {
             "base64 -d key.b64 > id_fixture && chmod 600 id_fixture",
             "echo $KEYSTORE | base64 -d > release.jks && ./gradlew assembleRelease",
             "[IO.File]::WriteAllBytes('a.bin', [Convert]::FromBase64String($s))",
-            "certutil -decode cert.b64 cert.cer",
             "base64 -d data.b64 > data.json && jq . data.json",
+            "echo eyJhIjoxfQ== | base64 -d | node script.js",
+            "echo eyJhIjoxfQ== | base64 -d | shasum",
+            "echo eyJhIjoxfQ== | base64 -d | shuf",
+            "echo $CA | base64 -d > ca.pem && node server.js",
+            "echo $CA | base64 -d > ca.pem && python manage.py runserver",
+            "openssl enc -aes-256-cbc -in a -out a.enc && sh deploy.sh",
+            "base64 -d data 2>/dev/null; source venv/bin/activate",
+            "base64 -d ca.b64 > ca.pem && chmod 600 ca.pem",
         ],
     );
 }
 
 #[test]
-fn decoding_without_execution_is_a_zero_point_hunt_signal() {
+fn every_decode_is_a_zero_point_timeline_mark() {
     let rules = bundled();
     let result = rules
         .evaluate(&[("command", "base64 --decode documented-fixture.b64")])
@@ -573,6 +594,7 @@ fn decoding_without_execution_is_a_zero_point_hunt_signal() {
         [
             "execution.shell",
             "execution.encoded_payload",
+            "obfuscation.decode",
             "chain.shell_encoded_payload"
         ]
     );

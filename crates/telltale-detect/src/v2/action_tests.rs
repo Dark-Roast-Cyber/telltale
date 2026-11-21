@@ -1005,7 +1005,8 @@ fn decode_piped_to_a_shell_keeps_its_review_score_in_both_views() {
         [
             "chain.shell_encoded_payload",
             "execution.encoded_payload",
-            "execution.shell"
+            "execution.shell",
+            "obfuscation.decode"
         ]
     );
     assert_eq!(session.rule_score(), 75);

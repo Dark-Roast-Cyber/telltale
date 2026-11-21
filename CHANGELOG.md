@@ -29,13 +29,18 @@
   can emit once after upgrade.
 - **Encoded payload scoring requires an observable execution step.**
   `execution.encoded_payload` keeps its name, UUID and 50-point contribution
-  but now matches only when the same command pipes decoded output to a shell
-  or interpreter, substitutes it into `eval`, a shell or process substitution,
-  assigns it to a variable that `eval` then runs, runs it through PowerShell
-  `Invoke-Expression`, or writes it to a file that the command then makes
-  executable or hands to a shell or interpreter. Decoding alone matches the new
-  zero-point hunt rule `obfuscation.decode` (`defense_evasion`), so a routine
-  decode in a shell tool scores the 15-point shell credit instead of 75. Both
+  but now matches only three kinds of command. The first runs decoded output
+  directly: it pipes it to a shell or to an interpreter reading standard
+  input, substitutes it into `eval`, `source`, a shell or an interpreter,
+  assigns it to a variable that `eval` runs, or passes it to PowerShell
+  `Invoke-Expression`. The second decodes with `certutil`. The third writes
+  decoded output to an executable-looking file (a script or binary extension,
+  or a path under `/tmp` or `/dev/shm`) and then runs a shell, interpreter or
+  `source` with a file, a `chmod` that adds execute, `start`, `call` or an
+  explicit path. Every decode also matches the new zero-point hunt rule
+  `obfuscation.decode` (`defense_evasion`), which marks it on the timeline, so
+  a routine decode in a shell tool scores the 15-point shell credit instead of
+  75. Both
   rules' behaviour fingerprints change, so affected sessions can emit once
   after upgrade. Fixes #178.
 - **Object-storage uploads are matched by transfer direction.**

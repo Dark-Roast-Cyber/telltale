@@ -1781,7 +1781,7 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
             "other": 2,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 133);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 134);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 44);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -3284,7 +3284,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 35);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        133
+        134
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -8856,6 +8856,7 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
             "execution.encoded_payload",
             "execution.shell",
             "exfil.dns_encoding",
+            "obfuscation.decode",
         ]
     );
     assert_eq!(event.risk_score, 130);
@@ -8892,6 +8893,7 @@ fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
         "execution.shell",
         "execution.encoded_payload",
         "exfil.dns_encoding",
+        "obfuscation.decode",
     ]
     .into_iter()
     .flat_map(|rule| {

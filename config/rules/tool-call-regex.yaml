@@ -124,31 +124,32 @@ status: stable
 logsource:
     product: ai_agent
     category: tool_activity
-description: Recorded command text decodes encoded content and runs the result in the same command; it does not establish that the decoded content ran.
+description: Recorded command text runs decoded content directly, decodes with certutil, or decodes to an executable-looking file that the same command then runs; it does not establish that the decoded content ran.
 modified: 2026-11-20
 detection:
     selection:
-        - tool.command|re|i: &pattern '(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)(?:[^;&\n]|\d?>&\d)*\|\s*(?:sudo\s+)?(?:[^\s;&|]*/)?(?:(?:ba|z|da|k)?sh|fish|pwsh|powershell|python[\d.]*|perl|ruby|node|iex)(?:\s+-[^\s;&|]*)*\s*(?:$|[;&|)\n"\x27`#])|(?:\beval|\bsource|(?:^|[\s;&|(])\.|\b(?:(?:ba|z|da|k)?sh|python[\d.]*|perl|ruby|node)(?:\s+-[^\s;&|]*)*)\s+["\x27]?(?:\$\(|<\(|`)[^)`\n]*(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)|(?:\biex\b|invoke-expression|\[scriptblock\]::create)[^\n]*FromBase64String|FromBase64String[^\n]*(?:\biex\b|invoke-expression)|(?:(?:base64\s+(?:-d|--decode)|xxd\s+-r|openssl\s+enc)[^;&|\n]*(?:>|\s-o\s|\s-out\s)|certutil\s+(?:-\S+\s+)*-decode\s)[^\n]*?(?:&&|\|\||;|\n)\s*(?:sudo\s+)?(?:chmod\s+(?:[ugoa]*\+[rwxXst]*x|[0-7]*[1357][0-7]*)\b|(?:(?:ba|z|da|k)?sh|source|\.|python[\d.]*|perl|ruby|node)\s+[^-\s;&|]|(?:pwsh|powershell)\s[^;&|\n]*-file\s|(?:start|call)\s+[^;&|\n]*\.(?:exe|bat|cmd|ps1|vbs)\b)|\w+=["\x27]?\$\([^)\n]*(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)[^\n]*?\beval\s+["\x27]?\$'
+        - tool.command|re|i: &pattern '(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)(?:(?:[^;&\n]|\d?>&\d)*\|\s*(?:sudo(?:\s+-\S+)*\s+)?(?:\S*/)?(?:(?:(?:ba|z|da|k|fi|pw)?sh|powershell|iex)(?:[\s;&|)"''`#]|$)|(?:python[\d.]*|perl|ruby|node|php)(?:\s+(?:-(?:[^\sm]\S*)?|\S*[<>]\S*))*\s*(?:$|[;&|)"''`#]))|[^;&|\n]*(?:>|\s-o\s|\s-out\s)\s*["'']?(?:/tmp/|/dev/shm/|[^\s;&|"'']*\.(?:\w*sh|p[ylhs]\w*|rb|js|bat|cmd|vbs|exe|bin|so)\b)[^\n]*?(?:[;&|\n]|sudo)\s*(?:(?:(?:ba|z|da|k|fi|pw)?sh|powershell|source|\.|python[\d.]*|perl|ruby|node|php)(?:\s+-\S+)*\s+[^-\s;&|]|chmod\s+(?:\S*\+\w*x|[0-7]*[1357][0-7]*\b)|(?:start|call)\b|\.?/))|(?:\beval|source|\.|\b(?:(?:ba|z|da|k|fi|pw)?sh|powershell|python[\d.]*|perl|ruby|node|php)(?:\s+-\S*)*)\s+["'']?(?:\$\(|<\(|`)[^)`\n]*(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)|\w+=["'']?\$\([^)\n]*(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)[^\n]*?\beval\s+["'']?\$|(?:\biex\b|invoke-ex|scriptblock\]::create)[^\n]*FromBase64String|FromBase64String[^\n]*(?:\biex\b|invoke-ex)|certutil[^;&|\n]*\s[-/]decode'
         - tool.arguments|re|i: *pattern
     condition: selection
 falsepositives:
     - 'Installers and incident-response tasks may run decoded scripts under operator control.'
-    - 'Decoding that is not piped to a shell or interpreter, substituted into eval or a shell, or written to a file that the same command then runs or makes executable does not match; obfuscation.decode records it instead.'
+    - 'Matches decoded output piped to a shell or to an interpreter reading standard input, substituted into eval, source, a shell or an interpreter, assigned to a variable that eval runs, or passed to PowerShell Invoke-Expression; and decoded output written to an executable-looking file (a script or binary extension, or a path under /tmp or /dev/shm) followed by a shell, interpreter, source, chmod adding execute, start, call or an explicit path. Other decoding matches only obfuscation.decode.'
+    - 'Every certutil decode matches, including certificate handling, because certutil decoding is a common way to stage payloads.'
 level: high
 tags:
     - atlas.aml.t0050
 telltale:
     category: execution
     score: 50
-    explanation: 'Encoded content was decoded and run in the same command.'
+    explanation: 'Encoded content was decoded and run in the same command, or decoded with certutil.'
     tags: [execution, obfuscation]
 ---
-title: Encoded content decoded without an observable execution step
+title: Encoded content decoded
 id: 0c5d7a3e-6f1b-4b8e-9d2a-7e4c1f9b3a65
 name: obfuscation.decode
 taxonomy: telltale
 status: stable
-description: Recorded command text decodes encoded content without running the result in the same command. It carries no points and gives the timeline a decode step to correlate with later activity.
+description: Recorded command text decodes encoded content. It carries no points and marks every decode on the timeline, whether or not the same command runs the result.
 modified: 2026-11-20
 logsource:
     product: ai_agent
@@ -156,13 +157,9 @@ logsource:
 detection:
     selection_command:
         tool.command|re|i: &decode '(?:base64\s+(?:-d|--decode)|openssl\s+enc|certutil\s+-decode|FromBase64String|xxd\s+-r|echo\s+[A-Za-z0-9+/]{80,}={0,2}\s*\|)'
-    filter_command:
-        tool.command|re|i: &execution '(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)(?:[^;&\n]|\d?>&\d)*\|\s*(?:sudo\s+)?(?:[^\s;&|]*/)?(?:(?:ba|z|da|k)?sh|fish|pwsh|powershell|python[\d.]*|perl|ruby|node|iex)(?:\s+-[^\s;&|]*)*\s*(?:$|[;&|)\n"\x27`#])|(?:\beval|\bsource|(?:^|[\s;&|(])\.|\b(?:(?:ba|z|da|k)?sh|python[\d.]*|perl|ruby|node)(?:\s+-[^\s;&|]*)*)\s+["\x27]?(?:\$\(|<\(|`)[^)`\n]*(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)|(?:\biex\b|invoke-expression|\[scriptblock\]::create)[^\n]*FromBase64String|FromBase64String[^\n]*(?:\biex\b|invoke-expression)|(?:(?:base64\s+(?:-d|--decode)|xxd\s+-r|openssl\s+enc)[^;&|\n]*(?:>|\s-o\s|\s-out\s)|certutil\s+(?:-\S+\s+)*-decode\s)[^\n]*?(?:&&|\|\||;|\n)\s*(?:sudo\s+)?(?:chmod\s+(?:[ugoa]*\+[rwxXst]*x|[0-7]*[1357][0-7]*)\b|(?:(?:ba|z|da|k)?sh|source|\.|python[\d.]*|perl|ruby|node)\s+[^-\s;&|]|(?:pwsh|powershell)\s[^;&|\n]*-file\s|(?:start|call)\s+[^;&|\n]*\.(?:exe|bat|cmd|ps1|vbs)\b)|\w+=["\x27]?\$\([^)\n]*(?:base64\s+(?:-d|--decode)|openssl\s+enc|xxd\s+-r)[^\n]*?\beval\s+["\x27]?\$'
     selection_arguments:
         tool.arguments|re|i: *decode
-    filter_arguments:
-        tool.arguments|re|i: *execution
-    condition: (selection_command and not filter_command) or (selection_arguments and not filter_arguments)
+    condition: 1 of selection_*
 falsepositives:
     - 'Developers routinely decode fixtures, certificates, keys and API payloads.'
 level: informational
@@ -171,7 +168,7 @@ tags:
 telltale:
     category: defense_evasion
     score: 0
-    explanation: 'Encoded content was decoded without an observable execution step in the same command. This zero-point hunt signal marks the decode on the timeline.'
+    explanation: 'Encoded content was decoded. This zero-point hunt signal marks the decode on the timeline; execution.encoded_payload scores decoding that the same command runs.'
     analytic_intent: hunt
     detection_class: threat_hunting
     signal_type: atomic

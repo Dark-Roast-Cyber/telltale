@@ -2793,7 +2793,8 @@
         "chain.shell_encoded_payload",
         "execution.encoded_payload",
         "execution.shell",
-        "exfil.dns_encoding"
+        "exfil.dns_encoding",
+        "obfuscation.decode"
       ],
       "contributions": [
         {
