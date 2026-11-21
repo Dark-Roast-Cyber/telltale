@@ -207,8 +207,9 @@ class Home:
         """Stop the evaluator this home started, then remove the home."""
         try:
             pid = int((self.state / "evaluator.pid").read_text())
-            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes() if Path("/proc").is_dir() else b"serve"
-            if b"serve" in cmdline:
+            # Only a process that names this home is this home's evaluator.
+            proc = Path(f"/proc/{pid}/cmdline")
+            if not proc.parent.parent.is_dir() or str(self.root).encode() in proc.read_bytes():
                 os.kill(pid, signal.SIGTERM)
                 for _ in range(50):
                     os.kill(pid, 0)
