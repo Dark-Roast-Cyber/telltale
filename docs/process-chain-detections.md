@@ -217,6 +217,21 @@ Across observations, the session kernel collapses the same rule against the same
 entity and matcher dedupe key inside the suppression window (1 hour by default).
 The retained occurrence projects a `repeat_count` evidence entry.
 
+Scanner state separately suppresses replay of an already emitted occurrence.
+For canonical correlations, this identity includes the supporting observation
+and process-step evidence, not the supporting Event 3 IDs in
+`correlated_event_ids`, which are regenerated on every scan. New supporting
+observations or changed evidence still emit under the same session and rule.
+The correlation event's `suppression_window_seconds` reports the rule's
+correlation window over source event time; it is not a timer that re-emits
+unchanged historical evidence.
+
+Existing scanner state needs no migration. The first scan after an upgrade can
+emit a previously seen correlation once while it records the new identity; a
+downgrade returns to the earlier behavior, which emits it again each scan.
+Event 3 records and delivery IDs are unchanged. `--backfill` continues to
+bypass scanner-state deduplication.
+
 ### Overlaps split by command line, not collapsed
 
 The overlaps that matter are not the same behaviour and are not deduplicated

@@ -48,19 +48,47 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:\b[a-z][a-z0-9+.-]*:)?//[^\s<>\"']+"#).expect("URL regex")
 });
 
-/// Device-namespace (`\\?\`, `\\.\`), drive and UNC paths. The device branch
-/// comes first so it wins at a shared start: its first component may be a
-/// drive (`C:`) or a volume name with braces, which the UNC branch stops at.
-static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+/// Device-namespace (`\\?\`, `\\.\`), drive and UNC paths in plain text.
+static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[1]));
+
+/// The same paths in text escaped once or twice (JSON strings), whose
+/// separators are 2 or 4 backslashes. Only text holding a doubled backslash
+/// can contain one, so this pass runs only then.
+static ESCAPED_WINDOWS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[2, 4]));
+
+/// Windows paths whose separators are `widths` backslashes. Each form keeps
+/// one separator width throughout, so a single escaped backslash
+/// (`HKCU\\Software`, `\\n`) is not read as a UNC start.
+///
+/// Device branches come first so they win at a shared start: their first
+/// component may be a drive (`C:`) or a volume name with braces, which the UNC
+/// branch stops at. A drive letter must not follow a letter, so provider
+/// drives such as `HKLM:\` stay readable; it may follow an escaped newline,
+/// tab or carriage return. That leading character is captured as `lead` and
+/// kept by the replacement.
+fn windows_path_regex(widths: &[usize]) -> Regex {
     const PART_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
     const DEVICE_NAME_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]:&|]"#;
-    // Directories may hold spaces; the last component may not.
-    let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*\\)*{PART_CHAR}+");
-    let device = format!(r"\\\\[?.]\\(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:\\{tail})?");
-    let drive = format!(r"\b[A-Z]:\\{tail}");
-    let unc = format!(r"\\\\{PART_CHAR}+\\{tail}");
-    Regex::new(&format!("(?i){device}|{drive}|{unc}")).expect("Windows path regex")
-});
+    let (mut devices, mut uncs, mut drives) = (Vec::new(), Vec::new(), Vec::new());
+    for width in widths {
+        let sep = format!(r"\\{{{width}}}");
+        let start = format!(r"\\{{{}}}", width * 2);
+        // Directories may hold spaces; the last component may not.
+        let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*{sep})*{PART_CHAR}+");
+        devices.push(format!(
+            r"{start}[?.]{sep}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:{sep}{tail})?"
+        ));
+        uncs.push(format!(r"{start}{PART_CHAR}+{sep}{tail}"));
+        drives.push(format!(r"[A-Z]:{sep}{tail}"));
+    }
+    Regex::new(&format!(
+        r"(?i){}|{}|(?P<lead>^|[^A-Z]|\\[nrt])(?:{})",
+        devices.join("|"),
+        uncs.join("|"),
+        drives.join("|")
+    ))
+    .expect("Windows path regex")
+}
 
 static POSIX_PRIVATE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -2004,12 +2032,38 @@ fn redact_urls_at_depth<E>(
     for capture in URL_RE.find_iter(text) {
         redacted.push_str(&text[offset..capture.start()]);
         let (url, trailing) = split_url_trailing_punctuation(capture.as_str());
-        redacted.push_str(&sanitize_url_at_depth(url, depth, charge)?);
+        // Nested text is a decoded URL component, where `//` is URL syntax.
+        let glued = text[..capture.start()].ends_with(char::is_alphanumeric);
+        if depth == 0 && !glued && is_forward_slash_unc(url) {
+            redacted.push_str(SENSITIVE_PATH);
+        } else {
+            redacted.push_str(&sanitize_url_at_depth(url, depth, charge)?);
+        }
         redacted.push_str(trailing);
         offset = capture.end();
     }
     redacted.push_str(&text[offset..]);
     Ok(redacted)
+}
+
+/// A forward-slash UNC path, `//server/share[/...]`: a scheme-relative
+/// candidate whose host is a single label with a letter (a server name) or
+/// an IPv4 address, with no port or userinfo, followed by a share name.
+/// Any other scheme-relative candidate is sanitized as a URL.
+fn is_forward_slash_unc(url: &str) -> bool {
+    let Some((host, path)) = url.strip_prefix("//").and_then(|rest| rest.split_once('/')) else {
+        return false;
+    };
+    let server_name = host.bytes().any(|byte| byte.is_ascii_alphabetic())
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    let address = host.parse::<std::net::Ipv4Addr>().is_ok();
+    let share = path
+        .chars()
+        .next()
+        .is_some_and(|character| !matches!(character, '/' | '?' | '#'));
+    (server_name || address) && share
 }
 
 fn sanitize_url_at_depth<E>(
@@ -2455,9 +2509,7 @@ fn split_url_before_absolute_path(url: &str) -> (&str, &str) {
 }
 
 fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
-    let redacted = WINDOWS_OR_UNC_PATH_RE
-        .replace_all(text, marker)
-        .into_owned();
+    let redacted = redact_windows_paths(text, marker);
     let redacted = POSIX_PRIVATE_PATH_RE
         .replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let whole = &captures[0];
@@ -2476,6 +2528,39 @@ fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
     CREDENTIAL_PATH_RE
         .replace_all(&redacted, marker)
         .into_owned()
+}
+
+/// Both Windows path patterns run over the original text, and overlapping or
+/// adjacent matches are redacted as one span, so a path that mixes escaped
+/// and plain separators is replaced whole. A drive match's `lead` character
+/// is not part of its span.
+fn redact_windows_paths(text: &str, marker: &str) -> String {
+    let span = |captures: regex::Captures<'_>| {
+        let whole = captures.get(0).expect("whole match");
+        let lead = captures.name("lead").map_or(0, |lead| lead.len());
+        whole.start() + lead..whole.end()
+    };
+    let mut spans = WINDOWS_OR_UNC_PATH_RE
+        .captures_iter(text)
+        .map(span)
+        .collect::<Vec<_>>();
+    if text.contains(r"\\") {
+        spans.extend(ESCAPED_WINDOWS_PATH_RE.captures_iter(text).map(span));
+        spans.sort_by_key(|span| span.start);
+    }
+    let mut redacted = String::with_capacity(text.len());
+    let mut offset = 0;
+    let mut spans = spans.into_iter().peekable();
+    while let Some(mut merged) = spans.next() {
+        while let Some(next) = spans.next_if(|next| next.start <= merged.end) {
+            merged.end = merged.end.max(next.end);
+        }
+        redacted.push_str(&text[offset..merged.start]);
+        redacted.push_str(marker);
+        offset = merged.end;
+    }
+    redacted.push_str(&text[offset..]);
+    redacted
 }
 
 fn path_marker(context: SanitizationContext) -> &'static str {
@@ -3559,6 +3644,213 @@ safe=value"#,
             ),
             "<path> and <path> and <path>"
         );
+    }
+
+    /// Asserts the sanitized text in every context: `evidence` is the
+    /// expectation for every context except `Diagnostic`, which uses its own
+    /// path marker.
+    fn assert_every_context(input: &str, evidence: &str, diagnostic: &str) {
+        for context in [
+            SanitizationContext::Evidence,
+            SanitizationContext::Url,
+            SanitizationContext::Path,
+            SanitizationContext::CommandResult,
+            SanitizationContext::Summary,
+            SanitizationContext::Metadata,
+        ] {
+            assert_eq!(
+                PrivacySanitizer::sanitize(context, input),
+                evidence,
+                "{context:?}"
+            );
+        }
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, input),
+            diagnostic
+        );
+    }
+
+    #[test]
+    fn json_escaped_drive_paths_are_redacted_in_every_context() {
+        assert_every_context(
+            r#"{"path":"C:\\Users\\example\\Project Space\\notes.txt"}"#,
+            r#"{"path":"[sensitive-path]"}"#,
+            r#"{"path":"<path>"}"#,
+        );
+    }
+
+    #[test]
+    fn json_escaped_unc_paths_are_redacted_in_every_context() {
+        assert_every_context(
+            r#"{"path":"\\\\server\\share\\example\\notes.txt"}"#,
+            r#"{"path":"[sensitive-path]"}"#,
+            r#"{"path":"<path>"}"#,
+        );
+    }
+
+    #[test]
+    fn json_escaped_device_namespace_paths_are_redacted_in_every_context() {
+        assert_every_context(
+            r#"{"path":"\\\\?\\C:\\Users\\example\\notes.txt"}"#,
+            r#"{"path":"[sensitive-path]"}"#,
+            r#"{"path":"<path>"}"#,
+        );
+    }
+
+    #[test]
+    fn json_escaped_device_namespace_path_forms_are_redacted_whole() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(sanitize(r"\\\\.\\C:\\Users\\example\\notes.txt"), "<path>");
+        assert_eq!(
+            sanitize(r"\\\\?\\UNC\\server\\share\\example\\notes.txt"),
+            "<path>"
+        );
+        assert_eq!(
+            sanitize(
+                r"\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\Users\\example\\notes.txt"
+            ),
+            "<path>"
+        );
+    }
+
+    #[test]
+    fn json_escaped_paths_inside_escaped_text_redact_only_the_path() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(
+            sanitize(r#""exit\r\nC:\\Users\\example>dir""#),
+            r#""exit\r\n<path>>dir""#
+        );
+        assert_eq!(
+            sanitize(r#""type \"C:\\Users\\example\\notes.txt\" now""#),
+            r#""type \"<path>\" now""#
+        );
+        assert_eq!(
+            sanitize(r#"{"cmd":"copy \\\\server\\share\\a.txt C:\\Temp\\b.txt\n"}"#),
+            r#"{"cmd":"copy <path> <path>"}"#
+        );
+    }
+
+    #[test]
+    fn twice_escaped_windows_paths_are_redacted() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(
+            sanitize(r#"{\"path\":\"C:\\\\Users\\\\example\\\\notes.txt\"}"#),
+            r#"{\"path\":\"<path>\"}"#
+        );
+        assert_eq!(
+            sanitize(r"\\\\\\\\server\\\\share\\\\example\\\\notes.txt"),
+            "<path>"
+        );
+    }
+
+    #[test]
+    fn mixed_width_windows_paths_are_redacted_whole() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(sanitize(r"C:\\Users\alice\secret.txt"), "<path>");
+        assert_eq!(sanitize(r"\\\\server\\share\deep\secret"), "<path>");
+        assert_eq!(sanitize(r"\\\\?\\C:\\Users\alice\secret.txt"), "<path>");
+        assert_eq!(
+            sanitize(r"\\\\?\\UNC\\server\\share\deep\secret.txt"),
+            "<path>"
+        );
+        assert_eq!(
+            sanitize(r"open C:\\Users\\alice\secret.txt now"),
+            "open <path> now"
+        );
+    }
+
+    /// Generated mixed-width paths: every component the plain single-width
+    /// pattern hides stays hidden.
+    #[test]
+    fn mixed_width_windows_paths_hide_what_single_width_matching_hid() {
+        let part = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
+        let tail = format!(r"(?:{part}+(?:\s+{part}+)*\\)*{part}+");
+        let single_width = regex::Regex::new(&format!(
+            r#"(?i)\\\\[?.]\\(?:[A-Z]:{part}*|[^\s\\<>"'`,;()\[\]:&|]+)(?:\\{tail})?|\b[A-Z]:\\{tail}|\\\\{part}+\\{tail}"#
+        ))
+        .unwrap();
+        let separators = [r"\", r"\\"];
+        for prefix in ["C:", r"\\server", r"\\\\server", r"\\?\C:", r"\\\\?\\C:"] {
+            for first in separators {
+                for second in separators {
+                    for third in separators {
+                        let input = format!(
+                            "read {prefix}{first}Alphaone{second}Bravotwo{third}Charlie.txt now"
+                        );
+                        let before = single_width.replace_all(&input, "<path>");
+                        let after =
+                            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &input);
+                        for token in ["Alphaone", "Bravotwo", "Charlie"] {
+                            assert!(
+                                before.contains(token) || !after.contains(token),
+                                "{input} -> {after}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Escaped text that only contains single escaped backslashes, such as a
+    /// registry key or an escaped newline, is not a path.
+    #[test]
+    fn json_escaped_registry_keys_and_escapes_are_kept() {
+        for kept in [
+            r"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater",
+            r#"printf \"a\\nb\\nc\""#,
+            r"Get-ChildItem HKLM:\Software\Microsoft",
+        ] {
+            assert_eq!(redact_sensitive_text(kept), kept);
+        }
+    }
+
+    #[test]
+    fn forward_slash_unc_paths_are_redacted_in_every_context() {
+        assert_every_context(
+            "open //server/share/example/notes.txt now",
+            "open [sensitive-path] now",
+            "open <path> now",
+        );
+    }
+
+    #[test]
+    fn forward_slash_unc_paths_with_address_hosts_are_redacted() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(sanitize("copy //192.0.2.10/share/a.txt ."), "copy <path> .");
+        assert_eq!(sanitize("dir //FILESRV01/share"), "dir <path>");
+    }
+
+    /// Scheme-relative URLs, URLs with doubled slashes and ordinary `//` text
+    /// keep their current treatment.
+    #[test]
+    fn urls_and_ordinary_double_slash_text_are_not_read_as_unc_paths() {
+        for kept in [
+            r#"<script src="//cdn.example.com/lib/app.js"></script>"#,
+            "fetch //api.example.com:8443/v1/items",
+            "//localhost:8080/health",
+            "https://example.invalid/a//b/c",
+            "http://host//double/slash",
+            "a // b",
+            "x = n//2/3",
+            "call(); //eslint-disable-line",
+            "//server",
+        ] {
+            assert_eq!(redact_sensitive_text(kept), kept);
+        }
+    }
+
+    #[test]
+    fn drive_paths_after_a_digit_or_underscore_are_redacted() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(sanitize(r"out_C:\Users\example\notes.txt"), "out_<path>");
+        assert_eq!(sanitize(r"2C:\Users\example\notes.txt"), "2<path>");
     }
 
     #[test]

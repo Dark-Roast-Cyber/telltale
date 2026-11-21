@@ -470,3 +470,302 @@ fn omitted_text_call(omitted: bool, kept: &str) -> CanonicalObservationV2 {
         builder.build().unwrap()
     }
 }
+
+/// A call whose arguments and result were each replaced whole: every selector
+/// that reads them, or a fact derived from them, has no visibility into the
+/// call. A not-exists condition and a positive condition are not evaluated.
+#[test]
+fn selectors_over_values_replaced_whole_are_not_evaluated() {
+    use super::{MatchState, MatcherSpec, NonEvaluationReason, SelectorPresence};
+    let replaced = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "command": "echo kept"}),
+        json!("kept"),
+        true,
+    );
+    let insufficient = MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility);
+    for name in [
+        "tool.arguments",
+        "tool.searchable_arguments",
+        "tool.arguments.text",
+        "tool.arguments.keys",
+        "compat.v1.arguments",
+        "tool.result",
+        "tool.searchable_result",
+        "tool.result.text",
+        "compat.v1.tool_result",
+        "command.text",
+        "compat.v1.command",
+        "resource.path",
+        "compat.v1.file_path",
+        "compat.v1.url",
+        "compat.v1.written_path",
+    ] {
+        let resolution = SelectorRegistry::new()
+            .resolve(SelectorId::parse(name).unwrap(), &replaced)
+            .unwrap();
+        assert_eq!(
+            resolution.presence(),
+            SelectorPresence::UnavailableVisibility,
+            "{name}"
+        );
+        for matcher in [
+            MatcherSpec::not_exists(name),
+            MatcherSpec::contains(name, JsonValue::string("kept")),
+        ] {
+            let state = matcher.compile().unwrap().evaluate(&replaced).unwrap();
+            assert_eq!(state.state(), &insufficient, "{name}");
+        }
+    }
+}
+
+/// A call that kept its values reads a missing fact as absent, as before.
+#[test]
+fn a_fact_missing_from_a_call_with_kept_values_is_absent() {
+    use super::{MatchState, MatcherSpec};
+    let kept = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "command": "echo kept"}),
+        json!("kept"),
+        false,
+    );
+    let state = MatcherSpec::not_exists("compat.v1.file_path")
+        .compile()
+        .unwrap()
+        .evaluate(&kept)
+        .unwrap();
+    assert_eq!(state.state(), &MatchState::Match);
+}
+
+/// A replaced member leaves `null` under its key, so the argument keys are
+/// all there: a condition on them is decided as for any call.
+#[test]
+fn argument_keys_beside_a_replaced_member_are_exact() {
+    use super::{MatchState, MatcherOperator, MatcherSpec};
+    let call = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "pad": "x".repeat(4_097)}),
+        json!("kept"),
+        false,
+    );
+    let keys_equal = |keys: &[&str]| {
+        let expected = JsonValue::array(keys.iter().copied().map(JsonValue::string).collect());
+        MatcherSpec::predicate(
+            "tool.arguments.keys",
+            MatcherOperator::Equals,
+            Some(expected),
+        )
+        .compile()
+        .unwrap()
+        .evaluate(&call)
+        .unwrap()
+        .state()
+        .clone()
+    };
+    assert_eq!(keys_equal(&["other"]), MatchState::NoMatch);
+    assert_eq!(keys_equal(&["pad", "url"]), MatchState::Match);
+}
+
+/// A member whose key is over its bound is dropped from the object, so the
+/// argument keys may miss it: a no-match on them is not evaluated.
+#[test]
+fn argument_keys_missing_a_dropped_key_are_partial() {
+    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
+    let call = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "k".repeat(65): "v"}),
+        json!("kept"),
+        false,
+    );
+    let state = MatcherSpec::predicate(
+        "tool.arguments.keys",
+        MatcherOperator::Equals,
+        Some(JsonValue::array(vec![JsonValue::string("other")])),
+    )
+    .compile()
+    .unwrap()
+    .evaluate(&call)
+    .unwrap();
+    assert_eq!(
+        state.state(),
+        &MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility)
+    );
+}
+
+/// A call with one argument member and one result member replaced, beside a
+/// kept URL: the whole values are not evaluated, and neither is a fact the
+/// replaced member could have given. The URL list derived from the kept
+/// members holds whole values: a match on it counts as it did before, while a
+/// no-match or a negated condition is not evaluated.
+#[test]
+fn a_fact_derived_beside_a_replaced_member_counts_only_its_matches() {
+    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
+    let call = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "pad": "x".repeat(4_097)}),
+        json!({"out": "x".repeat(4_097)}),
+        false,
+    );
+    let evaluate = |matcher: MatcherSpec| {
+        matcher
+            .compile()
+            .unwrap()
+            .evaluate(&call)
+            .unwrap()
+            .state()
+            .clone()
+    };
+    let insufficient = MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility);
+    assert_eq!(
+        evaluate(MatcherSpec::contains(
+            "compat.v1.url",
+            JsonValue::string("kept.example")
+        )),
+        MatchState::Match
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::contains(
+            "compat.v1.url",
+            JsonValue::string("other.example")
+        )),
+        insufficient
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::predicate(
+            "compat.v1.url",
+            MatcherOperator::NotEquals,
+            Some(JsonValue::string("https://other.example.invalid/")),
+        )),
+        insufficient
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::exists("compat.v1.url")),
+        MatchState::Match
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::not_exists("compat.v1.url")),
+        MatchState::NoMatch
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::not_exists("compat.v1.file_path")),
+        insufficient
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::not_exists("compat.v1.arguments")),
+        insufficient
+    );
+    assert_eq!(
+        evaluate(MatcherSpec::exists("tool.arguments")),
+        insufficient
+    );
+    assert_eq!(evaluate(MatcherSpec::exists("tool.result")), insufficient);
+    assert_eq!(
+        evaluate(MatcherSpec::not_exists("tool.result.text")),
+        insufficient
+    );
+}
+
+/// The Rule v1 content path reads the same visibility: over values replaced
+/// whole a rule is not evaluated, and over a URL list beside a replaced
+/// member a match counts while a no-match is not evaluated.
+#[test]
+fn rule_v1_content_over_replaced_values_is_not_evaluated() {
+    use super::{MatchState, NonEvaluationReason};
+    let rules = telltale_rules::load_default_rule_set().unwrap();
+    let export = rules.compatibility_export();
+    let evaluate = |id: &str, targets: &[&str], observation: &CanonicalObservationV2| {
+        let matcher = export
+            .rules()
+            .iter()
+            .find(|rule| rule.id == id)
+            .unwrap()
+            .compile_content_matcher()
+            .unwrap();
+        let targets = targets
+            .iter()
+            .map(|target| (*target).to_owned())
+            .collect::<Vec<_>>();
+        super::rule_v1::evaluate_content_matcher(
+            &matcher,
+            &targets,
+            observation,
+            &mut super::session::RetentionBudget::new(),
+        )
+        .unwrap()
+        .0
+    };
+    let insufficient = MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility);
+    let token = "AKIA2E0A8F3B244C9986";
+    let replaced = bounded_call(json!({"key": token}), json!(token), true);
+    assert_eq!(
+        evaluate(
+            "credential.api_key.pattern",
+            &["tool_result", "arguments"],
+            &replaced
+        ),
+        insufficient
+    );
+    let beside = |url: &str| {
+        bounded_call(
+            json!({"url": url, "pad": "x".repeat(4_097)}),
+            json!("kept"),
+            false,
+        )
+    };
+    assert_eq!(
+        evaluate(
+            "network.controlled_test_domain.darkroast",
+            &["url"],
+            &beside("https://kept.example.invalid/")
+        ),
+        insufficient
+    );
+    assert_eq!(
+        evaluate(
+            "network.controlled_test_domain.darkroast",
+            &["url"],
+            &beside("https://darkroastcyber.io/kept")
+        ),
+        MatchState::Match
+    );
+}
+
+/// A tool call with `arguments` and `result` converted as a source converts
+/// them (an over-bound member replaced by `null` and recorded), then replaced
+/// whole when `whole`. It carries no searchable text and no facet.
+fn bounded_call(arguments: Value, result: Value, whole: bool) -> CanonicalObservationV2 {
+    use telltale_schema::observation::{ArgumentText, BoundedTarget};
+    let metadata = |provenance| FactMetadata::new(provenance, Sensitivity::Normal).unwrap();
+    let (arguments, replaced_arguments) =
+        JsonValue::try_from_source_tool_arguments_bounded(&ArgumentText::new(), &arguments)
+            .unwrap();
+    let (result, replaced_result) =
+        JsonValue::try_from_source_value_bounded(BoundedTarget::Result, &result).unwrap();
+    let mut tool = ToolObservation::new()
+        .with_name("synthetic")
+        .unwrap()
+        .with_arguments(arguments)
+        .with_result(result)
+        .with_bounded_values(replaced_arguments.into_iter().chain(replaced_result));
+    if whole {
+        tool = tool.with_replaced_values().unwrap();
+    }
+    let mut builder = CanonicalObservationV2::builder(
+        ObservationBody::Tool(tool),
+        ObservationStage::ToolResultReturned,
+        ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            "synthetic",
+            "synthetic.store",
+            Fidelity::FullNative,
+        )
+        .unwrap()
+        .with_native_id("call")
+        .unwrap(),
+    )
+    .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+    .capability_context(
+        CapabilityContext::new()
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+    );
+    for path in ["tool.name", "tool.arguments", "tool.result"] {
+        builder = builder.fact_metadata(path, metadata(FactProvenance::Reported));
+    }
+    builder.build().unwrap()
+}

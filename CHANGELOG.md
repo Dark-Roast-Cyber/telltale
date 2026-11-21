@@ -21,6 +21,16 @@
   Safety Net, with a pinned
   reference and its notice retained in the bundled rule source. This is
   unreleased 0.8-line content, not a change to any 0.7.x artifact.
+
+- **An unchanged process-chain correlation is no longer emitted again on every
+  scan.** Its supporting Event 3 IDs (`correlated_event_ids`) are regenerated
+  each scan, and scanner state counted them as new evidence. Scanner state now
+  leaves out those links when the same rule's canonical observation and
+  process-step evidence backs them; new occurrences and changed evidence still
+  emit. No state migration and no Event 3 change; the first scan after an
+  upgrade can emit a previously seen correlation once. `--backfill` still
+  bypasses scanner-state deduplication.
+
 - **A tool call or result with a value over its own canonical bound is now emitted
   and evaluated instead of dropped whole.** Before, the whole call was
   quarantined, or the whole source failed in an adapter that reads a source
@@ -37,7 +47,16 @@
   values within their own bounds are kept unless the cap on recorded
   replacements is reached. A rule condition that reads an omitted
   searchable text is not evaluated for that call (insufficient visibility)
-  rather than read as absent. A string whose normalized form is over its
+  rather than read as absent. Selectors over bounded tool values report
+  unavailable visibility the same way: `tool.arguments` and `tool.result`
+  with a replacement, and a text or fact read from those values (argument
+  and result text, command, path, URL, written path, argument keys) that is
+  absent while its field has a replacement, are not evaluated, in Rule v1
+  content as in native conditions. A URL or written-path list read beside a
+  replacement is partial (`SelectorResolution::is_partial`): a match on it
+  counts as it did before, and a no-match or a negated condition is not
+  evaluated. Argument keys stay exact beside a replaced value and are
+  partial only when a member was dropped for an over-long key. A string whose normalized form is over its
   bound counts as over it. The unit is reported, never hidden: the source
   gets one content-free `scanner_error` per evaluated window with the new
   `error` value `canonical_values_bounded` (only when no unit of that window was
@@ -53,7 +72,7 @@
   agent-to-agent message text now gets the direct-text budget that commands,
   file bodies and patches already had; it is not read as a command.
   Detections for sessions holding such calls can appear once after upgrade
-  on a full-history scan, and the native action profile moves to 9, so
+  on a full-history scan, and the native action profile moves to 10, so
   every `semantic_identity` changes (replay identities do not); rebaseline
   as after a rule change. Event 3.0 and the JSON schemas are unchanged. API:
   each source's tool table declares which argument fields hold authored
@@ -274,6 +293,23 @@
   version and the build's Git hash (see [Telltale Hooks](docs/hooks/README.md)).
 
 ### Changes
+
+- **`telltale hooks` bounds journaled prompts and tool results by encoded
+  size.** `hooks.window.max_result_bytes` now bounds a prompt, a tool result
+  or a settlement line's text as the journal line encodes it (escaped JSON),
+  not by raw bytes, so text heavy with escaped characters takes no more of
+  the history window than ordinary text. Ordinary text within the bound is
+  journaled unchanged, and a result is still evaluated up to the bound in
+  bytes. When a call's input is bounded for history, the members Telltale
+  reads as its command are kept first. Existing journals read unchanged.
+
+- **Windows paths are now redacted in more spellings.** The privacy sanitizer
+  replaces drive, UNC and device-namespace paths written with escaped
+  backslashes, as inside a JSON string, paths that mix escaped and plain
+  separators, and forward-slash UNC paths (`//server/share/...`) whole with
+  the path marker in every sanitization context, and recognizes more
+  drive-path boundaries. URLs and other `//` text keep their treatment, and
+  there is no change to detection, state or the Event 3.0 shape.
 
 - **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
   acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions

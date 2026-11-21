@@ -14,7 +14,7 @@ use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus, RecoveryBudget};
-use crate::hooks::journal::{Line, bound_history, cut_utf8};
+use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
 use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
 use crate::hooks::telemetry::{
@@ -844,7 +844,7 @@ impl Runtime {
         let t = session.state.next_time_ms(now_ms());
         let uuid = format!("tth-prompt-{}", session.state.prompts);
         session.state.prompts += 1;
-        let bounded = cut_utf8(prompt, self.config.window.max_result_bytes);
+        let bounded = cut_escaped(prompt, self.config.window.max_result_bytes);
         session
             .journal()
             .append(&Line::user_prompt(
@@ -1550,7 +1550,9 @@ impl Runtime {
     }
 
     /// Evaluate the result against the history as a line of its own, then
-    /// journal it.
+    /// journal it. Both are bounded by `max_result_bytes`: the evaluated text
+    /// in bytes, the journaled text as the line encodes it, so text that
+    /// escapes long takes no more of the window than ordinary text.
     fn evaluate_result(
         &mut self,
         ctx: &Context,
@@ -1562,15 +1564,19 @@ impl Runtime {
     ) -> Result<(Result<Evaluation, &'static str>, usize, bool), &'static str> {
         let timestamp = format_ms(t);
         let uuid = format!("tth-result-{journal_id}");
-        let bounded = cut_utf8(result_text, self.config.window.max_result_bytes);
-        let line = Line::tool_result(
-            &ctx.session_id,
-            &uuid,
-            &timestamp,
-            journal_id,
-            bounded,
-            completion != Completion::Completed,
-        );
+        let max = self.config.window.max_result_bytes;
+        let result_line = |text| {
+            Line::tool_result(
+                &ctx.session_id,
+                &uuid,
+                &timestamp,
+                journal_id,
+                text,
+                completion != Completion::Completed,
+            )
+        };
+        let line = result_line(cut_utf8(result_text, max));
+        let journaled = result_line(cut_escaped(result_text, max));
         let focus = Focus {
             occurred_at: timestamp,
             stage: ObservationStage::ToolResultReturned,
@@ -1579,13 +1585,13 @@ impl Runtime {
         let evaluated = self.evaluate(
             ctx,
             session,
-            vec![line.clone()],
+            vec![line],
             std::slice::from_ref(&focus),
             &mut RecoveryBudget::start(),
         );
         session
             .journal()
-            .append(&line)
+            .append(&journaled)
             .map_err(|_| "journal_append_failed")?;
         Ok(evaluated)
     }
@@ -1766,7 +1772,7 @@ impl Runtime {
             &format!("tth-settled-{journal_id}"),
             &format_ms(t),
             journal_id,
-            cut_utf8(result_text, self.config.window.max_result_bytes),
+            cut_escaped(result_text, self.config.window.max_result_bytes),
             true,
         );
         let outcome_record_id = new_record_id();

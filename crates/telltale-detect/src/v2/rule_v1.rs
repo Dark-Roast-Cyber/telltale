@@ -779,11 +779,16 @@ pub(super) fn evaluate_content_matcher(
                 if let Some((text, _)) = borrowed {
                     fields.push((target.as_str(), *text));
                 } else {
-                    match resolution.as_ref().expect("resolved fallback").value() {
+                    let resolution = resolution.as_ref().expect("resolved fallback");
+                    match resolution.value() {
                         Some(JsonValue::String(value)) => {
                             fields.push((target.as_str(), value.as_str()))
                         }
                         _ => unknown.push(NonEvaluationReason::TypeMismatch),
+                    }
+                    // A partial field's match counts as before; its no-match does not.
+                    if resolution.is_partial() {
+                        unknown.push(NonEvaluationReason::InsufficientVisibility);
                     }
                 }
             }

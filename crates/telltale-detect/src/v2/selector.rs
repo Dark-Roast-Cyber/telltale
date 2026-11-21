@@ -3,8 +3,8 @@
 use std::fmt;
 
 use telltale_schema::observation::{
-    BoundedTarget, CanonicalObservationV2, CapabilityId, CorrelationOrigin, FactMetadata,
-    FactProvenance, JsonValue, ObservationBody,
+    BoundDimension, BoundedTarget, CanonicalObservationV2, CapabilityId, CorrelationOrigin,
+    FactMetadata, FactProvenance, JsonValue, ObservationBody,
 };
 
 use super::tool_arguments::{
@@ -297,6 +297,7 @@ pub struct SelectorResolution {
     value: Option<JsonValue>,
     metadata: Option<FactMetadata>,
     required_capability: Option<CapabilityId>,
+    partial: bool,
 }
 
 impl fmt::Debug for SelectorResolution {
@@ -308,6 +309,7 @@ impl fmt::Debug for SelectorResolution {
             .field("value", &self.value.as_ref().map(|_| "<redacted>"))
             .field("metadata", &self.metadata)
             .field("required_capability", &self.required_capability)
+            .field("partial", &self.partial)
             .finish()
     }
 }
@@ -327,6 +329,13 @@ impl SelectorResolution {
     }
     pub fn metadata(&self) -> Option<&FactMetadata> {
         self.metadata.as_ref()
+    }
+    /// Whether a present value was derived from a call's tool values while
+    /// some of them were replaced: it holds whole values, but maybe not all
+    /// of them. A match on it counts as it did before; a no-match or a negated
+    /// condition is not evaluated.
+    pub fn is_partial(&self) -> bool {
+        self.partial
     }
     pub fn required_capability(&self) -> Option<CapabilityId> {
         self.required_capability
@@ -388,6 +397,7 @@ impl SelectorRegistry {
                 value: None,
                 metadata: None,
                 required_capability: selector.required_capability(),
+                partial: false,
             });
         }
         // Canonical direct result strings are already NFC. Copy the selected
@@ -501,7 +511,7 @@ impl SelectorRegistry {
         {
             return absent(selector, required_capability);
         }
-        if matches!(
+        let resolution = if matches!(
             selector,
             SelectorId::CompatArguments
                 | SelectorId::CompatAssistantContext
@@ -517,7 +527,8 @@ impl SelectorRegistry {
             Self::resolve_compat(selector, observation, required_capability)
         } else {
             Self::resolve_native(selector, observation, required_capability)
-        }
+        };
+        with_bounded_visibility(resolution, observation)
     }
 
     fn resolve_native(
@@ -551,6 +562,7 @@ impl SelectorRegistry {
                         value: Some(JsonValue::string(value.value())),
                         metadata,
                         required_capability,
+                        partial: false,
                     }
                 })
                 .unwrap_or_else(|| absent(selector, required_capability)),
@@ -864,6 +876,81 @@ fn reads_omitted_searchable_text(
         .any(|value| value.target() == target)
 }
 
+/// How `resolution` reads when the tool value its selector reads, or derives
+/// a fact from, has replacements (`null`s a bounded conversion left, listed in
+/// `tool.bounded_values`). Telltale did not see that value whole, so:
+///
+/// - the whole-value selectors (`tool.arguments`, `tool.result`) have no
+///   visibility into the call;
+/// - a text or fact that reads as absent may be absent only because its
+///   operand, or a container holding it, was replaced, so it has no
+///   visibility either; a source never builds a fact from a replaced member,
+///   and detection cannot tell which member a source would have read, so any
+///   replacement in the field counts;
+/// - a present text or fact is a value seen whole and stays present, except
+///   that a URL or written-path list derived from several members
+///   (`compat.v1.url`, `compat.v1.written_path`) may miss the replaced ones:
+///   it is partial, so a match on it counts as it did before, and a no-match
+///   or a negated condition is not evaluated;
+/// - the argument keys stay exact beside a replaced member, which leaves
+///   `null` under its key; they are partial only when a member was dropped
+///   from the arguments object for its over-long key.
+fn with_bounded_visibility(
+    mut resolution: SelectorResolution,
+    observation: &CanonicalObservationV2,
+) -> SelectorResolution {
+    let ObservationBody::Tool(tool) = observation.body() else {
+        return resolution;
+    };
+    let (target, whole, list) = match resolution.selector {
+        SelectorId::ToolArguments => (BoundedTarget::Arguments, true, false),
+        SelectorId::ToolResult => (BoundedTarget::Result, true, false),
+        SelectorId::ToolSearchableArguments
+        | SelectorId::CompatArguments
+        | SelectorId::GovernedFacet("tool.arguments.text")
+        | SelectorId::GovernedFacet("tool.arguments.keys")
+        | SelectorId::CommandText
+        | SelectorId::CompatCommand
+        | SelectorId::ResourcePath
+        | SelectorId::CompatFilePath => (BoundedTarget::Arguments, false, false),
+        SelectorId::CompatUrl | SelectorId::CompatWrittenPath => {
+            (BoundedTarget::Arguments, false, true)
+        }
+        SelectorId::ToolSearchableResult
+        | SelectorId::CompatToolResult
+        | SelectorId::GovernedFacet("tool.result.text") => (BoundedTarget::Result, false, false),
+        _ => return resolution,
+    };
+    if !tool
+        .bounded_values()
+        .iter()
+        .any(|value| value.target() == target)
+    {
+        return resolution;
+    }
+    if resolution.selector == SelectorId::GovernedFacet("tool.arguments.keys")
+        && resolution.presence == SelectorPresence::Present
+    {
+        resolution.partial = tool.bounded_values().iter().any(|value| {
+            value.target() == BoundedTarget::Arguments
+                && value.pointer().is_empty()
+                && value.dimension() == BoundDimension::KeyBytes
+        });
+        return resolution;
+    }
+    match resolution.presence {
+        SelectorPresence::Present if list => resolution.partial = true,
+        SelectorPresence::Present if !whole => {}
+        SelectorPresence::Present | SelectorPresence::Absent => {
+            resolution.presence = SelectorPresence::UnavailableVisibility;
+            resolution.value = None;
+            resolution.metadata = None;
+        }
+        SelectorPresence::UnavailableVisibility | SelectorPresence::MetadataMissing => {}
+    }
+    resolution
+}
+
 fn absent(selector: SelectorId, required_capability: Option<CapabilityId>) -> SelectorResolution {
     SelectorResolution {
         selector,
@@ -871,6 +958,7 @@ fn absent(selector: SelectorId, required_capability: Option<CapabilityId>) -> Se
         value: None,
         metadata: None,
         required_capability,
+        partial: false,
     }
 }
 
@@ -1095,6 +1183,7 @@ fn field(
             value: Some(value),
             metadata: Some(metadata),
             required_capability,
+            partial: false,
         },
         _ => SelectorResolution {
             selector,
@@ -1102,6 +1191,7 @@ fn field(
             value: Some(value),
             metadata: None,
             required_capability,
+            partial: false,
         },
     }
 }
@@ -1121,6 +1211,7 @@ fn derived_field(
             value: Some(value),
             metadata: Some(metadata),
             required_capability,
+            partial: false,
         },
         Err(_) => SelectorResolution {
             selector,
@@ -1128,6 +1219,7 @@ fn derived_field(
             value: None,
             metadata: None,
             required_capability,
+            partial: false,
         },
     }
 }
@@ -1151,6 +1243,7 @@ fn correlation_field(
             value: Some(JsonValue::string(value.value())),
             metadata: Some(metadata),
             required_capability,
+            partial: false,
         },
         Err(_) => SelectorResolution {
             selector,
@@ -1158,6 +1251,7 @@ fn correlation_field(
             value: None,
             metadata: None,
             required_capability,
+            partial: false,
         },
     }
 }
@@ -1413,5 +1507,6 @@ fn message_text(
         value: Some(JsonValue::String(text)),
         metadata,
         required_capability,
+        partial: false,
     })
 }

@@ -98,8 +98,8 @@ const _: () = {
 /// Top-level members Telltale reads as command text
 /// (`is_command_argument_key` in telltale-detect). A rule on a command can
 /// need parts of it that are far apart, so a command that had to be split is
-/// reported as separated.
-fn is_command_key(key: &str) -> bool {
+/// reported as separated. History keeps them first (`journal::bound_history`).
+pub(crate) fn is_command_key(key: &str) -> bool {
     matches!(key, "command" | "cmd" | "commandLine" | "command_line")
 }
 
