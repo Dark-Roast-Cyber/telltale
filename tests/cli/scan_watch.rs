@@ -1769,19 +1769,19 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     );
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 150);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 151);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
             "user_message": 24,
             "assistant_message": 24,
-            "tool_call": 35,
+            "tool_call": 36,
             "tool_result": 16,
             "session_meta": 49,
             "other": 2,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 132);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 133);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 44);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -3284,7 +3284,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 35);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        132
+        133
     );
     assert!(
         !second_summary["diagnostic_warnings"]

@@ -1630,17 +1630,20 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
             .iter()
             .position(|s| matches!(s.as_str(), "cp" | "copy"))
             .is_some_and(|position| {
+                // A lone `-` is an operand: standard input or output.
                 let operands = tokens
                     .iter()
                     .skip(position + 1)
-                    .filter(|s| !s.starts_with('-'))
+                    .filter(|s| s.as_str() == "-" || !s.starts_with('-'))
                     .take(2)
                     .collect::<Vec<_>>();
                 operands.len() == 2 && !remote(operands[0]) && remote(operands[1])
             }),
-        "az" => tokens
-            .windows(3)
-            .any(|w| w[0] == "storage" && w[1] == "blob" && w[2] == "upload"),
+        "az" => tokens.windows(3).any(|w| {
+            w[0] == "storage"
+                && matches!(w[1].as_str(), "blob" | "file")
+                && matches!(w[2].as_str(), "upload" | "upload-batch")
+        }),
         _ => false,
     })
 }

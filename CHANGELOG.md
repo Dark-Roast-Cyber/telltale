@@ -27,6 +27,26 @@
   is a requested publication, not proof it ran. Both rules keep their names,
   UUIDs and scores; their behaviour fingerprints change, so affected sessions
   can emit once after upgrade.
+- **Encoded payload scoring requires an observable execution step.**
+  `execution.encoded_payload` keeps its name, UUID and 50-point contribution
+  but now matches only when the same command pipes decoded output to a shell
+  or interpreter, substitutes it into `eval`, a shell or process substitution,
+  runs it through PowerShell `Invoke-Expression`, or writes it to a file that
+  the command then runs or makes executable. Decoding alone matches the new
+  zero-point hunt rule `obfuscation.decode` (`defense_evasion`), so a routine
+  decode in a shell tool scores the 15-point shell credit instead of 75. Both
+  rules' behaviour fingerprints change, so affected sessions can emit once
+  after upgrade. Fixes #178.
+- **Object-storage uploads are matched by transfer direction.**
+  `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. Its
+  session rule and native action now agree: an `aws s3 cp`, `gsutil cp` or
+  `rclone copy` request matches only when a local source operand, or standard
+  input, precedes a remote destination, and Azure matches only
+  `storage blob|file upload` and `upload-batch`. Downloads, copies between two
+  remote locations and storage inventory such as `az storage account list` no
+  longer match. The native action profile version rises to 11. The rule's
+  behaviour fingerprint changes, so affected sessions can emit once after
+  upgrade. Fixes #179.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean
