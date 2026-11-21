@@ -343,6 +343,20 @@ impl Engine {
         request: Request<'_>,
         budget: &mut RecoveryBudget,
     ) -> Result<Evaluation, EngineError> {
+        // The trace goes back into the budget however the evaluation ends, so
+        // a call whose scan failed still records what its scans did.
+        let mut trace = std::mem::take(&mut budget.trace);
+        let evaluated = self.evaluate_traced(request, budget, &mut trace);
+        budget.trace = trace;
+        evaluated
+    }
+
+    fn evaluate_traced(
+        &self,
+        request: Request<'_>,
+        budget: &mut RecoveryBudget,
+        trace: &mut ScanTrace,
+    ) -> Result<Evaluation, EngineError> {
         let Request {
             client,
             window_path,
@@ -361,7 +375,6 @@ impl Engine {
         // scan: it is not scanned whole nor its variants together, so the
         // time goes to its pieces, the command's first.
         let pieces_only = scan == PendingScan::PiecesOnly && pending.len() > 1;
-        let mut trace = std::mem::take(&mut budget.trace);
         trace.together = None;
         if pieces_only {
             trace.whole = Some(StepOutcome::SkippedPiecesOnly);
@@ -373,7 +386,6 @@ impl Engine {
             trace.whole_ms += whole.scan_ms;
             if !whole.source_failed {
                 trace.whole = Some(StepOutcome::Passed);
-                budget.trace = trace;
                 return Ok(Evaluation {
                     history_kept: history.len(),
                     ..whole
@@ -410,7 +422,7 @@ impl Engine {
         let mut kept = vec![false; history.len()];
         let phase = Instant::now();
         if (late || best.source_failed) && pending.len() > 1 {
-            best = self.scan_each(client, window_path, pending, focus, &mut trace, || {
+            best = self.scan_each(client, window_path, pending, focus, trace, || {
                 budget.pieces_in_time()
             })?;
             trace.pieces_ms += phase.elapsed().as_millis() as u64;
@@ -427,7 +439,6 @@ impl Engine {
             best = self.restore_history(&window, budget, best, &mut kept)?;
             trace.history_ms += phase.elapsed().as_millis() as u64;
         }
-        budget.trace = trace;
         best.scan_ms = budget.elapsed_ms();
         best.failure_code = best.failure_code.or(failure_code);
         best.history_kept = kept.iter().filter(|kept| **kept).count();
@@ -2464,6 +2475,39 @@ mod recovery_tests {
     fn the_piece_limit_is_later_than_the_budget() {
         assert!(budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).pieces_in_time());
         assert!(!budget_used(Limits::default(), PIECE_SCAN_LIMIT, 0.0).pieces_in_time());
+    }
+
+    /// A call evaluated twice (whole, then projected) spends one budget and
+    /// one trace: an evaluation that fails keeps what the earlier one traced.
+    #[test]
+    fn a_failed_evaluation_keeps_the_calls_trace() {
+        let (dir, engine) = engine();
+        let at = "2026-11-06T00:00:00.000Z";
+        let line = Line::tool_use(
+            "s",
+            "uuid-0",
+            at,
+            "toolu_1",
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+        );
+        let focus = Focus {
+            occurred_at: at.to_owned(),
+            stage: ObservationStage::ToolRequested,
+            native_id: "uuid-0".to_owned(),
+        };
+        let mut budget = RecoveryBudget::start(Limits::default());
+        budget.trace.variants = 3;
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("missing").join("window.jsonl"),
+            history: &[],
+            pending: std::slice::from_ref(&line),
+            focus: std::slice::from_ref(&focus),
+            scan: PendingScan::Together,
+        };
+        assert!(engine.evaluate(request, &mut budget).is_err());
+        assert_eq!(budget.trace().variants, 3);
     }
 
     #[test]

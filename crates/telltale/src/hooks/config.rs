@@ -242,13 +242,16 @@ pub struct EvaluatorSettings {
     pub socket: Option<PathBuf>,
 }
 
+/// The default `request_timeout_ms`.
+pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
+
 impl Default for EvaluatorSettings {
     fn default() -> Self {
         Self {
             enabled: true,
             autostart: true,
             idle_timeout_secs: 30 * 60,
-            request_timeout_ms: 10_000,
+            request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
             socket: None,
         }
     }

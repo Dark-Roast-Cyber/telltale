@@ -14,8 +14,7 @@ use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{
-    Engine, EvalStatus, Evaluation, Focus, HOOK_DEADLINE, Limits, PendingScan, RecoveryBudget,
-    Request, ScanTrace,
+    Engine, EvalStatus, Evaluation, Focus, Limits, PendingScan, RecoveryBudget, Request, ScanTrace,
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
@@ -236,8 +235,9 @@ pub struct Runtime {
     /// When the hook started, if before this runtime handles its call
     /// ([`Self::started_at`]); otherwise each call starts when it is handled.
     started: Option<Instant>,
-    /// The current call's deadline ([`Limits::hook_deadline`] from its start).
-    deadline: Instant,
+    /// The current call's deadline ([`Limits::hook_deadline`] from its start); none
+    /// before a call starts, or when it is too far away to represent.
+    deadline: Option<Instant>,
     /// When the evaluator's client stops waiting (ms since the epoch).
     answer_by: Option<i64>,
 }
@@ -448,7 +448,7 @@ impl Runtime {
             evaluator_fallback: None,
             limits: Limits::default(),
             started: None,
-            deadline: Instant::now() + HOOK_DEADLINE,
+            deadline: None,
             answer_by: None,
         }
     }
@@ -468,15 +468,18 @@ impl Runtime {
         }
     }
 
-    /// A call starts: its deadline is set ([`Limits::hook_deadline`]).
+    /// A call starts: its deadline is set ([`Limits::hook_deadline`]). One too
+    /// far away for an `Instant` to hold is none.
     fn start_call(&mut self) {
         let started = self.started.unwrap_or_else(Instant::now);
-        self.deadline = started + self.limits.hook_deadline;
+        self.deadline = started.checked_add(self.limits.hook_deadline);
     }
 
     /// What is left of the call's deadline.
     fn remaining(&self) -> Duration {
-        self.deadline.saturating_duration_since(Instant::now())
+        self.deadline.map_or(Duration::MAX, |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        })
     }
 
     /// The call's limits, none longer than what is left of its deadline.
@@ -505,7 +508,7 @@ impl Runtime {
             evaluator_fallback: None,
             limits: Limits::default(),
             started: None,
-            deadline: Instant::now() + HOOK_DEADLINE,
+            deadline: None,
             answer_by: None,
         }
     }
@@ -2249,6 +2252,17 @@ mod tests {
         }
     }
 
+    /// A deadline too far away to represent is no deadline, not a panic.
+    #[test]
+    fn a_deadline_past_what_an_instant_holds_leaves_all_the_time() {
+        let mut runtime = Runtime::new(Config::default()).with_limits(Limits {
+            hook_deadline: Duration::MAX,
+            ..Limits::default()
+        });
+        runtime.start_call();
+        assert_eq!(runtime.remaining(), Duration::MAX);
+    }
+
     /// The deadline bounds waits and work not yet started: a call whose
     /// evaluation has finished is recorded and answered with its verdict even
     /// when the deadline passed while it was being evaluated.
@@ -2283,7 +2297,7 @@ mod tests {
         let id = RequestIdentity::next(&mut session, &call);
         let evaluated = runtime.evaluate_request(&ctx, &mut session, &id, &call);
 
-        runtime.deadline = Instant::now() - Duration::from_secs(1);
+        runtime.deadline = Some(Instant::now() - Duration::from_secs(1));
         let response = runtime
             .record_request(&ctx, session, None, id, &call, evaluated, false)
             .unwrap();

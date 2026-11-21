@@ -35,8 +35,9 @@ fn all_record_kinds_match_the_published_schema() {
     });
     broken.pre_bash("toolu_e", "ls");
     // A call Telltale excludes whole, evaluated as a projection: its record
-    // traces both evaluations.
-    let mut projected = Harness::new();
+    // traces both evaluations. Within generous limits, so that a slow first
+    // scan cannot skip the whole-window scan.
+    let mut projected = Harness::with_limits(common::generous(), |_| {});
     projected.pre(
         "Bash",
         "toolu_p",
