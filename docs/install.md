@@ -75,7 +75,7 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable is `v0.7.3`. Published candidates are immutable; each
+Official stable is `v0.7.4`. Published candidates are immutable; each
 candidate's identity and qualification results are on its
 [GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases). The
 [versioning contract](versioning.md) requires RC package/tag equality and separate exact
@@ -216,7 +216,7 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 Use the reviewed repository scripts from this checkout with Windows PowerShell
 5.1 or PowerShell 7 and a current authenticated GitHub CLI (`gh`). Installation
-selects the latest official stable Release (`v0.7.3` currently) and verifies the
+selects the latest official stable Release (`v0.7.4` currently) and verifies the
 exact release/tag/commit, GitHub asset digests, `SHA256SUMS`, source/ref/digest-bound
 GitHub attestation, canonical nine-member ZIP and executable version before
 changing the installation:
@@ -399,7 +399,7 @@ sources scanned after that filtering:
 cargo run --bin telltale -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
 ```
 
-In source builds after `v0.7.3`, `--emit-activity` checks known user MCP
+In source builds after `v0.7.4`, `--emit-activity` checks known user MCP
 configuration files under `--root`, but does not recursively search that root
 for workspace `.mcp.json` files. Workspace MCP discovery uses only the project
 roots selected by `--project-config` or `TELLTALE_PROJECT_CONFIG`. With the
@@ -412,7 +412,7 @@ This keeps a home-root service scan from entering personal Music, Pictures or
 Library directories just to find workspace MCP configuration. To include a
 workspace, name its project directory in a project configuration file; do not
 grant Apple Music or Photos access to work around MCP discovery. Published
-`v0.7.3` and earlier archives retain the earlier broad traversal behavior; updating the
+`v0.7.4` and earlier archives retain the earlier broad traversal behavior; updating the
 source does not change those immutable binaries.
 
 Telltale writes append-only JSONL by default so the output can be reviewed

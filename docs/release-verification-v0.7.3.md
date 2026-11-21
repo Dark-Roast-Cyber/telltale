@@ -140,6 +140,8 @@ python3 scripts/validate-event-jsonl --schema schemas/event.schema.json \
   --events "$verification_root/export.jsonl"  # exits 1
 ```
 
+The failure is not specific to macOS or new in `v0.7.3`: the same reproduction fails with the published Linux x64 binaries of `v0.7.2` and `v0.7.3`. It is tracked as [#251](https://github.com/Dark-Roast-Cyber/telltale/issues/251) and fixed in `v0.7.4`.
+
 This report records the observed failure. It does not contain an export fix or qualify exported credential detections for strict Event 3.0 consumers. Direct native JSONL emission passed the schema checks above.
 
 ### Local macOS procedure boundaries
