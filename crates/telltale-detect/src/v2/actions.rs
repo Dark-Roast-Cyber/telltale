@@ -1630,14 +1630,14 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
             .iter()
             .position(|s| matches!(s.as_str(), "cp" | "copy"))
             .is_some_and(|position| {
-                // A lone `-` is an operand: standard input or output.
-                let operands = tokens
+                // An upload names something local before the first remote
+                // location. A lone `-` is an operand (standard input); an
+                // option's value reads as local, so it cannot hide a source.
+                let mut words = tokens
                     .iter()
                     .skip(position + 1)
-                    .filter(|s| s.as_str() == "-" || !s.starts_with('-'))
-                    .take(2)
-                    .collect::<Vec<_>>();
-                operands.len() == 2 && !remote(operands[0]) && remote(operands[1])
+                    .filter(|s| s.as_str() == "-" || !s.starts_with('-'));
+                words.next().is_some_and(|first| !remote(first)) && words.any(|s| remote(s))
             }),
         "az" => tokens.windows(3).any(|w| {
             w[0] == "storage"
@@ -1674,10 +1674,16 @@ fn publishes_cloud_credential(tokens: &[String]) -> bool {
         _ => false,
     }
 }
+
+/// `s3://`, `gs://` or an rclone remote: a name of two or more word
+/// characters, dots or dashes before a colon. A drive letter is local.
 fn remote(value: &str) -> bool {
-    value.starts_with("s3://")
-        || value.starts_with("gs://")
-        || (value.contains(':') && !value.contains(":/"))
+    value.split_once(':').is_some_and(|(name, _)| {
+        name.len() >= 2
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+    })
 }
 
 /// A field a native predicate selects: the field name, the selected text, its

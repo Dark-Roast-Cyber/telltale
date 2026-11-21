@@ -31,8 +31,9 @@
   `execution.encoded_payload` keeps its name, UUID and 50-point contribution
   but now matches only when the same command pipes decoded output to a shell
   or interpreter, substitutes it into `eval`, a shell or process substitution,
-  runs it through PowerShell `Invoke-Expression`, or writes it to a file that
-  the command then runs or makes executable. Decoding alone matches the new
+  assigns it to a variable that `eval` then runs, runs it through PowerShell
+  `Invoke-Expression`, or writes it to a file that the command then makes
+  executable or hands to a shell or interpreter. Decoding alone matches the new
   zero-point hunt rule `obfuscation.decode` (`defense_evasion`), so a routine
   decode in a shell tool scores the 15-point shell credit instead of 75. Both
   rules' behaviour fingerprints change, so affected sessions can emit once
