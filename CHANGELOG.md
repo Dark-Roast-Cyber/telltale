@@ -8,9 +8,16 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 15.** Several changes below change what the
+- **The native action profile is 16.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
+
+- **A chain's exfiltration step needs a network request.** A URL named only
+  in assistant text or a tool result still raises its own finding, but no
+  longer completes `chain.secret_then_network`,
+  `chain.mcp_injection_then_egress` or `chain.harvest_then_exfil`; a tool
+  call that sends data still does. Session scores and action findings both
+  follow this.
 
 - **Each hook has one deadline.** A hook's waits are now bounded together:
   25 s from its start, below the timeouts of 30 s or more that the tool-call
