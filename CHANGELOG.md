@@ -477,6 +477,9 @@
   journaled unchanged, and a result is still evaluated up to the bound in
   bytes. When a call's input is bounded for history, the members Telltale
   reads as its command are kept first. Existing journals read unchanged.
+  A result with a finding whose journaled text is shorter than the text it
+  was evaluated on records `result_history_truncated` among its visibility
+  limits.
 
 - **Windows paths are now redacted in more spellings.** The privacy sanitizer
   replaces drive, UNC and device-namespace paths written with escaped

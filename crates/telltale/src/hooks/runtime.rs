@@ -1675,7 +1675,9 @@ impl Runtime {
     /// Evaluate the result against the history as a line of its own, then
     /// journal it. Both are bounded by `max_result_bytes`: the evaluated text
     /// in bytes, the journaled text as the line encodes it, so text that
-    /// escapes long takes no more of the window than ordinary text.
+    /// escapes long takes no more of the window than ordinary text. When the
+    /// journaled text is the shorter, the evaluation records
+    /// `result_history_truncated`: later calls see less of it than this one.
     fn evaluate_result(
         &mut self,
         ctx: &Context,
@@ -1698,14 +1700,16 @@ impl Runtime {
                 completion != Completion::Completed,
             )
         };
-        let line = result_line(cut_utf8(result_text, max));
-        let journaled = result_line(cut_escaped(result_text, max));
+        let evaluated_text = cut_utf8(result_text, max);
+        let journaled_text = cut_escaped(result_text, max);
+        let line = result_line(evaluated_text);
+        let journaled = result_line(journaled_text);
         let focus = Focus {
             occurred_at: timestamp,
             stage: ObservationStage::ToolResultReturned,
             native_id: uuid,
         };
-        let evaluated = self.evaluate(
+        let mut evaluated = self.evaluate(
             ctx,
             session,
             vec![line],
@@ -1713,6 +1717,13 @@ impl Runtime {
             PendingScan::Together,
             &mut self.call_budget(),
         );
+        if let Ok(evaluation) = &mut evaluated.0
+            && journaled_text.len() < evaluated_text.len()
+        {
+            evaluation
+                .visibility_limits
+                .push("result_history_truncated".to_owned());
+        }
         session
             .journal()
             .append(&journaled)
