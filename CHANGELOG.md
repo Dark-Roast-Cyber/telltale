@@ -315,14 +315,16 @@
   tiers.** `Pipeline::builder()` gains `organization_rules_document` (a
   same-ID definition replaces the lower tier's in place) and
   `override_document` (override v1, applied in call order before the
-  policy), each with a labelled variant; inputs are text, never paths. The
-  CLI, hooks and the builder now share one tier resolution, and CLI output is
-  unchanged. Label, organization and override parse, override version and
+  policy), each with a `labeled_` variant; inputs are text, never paths. The
+  CLI, hooks and the builder now share one tier resolution. CLI messages are
+  unchanged; when several inputs fail at once, the CLI now reports a file it
+  cannot read before a parse or merge error in another file. Label, organization and override parse, override version and
   entry, unknown `rule_id` and repeated-ID failures are a `RuleContentError`
   with a closed `RuleContentErrorCode` and no document text; a repeated ID
   among `rules_document` inputs now reports `rule_content_duplicate_id`
   instead of naming the rule. See
   [replacing rule content](docs/embedding.md#replacing-rule-content).
+
 - **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
   acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions
   (session format version 3) from `~/.pi/agent/sessions`. User and assistant

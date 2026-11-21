@@ -338,6 +338,7 @@ impl LoadedDefinition {
 /// variant holds the full message, which names the document's source and can
 /// name a rule ID; `Display` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RuleOverrideError {
     /// The document's `version` is not 1.
     UnsupportedVersion(String),

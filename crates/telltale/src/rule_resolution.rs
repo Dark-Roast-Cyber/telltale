@@ -120,9 +120,10 @@ impl RuleContentError {
         self.code
     }
 
-    /// The input the failure concerns, as `<kind>:<label>`: `organization`,
-    /// `override` or `explicit` (a `rules_document`) with the caller's label or
-    /// the input's 1-based position among its kind, `builtin:telltale.default`,
+    /// The input the failure concerns, as `<kind>:<label>`: `organization` or
+    /// `override` with the caller's label or the input's 1-based position among
+    /// its kind, `explicit:<n>` for the n-th `rules_document`,
+    /// `builtin:telltale.default`,
     /// or `package:<id>@<version>:<origin>#document:<n>` with the ID and
     /// version the package declares. `None` when no single input is to blame.
     pub fn document(&self) -> Option<&str> {
@@ -608,8 +609,9 @@ fn apply_rule_override(
                 RuleOverrideError::UnsupportedVersion(_) => {
                     RuleContentErrorCode::UnsupportedVersion
                 }
-                RuleOverrideError::InvalidEntry(_) => RuleContentErrorCode::InvalidOverride,
                 RuleOverrideError::UnknownRuleId(_) => RuleContentErrorCode::UnknownRuleId,
+                // `InvalidEntry`, and any reason added later, is an invalid override.
+                _ => RuleContentErrorCode::InvalidOverride,
             };
             ContentFailure::new(code, Some(source), error.to_string()).into()
         })

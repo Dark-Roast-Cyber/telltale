@@ -506,9 +506,11 @@ definitions the same way the organization tier does.
 
 Overrides apply to rules, not to chain modifiers: a chain's ID in an override
 is an unknown `rule_id`, and an unknown `rule_id` fails `build`, as it fails
-the CLI. A replacing rule uses its own matcher, not the native precision
-profile of the bundled rule it replaced; start a replacement from
-`telltale rules export-default` and keep its `id`.
+the CLI. A replacing rule whose matchers differ from the bundled rule's uses
+its own matchers, not the bundled rule's native precision profile; one that
+keeps the bundled matchers and changes only metadata or score keeps the
+profile. Start a replacement from `telltale rules export-default` and keep its
+`id`.
 
 `labeled_organization_rules_document` and `labeled_override_document` take a
 label you choose, used only to name the input in errors: 1 to 64 characters
@@ -550,9 +552,9 @@ match Pipeline::builder()
 }
 ```
 
-Other `Compilation` causes are untyped, and their text can name rule IDs and
-quote document values: a `rules_document`, package, or policy that does not
-parse, and a rule that fails validation when the merged content compiles.
+Other `Compilation` causes are untyped: a `rules_document`, package, or
+policy that does not parse, whose text can name rule IDs and quote document
+values, and a rule that fails validation when the merged content compiles.
 
 Telltale does not fetch, sign, or schedule rule content. Obtaining and
 authenticating documents is the host's job.

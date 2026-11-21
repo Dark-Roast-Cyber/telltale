@@ -1013,8 +1013,9 @@ impl PipelineBuilder {
     /// `organization-rules.d`. A rule or chain whose ID bundled core or a
     /// package already defines replaces that definition in place and must
     /// keep its Rule v2 `id`; other IDs are added. An ID repeated among
-    /// organization documents fails. A replacing rule uses its own matcher,
-    /// not the native precision profile of the bundled rule it replaces.
+    /// organization documents fails. A replacing rule whose matchers differ
+    /// from the bundled rule's uses its own matchers, not the bundled rule's
+    /// native precision profile.
     pub fn organization_rules_document(mut self, yaml: impl Into<String>) -> Self {
         self.organization_documents.push((None, yaml.into()));
         self
