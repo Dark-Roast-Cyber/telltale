@@ -21,7 +21,7 @@ mod segment;
 
 pub use content::{
     AppliedOverride, CompiledDefinition, DefinitionKind, DefinitionMetadata, LoadedDefinition,
-    LoadedRules, RelatedRule, RuleLogSource, RuleOverrideError,
+    LoadedRules, MAX_APPLIED_OVERRIDES, RelatedRule, RuleLogSource, RuleOverrideError,
 };
 pub use segment::{unquoted, unquoted_with_origin};
 
@@ -1256,7 +1256,7 @@ mod tests {
         let overrides: RuleOverrideDocument =
             serde_yaml::from_str(&format!("version: 1\noverrides:\n{entries}")).unwrap();
         loaded
-            .apply_override_document(&overrides, "synthetic-overrides.yaml")
+            .apply_override_document(&overrides, "synthetic-overrides.yaml", None)
             .unwrap();
         loaded.compile(None).unwrap()
     }

@@ -2,12 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/effective-configuration-v1.schema.json",
   "title": "Telltale Effective Configuration v1",
-  "description": "What one built pipeline runs: its rule packages and supplied documents by content hash, and per rule and chain modifier whether it is enabled, what it scores, which tier supplied it and which overrides changed it. No rule matchers, paths or document text. Every key is always present; absent values are null.",
+  "description": "What one built pipeline runs: its rule packages and supplied documents by content hash, and per rule and chain modifier whether it is enabled, what it scores, which tier supplied it and what it replaced, what turned it off, and which overrides were applied to it. No rule matchers, paths or document text. Every key is always present; absent values are null.",
   "$defs": {
     "label": { "type": "string", "minLength": 1, "maxLength": 256 },
     "optionalLabel": { "anyOf": [{ "$ref": "#/$defs/label" }, { "type": "null" }] },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "score": { "type": "integer", "minimum": 0 },
+    "tier": {
+      "type": "string",
+      "enum": ["builtin", "package", "organization", "deployment", "local", "explicit"]
+    },
     "package": {
       "type": "object",
       "required": ["id", "version", "content_sha256", "origin"],
@@ -48,24 +52,31 @@
     "definition": {
       "type": "object",
       "required": [
-        "id", "kind", "enabled", "session_score", "action_score", "tier",
-        "package_id", "document", "overrides"
+        "id", "kind", "enabled", "disabled_by", "session_score", "action_score", "tier",
+        "replaced_tier", "package_id", "document", "overrides"
       ],
       "properties": {
         "id": { "$ref": "#/$defs/label" },
         "kind": { "type": "string", "enum": ["rule", "modifier", "process_chain"] },
         "enabled": { "type": "boolean" },
+        "disabled_by": {
+          "anyOf": [
+            { "type": "string", "enum": ["definition", "override", "policy"] },
+            { "type": "null" }
+          ]
+        },
         "session_score": { "$ref": "#/$defs/score" },
         "action_score": { "anyOf": [{ "$ref": "#/$defs/score" }, { "type": "null" }] },
-        "tier": {
-          "type": "string",
-          "enum": ["builtin", "package", "organization", "deployment", "local", "explicit"]
-        },
+        "tier": { "$ref": "#/$defs/tier" },
+        "replaced_tier": { "anyOf": [{ "$ref": "#/$defs/tier" }, { "type": "null" }] },
         "package_id": { "$ref": "#/$defs/optionalLabel" },
         "document": { "$ref": "#/$defs/optionalLabel" },
         "overrides": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/override" } }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": { "properties": { "enabled": { "const": true } } },
+      "then": { "properties": { "disabled_by": { "type": "null" } } },
+      "else": { "properties": { "disabled_by": { "type": "string" } } }
     }
   },
   "type": "object",

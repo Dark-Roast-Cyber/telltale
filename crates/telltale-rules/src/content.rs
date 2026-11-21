@@ -111,11 +111,16 @@ pub struct LoadedDefinition {
     overrides: Vec<AppliedOverride>,
 }
 
-/// One override entry applied to a definition: the document's source name,
-/// the operator's reason and the values it set.
+/// Most override entries one definition takes.
+pub const MAX_APPLIED_OVERRIDES: usize = 256;
+
+/// One override entry applied to a definition: the document's source name
+/// and label, the operator's reason and the values it set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedOverride {
     pub source: String,
+    /// The caller's label for the document, if it gave one.
+    pub label: Option<String>,
     pub reason: String,
     pub enabled: Option<bool>,
     pub score: Option<u64>,
@@ -366,13 +371,17 @@ pub enum RuleOverrideError {
     InvalidEntry(String),
     /// An entry names no rule in the content.
     UnknownRuleId(String),
+    /// An entry would give a rule more than [`MAX_APPLIED_OVERRIDES`]
+    /// applied overrides.
+    TooManyOverrides(String),
 }
 
 impl std::fmt::Display for RuleOverrideError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (Self::UnsupportedVersion(message)
         | Self::InvalidEntry(message)
-        | Self::UnknownRuleId(message)) = self;
+        | Self::UnknownRuleId(message)
+        | Self::TooManyOverrides(message)) = self;
         formatter.write_str(message)
     }
 }
@@ -458,12 +467,15 @@ impl LoadedRules {
 
     /// Apply one override document: each entry sets a rule's `enabled` or
     /// `score`. Overrides change rules, never chain modifiers, so a modifier
-    /// ID is an unknown `rule_id` and fails. `source` names the document in
-    /// error messages (the CLI passes its path).
+    /// ID is an unknown `rule_id` and fails, as does an entry past
+    /// [`MAX_APPLIED_OVERRIDES`] for one rule. `source` names the document in
+    /// error messages (the CLI passes its path); `label` is recorded with
+    /// each applied entry.
     pub fn apply_override_document(
         &mut self,
         document: &RuleOverrideDocument,
         source: &str,
+        label: Option<&str>,
     ) -> Result<(), RuleOverrideError> {
         if document.version != 1 {
             return Err(RuleOverrideError::UnsupportedVersion(format!(
@@ -482,6 +494,13 @@ impl LoadedRules {
                     entry.rule_id
                 )));
             };
+            if rule.overrides.len() >= MAX_APPLIED_OVERRIDES {
+                return Err(RuleOverrideError::TooManyOverrides(format!(
+                    "rule '{}' has more than {MAX_APPLIED_OVERRIDES} override entries; \
+                     the last is in rule override file {source}",
+                    entry.rule_id
+                )));
+            }
             if let Some(enabled) = entry.enabled {
                 rule.set_enabled(enabled);
             }
@@ -490,6 +509,7 @@ impl LoadedRules {
             }
             rule.overrides.push(AppliedOverride {
                 source: source.to_owned(),
+                label: label.map(str::to_owned),
                 reason: entry.reason.clone(),
                 enabled: entry.enabled,
                 score: entry.score,

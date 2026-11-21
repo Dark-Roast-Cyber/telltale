@@ -67,10 +67,12 @@ fn an_override_reports_its_label_reason_and_values() {
         (
             base.id.as_str(),
             base.enabled,
+            base.disabled_by,
             base.session_score,
-            base.tier
+            base.tier,
+            base.replaced_tier
         ),
-        ("host.base", true, 45, RuleTierV1::Explicit)
+        ("host.base", true, None, 45, RuleTierV1::Explicit, None)
     );
     assert_eq!(
         base.overrides,

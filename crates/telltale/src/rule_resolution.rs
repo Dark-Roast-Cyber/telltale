@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::{Pipeline, PipelineError};
 use serde::Serialize;
 use telltale_rules::package::{
     CommunityRules, PackageOrigin, RulePackage, RulePackageSummary, resolve_rule_packages,
@@ -20,9 +21,6 @@ use telltale_rules::{
     CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode,
     RuleOverrideDocument, RuleOverrideError, bundled_default_rules, parse_rule_policy,
 };
-use telltale_schema::effective_configuration::RuleTierV1;
-
-use crate::{Pipeline, PipelineError};
 
 /// Managed rule content: tiered rule files, installed rule packages, and
 /// whether community content participates.
@@ -44,6 +42,12 @@ pub struct RuleProvenance {
     /// The tier of `winner`.
     #[serde(skip)]
     pub(crate) tier: RuleTier,
+    /// The caller's label for the input of `winner`, if it gave one.
+    #[serde(skip)]
+    pub(crate) label: Option<String>,
+    /// The tier of the definition `winner` replaced, if any.
+    #[serde(skip)]
+    pub(crate) replaced_tier: Option<RuleTier>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,11 +90,30 @@ pub struct EffectiveDefinition<'a> {
     /// Compiled into the effective set: its own `enabled`, overrides and the
     /// policy decide.
     pub enabled: bool,
+    /// What left it out of the effective set; `None` exactly when enabled.
+    pub disabled_by: Option<DisabledBy>,
     /// The tier whose definition is in effect.
-    pub tier: RuleTierV1,
+    pub tier: RuleTier,
+    /// The tier of the definition it replaced by ID, if any.
+    pub replaced_tier: Option<RuleTier>,
     /// The source name of the input that supplied it, which for a rule file
     /// names its path.
     pub source: &'a str,
+    /// The builder's label for the document that supplied it; `None` for
+    /// bundled, packaged and file content.
+    pub label: Option<&'a str>,
+}
+
+/// What left a definition out of the effective set, checked in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DisabledBy {
+    /// Its own definition, and no override sets `enabled`.
+    Definition,
+    /// The last override entry that sets `enabled` sets `false`.
+    Override,
+    /// It is enabled before policy, and the policy leaves it out.
+    Policy,
 }
 
 /// [`RuleResolution::effective_definitions`] over a resolution's parts.
@@ -120,21 +143,30 @@ pub(crate) fn effective_definitions<'a>(
         .map(|definition| {
             let id = definition.id();
             let winner = provenance.get(id);
+            let enabled = match definition.kind() {
+                DefinitionKind::Rule => rules.contains(id),
+                DefinitionKind::Modifier => modifiers.contains(id),
+            };
+            let overridden_off = definition
+                .overrides()
+                .iter()
+                .rev()
+                .find_map(|applied| applied.enabled)
+                == Some(false);
             EffectiveDefinition {
                 definition,
-                enabled: match definition.kind() {
-                    DefinitionKind::Rule => rules.contains(id),
-                    DefinitionKind::Modifier => modifiers.contains(id),
-                },
-                tier: match winner.map_or(RuleTier::Builtin, |winner| winner.tier) {
-                    RuleTier::Builtin => RuleTierV1::Builtin,
-                    RuleTier::Package => RuleTierV1::Package,
-                    RuleTier::Organization => RuleTierV1::Organization,
-                    RuleTier::Deployment => RuleTierV1::Deployment,
-                    RuleTier::Local => RuleTierV1::Local,
-                    RuleTier::Explicit => RuleTierV1::Explicit,
-                },
+                enabled,
+                disabled_by: (!enabled).then_some(if definition.enabled() {
+                    DisabledBy::Policy
+                } else if overridden_off {
+                    DisabledBy::Override
+                } else {
+                    DisabledBy::Definition
+                }),
+                tier: winner.map_or(RuleTier::Builtin, |winner| winner.tier),
+                replaced_tier: winner.and_then(|winner| winner.replaced_tier),
                 source: winner.map_or("", |winner| winner.winner.as_str()),
+                label: winner.and_then(|winner| winner.label.as_deref()),
             }
         })
         .collect()
@@ -155,10 +187,15 @@ pub enum RuleContentErrorCode {
     /// A definition ID repeats within one tier, across kinds, or where the
     /// tier only adds; or a replacement changes the Rule v2 id it replaces.
     DuplicateId,
-    /// An override entry has an empty `rule_id` or `reason`, or sets nothing.
+    /// An override entry has an empty `rule_id` or `reason`, a `reason` over
+    /// 256 characters or with control or invisible formatting characters
+    /// other than tab and newline, or sets nothing.
     InvalidOverride,
     /// An override names a `rule_id` that no rule in the content has.
     UnknownRuleId,
+    /// More inputs than the effective configuration describes: over 1024
+    /// supplied documents, or over 256 override entries applied to one rule.
+    ExceedsBounds,
 }
 
 impl RuleContentErrorCode {
@@ -171,6 +208,7 @@ impl RuleContentErrorCode {
             Self::DuplicateId => "rule_content_duplicate_id",
             Self::InvalidOverride => "rule_content_invalid_override",
             Self::UnknownRuleId => "rule_content_unknown_rule_id",
+            Self::ExceedsBounds => "rule_content_exceeds_bounds",
         }
     }
 }
@@ -265,13 +303,31 @@ pub(crate) struct RuleContent {
     /// Rule packages: (location, text).
     pub(crate) packages: Vec<(String, String)>,
     /// Rule files at the organization, deployment, local or explicit tier:
-    /// (tier, source, text), in load order within each tier.
-    pub(crate) files: Vec<(RuleTier, String, String)>,
+    /// (tier, name, text), in load order within each tier.
+    pub(crate) files: Vec<(RuleTier, InputName, String)>,
     /// Parsed documents at the explicit tier, after `files`.
-    pub(crate) documents: Vec<(String, LoadedRules)>,
-    /// Override documents: (source, text), applied in order.
-    pub(crate) overrides: Vec<(String, String)>,
+    pub(crate) documents: Vec<(InputName, LoadedRules)>,
+    /// Override documents: (name, text), applied in order.
+    pub(crate) overrides: Vec<(InputName, String)>,
     pub(crate) policy: Option<String>,
+}
+
+/// An input's source name, for diagnostics and errors, and the label the
+/// builder's caller gave it, carried into provenance and applied overrides.
+#[derive(Clone, Debug)]
+pub(crate) struct InputName {
+    pub(crate) source: String,
+    pub(crate) label: Option<String>,
+}
+
+impl InputName {
+    /// A name without a caller's label, such as a file's.
+    fn unlabeled(source: String) -> Self {
+        Self {
+            source,
+            label: None,
+        }
+    }
 }
 
 /// Resolve rule content. `documents` are in-memory rule content, labelled by
@@ -326,14 +382,22 @@ pub fn resolve_rule_set(
     }
     let overrides = override_paths
         .iter()
-        .map(|path| Ok((path.display().to_string(), read(path)?)))
+        .map(|path| {
+            Ok((
+                InputName::unlabeled(path.display().to_string()),
+                read(path)?,
+            ))
+        })
         .collect::<std::io::Result<Vec<_>>>()?;
     resolve_rule_content(RuleContent {
         mode,
         community: pack_paths.community,
         packages,
         files,
-        documents,
+        documents: documents
+            .into_iter()
+            .map(|(source, rules)| (InputName::unlabeled(source), rules))
+            .collect(),
         overrides,
         policy: policy_path.map(read).transpose()?,
     })
@@ -361,8 +425,8 @@ pub(crate) fn resolve_rule_content(
     let policy = policy.as_deref().map(parse_rule_policy).transpose()?;
     let (mut content, mut diagnostics) = merge_rule_documents(documents)?;
     diagnostics.packages = packages;
-    for (source, raw) in &overrides {
-        apply_rule_override(&mut content, source, raw)?;
+    for (name, raw) in &overrides {
+        apply_rule_override(&mut content, name, raw)?;
     }
     Ok(RuleResolution {
         rule_set: content.compile(policy.as_ref())?,
@@ -371,8 +435,11 @@ pub(crate) fn resolve_rule_content(
     })
 }
 
+/// Rule content tiers, lowest first; a higher tier replaces a definition in
+/// place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum RuleTier {
+#[non_exhaustive]
+pub enum RuleTier {
     Builtin,
     Package,
     Organization,
@@ -403,6 +470,7 @@ impl RuleTier {
 struct RuleDocument {
     tier: RuleTier,
     source: String,
+    label: Option<String>,
     rules: LoadedRules,
 }
 
@@ -410,19 +478,20 @@ fn load_rule_documents(
     mode: RuleLoadMode,
     community: CommunityRules,
     packages: Vec<(String, String)>,
-    files: Vec<(RuleTier, String, String)>,
-    extra_documents: Vec<(String, LoadedRules)>,
+    files: Vec<(RuleTier, InputName, String)>,
+    extra_documents: Vec<(InputName, LoadedRules)>,
 ) -> Result<(Vec<RuleDocument>, Vec<RulePackageSummary>), Box<dyn std::error::Error>> {
     let mut documents = Vec::new();
     if matches!(mode, RuleLoadMode::IncludeDefault) {
         documents.push(RuleDocument {
             tier: RuleTier::Builtin,
             source: "builtin:telltale.default".to_string(),
+            label: None,
             rules: bundled_default_rules()?,
         });
     }
     let packages = load_package_documents(mode, community, packages, &mut documents)?;
-    for (tier, source, raw) in files {
+    for (tier, InputName { source, label }, raw) in files {
         let rules = LoadedRules::parse(&raw).map_err(|error| {
             ContentFailure::new(
                 RuleContentErrorCode::InvalidDocument,
@@ -433,13 +502,15 @@ fn load_rule_documents(
         documents.push(RuleDocument {
             tier,
             source,
+            label,
             rules,
         });
     }
-    for (source, rules) in extra_documents {
+    for (InputName { source, label }, rules) in extra_documents {
         documents.push(RuleDocument {
             tier: RuleTier::Explicit,
             source,
+            label,
             rules,
         });
     }
@@ -479,6 +550,7 @@ fn load_package_documents(
             documents.push(RuleDocument {
                 tier: RuleTier::Package,
                 source: format!("package:{identity}:{location}#document:{index}"),
+                label: None,
                 rules,
             });
         }
@@ -486,9 +558,13 @@ fn load_package_documents(
     Ok(summaries)
 }
 
-/// A rule file's source: `<tier>:<path>#document:0`.
-fn file_source(tier: RuleTier, path: &Path) -> String {
-    format!("{}:{}#document:0", tier.name(), source_label_path(path))
+/// A rule file's name: `<tier>:<path>#document:0`.
+fn file_source(tier: RuleTier, path: &Path) -> InputName {
+    InputName::unlabeled(format!(
+        "{}:{}#document:0",
+        tier.name(),
+        source_label_path(path)
+    ))
 }
 
 struct DefinitionLocation {
@@ -496,7 +572,9 @@ struct DefinitionLocation {
     tier: RuleTier,
     index: usize,
     source: String,
+    label: Option<String>,
     replaced_sources: Vec<String>,
+    replaced_tier: Option<RuleTier>,
 }
 
 fn merge_rule_documents(
@@ -543,8 +621,7 @@ fn merge_rule_documents(
                     &mut locations,
                     &mut definitions,
                     definition.clone(),
-                    tier,
-                    &document.source,
+                    document,
                 )?;
             }
         }
@@ -558,6 +635,8 @@ fn merge_rule_documents(
             winner: location.source,
             replaced_sources: location.replaced_sources,
             tier: location.tier,
+            label: location.label,
+            replaced_tier: location.replaced_tier,
         })
         .collect();
     // Names are unique by now; a Rule v2 id on two names is what remains.
@@ -598,9 +677,9 @@ fn upsert_definition(
     locations: &mut BTreeMap<String, DefinitionLocation>,
     definitions: &mut Vec<LoadedDefinition>,
     definition: LoadedDefinition,
-    tier: RuleTier,
-    source: &str,
+    document: &RuleDocument,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let (tier, source) = (document.tier, document.source.as_str());
     let id = definition.id().to_owned();
     let kind = definition.kind();
     let Some(existing) = locations.get_mut(&id) else {
@@ -611,7 +690,9 @@ fn upsert_definition(
                 tier,
                 index: definitions.len(),
                 source: source.to_string(),
+                label: document.label.clone(),
                 replaced_sources: Vec::new(),
+                replaced_tier: None,
             },
         );
         definitions.push(definition);
@@ -642,7 +723,9 @@ fn upsert_definition(
     }
     definitions[existing.index] = definition;
     existing.replaced_sources.push(existing.source.clone());
+    existing.replaced_tier = Some(existing.tier);
     existing.source = source.to_string();
+    existing.label = document.label.clone();
     existing.tier = tier;
     Ok(())
 }
@@ -663,12 +746,13 @@ fn source_label_path(path: &Path) -> String {
     }
 }
 
-/// Parse and apply one override document named `source`.
+/// Parse and apply one override document named `name`.
 fn apply_rule_override(
     content: &mut LoadedRules,
-    source: &str,
+    name: &InputName,
     raw: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let source = name.source.as_str();
     let document = serde_yaml::from_str::<RuleOverrideDocument>(raw).map_err(|error| {
         ContentFailure::new(
             RuleContentErrorCode::InvalidDocument,
@@ -677,13 +761,14 @@ fn apply_rule_override(
         )
     })?;
     content
-        .apply_override_document(&document, source)
+        .apply_override_document(&document, source, name.label.as_deref())
         .map_err(|error| {
             let code = match &error {
                 RuleOverrideError::UnsupportedVersion(_) => {
                     RuleContentErrorCode::UnsupportedVersion
                 }
                 RuleOverrideError::UnknownRuleId(_) => RuleContentErrorCode::UnknownRuleId,
+                RuleOverrideError::TooManyOverrides(_) => RuleContentErrorCode::ExceedsBounds,
                 // `InvalidEntry`, and any reason added later, is an invalid override.
                 _ => RuleContentErrorCode::InvalidOverride,
             };

@@ -5646,10 +5646,10 @@ fn receive_committed_rows(receive: &std::sync::mpsc::Receiver<Value>, committed:
     }
 }
 
-/// Test-only SQLite VFS that can hold one writer inside the WAL sync of a
-/// commit: its frames are already written to the WAL, but SQLite has not yet
-/// published the commit to new readers.
-#[cfg(unix)]
+/// Test-only SQLite VFS that can hold one writer at the end of the WAL sync of
+/// a commit: its frames are written and flushed, but SQLite has not yet
+/// published the commit to new readers. The hold comes after the flush because
+/// Windows reports a file change only once the write reaches the disk.
 mod wal_sync_gate {
     use rusqlite::ffi;
     use std::ffi::c_int;
@@ -5733,20 +5733,23 @@ mod wal_sync_gate {
     }
 
     unsafe extern "C" fn sync(file: *mut ffi::sqlite3_file, flags: c_int) -> c_int {
+        // SAFETY: SQLite passes its own WAL file handle and sync flags through.
+        let result = unsafe { BASE_SYNC.get().unwrap()(file, flags) };
         let mut state = STATE.lock().unwrap();
         if *state == State::Armed {
             *state = State::Holding;
             CHANGED.notify_all();
-            state = CHANGED
-                .wait_while(state, |state| *state == State::Holding)
-                .unwrap();
+            drop(
+                CHANGED
+                    .wait_while(state, |state| *state == State::Holding)
+                    .unwrap(),
+            );
         }
-        drop(state);
-        // SAFETY: SQLite passes its own WAL file handle and sync flags through.
-        unsafe { BASE_SYNC.get().unwrap()(file, flags) }
+        result
     }
 
-    /// Hold the next WAL sync of a connection opened through this VFS.
+    /// Hold the next WAL sync of a connection opened through this VFS, once
+    /// it has flushed.
     pub(super) fn arm() {
         *STATE.lock().unwrap() = State::Armed;
     }
@@ -6043,12 +6046,6 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
 /// publishes the commit to readers, which notifies nothing. A scan that reads
 /// in between sees the previous snapshot; watch must still read the commit
 /// without waiting for a later write, and must then settle.
-///
-/// Unix only: on Windows CI the watcher was not woken while the writer was
-/// held before its WAL sync (run 44904064572), so the held-commit state this
-/// test needs cannot be produced there. The re-check logic itself is covered
-/// on every platform by the `sqlite_recheck` unit tests.
-#[cfg(unix)]
 #[test]
 fn opencode_relocation_watch_reads_a_commit_published_after_its_scan() {
     use std::io::BufRead;

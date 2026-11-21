@@ -386,12 +386,16 @@
   `Pipeline::effective_configuration` returns a versioned, strict
   `telltale.effective_configuration.v1` document: rule packages and the
   builder's text inputs by content SHA-256, and per rule and chain modifier
-  its effective `enabled` flag and scores, the tier that supplied it and the
-  overrides applied with their reasons. It holds no matchers, paths or
-  document text. `telltale-schema` adds the wire form with `to_json`,
-  `from_json` and a JSON Schema; the rule catalog is unchanged. `telltale
-  rules list` now reads enabled rules and scores from the same view; its
-  output is unchanged.
+  its effective `enabled` flag and what turned it off (its definition, an
+  override or the policy), its scores, the tier that supplied it and the
+  tier it replaced, and the overrides applied with their reasons. It holds
+  no matchers, paths or document text. `telltale-schema` adds the wire form
+  with `to_json`, `from_json` and a JSON Schema; the rule catalog is
+  unchanged. The builder rejects more than 1024 text inputs, and override
+  files (in the CLI too) that apply more than 256 entries to one rule, with
+  `rule_content_exceeds_bounds`, so every pipeline it builds can be
+  described. `telltale rules list` now reads enabled rules and scores from
+  the same view; its output is unchanged.
 
 - **`telltale hooks` bounds journaled prompts and tool results by encoded
   size.** `hooks.window.max_result_bytes` now bounds a prompt, a tool result
@@ -405,10 +409,12 @@
 - **Windows paths are now redacted in more spellings.** The privacy sanitizer
   replaces drive, UNC and device-namespace paths written with escaped
   backslashes, as inside a JSON string, paths that mix escaped and plain
-  separators, and forward-slash UNC paths (`//server/share/...`) whole with
-  the path marker in every sanitization context, and recognizes more
-  drive-path boundaries. URLs and other `//` text keep their treatment, and
-  there is no change to detection, state or the Event 3.0 shape.
+  separators in any order after their start (plain then escaped, escaped then
+  plain, or alternating component by component), and forward-slash UNC paths
+  (`//server/share/...`) whole with the path marker in every sanitization
+  context, and recognizes more drive-path boundaries. URLs and other `//` text
+  keep their treatment, and there is no change to detection, state or the
+  Event 3.0 shape.
 
 - **The embedding builder accepts the CLI's organization and override rule
   tiers.** `Pipeline::builder()` gains `organization_rules_document` (a

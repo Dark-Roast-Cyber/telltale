@@ -32,7 +32,7 @@
 //! ```
 
 use rule_resolution::{
-    ContentFailure, NoRuleDocuments, RuleContent, RuleTier, resolve_rule_content,
+    ContentFailure, InputName, NoRuleDocuments, RuleContent, RuleTier, resolve_rule_content,
 };
 pub use rule_resolution::{RuleContentError, RuleContentErrorCode};
 use telltale_rules::package::CommunityRules;
@@ -108,10 +108,10 @@ pub use telltale_schema::action_record::{
     ActionRecordEvidence, ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
 };
 pub use telltale_schema::effective_configuration::{
-    AppliedOverrideV1, DefinitionKindV1, DocumentKindV1, EFFECTIVE_CONFIGURATION_MAX_INPUT_BYTES,
-    EFFECTIVE_CONFIGURATION_V1_ID, EFFECTIVE_CONFIGURATION_V1_SCHEMA, EffectiveConfigurationError,
-    EffectiveConfigurationV1, EffectiveDefinitionV1, EffectiveDocumentV1, EffectivePackageV1,
-    PackageOriginV1, RuleTierV1,
+    AppliedOverrideV1, DefinitionKindV1, DisabledByV1, DocumentKindV1,
+    EFFECTIVE_CONFIGURATION_MAX_INPUT_BYTES, EFFECTIVE_CONFIGURATION_V1_ID,
+    EFFECTIVE_CONFIGURATION_V1_SCHEMA, EffectiveConfigurationError, EffectiveConfigurationV1,
+    EffectiveDefinitionV1, EffectiveDocumentV1, EffectivePackageV1, PackageOriginV1, RuleTierV1,
 };
 pub use telltale_schema::rule_catalog::{
     RULE_CATALOG_V2_ID, RULE_CATALOG_V2_SCHEMA, RuleCatalogEntryV2, RuleCatalogError,
@@ -1033,8 +1033,10 @@ impl PipelineBuilder {
         self
     }
 
-    /// [`Self::organization_rules_document`] with a caller-chosen label, used
-    /// only in [`RuleContentError::document`]: 1 to 64 characters from
+    /// [`Self::organization_rules_document`] with a caller-chosen label, which
+    /// names the input in [`RuleContentError::document`] and is reported as
+    /// the document's `label` in [`Pipeline::effective_configuration`], so
+    /// treat it as visible to operators: 1 to 64 characters from
     /// `A-Z a-z 0-9 . _ -`. Do not pass a path. Another label, or a label two
     /// organization documents share, fails `build` with
     /// [`RuleContentErrorCode::InvalidLabel`]. An unlabelled document's label is
@@ -1102,40 +1104,61 @@ impl PipelineBuilder {
     /// Content and policy that leave no effective rule return
     /// [`PipelineError::EmptyRuleSet`].
     pub fn build(self) -> Result<Pipeline, PipelineError> {
-        let organization = labeled_sources("organization", self.organization_documents)?;
-        let overrides = labeled_sources("override", self.override_documents)?;
-        let mut supplied = Vec::new();
-        // `<kind>:<label>`, as `labeled_sources` names each input.
-        let named = |source: &str| {
-            source
-                .split_once(':')
-                .map_or_else(String::new, |(_, label)| label.to_owned())
-        };
-        for (source, raw) in &organization {
-            supplied.push((DocumentKindV1::Organization, named(source), raw));
-        }
-        for (index, raw) in self.extra_rule_documents.iter().enumerate() {
-            supplied.push((DocumentKindV1::Explicit, (index + 1).to_string(), raw));
-        }
-        for (source, raw) in &overrides {
-            supplied.push((DocumentKindV1::Override, named(source), raw));
-        }
-        if let Some(raw) = &self.policy_document {
-            supplied.push((DocumentKindV1::Policy, "1".to_owned(), raw));
-        }
-        let supplied_documents = supplied
-            .into_iter()
-            .map(|(kind, label, raw)| EffectiveDocumentV1 {
-                kind,
-                label,
-                content_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
-            })
-            .collect::<Vec<_>>();
-        let documents = self
+        let organization =
+            labeled_sources(DocumentKindV1::Organization, self.organization_documents)?;
+        let overrides = labeled_sources(DocumentKindV1::Override, self.override_documents)?;
+        let explicit = self
             .extra_rule_documents
             .iter()
             .enumerate()
-            .map(|(index, raw)| Ok((format!("explicit:{}", index + 1), LoadedRules::parse(raw)?)))
+            .map(|(index, raw)| {
+                (
+                    input_name(DocumentKindV1::Explicit, (index + 1).to_string()),
+                    raw,
+                )
+            })
+            .collect::<Vec<_>>();
+        let policy = self
+            .policy_document
+            .as_ref()
+            .map(|raw| (input_name(DocumentKindV1::Policy, "1".to_owned()), raw));
+        let supplied = organization
+            .iter()
+            .map(|(name, raw)| (DocumentKindV1::Organization, name, raw.as_str()))
+            .chain(
+                explicit
+                    .iter()
+                    .map(|(name, raw)| (DocumentKindV1::Explicit, name, raw.as_str())),
+            )
+            .chain(
+                overrides
+                    .iter()
+                    .map(|(name, raw)| (DocumentKindV1::Override, name, raw.as_str())),
+            )
+            .chain(
+                policy
+                    .iter()
+                    .map(|(name, raw)| (DocumentKindV1::Policy, name, raw.as_str())),
+            )
+            .collect::<Vec<_>>();
+        // The effective configuration lists every supplied document.
+        if let Some((_, name, _)) = supplied.get(MAX_SUPPLIED_DOCUMENTS) {
+            return Err(PipelineError::Compilation(Box::new(RuleContentError::new(
+                RuleContentErrorCode::ExceedsBounds,
+                Some(name.source.clone()),
+            ))));
+        }
+        let supplied_documents = supplied
+            .into_iter()
+            .map(|(kind, name, raw)| EffectiveDocumentV1 {
+                kind,
+                label: name.label.clone().unwrap_or_default(),
+                content_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
+            })
+            .collect::<Vec<_>>();
+        let documents = explicit
+            .into_iter()
+            .map(|(name, raw)| Ok((name, LoadedRules::parse(raw)?)))
             .collect::<Result<Vec<_>, BoxError>>()
             .map_err(PipelineError::Compilation)?;
         let content = RuleContent {
@@ -1157,7 +1180,7 @@ impl PipelineBuilder {
                 .collect(),
             files: organization
                 .into_iter()
-                .map(|(source, raw)| (RuleTier::Organization, source, raw))
+                .map(|(name, raw)| (RuleTier::Organization, name, raw))
                 .collect(),
             documents,
             overrides,
@@ -1181,20 +1204,39 @@ impl PipelineBuilder {
     }
 }
 
-/// Name each input of one kind `<kind>:<label>`, an unlabelled one by its
+/// Most documents a builder takes: the effective configuration lists each.
+const MAX_SUPPLIED_DOCUMENTS: usize = 1024;
+
+/// A builder input's name: `<kind>:<label>` as its source, which errors
+/// report, and its label, which the effective configuration reports with the
+/// same kind.
+fn input_name(kind: DocumentKindV1, label: String) -> InputName {
+    let kind_name = match kind {
+        DocumentKindV1::Organization => "organization",
+        DocumentKindV1::Explicit => "explicit",
+        DocumentKindV1::Override => "override",
+        DocumentKindV1::Policy => "policy",
+    };
+    InputName {
+        source: format!("{kind_name}:{label}"),
+        label: Some(label),
+    }
+}
+
+/// Name each input of one kind with [`input_name`], an unlabelled one by its
 /// 1-based position. A label outside the allowed form, or a name two inputs
 /// share, fails, so a name in a diagnostic always means one input.
 fn labeled_sources(
-    kind: &str,
+    kind: DocumentKindV1,
     inputs: Vec<(Option<String>, String)>,
-) -> Result<Vec<(String, String)>, PipelineError> {
+) -> Result<Vec<(InputName, String)>, PipelineError> {
     let invalid = || {
         PipelineError::Compilation(Box::new(RuleContentError::new(
             RuleContentErrorCode::InvalidLabel,
             None,
         )))
     };
-    let mut named = Vec::<(String, String)>::with_capacity(inputs.len());
+    let mut named = Vec::<(InputName, String)>::with_capacity(inputs.len());
     for (index, (label, raw)) in inputs.into_iter().enumerate() {
         let label = label.unwrap_or_else(|| (index + 1).to_string());
         if !(1..=64).contains(&label.len())
@@ -1204,11 +1246,13 @@ fn labeled_sources(
         {
             return Err(invalid());
         }
-        let source = format!("{kind}:{label}");
-        if named.iter().any(|(existing, _)| *existing == source) {
+        if named
+            .iter()
+            .any(|(existing, _)| existing.label.as_ref() == Some(&label))
+        {
             return Err(invalid());
         }
-        named.push((source, raw));
+        named.push((input_name(kind, label), raw));
     }
     Ok(named)
 }
