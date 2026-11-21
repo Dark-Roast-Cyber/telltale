@@ -7,7 +7,7 @@ loopback-only model providers. Raw synthetic receipts remain private; the
 
 ## Tested build
 
-- Source base: `c5ac6bf7ffbfe874b7fad34104addfea8d9ed361` plus the uncommitted
+- Source base: `b3db4d8c1f9cec8afbf05f1e2971ad3baba8c5f9` plus the uncommitted
   pilot changes. This is local development evidence, not a release claim.
 - Integrated executable SHA-256:
   `7705b8cf02432b49443f2b8a1f9041dae09b699e889f3c2c8d42ab09ace6f2f2`.

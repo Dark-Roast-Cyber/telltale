@@ -1,7 +1,7 @@
 {
   "release_tag": "v0.7.3",
   "source_commit": "7da3922168ab2173d652a38124b22ce326d66438",
-  "verification_workflow_commit": "d54e8f21b03cde0d84d2376f2fef6cc6f96be1d5",
+  "verification_workflow_commit": "a76521b748ae308e5f6b64bff1785ca1962547d9",
   "date": "2026-11-20",
   "host": {
     "os": "macOS",
