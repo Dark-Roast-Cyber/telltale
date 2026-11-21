@@ -1,0 +1,2 @@
+{"type":"session_meta","session_id":"synthetic-git-clean-preview","timestamp":"2026-04-03T09:00:00Z","payload":{"source":"cli"}}
+{"type":"response_item","timestamp":"2026-04-03T09:00:01Z","payload":{"type":"function_call","call_id":"preview","name":"exec_command","arguments":"{\"cmd\":\"git clean -n -fdx\"}"}}

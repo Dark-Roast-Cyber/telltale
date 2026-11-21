@@ -253,6 +253,127 @@ fn git_discard_tags_lost_work_and_rewritten_history() {
 }
 
 #[test]
+fn git_discard_matches_a_long_clean_force_option() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git clean --force -dx"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_matches_an_explicit_file_restore() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git restore src/app.rs"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_matches_a_checkout_path_restore() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git checkout HEAD -- src/app.rs"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_matches_a_forced_checkout() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git checkout --force main"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_matches_a_branch_switch_that_discards_changes() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git switch --discard-changes main"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_matches_a_forced_worktree_removal() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git worktree remove --force ../feature"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_matches_an_executable_suffix_and_attached_directory_option() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git.exe -Crepo reset --hard"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_ignores_a_clean_dry_run_with_force() {
+    let rules = bundled();
+    assert!(rule_ids(&rules, "command", "git clean -n -fdx").is_empty());
+}
+
+#[test]
+fn git_discard_ignores_a_force_push_dry_run() {
+    let rules = bundled();
+    assert!(rule_ids(&rules, "command", "git push --force --dry-run origin main").is_empty());
+}
+
+#[test]
+fn git_discard_ignores_help_for_a_destructive_operation() {
+    let rules = bundled();
+    assert!(rule_ids(&rules, "command", "git reset --hard --help").is_empty());
+}
+
+#[test]
+fn git_discard_dry_run_filter_does_not_hide_a_later_discard() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git clean -n -fd; git reset --hard"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_does_not_read_a_pathspec_as_a_dry_run_option() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git clean -f -- -n"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_does_not_read_an_exclude_pattern_as_a_dry_run_option() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(&rules, "command", "git clean -e -n -f"),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
+fn git_discard_does_not_exempt_a_negated_dry_run() {
+    let rules = bundled();
+    assert_eq!(
+        rule_ids(
+            &rules,
+            "command",
+            "git push --force --dry-run --no-dry-run origin main"
+        ),
+        ["destructive.git_discard"]
+    );
+}
+
+#[test]
 fn database_drop_tags_dropped_or_emptied_data() {
     assert_matches(
         "destructive.database_drop",

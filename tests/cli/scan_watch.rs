@@ -1769,13 +1769,13 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     );
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 149);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 150);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
             "user_message": 24,
             "assistant_message": 24,
-            "tool_call": 34,
+            "tool_call": 35,
             "tool_result": 16,
             "session_meta": 49,
             "other": 2,

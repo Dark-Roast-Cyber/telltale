@@ -4229,10 +4229,19 @@ fn reads_of_different_harnesses_deny_by_how_they_are_joined() {
 /// denials by addition cost more than the call they stop.
 #[test]
 fn denials_by_addition_harden_the_rest_of_the_session() {
-    const DENIED: &[&str] = &[
-        "git restore .claude/settings.json .codex/config.toml",
-        "git diff .claude/settings.json && git diff .codex/config.toml",
-        "printf \".claude/settings.local.json\\n.codex/config.toml\\n\" >> .gitignore",
+    const DENIED: &[(&str, &str)] = &[
+        (
+            "git restore .claude/settings.json .codex/config.toml",
+            "deny action_score 175",
+        ),
+        (
+            "git diff .claude/settings.json && git diff .codex/config.toml",
+            "deny action_score 120",
+        ),
+        (
+            "printf \".claude/settings.local.json\\n.codex/config.toml\\n\" >> .gitignore",
+            "deny action_score 120",
+        ),
     ];
     const ASKS_ALONE: &str = "echo .claude >> .gitignore";
     const UNSCORED: &str = "ls";
@@ -4250,9 +4259,9 @@ fn denials_by_addition_harden_the_rest_of_the_session() {
     };
     let mut table = Vec::new();
     for denials in 0..=DENIED.len() {
-        for (i, command) in DENIED[..denials].iter().enumerate() {
+        for (i, (command, expected)) in DENIED[..denials].iter().enumerate() {
             let found = decide(denials, format!("toolu_d{denials}_{i}"), command);
-            assert_eq!(found, "deny action_score 120", "{command}");
+            assert_eq!(found, *expected, "{command}");
         }
         table.push((
             denials,
@@ -4260,8 +4269,9 @@ fn denials_by_addition_harden_the_rest_of_the_session() {
             decide(denials, format!("toolu_u{denials}"), UNSCORED),
         ));
     }
-    // The second denied call brings one that asks alone to the session's deny threshold, 120 + 120
-    // + 60 = 300; the third is `repeated_denials`. A call with no finding is never touched.
+    // The first restore also contributes 55 destructive-Git points. The second
+    // denied call crosses the session threshold: 175 + 120 + 60 = 355. The third
+    // is `repeated_denials`. A call with no finding is never touched.
     let table: Vec<(usize, &str, &str)> = table
         .iter()
         .map(|(denials, asks, unscored)| (*denials, asks.as_str(), unscored.as_str()))

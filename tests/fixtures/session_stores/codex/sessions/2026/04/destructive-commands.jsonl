@@ -4,3 +4,4 @@
 {"type":"event_msg","timestamp":"2026-04-03T09:00:20Z","payload":{"type":"tool_call","tool_name":"bash","command":"git reset --hard origin/main","message":"Run a synthetic fixture command."}}
 {"type":"event_msg","timestamp":"2026-04-03T09:00:30Z","payload":{"type":"tool_call","tool_name":"bash","command":"dropdb fixture_app","message":"Run a synthetic fixture command."}}
 {"type":"event_msg","timestamp":"2026-04-03T09:00:40Z","payload":{"type":"tool_call","tool_name":"bash","command":"terraform destroy -auto-approve","message":"Run a synthetic fixture command."}}
+{"type":"response_item","timestamp":"2026-04-03T09:00:50Z","payload":{"type":"function_call","call_id":"restore","name":"exec_command","arguments":"{\"cmd\":\"git restore src/app.rs\"}"}}

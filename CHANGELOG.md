@@ -8,6 +8,19 @@
 
 ### Compatibility and operator impact
 
+- **Destructive Git detection distinguishes more requests from plain previews.**
+  `destructive.git_discard` now covers explicit file restores, forced checkouts,
+  branch switches that discard changes, forced worktree removal, the long clean
+  force option, and Git executable suffixes and attached directory options.
+  Narrow, whole-invocation filters exclude plain help and clean/push dry runs
+  without hiding destructive requests in another command. The rule keeps its
+  name, UUID, severity and 55-point contribution; its behaviour fingerprint
+  changes, so affected sessions can emit once after upgrade. Newly matched
+  requests also contribute those points to hook decisions; thresholds are
+  unchanged. The patterns and synthetic cases are informed by MIT-licensed CC
+  Safety Net, with a pinned
+  reference and its notice retained in the bundled rule source. This is
+  unreleased 0.8-line content, not a change to any 0.7.x artifact.
 - **A tool call or result with a value over its own canonical bound is now emitted
   and evaluated instead of dropped whole.** Before, the whole call was
   quarantined, or the whole source failed in an adapter that reads a source

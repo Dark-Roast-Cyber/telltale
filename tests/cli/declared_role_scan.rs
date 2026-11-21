@@ -181,6 +181,37 @@ fn a_shell_command_is_read_as_before() {
 }
 
 #[test]
+fn codex_git_file_restore_is_a_destructive_request() {
+    let found = codex(serde_json::json!({
+        "type": "function_call", "call_id": "restore", "name": "exec_command",
+        "arguments": "{\"cmd\":\"git restore src/app.rs\"}"
+    }));
+    assert_eq!(
+        found,
+        rules(&["destructive.git_discard", "execution.shell"])
+    );
+}
+
+#[test]
+fn codex_git_cleanup_preview_is_not_a_destructive_request() {
+    let found = codex(serde_json::json!({
+        "type": "function_call", "call_id": "preview", "name": "exec_command",
+        "arguments": "{\"cmd\":\"git clean -n -fdx\"}"
+    }));
+    assert_eq!(found, rules(&["execution.shell"]));
+}
+
+#[test]
+fn codex_git_restore_written_as_documentation_is_not_a_command() {
+    let found = codex(serde_json::json!({
+        "type": "custom_tool_call", "call_id": "docs", "name": "apply_patch",
+        "input": "*** Begin Patch\n*** Add File: /home/synthetic/project/git.md\n+Example: git restore src/app.rs\n*** End Patch\n",
+        "status": "completed"
+    }));
+    assert_eq!(found, rules(&[]));
+}
+
+#[test]
 fn the_files_a_patch_writes_are_still_written_paths() {
     let patch = format!(
         "*** Begin Patch\n*** Update File: {PROJECT}/AGENTS.md\n+Follow the synthetic notes.\n*** End Patch\n"

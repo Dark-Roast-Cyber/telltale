@@ -56,6 +56,40 @@ When authoring or reviewing detection content:
 | `impact` | Destruction of recovery data or availability. | `vssadmin delete shadows`, `wbadmin delete catalog`, `bcdedit recoveryenabled no`. | `procchain.impact.*` |
 | `collection` | Local data staged for transfer. | `rar`/`7z` archive creation, especially password-protected. | `procchain.collection.*` |
 
+### Destructive Git requests
+
+`destructive.git_discard` is one behaviour-family rule, not a rule for every
+command spelling. It reads `tool.command`, keeps its existing UUID and 55-point
+contribution, and includes explicit file restores, forced checkouts and branch
+switches, forced worktree removal, local discard, and remote-history changes.
+`--force-with-lease` remains observable: a safer force push still rewrites
+history. Plain `git checkout <branch>` and `git restore --staged <path>`
+requests are not selected.
+
+Plain clean/push dry runs and help requests have a conservative
+`recorded_exclusion` filter. It accepts only whole literal invocations and
+valueless options listed in the rule. An option value, pathspec, quoted text,
+or an unresolved shell construct cannot by itself establish a safe preview.
+Other benign spellings and compound calls can still match. A preview in one
+command does not veto a destructive match in another. The selection retains
+Telltale's existing quote-removed command reading; the filter reads only the
+recorded text.
+
+A match describes a request, not authorization, successful execution or actual
+data loss. Authorized restores and history maintenance are expected false
+positives. Telltale does not inspect the current filesystem to decide whether
+historical work was disposable. Indirect operations and shell or Git state
+not present in the recorded command remain coverage limits; this is not a
+complete Git interpreter.
+
+The command distinctions were informed by
+[CC Safety Net's Git analyzer at revision ab95df5](https://github.com/kenryu42/cc-safety-net/blob/ab95df55d26cca52f49326980be0ef9f81e1406c/src/gate/analyzer/git/rules.ts)
+and Git's [clean](https://git-scm.com/docs/git-clean) and
+[restore](https://git-scm.com/docs/git-restore) references. Telltale implements
+its own bounded Rule v2 patterns; it does not import CC Safety Net's runtime,
+blocking policy, filesystem inspection or safety presets. The upstream MIT
+notice is retained in the bundled rule source.
+
 ## Derived Chain Modifiers
 
 Chain modifiers add score and derived rule IDs when the steps they name are linked. Each bundled chain declares its link: the steps fall within a number of tool calls of each other, counted so that a call and its result count once and messages add no distance, in declared order unless the link allows any order. One call that matches every step always links. `chain.download_then_execute` has its own link, below. A modifier without a link, such as one in a rule pack written before links, keeps co-occurrence anywhere in the session. Modifiers do not replace the single category assigned to each base rule.
