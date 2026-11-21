@@ -48,10 +48,17 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:\b[a-z][a-z0-9+.-]*:)?//[^\s<>\"']+"#).expect("URL regex")
 });
 
-/// Device-namespace (`\\?\`, `\\.\`), drive and UNC paths, as plain text and
-/// as text escaped once or twice (JSON strings), whose separators are 1, 2 or
-/// 4 backslashes. Each form keeps one separator width throughout, so a single
-/// escaped backslash (`HKCU\\Software`, `\\n`) is not read as a UNC start.
+/// Device-namespace (`\\?\`, `\\.\`), drive and UNC paths in plain text.
+static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[1]));
+
+/// The same paths in text escaped once or twice (JSON strings), whose
+/// separators are 2 or 4 backslashes. Only text holding a doubled backslash
+/// can contain one, so this pass runs only then.
+static ESCAPED_WINDOWS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[2, 4]));
+
+/// Windows paths whose separators are `widths` backslashes. Each form keeps
+/// one separator width throughout, so a single escaped backslash
+/// (`HKCU\\Software`, `\\n`) is not read as a UNC start.
 ///
 /// Device branches come first so they win at a shared start: their first
 /// component may be a drive (`C:`) or a volume name with braces, which the UNC
@@ -59,11 +66,11 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// drives such as `HKLM:\` stay readable; it may follow an escaped newline,
 /// tab or carriage return. That leading character is captured as `lead` and
 /// kept by the replacement.
-static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+fn windows_path_regex(widths: &[usize]) -> Regex {
     const PART_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
     const DEVICE_NAME_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]:&|]"#;
     let (mut devices, mut uncs, mut drives) = (Vec::new(), Vec::new(), Vec::new());
-    for width in [1, 2, 4] {
+    for width in widths {
         let sep = format!(r"\\{{{width}}}");
         let start = format!(r"\\{{{}}}", width * 2);
         // Directories may hold spaces; the last component may not.
@@ -81,7 +88,7 @@ static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
         drives.join("|")
     ))
     .expect("Windows path regex")
-});
+}
 
 static POSIX_PRIVATE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -2502,11 +2509,17 @@ fn split_url_before_absolute_path(url: &str) -> (&str, &str) {
 }
 
 fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
+    let replace = |captures: &regex::Captures<'_>| {
+        let lead = captures.name("lead").map_or("", |lead| lead.as_str());
+        format!("{lead}{marker}")
+    };
+    let redacted = if text.contains(r"\\") {
+        ESCAPED_WINDOWS_PATH_RE.replace_all(text, replace)
+    } else {
+        text.into()
+    };
     let redacted = WINDOWS_OR_UNC_PATH_RE
-        .replace_all(text, |captures: &regex::Captures<'_>| {
-            let lead = captures.name("lead").map_or("", |lead| lead.as_str());
-            format!("{lead}{marker}")
-        })
+        .replace_all(&redacted, replace)
         .into_owned();
     let redacted = POSIX_PRIVATE_PATH_RE
         .replace_all(&redacted, |captures: &regex::Captures<'_>| {
