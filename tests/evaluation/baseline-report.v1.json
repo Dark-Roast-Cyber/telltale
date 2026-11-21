@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "214ac1b53f6b7d484df4c86c2bb28b25243115a5f3d1957c8b91d25019e84540",
+    "manifest_sha256": "f1adc6a7f8e1b33b697d220b998d80a8b174e0fcbfa1ebe83961d440be50d0c2",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -42,19 +42,19 @@
   "characterization": {
     "note": "Signal and severity characterization of current detector output. Positive-risk (score > 0) is not a false-positive rate and is not the primary efficacy classifier.",
     "positive_risk": {
-      "numerator": 67,
+      "numerator": 66,
       "denominator": 82,
-      "value": 0.8170731707317073
+      "value": 0.8048780487804879
     },
     "non_informational": {
-      "numerator": 58,
+      "numerator": 57,
       "denominator": 82,
-      "value": 0.7073170731707317
+      "value": 0.6951219512195121
     },
     "review_or_higher": {
-      "numerator": 43,
+      "numerator": 42,
       "denominator": 82,
-      "value": 0.524390243902439
+      "value": 0.5121951219512195
     },
     "security_review_required": {
       "numerator": 28,
@@ -69,9 +69,9 @@
     "severity_distribution": {
       "critical": 11,
       "high": 17,
-      "informational": 24,
+      "informational": 25,
       "low": 15,
-      "medium": 15
+      "medium": 14
     }
   },
   "efficacy": {
@@ -103,19 +103,19 @@
     "benign_signal_ladder": {
       "scored_denominator": 51,
       "benign_positive_risk_rate": {
-        "numerator": 41,
+        "numerator": 40,
         "denominator": 51,
-        "value": 0.803921568627451
+        "value": 0.7843137254901961
       },
       "benign_non_informational_rate": {
-        "numerator": 34,
+        "numerator": 33,
         "denominator": 51,
-        "value": 0.6666666666666666
+        "value": 0.6470588235294118
       },
       "benign_review_or_higher_rate": {
-        "numerator": 20,
+        "numerator": 19,
         "denominator": 51,
-        "value": 0.39215686274509803
+        "value": 0.37254901960784315
       },
       "benign_security_review_rate": {
         "numerator": 7,
@@ -130,7 +130,7 @@
     }
   },
   "rule_coverage": {
-    "enabled_count": 25,
+    "enabled_count": 26,
     "enabled_ids": [
       "approval.bypass.context",
       "credential.api_key.pattern",
@@ -149,6 +149,7 @@
       "mcp.tool_metadata.prompt_injection",
       "network.controlled_test_domain.darkroast",
       "network.download",
+      "obfuscation.decode",
       "persistence.agent_instruction_write",
       "persistence.shell_profile",
       "prompt_injection.instruction_override",
@@ -189,7 +190,6 @@
         "RX-INFRA-DESTROY-001"
       ],
       "execution.encoded_payload": [
-        "BC-DECODE-001",
         "RX-UC003-001"
       ],
       "execution.shell": [
@@ -283,6 +283,9 @@
         "RX-DOWNLOAD-EXEC-001",
         "RX-PIPE-EXEC-001",
         "RX-SECRET-NET-001"
+      ],
+      "obfuscation.decode": [
+        "BC-DECODE-001"
       ],
       "persistence.agent_instruction_write": [
         "BC-AGENT-INSTRUCTION-WRITE-001"
@@ -414,6 +417,9 @@
         "BC-PREC-MENTION-THEN-LS-001",
         "BC-PREC-PATH-NOT-ENCODED-001",
         "BC-PREC-RESULT-TEXT-001"
+      ],
+      "obfuscation.decode": [
+        "BC-DECODE-001"
       ],
       "persistence.agent_instruction_write": [
         "BC-AGENT-INSTRUCTION-READ-001",
@@ -617,9 +623,9 @@
       "fn": 0
     },
     "execution.encoded_payload": {
-      "tp": 2,
+      "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 69,
       "fn": 0
     },
     "execution.shell": {
@@ -676,6 +682,12 @@
       "tn": 62,
       "fn": 0
     },
+    "obfuscation.decode": {
+      "tp": 1,
+      "fp": 0,
+      "tn": 68,
+      "fn": 0
+    },
     "persistence.agent_instruction_write": {
       "tp": 1,
       "fp": 0,
@@ -727,7 +739,7 @@
   },
   "contribution_conformance": {
     "exact_expected_total_checks": 82,
-    "contribution_id_point_checks": 127,
+    "contribution_id_point_checks": 126,
     "failures": []
   },
   "source_coverage": {
@@ -1036,18 +1048,12 @@
       "expected_security_review": "not_required",
       "label_rationale": "Decoding a documented local fixture blob during development should not require security review.",
       "observed_security_review": false,
-      "observed_severity": "medium",
-      "score": 50,
+      "observed_severity": "informational",
+      "score": 0,
       "matched_rule_ids": [
-        "execution.encoded_payload"
+        "obfuscation.decode"
       ],
-      "contributions": [
-        {
-          "id": "execution.encoded_payload",
-          "type": "deterministic_rule",
-          "points": 50
-        }
-      ],
+      "contributions": [],
       "efficacy_result": "tn",
       "conformance_failures": []
     },
@@ -2787,7 +2793,8 @@
         "chain.shell_encoded_payload",
         "execution.encoded_payload",
         "execution.shell",
-        "exfil.dns_encoding"
+        "exfil.dns_encoding",
+        "obfuscation.decode"
       ],
       "contributions": [
         {

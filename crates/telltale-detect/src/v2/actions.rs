@@ -22,7 +22,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 10;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 11;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1620,33 +1620,135 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
         return Ok(true);
     }
     let client = command_word(tokens).to_ascii_lowercase();
-    if !matches!(client.as_str(), "aws" | "gsutil" | "rclone" | "az") {
+    if !matches!(client.as_str(), "aws" | "gsutil" | "rclone" | "az" | "gh") {
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;
     Ok(match client.as_str() {
-        "aws" | "gsutil" | "rclone" => tokens
+        "gh" => publishes_cloud_credential(tokens),
+        // A copy is an upload unless it reads a remote source first. Option
+        // values are not parsed, so a value-taking option before a remote
+        // source reads as a local source.
+        "aws" | "gsutil" => tokens
             .iter()
-            .position(|s| matches!(s.as_str(), "cp" | "copy"))
+            .position(|s| s == "cp")
             .is_some_and(|position| {
-                let operands = tokens
+                tokens
                     .iter()
                     .skip(position + 1)
-                    .filter(|s| !s.starts_with('-'))
-                    .take(2)
-                    .collect::<Vec<_>>();
-                operands.len() == 2 && !remote(operands[0]) && remote(operands[1])
+                    .find(|s| s.as_str() == "-" || !s.starts_with('-'))
+                    .is_none_or(|first| !object_url(first))
+            }),
+        // rclone options can take values with colons, so only the word right
+        // after the subcommand is read as the source.
+        "rclone" => tokens
+            .iter()
+            .position(|s| s.starts_with("copy"))
+            .is_some_and(|position| {
+                tokens
+                    .get(position + 1)
+                    .is_none_or(|first| !rclone_remote(first))
             }),
         "az" => tokens
-            .windows(3)
-            .any(|w| w[0] == "storage" && w[1] == "blob" && w[2] == "upload"),
+            .iter()
+            .position(|s| s == "storage")
+            .is_some_and(|position| azure_upload(&tokens[position + 1..])),
         _ => false,
     })
 }
-fn remote(value: &str) -> bool {
-    value.starts_with("s3://")
-        || value.starts_with("gs://")
-        || (value.contains(':') && !value.contains(":/"))
+/// Whether a GitHub CLI call publishes a cloud credential file: a file operand of
+/// `gist create`, or the body file of an `issue` or `pr` `comment`. A secret gist
+/// is unlisted, not private, so either is readable by others. Ordinary files are
+/// routine publication and do not count. The files are those the rule's own
+/// pattern names, so the session and action readings agree.
+fn publishes_cloud_credential(tokens: &[String]) -> bool {
+    static CREDENTIAL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\.aws[/\\](?:credentials|config)|\.kube[/\\]config|\.docker[/\\]config\.json|(?:credentials|service-account)\.json|accessTokens\.json|credentials\.db").unwrap()
+    });
+    let words = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    let rest = words.get(3..).unwrap_or_default();
+    match words.get(1..3) {
+        Some(["gist", "create"]) => rest
+            .iter()
+            .any(|word| !word.starts_with('-') && CREDENTIAL.is_match(word)),
+        Some(["issue" | "pr", "comment"]) => rest.iter().enumerate().any(|(at, word)| {
+            let file = match *word {
+                "-F" | "--body-file" => rest.get(at + 1).copied(),
+                _ => word
+                    .strip_prefix("--body-file=")
+                    .or_else(|| word.strip_prefix("-F").filter(|file| !file.is_empty())),
+            };
+            file.is_some_and(|file| CREDENTIAL.is_match(file))
+        }),
+        _ => false,
+    }
+}
+
+/// An `az storage` command that sends local content: an upload or sync verb
+/// of `blob`, `file` or `fs`, at most one word after the group, or a `copy`
+/// with no HTTP(S) source.
+fn azure_upload(words: &[String]) -> bool {
+    let verb = |word: &String| word.starts_with("upload") || word.starts_with("sync");
+    match words {
+        [group, rest @ ..] if matches!(group.as_str(), "blob" | "file" | "fs") => match rest {
+            [first, ..] if verb(first) => true,
+            [first, second, ..] => {
+                first
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    && verb(second)
+            }
+            _ => false,
+        },
+        [copy, rest @ ..] if copy == "copy" => {
+            // Only an HTTP(S) source is remote.
+            let remote_source = |value: &str| scheme(value, "http:") || scheme(value, "https:");
+            let mut sources = rest.iter().enumerate().filter_map(|(index, word)| {
+                let (option, value) = word.split_once('=').unwrap_or((word.as_str(), ""));
+                let name = option
+                    .strip_prefix("--s")
+                    .or_else(|| option.strip_prefix("-s"));
+                name.is_some_and(|name| {
+                    name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                })
+                .then(|| {
+                    if word.contains('=') {
+                        value
+                    } else {
+                        rest.get(index + 1).map_or("", String::as_str)
+                    }
+                })
+            });
+            !sources.any(remote_source)
+        }
+        _ => false,
+    }
+}
+
+fn scheme(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+}
+
+/// An `s3://` or `gs://` location.
+fn object_url(value: &str) -> bool {
+    scheme(value, "s3://") || scheme(value, "gs://")
+}
+
+/// An rclone remote: an on-the-fly backend (a leading colon) or a name of a
+/// letter and one or more word characters, dots or dashes before a colon that
+/// `//` does not follow. A drive letter or a URL is local.
+fn rclone_remote(value: &str) -> bool {
+    value.starts_with(':')
+        || value.split_once(':').is_some_and(|(name, rest)| {
+            name.len() >= 2
+                && name.starts_with(|c: char| c.is_ascii_alphabetic())
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+                && !rest.starts_with("//")
+        })
 }
 
 /// A field a native predicate selects: the field name, the selected text, its
@@ -2875,7 +2977,9 @@ fn downloaded_artifacts(
                                         && !token.starts_with("--")
                                         && token[1..].contains('O'))
                             }
-                            "invoke-webrequest" | "iwr" => token.eq_ignore_ascii_case("-OutFile"),
+                            "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm" => {
+                                token.eq_ignore_ascii_case("-OutFile")
+                            }
                             _ => false,
                         }
                 })
@@ -2944,7 +3048,9 @@ fn downloaded_artifacts(
                             break;
                         }
                     }
-                    "invoke-webrequest" | "iwr" if token.eq_ignore_ascii_case("-OutFile") => {
+                    "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm"
+                        if token.eq_ignore_ascii_case("-OutFile") =>
+                    {
                         artifact = next();
                         break;
                     }
@@ -3094,7 +3200,58 @@ fn piped_execution(
             }
         }
     }
+    inline_execution(view, budget)
+}
+/// The byte range of a command that runs, as code, what a download inside one
+/// of its words prints: `bash <(curl …)`, `source <(…)`, `eval "$(…)"`,
+/// `sh -c "$(…)"` or `iex (iwr …)`. A download in any other word is data.
+fn inline_execution(
+    view: &ActionView,
+    budget: &mut RetentionBudget,
+) -> Result<Option<Range<usize>>, ProcessingError> {
+    for (outer, tokens) in view.stage_spans.iter().zip(&view.commands) {
+        charge_tokens(tokens, budget)?;
+        let Some(program) = inline_code(tokens) else {
+            continue;
+        };
+        for (inner, inner_tokens) in view.stage_spans.iter().zip(&view.commands) {
+            if inner.start > outer.start
+                && inner.end <= outer.end
+                && inner_tokens.first().is_some_and(|word| word == program)
+                && is_download(inner_tokens, budget)?
+                && download_stdout(inner_tokens, budget)?
+            {
+                return Ok(Some(outer.clone()));
+            }
+        }
+    }
     Ok(None)
+}
+/// The program of the substitution that a command runs as its code: the script
+/// operand of a shell or `source`, the script after a shell's `-c`, or what
+/// `eval` or `iex` evaluates.
+fn inline_code(tokens: &[String]) -> Option<&str> {
+    let args = tokens.get(1..)?;
+    let (word, openers): (&String, &[&str]) =
+        match super::http::client_name(tokens.first()?).as_str() {
+            "source" | "." => (args.first()?, &["<("]),
+            "eval" => (args.first()?, &["$(", "`"]),
+            "iex" | "invoke-expression" => (args.first()?, &["(", "$("]),
+            shell if super::shell_text::SHELLS.contains(&shell) => {
+                match args
+                    .iter()
+                    .position(|word| super::shell_text::script_flag(word))
+                {
+                    Some(flag) => (args.get(flag + 1)?, &["$(", "`"]),
+                    None => (args.iter().find(|word| !word.starts_with('-'))?, &["<("]),
+                }
+            }
+            _ => return None,
+        };
+    openers
+        .iter()
+        .find_map(|opener| word.strip_prefix(opener))
+        .and_then(|code| code.split_whitespace().next())
 }
 fn download_stdout(
     tokens: &[String],
@@ -3107,7 +3264,15 @@ fn download_stdout(
     if artifacts.iter().any(|(path, _)| path == "-") {
         return Ok(true);
     }
-    if super::http::client_name(&tokens[0]) != "curl" {
+    let client = super::http::client_name(&tokens[0]);
+    // A PowerShell web cmdlet without `-OutFile` passes the response on.
+    if matches!(
+        client.as_str(),
+        "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm"
+    ) {
+        return Ok(artifacts.is_empty());
+    }
+    if client != "curl" {
         return Ok(false);
     }
     charge_tokens(tokens, budget)?;
