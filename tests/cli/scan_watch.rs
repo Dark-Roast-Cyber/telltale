@@ -1769,19 +1769,19 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     );
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 151);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 159);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
             "user_message": 24,
             "assistant_message": 24,
-            "tool_call": 36,
+            "tool_call": 44,
             "tool_result": 16,
             "session_meta": 49,
             "other": 2,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 134);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 144);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 44);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -2028,8 +2028,8 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
     assert_eq!(detection["event_type"], "detection");
     assert_eq!(detection["severity"], "critical");
     assert_eq!(detection["session_id"], "uc001-positive");
-    // Mentioning a tool in assistant text does not attest an observed tool name.
-    assert!(detection["tool_name"].is_null());
+    // The session's one observed tool is its outbound transfer call.
+    assert_eq!(detection["tool_name"], "bash");
     assert!(
         detection["rule_ids"]
             .as_array()
@@ -2060,6 +2060,8 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
         assert!(validator.is_valid(event), "invalid event for {session_id}");
         assert_eq!(event["event_type"], "detection", "{session_id}");
         assert_eq!(event["severity"], "critical", "{session_id}");
+        // Mentioning a tool in assistant text does not attest an observed tool name.
+        assert!(event["tool_name"].is_null(), "{session_id}");
         assert!(
             event["rule_ids"]
                 .as_array()
@@ -2108,8 +2110,9 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
             .iter()
             .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
     );
+    // The session names the URL in text and runs no transfer: no egress chain.
     assert!(
-        compliance_tool["rule_ids"]
+        !compliance_tool["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
@@ -2144,8 +2147,9 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
             .iter()
             .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
     );
+    // The session names the URL in text and runs no transfer: no egress chain.
     assert!(
-        reversed_injection["rule_ids"]
+        !reversed_injection["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
@@ -2451,12 +2455,13 @@ fn scan_once_emits_token_injection_and_install_detections() {
             .iter()
             .any(|rule| rule == "network.controlled_test_domain.darkroast")
     );
+    // The URL is only named in the tool result, so no egress chain links.
     assert!(
-        tool_result["rule_ids"]
+        !tool_result["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
-            .any(|rule| rule == "chain.mcp_injection_then_egress")
+            .any(|rule| rule.as_str().is_some_and(|id| id.starts_with("chain.")))
     );
     assert!(
         tool_result["evidence"]
@@ -3284,7 +3289,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 35);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        134
+        144
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -5136,11 +5141,6 @@ fn scan_once_continues_after_malformed_source() {
             {
                 "code": "source_coverage_partial",
                 "classification": "coverage_limitation",
-                "basis": "source_processing"
-            },
-            {
-                "code": "no_tool_records_observed",
-                "classification": "suspicious_zero",
                 "basis": "source_processing"
             }
         ])

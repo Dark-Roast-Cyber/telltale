@@ -162,9 +162,9 @@ cases:
     eventfulness: noteworthy
     disposition: malicious
     expected_security_review: required
-    label_rationale: Synthetic MCP prompt injection followed by attempted controlled-domain egress is intentionally high-signal and should require security review.
+    label_rationale: Synthetic MCP prompt injection followed by an outbound transfer to the controlled domain is intentionally high-signal and should require security review.
     expected_visibility:
-      required_record_kinds: [tool_result]
+      required_record_kinds: [tool_result, tool_call]
       optional_fields: [timestamp, tool_name, arguments, agent, model, provider]
       unavailable_fields: [pid, parent_pid]
     expected_detection:
@@ -176,11 +176,17 @@ cases:
         - rule_id: chain.mcp_injection_then_egress
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 185
+      expected_score: 260
       expected_contributions:
         - id: approval.bypass.context
           type: deterministic_rule
           points: 45
+        - id: execution.shell
+          type: deterministic_rule
+          points: 15
+        - id: exfil.outbound_upload
+          type: deterministic_rule
+          points: 60
         - id: mcp.tool_metadata.prompt_injection
           type: deterministic_rule
           points: 60
