@@ -874,11 +874,16 @@ pub const TOOL_MAX_BOUNDED_VALUES: usize = 16;
 /// name, facets and the replacement list itself.
 const BOUNDED_AGGREGATE_BYTES: usize = SEMANTIC_MAX_TOTAL_BYTES - 16_384;
 
-/// The tool field a [`BoundedValue`] was replaced in.
+/// The tool field a [`BoundedValue`] was replaced in, or the derived
+/// searchable text it omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BoundedTarget {
     Arguments,
     Result,
+    /// `tool.searchable_arguments`, omitted whole while the arguments are kept.
+    SearchableArguments,
+    /// `tool.searchable_result`, omitted whole while the result is kept.
+    SearchableResult,
 }
 
 impl BoundedTarget {
@@ -886,16 +891,27 @@ impl BoundedTarget {
         match self {
             Self::Arguments => "arguments",
             Self::Result => "result",
+            Self::SearchableArguments => "searchable_arguments",
+            Self::SearchableResult => "searchable_result",
         }
+    }
+
+    /// Whether this target is a derived searchable text rather than a tool
+    /// value: its entry records the text omitted, and no value is replaced.
+    pub fn is_searchable_text(self) -> bool {
+        matches!(self, Self::SearchableArguments | Self::SearchableResult)
     }
 }
 
-/// One over-bound value a bounded tool conversion replaced by `null`. The
-/// side list on [`super::ToolObservation`] is the only marker: a `null` or an
-/// object of this shape in source data is ordinary data, and only the bounded
-/// converters create an entry. It holds coordinates and sizes, never content:
-/// the pointer (RFC 6901, over keys already admitted) names where the
-/// replaced value sat, or the object an over-long key was dropped from.
+/// One over-bound value a bounded tool conversion replaced by `null`, or one
+/// derived searchable text over its bound that was omitted while the tool
+/// values were kept. The side list on [`super::ToolObservation`] is the only
+/// marker: a `null` or an object of this shape in source data is ordinary
+/// data, and only the bounded converters create an entry. It holds
+/// coordinates and sizes, never content: the pointer (RFC 6901, over keys
+/// already admitted) names where the replaced value sat, or the object an
+/// over-long key was dropped from; an omitted searchable text has the empty
+/// pointer.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BoundedValue {
     target: BoundedTarget,
@@ -905,7 +921,12 @@ pub struct BoundedValue {
 }
 
 impl BoundedValue {
-    fn new(target: BoundedTarget, pointer: &str, dimension: BoundDimension, bytes: usize) -> Self {
+    pub(super) fn new(
+        target: BoundedTarget,
+        pointer: &str,
+        dimension: BoundDimension,
+        bytes: usize,
+    ) -> Self {
         Self {
             target,
             pointer: pointer.to_owned(),
@@ -1300,7 +1321,8 @@ pub(crate) fn fit_tool_values(
             _ => unreachable!("only containers have members"),
         }
     }
-    entries.clear();
+    // An omitted searchable text's entry is no tool value's; it stays.
+    entries.retain(|entry| entry.target.is_searchable_text());
     for bounder in bounders {
         entries.extend(bounder.entries);
     }
@@ -1439,11 +1461,14 @@ fn member_source_bytes(key: &str, value: &serde_json::Value) -> usize {
 
 /// Each entry names a replacement that is really there: a sorted, unique,
 /// capped list whose pointers resolve to `null`, or to the object an
-/// over-long key was dropped from.
+/// over-long key was dropped from. An omitted searchable text's entry has the
+/// empty pointer and a string bound, and its field (`searchable`, arguments
+/// then result) is absent.
 pub(crate) fn validate_bounded_values(
     values: &[BoundedValue],
     arguments: Option<&JsonValue>,
     result: Option<&JsonValue>,
+    searchable: [bool; 2],
 ) -> Result<(), ObservationError> {
     let invalid = || ObservationError::new(ValidationCode::InvalidBody);
     if values.len() > TOOL_MAX_BOUNDED_VALUES
@@ -1454,11 +1479,24 @@ pub(crate) fn validate_bounded_values(
         return Err(invalid());
     }
     for value in values {
-        let mut node = match value.target {
+        let root = match value.target {
             BoundedTarget::Arguments => arguments,
             BoundedTarget::Result => result,
-        }
-        .ok_or_else(invalid)?;
+            target => {
+                let kept = searchable[usize::from(target == BoundedTarget::SearchableResult)];
+                if kept
+                    || !value.pointer.is_empty()
+                    || !matches!(
+                        value.dimension,
+                        BoundDimension::StringBytes | BoundDimension::EncodedBytes
+                    )
+                {
+                    return Err(invalid());
+                }
+                continue;
+            }
+        };
+        let mut node = root.ok_or_else(invalid)?;
         let segments = pointer_segments(&value.pointer).ok_or_else(invalid)?;
         if segments.len() >= LOCAL_MAX_DEPTH {
             return Err(invalid());

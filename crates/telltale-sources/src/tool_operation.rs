@@ -308,12 +308,17 @@ pub(crate) enum ValueBounds {
     /// the call's name and admitted values are still evaluated.
     #[default]
     Replace,
-    /// [`ValueBounds::Replace`], then fit the arguments and result together
+    /// [`ValueBounds::Replace`], and omit a derived searchable text over its
+    /// bound, recording it ([`with_searchable_text`]), so the values are
+    /// kept. Only [`build_fitted`] asks for it, after the call's observation
+    /// failed a value bound; [`ValueBounds::Fit`] and [`ValueBounds::Whole`]
+    /// omit such a text as well.
+    OmitText,
+    /// [`ValueBounds::OmitText`], then fit the arguments and result together
     /// into the room the rest of the observation leaves
-    /// ([`ToolObservation::with_fitted_values`]). Only [`build_fitted`] asks
-    /// for it, after the call's observation failed a value bound.
+    /// ([`ToolObservation::with_fitted_values`]).
     Fit,
-    /// [`ValueBounds::Replace`], then replace the arguments and the result
+    /// [`ValueBounds::OmitText`], then replace the arguments and the result
     /// whole ([`ToolObservation::with_replaced_values`]): [`build_fitted`]'s
     /// last attempt.
     Whole,
@@ -323,10 +328,12 @@ pub(crate) enum ValueBounds {
 
 /// Build a tool call's observation with `build`, converting its values under
 /// `bounds`. When that fails on a value bound and `bounds` replaces values,
-/// build it again with the values fitted ([`ValueBounds::Fit`]): each value
-/// may be admitted on its own and still overflow the observation together
-/// with the other value, the tool name or the facets. Should that fail on a
-/// bound as well, a last attempt replaces both values whole
+/// build it again with a derived searchable text over its bound omitted
+/// ([`ValueBounds::OmitText`]), so the values themselves are kept. Should that
+/// fail on a bound too, build it with the values fitted ([`ValueBounds::Fit`]):
+/// each value may be admitted on its own and still overflow the observation
+/// together with the other value, the tool name or the facets. Should that
+/// fail on a bound as well, a last attempt replaces both values whole
 /// ([`ValueBounds::Whole`]). A call that builds takes exactly its first
 /// attempt; one that no attempt builds keeps the first attempt's error.
 /// `bound` names a value-bound failure in the adapter's error.
@@ -339,9 +346,40 @@ pub(crate) fn build_fitted<T, E>(
         Err(error) if bounds == ValueBounds::Replace && bound(&error) => error,
         outcome => return outcome,
     };
-    match build(ValueBounds::Fit) {
-        Err(fitted) if bound(&fitted) => build(ValueBounds::Whole).map_err(|_| error),
-        outcome => outcome.map_err(|_| error),
+    for retry in [ValueBounds::OmitText, ValueBounds::Fit] {
+        match build(retry) {
+            Err(failed) if bound(&failed) => {}
+            outcome => return outcome.map_err(|_| error),
+        }
+    }
+    build(ValueBounds::Whole).map_err(|_| error)
+}
+
+/// Set a call's derived searchable text (`target` is
+/// [`BoundedTarget::SearchableArguments`] or
+/// [`BoundedTarget::SearchableResult`]). Under [`ValueBounds::Replace`] and
+/// [`ValueBounds::Strict`] the text is set as given, so one over its bound
+/// fails the call's observation; under the retries of [`build_fitted`] it is
+/// omitted and recorded instead. The caller adds the field's metadata only
+/// when the text is set.
+pub(crate) fn with_searchable_text(
+    body: ToolObservation,
+    target: BoundedTarget,
+    text: &str,
+    bounds: ValueBounds,
+) -> Result<ToolObservation, ObservationError> {
+    let omit = matches!(
+        bounds,
+        ValueBounds::OmitText | ValueBounds::Fit | ValueBounds::Whole
+    );
+    match (target, omit) {
+        (BoundedTarget::SearchableArguments, false) => body.with_searchable_arguments(text),
+        (BoundedTarget::SearchableArguments, true) => body.with_bounded_searchable_arguments(text),
+        (BoundedTarget::SearchableResult, false) => body.with_searchable_result(text),
+        (BoundedTarget::SearchableResult, true) => body.with_bounded_searchable_result(text),
+        (BoundedTarget::Arguments | BoundedTarget::Result, _) => {
+            unreachable!("a tool value is no searchable text")
+        }
     }
 }
 
@@ -393,7 +431,7 @@ fn fitted(body: ToolObservation, bounds: ValueBounds) -> Result<ToolObservation,
     match bounds {
         ValueBounds::Fit => body.with_fitted_values(),
         ValueBounds::Whole => body.with_replaced_values(),
-        ValueBounds::Replace | ValueBounds::Strict => Ok(body),
+        ValueBounds::Replace | ValueBounds::OmitText | ValueBounds::Strict => Ok(body),
     }
 }
 
@@ -729,6 +767,102 @@ mod tests {
 
     fn declared(table: &[ToolSpec], body: ToolObservation) -> ToolOperation {
         declare(table, body).operation().cloned().expect("declared")
+    }
+
+    /// The attempts [`build_fitted`] makes: the first only, unless it fails on
+    /// a bound under [`ValueBounds::Replace`]; then the omitted text, the
+    /// fitted values and the whole replacement, stopping at the first that
+    /// builds. Strict conversion never retries.
+    #[test]
+    fn build_fitted_omits_searchable_text_before_fitting_values() {
+        let attempts = |bounds, builds: Option<ValueBounds>, error: &'static str| {
+            let mut seen = Vec::new();
+            let outcome = build_fitted(
+                bounds,
+                |error: &&str| *error == "bound",
+                |attempt| {
+                    seen.push(attempt);
+                    if Some(attempt) == builds {
+                        Ok(attempt)
+                    } else {
+                        Err(error)
+                    }
+                },
+            );
+            (seen, outcome)
+        };
+        use ValueBounds::{Fit, OmitText, Replace, Strict, Whole};
+        assert_eq!(
+            attempts(Replace, Some(Replace), "bound"),
+            (vec![Replace], Ok(Replace))
+        );
+        assert_eq!(
+            attempts(Replace, Some(OmitText), "bound"),
+            (vec![Replace, OmitText], Ok(OmitText))
+        );
+        assert_eq!(
+            attempts(Replace, Some(Fit), "bound"),
+            (vec![Replace, OmitText, Fit], Ok(Fit))
+        );
+        assert_eq!(
+            attempts(Replace, Some(Whole), "bound"),
+            (vec![Replace, OmitText, Fit, Whole], Ok(Whole))
+        );
+        assert_eq!(
+            attempts(Replace, None, "bound"),
+            (vec![Replace, OmitText, Fit, Whole], Err("bound"))
+        );
+        assert_eq!(
+            attempts(Replace, None, "other"),
+            (vec![Replace], Err("other"))
+        );
+        assert_eq!(
+            attempts(Strict, None, "bound"),
+            (vec![Strict], Err("bound"))
+        );
+    }
+
+    /// Only the retries omit a searchable text over its bound; the first
+    /// attempt and strict conversion set it as given, so it fails the call.
+    #[test]
+    fn searchable_text_is_omitted_only_on_a_retry() {
+        let text = "x".repeat(4_097);
+        for target in [
+            BoundedTarget::SearchableArguments,
+            BoundedTarget::SearchableResult,
+        ] {
+            for bounds in [ValueBounds::Replace, ValueBounds::Strict] {
+                let body =
+                    with_searchable_text(ToolObservation::new(), target, &text, bounds).unwrap();
+                assert!(body.bounded_values().is_empty(), "{bounds:?}");
+                assert!(
+                    body.searchable_arguments()
+                        .or(body.searchable_result())
+                        .is_some(),
+                    "{bounds:?}"
+                );
+            }
+            for bounds in [ValueBounds::OmitText, ValueBounds::Fit, ValueBounds::Whole] {
+                let body =
+                    with_searchable_text(ToolObservation::new(), target, &text, bounds).unwrap();
+                assert_eq!(
+                    body.searchable_arguments().or(body.searchable_result()),
+                    None
+                );
+                assert_eq!(
+                    body.bounded_values()
+                        .iter()
+                        .map(|value| (value.target(), value.dimension()))
+                        .collect::<Vec<_>>(),
+                    [(target, BoundDimension::StringBytes)],
+                    "{bounds:?}"
+                );
+                // Within its bound the text is kept on every attempt.
+                let kept =
+                    with_searchable_text(ToolObservation::new(), target, "short", bounds).unwrap();
+                assert!(kept.bounded_values().is_empty());
+            }
+        }
     }
 
     type TextRow = (&'static str, &'static [&'static str], bool, bool);
