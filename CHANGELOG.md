@@ -16,10 +16,11 @@
   25 s from its start, below the 30 s timeout it is installed with. The wait
   for the evaluator, the wait for the session's lock, the recovery budget and
   the piece time limit are each cut to what is left of it. A tool call that
-  reaches the deadline before its decision is recorded records no decision
-  and journals nothing; it gets the stricter of `on_error` and
+  has no time left before its evaluation starts is not evaluated: it records
+  no decision and journals nothing, and gets the stricter of `on_error` and
   `on_unevaluable` (default `ask`) and one `error` record with the new code
-  `hook_deadline`. One scan already in flight is not interrupted.
+  `hook_deadline`. A decision already evaluated is always delivered. One scan
+  already in flight is not interrupted.
 
 - **Hooks embedding API: time limits are built in.** `Runtime::with_limits`
   (with `engine::Limits`) replaces `Runtime::set_session_lock_wait`, and

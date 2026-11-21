@@ -272,10 +272,12 @@ group; failed cleanup cannot release a still-live slot.
   later wait is cut to what is left of it: the wait for the evaluator, the wait
   for the session's lock (10 s at most), the recovery budget and the piece time
   limit (`Limits::within`). A call waits for its session's lock, then gets the
-  strict policy (`state_lock_timeout`). A call that reaches the deadline before
-  its decision is recorded records none and journals nothing; it gets the strict
-  policy and one `error` record (`hook_deadline`). One scan already in flight is
-  not interrupted, so a single slow scan can still run past the deadline. The
+  strict policy (`state_lock_timeout`). A call that has no time left before its
+  evaluation starts is not evaluated: it records no decision and journals
+  nothing, and gets the strict policy and one `error` record (`hook_deadline`).
+  A decision already evaluated is always recorded and delivered, however late.
+  One scan already in flight is not interrupted, so a single slow scan can
+  still run past the deadline. The
   evaluator never records what its client stopped waiting for, and a client that
   gets no answer returns what was recorded or evaluates in-process (ADR 0003).
   The limits are values the runtime is built with (`engine::Limits`, defaults

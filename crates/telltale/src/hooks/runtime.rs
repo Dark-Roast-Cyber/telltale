@@ -246,8 +246,8 @@ pub struct Runtime {
 pub const STATE_LOCK_TIMEOUT: &str = "state_lock_timeout";
 /// The evaluator finished after its client stopped waiting; nothing was recorded.
 pub const ANSWER_TOO_LATE: &str = "evaluator_answer_too_late";
-/// The call reached the hook's deadline before its decision was recorded; no
-/// decision is recorded.
+/// The call had no time left before its evaluation started; it is not evaluated
+/// and no decision is recorded.
 pub const HOOK_DEADLINE_PASSED: &str = "hook_deadline";
 /// No state directory resolves. On a tool request it is also the visibility
 /// limit of a call evaluated without its session (`Runtime::tool_requested`).

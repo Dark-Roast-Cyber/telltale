@@ -735,8 +735,9 @@ pub struct Limits {
 }
 
 /// Time from the start of a hook after which nothing more is waited for: every
-/// later wait is cut to what remains of it ([`Limits::within`]), and a call that
-/// reaches it before recording a decision records none. A harness kills a hook
+/// later wait is cut to what remains of it ([`Limits::within`]), and a call with
+/// none left before its evaluation starts is not evaluated. A verdict already
+/// evaluated is always recorded and delivered. A harness kills a hook
 /// at 30 s (the shortest timeout installed) and then runs the call; this leaves
 /// room for one scan already in flight, which is not interrupted, and for the
 /// process to exit.
