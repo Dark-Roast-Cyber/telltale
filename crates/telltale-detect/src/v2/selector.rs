@@ -78,80 +78,52 @@ const SELECTORS: &[&str] = &[
 /// string literal, so a renamed registry entry fails the selector tests instead
 /// of falling through to no handling.
 pub(super) mod governed {
-    pub const MESSAGE_TEXT: &str = "message.text";
-    pub const TOOL_CALL_ID: &str = "tool.call_id";
-    pub const TOOL_STAGE: &str = "tool.stage";
-    pub const TOOL_ARGUMENTS_TEXT: &str = "tool.arguments.text";
-    pub const TOOL_ARGUMENTS_KEYS: &str = "tool.arguments.keys";
-    pub const TOOL_RESULT_TEXT: &str = "tool.result.text";
-    pub const TOOL_RESULT_IS_ERROR: &str = "tool.result.is_error";
-    pub const TOOL_RESULT_EXIT_CODE: &str = "tool.result.exit_code";
-    pub const RESOURCE_OPERATION: &str = "resource.operation";
-    pub const RESOURCE_PATH_CLASS: &str = "resource.path_class";
-    pub const NETWORK_DOMAIN: &str = "network.domain";
-    pub const NETWORK_DESTINATION_CLASS: &str = "network.destination_class";
-    pub const NETWORK_OPERATION: &str = "network.operation";
-    pub const NETWORK_PORT: &str = "network.port";
-    pub const NETWORK_PROTOCOL: &str = "network.protocol";
-    pub const PROCESS_NAME: &str = "process.name";
-    pub const PROCESS_PID: &str = "process.pid";
-    pub const PROCESS_INSTANCE_ID: &str = "process.instance_id";
-    pub const PROCESS_PRIVILEGE: &str = "process.privilege";
-    pub const INFERENCE_PROVIDER: &str = "inference.provider";
-    pub const INFERENCE_REQUESTED_MODEL: &str = "inference.requested_model";
-    pub const INFERENCE_RESOLVED_MODEL: &str = "inference.resolved_model";
-    pub const INFERENCE_STREAMING: &str = "inference.streaming";
-    pub const INFERENCE_STOP_REASON: &str = "inference.stop_reason";
-    pub const MCP_SERVER_ID: &str = "mcp.server.id";
-    pub const MCP_SERVER_TRANSPORT: &str = "mcp.server.transport";
-    pub const MCP_SERVER_LOCATION_CLASS: &str = "mcp.server.location_class";
-    pub const MCP_TOOL_NAME: &str = "mcp.tool.name";
-    pub const RUNTIME_EXECUTION_MODE: &str = "runtime.execution_mode";
-    pub const RUNTIME_ISOLATION_STATE: &str = "runtime.isolation.state";
-    pub const RUNTIME_PRIVILEGE: &str = "runtime.privilege";
-    pub const RUNTIME_WORKSPACE_CLASS: &str = "runtime.workspace.class";
-    pub const BROWSER_SURFACE: &str = "browser.surface";
-    pub const BROWSER_ORIGIN_CLASS: &str = "browser.origin_class";
-    pub const BROWSER_NAVIGATION_ID: &str = "browser.navigation_id";
+    /// Declares each name once: as its constant and as an entry of `ALL`.
+    macro_rules! names {
+        ($($name:ident = $value:literal;)*) => {
+            $(pub const $name: &str = $value;)*
+            #[cfg(test)]
+            pub const ALL: &[&str] = &[$($name),*];
+        };
+    }
 
-    #[cfg(test)]
-    pub const ALL: &[&str] = &[
-        MESSAGE_TEXT,
-        TOOL_CALL_ID,
-        TOOL_STAGE,
-        TOOL_ARGUMENTS_TEXT,
-        TOOL_ARGUMENTS_KEYS,
-        TOOL_RESULT_TEXT,
-        TOOL_RESULT_IS_ERROR,
-        TOOL_RESULT_EXIT_CODE,
-        RESOURCE_OPERATION,
-        RESOURCE_PATH_CLASS,
-        NETWORK_DOMAIN,
-        NETWORK_DESTINATION_CLASS,
-        NETWORK_OPERATION,
-        NETWORK_PORT,
-        NETWORK_PROTOCOL,
-        PROCESS_NAME,
-        PROCESS_PID,
-        PROCESS_INSTANCE_ID,
-        PROCESS_PRIVILEGE,
-        INFERENCE_PROVIDER,
-        INFERENCE_REQUESTED_MODEL,
-        INFERENCE_RESOLVED_MODEL,
-        INFERENCE_STREAMING,
-        INFERENCE_STOP_REASON,
-        MCP_SERVER_ID,
-        MCP_SERVER_TRANSPORT,
-        MCP_SERVER_LOCATION_CLASS,
-        MCP_TOOL_NAME,
-        RUNTIME_EXECUTION_MODE,
-        RUNTIME_ISOLATION_STATE,
-        RUNTIME_PRIVILEGE,
-        RUNTIME_WORKSPACE_CLASS,
-        BROWSER_SURFACE,
-        BROWSER_ORIGIN_CLASS,
-        BROWSER_NAVIGATION_ID,
-    ];
+    names! {
+        MESSAGE_TEXT = "message.text";
+        TOOL_CALL_ID = "tool.call_id";
+        TOOL_STAGE = "tool.stage";
+        TOOL_ARGUMENTS_TEXT = "tool.arguments.text";
+        TOOL_ARGUMENTS_KEYS = "tool.arguments.keys";
+        TOOL_RESULT_TEXT = "tool.result.text";
+        TOOL_RESULT_IS_ERROR = "tool.result.is_error";
+        TOOL_RESULT_EXIT_CODE = "tool.result.exit_code";
+        RESOURCE_OPERATION = "resource.operation";
+        RESOURCE_PATH_CLASS = "resource.path_class";
+        NETWORK_DOMAIN = "network.domain";
+        NETWORK_DESTINATION_CLASS = "network.destination_class";
+        NETWORK_OPERATION = "network.operation";
+        NETWORK_PORT = "network.port";
+        NETWORK_PROTOCOL = "network.protocol";
+        PROCESS_NAME = "process.name";
+        PROCESS_PID = "process.pid";
+        PROCESS_INSTANCE_ID = "process.instance_id";
+        PROCESS_PRIVILEGE = "process.privilege";
+        INFERENCE_PROVIDER = "inference.provider";
+        INFERENCE_REQUESTED_MODEL = "inference.requested_model";
+        INFERENCE_RESOLVED_MODEL = "inference.resolved_model";
+        INFERENCE_STREAMING = "inference.streaming";
+        INFERENCE_STOP_REASON = "inference.stop_reason";
+        MCP_SERVER_ID = "mcp.server.id";
+        MCP_SERVER_TRANSPORT = "mcp.server.transport";
+        MCP_SERVER_LOCATION_CLASS = "mcp.server.location_class";
+        MCP_TOOL_NAME = "mcp.tool.name";
+        RUNTIME_EXECUTION_MODE = "runtime.execution_mode";
+        RUNTIME_ISOLATION_STATE = "runtime.isolation.state";
+        RUNTIME_PRIVILEGE = "runtime.privilege";
+        RUNTIME_WORKSPACE_CLASS = "runtime.workspace.class";
+        BROWSER_SURFACE = "browser.surface";
+        BROWSER_ORIGIN_CLASS = "browser.origin_class";
+        BROWSER_NAVIGATION_ID = "browser.navigation_id";
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

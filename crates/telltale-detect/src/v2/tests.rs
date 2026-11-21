@@ -498,7 +498,7 @@ fn every_governed_facet_the_resolver_handles_is_a_registered_governed_selector()
 }
 
 #[test]
-fn every_registered_governed_selector_has_resolver_handling() {
+fn every_registered_governed_selector_is_named_for_the_resolver() {
     let unhandled: Vec<&str> = SelectorId::all()
         .iter()
         .copied()
