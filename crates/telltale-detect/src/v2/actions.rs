@@ -22,7 +22,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 13;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 14;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1626,8 +1626,8 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
     charge_tokens(command, budget)?;
     let client = super::http::client_name(&command[0]);
     // The operands after options and their values: the command group,
-    // subcommand, then the source and destination of a copy. A copy is an
-    // upload unless it reads a remote source.
+    // subcommand, then the source and destination of a copy, move or sync,
+    // which is an upload unless it reads a remote source.
     let (long, short) = VALUE_OPTIONS
         .iter()
         .find(|(name, ..)| *name == client)
@@ -1635,10 +1635,13 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
     let operands = operands(&command[1..], long, short);
     Ok(match (client.as_str(), operands.as_slice()) {
         ("gh", [group, verb, ..]) => publishes_cloud_credential(command, group, verb),
-        ("aws", ["s3", "cp", source, _, ..]) | ("gsutil", ["cp", source, _, ..]) => {
-            !object_url(source)
+        ("aws", ["s3", "cp" | "mv" | "sync", source, _, ..])
+        | ("gsutil", ["cp" | "mv" | "rsync", source, _, ..]) => !object_url(source),
+        ("rclone", [verb, source, _, ..])
+            if verb.starts_with("copy") || matches!(*verb, "sync" | "move") =>
+        {
+            !rclone_remote(source)
         }
-        ("rclone", [verb, source, _, ..]) if verb.starts_with("copy") => !rclone_remote(source),
         ("az", _) => command
             .iter()
             .position(|s| s == "storage")
@@ -1673,7 +1676,7 @@ const VALUE_OPTIONS: [(&str, &[&str], &str); 4] = [
         ],
         "",
     ),
-    ("gsutil", &[], "ahijLosuz"),
+    ("gsutil", &[], "ahijLosuxz"),
     (
         "rclone",
         &[

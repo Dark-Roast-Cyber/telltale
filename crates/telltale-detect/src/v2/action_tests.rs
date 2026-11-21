@@ -1022,6 +1022,43 @@ fn object_storage_uploads_behind_wrappers_and_options_match_in_the_action_view()
     }
 }
 
+/// A move or sync is read like a copy: a local source is an upload.
+#[test]
+fn object_storage_moves_and_syncs_from_a_local_source_match_in_the_action_view() {
+    for command in [
+        "aws s3 mv dump.sql s3://synthetic-bucket/",
+        "aws s3 sync --exclude '*.tmp' ./dist s3://synthetic-bucket/site/",
+        "gsutil mv build.tar gs://synthetic-bucket/",
+        "gsutil -m rsync -d -r ./dist gs://synthetic-bucket/site",
+        "rclone sync ./reports synthetic-remote:archive",
+        "rclone move -P ./reports synthetic-remote:archive",
+    ] {
+        assert!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
+/// A move or sync from a remote source, to a local or a remote destination,
+/// is not an upload.
+#[test]
+fn object_storage_moves_and_syncs_from_a_remote_source_do_not_match_in_the_action_view() {
+    for command in [
+        "aws s3 mv s3://synthetic-bucket/a ./a",
+        "aws s3 sync s3://synthetic-bucket/site s3://other-bucket/site",
+        "gsutil mv gs://synthetic-bucket/a.tar .",
+        "gsutil rsync -x '\\.git' -r gs://synthetic-bucket/site ./site",
+        "rclone sync synthetic-remote:archive ./reports",
+        "rclone move synthetic-remote:archive other-remote:archive",
+    ] {
+        assert!(
+            !session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
 /// Value-taking options and progress flags before a remote source, help and a
 /// copy outside the `s3` command group are not uploads.
 #[test]

@@ -108,6 +108,11 @@
   source. GitHub CLI publication finds its subcommand after global options
   such as `-R` and also reads the body file of `issue create` and
   `pr create`. The native action profile version rises to 12.
+- **Native actions read object-storage moves and syncs like copies.**
+  `aws s3 mv` and `aws s3 sync`, `gsutil mv` and `gsutil rsync`, and
+  `rclone sync` and `rclone move` are read by the copy rule: a local source
+  is an upload, and a remote source, to a local or a remote destination, is
+  not. The native action profile version rises to 14.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean
