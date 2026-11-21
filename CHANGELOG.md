@@ -1,8 +1,20 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.4` is the current stable release and `v0.7.3` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.5` is the current stable release and `v0.7.4` the previous stable. Exact source, artifact and qualification evidence is recorded on each Release and the release qualification issue; prerelease evidence does not qualify stable artifacts. See the [0.7 migration guide](docs/migrations/0.7.0.md) before upgrading. Retained candidate and weekly development notes are historical snapshots, not current release status.
 
 ---
+
+## 0.7.5 — published stable (2026-11-21)
+
+### Changes since 0.7.4
+
+- Windows paths are now redacted in more spellings. The privacy sanitizer
+  replaces drive, UNC and device-namespace paths written with escaped
+  backslashes, as inside a JSON string, paths that mix escaped and plain
+  separators, and forward-slash UNC paths (`//server/share/...`) whole with
+  the path marker in every sanitization context, and recognizes more
+  drive-path boundaries. URLs and other `//` text keep their treatment, and
+  there is no change to detection, state or the Event 3.0 shape.
 
 ## 0.7.4 — published stable (2026-11-20)
 
