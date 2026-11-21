@@ -539,7 +539,7 @@ document text, rule IDs, or paths. `Display` is the code's text.
 | `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
 | `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, a `reason` over 256 characters or with control or invisible formatting characters other than tab and newline, or that sets nothing |
 | `UnknownRuleId` | an override `rule_id` that no rule has |
-| `ExceedsBounds` | more than 1024 text inputs in all, or more than 256 override entries applied to one rule |
+| `ExceedsBounds` | more than 1024 text inputs in all, more than 256 rule packages, more than 3725 rules and chain modifiers (with the 371 bundled process-chain rules, a 4096-entry catalog), or more than 256 override entries applied to one rule |
 
 ```rust,no_run
 use telltale_core::{Pipeline, PipelineError, RuleContentError, RuleContentErrorCode};

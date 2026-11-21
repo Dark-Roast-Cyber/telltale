@@ -490,6 +490,11 @@ pub struct ProcessChainRuleMetadata {
     pub enabled: bool,
 }
 
+/// How many rules [`bundled_process_chain_metadata`] lists: what the embedded
+/// pack adds to a rule catalog when process-chain detection is enabled, known
+/// without compiling the pack.
+pub const BUNDLED_PROCESS_CHAIN_RULE_COUNT: usize = 371;
+
 /// Display metadata for every rule of the embedded process-chain pack, in pack
 /// order. The pack is compiled first, so the metadata describes a valid pack.
 pub fn bundled_process_chain_metadata() -> Result<Vec<ProcessChainRuleMetadata>, ProcessChainError>
@@ -1226,7 +1231,8 @@ fn apply_context(
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessChainContext, ProcessChainPack, ProcessObservation, ProcessRef, compile_pack,
+        BUNDLED_PROCESS_CHAIN_RULE_COUNT, ProcessChainContext, ProcessChainPack,
+        ProcessObservation, ProcessRef, bundled_process_chain_metadata, compile_pack,
         load_default_process_chain_rules, load_process_chain_rules, normalize_process_name,
     };
 
@@ -1252,6 +1258,13 @@ mod tests {
                 .iter()
                 .all(|rule| (600..=3600).contains(&rule.window_seconds))
         );
+    }
+
+    #[test]
+    fn bundled_rule_count_is_the_number_of_listed_rules() {
+        // Load-time bounds reserve this many catalog entries for the pack.
+        let listed = bundled_process_chain_metadata().expect("pack compiles");
+        assert_eq!(listed.len(), BUNDLED_PROCESS_CHAIN_RULE_COUNT);
     }
 
     #[test]

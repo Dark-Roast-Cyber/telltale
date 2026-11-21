@@ -635,6 +635,77 @@ fn more_supplied_documents_than_the_document_holds_fail() {
     );
 }
 
+/// `count` rules `syn.bulk.<n>`, as one multi-document rule text.
+fn bulk_rules(count: usize) -> String {
+    (0..count)
+        .map(|index| {
+            rule(
+                &format!("syn.bulk.{index}"),
+                &format!("6a1f0c2e-1b2c-4d3e-8f41-{index:012}"),
+                "syn-bulk",
+                5,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("---\n")
+}
+
+#[test]
+fn more_definitions_than_the_document_holds_with_process_chain_rules_fail() {
+    // `base_builder` has 2 definitions; with the 371 bundled process-chain
+    // rules, 3725 definitions fill the 4096 the document holds.
+    let mut options = DetailedEvaluationOptions::default();
+    options.process_chain = true;
+    let at_bound = base_builder()
+        .rules_document(bulk_rules(3723))
+        .build()
+        .unwrap();
+    assert_eq!(
+        at_bound
+            .effective_configuration(&options)
+            .unwrap()
+            .definitions
+            .len(),
+        4096
+    );
+    assert_eq!(at_bound.rule_catalog(&options).unwrap().len(), 4096);
+    let error = rejected(base_builder().rules_document(bulk_rules(3724)));
+    assert_eq!(
+        (error.code(), error.document()),
+        (RuleContentErrorCode::ExceedsBounds, Some("explicit:2"))
+    );
+}
+
+/// A package `syn.pack<n>` with one rule, in its own namespace.
+fn numbered_package(number: usize) -> String {
+    format!(
+        "format: telltale-rule-package/v2\nid: syn.pack{number}\ntitle: Synthetic pack\n\
+         version: \"1.0.0\"\npublisher: Synthetic\nlicense: Apache-2.0\nrule_namespace: syn{number}\n---\n{}",
+        rule(
+            &format!("syn{number}.rule"),
+            &format!("6a1f0c2e-1b2c-4d3e-8f42-{number:012}"),
+            "syn-pack",
+            5
+        )
+    )
+}
+
+#[test]
+fn more_rule_packages_than_the_document_holds_fail() {
+    let with = |count: usize| {
+        (2..count + 2).fold(base_builder(), |builder, number| {
+            builder.rule_package(numbered_package(number))
+        })
+    };
+    // With the one package of `base_builder`, 256 packages fit.
+    assert_eq!(effective(with(255)).packages.len(), 256);
+    let error = rejected(with(256));
+    assert_eq!(
+        (error.code(), error.document()),
+        (RuleContentErrorCode::ExceedsBounds, Some("package:257"))
+    );
+}
+
 #[test]
 fn input_names_in_errors_use_the_kind_and_label_the_document_reports() {
     let replacement = rule(BASE, BASE_UUID, "syn-gamma", 35);

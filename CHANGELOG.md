@@ -470,8 +470,10 @@
   tier it replaced, and the overrides applied with their reasons. It holds
   no matchers, paths or document text. `telltale-schema` adds the wire form
   with `to_json`, `from_json` and a JSON Schema; the rule catalog is
-  unchanged. The builder rejects more than 1024 text inputs, and override
-  files (in the CLI too) that apply more than 256 entries to one rule, with
+  unchanged. The builder rejects more than 1024 text inputs, and (in the
+  CLI too) more than 256 rule packages, more than 3725 rules and chain
+  modifiers (a 4096-entry catalog less the 371 bundled process-chain rules)
+  and override files that apply more than 256 entries to one rule, with
   `rule_content_exceeds_bounds`, so every pipeline it builds can be
   described. `telltale rules list` now reads enabled rules and scores from
   the same view; its output is unchanged.
