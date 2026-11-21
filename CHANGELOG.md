@@ -15,7 +15,9 @@
   values first: a rule finding there keeps its force, and the unprojected
   remainder floors the decision at `on_unevaluable` (recorded as
   `pending_input_separated`). The work per call stays bounded by the same
-  variant limit.
+  variant limit, and a projected call whose evaluation has already passed the
+  piece time limit is no longer scanned ahead of the piece loop: it records
+  `pending_pieces_unscanned` and follows `on_unevaluable`.
 
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
