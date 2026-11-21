@@ -1056,14 +1056,13 @@ cases:
       unavailable_fields: [pid, parent_pid]
     expected_detection:
       rule_expectations:
-        - rule_id: execution.encoded_payload
+        - rule_id: obfuscation.decode
           expectation: expected_match
+        - rule_id: execution.encoded_payload
+          expectation: expected_absent
       exact_rule_set: true
-      expected_score: 50
-      expected_contributions:
-        - id: execution.encoded_payload
-          type: deterministic_rule
-          points: 50
+      expected_score: 0
+      expected_contributions: []
     tags: [benign_confounder, efficacy, characterization]
 
   - id: BC-UPLOAD-001

