@@ -11,15 +11,13 @@
 //! Each definition also keeps the descriptive metadata the catalog reports
 //! ([`DefinitionMetadata`]) and the package that shipped it, if any.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-use std::path::Path;
-
 use crate::{
     CompiledRule, CompiledRuleSet, RuleLoadNotice, RuleOverrideDocument, RulePolicy,
     RuleV1CompatibilityModifier, RuleV1CompatibilityRule, policy_allows_modifier,
     policy_allows_rule, policy_name, provenance, rule_v2, validate_rule_override_entry,
 };
+use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
 
 /// Whether a definition is a rule or a chain modifier (a Rule v2 chain).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,6 +334,32 @@ impl LoadedDefinition {
     }
 }
 
+/// Why [`LoadedRules::apply_override_document`] rejected a document. Each
+/// variant holds the full message, which names the document's source and can
+/// name a rule ID; `Display` shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RuleOverrideError {
+    /// The document's `version` is not 1.
+    UnsupportedVersion(String),
+    /// An entry has an empty `rule_id` or `reason`, or sets neither `enabled`
+    /// nor `score`.
+    InvalidEntry(String),
+    /// An entry names no rule in the content.
+    UnknownRuleId(String),
+}
+
+impl std::fmt::Display for RuleOverrideError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::UnsupportedVersion(message)
+        | Self::InvalidEntry(message)
+        | Self::UnknownRuleId(message)) = self;
+        formatter.write_str(message)
+    }
+}
+
+impl Error for RuleOverrideError {}
+
 /// An ordered list of loaded definitions, each id and each Rule v2 UUID once.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoadedRules {
@@ -413,33 +437,31 @@ impl LoadedRules {
         self
     }
 
-    /// Apply one override document read from `path`: each entry sets a rule's
-    /// `enabled` or `score`. An entry naming no rule fails.
+    /// Apply one override document: each entry sets a rule's `enabled` or
+    /// `score`. Overrides change rules, never chain modifiers, so a modifier
+    /// ID is an unknown `rule_id` and fails. `source` names the document in
+    /// error messages (the CLI passes its path).
     pub fn apply_override_document(
         &mut self,
         document: &RuleOverrideDocument,
-        path: &Path,
-    ) -> Result<(), Box<dyn Error>> {
+        source: &str,
+    ) -> Result<(), RuleOverrideError> {
         if document.version != 1 {
-            return Err(format!(
-                "unsupported rule override version {} in {}; only version 1 is supported",
-                document.version,
-                path.display()
-            )
-            .into());
+            return Err(RuleOverrideError::UnsupportedVersion(format!(
+                "unsupported rule override version {} in {source}; only version 1 is supported",
+                document.version
+            )));
         }
         let _ = &document.description;
         for entry in &document.overrides {
-            validate_rule_override_entry(entry, path)?;
+            validate_rule_override_entry(entry, source).map_err(RuleOverrideError::InvalidEntry)?;
             let Some(rule) = self.definitions.iter_mut().find(|definition| {
                 definition.kind() == DefinitionKind::Rule && definition.id() == entry.rule_id
             }) else {
-                return Err(format!(
-                    "unknown rule_id '{}' in rule override file {}",
-                    entry.rule_id,
-                    path.display()
-                )
-                .into());
+                return Err(RuleOverrideError::UnknownRuleId(format!(
+                    "unknown rule_id '{}' in rule override file {source}",
+                    entry.rule_id
+                )));
             };
             if let Some(enabled) = entry.enabled {
                 rule.set_enabled(enabled);

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use telltale_schema::observation::{
     BrowserObservation, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
@@ -2741,7 +2740,7 @@ overrides:
     // proves that the compatibility seam sees post-override values.
     let mut rules = telltale_rules::LoadedRules::parse(document).expect("synthetic document");
     rules
-        .apply_override_document(&override_doc, Path::new("synthetic-overrides.yaml"))
+        .apply_override_document(&override_doc, "synthetic-overrides.yaml")
         .expect("apply override");
     assert_eq!(
         rules

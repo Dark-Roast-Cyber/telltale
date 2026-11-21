@@ -31,11 +31,13 @@
 //! # Ok::<(), PipelineError>(())
 //! ```
 
-pub use telltale_rules::package::{COMMUNITY_PACKAGE_ID, RulePackageSummary};
-use telltale_rules::package::{
-    CommunityRules, ResolvedRulePackage, RulePackage, resolve_rule_packages,
+use rule_resolution::{
+    ContentFailure, NoRuleDocuments, RuleContent, RuleTier, resolve_rule_content,
 };
-use telltale_rules::{CompiledRuleSet, LoadedRules};
+pub use rule_resolution::{RuleContentError, RuleContentErrorCode};
+use telltale_rules::package::CommunityRules;
+pub use telltale_rules::package::{COMMUNITY_PACKAGE_ID, RulePackageSummary};
+use telltale_rules::{CompiledRuleSet, LoadedRules, RuleLoadMode};
 
 #[cfg(feature = "protected-assignment")]
 pub mod assignment;
@@ -659,13 +661,18 @@ pub struct Pipeline {
     rule_packages: Vec<RulePackageSummary>,
 }
 
-/// Builder for [`Pipeline`]. This in-memory convenience includes bundled core
-/// rules and the embedded community package, and makes supplied packages and
-/// rule documents additive; it is not the CLI's path and managed-tier
-/// configuration resolver.
+/// Builder for [`Pipeline`]. It includes bundled core rules and the embedded
+/// community package, and makes supplied packages and rule documents
+/// additive. Organization rule documents may replace a same-ID definition and
+/// override documents tune rules, as the CLI's `organization-rules.d` and
+/// `overrides.d` do, through the CLI's own tier resolution. Every input is
+/// text; the builder reads no configuration directory.
 #[derive(Default)]
 pub struct PipelineBuilder {
     extra_rule_documents: Vec<String>,
+    /// (label, text) in call order.
+    organization_documents: Vec<(Option<String>, String)>,
+    override_documents: Vec<(Option<String>, String)>,
     rule_packages: Vec<String>,
     policy_document: Option<String>,
     custom_only: bool,
@@ -1002,6 +1009,57 @@ impl PipelineBuilder {
         self
     }
 
+    /// Add a rule document at the organization tier, like a file in
+    /// `organization-rules.d`. A rule or chain whose ID bundled core or a
+    /// package already defines replaces that definition in place and must
+    /// keep its Rule v2 `id`; other IDs are added. An ID repeated among
+    /// organization documents fails. A replacing rule whose matchers differ
+    /// from the bundled rule's uses its own matchers, not the bundled rule's
+    /// native precision profile.
+    pub fn organization_rules_document(mut self, yaml: impl Into<String>) -> Self {
+        self.organization_documents.push((None, yaml.into()));
+        self
+    }
+
+    /// [`Self::organization_rules_document`] with a caller-chosen label, used
+    /// only in [`RuleContentError::document`]: 1 to 64 characters from
+    /// `A-Z a-z 0-9 . _ -`. Do not pass a path. Another label, or a label two
+    /// organization documents share, fails `build` with
+    /// [`RuleContentErrorCode::InvalidLabel`]. An unlabelled document's label is
+    /// its 1-based position among organization documents.
+    pub fn labeled_organization_rules_document(
+        mut self,
+        label: impl Into<String>,
+        yaml: impl Into<String>,
+    ) -> Self {
+        self.organization_documents
+            .push((Some(label.into()), yaml.into()));
+        self
+    }
+
+    /// Add an override v1 document, like a file in `overrides.d`. Documents
+    /// apply in call order after all rule content is merged and before the
+    /// policy. They change rules, never chain modifiers: a modifier ID, like
+    /// any `rule_id` no rule has, fails `build` with
+    /// [`RuleContentErrorCode::UnknownRuleId`].
+    pub fn override_document(mut self, yaml: impl Into<String>) -> Self {
+        self.override_documents.push((None, yaml.into()));
+        self
+    }
+
+    /// [`Self::override_document`] with a caller-chosen label, checked as for
+    /// [`Self::labeled_organization_rules_document`]. An unlabelled document's
+    /// label is its 1-based position among override documents.
+    pub fn labeled_override_document(
+        mut self,
+        label: impl Into<String>,
+        yaml: impl Into<String>,
+    ) -> Self {
+        self.override_documents
+            .push((Some(label.into()), yaml.into()));
+        self
+    }
+
     /// Drop the bundled core rules and the embedded community package; use
     /// only supplied packages and documents (mirrors `--no-default-rules`).
     pub fn without_bundled_defaults(mut self) -> Self {
@@ -1016,60 +1074,100 @@ impl PipelineBuilder {
         self
     }
 
-    /// Compile bundled core rules, rule packages, and supplied rule documents
-    /// with the optional policy.
-    /// Missing documents or rejected rules/packages/policy return [`PipelineError`].
+    /// Resolve bundled core rules, rule packages, organization and supplied
+    /// rule documents by tier, apply override documents, and compile with the
+    /// optional policy, as the CLI does.
+    /// Missing documents return [`PipelineError::InvalidConfiguration`].
+    /// Rejected labels, organization or override documents, repeated IDs and
+    /// override entries return [`PipelineError::Compilation`] with a
+    /// [`RuleContentError`] source. Other rejected documents, packages and
+    /// policies, and a rule that fails validation when the merged content
+    /// compiles, keep an untyped source whose text can name rule IDs and quote
+    /// document values.
     /// Canonical semantics are compiled once here and reused by every scan.
     /// Content that rule loading accepts but canonical compilation rejects
     /// returns [`PipelineError::Compilation`] here, not later from a scan.
     /// Content and policy that leave no effective rule return
     /// [`PipelineError::EmptyRuleSet`].
     pub fn build(self) -> Result<Pipeline, PipelineError> {
-        let community = if self.without_community {
-            CommunityRules::Disabled
-        } else if self.custom_only {
-            CommunityRules::SuppliedOnly
-        } else {
-            CommunityRules::Embedded
+        let organization = labeled_sources("organization", self.organization_documents)?;
+        let overrides = labeled_sources("override", self.override_documents)?;
+        let documents = self
+            .extra_rule_documents
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| Ok((format!("explicit:{}", index + 1), LoadedRules::parse(raw)?)))
+            .collect::<Result<Vec<_>, BoxError>>()
+            .map_err(PipelineError::Compilation)?;
+        let content = RuleContent {
+            mode: if self.custom_only {
+                RuleLoadMode::CustomOnly
+            } else {
+                RuleLoadMode::IncludeDefault
+            },
+            community: if self.without_community {
+                CommunityRules::Disabled
+            } else {
+                CommunityRules::Embedded
+            },
+            packages: self
+                .rule_packages
+                .into_iter()
+                .enumerate()
+                .map(|(index, raw)| (format!("supplied:{}", index + 1), raw))
+                .collect(),
+            files: organization
+                .into_iter()
+                .map(|(source, raw)| (RuleTier::Organization, source, raw))
+                .collect(),
+            documents,
+            overrides,
+            policy: self.policy_document,
         };
-        let supplied = self
-            .rule_packages
-            .iter()
-            .map(|raw| RulePackage::parse(raw))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(PipelineError::Compilation)?;
-        let packages =
-            resolve_rule_packages(community, supplied).map_err(PipelineError::Compilation)?;
-        let rule_packages = packages
-            .iter()
-            .map(ResolvedRulePackage::summary)
-            .collect::<Vec<_>>();
-        let mut documents = Vec::new();
-        if !self.custom_only {
-            documents
-                .push(telltale_rules::bundled_default_rules().map_err(PipelineError::Compilation)?);
-        }
-        for resolved in packages {
-            documents.extend(resolved.package.into_documents());
-        }
-        for raw in &self.extra_rule_documents {
-            documents.push(LoadedRules::parse(raw).map_err(PipelineError::Compilation)?);
-        }
-        if documents.is_empty() {
-            return Err(PipelineError::InvalidConfiguration);
-        }
-        let policy = self
-            .policy_document
-            .as_deref()
-            .map(telltale_rules::parse_rule_policy)
-            .transpose()
-            .map_err(PipelineError::Compilation)?;
-        let content = LoadedRules::merge(documents).map_err(PipelineError::Compilation)?;
-        let rule_set = content
-            .compile(policy.as_ref())
-            .map_err(PipelineError::Compilation)?;
-        Pipeline::from_compiled(content, rule_set, rule_packages)
+        resolve_rule_content(content)
+            .map_err(|error| {
+                if error.is::<NoRuleDocuments>() {
+                    PipelineError::InvalidConfiguration
+                } else if let Some(failure) = error.downcast_ref::<ContentFailure>() {
+                    PipelineError::Compilation(Box::new(failure.without_message()))
+                } else {
+                    PipelineError::Compilation(error)
+                }
+            })?
+            .into_pipeline()
     }
+}
+
+/// Name each input of one kind `<kind>:<label>`, an unlabelled one by its
+/// 1-based position. A label outside the allowed form, or a name two inputs
+/// share, fails, so a name in a diagnostic always means one input.
+fn labeled_sources(
+    kind: &str,
+    inputs: Vec<(Option<String>, String)>,
+) -> Result<Vec<(String, String)>, PipelineError> {
+    let invalid = || {
+        PipelineError::Compilation(Box::new(RuleContentError::new(
+            RuleContentErrorCode::InvalidLabel,
+            None,
+        )))
+    };
+    let mut named = Vec::<(String, String)>::with_capacity(inputs.len());
+    for (index, (label, raw)) in inputs.into_iter().enumerate() {
+        let label = label.unwrap_or_else(|| (index + 1).to_string());
+        if !(1..=64).contains(&label.len())
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(invalid());
+        }
+        let source = format!("{kind}:{label}");
+        if named.iter().any(|(existing, _)| *existing == source) {
+            return Err(invalid());
+        }
+        named.push((source, raw));
+    }
+    Ok(named)
 }
 
 impl Pipeline {
@@ -1103,6 +1201,8 @@ impl Pipeline {
 mod canonical_embedding_tests;
 #[cfg(test)]
 mod detailed_scan_tests;
+#[cfg(test)]
+mod rule_content_tests;
 
 #[cfg(test)]
 mod test_support;
@@ -1300,7 +1400,7 @@ telltale:
             .unwrap();
         assert_eq!(
             error.source().unwrap().to_string(),
-            "duplicate rule id: network.download"
+            "rule_content_duplicate_id"
         );
     }
 

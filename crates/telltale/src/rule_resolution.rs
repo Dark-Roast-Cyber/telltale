@@ -4,8 +4,9 @@
 //! documents, merged by tier, then overrides and an optional policy.
 //!
 //! Callers discover the files (the CLI from its config roots); this module
-//! only reads the paths it is given. [`crate::Pipeline::builder`] is the
-//! simpler additive path for embedders that do not use rule folders.
+//! only reads the paths it is given. [`crate::Pipeline::builder`] passes its
+//! documents as text through the same resolution, so the CLI and an embedding
+//! host resolve the same content the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -17,7 +18,7 @@ use telltale_rules::package::{
 };
 use telltale_rules::{
     CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode,
-    RuleOverrideDocument, bundled_default_rules, parse_rule_policy,
+    RuleOverrideDocument, RuleOverrideError, bundled_default_rules, parse_rule_policy,
 };
 
 use crate::{Pipeline, PipelineError};
@@ -66,6 +67,140 @@ impl RuleResolution {
     }
 }
 
+/// Closed reasons [`crate::PipelineBuilder::build`] rejects rule content.
+/// Match these, not message text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RuleContentErrorCode {
+    /// An input label is empty, longer than 64 characters, has a character
+    /// outside `A-Z a-z 0-9 . _ -`, or names two inputs of one kind.
+    InvalidLabel,
+    /// An organization rule document or an override document does not parse.
+    InvalidDocument,
+    /// An override document declares a version other than 1.
+    UnsupportedVersion,
+    /// A definition ID repeats within one tier, across kinds, or where the
+    /// tier only adds; or a replacement changes the Rule v2 id it replaces.
+    DuplicateId,
+    /// An override entry has an empty `rule_id` or `reason`, or sets nothing.
+    InvalidOverride,
+    /// An override names a `rule_id` that no rule in the content has.
+    UnknownRuleId,
+}
+
+impl RuleContentErrorCode {
+    /// Stable text for the code, for logs and metrics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidLabel => "rule_content_invalid_label",
+            Self::InvalidDocument => "rule_content_invalid_document",
+            Self::UnsupportedVersion => "rule_content_unsupported_version",
+            Self::DuplicateId => "rule_content_duplicate_id",
+            Self::InvalidOverride => "rule_content_invalid_override",
+            Self::UnknownRuleId => "rule_content_unknown_rule_id",
+        }
+    }
+}
+
+/// Rule content the builder rejected: a closed code and the input it
+/// concerns, never document text, rule IDs or paths. `Display` is the code.
+/// It is the `Error::source()` of [`crate::PipelineError::Compilation`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleContentError {
+    code: RuleContentErrorCode,
+    document: Option<String>,
+}
+
+impl RuleContentError {
+    pub(crate) fn new(code: RuleContentErrorCode, document: Option<String>) -> Self {
+        Self { code, document }
+    }
+
+    pub fn code(&self) -> RuleContentErrorCode {
+        self.code
+    }
+
+    /// The input the failure concerns, as `<kind>:<label>`: `organization` or
+    /// `override` with the caller's label or the input's 1-based position among
+    /// its kind, `explicit:<n>` for the n-th `rules_document`,
+    /// `builtin:telltale.default`,
+    /// or `package:<id>@<version>:<origin>#document:<n>` with the ID and
+    /// version the package declares. `None` when no single input is to blame.
+    pub fn document(&self) -> Option<&str> {
+        self.document.as_deref()
+    }
+}
+
+impl std::fmt::Display for RuleContentError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code.as_str())
+    }
+}
+
+impl std::error::Error for RuleContentError {}
+
+/// A content failure with its full message, which can name paths and rule
+/// IDs. The CLI shows the message; the builder keeps only the code and source.
+#[derive(Debug)]
+pub(crate) struct ContentFailure {
+    code: RuleContentErrorCode,
+    source: Option<String>,
+    message: String,
+}
+
+impl ContentFailure {
+    fn new(code: RuleContentErrorCode, source: Option<&str>, message: String) -> Self {
+        Self {
+            code,
+            source: source.map(str::to_owned),
+            message,
+        }
+    }
+
+    pub(crate) fn without_message(&self) -> RuleContentError {
+        RuleContentError::new(self.code, self.source.clone())
+    }
+}
+
+impl std::fmt::Display for ContentFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ContentFailure {}
+
+/// No tier supplied any rule document.
+#[derive(Debug)]
+pub(crate) struct NoRuleDocuments;
+
+impl std::fmt::Display for NoRuleDocuments {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "no rule documents loaded; remove --no-default-rules or pass at least one --rules file",
+        )
+    }
+}
+
+impl std::error::Error for NoRuleDocuments {}
+
+/// Rule content as named text, by tier: everything [`resolve_rule_content`]
+/// resolves. Names label sources in diagnostics and messages.
+pub(crate) struct RuleContent {
+    pub(crate) mode: RuleLoadMode,
+    pub(crate) community: CommunityRules,
+    /// Rule packages: (location, text).
+    pub(crate) packages: Vec<(String, String)>,
+    /// Rule files at the organization, deployment, local or explicit tier:
+    /// (tier, source, text), in load order within each tier.
+    pub(crate) files: Vec<(RuleTier, String, String)>,
+    /// Parsed documents at the explicit tier, after `files`.
+    pub(crate) documents: Vec<(String, LoadedRules)>,
+    /// Override documents: (source, text), applied in order.
+    pub(crate) overrides: Vec<(String, String)>,
+    pub(crate) policy: Option<String>,
+}
+
 /// Resolve rule content. `documents` are in-memory rule content, labelled by
 /// source, loaded at the explicit tier: additive, so a definition ID that any
 /// other tier already has is an error. `replacements` is text to use in place
@@ -74,7 +209,8 @@ impl RuleResolution {
 /// Every file is one or more Rule v2 documents; a Rule v1 document fails.
 /// Definitions merge by compiled id (the Rule v2 `name`): a higher tier
 /// replaces a lower one in place, and must keep its UUID. An id twice within one tier, or a
-/// UUID on two names, is an error.
+/// UUID on two names, is an error. Every named file is read before any is
+/// parsed; `resolve_rule_content` does the rest.
 pub fn resolve_rule_set(
     pack_paths: &RulePackPaths,
     explicit_rule_paths: &[PathBuf],
@@ -91,28 +227,70 @@ pub fn resolve_rule_set(
         .iter()
         .flat_map(|(path, raw)| [(path.clone(), *raw), (canonical_or_original(path), *raw)])
         .collect::<BTreeMap<_, _>>();
-    let (documents, packages) = load_rule_documents(
-        pack_paths,
-        explicit_rule_paths,
-        documents,
-        mode,
-        &replacements,
-    )?;
-    if documents.is_empty() {
-        return Err(
-            "no rule documents loaded; remove --no-default-rules or pass at least one --rules file"
-                .into(),
-        );
+    let read = |path: &Path| read_source(path, &replacements);
+    let packages = pack_paths
+        .packages
+        .iter()
+        .map(|path| Ok((source_label_path(path), read(path)?)))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut managed_paths = BTreeSet::new();
+    let mut files = Vec::new();
+    for (tier, paths) in [
+        (RuleTier::Organization, &pack_paths.organization),
+        (RuleTier::Deployment, &pack_paths.deployment),
+        (RuleTier::Local, &pack_paths.local),
+    ] {
+        for path in paths {
+            managed_paths.insert(canonical_or_original(path));
+            files.push((tier, file_source(tier, path), read(path)?));
+        }
     }
+    for path in explicit_rule_paths {
+        if !managed_paths.contains(&canonical_or_original(path)) {
+            let tier = RuleTier::Explicit;
+            files.push((tier, file_source(tier, path), read(path)?));
+        }
+    }
+    let overrides = override_paths
+        .iter()
+        .map(|path| Ok((path.display().to_string(), read(path)?)))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    resolve_rule_content(RuleContent {
+        mode,
+        community: pack_paths.community,
+        packages,
+        files,
+        documents,
+        overrides,
+        policy: policy_path.map(read).transpose()?,
+    })
+}
 
-    let policy = match policy_path {
-        Some(path) => Some(parse_rule_policy(&read_source(path, &replacements)?)?),
-        None => None,
-    };
-
+/// Merge the tiers of `content`, apply its overrides in order, and compile
+/// with its policy: the one resolution the CLI, hooks and the embedding
+/// builder share.
+pub(crate) fn resolve_rule_content(
+    content: RuleContent,
+) -> Result<RuleResolution, Box<dyn std::error::Error>> {
+    let RuleContent {
+        mode,
+        community,
+        packages,
+        files,
+        documents,
+        overrides,
+        policy,
+    } = content;
+    let (documents, packages) = load_rule_documents(mode, community, packages, files, documents)?;
+    if documents.is_empty() {
+        return Err(Box::new(NoRuleDocuments));
+    }
+    let policy = policy.as_deref().map(parse_rule_policy).transpose()?;
     let (mut content, mut diagnostics) = merge_rule_documents(documents)?;
     diagnostics.packages = packages;
-    apply_rule_overrides_from_paths(&mut content, override_paths, &replacements)?;
+    for (source, raw) in &overrides {
+        apply_rule_override(&mut content, source, raw)?;
+    }
     Ok(RuleResolution {
         rule_set: content.compile(policy.as_ref())?,
         content,
@@ -121,7 +299,7 @@ pub fn resolve_rule_set(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum RuleTier {
+pub(crate) enum RuleTier {
     Builtin,
     Package,
     Organization,
@@ -156,14 +334,13 @@ struct RuleDocument {
 }
 
 fn load_rule_documents(
-    pack_paths: &RulePackPaths,
-    explicit_rule_paths: &[PathBuf],
-    extra_documents: Vec<(String, LoadedRules)>,
     mode: RuleLoadMode,
-    replacements: &BTreeMap<PathBuf, &str>,
+    community: CommunityRules,
+    packages: Vec<(String, String)>,
+    files: Vec<(RuleTier, String, String)>,
+    extra_documents: Vec<(String, LoadedRules)>,
 ) -> Result<(Vec<RuleDocument>, Vec<RulePackageSummary>), Box<dyn std::error::Error>> {
     let mut documents = Vec::new();
-    let mut managed_paths = BTreeSet::new();
     if matches!(mode, RuleLoadMode::IncludeDefault) {
         documents.push(RuleDocument {
             tier: RuleTier::Builtin,
@@ -171,25 +348,20 @@ fn load_rule_documents(
             rules: bundled_default_rules()?,
         });
     }
-    let packages = load_package_documents(pack_paths, mode, &mut documents, replacements)?;
-
-    for (tier, paths) in [
-        (RuleTier::Organization, &pack_paths.organization),
-        (RuleTier::Deployment, &pack_paths.deployment),
-        (RuleTier::Local, &pack_paths.local),
-    ] {
-        for path in paths {
-            managed_paths.insert(canonical_or_original(path));
-            documents.push(load_rule_document(tier, path, replacements)?);
-        }
-    }
-
-    for path in explicit_rule_paths {
-        let canonical = canonical_or_original(path);
-        if managed_paths.contains(&canonical) {
-            continue;
-        }
-        documents.push(load_rule_document(RuleTier::Explicit, path, replacements)?);
+    let packages = load_package_documents(mode, community, packages, &mut documents)?;
+    for (tier, source, raw) in files {
+        let rules = LoadedRules::parse(&raw).map_err(|error| {
+            ContentFailure::new(
+                RuleContentErrorCode::InvalidDocument,
+                Some(&source),
+                format!("invalid rule document '{source}': {error}"),
+            )
+        })?;
+        documents.push(RuleDocument {
+            tier,
+            source,
+            rules,
+        });
     }
     for (source, rules) in extra_documents {
         documents.push(RuleDocument {
@@ -205,34 +377,28 @@ fn load_rule_documents(
 /// defaults, the embedded community snapshot is omitted but an installed
 /// community package still loads, like any other managed content.
 fn load_package_documents(
-    pack_paths: &RulePackPaths,
     mode: RuleLoadMode,
+    community: CommunityRules,
+    packages: Vec<(String, String)>,
     documents: &mut Vec<RuleDocument>,
-    replacements: &BTreeMap<PathBuf, &str>,
 ) -> Result<Vec<RulePackageSummary>, Box<dyn std::error::Error>> {
-    let community = match (mode, pack_paths.community) {
+    let community = match (mode, community) {
         (RuleLoadMode::CustomOnly, CommunityRules::Embedded) => CommunityRules::SuppliedOnly,
         (_, community) => community,
     };
-    let installed = pack_paths
-        .packages
+    let installed = packages
         .iter()
-        .map(|path| {
-            RulePackage::parse(&read_source(path, replacements)?).map_err(|error| {
-                format!(
-                    "invalid rule package '{}': {error}",
-                    source_label_path(path)
-                )
-                .into()
-            })
+        .map(|(location, raw)| {
+            RulePackage::parse(raw)
+                .map_err(|error| format!("invalid rule package '{location}': {error}").into())
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
     let mut summaries = Vec::new();
     for resolved in resolve_rule_packages(community, installed)? {
         summaries.push(resolved.summary());
         let location = match resolved.origin {
-            PackageOrigin::Embedded => "embedded".to_string(),
-            PackageOrigin::Supplied(index) => source_label_path(&pack_paths.packages[index]),
+            PackageOrigin::Embedded => "embedded",
+            PackageOrigin::Supplied(index) => packages[index].0.as_str(),
         };
         let package = resolved.package;
         let identity = format!("{}@{}", package.id(), package.version());
@@ -247,20 +413,9 @@ fn load_package_documents(
     Ok(summaries)
 }
 
-fn load_rule_document(
-    tier: RuleTier,
-    path: &Path,
-    replacements: &BTreeMap<PathBuf, &str>,
-) -> Result<RuleDocument, Box<dyn std::error::Error>> {
-    let source = format!("{}:{}#document:0", tier.name(), source_label_path(path));
-    let raw = read_source(path, replacements)?;
-    let rules = LoadedRules::parse(&raw)
-        .map_err(|error| format!("invalid rule document '{source}': {error}"))?;
-    Ok(RuleDocument {
-        tier,
-        source,
-        rules,
-    })
+/// A rule file's source: `<tier>:<path>#document:0`.
+fn file_source(tier: RuleTier, path: &Path) -> String {
+    format!("{}:{}#document:0", tier.name(), source_label_path(path))
 }
 
 struct DefinitionLocation {
@@ -331,8 +486,12 @@ fn merge_rule_documents(
             replaced_sources: location.replaced_sources,
         })
         .collect();
+    // Names are unique by now; a Rule v2 id on two names is what remains.
+    let content = LoadedRules::from_definitions(definitions).map_err(|error| {
+        ContentFailure::new(RuleContentErrorCode::DuplicateId, None, error.to_string())
+    })?;
     Ok((
-        LoadedRules::from_definitions(definitions)?,
+        content,
         RuleResolutionDiagnostics {
             sources,
             provenance,
@@ -348,12 +507,15 @@ fn duplicate_definition_error(
     second_kind: DefinitionKind,
     second_source: &str,
 ) -> Box<dyn std::error::Error> {
-    format!(
-        "duplicate rule id: {id} ({} from {first_source}; {} from {second_source})",
-        first_kind.as_str(),
-        second_kind.as_str(),
-    )
-    .into()
+    Box::new(ContentFailure::new(
+        RuleContentErrorCode::DuplicateId,
+        Some(second_source),
+        format!(
+            "duplicate rule id: {id} ({} from {first_source}; {} from {second_source})",
+            first_kind.as_str(),
+            second_kind.as_str(),
+        ),
+    ))
 }
 
 /// Add `definition`, or let it replace the definition with its id from a
@@ -394,12 +556,15 @@ fn upsert_definition(
     if let (Some(old), Some(new)) = (replaced.uuid(), definition.uuid())
         && old != new
     {
-        return Err(format!(
-            "rule '{id}' from {source} replaces the rule from {} but its Rule v2 id {new} differs \
-             from {old}; a replacement keeps the id of the rule it replaces",
-            existing.source
-        )
-        .into());
+        return Err(Box::new(ContentFailure::new(
+            RuleContentErrorCode::DuplicateId,
+            Some(source),
+            format!(
+                "rule '{id}' from {source} replaces the rule from {} but its Rule v2 id {new} \
+                 differs from {old}; a replacement keeps the id of the rule it replaces",
+                existing.source
+            ),
+        )));
     }
     definitions[existing.index] = definition;
     existing.replaced_sources.push(existing.source.clone());
@@ -424,18 +589,32 @@ fn source_label_path(path: &Path) -> String {
     }
 }
 
-fn apply_rule_overrides_from_paths(
+/// Parse and apply one override document named `source`.
+fn apply_rule_override(
     content: &mut LoadedRules,
-    override_paths: &[PathBuf],
-    replacements: &BTreeMap<PathBuf, &str>,
+    source: &str,
+    raw: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for path in override_paths {
-        let raw = read_source(path, replacements)?;
-        let document = serde_yaml::from_str::<RuleOverrideDocument>(&raw)
-            .map_err(|error| format!("invalid rule override file '{}': {error}", path.display()))?;
-        content.apply_override_document(&document, path)?;
-    }
-    Ok(())
+    let document = serde_yaml::from_str::<RuleOverrideDocument>(raw).map_err(|error| {
+        ContentFailure::new(
+            RuleContentErrorCode::InvalidDocument,
+            Some(source),
+            format!("invalid rule override file '{source}': {error}"),
+        )
+    })?;
+    content
+        .apply_override_document(&document, source)
+        .map_err(|error| {
+            let code = match &error {
+                RuleOverrideError::UnsupportedVersion(_) => {
+                    RuleContentErrorCode::UnsupportedVersion
+                }
+                RuleOverrideError::UnknownRuleId(_) => RuleContentErrorCode::UnknownRuleId,
+                // `InvalidEntry`, and any reason added later, is an invalid override.
+                _ => RuleContentErrorCode::InvalidOverride,
+            };
+            ContentFailure::new(code, Some(source), error.to_string()).into()
+        })
 }
 
 /// The replacement text for `path`, else the file's contents.

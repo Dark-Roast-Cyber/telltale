@@ -131,7 +131,7 @@ fn pipeline_error_characterization_builder_diagnostics() {
     assert_eq!(duplicate.to_string(), "pipeline_compilation_failed");
     assert_eq!(
         duplicate.source().unwrap().to_string(),
-        "duplicate rule id: custom.error_contract"
+        "rule_content_duplicate_id"
     );
     assert!(matches!(duplicate, PipelineError::Compilation(_)));
     assert!(
