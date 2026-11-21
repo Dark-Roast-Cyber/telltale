@@ -166,7 +166,12 @@ escaping rules.
 - Scan, watch and bounded discovery share these candidates. Watch subscribes to
   OpenCode directories nonrecursively unless another selected source requires
   recursion there, maps an arbitrary configured filename's WAL to its main file,
-  and ignores its reader-generated SHM/journal changes. State, JSONL and outbox
+  and ignores its reader-generated SHM/journal changes. Watch re-checks SQLite
+  stores briefly after a change, so a commit that becomes visible after its
+  write event is read without waiting for the next change; the re-check reads
+  only the leading wal-index header bytes of the SHM file, scans the store again
+  only if its shared-memory header changed, and that scan can consume an
+  iteration. State, JSONL and outbox
   paths must still be outside watched source directories.
   For a parent used solely by an arbitrary override, unrelated sibling events
   are ignored as well. Other selected source roots keep their own coverage.

@@ -24,6 +24,7 @@ use notify::{
 use crate::discovery::discover_watch_roots_with_projects;
 use crate::event::{PrivacySanitizer, SanitizationContext};
 use crate::file_lock::normalized_path;
+use telltale_schema::clients::SourceKind;
 use telltale_schema::source::Source;
 
 use super::discovery::{
@@ -61,6 +62,21 @@ const WATCH_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_NOTIFICATION_CAPACITY: usize = 256;
 const WATCH_EVENT_PATH_CAPACITY: usize = 64;
 const WATCH_PENDING_PATH_CAPACITY: usize = 4096;
+/// Delays after a scan of a SQLite store at which its commit sample is re-read.
+/// SQLite writes a commit's WAL frames, which notify, before it publishes the
+/// commit to readers in `-shm`, which does not; a scan woken by the write can
+/// still read the previous snapshot. A bounded window catches that late
+/// publication without rescanning an unchanged store.
+const SQLITE_COMMIT_RECHECK_DELAYS: [Duration; 4] = [
+    Duration::from_millis(250),
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+    Duration::from_secs(10),
+];
+/// The leading bytes of `-shm`: both wal-index header copies, which every
+/// published commit rewrites, compared as opaque bytes. The reader marks that
+/// follow change whenever a reader, including the watcher's own scan, starts.
+const SQLITE_COMMIT_SAMPLE_LEN: usize = 96;
 
 /// The startup snapshot and subsequent scan results, never reread on idle wakeups.
 struct WatchHeartbeat {
@@ -379,6 +395,7 @@ pub(crate) fn run_watch(
     };
     let mut remaining = config.trigger.iterations;
     let mut last_scan_completed: Option<Instant> = None;
+    let mut sqlite_rechecks = BTreeMap::new();
     let idle_delivery = !config.execution.dry_run && config.execution.sinks.has_persistent_replay();
     if idle_delivery {
         report_idle_delivery_failures(
@@ -440,7 +457,15 @@ pub(crate) fn run_watch(
                 last_delivery_completed = Instant::now();
                 continue;
             }
-            match inbox.rx.recv_timeout(WATCH_SHUTDOWN_POLL) {
+            let now = Instant::now();
+            take_due_sqlite_rechecks(&mut sqlite_rechecks, &mut pending, now);
+            if !pending.is_empty() {
+                break;
+            }
+            let wait = next_sqlite_recheck(&sqlite_rechecks).map_or(WATCH_SHUTDOWN_POLL, |due| {
+                due.saturating_duration_since(now).min(WATCH_SHUTDOWN_POLL)
+            });
+            match inbox.rx.recv_timeout(wait) {
                 Ok(event) => pending.absorb_with_filter(&event, &inbox.filter),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
@@ -476,6 +501,13 @@ pub(crate) fn run_watch(
         let heartbeat_scan = heartbeat
             .as_ref()
             .is_some_and(|heartbeat| heartbeat.is_due(unix_ms_now(), Instant::now()));
+        // Sample before widening clears the changed paths.
+        let samples = sample_sqlite_sources(
+            &pending,
+            heartbeat_scan,
+            &source_index,
+            &mut sqlite_rechecks,
+        );
         if heartbeat_scan {
             pending.require_full_scan();
         }
@@ -497,6 +529,17 @@ pub(crate) fn run_watch(
         #[cfg(target_os = "macos")]
         sqlite_metadata.before_scan(&targets);
         let result = run_scan(scan_config, targets, StateSavePolicy::OnChange)?;
+        let scanned = Instant::now();
+        sqlite_rechecks.extend(samples.into_iter().map(|(path, sample)| {
+            (
+                path,
+                SqliteCommitRecheck {
+                    sample,
+                    scanned,
+                    next: 0,
+                },
+            )
+        }));
         inbox.check_error()?;
         last_delivery_completed = Instant::now();
         if let Some(heartbeat) = &mut heartbeat {
@@ -509,6 +552,11 @@ pub(crate) fn run_watch(
         }
         if let Some((sources, discovery)) = result.full_scan_discovery {
             (source_index, watch_discovery) = watch_index_from_sources(sources, discovery);
+            sqlite_rechecks.retain(|path, _| {
+                source_index
+                    .get(path)
+                    .is_some_and(|source| source.kind == SourceKind::Sqlite)
+            });
             #[cfg(target_os = "macos")]
             sqlite_metadata.reconcile(&source_index);
         }
@@ -583,6 +631,99 @@ fn collect_watch_events_for(
             }
         }
     }
+}
+
+/// A changed SQLite store's commit sample from before its last scan.
+struct SqliteCommitRecheck {
+    sample: [u8; SQLITE_COMMIT_SAMPLE_LEN],
+    scanned: Instant,
+    next: usize,
+}
+
+/// A plain read of the leading `-shm` bytes; never opens the database. A
+/// missing or shorter file means there is nothing to compare.
+fn sqlite_commit_sample(database: &Path) -> Option<[u8; SQLITE_COMMIT_SAMPLE_LEN]> {
+    use std::io::Read;
+    let mut sample = [0; SQLITE_COMMIT_SAMPLE_LEN];
+    std::fs::File::open(sqlite_sidecar_path(database, "-shm"))
+        .and_then(|mut file| file.read_exact(&mut sample))
+        .ok()?;
+    Some(sample)
+}
+
+/// Sample the SQLite stores a scan is about to read, ending their earlier
+/// windows; the scan restarts them. A full scan, including one a heartbeat
+/// widens, samples every indexed store, because rescans and overflow clear
+/// the changed paths. A changed path not yet indexed is sampled when a `-shm`
+/// sits beside it, so a new store's first commit is covered too.
+fn sample_sqlite_sources(
+    pending: &PendingWatchChanges,
+    full_scan: bool,
+    source_index: &BTreeMap<PathBuf, Source>,
+    rechecks: &mut BTreeMap<PathBuf, SqliteCommitRecheck>,
+) -> Vec<(PathBuf, [u8; SQLITE_COMMIT_SAMPLE_LEN])> {
+    let full_scan = full_scan || pending.saw_rescan || pending.saw_remove;
+    let indexed = source_index
+        .iter()
+        .filter(|(_, source)| source.kind == SourceKind::Sqlite)
+        .map(|(key, _)| key.clone())
+        .filter(|_| full_scan);
+    let changed = pending
+        .paths
+        .iter()
+        .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
+        .filter(|key| {
+            source_index
+                .get(key)
+                .is_none_or(|source| source.kind == SourceKind::Sqlite)
+        });
+    let keys = indexed.chain(changed).collect::<BTreeSet<_>>();
+    keys.into_iter()
+        .filter_map(|key| {
+            rechecks.remove(&key);
+            // Re-checks read the same canonical path that the scan reads.
+            let sample = sqlite_commit_sample(&key)?;
+            Some((key, sample))
+        })
+        .collect()
+}
+
+/// Queue a scan of each store whose sample changed since its scan; drop a
+/// window after its last delay.
+fn take_due_sqlite_rechecks(
+    rechecks: &mut BTreeMap<PathBuf, SqliteCommitRecheck>,
+    pending: &mut PendingWatchChanges,
+    now: Instant,
+) {
+    rechecks.retain(|path, recheck| {
+        let Some(delay) = SQLITE_COMMIT_RECHECK_DELAYS.get(recheck.next) else {
+            return false;
+        };
+        if now < recheck.scanned + *delay {
+            return true;
+        }
+        recheck.next += 1;
+        // SQLite truncates and rebuilds `-shm` when a first connection
+        // reopens, so an unreadable sample waits for the next delay.
+        match sqlite_commit_sample(path) {
+            Some(sample) if sample != recheck.sample => {
+                pending.paths.insert(path.clone());
+                false
+            }
+            _ => recheck.next < SQLITE_COMMIT_RECHECK_DELAYS.len(),
+        }
+    });
+}
+
+fn next_sqlite_recheck(rechecks: &BTreeMap<PathBuf, SqliteCommitRecheck>) -> Option<Instant> {
+    rechecks
+        .values()
+        .filter_map(|recheck| {
+            SQLITE_COMMIT_RECHECK_DELAYS
+                .get(recheck.next)
+                .map(|delay| recheck.scanned + *delay)
+        })
+        .min()
 }
 
 enum WatchScanAction {
@@ -1414,6 +1555,123 @@ mod tests {
 
         let idle = PendingWatchChanges::default();
         assert!(matches!(idle.scan_action(&index), WatchScanAction::Skip));
+    }
+
+    #[test]
+    fn sqlite_rechecks_sample_every_indexed_store_for_a_full_or_widened_scan() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let first = root.join("first.sqlite");
+        let second = root.join("second.sqlite");
+        let jsonl = root.join("session.jsonl");
+        std::fs::write(sqlite_sidecar_path(&first, "-shm"), [1; 96]).unwrap();
+        std::fs::write(sqlite_sidecar_path(&second, "-shm"), [2; 96]).unwrap();
+        std::fs::write(sqlite_sidecar_path(&jsonl, "-shm"), [3; 96]).unwrap();
+        let source = |path: &Path, kind| Source {
+            path: path.to_path_buf(),
+            client: ClientId::OpenCode,
+            source_id: "synthetic".into(),
+            kind,
+        };
+        let index = BTreeMap::from([
+            (first.clone(), source(&first, SourceKind::Sqlite)),
+            (second.clone(), source(&second, SourceKind::Sqlite)),
+            (jsonl.clone(), source(&jsonl, SourceKind::Jsonl)),
+        ]);
+        let expected = vec![(first.clone(), [1; 96]), (second.clone(), [2; 96])];
+        let mut rechecks = BTreeMap::new();
+        // A heartbeat widens a scan woken by one store's WAL write.
+        let mut woken = PendingWatchChanges::default();
+        woken.paths.insert(first.clone());
+        assert_eq!(
+            sample_sqlite_sources(&woken, true, &index, &mut rechecks),
+            expected
+        );
+        // Overflow and rescan notifications clear the changed paths.
+        let mut rescan = PendingWatchChanges::default();
+        rescan.require_full_scan();
+        assert_eq!(
+            sample_sqlite_sources(&rescan, false, &index, &mut rechecks),
+            expected
+        );
+    }
+
+    #[test]
+    fn sqlite_rechecks_sample_a_new_store_beside_its_shm() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let new_store = root.join("new.sqlite");
+        let no_shm = root.join("no-shm.sqlite");
+        std::fs::write(&new_store, b"synthetic").unwrap();
+        std::fs::write(sqlite_sidecar_path(&new_store, "-shm"), [4; 96]).unwrap();
+        let mut pending = PendingWatchChanges::default();
+        pending.paths.insert(new_store.clone());
+        pending.paths.insert(no_shm);
+        assert_eq!(
+            sample_sqlite_sources(&pending, false, &BTreeMap::new(), &mut BTreeMap::new()),
+            vec![(new_store, [4; 96])]
+        );
+    }
+
+    #[test]
+    fn sqlite_recheck_of_an_unchanged_store_ends_after_its_last_delay() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("store.sqlite");
+        std::fs::write(sqlite_sidecar_path(&database, "-shm"), [7; 136]).unwrap();
+        let scanned = Instant::now();
+        let mut rechecks = BTreeMap::from([(
+            database.clone(),
+            SqliteCommitRecheck {
+                sample: [7; SQLITE_COMMIT_SAMPLE_LEN],
+                scanned,
+                next: 0,
+            },
+        )]);
+        let mut pending = PendingWatchChanges::default();
+        take_due_sqlite_rechecks(
+            &mut rechecks,
+            &mut pending,
+            scanned + Duration::from_millis(249),
+        );
+        assert_eq!(
+            next_sqlite_recheck(&rechecks),
+            Some(scanned + Duration::from_millis(250))
+        );
+        take_due_sqlite_rechecks(
+            &mut rechecks,
+            &mut pending,
+            scanned + Duration::from_millis(250),
+        );
+        // SQLite truncates and rebuilds `-shm` when a first connection reopens;
+        // an unreadable sample does not end the window.
+        std::fs::write(sqlite_sidecar_path(&database, "-shm"), [7; 10]).unwrap();
+        take_due_sqlite_rechecks(
+            &mut rechecks,
+            &mut pending,
+            scanned + Duration::from_secs(1),
+        );
+        assert_eq!(
+            next_sqlite_recheck(&rechecks),
+            Some(scanned + Duration::from_secs(3))
+        );
+        std::fs::write(sqlite_sidecar_path(&database, "-shm"), [7; 136]).unwrap();
+        take_due_sqlite_rechecks(
+            &mut rechecks,
+            &mut pending,
+            scanned + Duration::from_secs(3),
+        );
+        assert_eq!(
+            next_sqlite_recheck(&rechecks),
+            Some(scanned + Duration::from_secs(10))
+        );
+        take_due_sqlite_rechecks(
+            &mut rechecks,
+            &mut pending,
+            scanned + Duration::from_secs(10),
+        );
+        assert!(pending.is_empty());
+        assert!(rechecks.is_empty());
+        assert_eq!(next_sqlite_recheck(&rechecks), None);
     }
 
     #[test]
