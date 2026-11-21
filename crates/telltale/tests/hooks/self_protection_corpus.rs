@@ -3267,6 +3267,7 @@ fn evaluate_with(
             &[],
             &[line],
             std::slice::from_ref(&focus),
+            false,
             &mut telltale_core::hooks::engine::RecoveryBudget::start(),
         )
         .unwrap()

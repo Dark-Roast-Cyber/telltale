@@ -336,6 +336,8 @@ impl Engine {
     /// that is past capacity, because nothing else secures the verdict. Those
     /// stop at [`PIECE_SCAN_LIMIT`] instead, and so does the scan of a
     /// projection's lines together: past it, a projected call is not scanned.
+    /// A projection `past_budget` goes straight to the scans of its lines.
+    #[allow(clippy::too_many_arguments)]
     pub fn evaluate(
         &self,
         client: ClientId,
@@ -343,6 +345,7 @@ impl Engine {
         history: &[Line],
         pending: &[Line],
         focus: &[Focus],
+        past_budget: bool,
         budget: &mut RecoveryBudget,
     ) -> Result<Evaluation, EngineError> {
         let sizes: Vec<usize> = history.iter().map(|line| line.to_jsonl().len()).collect();
@@ -351,7 +354,11 @@ impl Engine {
         let mut failure_code = None;
         // With no history, the scan of `pending` alone is this one again.
         let mut alone = None;
-        if budget.admits(whole_bytes) {
+        // A projection past its budget holds more than Telltale takes in one
+        // scan: it is not scanned whole nor its variants together, so the
+        // time goes to its pieces, the command's first.
+        let pieces_only = past_budget && pending.len() > 1;
+        if !pieces_only && budget.admits(whole_bytes) {
             let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
             if !whole.source_failed {
@@ -365,7 +372,7 @@ impl Engine {
         }
         // A projection's variants scanned together come ahead of the piece
         // loop and are bound by the same limit: past it, none is scanned.
-        let late = pending.len() > 1 && !budget.pieces_in_time();
+        let late = pieces_only || (pending.len() > 1 && !budget.pieces_in_time());
         let mut best = if late {
             Evaluation::not_evaluated(focus.len(), 0)
         } else if let Some(alone) = alone {
@@ -2000,8 +2007,16 @@ mod recovery_tests {
     }
 
     fn evaluate_projected_with(
+        lines: (Vec<Line>, Vec<Focus>),
+        used: Duration,
+    ) -> (Evaluation, usize) {
+        evaluate_lines(lines, used, false)
+    }
+
+    fn evaluate_lines(
         (lines, focus): (Vec<Line>, Vec<Focus>),
         used: Duration,
+        past_budget: bool,
     ) -> (Evaluation, usize) {
         let (dir, engine) = engine();
         let mut budget = budget_used(used, 0.0);
@@ -2012,6 +2027,7 @@ mod recovery_tests {
                 &[],
                 &lines,
                 &focus,
+                past_budget,
                 &mut budget,
             )
             .unwrap();
@@ -2149,6 +2165,59 @@ mod recovery_tests {
         assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
         assert_eq!(evaluation.unevaluated_focus, 0);
         assert!(!says_unscanned(&evaluation));
+    }
+
+    /// An input past the projection budget whose variants Telltale accepts
+    /// together: a command of several chunks, its deny in the last chunk.
+    fn past_the_budget() -> (Vec<Line>, Vec<Focus>) {
+        let input = serde_json::json!({
+            "command": format!("echo {}; {DENY}", "a".repeat(9000)),
+            "d": "d".repeat(400_000),
+        });
+        let projection = crate::hooks::projection::project(&input).unwrap();
+        assert!(projection.past_budget);
+        projected(input)
+    }
+
+    /// Past the budget the call is not scanned whole, nor its variants
+    /// together: the piece loop starts at once, the command's chunks first,
+    /// and a deny in the last of them is found.
+    #[test]
+    fn a_projection_past_the_budget_goes_straight_to_its_pieces() {
+        let (evaluation, lines) = evaluate_lines(past_the_budget(), Duration::ZERO, true);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
+        assert_eq!(
+            evaluation.unevaluated_focus, lines,
+            "scanned piece by piece"
+        );
+    }
+
+    /// A command of several chunks, its deny in the last: variants Telltale
+    /// accepts together.
+    fn split_command() -> (Vec<Line>, Vec<Focus>) {
+        pieces(format!("echo {}; {DENY}", "a".repeat(9000)))
+    }
+
+    /// Variants the caller marks past the budget are never scanned together,
+    /// even where Telltale would accept them together: every focus is left to
+    /// the piece loop, which finds the deny.
+    #[test]
+    fn variants_past_the_budget_are_never_scanned_together() {
+        let (evaluation, lines) = evaluate_lines(split_command(), Duration::ZERO, true);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(
+            evaluation.unevaluated_focus, lines,
+            "scanned piece by piece"
+        );
+    }
+
+    /// The same variants within the budget are scanned together, as before.
+    #[test]
+    fn variants_within_the_budget_are_scanned_together() {
+        let (evaluation, _) = evaluate_lines(split_command(), Duration::ZERO, false);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(evaluation.unevaluated_focus, 0, "scanned together");
     }
 
     #[test]

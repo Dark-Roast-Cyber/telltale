@@ -263,8 +263,10 @@ group; failed cleanup cannot release a still-live slot.
   its piece limit under load, can still cost that verdict (threat model). The scans
   ahead of the piece loop are bounded too: the whole window only starts within the
   recovery budget, a call with no history is not scanned a second time on its own,
-  and a projected call's variants are not scanned at all once the piece limit has
-  passed (`pending_pieces_unscanned`, then `on_unevaluable`).
+  a projection past its budget is not scanned whole or with its variants together
+  but goes straight to its pieces, a longer command's first, and a projected call's
+  variants are not scanned at all once the piece limit has passed
+  (`pending_pieces_unscanned`, then `on_unevaluable`).
 - Waiting is bounded. A call waits 10 s for its session's lock, then gets the
   strict policy. The evaluator never records what its client stopped waiting for,
   and a client that gets no answer returns what was recorded or evaluates in-process

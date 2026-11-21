@@ -19,8 +19,10 @@
   `pending_input_separated`). An input of 1,025 to 2,048 values, previously
   unevaluable, is now projected in full. The work per call stays bounded by
   the same variant limit; a call with no session history is no longer scanned
-  twice ahead of the piece loop, and a projected call whose evaluation has
-  already passed the piece time limit is not scanned there at all: it records
+  twice ahead of the piece loop, a call past the projection budget goes
+  straight to the piece loop (its command's pieces first) instead of first
+  being scanned whole, and a projected call whose evaluation has already
+  passed the piece time limit is not scanned there at all: it records
   `pending_pieces_unscanned` and follows `on_unevaluable`.
 
 - **Destructive Git detection distinguishes more requests from plain previews.**

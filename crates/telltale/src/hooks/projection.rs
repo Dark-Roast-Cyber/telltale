@@ -125,6 +125,10 @@ pub struct Projection {
     /// a URL Telltale refuses had to be rewritten to be evaluated, and when
     /// the input is past the budget and part of it is in no variant.
     pub separated: bool,
+    /// Past the budget: a value, chunk or variant was left out. The variants
+    /// together then hold more than Telltale takes in one scan, and are
+    /// evaluated one by one, the command's first.
+    pub past_budget: bool,
 }
 
 struct Leaf {
@@ -590,6 +594,7 @@ pub fn project(input: &Value) -> Option<Projection> {
         return Some(Projection {
             variants,
             separated,
+            past_budget: !whole,
         });
     }
 
@@ -605,6 +610,7 @@ pub fn project(input: &Value) -> Option<Projection> {
             return Some(Projection {
                 variants: groups.into_iter().map(|group| variant(&[group])).collect(),
                 separated: true,
+                past_budget: false,
             });
         }
     }
@@ -631,6 +637,7 @@ pub fn project(input: &Value) -> Option<Projection> {
     Some(Projection {
         variants,
         separated: true,
+        past_budget: true,
     })
 }
 
@@ -1038,7 +1045,7 @@ mod tests {
         for (label, input) in past_the_budget(command) {
             let projection = project(&input).unwrap_or_else(|| panic!("{label}"));
             within_bounds(&projection.variants);
-            assert!(projection.separated, "{label}");
+            assert!(projection.separated && projection.past_budget, "{label}");
             for v in &projection.variants {
                 assert_eq!(v["command"], command, "{label}");
             }
@@ -1083,7 +1090,7 @@ mod tests {
             "b": "z".repeat(5000),
         });
         let projection = project(&input).unwrap();
-        assert!(!projection.separated);
+        assert!(!projection.separated && !projection.past_budget);
         assert_eq!(
             projection.variants,
             vec![

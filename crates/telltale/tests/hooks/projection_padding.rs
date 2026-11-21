@@ -245,9 +245,13 @@ fn past_the_budget(command: &str) -> Vec<(String, Value)> {
     ]
 }
 
-/// A denied command just over the anchor size.
-fn long_denied_commands() -> [String; 1] {
-    [format!("{DENIED}; echo {}", "a".repeat(1100))]
+/// A denied command just over the anchor size, and one of several chunks
+/// with the denied part in its last chunk.
+fn long_denied_commands() -> [String; 2] {
+    [
+        format!("{DENIED}; echo {}", "a".repeat(1100)),
+        format!("echo {}; {DENIED}", "a".repeat(9000)),
+    ]
 }
 
 /// The decision record of a Bash call with `input`, in a session of its own.
@@ -260,7 +264,8 @@ fn decision(h: &mut Harness, label: &str, input: Value) -> Value {
 
 /// An input past the projection budget is evaluated on a bounded set of
 /// variants that holds its command: a rule deny still decides, under both
-/// policies, whether the command is short or just over the anchor size.
+/// policies, whether the command is short, just over the anchor size, or
+/// several chunks long.
 #[test]
 fn an_input_past_the_projection_budget_keeps_a_rule_deny() {
     let mut cases = past_the_budget(DENIED);
