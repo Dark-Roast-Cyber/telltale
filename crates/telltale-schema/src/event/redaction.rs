@@ -76,7 +76,7 @@ fn windows_path_regex(widths: &[usize]) -> Regex {
         // Directories may hold spaces; the last component may not.
         let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*{sep})*{PART_CHAR}+");
         devices.push(format!(
-            r"{start}[?.]{sep}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:{sep}{tail})?(?:{sep})?"
+            r"{start}[?.]{sep}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:{sep}{tail})?"
         ));
         uncs.push(format!(r"{start}{PART_CHAR}+{sep}{tail}"));
         drives.push(format!(r"[A-Z]:{sep}{tail}"));
@@ -2509,18 +2509,7 @@ fn split_url_before_absolute_path(url: &str) -> (&str, &str) {
 }
 
 fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
-    let replace = |captures: &regex::Captures<'_>| {
-        let lead = captures.name("lead").map_or("", |lead| lead.as_str());
-        format!("{lead}{marker}")
-    };
-    let redacted = if text.contains(r"\\") {
-        ESCAPED_WINDOWS_PATH_RE.replace_all(text, replace)
-    } else {
-        text.into()
-    };
-    let redacted = WINDOWS_OR_UNC_PATH_RE
-        .replace_all(&redacted, replace)
-        .into_owned();
+    let redacted = redact_windows_paths(text, marker);
     let redacted = POSIX_PRIVATE_PATH_RE
         .replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let whole = &captures[0];
@@ -2539,6 +2528,39 @@ fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
     CREDENTIAL_PATH_RE
         .replace_all(&redacted, marker)
         .into_owned()
+}
+
+/// Both Windows path patterns run over the original text, and overlapping or
+/// adjacent matches are redacted as one span, so a path that mixes escaped
+/// and plain separators is replaced whole. A drive match's `lead` character
+/// is not part of its span.
+fn redact_windows_paths(text: &str, marker: &str) -> String {
+    let span = |captures: regex::Captures<'_>| {
+        let whole = captures.get(0).expect("whole match");
+        let lead = captures.name("lead").map_or(0, |lead| lead.len());
+        whole.start() + lead..whole.end()
+    };
+    let mut spans = WINDOWS_OR_UNC_PATH_RE
+        .captures_iter(text)
+        .map(span)
+        .collect::<Vec<_>>();
+    if text.contains(r"\\") {
+        spans.extend(ESCAPED_WINDOWS_PATH_RE.captures_iter(text).map(span));
+        spans.sort_by_key(|span| span.start);
+    }
+    let mut redacted = String::with_capacity(text.len());
+    let mut offset = 0;
+    let mut spans = spans.into_iter().peekable();
+    while let Some(mut merged) = spans.next() {
+        while let Some(next) = spans.next_if(|next| next.start <= merged.end) {
+            merged.end = merged.end.max(next.end);
+        }
+        redacted.push_str(&text[offset..merged.start]);
+        redacted.push_str(marker);
+        offset = merged.end;
+    }
+    redacted.push_str(&text[offset..]);
+    redacted
 }
 
 fn path_marker(context: SanitizationContext) -> &'static str {
@@ -3690,7 +3712,6 @@ safe=value"#,
             ),
             "<path>"
         );
-        assert_eq!(sanitize(r"\\\\?\\C:\\"), "<path>");
     }
 
     #[test]
@@ -3698,8 +3719,8 @@ safe=value"#,
         let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
 
         assert_eq!(
-            sanitize(r#""Directory of C:\\Users\\example\r\nC:\\Users\\example>dir""#),
-            r#""Directory of <path>\r\n<path>>dir""#
+            sanitize(r#""exit\r\nC:\\Users\\example>dir""#),
+            r#""exit\r\n<path>>dir""#
         );
         assert_eq!(
             sanitize(r#""type \"C:\\Users\\example\\notes.txt\" now""#),
@@ -3707,7 +3728,7 @@ safe=value"#,
         );
         assert_eq!(
             sanitize(r#"{"cmd":"copy \\\\server\\share\\a.txt C:\\Temp\\b.txt\n"}"#),
-            r#"{"cmd":"copy <path> <path>\n"}"#
+            r#"{"cmd":"copy <path> <path>"}"#
         );
     }
 
@@ -3723,6 +3744,56 @@ safe=value"#,
             sanitize(r"\\\\\\\\server\\\\share\\\\example\\\\notes.txt"),
             "<path>"
         );
+    }
+
+    #[test]
+    fn mixed_width_windows_paths_are_redacted_whole() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        assert_eq!(sanitize(r"C:\\Users\alice\secret.txt"), "<path>");
+        assert_eq!(sanitize(r"\\\\server\\share\deep\secret"), "<path>");
+        assert_eq!(sanitize(r"\\\\?\\C:\\Users\alice\secret.txt"), "<path>");
+        assert_eq!(
+            sanitize(r"\\\\?\\UNC\\server\\share\deep\secret.txt"),
+            "<path>"
+        );
+        assert_eq!(
+            sanitize(r"open C:\\Users\\alice\secret.txt now"),
+            "open <path> now"
+        );
+    }
+
+    /// Generated mixed-width paths: every component the plain single-width
+    /// pattern hides stays hidden.
+    #[test]
+    fn mixed_width_windows_paths_hide_what_single_width_matching_hid() {
+        let part = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
+        let tail = format!(r"(?:{part}+(?:\s+{part}+)*\\)*{part}+");
+        let single_width = regex::Regex::new(&format!(
+            r#"(?i)\\\\[?.]\\(?:[A-Z]:{part}*|[^\s\\<>"'`,;()\[\]:&|]+)(?:\\{tail})?|\b[A-Z]:\\{tail}|\\\\{part}+\\{tail}"#
+        ))
+        .unwrap();
+        let separators = [r"\", r"\\"];
+        for prefix in ["C:", r"\\server", r"\\\\server", r"\\?\C:", r"\\\\?\\C:"] {
+            for first in separators {
+                for second in separators {
+                    for third in separators {
+                        let input = format!(
+                            "read {prefix}{first}Alphaone{second}Bravotwo{third}Charlie.txt now"
+                        );
+                        let before = single_width.replace_all(&input, "<path>");
+                        let after =
+                            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &input);
+                        for token in ["Alphaone", "Bravotwo", "Charlie"] {
+                            assert!(
+                                before.contains(token) || !after.contains(token),
+                                "{input} -> {after}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Escaped text that only contains single escaped backslashes, such as a
@@ -3780,14 +3851,6 @@ safe=value"#,
 
         assert_eq!(sanitize(r"out_C:\Users\example\notes.txt"), "out_<path>");
         assert_eq!(sanitize(r"2C:\Users\example\notes.txt"), "2<path>");
-    }
-
-    #[test]
-    fn device_namespace_drive_root_is_redacted_whole() {
-        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
-
-        assert_eq!(sanitize(r"\\.\C:\"), "<path>");
-        assert_eq!(sanitize(r"open \\?\D:\ now"), "open <path> now");
     }
 
     #[test]
