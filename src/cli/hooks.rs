@@ -25,7 +25,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use telltale_core::hooks::config::{Config, OnError, RuleContent};
-use telltale_core::hooks::engine::{Engine, Limits};
+use telltale_core::hooks::engine::Engine;
+#[cfg(unix)]
+use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::evaluator;
 #[cfg(unix)]
 use telltale_core::hooks::evaluator::ClientOutcome;
@@ -795,7 +797,7 @@ fn hook(
     expect_enforce: bool,
 ) -> i32 {
     // The hook's one deadline counts from here (`Limits::hook_deadline`).
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     // A panic anywhere before the answer is caught, since most harnesses read
     // a crash as "run the call". A configuration whose loading panicked did
     // not load.
