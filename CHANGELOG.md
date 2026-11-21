@@ -29,13 +29,14 @@
   can emit once after upgrade.
 - **Encoded payload scoring requires an observable execution step.**
   `execution.encoded_payload` keeps its name, UUID and 50-point contribution
-  but now matches only three kinds of command. The first runs decoded output
+  but now matches three kinds of command. The first runs decoded output
   directly: it pipes it to a shell or to an interpreter reading standard
   input, substitutes it into `eval`, `source`, a shell or an interpreter,
   assigns it to a variable that `eval` runs, or passes it to PowerShell
-  `Invoke-Expression`. The second decodes with `certutil`. The third writes
-  decoded output to an executable-looking file (a script or binary extension,
-  or a path under `/tmp` or `/dev/shm`) and then runs a shell, interpreter or
+  `Invoke-Expression` or loads it as a script block or .NET assembly. The
+  second decodes with `certutil`. The third writes decoded output to an
+  executable-looking file (a script or binary extension, or a path under
+  `/tmp` or `/dev/shm`) followed by a run step: a shell, interpreter or
   `source` with a file, a `chmod` that adds execute, `start`, `call` or an
   explicit path. Every decode also matches the new zero-point hunt rule
   `obfuscation.decode` (`defense_evasion`), which marks it on the timeline, so
@@ -45,13 +46,15 @@
   after upgrade. Fixes #178.
 - **Object-storage uploads are matched by transfer direction.**
   `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. Its
-  session rule and native action now agree: an `aws s3 cp`, `gsutil cp` or
-  `rclone copy` request matches only when its first operand is local (a path,
-  standard input or a `file://` or HTTP URL) and a remote location follows.
-  Azure matches only the `az storage` upload and sync verbs of `blob`, `file`
-  and `fs`, and `az storage copy` from a local source. Downloads, copies between
-  two remote locations and storage inventory or settings commands such as
-  `az storage account list` no longer match, and a command run in the
+  session rule and native action now agree. An `aws s3 cp` or `gsutil cp`
+  request is excluded when its first operand is an `s3://` or `gs://`
+  location, and an `rclone copy` request when the word after the subcommand
+  is a remote, so a local source before a remote destination still matches.
+  Azure matches the `az storage` upload and sync verbs of `blob`, `file` and
+  `fs`, and `az storage copy` unless a source is an HTTP(S) URL. Downloads and
+  copies between two remote locations that name the remote source first,
+  and storage inventory or settings commands such as
+  `az storage account list`, no longer match, and a command run in the
   background beside one of them is still read on its own. The native action
   profile version rises to 11, which also covers the inline-execution and
   GitHub CLI changes above. The rule's behaviour fingerprint changes, so

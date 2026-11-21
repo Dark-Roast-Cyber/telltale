@@ -1626,18 +1626,28 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
     charge_tokens(tokens, budget)?;
     Ok(match client.as_str() {
         "gh" => publishes_cloud_credential(tokens),
-        "aws" | "gsutil" | "rclone" => tokens
+        // A copy is an upload unless it reads a remote source first. Option
+        // values are not parsed, so a value-taking option before a remote
+        // source reads as a local source.
+        "aws" | "gsutil" => tokens
             .iter()
-            .position(|s| matches!(s.as_str(), "cp" | "copy"))
+            .position(|s| s == "cp")
             .is_some_and(|position| {
-                // An upload names something local before the first remote
-                // location. A lone `-` is an operand (standard input); an
-                // option's value reads as local, so it cannot hide a source.
-                let mut words = tokens
+                tokens
                     .iter()
                     .skip(position + 1)
-                    .filter(|s| s.as_str() == "-" || !s.starts_with('-'));
-                words.next().is_some_and(|first| !remote(first)) && words.any(|s| remote(s))
+                    .find(|s| s.as_str() == "-" || !s.starts_with('-'))
+                    .is_none_or(|first| !object_url(first))
+            }),
+        // rclone options can take values with colons, so only the word right
+        // after the subcommand is read as the source.
+        "rclone" => tokens
+            .iter()
+            .position(|s| s.starts_with("copy"))
+            .is_some_and(|position| {
+                tokens
+                    .get(position + 1)
+                    .is_none_or(|first| !rclone_remote(first))
             }),
         "az" => tokens
             .iter()
@@ -1676,7 +1686,7 @@ fn publishes_cloud_credential(tokens: &[String]) -> bool {
 
 /// An `az storage` command that sends local content: an upload or sync verb
 /// of `blob`, `file` or `fs`, at most one word after the group, or a `copy`
-/// whose every source is local.
+/// with no HTTP(S) source.
 fn azure_upload(words: &[String]) -> bool {
     let verb = |word: &String| word.starts_with("upload") || word.starts_with("sync");
     match words {
@@ -1691,13 +1701,17 @@ fn azure_upload(words: &[String]) -> bool {
             _ => false,
         },
         [copy, rest @ ..] if copy == "copy" => {
-            // A source that does not start like a local path is remote.
-            let local = |value: &str| {
-                value.starts_with(['.', '/', '~', '$']) || value.as_bytes().get(1) == Some(&b':')
-            };
+            // Only an HTTP(S) source is remote.
+            let remote_source = |value: &str| scheme(value, "http:") || scheme(value, "https:");
             let mut sources = rest.iter().enumerate().filter_map(|(index, word)| {
                 let (option, value) = word.split_once('=').unwrap_or((word.as_str(), ""));
-                matches!(option, "-s" | "--s" | "-source" | "--source").then(|| {
+                let name = option
+                    .strip_prefix("--s")
+                    .or_else(|| option.strip_prefix("-s"));
+                name.is_some_and(|name| {
+                    name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                })
+                .then(|| {
                     if word.contains('=') {
                         value
                     } else {
@@ -1705,26 +1719,31 @@ fn azure_upload(words: &[String]) -> bool {
                     }
                 })
             });
-            sources.all(local)
+            !sources.any(remote_source)
         }
         _ => false,
     }
 }
 
-/// `s3://`, `gs://`, an on-the-fly backend (a leading colon) or a named
-/// remote: two or more word characters, dots or dashes before a colon that
-/// `//` does not follow. A drive letter or another URL scheme is local.
-fn remote(value: &str) -> bool {
-    let scheme = |prefix: &str| {
-        value
-            .get(..prefix.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-    };
-    scheme("s3://")
-        || scheme("gs://")
-        || value.starts_with(':')
+fn scheme(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+}
+
+/// An `s3://` or `gs://` location.
+fn object_url(value: &str) -> bool {
+    scheme(value, "s3://") || scheme(value, "gs://")
+}
+
+/// An rclone remote: an on-the-fly backend (a leading colon) or a name of a
+/// letter and one or more word characters, dots or dashes before a colon that
+/// `//` does not follow. A drive letter or a URL is local.
+fn rclone_remote(value: &str) -> bool {
+    value.starts_with(':')
         || value.split_once(':').is_some_and(|(name, rest)| {
             name.len() >= 2
+                && name.starts_with(|c: char| c.is_ascii_alphabetic())
                 && name
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
