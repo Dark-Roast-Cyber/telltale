@@ -326,6 +326,80 @@ fn default_effective_configuration_lists_the_rule_catalog_rules() {
     assert!(document.documents.is_empty());
 }
 
+/// Every entry's `enabled` flag and scores are the catalog's, for the bundled
+/// content with and without the process-chain pack and for tuned content.
+#[test]
+fn effective_configuration_agrees_with_the_rule_catalog_entry_by_entry() {
+    let tuned = Pipeline::builder().labeled_override_document(
+        "fleet-tuning",
+        overrides(
+            "  - rule_id: exfil.outbound_upload\n    reason: Retired.\n    enabled: false\n  \
+                 - rule_id: execution.shell\n    reason: Quieter.\n    score: 5\n",
+        ),
+    );
+    // An organization chain that replaces a bundled one by ID.
+    let replaced_chain = Pipeline::builder().organization_rules_document(
+        "title: Download followed by execution\n\
+             id: fcff0b3e-cbed-4bec-b561-9717dbce4abb\n\
+             name: chain.download_then_execute\n\
+             taxonomy: telltale\nstatus: stable\n\
+             correlation:\n    type: telltale_chain\n    categories: [download, execution]\n    \
+             within_calls: 2\n    order: ordered\n\
+             falsepositives:\n    - 'Synthetic.'\n\
+             telltale:\n    score: 40\n    explanation: 'Synthetic replacement.'\n",
+    );
+    let builders = [
+        ("bundled", Pipeline::builder()),
+        ("tuned", tuned),
+        ("replaced chain", replaced_chain),
+        ("synthetic", base_builder()),
+    ];
+    for (name, builder) in builders {
+        let pipeline = builder.build().unwrap();
+        for process_chain in [false, true] {
+            let mut options = DetailedEvaluationOptions::default();
+            options.process_chain = process_chain;
+            let fields =
+                |id: &str, enabled, session, action: Option<u64>, package: Option<&str>| {
+                    (
+                        id.to_owned(),
+                        enabled,
+                        session,
+                        action,
+                        package.map(str::to_owned),
+                    )
+                };
+            let document = pipeline.effective_configuration(&options).unwrap();
+            let catalog = pipeline.rule_catalog_document(&options).unwrap();
+            assert_eq!(
+                document
+                    .definitions
+                    .iter()
+                    .map(|entry| fields(
+                        &entry.id,
+                        entry.enabled,
+                        entry.session_score,
+                        entry.action_score,
+                        entry.package_id.as_deref(),
+                    ))
+                    .collect::<Vec<_>>(),
+                catalog
+                    .entries
+                    .iter()
+                    .map(|entry| fields(
+                        &entry.id,
+                        entry.enabled,
+                        entry.session_score,
+                        entry.action_score,
+                        entry.package_id.as_deref(),
+                    ))
+                    .collect::<Vec<_>>(),
+                "{name}, process_chain {process_chain}"
+            );
+        }
+    }
+}
+
 #[test]
 fn effective_configuration_shows_overrides_with_label_and_reason() {
     let document = effective(base_builder().labeled_override_document(
