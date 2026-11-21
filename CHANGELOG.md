@@ -47,7 +47,14 @@
   values within their own bounds are kept unless the cap on recorded
   replacements is reached. A rule condition that reads an omitted
   searchable text is not evaluated for that call (insufficient visibility)
-  rather than read as absent. A string whose normalized form is over its
+  rather than read as absent. Selectors over bounded tool values report
+  unavailable visibility the same way: `tool.arguments` and `tool.result`
+  with a replacement, and a text or fact read from those values (argument
+  and result text, command, path, URL, written path, argument keys) that is
+  absent while its field has a replacement, are not evaluated, in Rule v1
+  content as in native conditions. A URL, written-path or argument-key list
+  read beside a replacement is partial: a match on it counts and a no-match
+  is not evaluated (`SelectorResolution::is_partial`). A string whose normalized form is over its
   bound counts as over it. The unit is reported, never hidden: the source
   gets one content-free `scanner_error` per evaluated window with the new
   `error` value `canonical_values_bounded` (only when no unit of that window was
@@ -63,7 +70,7 @@
   agent-to-agent message text now gets the direct-text budget that commands,
   file bodies and patches already had; it is not read as a command.
   Detections for sessions holding such calls can appear once after upgrade
-  on a full-history scan, and the native action profile moves to 9, so
+  on a full-history scan, and the native action profile moves to 10, so
   every `semantic_identity` changes (replay identities do not); rebaseline
   as after a rule change. Event 3.0 and the JSON schemas are unchanged. API:
   each source's tool table declares which argument fields hold authored

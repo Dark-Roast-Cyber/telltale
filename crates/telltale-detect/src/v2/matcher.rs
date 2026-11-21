@@ -599,12 +599,23 @@ fn evaluate_resolved_predicate(
         budget.charge(bytes.saturating_add(predicate.expected_bytes))?;
         apply_operator(predicate, actual, expected)
     };
+    // A partial value may miss what it was not given: only a positive match
+    // on what it holds is confident.
+    let partial = resolved.is_partial();
+    let negated = matches!(
+        predicate.operator,
+        MatcherOperator::NotEquals | MatcherOperator::NotIn
+    );
     Ok(match result {
-        Ok(true) => (
+        Ok(true) if !(partial && negated) => (
             MatchState::Match,
             vec![predicate.selector.as_str().to_owned()],
         ),
-        Ok(false) => (MatchState::NoMatch, Vec::new()),
+        Ok(_) if partial => (
+            MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility),
+            Vec::new(),
+        ),
+        Ok(_) => (MatchState::NoMatch, Vec::new()),
         Err(reason) => (MatchState::NotEvaluated(reason), Vec::new()),
     })
 }

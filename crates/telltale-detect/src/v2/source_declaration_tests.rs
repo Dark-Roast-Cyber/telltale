@@ -326,3 +326,63 @@ fn restored_rows_add_facts_only_when_the_call_carries_the_operand() {
         );
     }
 }
+
+/// A Copilot CLI request with an argument value over its bound keeps its other
+/// arguments, and its raw request text is not kept beside them: the argument
+/// text selectors have no visibility into the call, while the command from a
+/// kept member is read.
+#[test]
+fn a_copilot_request_with_a_replaced_argument_has_no_argument_text_visibility() {
+    use super::{MatchState, MatcherSpec, NonEvaluationReason, SelectorId, SelectorPresence};
+    let items = json!([{"type":"function_call","name":"bash","call_id":"call-0",
+        "arguments":json!({"command":COMMAND,"description":"x".repeat(4_097)}).to_string(),
+        "status":"completed"}]);
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("copilot.log");
+    fs::write(
+        &path,
+        format!(
+            "2026-09-02T12:00:00Z [INFO] Workspace initialized: declared (checkpoints: 0)\n2026-09-02T12:00:01Z [INFO] Accumulated output items (1): {items}\n"
+        ),
+    )
+    .unwrap();
+    let batch = acquire_source(
+        &Source {
+            client: ClientId::Copilot,
+            kind: SourceKind::CopilotProcessLog,
+            source_id: "copilot.process_log".to_owned(),
+            path,
+        },
+        AcquisitionOptions::new(ObservedAt::new("2026-09-20T00:00:00Z").unwrap()),
+    )
+    .unwrap();
+    let [request] = batch.observations.as_slice() else {
+        panic!("one request")
+    };
+    let resolve = |name| {
+        super::SelectorRegistry::new()
+            .resolve(SelectorId::parse(name).unwrap(), request)
+            .unwrap()
+    };
+    assert_eq!(
+        resolve("compat.v1.arguments").presence(),
+        SelectorPresence::UnavailableVisibility
+    );
+    assert_eq!(
+        resolve("tool.searchable_arguments").presence(),
+        SelectorPresence::UnavailableVisibility
+    );
+    assert_eq!(
+        resolve("compat.v1.command").value(),
+        Some(&telltale_schema::observation::JsonValue::string(COMMAND))
+    );
+    let state = MatcherSpec::not_exists("compat.v1.arguments")
+        .compile()
+        .unwrap()
+        .evaluate(request)
+        .unwrap();
+    assert_eq!(
+        state.state(),
+        &MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility)
+    );
+}
