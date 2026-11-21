@@ -13,7 +13,8 @@ hook processes one after another, every one a PreToolUse Bash call with
 synthetic input:
 
 - small: a short command;
-- projected: a command of about 48 KB, which the hook projects into pieces;
+- projected: a short command beside 240 values of about 200 bytes, which the
+  hook projects into pieces;
 - past-budget: a short command beside 3,000 short values, past the projection
   budget.
 
@@ -327,8 +328,12 @@ def summarize(args, name: str, results: dict, records: list[dict], evaluator_rea
 
 def version(binary: Path) -> str | None:
     try:
-        out = subprocess.run([str(binary.resolve()), "hooks", "version"], capture_output=True, text=True, timeout=30)
-    except OSError:
+        with tempfile.TemporaryDirectory(prefix="ttlb-") as empty:
+            out = subprocess.run(
+                [str(binary.resolve()), "hooks", "version"], capture_output=True, text=True, timeout=30,
+                cwd=empty, env={"PATH": os.environ.get("PATH", os.defpath), "HOME": empty},
+            )
+    except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip().splitlines()[0] if out.returncode == 0 and out.stdout.strip() else None
 
