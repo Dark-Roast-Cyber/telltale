@@ -187,7 +187,9 @@ pub enum RuleContentErrorCode {
     /// A definition ID repeats within one tier, across kinds, or where the
     /// tier only adds; or a replacement changes the Rule v2 id it replaces.
     DuplicateId,
-    /// An override entry has an empty `rule_id` or `reason`, or sets nothing.
+    /// An override entry has an empty `rule_id` or `reason`, a `reason` over
+    /// 256 characters or with control or invisible formatting characters
+    /// other than tab and newline, or sets nothing.
     InvalidOverride,
     /// An override names a `rule_id` that no rule in the content has.
     UnknownRuleId,

@@ -1033,8 +1033,10 @@ impl PipelineBuilder {
         self
     }
 
-    /// [`Self::organization_rules_document`] with a caller-chosen label, used
-    /// only in [`RuleContentError::document`]: 1 to 64 characters from
+    /// [`Self::organization_rules_document`] with a caller-chosen label, which
+    /// names the input in [`RuleContentError::document`] and is reported as
+    /// the document's `label` in [`Pipeline::effective_configuration`], so
+    /// treat it as visible to operators: 1 to 64 characters from
     /// `A-Z a-z 0-9 . _ -`. Do not pass a path. Another label, or a label two
     /// organization documents share, fails `build` with
     /// [`RuleContentErrorCode::InvalidLabel`]. An unlabelled document's label is

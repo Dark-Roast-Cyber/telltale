@@ -513,7 +513,9 @@ profile. Start a replacement from `telltale rules export-default` and keep its
 `id`.
 
 `labeled_organization_rules_document` and `labeled_override_document` take a
-label you choose, used only to name the input in errors: 1 to 64 characters
+label you choose. It names the input in errors and is reported as the
+document's `label` in the effective configuration, so treat it as visible to
+operators: 1 to 64 characters
 from `A-Z a-z 0-9 . _ -`, unique among inputs of its kind. Do not pass a path.
 An unlabelled input is named by its 1-based position among inputs of its kind.
 
@@ -529,7 +531,7 @@ document text, rule IDs, or paths. `Display` is the code's text.
 | `InvalidDocument` | an organization or override document that does not parse |
 | `UnsupportedVersion` | an override document whose `version` is not 1 |
 | `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
-| `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, or that sets nothing |
+| `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, a `reason` over 256 characters or with control or invisible formatting characters other than tab and newline, or that sets nothing |
 | `UnknownRuleId` | an override `rule_id` that no rule has |
 | `ExceedsBounds` | more than 1024 text inputs in all, or more than 256 override entries applied to one rule |
 
@@ -675,9 +677,12 @@ came from instead of display metadata:
   override applied to it, in order, with its document label, its `reason`
   and the values it set.
 
-The document holds no rule matchers, paths or document text; the override
-`reason`, at most 256 characters without control or invisible formatting
-characters, is the only operator-written text. A pipeline over rule files
+Each override entry is listed even when it set a value the definition already
+had; for `enabled` and for `score`, the last entry that sets that field decides
+it. The document holds no rule matchers, paths or document text; the only
+operator-written text is the override `reason`, at most 256 characters without
+control or invisible formatting characters, and the labels you gave the
+builder's inputs. A pipeline over rule files
 rather than builder text reports no `documents` and no document labels. Every
 list has a stable order, so equal configurations serialize to equal bytes.
 `EffectiveConfigurationV1::to_json` and `from_json` produce and parse it
@@ -686,6 +691,9 @@ strictly: an unknown field, another version or input over 8 MiB
 JSON Schema is
 [`schemas/effective-configuration-v1.schema.json`](../schemas/effective-configuration-v1.schema.json).
 `telltale rules list` reports enabled rules and their scores from the same view.
+This document is not the `effective_configuration` object of the CLI's scan
+summary, which records a scan run's settings, outputs and rule sources with
+hashed paths; the two share only a name.
 
 ## Host wire and durable handoff
 

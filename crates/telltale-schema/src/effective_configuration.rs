@@ -2,10 +2,11 @@
 //!
 //! An embedding host shows an operator which rule content an endpoint runs:
 //! each rule package and supplied document by identity and content hash, and
-//! per rule and chain modifier whether it is enabled, what it scores, which
-//! tier supplied it and which overrides changed it. The document holds no rule
-//! matchers, no paths and no document text; the only operator-written text is
-//! an override's bounded `reason`.
+//! per rule and chain modifier whether it is enabled and what turned it off,
+//! what it scores, which tier supplied it and what it replaced, and which
+//! overrides were applied to it. The document holds no rule matchers, no paths
+//! and no document text; the only operator-written text is an override's
+//! bounded `reason` and the bounded labels the host gave its inputs.
 //!
 //! It is separate from the rule catalog, which carries display metadata.
 //! Every list is in a stable order, so equal configurations serialize to
@@ -124,7 +125,9 @@ pub struct EffectiveDefinitionV1 {
     /// `None` for bundled and packaged content and content not supplied as
     /// text.
     pub document: Option<String>,
-    /// Overrides that changed it, in the order applied; the last one wins.
+    /// Overrides applied to it, in the order applied, including any that set
+    /// a value it already had. For `enabled` and for `score`, the last entry
+    /// that sets that field decides it.
     pub overrides: Vec<AppliedOverrideV1>,
 }
 
