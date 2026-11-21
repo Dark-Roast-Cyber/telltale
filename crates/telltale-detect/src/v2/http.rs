@@ -79,7 +79,7 @@ pub(crate) fn assignment(token: &str) -> bool {
 /// leading assignments and wrappers such as `sudo -u user`, `env A=1`,
 /// `xargs -n1` or `timeout 30`. A client named as an argument (`git fetch`,
 /// `echo curl`, `which wget`) is not an invocation.
-fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]> {
+pub(crate) fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]> {
     let mut index = 0;
     while let Some(token) = tokens.get(index) {
         let name = client_name(token);
@@ -100,21 +100,25 @@ fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]
             if option == "--" {
                 break;
             }
-            // A value-taking option without an attached value takes the next
-            // token: `--user deploy`, `-u deploy`, or a cluster ending in a
-            // value-taking letter (`-iu deploy`, but not `-uroot`).
-            let takes_next = match option.strip_prefix("--") {
-                Some(long) => WRAPPER_VALUE_OPTIONS.contains(&long),
-                None => option[1..]
-                    .char_indices()
-                    .find(|(_, letter)| values.contains(*letter))
-                    .is_some_and(|(offset, _)| offset + 1 == option.len() - 1),
-            };
-            index += usize::from(takes_next);
+            index += usize::from(takes_next(option, &WRAPPER_VALUE_OPTIONS, values));
         }
         index += usize::from(*positional);
     }
     None
+}
+
+/// Whether an option word takes the next token as its value: a `long` option
+/// without an attached `=value` (`--user deploy`), or a short cluster whose
+/// first value-taking letter in `short` ends it (`-u deploy`, `-iu deploy`,
+/// but not `-uroot`).
+pub(crate) fn takes_next(option: &str, long: &[&str], short: &str) -> bool {
+    match option.strip_prefix("--") {
+        Some(name) => long.contains(&name),
+        None => option[1..]
+            .char_indices()
+            .find(|(_, letter)| short.contains(*letter))
+            .is_some_and(|(offset, _)| offset + 1 == option.len() - 1),
+    }
 }
 
 /// The normalized command word: basename, lowercase, no `.exe`, and the

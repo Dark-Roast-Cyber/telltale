@@ -22,7 +22,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 11;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 12;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1619,59 +1619,123 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
     if super::http::is_upload(tokens) {
         return Ok(true);
     }
-    let client = command_word(tokens).to_ascii_lowercase();
-    if !matches!(client.as_str(), "aws" | "gsutil" | "rclone" | "az" | "gh") {
+    let Some(command) = super::http::invocation(tokens, &["aws", "gsutil", "rclone", "az", "gh"])
+    else {
         return Ok(false);
-    }
-    charge_tokens(tokens, budget)?;
-    Ok(match client.as_str() {
-        "gh" => publishes_cloud_credential(tokens),
-        // A copy is an upload unless it reads a remote source first. Option
-        // values are not parsed, so a value-taking option before a remote
-        // source reads as a local source.
-        "aws" | "gsutil" => tokens
-            .iter()
-            .position(|s| s == "cp")
-            .is_some_and(|position| {
-                tokens
-                    .iter()
-                    .skip(position + 1)
-                    .find(|s| s.as_str() == "-" || !s.starts_with('-'))
-                    .is_none_or(|first| !object_url(first))
-            }),
-        // rclone options can take values with colons, so only the word right
-        // after the subcommand is read as the source.
-        "rclone" => tokens
-            .iter()
-            .position(|s| s.starts_with("copy"))
-            .is_some_and(|position| {
-                tokens
-                    .get(position + 1)
-                    .is_none_or(|first| !rclone_remote(first))
-            }),
-        "az" => tokens
+    };
+    charge_tokens(command, budget)?;
+    let client = super::http::client_name(&command[0]);
+    // The operands after options and their values: the command group,
+    // subcommand, then the source and destination of a copy. A copy is an
+    // upload unless it reads a remote source.
+    let (long, short) = VALUE_OPTIONS
+        .iter()
+        .find(|(name, ..)| *name == client)
+        .map_or((&[][..], ""), |(_, long, short)| (*long, *short));
+    let operands = operands(&command[1..], long, short);
+    Ok(match (client.as_str(), operands.as_slice()) {
+        ("gh", [group, verb, ..]) => publishes_cloud_credential(command, group, verb),
+        ("aws", ["s3", "cp", source, _, ..]) | ("gsutil", ["cp", source, _, ..]) => {
+            !object_url(source)
+        }
+        ("rclone", [verb, source, _, ..]) if verb.starts_with("copy") => !rclone_remote(source),
+        ("az", _) => command
             .iter()
             .position(|s| s == "storage")
-            .is_some_and(|position| azure_upload(&tokens[position + 1..])),
+            .is_some_and(|position| azure_upload(&command[position + 1..])),
         _ => false,
     })
 }
+
+/// The options that take a separate value, long then short, of the clients
+/// whose copy direction is read from their operands.
+const VALUE_OPTIONS: [(&str, &[&str], &str); 4] = [
+    (
+        "aws",
+        &[
+            "profile",
+            "region",
+            "endpoint-url",
+            "output",
+            "query",
+            "ca-bundle",
+            "cli-read-timeout",
+            "cli-connect-timeout",
+            "source-region",
+            "storage-class",
+            "acl",
+            "include",
+            "exclude",
+            "content-type",
+            "cache-control",
+            "expires",
+            "sse-kms-key-id",
+        ],
+        "",
+    ),
+    ("gsutil", &[], "ahijLosuz"),
+    (
+        "rclone",
+        &[
+            "config",
+            "bwlimit",
+            "header",
+            "header-upload",
+            "header-download",
+            "transfers",
+            "checkers",
+            "include",
+            "exclude",
+            "filter",
+            "files-from",
+            "log-file",
+            "log-level",
+            "backup-dir",
+        ],
+        "",
+    ),
+    ("gh", &["repo", "hostname"], "R"),
+];
+
+/// The operands among a command's arguments: the words that are neither an
+/// option nor the separate value of one, and every word after `--`. A lone
+/// `-` (standard input or output) is an operand.
+fn operands<'a>(args: &'a [String], long: &[&str], short: &str) -> Vec<&'a str> {
+    let mut operands = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            operands.extend(words.map(String::as_str));
+            break;
+        }
+        if word.len() > 1 && word.starts_with('-') {
+            if super::http::takes_next(word, long, short) {
+                words.next();
+            }
+        } else {
+            operands.push(word.as_str());
+        }
+    }
+    operands
+}
+
+/// A cloud credential file path, as the bundled upload and harvest rules name
+/// them.
+pub(super) const CLOUD_CREDENTIAL_PATH: &str = r"(?i)\.aws[/\\](?:credentials|config)|\.kube[/\\]config|\.docker[/\\]config\.json|(?:credentials|service-account)\.json|accessTokens\.json|credentials\.db";
+
 /// Whether a GitHub CLI call publishes a cloud credential file: a file operand of
-/// `gist create`, or the body file of an `issue` or `pr` `comment`. A secret gist
-/// is unlisted, not private, so either is readable by others. Ordinary files are
-/// routine publication and do not count. The files are those the rule's own
-/// pattern names, so the session and action readings agree.
-fn publishes_cloud_credential(tokens: &[String]) -> bool {
-    static CREDENTIAL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\.aws[/\\](?:credentials|config)|\.kube[/\\]config|\.docker[/\\]config\.json|(?:credentials|service-account)\.json|accessTokens\.json|credentials\.db").unwrap()
-    });
-    let words = tokens.iter().map(String::as_str).collect::<Vec<_>>();
-    let rest = words.get(3..).unwrap_or_default();
-    match words.get(1..3) {
-        Some(["gist", "create"]) => rest
+/// `gist create`, or the body file of an `issue` or `pr` `comment` or `create`.
+/// A secret gist is unlisted, not private, so either is readable by others.
+/// Ordinary files are routine publication and do not count.
+fn publishes_cloud_credential(command: &[String], group: &str, verb: &str) -> bool {
+    static CREDENTIAL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(CLOUD_CREDENTIAL_PATH).unwrap());
+    let rest = command[1..].iter().map(String::as_str).collect::<Vec<_>>();
+    match (group, verb) {
+        ("gist", "create") => rest
             .iter()
             .any(|word| !word.starts_with('-') && CREDENTIAL.is_match(word)),
-        Some(["issue" | "pr", "comment"]) => rest.iter().enumerate().any(|(at, word)| {
+        ("issue" | "pr", "comment" | "create") => rest.iter().enumerate().any(|(at, word)| {
             let file = match *word {
                 "-F" | "--body-file" => rest.get(at + 1).copied(),
                 _ => word
@@ -1686,8 +1750,14 @@ fn publishes_cloud_credential(tokens: &[String]) -> bool {
 
 /// An `az storage` command that sends local content: an upload or sync verb
 /// of `blob`, `file` or `fs`, at most one word after the group, or a `copy`
-/// with no HTTP(S) source.
+/// with no HTTP(S) source and no storage-account source option.
 fn azure_upload(words: &[String]) -> bool {
+    const REMOTE_SOURCE_OPTIONS: [&str; 4] = [
+        "--source-account-name",
+        "--source-container",
+        "--source-blob",
+        "--source-share",
+    ];
     let verb = |word: &String| word.starts_with("upload") || word.starts_with("sync");
     match words {
         [group, rest @ ..] if matches!(group.as_str(), "blob" | "file" | "fs") => match rest {
@@ -1719,7 +1789,14 @@ fn azure_upload(words: &[String]) -> bool {
                     }
                 })
             });
-            !sources.any(remote_source)
+            let account_source = rest.iter().any(|word| {
+                REMOTE_SOURCE_OPTIONS.contains(
+                    &word
+                        .split_once('=')
+                        .map_or(word.as_str(), |(option, _)| option),
+                )
+            });
+            !account_source && !sources.any(remote_source)
         }
         _ => false,
     }

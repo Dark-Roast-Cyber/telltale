@@ -74,8 +74,8 @@
   rules' behaviour fingerprints change, so affected sessions can emit once
   after upgrade. Fixes #178.
 - **Object-storage uploads are matched by transfer direction.**
-  `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. Its
-  session rule and native action now agree. An `aws s3 cp` or `gsutil cp`
+  `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. An
+  `aws s3 cp` or `gsutil cp`
   request is excluded when its first operand is an `s3://` or `gs://`
   location, and an `rclone copy` request when the word after the subcommand
   is a remote, so a local source before a remote destination still matches.
@@ -88,6 +88,18 @@
   profile version rises to 11, which also covers the inline-execution and
   GitHub CLI changes above. The rule's behaviour fingerprint changes, so
   affected sessions can emit once after upgrade. Fixes #179.
+- **Native actions read storage and GitHub CLI commands as they read HTTP
+  clients.** The native `exfil.outbound_upload` reading finds `aws`,
+  `gsutil`, `rclone`, `az` and `gh` after leading assignments, wrappers such
+  as `sudo`, and a `.exe` suffix, and reads past global options, option
+  clusters, `--option=value` and the values of options that take one, so the
+  copy source is the first operand. An `aws` copy is read in the `s3` command
+  group and needs a source and a destination. `az storage copy` with a
+  storage-account source option (`--source-account-name`,
+  `--source-container`, `--source-blob` or `--source-share`) reads a remote
+  source. GitHub CLI publication finds its subcommand after global options
+  such as `-R` and also reads the body file of `issue create` and
+  `pr create`. The native action profile version rises to 12.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean
