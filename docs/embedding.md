@@ -137,16 +137,18 @@ synthetic fixture root).
 The builder shares the CLI's rule content, defaults, policy, and evaluation
 semantics: bundled core rules plus the embedded community package
 (`telltale.community`) by default. It accepts document and package strings, not
-filesystem paths, and rejects duplicate IDs across documents, including bundled
-defaults. It does not implement the CLI's filesystem-managed tiers, same-ID
-replacement, or override files
-([tier resolution](install.md#local-rule-policy-and-allowlist-config)):
+filesystem paths, and resolves them with the CLI's own
+[tier resolution](install.md#local-rule-policy-and-allowlist-config); see
+[replacing rule content](#replacing-rule-content) for the organization and
+override inputs:
 
 ```rust
 let pipeline = Pipeline::builder()
-    .rule_package(package_yaml)       // additive, like rule-packages.d
-    .rules_document(custom_yaml)      // additive, like --rules
-    .policy_document(policy_yaml)     // enable/disable, like --policy
+    .rule_package(package_yaml)            // additive, like rule-packages.d
+    .organization_rules_document(org_yaml) // replaces same ID, like organization-rules.d
+    .rules_document(custom_yaml)           // additive, like --rules
+    .override_document(override_yaml)      // enabled/score, like overrides.d
+    .policy_document(policy_yaml)          // enable/disable, like --policy
     .build()?;
 // .without_community_rules() mirrors --no-community-rules.
 // .without_bundled_defaults() mirrors --no-default-rules: it drops core rules
@@ -484,6 +486,73 @@ changes after `build()`, so replace it as a whole:
 3. On `Ok`, compare `semantic_provenance(&options)` with the active pipeline's,
    then swap. A different identity is a semantic rebaseline; keep admitted
    pending work across it.
+
+The builder takes the CLI's rule content tiers as text and resolves them with
+the same code, so a fleet that runs both can give them the same tuning. In
+tier order:
+
+| Input | CLI equivalent | Effect |
+| --- | --- | --- |
+| bundled core and embedded community rules | defaults | the base content |
+| `rule_package` | `rule-packages.d` | adds definitions |
+| `organization_rules_document` | `organization-rules.d` | a rule or chain whose ID a lower tier defines replaces it in place and must keep its Rule v2 `id`; other IDs are added |
+| `rules_document` | `--rules` | adds definitions; never replaces one |
+| `override_document` | `overrides.d` | override v1 entries set a rule's `enabled` or `score`, in call order, after all content is merged |
+| `policy_document` | `policies.d`, `--policy` | applied last |
+
+An ID repeated within one tier, or reused by a tier that only adds, fails. The
+builder has no `rules.d` or `ui-rules.d` input: those CLI tiers replace
+definitions the same way the organization tier does.
+
+Overrides apply to rules, not to chain modifiers: a chain's ID in an override
+is an unknown `rule_id`, and an unknown `rule_id` fails `build`, as it fails
+the CLI. A replacing rule uses its own matcher, not the native precision
+profile of the bundled rule it replaced; start a replacement from
+`telltale rules export-default` and keep its `id`.
+
+`labeled_organization_rules_document` and `labeled_override_document` take a
+label you choose, used only to name the input in errors: 1 to 64 characters
+from `A-Z a-z 0-9 . _ -`, unique among inputs of its kind. Do not pass a path.
+An unlabelled input is named by its 1-based position among inputs of its kind.
+
+These failures are `PipelineError::Compilation` whose `source()` is a
+`RuleContentError`: a closed `RuleContentErrorCode` (a `#[non_exhaustive]`
+enum) and the name of the input, such as `organization:<label>`,
+`override:<label>` or `explicit:<n>` for a `rules_document`. It never holds
+document text, rule IDs, or paths. `Display` is the code's text.
+
+| Code | Failure |
+| --- | --- |
+| `InvalidLabel` | a label outside the allowed form, or one name for two inputs |
+| `InvalidDocument` | an organization or override document that does not parse |
+| `UnsupportedVersion` | an override document whose `version` is not 1 |
+| `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
+| `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, or that sets nothing |
+| `UnknownRuleId` | an override `rule_id` that no rule has |
+
+```rust,no_run
+use telltale_core::{Pipeline, PipelineError, RuleContentError, RuleContentErrorCode};
+
+# let override_yaml = String::new();
+match Pipeline::builder()
+    .labeled_override_document("fleet", override_yaml)
+    .build()
+{
+    Ok(pipeline) => { /* compare semantic_provenance, then swap */ }
+    Err(PipelineError::Compilation(cause)) => match cause.downcast_ref::<RuleContentError>() {
+        // Prints "rule_content_unknown_rule_id in Some(\"override:fleet\")".
+        Some(error) if error.code() == RuleContentErrorCode::UnknownRuleId => {
+            eprintln!("{error} in {:?}", error.document())
+        }
+        _ => eprintln!("rule content rejected; keeping the active pipeline"),
+    },
+    Err(other) => eprintln!("{other}"),
+}
+```
+
+Other `Compilation` causes are untyped, and their text can name rule IDs and
+quote document values: a `rules_document`, package, or policy that does not
+parse, and a rule that fails validation when the merged content compiles.
 
 Telltale does not fetch, sign, or schedule rule content. Obtaining and
 authenticating documents is the host's job.
