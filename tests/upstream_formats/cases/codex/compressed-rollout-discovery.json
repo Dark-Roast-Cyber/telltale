@@ -6,7 +6,7 @@
     "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rollout/src/compression.rs#L333-L370"
   ],
   "status": "known_gap",
-  "note": "The extension(jsonl) pattern does not match .jsonl.zst, so compressed history is silently absent. The feature is off by default. The file holds only a zstd frame magic; build a real frame before promoting this case.",
+  "note": "The extension(jsonl) pattern does not match .jsonl.zst, so compressed history is absent from a later scan; docs/session-sources.md records the limit. The feature is off by default. The file holds only a zstd frame magic; build a real frame before promoting this case.",
   "discover": {
     "client": "codex",
     "files": {

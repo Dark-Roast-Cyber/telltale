@@ -293,6 +293,14 @@ Codex adapter notes:
   values is evaluated instead, with those values replaced, and reported by the
   same coordinates as a bounded unit.
   Coordinate, ownership and wrapper errors still fail the whole source.
+- Compressed rollouts are not read. With Codex's opt-in
+  `local_thread_store_compression` feature (off by default), rollouts older
+  than seven days are rewritten as `.jsonl.zst` under `sessions` and
+  `archived_sessions`. Discovery selects `.jsonl` files only, so a compressed
+  rollout is absent from a later full-history scan and is not counted as a
+  source. A session scanned or watched before it was compressed has already
+  been read. Leave the feature off on hosts where Telltale must be able to
+  rescan history.
 
 OpenCode adapter notes:
 
