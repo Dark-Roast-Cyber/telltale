@@ -156,7 +156,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i: &decode '(?:base64\s+(?:-d|--decode)|openssl\s+enc|certutil\s+-decode|FromBase64String|xxd\s+-r|echo\s+[A-Za-z0-9+/]{80,}={0,2}\s*\|)'
+        tool.command|re|i: &decode '(?:base64\s+(?:-d|--decode)|openssl\s+enc|certutil[^;&|\n]*\s[-/]decode|FromBase64String|xxd\s+-r|echo\s+[A-Za-z0-9+/]{80,}={0,2}\s*\|)'
     selection_arguments:
         tool.arguments|re|i: *decode
     condition: 1 of selection_*

