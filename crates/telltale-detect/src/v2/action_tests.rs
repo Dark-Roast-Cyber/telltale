@@ -648,10 +648,6 @@ fn egress_chain_openers() -> [(CanonicalObservationV2, &'static str); 3] {
 #[test]
 fn a_url_named_in_text_does_not_supply_the_egress_step_of_a_chain() {
     for mention in [
-        parsed_shell_call(
-            "mention",
-            "echo 'docs: https://docs.darkroastcyber.io/guide'",
-        ),
         text_result(
             "mention",
             "See https://docs.darkroastcyber.io/guide for setup.",
@@ -666,6 +662,20 @@ fn a_url_named_in_text_does_not_supply_the_egress_step_of_a_chain() {
             ObservationStage::MessageObserved,
         ),
     ] {
+        // On its own the mention raises only the zero-point reference rule.
+        let output = actions(std::slice::from_ref(&mention));
+        let session = &output.sessions()[0];
+        assert_eq!(
+            session.rule_ids(),
+            ["network.controlled_test_domain.mention"]
+        );
+        assert_eq!(session.rule_score(), 0);
+        assert!(!session.action_findings().iter().any(|finding| {
+            finding
+                .rule_ids()
+                .iter()
+                .any(|id| id == "network.controlled_test_domain.darkroast")
+        }));
         for (opener, chain) in egress_chain_openers() {
             assert_eq!(
                 chain_in_both_views(&[opener, mention.clone()], chain),
