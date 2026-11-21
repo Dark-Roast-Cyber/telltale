@@ -329,3 +329,74 @@ short window and 44 to about 190 ms in a full one, depending on what it holds.
 Sources: the experiment and
 `scripts/hooks/bench-hook.sh`. Any evaluator failure falls back to in-process
 evaluation.
+
+### Load benchmark
+
+`make hooks-load-bench` builds the release binary and runs
+`scripts/hooks/load-bench.py`, which starts `telltale hooks claude-code hook`
+processes in parallel and reports what they cost. It answers whether the time
+limits above (the 25 s hook deadline, the session lock wait, the 5 s piece
+limit, the recovery budget) hold under load. Run it on a host that is otherwise
+idle, or say how busy it was. Pass options in `ARGS`:
+
+    make hooks-load-bench ARGS="--concurrency 8 --calls 4 --payload small,projected,past-budget --session same,distinct --evaluator on,off --check"
+    make hooks-load-bench ARGS="--concurrency 8 --calls 4 --cpus 0,1 --out target/hooks-load.json"
+
+Each combination of `--payload`, `--session` and `--evaluator` is a scenario
+with a fresh temporary hooks home: configuration (`hooks.mode: enforce`),
+state, telemetry, the evaluator socket, `HOME`, the `XDG_*` folders and
+`TMPDIR` are all in one temporary directory, nothing else from the environment
+but `PATH` is passed on, and the directory and any evaluator started in it are
+removed at the end. A real installation's configuration, state and journals
+are never read or written. In a scenario, `--concurrency` workers start
+together and each sends `--calls` PreToolUse Bash calls, one after another,
+with synthetic input:
+
+| `--payload` | Input |
+| --- | --- |
+| `small` | a short command |
+| `projected` | a short command beside a few hundred short values, quarantined by Telltale and projected within the projection budget |
+| `past-budget` | a short command beside 3,000 short values, past the projection budget (`pending_input_truncated`, so the verdict is floored at `on_unevaluable`) |
+
+`--session same` puts every call in one session, so calls wait for its lock;
+`distinct` gives each worker its own. `--evaluator on` starts the long-lived
+evaluator with a warm-up call and waits for it; `off` evaluates in-process.
+`--cpus 0,1` runs the hooks, and the evaluator they start, under
+`taskset -c 0,1`, as on a 2 vCPU host; the rest of the host is not limited.
+
+The report is JSON (stdout or `--out`), with a table on stderr. It holds
+counts, closed codes and milliseconds, never payload text or paths:
+
+- `host`: logical CPUs, the CPUs the benchmark may use, and the load average
+  at the start and the end; `telltale_version` names the build.
+- Per scenario, `wall_ms`: p50, p95, p99 and maximum wall time of a hook
+  process, as a harness waits for it, and how many calls took more than 25 s
+  (the deadline), 30 s (the timeout Claude Code and Codex CLI hooks are
+  installed with) and the `--check` limit.
+- `answers` (`allow`: exit 0 and nothing printed; `ask`, `deny`) and
+  `unanswered`: calls that exited non-zero, printed something else or were
+  killed at `--timeout-s` (120 s).
+- `records`, from the run's hooks records: decisions and their `basis`,
+  `floored` (decisions floored at `on_unevaluable`, basis
+  `unevaluable_input`), error codes with `hook_deadline` and
+  `state_lock_timeout` counted apart, evaluation status, visibility limits,
+  which evaluator answered and why one fell back, and calls with no record.
+- `build_ms`, `scan_ms` and `scans`: percentiles of the pipeline build, of
+  the whole evaluation and of each scan phase in `evaluation.scans`
+  (`whole_ms`, `together_ms`, `pieces_ms`, `history_ms`), pieces scanned of
+  those offered, pieces refused with the first refusal codes, and how the
+  whole and together scans ended.
+- `lock_wait_ms` is null: the hook does not record how long it waited for the
+  session lock. A long wait shows as wall time beyond `scan_ms` and, past the
+  wait, as `state_lock_timeout`.
+- `evaluator_ready` is false when `--evaluator on` was asked for and no
+  evaluator answered; those calls evaluated in-process.
+
+`--check` exits 1 when a call took longer than `--deadline-ms` (25,000) plus
+`--margin-ms` (5,000), or ended without an answer, so "the bounds hold" is a
+command. The benchmark does not observe a harness: what a harness does when
+its own timeout kills a hook, a harness that runs calls in parallel
+differently, and other platforms are outside it. On Linux the evaluator needs
+a Unix socket; in a sandbox that refuses one, `evaluator_ready` is false.
+`tests/hooks_load_bench_test.py` (in `make hooks-plugin-check`) checks the
+report, the isolation and `--check` against a stand-in binary.
