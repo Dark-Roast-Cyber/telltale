@@ -96,7 +96,10 @@ support gate. Record it when safe and available, but do not scan large or
 sensitive real session stores just to satisfy fixture coverage.
 
 The UC-001 gate proves critical MCP injection plus controlled-domain egress in
-one session for eight identities (six client families). Copilot's attack tool
+one session for eight identities (six client families): each attack fixture
+runs an outbound transfer to the controlled domain after the injected text, and
+the same session without that call keeps both atomic findings but links no
+chain, because a URL named only in text is not egress. Copilot's attack tool
 result is preserved, but both atomic rules require UserContext, which its
 adapter reports Unsupported. Both detectors are capability-indeterminate with
 `required_capability_unsupported`; the chain cannot fire and evaluation is
