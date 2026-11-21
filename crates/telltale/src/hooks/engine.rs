@@ -334,7 +334,10 @@ impl Engine {
     /// call keeps, not whether the call itself is evaluated: the scan of
     /// `pending` alone does not ask it, and nor do the scans of its lines when
     /// that is past capacity, because nothing else secures the verdict. Those
-    /// stop at [`PIECE_SCAN_LIMIT`] instead.
+    /// stop at [`PIECE_SCAN_LIMIT`] instead, and so does the scan of a
+    /// projection's lines together: past it, a projected call is not scanned.
+    /// A projection `past_budget` goes straight to the scans of its lines.
+    #[allow(clippy::too_many_arguments)]
     pub fn evaluate(
         &self,
         client: ClientId,
@@ -342,13 +345,20 @@ impl Engine {
         history: &[Line],
         pending: &[Line],
         focus: &[Focus],
+        past_budget: bool,
         budget: &mut RecoveryBudget,
     ) -> Result<Evaluation, EngineError> {
         let sizes: Vec<usize> = history.iter().map(|line| line.to_jsonl().len()).collect();
         let pending_bytes = pending.iter().map(|line| line.to_jsonl().len()).sum();
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
         let mut failure_code = None;
-        if budget.admits(whole_bytes) {
+        // With no history, the scan of `pending` alone is this one again.
+        let mut alone = None;
+        // A projection past its budget holds more than Telltale takes in one
+        // scan: it is not scanned whole nor its variants together, so the
+        // time goes to its pieces, the command's first.
+        let pieces_only = past_budget && pending.len() > 1;
+        if !pieces_only && budget.admits(whole_bytes) {
             let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
             if !whole.source_failed {
@@ -357,12 +367,23 @@ impl Engine {
                     ..whole
                 });
             }
-            failure_code = whole.failure_code;
+            failure_code = whole.failure_code.clone();
+            alone = history.is_empty().then_some(whole);
         }
-        let mut best = self.scan(client, window_path, pending.iter(), focus)?;
-        budget.observe(pending_bytes, best.scan_ms);
+        // A projection's variants scanned together come ahead of the piece
+        // loop and are bound by the same limit: past it, none is scanned.
+        let late = pieces_only || (pending.len() > 1 && !budget.pieces_in_time());
+        let mut best = if late {
+            Evaluation::not_evaluated(focus.len(), 0)
+        } else if let Some(alone) = alone {
+            alone
+        } else {
+            let scan = self.scan(client, window_path, pending.iter(), focus)?;
+            budget.observe(pending_bytes, scan.scan_ms);
+            scan
+        };
         let mut kept = vec![false; history.len()];
-        if best.source_failed && pending.len() > 1 {
+        if (late || best.source_failed) && pending.len() > 1 {
             best = self.scan_each(client, window_path, pending, focus, || {
                 budget.pieces_in_time()
             })?;
@@ -656,8 +677,8 @@ pub const RECOVERY_BUDGET: Duration = Duration::from_secs(2);
 /// Time after the start of an evaluation ([`RecoveryBudget::start`]) at which no
 /// further piece of a call past capacity is scanned. It sits below `DEADLINE_MARGIN`
 /// in the evaluator by the reply and the wait for the lock, and about 250 ms for the
-/// piece in flight, which load can overrun. The scans ahead of the loop are not
-/// limited by it. Load decides how far a call gets: what the pieces scanned found
+/// piece in flight, which load can overrun. No scan of a projection's lines
+/// together starts past it either; the scan of a call whole is not limited by it. Load decides how far a call gets: what the pieces scanned found
 /// keeps its force, and the rest goes to `on_unevaluable`.
 pub const PIECE_SCAN_LIMIT: Duration = Duration::from_secs(5);
 /// Scans smaller than this do not set the forecast's rate: their cost is mostly
@@ -1950,7 +1971,11 @@ mod recovery_tests {
 
     /// A call past capacity on its own, as the runtime projects it.
     fn pieces(command: String) -> (Vec<Line>, Vec<Focus>) {
-        let input = serde_json::json!({ "command": command });
+        projected(serde_json::json!({ "command": command }))
+    }
+
+    /// The variants of `input`, as the runtime projects it.
+    fn projected(input: serde_json::Value) -> (Vec<Line>, Vec<Focus>) {
         let variants = crate::hooks::projection::project(&input).unwrap().variants;
         assert!(variants.len() <= crate::hooks::projection::MAX_VARIANTS);
         let mut lines = Vec::new();
@@ -1978,7 +2003,21 @@ mod recovery_tests {
     /// `used` is what the evaluation has already spent. The budget starts after the
     /// engine is built, so that the build is not charged to it.
     fn evaluate_with(command: String, used: Duration) -> (Evaluation, usize) {
-        let (lines, focus) = pieces(command);
+        evaluate_projected_with(pieces(command), used)
+    }
+
+    fn evaluate_projected_with(
+        lines: (Vec<Line>, Vec<Focus>),
+        used: Duration,
+    ) -> (Evaluation, usize) {
+        evaluate_lines(lines, used, false)
+    }
+
+    fn evaluate_lines(
+        (lines, focus): (Vec<Line>, Vec<Focus>),
+        used: Duration,
+        past_budget: bool,
+    ) -> (Evaluation, usize) {
         let (dir, engine) = engine();
         let mut budget = budget_used(used, 0.0);
         let evaluation = engine
@@ -1988,6 +2027,7 @@ mod recovery_tests {
                 &[],
                 &lines,
                 &focus,
+                past_budget,
                 &mut budget,
             )
             .unwrap();
@@ -2090,6 +2130,94 @@ mod recovery_tests {
         assert_eq!(evaluation.status, EvalStatus::NotEvaluated);
         assert_eq!(evaluation.unevaluated_focus, lines);
         assert!(says_unscanned(&evaluation));
+    }
+
+    /// A projection Telltale accepts whole: the denied command beside a value
+    /// too long for one call, so it is spread over a few variants.
+    fn accepted_whole() -> (Vec<Line>, Vec<Focus>) {
+        let (lines, focus) = projected(serde_json::json!({
+            "command": DENY,
+            "description": "d".repeat(9000),
+        }));
+        assert!(lines.len() > 1);
+        (lines, focus)
+    }
+
+    /// The scan of a projection's variants together comes ahead of the piece
+    /// loop, and is bound by the same limit: past it, nothing of the call is
+    /// scanned, and the runtime applies `on_unevaluable`.
+    #[test]
+    fn a_projection_already_past_the_limit_is_not_scanned_together() {
+        let (evaluation, lines) = evaluate_projected_with(accepted_whole(), PIECE_SCAN_LIMIT);
+        assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(evaluation.status, EvalStatus::NotEvaluated);
+        assert_eq!(evaluation.unevaluated_focus, lines);
+        assert!(says_unscanned(&evaluation));
+    }
+
+    /// Within the piece limit, a spent recovery budget does not stop that scan:
+    /// the variants are evaluated together, none left unevaluated, and the deny
+    /// found keeps its force.
+    #[test]
+    fn a_projection_within_the_limit_is_scanned_together_and_keeps_its_deny() {
+        let (evaluation, _) = evaluate_projected_with(accepted_whole(), RECOVERY_BUDGET);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
+        assert_eq!(evaluation.unevaluated_focus, 0);
+        assert!(!says_unscanned(&evaluation));
+    }
+
+    /// An input past the projection budget whose variants Telltale accepts
+    /// together: a command of several chunks, its deny in the last chunk.
+    fn past_the_budget() -> (Vec<Line>, Vec<Focus>) {
+        let input = serde_json::json!({
+            "command": format!("echo {}; {DENY}", "a".repeat(9000)),
+            "d": "d".repeat(400_000),
+        });
+        let projection = crate::hooks::projection::project(&input).unwrap();
+        assert!(projection.past_budget);
+        projected(input)
+    }
+
+    /// Past the budget the call is not scanned whole, nor its variants
+    /// together: the piece loop starts at once, the command's chunks first,
+    /// and a deny in the last of them is found.
+    #[test]
+    fn a_projection_past_the_budget_goes_straight_to_its_pieces() {
+        let (evaluation, lines) = evaluate_lines(past_the_budget(), Duration::ZERO, true);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
+        assert_eq!(
+            evaluation.unevaluated_focus, lines,
+            "scanned piece by piece"
+        );
+    }
+
+    /// A command of several chunks, its deny in the last: variants Telltale
+    /// accepts together.
+    fn split_command() -> (Vec<Line>, Vec<Focus>) {
+        pieces(format!("echo {}; {DENY}", "a".repeat(9000)))
+    }
+
+    /// Variants the caller marks past the budget are never scanned together,
+    /// even where Telltale would accept them together: every focus is left to
+    /// the piece loop, which finds the deny.
+    #[test]
+    fn variants_past_the_budget_are_never_scanned_together() {
+        let (evaluation, lines) = evaluate_lines(split_command(), Duration::ZERO, true);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(
+            evaluation.unevaluated_focus, lines,
+            "scanned piece by piece"
+        );
+    }
+
+    /// The same variants within the budget are scanned together, as before.
+    #[test]
+    fn variants_within_the_budget_are_scanned_together() {
+        let (evaluation, _) = evaluate_lines(split_command(), Duration::ZERO, false);
+        assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
+        assert_eq!(evaluation.unevaluated_focus, 0, "scanned together");
     }
 
     #[test]

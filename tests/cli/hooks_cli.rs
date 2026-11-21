@@ -258,6 +258,33 @@ fn oversized_pre_tool_use_gets_the_unevaluable_verdict() {
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
 }
 
+/// A denied command in an input past the projection budget is still denied;
+/// the same input beside a command no rule denies gets the unevaluable
+/// verdict.
+#[test]
+fn an_input_past_the_projection_budget_keeps_a_rule_deny() {
+    let values: serde_json::Map<String, Value> = (0..3000)
+        .map(|i| (format!("k{i:04}"), json!("x")))
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+
+    let mut payload = pre("rm -f ~/.claude/settings.json");
+    payload["tool_input"]["meta"] = Value::Object(values.clone());
+    let (code, stdout, stderr) = run(&payload, &env, &[]);
+    assert_eq!(code, 0, "{stderr}");
+    let output: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    let mut payload = pre("ls -la");
+    payload["tool_use_id"] = "toolu_cli_benign".into();
+    payload["tool_input"]["meta"] = Value::Object(values);
+    let (code, stdout, stderr) = run(&payload, &env, &[]);
+    assert_eq!(code, 0, "{stderr}");
+    let output: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
+}
+
 #[test]
 fn misconfiguration_reason_carries_no_paths() {
     let dir = tempfile::tempdir().unwrap();
