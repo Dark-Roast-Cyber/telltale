@@ -28,7 +28,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -649,6 +649,38 @@ to services that render detections. `telltale rules catalog` prints it for the
 CLI's resolved rules. Its JSON Schema is
 [`schemas/rule-catalog-v2.schema.json`](../schemas/rule-catalog-v2.schema.json);
 catalog v1 is kept as a historical schema.
+
+### Effective configuration
+
+`Pipeline::effective_configuration(&options)` returns what one built pipeline
+runs as a versioned `EffectiveConfigurationV1` document
+(`telltale.effective_configuration.v1`), for a page that shows an operator what
+an endpoint runs. It lists the same entries as `Pipeline::rule_catalog_document`
+for the same options, with the same semantic identity, and adds where each
+came from instead of display metadata:
+
+- `packages`: each rule package's ID, version, content SHA-256, and whether it
+  is `embedded` or `supplied`;
+- `documents`: each text input of the builder (`organization`, `explicit`,
+  `override` or `policy`) by label, or by 1-based position among its kind when
+  unlabelled, and content SHA-256;
+- `definitions`: per rule, chain modifier and enabled process-chain rule, its
+  effective `enabled` flag, session and action scores, the tier whose
+  definition is in effect, the package or supplied document that defines it,
+  and each override applied to it, in order, with its document label, its
+  `reason` and the values it set.
+
+The document holds no rule matchers, paths or document text; the override
+`reason`, at most 256 characters without control or invisible formatting
+characters, is the only operator-written text. A pipeline over rule files
+rather than builder text reports no `documents` and no document labels. Every
+list has a stable order, so equal configurations serialize to equal bytes.
+`EffectiveConfigurationV1::to_json` and `from_json` produce and parse it
+strictly: an unknown field, another version or input over 8 MiB
+(`EFFECTIVE_CONFIGURATION_MAX_INPUT_BYTES`) is rejected with a closed code. Its
+JSON Schema is
+[`schemas/effective-configuration-v1.schema.json`](../schemas/effective-configuration-v1.schema.json).
+`telltale rules list` reports enabled rules and their scores from the same view.
 
 ## Host wire and durable handoff
 

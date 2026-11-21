@@ -1,0 +1,77 @@
+{
+  "schema": "telltale.effective_configuration.v1",
+  "telltale_version": "0.0.0-golden",
+  "semantic_identity": "semantic:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "packages": [
+    {
+      "id": "syn.pack",
+      "version": "1.0.0",
+      "content_sha256": "4348866f9a5b6c60baf5ac002a0ddd15b2a1587cd3258601ecfee0280ef72bda",
+      "origin": "supplied"
+    }
+  ],
+  "documents": [
+    {
+      "kind": "organization",
+      "label": "acme",
+      "content_sha256": "914b32dbb2eada7128fb60c05937466ae9616bea8a8bf72d2c0359dabb18657e"
+    },
+    {
+      "kind": "explicit",
+      "label": "1",
+      "content_sha256": "c9246590f1a06f4c3ed06c92f44be1577b253ea97323b127660519232f678bf1"
+    },
+    {
+      "kind": "override",
+      "label": "fleet-tuning",
+      "content_sha256": "59706cb5213081d60b1fd03370a658b7f23898893b6727d26e0e1740767602f4"
+    },
+    {
+      "kind": "policy",
+      "label": "1",
+      "content_sha256": "76df027066f5aeac069a1639e1098e7814e86306e3624b98c025b663e0ae694e"
+    }
+  ],
+  "definitions": [
+    {
+      "id": "syn.base",
+      "kind": "rule",
+      "enabled": true,
+      "session_score": 55,
+      "action_score": 55,
+      "tier": "organization",
+      "package_id": null,
+      "document": "acme",
+      "overrides": [
+        {
+          "document": "fleet-tuning",
+          "reason": "Noisy in CI.",
+          "enabled": null,
+          "score": 55
+        }
+      ]
+    },
+    {
+      "id": "syn.kept",
+      "kind": "rule",
+      "enabled": true,
+      "session_score": 5,
+      "action_score": 5,
+      "tier": "package",
+      "package_id": "syn.pack",
+      "document": null,
+      "overrides": []
+    },
+    {
+      "id": "syn.other",
+      "kind": "rule",
+      "enabled": false,
+      "session_score": 15,
+      "action_score": null,
+      "tier": "explicit",
+      "package_id": null,
+      "document": "1",
+      "overrides": []
+    }
+  ]
+}

@@ -86,6 +86,7 @@ pub use telltale_sources::discovery::{
 };
 pub use telltale_sources::paths::PathProfile;
 
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 type BoxError = Box<dyn std::error::Error>;
@@ -105,6 +106,12 @@ pub use telltale_schema::action_record::{
     ACTION_RECORD_MAX_INPUT_BYTES, ACTION_RECORD_V1_ID, ACTION_RECORD_V1_SCHEMA,
     ActionRecordContext, ActionRecordContribution, ActionRecordError, ActionRecordErrorCategory,
     ActionRecordEvidence, ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
+};
+pub use telltale_schema::effective_configuration::{
+    AppliedOverrideV1, DefinitionKindV1, DocumentKindV1, EFFECTIVE_CONFIGURATION_MAX_INPUT_BYTES,
+    EFFECTIVE_CONFIGURATION_V1_ID, EFFECTIVE_CONFIGURATION_V1_SCHEMA, EffectiveConfigurationError,
+    EffectiveConfigurationV1, EffectiveDefinitionV1, EffectiveDocumentV1, EffectivePackageV1,
+    PackageOriginV1, RuleTierV1,
 };
 pub use telltale_schema::rule_catalog::{
     RULE_CATALOG_V2_ID, RULE_CATALOG_V2_SCHEMA, RuleCatalogEntryV2, RuleCatalogError,
@@ -659,6 +666,11 @@ pub struct Pipeline {
     process_rules: std::sync::OnceLock<telltale_rules::process_chain::CompiledProcessChainRules>,
     /// Identity of every rule package in `rule_set`, in load order.
     rule_packages: Vec<RulePackageSummary>,
+    /// The tier and source of every definition in `content`.
+    provenance: Vec<rule_resolution::RuleProvenance>,
+    /// The builder's text inputs, for the effective configuration; empty for
+    /// a pipeline over rule files.
+    documents: Vec<EffectiveDocumentV1>,
 }
 
 /// Builder for [`Pipeline`]. It includes bundled core rules and the embedded
@@ -1092,6 +1104,33 @@ impl PipelineBuilder {
     pub fn build(self) -> Result<Pipeline, PipelineError> {
         let organization = labeled_sources("organization", self.organization_documents)?;
         let overrides = labeled_sources("override", self.override_documents)?;
+        let mut supplied = Vec::new();
+        // `<kind>:<label>`, as `labeled_sources` names each input.
+        let named = |source: &str| {
+            source
+                .split_once(':')
+                .map_or_else(String::new, |(_, label)| label.to_owned())
+        };
+        for (source, raw) in &organization {
+            supplied.push((DocumentKindV1::Organization, named(source), raw));
+        }
+        for (index, raw) in self.extra_rule_documents.iter().enumerate() {
+            supplied.push((DocumentKindV1::Explicit, (index + 1).to_string(), raw));
+        }
+        for (source, raw) in &overrides {
+            supplied.push((DocumentKindV1::Override, named(source), raw));
+        }
+        if let Some(raw) = &self.policy_document {
+            supplied.push((DocumentKindV1::Policy, "1".to_owned(), raw));
+        }
+        let supplied_documents = supplied
+            .into_iter()
+            .map(|(kind, label, raw)| EffectiveDocumentV1 {
+                kind,
+                label,
+                content_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
+            })
+            .collect::<Vec<_>>();
         let documents = self
             .extra_rule_documents
             .iter()
@@ -1135,6 +1174,10 @@ impl PipelineBuilder {
                 }
             })?
             .into_pipeline()
+            .map(|pipeline| Pipeline {
+                documents: supplied_documents,
+                ..pipeline
+            })
     }
 }
 
@@ -1176,7 +1219,7 @@ impl Pipeline {
     pub(crate) fn from_compiled(
         content: LoadedRules,
         rule_set: CompiledRuleSet,
-        rule_packages: Vec<RulePackageSummary>,
+        diagnostics: rule_resolution::RuleResolutionDiagnostics,
     ) -> Result<Self, PipelineError> {
         // Modifiers only combine rule matches, so no effective rule leaves no
         // rule detection. Fail closed instead of building an empty pipeline,
@@ -1192,7 +1235,9 @@ impl Pipeline {
             rule_set,
             canonical,
             process_rules: std::sync::OnceLock::new(),
-            rule_packages,
+            rule_packages: diagnostics.packages,
+            provenance: diagnostics.provenance,
+            documents: Vec::new(),
         })
     }
 }

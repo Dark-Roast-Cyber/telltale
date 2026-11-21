@@ -20,8 +20,8 @@ pub mod rule_v2;
 mod segment;
 
 pub use content::{
-    CompiledDefinition, DefinitionKind, DefinitionMetadata, LoadedDefinition, LoadedRules,
-    RelatedRule, RuleLogSource, RuleOverrideError,
+    AppliedOverride, CompiledDefinition, DefinitionKind, DefinitionMetadata, LoadedDefinition,
+    LoadedRules, RelatedRule, RuleLogSource, RuleOverrideError,
 };
 pub use segment::{unquoted, unquoted_with_origin};
 
@@ -738,6 +738,18 @@ fn validate_rule_override_entry(entry: &RuleOverrideEntry, source: &str) -> Resu
         return Err(format!(
             "rule override for '{}' in {source} requires a non-empty reason",
             entry.rule_id
+        ));
+    }
+    // Reasons are reported back to operators, so they follow the rule package
+    // text bounds.
+    if entry.reason.chars().count() > package::MAX_LABEL_LEN
+        || entry.reason.chars().any(package::is_hidden_character)
+    {
+        return Err(format!(
+            "rule override for '{}' in {source} needs a reason of at most {} characters \
+             without control or invisible formatting characters",
+            entry.rule_id,
+            package::MAX_LABEL_LEN
         ));
     }
     if entry.enabled.is_none() && entry.score.is_none() {

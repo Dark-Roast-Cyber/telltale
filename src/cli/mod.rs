@@ -1887,13 +1887,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|entry| (entry.id.as_str(), entry))
                     .collect::<std::collections::BTreeMap<_, _>>();
-                for rule in resolution.rule_set.summaries() {
+                // The enabled rules in compiled order, from the view the
+                // embedding effective configuration also reports.
+                for effective in resolution.effective_definitions() {
+                    let rule = effective.definition;
+                    if rule.kind() != crate::rules::DefinitionKind::Rule || !effective.enabled {
+                        continue;
+                    }
+                    let (category, severity) = (
+                        rule.category().unwrap_or_default(),
+                        rule.severity().unwrap_or_default(),
+                    );
                     let source = provenance
-                        .get(rule.id.as_str())
+                        .get(rule.id())
                         .map(|entry| opaque_identifier("rule-source", &entry.winner))
                         .unwrap_or_else(|| "-".to_string());
                     let replaced = provenance
-                        .get(rule.id.as_str())
+                        .get(rule.id())
                         .map(|entry| {
                             entry
                                 .replaced_sources
@@ -1906,22 +1916,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if verbose {
                         println!(
                             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                            terminal_rule_identifier(&rule.id),
-                            terminal_rule_category(&rule.category),
-                            terminal_rule_severity(&rule.severity),
-                            rule.score,
-                            rule.enabled,
+                            terminal_rule_identifier(rule.id()),
+                            terminal_rule_category(category),
+                            terminal_rule_severity(severity),
+                            rule.score(),
+                            effective.enabled,
                             source,
                             replaced
                         );
                     } else {
                         println!(
                             "{}\t{}\t{}\t{}\t{}",
-                            terminal_rule_identifier(&rule.id),
-                            terminal_rule_category(&rule.category),
-                            terminal_rule_severity(&rule.severity),
-                            rule.score,
-                            rule.enabled
+                            terminal_rule_identifier(rule.id()),
+                            terminal_rule_category(category),
+                            terminal_rule_severity(severity),
+                            rule.score(),
+                            effective.enabled
                         );
                     }
                 }

@@ -108,6 +108,17 @@ pub struct LoadedDefinition {
     body: Body,
     metadata: DefinitionMetadata,
     package_id: Option<String>,
+    overrides: Vec<AppliedOverride>,
+}
+
+/// One override entry applied to a definition: the document's source name,
+/// the operator's reason and the values it set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedOverride {
+    pub source: String,
+    pub reason: String,
+    pub enabled: Option<bool>,
+    pub score: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,7 +172,9 @@ impl PartialEq for LoadedDefinition {
             ) => left == right && left_enabled == right_enabled,
             _ => false,
         };
-        body && self.metadata == other.metadata && self.package_id == other.package_id
+        body && self.metadata == other.metadata
+            && self.package_id == other.package_id
+            && self.overrides == other.overrides
     }
 }
 
@@ -182,6 +195,7 @@ impl LoadedDefinition {
             body,
             metadata: definition.metadata,
             package_id: None,
+            overrides: Vec::new(),
         }
     }
 
@@ -220,6 +234,11 @@ impl LoadedDefinition {
     /// The rule package that ships this definition; `None` for other content.
     pub fn package_id(&self) -> Option<&str> {
         self.package_id.as_deref()
+    }
+
+    /// Override entries applied to this definition, in order.
+    pub fn overrides(&self) -> &[AppliedOverride] {
+        &self.overrides
     }
 
     /// Findings about this definition that did not stop it from loading.
@@ -469,6 +488,12 @@ impl LoadedRules {
             if let Some(score) = entry.score {
                 rule.set_score(score);
             }
+            rule.overrides.push(AppliedOverride {
+                source: source.to_owned(),
+                reason: entry.reason.clone(),
+                enabled: entry.enabled,
+                score: entry.score,
+            });
         }
         Ok(())
     }

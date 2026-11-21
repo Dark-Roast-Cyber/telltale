@@ -41,7 +41,7 @@ const COMMUNITY_PACKAGE_YAML: &str = include_str!("../data/community.package.yam
 const RESERVED_NAMESPACES: &[&str] = &["procchain", "telltale"];
 const MAX_IDENTIFIER_LEN: usize = 64;
 const MAX_NAMESPACE_LEN: usize = 32;
-const MAX_LABEL_LEN: usize = 256;
+pub(crate) const MAX_LABEL_LEN: usize = 256;
 
 /// The package header: the whole first document of the stream.
 #[derive(Deserialize)]
@@ -431,7 +431,7 @@ pub(crate) fn reject_decoded_hidden_characters_in(
 /// return and the line and paragraph separators in the range starting at
 /// U+2028 are line breaks to YAML, but many viewers do not break there, so
 /// they could add keys a reviewer never sees.
-fn is_hidden_character(character: char) -> bool {
+pub(crate) fn is_hidden_character(character: char) -> bool {
     (character.is_control() && !matches!(character, '\t' | '\n'))
         || matches!(
             character,

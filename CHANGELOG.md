@@ -8,6 +8,13 @@
 
 ### Compatibility and operator impact
 
+- **Override reasons are bounded.** An override entry's `reason`, in
+  `overrides.d` or a builder override document, must be at most 256
+  characters without control or invisible formatting characters other than
+  tab and newline, the rule package text rules. A longer reason, or one with
+  such characters, now fails to load as an invalid override. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md#override-reasons-are-bounded).
+
 - **A hooks tool call past the projection budget is still evaluated.** A tool
   input with more values or bytes than the bounded projection variants hold
   used to be unevaluable as a whole and got `on_unevaluable`. It is now
@@ -366,6 +373,17 @@
   version and the build's Git hash (see [Telltale Hooks](docs/hooks/README.md)).
 
 ### Changes
+
+- **An embedded pipeline can describe its effective configuration.**
+  `Pipeline::effective_configuration` returns a versioned, strict
+  `telltale.effective_configuration.v1` document: rule packages and the
+  builder's text inputs by content SHA-256, and per rule and chain modifier
+  its effective `enabled` flag and scores, the tier that supplied it and the
+  overrides applied with their reasons. It holds no matchers, paths or
+  document text. `telltale-schema` adds the wire form with `to_json`,
+  `from_json` and a JSON Schema; the rule catalog is unchanged. `telltale
+  rules list` now reads enabled rules and scores from the same view; its
+  output is unchanged.
 
 - **`telltale hooks` bounds journaled prompts and tool results by encoded
   size.** `hooks.window.max_result_bytes` now bounds a prompt, a tool result
