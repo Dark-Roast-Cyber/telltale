@@ -177,15 +177,15 @@ segment does not match the filter, so
 `curl --data @f https://example.invalid/upload; curl https://example.invalid/file`
 matches this rule through its second segment, and a single
 `curl --data @f https://example.invalid/upload` does not. Segments split
-outside quotes on `;`, `|`, `||`, `&&` and newlines and are trimmed of
+outside quotes on `;`, `|`, `||`, `|&`, `&&`, a background `&` and newlines,
+the same separators the native statement reader uses, and are trimmed of
 surrounding whitespace; `^` and `$` anchor to the segment, and a pattern cannot
 span segments. Single quotes are literal, a backslash escapes the next
-character (`\;` does not split) outside single quotes and inside `$'...'`, and a
-single `&` is not a separator, so `2>&1`
-and unquoted query strings stay in their segment. An unclosed quote runs to the
-end of the field. Background commands (`a & b`) also stay in one segment, so
-an upload after a single `&` can still exclude a download before it. This is a
-known limit of the lexical split, not a claim of shell parsing. Subshells, command
+character (`\;` does not split) outside single quotes and inside `$'...'`, and
+the `&` of a redirection (`2>&1`, `&>`, `>&2`) is not a separator. A background
+command (`a & b`) ends its segment, as a shell runs it, so an unquoted query
+string's `&` also splits. An unclosed quote runs to the end of the field. This is
+a lexical split, not a claim of shell parsing. Subshells, command
 substitution, heredocs and comments are not interpreted, and a command inside a
 JSON string in `tool.arguments` stays one segment. A scope modifier applies to
 the selection key that carries it and to its filter, which may repeat it or

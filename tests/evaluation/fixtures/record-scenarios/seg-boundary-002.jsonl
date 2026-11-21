@@ -1,0 +1,2 @@
+{"type":"session_meta","session_id":"segment-boundary-redirect","timestamp":"2026-04-03T07:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"segment-boundary-redirect","timestamp":"2026-04-03T07:00:01Z","payload":{"type":"tool_call","tool_name":"publish_artifact","arguments":"curl -o tool.tar.gz https://example.invalid/tool.tar.gz 2>&1 &> fetch.log","message":"Fetch a tool and keep its output in a log."}}

@@ -735,16 +735,17 @@ fn a_replay_identity_stays_with_what_the_call_recorded() {
             "rm -rf /; cat <<'E'\nbody\nE",
             "30115ccbe0811cc09940de142678412ee3ff910dc64f55865fb0ae08cfa368de",
         ),
-        // A plain split and the reader part ways on each of these, and a word with an
-        // escape has a second reading. Neither is what the call recorded.
+        // A redirection's `&` ends no statement, so the recorded statement keeps it.
         (
             "rm -rf / 2>&1",
-            "9b6e5ae337c0133e8ac1bc5179fd1bb55df33ff3ae6a1d7365f6224d33b606b4",
+            "de75a5c0e033fd59a0216f0e456cedc13fd3a5d1eb92a180432502f548dbfe39",
         ),
         (
             "make a 2>&1 | tail -5; rm -rf /",
-            "ecccf49b43fbce373a2f61a3ee96dce866b171c5a8d18aba4283d0203c521d5d",
+            "2bf71fc4b082adb5257c82d5927246291677e2c29d3dd832f2e98f052cfe239d",
         ),
+        // A plain split and the reader part ways on each of these, and a word with an
+        // escape has a second reading. Neither is what the call recorded.
         (
             "x=$(a; b c); rm -rf /",
             "18cc8ddedbb417613197b105f4bb3391aa715cfa15de353041492ca720534d06",

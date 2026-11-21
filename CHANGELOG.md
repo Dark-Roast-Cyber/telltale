@@ -88,6 +88,14 @@
   profile version rises to 11, which also covers the inline-execution and
   GitHub CLI changes above. The rule's behaviour fingerprint changes, so
   affected sessions can emit once after upgrade. Fixes #179.
+- **Rule v1 segments and native statements share one separator rule.** A
+  background `&` now ends a `detection.scope: segment` or `exclusion_segment`
+  segment, as it ends a native statement, and `|&` is one separator. The `&`
+  of a redirection (`2>&1`, `&>`, `>&2`, `<&3`) ends neither, so the native
+  reader no longer splits a statement there. A custom segment-scoped rule whose
+  pattern spanned a background `&` matches each side on its own. The native
+  action profile version rises to 13. The evaluation corpus gains three
+  segment-boundary characterization cases.
 - **Native actions read storage and GitHub CLI commands as they read HTTP
   clients.** The native `exfil.outbound_upload` reading finds `aws`,
   `gsutil`, `rclone`, `az` and `gh` after leading assignments, wrappers such

@@ -1,15 +1,13 @@
 //! Shell command segments for Rule v1 `detection.scope: segment`.
 //!
-//! A segment is the text between unquoted `;`, `|`, `||`, `&&` and newline
-//! separators, trimmed of surrounding ASCII whitespace; empty segments are
-//! skipped. Single quotes are literal. A backslash escapes the next character
-//! outside single quotes, so `\;` and a `\"` inside double quotes end nothing,
-//! and `$'...'` takes backslash escapes, so its `\'` ends nothing either.
-//! An unclosed quote runs to the end of the text, which yields one larger
-//! segment rather than an error. A single `&` is not a separator, so `2>&1`,
-//! `&>` and unquoted query strings stay in their segment.
-//! This also leaves background commands (`a & b`) in one segment: an upload
-//! after a single `&` can still exclude a download before it.
+//! A segment is the text between unquoted [`statement_separator`]s (`;`, `|`,
+//! `||`, `|&`, `&&`, a background `&` and newlines), trimmed of surrounding
+//! ASCII whitespace; empty segments are skipped. The `&` of a redirection
+//! (`2>&1`, `&>`) separates nothing. Single quotes are literal. A backslash
+//! escapes the next character outside single quotes, so `\;` and a `\"` inside
+//! double quotes end nothing, and `$'...'` takes backslash escapes, so its `\'`
+//! ends nothing either. An unclosed quote runs to the end of the text, which
+//! yields one larger segment rather than an error.
 //!
 //! This is a lexical split, not a shell parser: subshells, command
 //! substitution, heredocs and comments are not interpreted. It makes one pass
@@ -222,6 +220,30 @@ fn shell_script(argv: Vec<serde_json::Value>) -> Option<String> {
         .then_some(script)
 }
 
+/// The byte length of the statement separator at `index` of unquoted shell
+/// text, if one starts there: `;`, a newline, `|`, `||`, `|&`, `&&`, or a
+/// single `&` that runs the command before it in the background. The `&` of a
+/// redirection (`&>`, `>&`, `2>&1`, `<&`) separates nothing. Both the Rule v1
+/// segment scope and the native statement reader split by this rule.
+pub fn statement_separator(bytes: &[u8], index: usize) -> Option<usize> {
+    let next = bytes.get(index + 1).copied();
+    match bytes[index] {
+        b';' | b'\n' => Some(1),
+        b'|' if matches!(next, Some(b'|' | b'&')) => Some(2),
+        b'|' => Some(1),
+        b'&' if next == Some(b'&') => Some(2),
+        b'&' if next == Some(b'>')
+            || index
+                .checked_sub(1)
+                .is_some_and(|previous| matches!(bytes[previous], b'>' | b'<')) =>
+        {
+            None
+        }
+        b'&' => Some(1),
+        _ => None,
+    }
+}
+
 /// Where the segment starting at `start` ends, and where the next one starts.
 fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
     let mut quote = None;
@@ -256,11 +278,11 @@ fn segment_end(bytes: &[u8], start: usize) -> (usize, usize) {
                     }
                 }
                 b'\'' | b'"' => quote = Some(byte),
-                b';' | b'\n' => return (index, index + 1),
-                b'|' if bytes.get(index + 1) == Some(&b'|') => return (index, index + 2),
-                b'|' => return (index, index + 1),
-                b'&' if bytes.get(index + 1) == Some(&b'&') => return (index, index + 2),
-                _ => {}
+                _ => {
+                    if let Some(length) = statement_separator(bytes, index) {
+                        return (index, index + length);
+                    }
+                }
             },
         }
         index += 1;
@@ -477,7 +499,6 @@ mod tests {
             ["a", "b", "c", "d", "e", "f"]
         );
         assert_eq!(split("a\r\nb"), ["a", "b"]);
-        assert_eq!(split("a |& b"), ["a", "& b"]);
     }
 
     #[test]
@@ -587,12 +608,17 @@ mod tests {
     }
 
     #[test]
-    fn single_ampersands_do_not_split() {
+    fn a_background_ampersand_splits_and_a_redirection_ampersand_does_not() {
+        assert_eq!(split("a & b &"), ["a", "b"]);
         assert_eq!(
-            split("curl https://example.invalid/?a=1&b=2 2>&1 &> log; c"),
-            ["curl https://example.invalid/?a=1&b=2 2>&1 &> log", "c"]
+            split("curl https://example.invalid/?a=1&b=2 2>&1 &> log >&2 0<&3; c"),
+            [
+                "curl https://example.invalid/?a=1",
+                "b=2 2>&1 &> log >&2 0<&3",
+                "c"
+            ]
         );
-        assert_eq!(split("a & b"), ["a & b"]);
+        assert_eq!(split("a |& b"), ["a", "b"]);
     }
 
     #[test]

