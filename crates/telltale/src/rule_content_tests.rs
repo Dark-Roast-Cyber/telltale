@@ -348,9 +348,13 @@ fn effective_configuration_agrees_with_the_rule_catalog_entry_by_entry() {
              falsepositives:\n    - 'Synthetic.'\n\
              telltale:\n    score: 40\n    explanation: 'Synthetic replacement.'\n",
     );
+    let policy = Pipeline::builder().policy_document(
+        "version: 1\ndisabled_rules: [execution.shell, chain.download_then_execute]\n",
+    );
     let builders = [
         ("bundled", Pipeline::builder()),
         ("tuned", tuned),
+        ("policy", policy),
         ("replaced chain", replaced_chain),
         ("synthetic", base_builder()),
     ];
@@ -416,9 +420,11 @@ fn effective_configuration_shows_overrides_with_label_and_reason() {
                 id: "syn.base".into(),
                 kind: DefinitionKindV1::Rule,
                 enabled: true,
+                disabled_by: None,
                 session_score: 55,
                 action_score: Some(55),
                 tier: RuleTierV1::Package,
+                replaced_tier: None,
                 package_id: Some("syn.pack".into()),
                 document: None,
                 overrides: vec![AppliedOverrideV1 {
@@ -432,9 +438,11 @@ fn effective_configuration_shows_overrides_with_label_and_reason() {
                 id: "syn.other".into(),
                 kind: DefinitionKindV1::Rule,
                 enabled: false,
+                disabled_by: Some(DisabledByV1::Override),
                 session_score: 15,
                 action_score: None,
                 tier: RuleTierV1::Explicit,
+                replaced_tier: None,
                 package_id: None,
                 document: Some("1".into()),
                 overrides: vec![AppliedOverrideV1 {
@@ -459,11 +467,19 @@ fn effective_configuration_shows_a_replaced_rule_at_the_organization_tier() {
         (
             base.id.as_str(),
             base.tier,
+            base.replaced_tier,
             base.document.as_deref(),
             base.package_id.as_deref(),
             base.session_score,
         ),
-        ("syn.base", RuleTierV1::Organization, Some("acme"), None, 35)
+        (
+            "syn.base",
+            RuleTierV1::Organization,
+            Some(RuleTierV1::Package),
+            Some("acme"),
+            None,
+            35
+        )
     );
 }
 
@@ -514,4 +530,196 @@ fn effective_configuration_identifies_packages_and_documents_by_content_sha256()
             },
         ]
     );
+}
+
+#[test]
+fn effective_configuration_names_what_turned_each_rule_off() {
+    let document = effective(
+        base_builder()
+            .rules_document(
+                rule(
+                    "syn.own",
+                    "6a1f0c2e-1b2c-4d3e-8f40-000000000006",
+                    "syn-own",
+                    10,
+                )
+                .replace("    score: 10\n", "    score: 10\n    enabled: false\n"),
+            )
+            .rules_document(rule(
+                "syn.kept",
+                "6a1f0c2e-1b2c-4d3e-8f40-000000000007",
+                "syn-kept",
+                10,
+            ))
+            .override_document(overrides(
+                "  - rule_id: syn.base\n    reason: Retired.\n    enabled: false\n",
+            ))
+            .policy_document("version: 1\ndisabled_rules: [syn.other]\n"),
+    );
+    assert_eq!(
+        document
+            .definitions
+            .iter()
+            .map(|definition| (
+                definition.id.as_str(),
+                definition.enabled,
+                definition.disabled_by
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("syn.base", false, Some(DisabledByV1::Override)),
+            ("syn.kept", true, None),
+            ("syn.other", false, Some(DisabledByV1::Policy)),
+            ("syn.own", false, Some(DisabledByV1::Definition)),
+        ]
+    );
+}
+
+#[test]
+fn an_override_that_enables_a_rule_the_policy_drops_leaves_it_off_by_policy() {
+    let document = effective(
+        base_builder()
+            .rules_document(
+                rule(
+                    "syn.own",
+                    "6a1f0c2e-1b2c-4d3e-8f40-000000000006",
+                    "syn-own",
+                    10,
+                )
+                .replace("    score: 10\n", "    score: 10\n    enabled: false\n"),
+            )
+            .override_document(overrides(
+                "  - rule_id: syn.own\n    reason: Wanted.\n    enabled: true\n",
+            ))
+            .policy_document("version: 1\ndisabled_rules: [syn.own]\n"),
+    );
+    let own = document
+        .definitions
+        .iter()
+        .find(|definition| definition.id == "syn.own")
+        .unwrap();
+    assert_eq!(
+        (own.enabled, own.disabled_by),
+        (false, Some(DisabledByV1::Policy))
+    );
+}
+
+#[test]
+fn more_override_entries_on_one_rule_than_the_document_holds_fail() {
+    let entry = "  - rule_id: syn.base\n    reason: Synthetic.\n    score: 5\n";
+    let error =
+        rejected(base_builder().labeled_override_document("bulk", overrides(&entry.repeat(257))));
+    assert_eq!(
+        (error.code(), error.document()),
+        (RuleContentErrorCode::ExceedsBounds, Some("override:bulk"))
+    );
+    assert_eq!(error.to_string(), "rule_content_exceeds_bounds");
+    let at_bound = effective(base_builder().override_document(overrides(&entry.repeat(256))));
+    assert_eq!(at_bound.definitions[0].overrides.len(), 256);
+}
+
+#[test]
+fn more_supplied_documents_than_the_document_holds_fail() {
+    let empty = "version: 1\noverrides: []\n";
+    let with = |count: usize| {
+        (0..count).fold(base_builder(), |builder, _| {
+            builder.override_document(empty)
+        })
+    };
+    // With the one `rules_document` of `base_builder`, 1024 inputs fit.
+    assert_eq!(effective(with(1023)).documents.len(), 1024);
+    let error = rejected(with(1024));
+    assert_eq!(
+        (error.code(), error.document()),
+        (RuleContentErrorCode::ExceedsBounds, Some("override:1024"))
+    );
+}
+
+#[test]
+fn input_names_in_errors_use_the_kind_and_label_the_document_reports() {
+    let replacement = rule(BASE, BASE_UUID, "syn-gamma", 35);
+    let tune = overrides("  - rule_id: syn.base\n    reason: Synthetic.\n    score: 5\n");
+    let accepted = effective(
+        base_builder()
+            .labeled_organization_rules_document("acme", &replacement)
+            .rules_document(rule(
+                "syn.added",
+                "6a1f0c2e-1b2c-4d3e-8f40-000000000008",
+                "syn-added",
+                5,
+            ))
+            .labeled_override_document("fleet", &tune),
+    );
+    let reported = accepted
+        .documents
+        .iter()
+        .map(|document| {
+            let kind = serde_json::to_value(document.kind).unwrap();
+            format!("{}:{}", kind.as_str().unwrap(), document.label)
+        })
+        .collect::<Vec<_>>();
+    let organization = rejected(
+        base_builder()
+            .labeled_organization_rules_document("acme", "title: [unparsable\n")
+            .labeled_override_document("fleet", &tune),
+    );
+    let explicit = rejected(base_builder().rules_document(&replacement));
+    let override_input = rejected(
+        base_builder()
+            .labeled_organization_rules_document("acme", &replacement)
+            .labeled_override_document("fleet", "version: 1\noverrides: [unparsable\n"),
+    );
+    assert_eq!(
+        reported,
+        [
+            "organization:acme",
+            "explicit:1",
+            "explicit:2",
+            "override:fleet"
+        ]
+    );
+    assert_eq!(organization.document(), Some(reported[0].as_str()));
+    assert_eq!(explicit.document(), Some(reported[2].as_str()));
+    assert_eq!(override_input.document(), Some(reported[3].as_str()));
+}
+
+#[test]
+fn a_pipeline_over_rule_files_reports_no_document_labels() {
+    let root = tempfile::tempdir().unwrap();
+    let organization = root.path().join("acme.yaml");
+    let tuning = root.path().join("fleet-tuning.yaml");
+    std::fs::write(&organization, rule(BASE, BASE_UUID, "syn-gamma", 35)).unwrap();
+    std::fs::write(
+        &tuning,
+        overrides("  - rule_id: syn.base\n    reason: Noisy in CI.\n    score: 55\n"),
+    )
+    .unwrap();
+    let paths = crate::rule_resolution::RulePackPaths {
+        organization: vec![organization],
+        ..Default::default()
+    };
+    let document = crate::rule_resolution::resolve_rule_set(
+        &paths,
+        &[],
+        Vec::new(),
+        None,
+        RuleLoadMode::CustomOnly,
+        &[tuning],
+        &[],
+    )
+    .unwrap()
+    .into_pipeline()
+    .unwrap()
+    .effective_configuration(&DetailedEvaluationOptions::default())
+    .unwrap();
+    let [base] = document.definitions.as_slice() else {
+        panic!("one definition");
+    };
+    assert_eq!(
+        (base.tier, base.document.as_deref(), base.session_score),
+        (RuleTierV1::Organization, None, 55)
+    );
+    assert_eq!(base.overrides[0].document, None);
+    assert_eq!(base.overrides[0].reason, "Noisy in CI.");
+    assert!(document.documents.is_empty());
 }

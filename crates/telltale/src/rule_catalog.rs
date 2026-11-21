@@ -5,11 +5,11 @@
 //! from and what changed it.
 use std::collections::BTreeMap;
 
-use crate::rule_resolution::effective_definitions;
+use crate::rule_resolution::{DisabledBy, RuleTier, effective_definitions};
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
 use telltale_rules::{DefinitionKind, LoadedDefinition};
 use telltale_schema::effective_configuration::{
-    AppliedOverrideV1, DefinitionKindV1, DocumentKindV1, EFFECTIVE_CONFIGURATION_V1_ID,
+    AppliedOverrideV1, DefinitionKindV1, DisabledByV1, EFFECTIVE_CONFIGURATION_V1_ID,
     EffectiveConfigurationV1, EffectiveDefinitionV1, EffectivePackageV1, PackageOriginV1,
     RuleTierV1,
 };
@@ -366,15 +366,6 @@ impl Pipeline {
             .iter()
             .map(|effective| (effective.definition.id(), effective))
             .collect::<BTreeMap<_, _>>();
-        // The label of the supplied document named `source`; `None` for any
-        // other source, such as a rule file path.
-        let label = |kind: DocumentKindV1, prefix: &str, source: &str| {
-            let label = source.strip_prefix(prefix)?.strip_prefix(':')?;
-            self.documents
-                .iter()
-                .any(|document| document.kind == kind && document.label == label)
-                .then(|| label.to_owned())
-        };
         let mut packages = self
             .rule_packages
             .iter()
@@ -402,27 +393,30 @@ impl Pipeline {
             let loaded = (kind != DefinitionKindV1::ProcessChain)
                 .then(|| view.get(entry.id.as_str()).copied())
                 .flatten();
-            let document = loaded.and_then(|loaded| match loaded.tier {
-                RuleTierV1::Organization => {
-                    label(DocumentKindV1::Organization, "organization", loaded.source)
-                }
-                RuleTierV1::Explicit => label(DocumentKindV1::Explicit, "explicit", loaded.source),
-                _ => None,
-            });
             let overrides = loaded.map_or(&[][..], |loaded| loaded.definition.overrides());
             effective.push(EffectiveDefinitionV1 {
                 kind,
                 enabled: loaded.map_or(entry.enabled, |loaded| loaded.enabled),
+                disabled_by: match loaded {
+                    Some(loaded) => loaded.disabled_by.map(|cause| match cause {
+                        DisabledBy::Definition => DisabledByV1::Definition,
+                        DisabledBy::Override => DisabledByV1::Override,
+                        DisabledBy::Policy => DisabledByV1::Policy,
+                    }),
+                    // A process-chain rule is off only in its definition.
+                    None => (!entry.enabled).then_some(DisabledByV1::Definition),
+                },
                 session_score: loaded
                     .map_or(entry.session_score, |loaded| loaded.definition.score()),
                 action_score: entry.action_score,
-                tier: loaded.map_or(RuleTierV1::Builtin, |loaded| loaded.tier),
+                tier: tier_v1(loaded.map_or(RuleTier::Builtin, |loaded| loaded.tier)),
+                replaced_tier: loaded.and_then(|loaded| loaded.replaced_tier).map(tier_v1),
                 package_id: entry.package_id,
-                document,
+                document: loaded.and_then(|loaded| loaded.label).map(str::to_owned),
                 overrides: overrides
                     .iter()
                     .map(|applied| AppliedOverrideV1 {
-                        document: label(DocumentKindV1::Override, "override", &applied.source),
+                        document: applied.label.clone(),
                         reason: applied.reason.clone(),
                         enabled: applied.enabled,
                         score: applied.score,
@@ -439,8 +433,22 @@ impl Pipeline {
             documents: self.documents.clone(),
             definitions: effective,
         };
-        document.to_json().map_err(|_| catalog_bounds())?;
+        document
+            .to_json()
+            .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
         Ok(document)
+    }
+}
+
+/// The wire form of a tier.
+fn tier_v1(tier: RuleTier) -> RuleTierV1 {
+    match tier {
+        RuleTier::Builtin => RuleTierV1::Builtin,
+        RuleTier::Package => RuleTierV1::Package,
+        RuleTier::Organization => RuleTierV1::Organization,
+        RuleTier::Deployment => RuleTierV1::Deployment,
+        RuleTier::Local => RuleTierV1::Local,
+        RuleTier::Explicit => RuleTierV1::Explicit,
     }
 }
 
@@ -687,6 +695,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_document_the_schema_rejects_fails_with_the_effective_configuration_code() {
+        let mut pipeline = Pipeline::builder().build().unwrap();
+        // More documents than the schema allows, which `build` never yields.
+        pipeline.documents = vec![
+            telltale_schema::effective_configuration::EffectiveDocumentV1 {
+                kind: crate::DocumentKindV1::Policy,
+                label: "1".into(),
+                content_sha256: "a".repeat(64),
+            };
+            1025
+        ];
+        let error = pipeline
+            .effective_configuration(&DetailedEvaluationOptions::default())
+            .unwrap_err();
+        let code = std::error::Error::source(&error)
+            .and_then(|cause| {
+                cause.downcast_ref::<telltale_schema::effective_configuration::EffectiveConfigurationError>()
+            })
+            .map(|cause| cause.code());
+        assert_eq!(code, Some("schema_mismatch"));
     }
 
     const UUID: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";

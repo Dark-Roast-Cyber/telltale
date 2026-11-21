@@ -106,6 +106,8 @@ pub struct EffectiveDefinitionV1 {
     pub kind: DefinitionKindV1,
     /// Whether it takes part in detection, policy and overrides included.
     pub enabled: bool,
+    /// What turned it off; `None` exactly when it is enabled.
+    pub disabled_by: Option<DisabledByV1>,
     /// The session score after overrides.
     pub session_score: u64,
     /// The individual action score; `None` when the definition does not
@@ -113,6 +115,9 @@ pub struct EffectiveDefinitionV1 {
     pub action_score: Option<u64>,
     /// The tier whose definition is in effect.
     pub tier: RuleTierV1,
+    /// The tier of the definition this one replaced by ID; `None` when it
+    /// replaced nothing.
+    pub replaced_tier: Option<RuleTierV1>,
     /// The package that ships the definition; `None` for other content.
     pub package_id: Option<String>,
     /// The `label` of the supplied document of kind `tier` that defines it;
@@ -131,6 +136,19 @@ pub enum DefinitionKindV1 {
     Modifier,
     /// A rule of the bundled process-chain pack.
     ProcessChain,
+}
+
+/// What turned a definition off, checked in this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisabledByV1 {
+    /// Its own definition: `enabled: false`, or a status that loads it
+    /// disabled, and no override sets `enabled`.
+    Definition,
+    /// The last override entry that sets `enabled` sets `false`.
+    Override,
+    /// It is enabled before policy, and the rule policy leaves it out.
+    Policy,
 }
 
 /// Rule content tiers, lowest first; a higher tier replaces a definition in
@@ -244,9 +262,11 @@ mod tests {
                 id: "syn.base".into(),
                 kind: DefinitionKindV1::Rule,
                 enabled: true,
+                disabled_by: None,
                 session_score: 55,
                 action_score: Some(55),
                 tier: RuleTierV1::Package,
+                replaced_tier: None,
                 package_id: Some("syn.pack".into()),
                 document: None,
                 overrides: vec![AppliedOverrideV1 {
@@ -320,6 +340,27 @@ mod tests {
                 result.err().map(|error| error.code()),
                 expected,
                 "{reason:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_cause_is_present_exactly_when_a_definition_is_disabled() {
+        for (enabled, disabled_by, expected) in [
+            (true, json!(null), None),
+            (false, json!("policy"), None),
+            (false, json!(null), Some("schema_mismatch")),
+            (true, json!("override"), Some("schema_mismatch")),
+            (false, json!("status"), Some("schema_mismatch")),
+        ] {
+            let mut value = serde_json::to_value(document()).unwrap();
+            value["definitions"][0]["enabled"] = json!(enabled);
+            value["definitions"][0]["disabled_by"] = disabled_by.clone();
+            let result = EffectiveConfigurationV1::from_json(&serde_json::to_vec(&value).unwrap());
+            assert_eq!(
+                result.err().map(|error| error.code()),
+                expected,
+                "{enabled} {disabled_by}"
             );
         }
     }

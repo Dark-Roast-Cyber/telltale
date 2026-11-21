@@ -531,6 +531,7 @@ document text, rule IDs, or paths. `Display` is the code's text.
 | `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
 | `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, or that sets nothing |
 | `UnknownRuleId` | an override `rule_id` that no rule has |
+| `ExceedsBounds` | more than 1024 text inputs in all, or more than 256 override entries applied to one rule |
 
 ```rust,no_run
 use telltale_core::{Pipeline, PipelineError, RuleContentError, RuleContentErrorCode};
@@ -665,10 +666,14 @@ came from instead of display metadata:
   `override` or `policy`) by label, or by 1-based position among its kind when
   unlabelled, and content SHA-256;
 - `definitions`: per rule, chain modifier and enabled process-chain rule, its
-  effective `enabled` flag, session and action scores, the tier whose
-  definition is in effect, the package or supplied document that defines it,
-  and each override applied to it, in order, with its document label, its
-  `reason` and the values it set.
+  effective `enabled` flag and, when it is off, `disabled_by`: `definition`
+  (its own definition, and no override sets `enabled`), `override` (the last
+  override that sets `enabled` sets `false`) or `policy` (enabled until the
+  policy left it out); its session and action scores, the tier whose
+  definition is in effect and `replaced_tier`, the tier of the definition it
+  replaced by ID; the package or supplied document that defines it; and each
+  override applied to it, in order, with its document label, its `reason`
+  and the values it set.
 
 The document holds no rule matchers, paths or document text; the override
 `reason`, at most 256 characters without control or invisible formatting
