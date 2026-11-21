@@ -2106,6 +2106,58 @@ mod tests {
         (response, base.into_owned())
     }
 
+    /// A projection past its budget goes straight to its pieces. When the
+    /// piece time limit has already passed, none is scanned, and the call
+    /// gets `on_unevaluable`, never an allow on "no finding".
+    #[test]
+    fn a_projection_past_its_budget_with_no_piece_time_left_gets_on_unevaluable() {
+        use crate::hooks::config::OnError;
+        for (policy, expected) in [(OnError::Ask, Verdict::Ask), (OnError::Deny, Verdict::Deny)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut runtime = Runtime::new(Config {
+                mode: Mode::Enforce,
+                state_dir: Some(dir.path().join("state")),
+                on_unevaluable: policy,
+                ..Config::default()
+            });
+            let ctx = Context {
+                harness: "claude-code",
+                hook_event: "PreToolUse".to_owned(),
+                session_id: "s".to_owned(),
+                agent_id: None,
+                agent_type: None,
+                prompt_id: None,
+                permission_mode: None,
+                cwd: None,
+                can_ask: true,
+            };
+            let call = ToolCall {
+                tool_use_id: Some("toolu_1".to_owned()),
+                tool_name: "Bash".to_owned(),
+                input: json!({"command": "ls", "d": "d".repeat(400_000)}),
+            };
+            let projected = crate::hooks::projection::project(&call.input).unwrap();
+            assert!(projected.past_budget);
+            let mut session = runtime.open(&ctx).unwrap();
+            let id = RequestIdentity::next(&mut session, &call);
+            let mut budget = RecoveryBudget::already_spent(crate::hooks::engine::PIECE_SCAN_LIMIT);
+            let (result, _, _) =
+                runtime.evaluate_projected(&ctx, &mut session, &id, &call, &projected, &mut budget);
+            assert_eq!(budget.trace().pieces_scanned, 0);
+            let decision = runtime.decide_request(
+                &ctx,
+                &session,
+                result,
+                projected.separated,
+                false,
+                false,
+                false,
+            );
+            assert_eq!(decision.outcome.verdict, expected);
+            assert_eq!(decision.outcome.basis, Basis::UnevaluableInput);
+        }
+    }
+
     #[test]
     fn a_build_failure_with_no_operator_files_is_never_an_allow_by_default() {
         let (response, base) = after_a_build_failure(|_| {}, true);
