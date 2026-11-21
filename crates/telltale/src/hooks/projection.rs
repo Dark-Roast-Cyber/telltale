@@ -40,10 +40,11 @@
 //!
 //! The work is bounded: at most [`MAX_VARIANTS`] variants, and no more values
 //! or pieces of values than they hold. Past that budget a bounded set of
-//! variants is still evaluated rather than none: a command first, then the
-//! other top-level values, then nested ones, and the first chunk of every
-//! value ahead of later ones; the first block of short top-level values goes
-//! into every variant. What does not fit is not evaluated, and is reported as
+//! variants is still evaluated rather than none: a short command and the first
+//! block of short top-level values go into every variant, every chunk of a
+//! longer command comes ahead of other values, and then the start of other
+//! values while variants remain. Within the budget the layout follows the
+//! input's own order. What does not fit is not evaluated, and is reported as
 //! separated, so it floors the verdict like anything else kept apart.
 
 use serde_json::{Map, Value};
@@ -160,8 +161,9 @@ fn scalar_items(value: &Value) -> Option<Vec<String>> {
         .and_then(|items| items.iter().map(scalar_text).collect())
 }
 
-/// Flatten to at most [`MAX_LEAVES`] leaves: a command first, then the other
-/// top-level values, then nested ones, whatever their names sort as.
+/// Flatten to at most [`MAX_LEAVES`] leaves, in the input's order; past that,
+/// a command first, then the other top-level values, then nested ones,
+/// whatever their names sort as.
 fn flatten(value: &Value) -> Flat {
     fn walk(prefix: &str, value: &Value, depth: usize, out: &mut Vec<Leaf>) -> bool {
         if out.len() >= MAX_LEAVES {
@@ -193,13 +195,62 @@ fn flatten(value: &Value) -> Flat {
             other => leaf(other.to_string(), out),
         }
     }
-    let mut leaves = Vec::new();
-    let mut containers = Vec::new();
-    let mut complete = true;
+    /// The members in this order, up to [`MAX_LEAVES`] leaves.
+    fn members<'a>(members: impl Iterator<Item = (&'a String, &'a Value)>) -> Flat {
+        let mut leaves = Vec::new();
+        let mut containers = Vec::new();
+        let mut complete = true;
+        for (key, member) in members {
+            if leaves.len() >= MAX_LEAVES {
+                complete = false;
+                break;
+            }
+            let before = leaves.len();
+            // Telltale reads a top-level array of strings by its member's
+            // name too (an argv `command`, `paths`), so it is not flattened
+            // into members of other names. An argv is joined as Telltale
+            // joins it, and is then one command like any other.
+            if let Some(items) = scalar_items(member) {
+                if is_command_key(key) {
+                    leaves.push(Leaf {
+                        key: key.clone(),
+                        text: items.join(" "),
+                        top: true,
+                        list: None,
+                    });
+                } else {
+                    let room = MAX_LEAVES - leaves.len();
+                    complete &= items.len() <= room;
+                    leaves.extend(items.into_iter().take(room).map(|text| Leaf {
+                        key: key.clone(),
+                        text,
+                        top: false,
+                        list: Some(before),
+                    }));
+                }
+                continue;
+            }
+            complete &= walk(key, member, 1, &mut leaves);
+            if leaves.len() > before && (member.is_object() || member.is_array()) {
+                containers.push(key.clone());
+            }
+        }
+        Flat {
+            leaves,
+            containers,
+            complete,
+        }
+    }
     match value {
         Value::Object(map) => {
-            let mut members: Vec<_> = map.iter().collect();
-            members.sort_by_cached_key(|(key, member)| {
+            let flat = members(map.iter());
+            if flat.complete {
+                return flat;
+            }
+            // Past the budget, what comes first is what is projected: a
+            // command, then the other top-level values, then nested ones.
+            let mut sorted: Vec<_> = map.iter().collect();
+            sorted.sort_by_cached_key(|(key, member)| {
                 let nested = match member {
                     Value::Object(_) => true,
                     Value::Array(items) => {
@@ -209,49 +260,18 @@ fn flatten(value: &Value) -> Flat {
                 };
                 (!is_command_key(key), nested)
             });
-            for (key, member) in members {
-                if leaves.len() >= MAX_LEAVES {
-                    complete = false;
-                    break;
-                }
-                let before = leaves.len();
-                // Telltale reads a top-level array of strings by its member's
-                // name too (an argv `command`, `paths`), so it is not
-                // flattened into members of other names. An argv is joined as
-                // Telltale joins it, and is then one command like any other.
-                if let Some(items) = scalar_items(member) {
-                    if is_command_key(key) {
-                        leaves.push(Leaf {
-                            key: key.clone(),
-                            text: items.join(" "),
-                            top: true,
-                            list: None,
-                        });
-                    } else {
-                        let room = MAX_LEAVES - leaves.len();
-                        complete &= items.len() <= room;
-                        leaves.extend(items.into_iter().take(room).map(|text| Leaf {
-                            key: key.clone(),
-                            text,
-                            top: false,
-                            list: Some(before),
-                        }));
-                    }
-                    continue;
-                }
-                complete &= walk(key, member, 1, &mut leaves);
-                if leaves.len() > before && (member.is_object() || member.is_array()) {
-                    containers.push(key.clone());
-                }
-            }
+            members(sorted.into_iter())
         }
         // Not an object: no member has a name Telltale could route on.
-        other => complete = walk("input", other, 2, &mut leaves),
-    }
-    Flat {
-        leaves,
-        containers,
-        complete,
+        other => {
+            let mut leaves = Vec::new();
+            let complete = walk("input", other, 2, &mut leaves);
+            Flat {
+                leaves,
+                containers: Vec::new(),
+                complete,
+            }
+        }
     }
 }
 
@@ -457,44 +477,60 @@ pub fn project(input: &Value) -> Option<Projection> {
     if leaves.is_empty() {
         return None;
     }
-    let mut separated = !complete;
+    // Everything is in some variant; past the budget it is not.
+    let mut whole = complete;
+    let mut separated = false;
     let mut rewritten = false;
+    let command_leaf = |index: usize| {
+        leaves
+            .get(index)
+            .is_some_and(|leaf| leaf.top && is_command_key(&leaf.key))
+    };
     // Anchors, and the pieces of the other leaves: each leaf's chunks, a
-    // later chunk of a command behind the head of that command.
+    // later chunk of a command behind the head of that command. A command is
+    // cut first, so that no other value takes the room of its pieces, and
+    // each leaf keeps its place in the input's order.
     let mut anchors: Vec<Item> = Vec::new();
-    let mut pieces: Vec<Vec<Item>> = Vec::new();
-    let mut count = 0;
+    let mut long: Vec<(usize, String)> = Vec::new();
+    let item = |index: usize, text: String, rewritten: &mut bool| {
+        let leaf = &leaves[index];
+        let key = bounded_key(&leaf.key, leaf.list.unwrap_or(index));
+        Item::new(key, text, leaf.list.is_some(), index, rewritten)
+    };
     for (index, leaf) in leaves.iter().enumerate() {
         // Telltale evaluates the normalized text, and bounds it.
         let text: String = leaf.text.nfc().collect();
-        let mut item = |text: String| {
-            let key = bounded_key(&leaf.key, leaf.list.unwrap_or(index));
-            Item::new(key, text, leaf.list.is_some(), index, &mut rewritten)
-        };
         if leaf.top && text.len() <= ANCHOR_BYTES {
-            anchors.push(item(text));
-            continue;
+            anchors.push(item(index, text, &mut rewritten));
+        } else {
+            long.push((index, text));
         }
-        let command = leaf.top && is_command_key(&leaf.key);
+    }
+    long.sort_by_key(|(index, _)| !command_leaf(*index));
+    let mut pieces: Vec<Vec<Item>> = leaves.iter().map(|_| Vec::new()).collect();
+    let mut count = 0;
+    for (index, text) in long {
+        let command = command_leaf(index);
         // No more pieces than variants can hold: the rest is not cut.
-        let (mut chunks, whole) = chunks(&text);
+        let (mut chunks, all) = chunks(&text);
         chunks.truncate(MAX_LEAVES - count);
+        whole &= all && !chunks.is_empty();
         if chunks.is_empty() {
-            separated = true;
             continue;
         }
         count += chunks.len();
-        separated |= !whole || (command && chunks.len() > 1);
+        separated |= command && chunks.len() > 1;
         let head = cut(&text, HEAD_BYTES);
-        let mut items = vec![item(chunks[0].to_owned())];
+        let mut items = vec![item(index, chunks[0].to_owned(), &mut rewritten)];
         for chunk in &chunks[1..] {
-            items.push(item(if command {
+            let text = if command {
                 format!("{head}{chunk}")
             } else {
                 (*chunk).to_owned()
-            }));
+            };
+            items.push(item(index, text, &mut rewritten));
         }
-        pieces.push(items);
+        pieces[index] = items;
     }
     for (index, key) in containers.iter().enumerate() {
         let key = bounded_key(key, leaves.len() + index);
@@ -506,7 +542,7 @@ pub fn project(input: &Value) -> Option<Projection> {
             &mut rewritten,
         ));
     }
-    separated |= rewritten;
+    separated |= rewritten || !whole;
     // The rest, first chunks first: the first chunks of all leaves side by
     // side, then the second ones, and so on.
     let mut rest: Vec<Item> = Vec::with_capacity(count);
@@ -534,7 +570,9 @@ pub fn project(input: &Value) -> Option<Projection> {
         VARIANT_BYTES - 2 - largest,
     );
     let pairs = blocks.len() * (blocks.len() - 1) / 2;
-    if pairs + groups.len() * blocks.len() <= MAX_VARIANTS {
+    // Past the budget, a pair of blocks without a command is not worth a
+    // variant: then every variant holds the first block.
+    if (whole || blocks.len() == 1) && pairs + groups.len() * blocks.len() <= MAX_VARIANTS {
         let mut variants = Vec::new();
         for group in &groups {
             for block in &blocks {
@@ -559,26 +597,36 @@ pub fn project(input: &Value) -> Option<Projection> {
     // covered, and the caller is told that values which may belong together
     // are apart.
     let lead = blocks[0].len();
-    let all: Vec<Item> = anchors.into_iter().chain(rest).collect();
-    let groups = pack(&all, LEAVES_PER_VARIANT, VARIANT_BYTES - 2);
-    if groups.len() <= MAX_VARIANTS {
-        return Some(Projection {
-            variants: groups.into_iter().map(|group| variant(&[group])).collect(),
-            separated: true,
-        });
+    let anchor_count = anchors.len();
+    let mut all: Vec<Item> = anchors.into_iter().chain(rest).collect();
+    if whole {
+        let groups = pack(&all, LEAVES_PER_VARIANT, VARIANT_BYTES - 2);
+        if groups.len() <= MAX_VARIANTS {
+            return Some(Projection {
+                variants: groups.into_iter().map(|group| variant(&[group])).collect(),
+                separated: true,
+            });
+        }
     }
     // Past the budget: the first block of anchors, a command first, goes into
-    // every variant, beside as many groups of the rest as the budget holds.
-    let (first, rest) = all.split_at(lead);
+    // every variant. Beside it go a command's pieces, each in a group of its
+    // own, then the other anchors, then the other pieces, first chunks first,
+    // as many groups as the budget holds.
+    let mut others = all.split_off(lead);
+    let pieces = others.split_off(anchor_count - lead);
+    let (commands, pieces): (Vec<Item>, Vec<Item>) =
+        pieces.into_iter().partition(|item| command_leaf(item.leaf));
+    let rest: Vec<Item> = commands.into_iter().chain(others).chain(pieces).collect();
+    let first = all;
     let groups = pack(
-        rest,
+        &rest,
         LEAVES_PER_VARIANT - first.len(),
-        VARIANT_BYTES - 2 - bytes_of(first),
+        VARIANT_BYTES - 2 - bytes_of(&first),
     );
     let variants = groups
         .iter()
         .take(MAX_VARIANTS)
-        .map(|group| variant(&[first, group]))
+        .map(|group| variant(&[&first, group]))
         .collect();
     Some(Projection {
         variants,
@@ -946,32 +994,30 @@ mod tests {
         }
     }
 
-    /// Past each limit of the budget, a bounded set of variants is still
-    /// evaluated, the short command among them, and the rest is reported.
-    #[test]
-    fn past_the_budget_a_bounded_set_of_variants_still_holds_the_command() {
-        let command = "rm -f /w/.claude/settings.json";
-        let tiny = |prefix: &str, n: usize| -> Map<String, Value> {
+    /// Inputs past each limit of the budget beside `command`: more values than
+    /// the variants hold (nested, and at the top level), more variants, a value
+    /// of more chunks, and more pieces.
+    fn past_the_budget(command: &str) -> Vec<(&'static str, Value)> {
+        let values = |prefix: &str, n: usize, size: usize| -> Map<String, Value> {
             (0..n)
-                .map(|i| (format!("{prefix}{i:04}"), json!("x")))
+                .map(|i| (format!("{prefix}{i:04}"), json!("p".repeat(size))))
                 .collect()
         };
-        let nested = |n: usize, size: usize| -> Map<String, Value> {
-            (0..n)
-                .map(|i| (format!("k{i:04}"), json!("p".repeat(size))))
-                .collect()
+        let top = |n: usize, size: usize| {
+            let mut members = values("a", n, size);
+            members.insert("command".to_owned(), json!(command));
+            Value::Object(members)
         };
-        let mut flat = tiny("a", 3000);
-        flat.insert("command".to_owned(), json!(command));
-        let cases = [
+        vec![
             (
                 "values nested",
-                json!({"command": command, "meta": tiny("k", 3000)}),
+                json!({"command": command, "meta": values("k", 3000, 1)}),
             ),
-            ("values at the top level", Value::Object(flat)),
+            ("values at the top level", top(3000, 1)),
+            ("larger values at the top level", top(2100, 1000)),
             (
                 "variants",
-                json!({"command": command, "meta": nested(2000, 100)}),
+                json!({"command": command, "meta": values("k", 700, 3000)}),
             ),
             (
                 "chunks",
@@ -979,14 +1025,23 @@ mod tests {
             ),
             (
                 "pieces",
-                json!({"command": command, "meta": nested(20, 300_000)}),
+                json!({"command": command, "a": values("k", 20, 300_000)}),
             ),
-        ];
-        for (label, input) in cases {
+        ]
+    }
+
+    /// Past each limit of the budget a bounded set of variants is evaluated,
+    /// a short command in every one of them, and the rest is reported.
+    #[test]
+    fn an_input_past_the_budget_has_its_short_command_in_every_variant() {
+        let command = "rm -f /w/.claude/settings.json";
+        for (label, input) in past_the_budget(command) {
             let projection = project(&input).unwrap_or_else(|| panic!("{label}"));
             within_bounds(&projection.variants);
             assert!(projection.separated, "{label}");
-            assert!(together(&projection.variants, &["command"]), "{label}");
+            for v in &projection.variants {
+                assert_eq!(v["command"], command, "{label}");
+            }
         }
         // A value cut short is covered from its start.
         let long = format!("HEAD{}", "x".repeat(CHUNK_BYTES * MAX_VARIANTS * 2));
@@ -994,6 +1049,49 @@ mod tests {
         within_bounds(&projection.variants);
         assert!(projection.separated);
         assert!(covered(&projection.variants, "HEAD"));
+    }
+
+    /// A command longer than an anchor, or than a chunk, is evaluated whole,
+    /// up to its own chunk limit, however far past the budget the input is.
+    #[test]
+    fn an_input_past_the_budget_has_every_chunk_of_a_long_command() {
+        let over_anchor = format!("rm -f /w/.claude/settings.json; echo {}", "a".repeat(1100));
+        let chunked = format!("echo {}; rm -f /w/.claude/settings.json", "a".repeat(9000));
+        for command in [over_anchor, chunked] {
+            for (label, input) in past_the_budget(&command) {
+                let projection = project(&input).unwrap_or_else(|| panic!("{label}"));
+                within_bounds(&projection.variants);
+                assert!(projection.separated, "{label}");
+                assert!(covered(&projection.variants, &command[..40]), "{label}");
+                let end = &command[command.len() - 40..];
+                assert!(
+                    covered(&projection.variants, end),
+                    "{label} {}",
+                    command.len()
+                );
+            }
+        }
+    }
+
+    /// Within the budget, the layout follows the input's own member order:
+    /// values first chunks first, packed in that order.
+    #[test]
+    fn an_input_within_the_budget_keeps_its_layout() {
+        let p = "p".repeat(2900);
+        let input = json!({
+            "a": {"k0": p, "k1": p, "k2": p, "k3": p, "k4": p},
+            "b": "z".repeat(5000),
+        });
+        let projection = project(&input).unwrap();
+        assert!(!projection.separated);
+        assert_eq!(
+            projection.variants,
+            vec![
+                json!({"a": "", "a.k0": p, "a.k1": p, "a.k2": p, "a.k3": p, "a.k4": p}),
+                json!({"a": "", "b": "z".repeat(3000)}),
+                json!({"a": "", "b": "z".repeat(2512)}),
+            ]
+        );
     }
 
     #[test]

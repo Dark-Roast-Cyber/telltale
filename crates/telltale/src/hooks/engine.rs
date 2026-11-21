@@ -349,6 +349,8 @@ impl Engine {
         let pending_bytes = pending.iter().map(|line| line.to_jsonl().len()).sum();
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
         let mut failure_code = None;
+        // With no history, the scan of `pending` alone is this one again.
+        let mut alone = None;
         if budget.admits(whole_bytes) {
             let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
@@ -358,13 +360,16 @@ impl Engine {
                     ..whole
                 });
             }
-            failure_code = whole.failure_code;
+            failure_code = whole.failure_code.clone();
+            alone = history.is_empty().then_some(whole);
         }
         // A projection's variants scanned together come ahead of the piece
         // loop and are bound by the same limit: past it, none is scanned.
         let late = pending.len() > 1 && !budget.pieces_in_time();
         let mut best = if late {
             Evaluation::not_evaluated(focus.len(), 0)
+        } else if let Some(alone) = alone {
+            alone
         } else {
             let scan = self.scan(client, window_path, pending.iter(), focus)?;
             budget.observe(pending_bytes, scan.scan_ms);

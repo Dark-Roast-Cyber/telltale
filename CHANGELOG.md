@@ -11,12 +11,16 @@
 - **A hooks tool call past the projection budget is still evaluated.** A tool
   input with more values or bytes than the bounded projection variants hold
   used to be unevaluable as a whole and got `on_unevaluable`. It is now
-  evaluated on a bounded set of variants, a command and other short top-level
-  values first: a rule finding there keeps its force, and the unprojected
-  remainder floors the decision at `on_unevaluable` (recorded as
-  `pending_input_separated`). The work per call stays bounded by the same
-  variant limit, and a projected call whose evaluation has already passed the
-  piece time limit is no longer scanned ahead of the piece loop: it records
+  evaluated on a bounded set of variants: a short command and the first block
+  of short top-level values with every variant, every chunk of a longer
+  command ahead of other values, then the start of other values while variants
+  remain. A rule finding there keeps its force, and the unprojected remainder
+  floors the decision at `on_unevaluable` (recorded as
+  `pending_input_separated`). An input of 1,025 to 2,048 values, previously
+  unevaluable, is now projected in full. The work per call stays bounded by
+  the same variant limit; a call with no session history is no longer scanned
+  twice ahead of the piece loop, and a projected call whose evaluation has
+  already passed the piece time limit is not scanned there at all: it records
   `pending_pieces_unscanned` and follows `on_unevaluable`.
 
 - **Destructive Git detection distinguishes more requests from plain previews.**

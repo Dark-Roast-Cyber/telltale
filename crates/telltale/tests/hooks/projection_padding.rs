@@ -208,29 +208,31 @@ fn thirty_one_siblings_cannot_lower_a_deny() {
     assert_denied(&cases);
 }
 
-/// Inputs past each limit of the projection budget, `command` beside the
-/// padding: more values than the variants hold (nested, and top-level members
-/// that sort ahead of the command), more variants than the budget, a value of
-/// more chunks than the budget, and more pieces than the budget.
+/// Inputs past each limit of the projection budget beside `command`: more
+/// values than the variants hold (nested, and at the top level), more variants
+/// than the budget, a value of more chunks than the budget, and more pieces
+/// than the budget.
 fn past_the_budget(command: &str) -> Vec<(String, Value)> {
-    let tiny = |prefix: &str, n: usize| -> Vec<(String, Value)> {
+    let values = |prefix: &str, n: usize, size: usize| -> serde_json::Map<String, Value> {
         (0..n)
-            .map(|i| (format!("{prefix}{i:04}"), json!("x")))
+            .map(|i| (format!("{prefix}{i:04}"), json!(pad(i % 1000, size, 'p'))))
             .collect()
     };
-    let mut flat = json!({ "command": command });
-    for (key, value) in tiny("a", 3000) {
-        flat[key] = value;
-    }
+    let top = |n: usize, size: usize| {
+        let mut members = values("a", n, size);
+        members.insert("command".to_owned(), json!(command));
+        Value::Object(members)
+    };
     vec![
         (
             "values nested".to_owned(),
-            json!({ "command": command, "meta": Value::Object(tiny("k", 3000).into_iter().collect()) }),
+            json!({ "command": command, "meta": values("k", 3000, 4) }),
         ),
-        ("values at the top level".to_owned(), flat),
+        ("values at the top level".to_owned(), top(3000, 4)),
+        ("larger values at the top level".to_owned(), top(2100, 1000)),
         (
             "variants".to_owned(),
-            padded(command, Shape::Nested, 2000, 100, 'p'),
+            padded(command, Shape::Nested, 700, 3000, 'p'),
         ),
         (
             "chunks".to_owned(),
@@ -238,9 +240,14 @@ fn past_the_budget(command: &str) -> Vec<(String, Value)> {
         ),
         (
             "pieces".to_owned(),
-            padded(command, Shape::Nested, 20, 300_000, 'p'),
+            json!({ "command": command, "a": values("k", 20, 300_000) }),
         ),
     ]
+}
+
+/// A denied command just over the anchor size.
+fn long_denied_commands() -> [String; 1] {
+    [format!("{DENIED}; echo {}", "a".repeat(1100))]
 }
 
 /// The decision record of a Bash call with `input`, in a session of its own.
@@ -251,17 +258,24 @@ fn decision(h: &mut Harness, label: &str, input: Value) -> Value {
     h.decision_for(&id)
 }
 
-/// Past the projection budget a bounded set of variants is evaluated, the
-/// short command in every one: a deny still decides, under both policies.
+/// An input past the projection budget is evaluated on a bounded set of
+/// variants that holds its command: a rule deny still decides, under both
+/// policies, whether the command is short or just over the anchor size.
 #[test]
-fn padding_past_the_projection_budget_cannot_lower_a_deny() {
-    assert_denied(&past_the_budget(DENIED));
+fn an_input_past_the_projection_budget_keeps_a_rule_deny() {
+    let mut cases = past_the_budget(DENIED);
+    for command in long_denied_commands() {
+        for (label, input) in past_the_budget(&command) {
+            cases.push((format!("{} byte command, {label}", command.len()), input));
+        }
+    }
+    assert_denied(&cases);
 }
 
-/// What could not be evaluated is not an allow: the same padding beside a
+/// What could not be evaluated is not an allow: the same input beside a
 /// command no rule denies gets `on_unevaluable`, whatever it is set to.
 #[test]
-fn padding_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
+fn an_input_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
     let mut failures = Vec::new();
     for (policy, mut h, expected) in [
         ("default", Harness::new(), "ask"),
@@ -284,7 +298,7 @@ fn padding_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
 /// However large the input, a call past the budget evaluates at most 128
 /// variants: its window holds no more records than that.
 #[test]
-fn a_call_past_the_projection_budget_evaluates_a_bounded_number_of_variants() {
+fn an_input_past_the_projection_budget_evaluates_a_bounded_number_of_variants() {
     let mut h = Harness::new();
     let mut failures = Vec::new();
     for (n, (label, input)) in past_the_budget(DENIED).into_iter().enumerate() {
