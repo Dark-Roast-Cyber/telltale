@@ -2097,9 +2097,10 @@ mod recovery_tests {
         assert!(tried_first_to_last(&[]).is_empty());
     }
 
-    fn budget_used(used: Duration, ms_per_byte: f64) -> RecoveryBudget {
+    fn budget_used(limits: Limits, used: Duration, ms_per_byte: f64) -> RecoveryBudget {
         RecoveryBudget {
             ms_per_byte,
+            limits,
             ..RecoveryBudget::already_spent(used)
         }
     }
@@ -2187,24 +2188,36 @@ mod recovery_tests {
 
     /// `used` is what the evaluation has already spent. The budget starts after the
     /// engine is built, so that the build is not charged to it.
-    fn evaluate_with(command: String, used: Duration) -> (Evaluation, usize) {
-        evaluate_projected_with(pieces(command), used)
+    /// `limits` are the evaluation's.
+    fn evaluate_with(command: String, limits: Limits, used: Duration) -> (Evaluation, usize) {
+        evaluate_projected_with(pieces(command), limits, used)
     }
 
     fn evaluate_projected_with(
         lines: (Vec<Line>, Vec<Focus>),
+        limits: Limits,
         used: Duration,
     ) -> (Evaluation, usize) {
-        evaluate_lines(lines, used, PendingScan::Together)
+        evaluate_lines(lines, limits, used, PendingScan::Together)
+    }
+
+    /// No piece time limit a loaded host reaches: a test of what the pieces
+    /// find does not depend on the runner's speed.
+    fn time_for_every_piece() -> Limits {
+        Limits {
+            piece_scan: Duration::from_secs(3600),
+            ..Limits::default()
+        }
     }
 
     fn evaluate_lines(
         (lines, focus): (Vec<Line>, Vec<Focus>),
+        limits: Limits,
         used: Duration,
         scan: PendingScan,
     ) -> (Evaluation, usize) {
         let (dir, engine) = engine();
-        let mut budget = budget_used(used, 0.0);
+        let mut budget = budget_used(limits, used, 0.0);
         let request = Request {
             client: ClientId::Claude,
             window_path: &dir.path().join("window.jsonl"),
@@ -2267,6 +2280,7 @@ mod recovery_tests {
     fn a_spent_budget_does_not_stop_the_pieces_of_a_call_past_capacity() {
         let (evaluation, lines) = evaluate_with(
             format!("echo {}; {DENY}; echo {}", hosts(0, 400), hosts(400, 14600)),
+            time_for_every_piece(),
             RECOVERY_BUDGET,
         );
         assert_eq!(evaluation.unevaluated_focus, lines, "in pieces");
@@ -2308,6 +2322,7 @@ mod recovery_tests {
     fn an_evaluation_already_past_the_limit_scans_no_piece() {
         let (evaluation, lines) = evaluate_with(
             format!("{DENY}; echo {}", hosts(0, 15000)),
+            Limits::default(),
             PIECE_SCAN_LIMIT,
         );
         assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
@@ -2332,7 +2347,8 @@ mod recovery_tests {
     /// scanned, and the runtime applies `on_unevaluable`.
     #[test]
     fn a_projection_already_past_the_limit_is_not_scanned_together() {
-        let (evaluation, lines) = evaluate_projected_with(accepted_whole(), PIECE_SCAN_LIMIT);
+        let (evaluation, lines) =
+            evaluate_projected_with(accepted_whole(), Limits::default(), PIECE_SCAN_LIMIT);
         assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(evaluation.status, EvalStatus::NotEvaluated);
         assert_eq!(evaluation.unevaluated_focus, lines);
@@ -2344,7 +2360,8 @@ mod recovery_tests {
     /// found keeps its force.
     #[test]
     fn a_projection_within_the_limit_is_scanned_together_and_keeps_its_deny() {
-        let (evaluation, _) = evaluate_projected_with(accepted_whole(), RECOVERY_BUDGET);
+        let (evaluation, _) =
+            evaluate_projected_with(accepted_whole(), time_for_every_piece(), RECOVERY_BUDGET);
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
         assert_eq!(evaluation.unevaluated_focus, 0);
@@ -2368,8 +2385,12 @@ mod recovery_tests {
     /// and a deny in the last of them is found.
     #[test]
     fn a_projection_past_the_budget_goes_straight_to_its_pieces() {
-        let (evaluation, lines) =
-            evaluate_lines(past_the_budget(), Duration::ZERO, PendingScan::PiecesOnly);
+        let (evaluation, lines) = evaluate_lines(
+            past_the_budget(),
+            time_for_every_piece(),
+            Duration::ZERO,
+            PendingScan::PiecesOnly,
+        );
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
         assert_eq!(
@@ -2389,8 +2410,12 @@ mod recovery_tests {
     /// the piece loop, which finds the deny.
     #[test]
     fn variants_past_the_budget_are_never_scanned_together() {
-        let (evaluation, lines) =
-            evaluate_lines(split_command(), Duration::ZERO, PendingScan::PiecesOnly);
+        let (evaluation, lines) = evaluate_lines(
+            split_command(),
+            time_for_every_piece(),
+            Duration::ZERO,
+            PendingScan::PiecesOnly,
+        );
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(
             evaluation.unevaluated_focus, lines,
@@ -2401,16 +2426,20 @@ mod recovery_tests {
     /// The same variants within the budget are scanned together, as before.
     #[test]
     fn variants_within_the_budget_are_scanned_together() {
-        let (evaluation, _) =
-            evaluate_lines(split_command(), Duration::ZERO, PendingScan::Together);
+        let (evaluation, _) = evaluate_lines(
+            split_command(),
+            time_for_every_piece(),
+            Duration::ZERO,
+            PendingScan::Together,
+        );
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(evaluation.unevaluated_focus, 0, "scanned together");
     }
 
     #[test]
     fn the_piece_limit_is_later_than_the_budget() {
-        assert!(budget_used(RECOVERY_BUDGET, 0.0).pieces_in_time());
-        assert!(!budget_used(PIECE_SCAN_LIMIT, 0.0).pieces_in_time());
+        assert!(budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).pieces_in_time());
+        assert!(!budget_used(Limits::default(), PIECE_SCAN_LIMIT, 0.0).pieces_in_time());
     }
 
     #[test]
@@ -2419,11 +2448,13 @@ mod recovery_tests {
         assert!(fresh.admits(usize::MAX / 2), "nothing measured yet");
         // 1 MB at 0.5 ms per KB: 500 ms, doubled.
         let rate = 0.0005;
-        assert!(budget_used(Duration::from_millis(900), rate).admits(1_000_000));
-        assert!(!budget_used(Duration::from_millis(1100), rate).admits(1_000_000));
-        assert!(budget_used(Duration::from_millis(1100), rate).admits(500_000));
-        assert!(!budget_used(RECOVERY_BUDGET, 0.0).admits(1));
-        assert!(budget_used(RECOVERY_BUDGET, 0.0).spent());
+        assert!(budget_used(Limits::default(), Duration::from_millis(900), rate).admits(1_000_000));
+        assert!(
+            !budget_used(Limits::default(), Duration::from_millis(1100), rate).admits(1_000_000)
+        );
+        assert!(budget_used(Limits::default(), Duration::from_millis(1100), rate).admits(500_000));
+        assert!(!budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).admits(1));
+        assert!(budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).spent());
     }
 
     #[test]
