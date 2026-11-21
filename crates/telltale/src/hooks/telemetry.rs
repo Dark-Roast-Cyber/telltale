@@ -105,6 +105,10 @@ pub struct EvaluationInfo {
     pub evaluator: &'static str,
     /// Why an in-process evaluation did not use the evaluator, if it tried.
     pub evaluator_fallback: Option<&'static str>,
+    /// What the scans of a tool call did (requests only): counts, closed
+    /// values and milliseconds, no content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scans: Option<crate::hooks::engine::ScanTrace>,
 }
 
 #[derive(Debug, Clone, Serialize)]

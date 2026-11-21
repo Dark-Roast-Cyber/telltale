@@ -13,6 +13,7 @@ use crate::common;
 use common::Harness;
 use serde_json::{Map, Value, json};
 use telltale_core::hooks::config::{Config, OnError};
+use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::runtime::{Completion, Context, Event, Response, ToolCall};
 use telltale_core::hooks::state::Verdict;
 
@@ -566,13 +567,18 @@ fn no_poisoning_input_raises_a_hook_error() {
     assert_eq!(h.records("error"), Vec::<Value>::new());
 }
 
-/// The evaluation fits in the evaluator's margin, even with a full window of lines
-/// that make every scan slow or fail, because no scan starts that is forecast to
-/// end past the budget. The bound is wall-clock time on a machine that runs this
-/// test beside the long corpus tests, so it is set well above the 2 s measured
-/// alone and well below the tens of seconds an unbounded search takes.
+/// The recovery budget bounds what a call spends on its history, counted in
+/// scans: once it is spent, even a full window of lines that make every scan
+/// slow or fail costs the call one scan, of its own line, which keeps its rule
+/// deny. The window is not scanned whole and no history goes back, and the
+/// record says history was lost. (When a scan is admitted before the budget is
+/// spent is the forecast's unit tests' subject, in `engine.rs`.)
 #[test]
 fn recovery_cost_is_bounded_at_the_window_limits() {
+    let spent = Limits {
+        recovery: std::time::Duration::ZERO,
+        ..common::generous()
+    };
     let shapes: [(&str, Vec<Value>); 2] = [
         (
             "every-line-poison",
@@ -584,18 +590,16 @@ fn recovery_cost_is_bounded_at_the_window_limits() {
         ),
     ];
     for (shape, lines) in shapes {
-        let mut h = Harness::new();
+        let mut h = Harness::with_limits(spent, |_| {});
         pre(&mut h, true, "first", command("ls"));
         seed(&h, lines);
-        let started = std::time::Instant::now();
         let later = pre(&mut h, true, "later", command(EXFIL));
-        let took = started.elapsed();
-        assert_eq!(
-            rule_deny_failure(shape, &h.decision_for("later"), &later),
-            None
-        );
-        assert!(took.as_secs() < 12, "{shape} took {took:?}");
-        eprintln!("{shape}: {took:?}");
+        let record = h.decision_for("later");
+        assert_eq!(rule_deny_failure(shape, &record, &later), None);
+        let scans = &record["evaluation"]["scans"];
+        assert_eq!(scans["whole"], "skipped_budget", "{shape}: {scans}");
+        assert_eq!(scans["together"], "passed", "{shape}: {scans}");
+        assert!(limits(&record).iter().any(|l| l == HISTORY_LOST), "{shape}");
     }
 }
 
@@ -726,7 +730,9 @@ fn a_flood_does_not_displace_a_short_chain_stage() {
             .collect::<Vec<_>>()
     });
     for history in exact.chain(filler_then_flood) {
-        let mut h = Harness::new();
+        // Within generous limits: the order lines go back in decides this,
+        // not how many scans the host fits in the recovery budget.
+        let mut h = Harness::with_limits(common::generous(), |_| {});
         pre(&mut h, true, "first", command(DOWNLOAD));
         seed(&h, history);
         pre(&mut h, true, "run", command(RUN_DOWNLOADED));
@@ -1000,8 +1006,11 @@ fn a_session_locked_past_the_wait_gets_the_strict_policy() {
             None,
         ),
     ] {
-        let mut h = Harness::with(edit);
-        h.runtime.set_session_lock_wait(wait);
+        let limits = Limits {
+            session_lock_wait: wait,
+            ..Limits::default()
+        };
+        let mut h = Harness::with_limits(limits, edit);
         let holder = session_handle(&h);
         let started = std::time::Instant::now();
         let response = pre(&mut h, true, "late", command(EXFIL));
@@ -1018,6 +1027,58 @@ fn a_session_locked_past_the_wait_gets_the_strict_policy() {
         drop(holder);
         let response = pre(&mut h, true, "after", command(EXFIL));
         assert_eq!(verdict(&response), Some(Verdict::Deny));
+    }
+}
+
+/// The wait for a session's lock is cut to what remains of the hook's
+/// deadline: past it, the call gets the strict policy without waiting out the
+/// lock wait (here a minute).
+#[test]
+fn the_lock_wait_ends_at_the_hook_deadline() {
+    let minute = std::time::Duration::from_secs(60);
+    let limits = Limits {
+        session_lock_wait: minute,
+        hook_deadline: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    let mut h = Harness::with_limits(limits, |_| {});
+    let holder = session_handle(&h);
+    let started = std::time::Instant::now();
+    let response = pre(&mut h, true, "late", command(EXFIL));
+    assert!(started.elapsed() < minute);
+    assert_eq!(verdict(&response), Some(Verdict::Ask));
+    let errors = h.records("error");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0]["error_code"], "state_lock_timeout");
+    assert!(h.records("decision").is_empty());
+    drop(holder);
+}
+
+/// A call that reaches the hook's deadline before its decision is recorded
+/// records none and journals nothing: the harness gets the strict policy, and
+/// one error record says why.
+#[test]
+fn a_call_past_the_hook_deadline_records_no_decision() {
+    let past = Limits {
+        hook_deadline: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    for (edit, expected) in [
+        ((|_| {}) as ConfigEdit, Some(Verdict::Ask)),
+        (
+            (|config| config.on_unevaluable = OnError::Deny) as ConfigEdit,
+            Some(Verdict::Deny),
+        ),
+    ] {
+        let mut h = Harness::with_limits(past, edit);
+        let response = pre(&mut h, true, "late", command(EXFIL));
+        assert_eq!(verdict(&response), expected);
+        assert_eq!(journal_len(&h), 0);
+        let errors = h.records("error");
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert_eq!(errors[0]["error_code"], "hook_deadline");
+        assert_eq!(errors[0]["action"]["tool_use_id"], "late");
+        assert!(h.records("decision").is_empty());
     }
 }
 

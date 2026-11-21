@@ -73,6 +73,59 @@ const SELECTORS: &[&str] = &[
     "browser.navigation_id",
 ];
 
+/// The registered selectors that parse as [`SelectorId::GovernedFacet`] and
+/// have their own resolver handling. Resolver arms match these names, never a
+/// string literal, so a renamed registry entry fails the selector tests instead
+/// of falling through to no handling.
+pub(super) mod governed {
+    /// Declares each name once: as its constant and as an entry of `ALL`.
+    macro_rules! names {
+        ($($name:ident = $value:literal;)*) => {
+            $(pub const $name: &str = $value;)*
+            #[cfg(test)]
+            pub const ALL: &[&str] = &[$($name),*];
+        };
+    }
+
+    names! {
+        MESSAGE_TEXT = "message.text";
+        TOOL_CALL_ID = "tool.call_id";
+        TOOL_STAGE = "tool.stage";
+        TOOL_ARGUMENTS_TEXT = "tool.arguments.text";
+        TOOL_ARGUMENTS_KEYS = "tool.arguments.keys";
+        TOOL_RESULT_TEXT = "tool.result.text";
+        TOOL_RESULT_IS_ERROR = "tool.result.is_error";
+        TOOL_RESULT_EXIT_CODE = "tool.result.exit_code";
+        RESOURCE_OPERATION = "resource.operation";
+        RESOURCE_PATH_CLASS = "resource.path_class";
+        NETWORK_DOMAIN = "network.domain";
+        NETWORK_DESTINATION_CLASS = "network.destination_class";
+        NETWORK_OPERATION = "network.operation";
+        NETWORK_PORT = "network.port";
+        NETWORK_PROTOCOL = "network.protocol";
+        PROCESS_NAME = "process.name";
+        PROCESS_PID = "process.pid";
+        PROCESS_INSTANCE_ID = "process.instance_id";
+        PROCESS_PRIVILEGE = "process.privilege";
+        INFERENCE_PROVIDER = "inference.provider";
+        INFERENCE_REQUESTED_MODEL = "inference.requested_model";
+        INFERENCE_RESOLVED_MODEL = "inference.resolved_model";
+        INFERENCE_STREAMING = "inference.streaming";
+        INFERENCE_STOP_REASON = "inference.stop_reason";
+        MCP_SERVER_ID = "mcp.server.id";
+        MCP_SERVER_TRANSPORT = "mcp.server.transport";
+        MCP_SERVER_LOCATION_CLASS = "mcp.server.location_class";
+        MCP_TOOL_NAME = "mcp.tool.name";
+        RUNTIME_EXECUTION_MODE = "runtime.execution_mode";
+        RUNTIME_ISOLATION_STATE = "runtime.isolation.state";
+        RUNTIME_PRIVILEGE = "runtime.privilege";
+        RUNTIME_WORKSPACE_CLASS = "runtime.workspace.class";
+        BROWSER_SURFACE = "browser.surface";
+        BROWSER_ORIGIN_CLASS = "browser.origin_class";
+        BROWSER_NAVIGATION_ID = "browser.navigation_id";
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SelectorBacking {
     Direct,
@@ -384,7 +437,7 @@ impl SelectorRegistry {
         }
         if matches!(
             selector,
-            SelectorId::GovernedFacet("message.text")
+            SelectorId::GovernedFacet(governed::MESSAGE_TEXT)
                 | SelectorId::CompatAssistantContext
                 | SelectorId::CompatUserContext
         ) {
@@ -407,7 +460,7 @@ impl SelectorRegistry {
             selector,
             SelectorId::ToolResult
                 | SelectorId::CompatToolResult
-                | SelectorId::GovernedFacet("tool.result.text")
+                | SelectorId::GovernedFacet(governed::TOOL_RESULT_TEXT)
         ) && let ObservationBody::Tool(tool) = observation.body()
             && (selector == SelectorId::ToolResult || tool.searchable_result().is_none())
             && let Some(JsonValue::String(text)) = tool.result()
@@ -617,20 +670,20 @@ impl SelectorRegistry {
             SelectorId::ToolSearchableArguments => {
                 tool_string(selector, observation, true, required_capability)
             }
-            SelectorId::GovernedFacet("tool.arguments.text") => {
+            SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_TEXT) => {
                 tool_text(selector, observation, true, required_capability)
             }
-            SelectorId::GovernedFacet("tool.arguments.keys") => {
+            SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_KEYS) => {
                 tool_argument_keys(selector, observation, required_capability)
             }
             SelectorId::ToolResult => tool_value(selector, observation, false, required_capability),
             SelectorId::ToolSearchableResult => {
                 tool_string(selector, observation, false, required_capability)
             }
-            SelectorId::GovernedFacet("tool.result.text") => {
+            SelectorId::GovernedFacet(governed::TOOL_RESULT_TEXT) => {
                 tool_text(selector, observation, false, required_capability)
             }
-            SelectorId::GovernedFacet("tool.result.is_error") => match observation.body() {
+            SelectorId::GovernedFacet(governed::TOOL_RESULT_IS_ERROR) => match observation.body() {
                 ObservationBody::Tool(body) => body.is_error().map_or_else(
                     || absent(selector, required_capability),
                     |value| {
@@ -645,28 +698,30 @@ impl SelectorRegistry {
                 ),
                 _ => absent(selector, required_capability),
             },
-            SelectorId::GovernedFacet("tool.result.exit_code") => match observation.body() {
-                ObservationBody::Tool(body) => body.exit_code().map_or_else(
-                    || absent(selector, required_capability),
-                    |value| {
-                        field(
-                            selector,
-                            observation,
-                            "tool.exit_code",
-                            JsonValue::Integer(value),
-                            required_capability,
-                        )
-                    },
-                ),
-                _ => absent(selector, required_capability),
-            },
-            SelectorId::GovernedFacet("tool.call_id") => {
+            SelectorId::GovernedFacet(governed::TOOL_RESULT_EXIT_CODE) => {
+                match observation.body() {
+                    ObservationBody::Tool(body) => body.exit_code().map_or_else(
+                        || absent(selector, required_capability),
+                        |value| {
+                            field(
+                                selector,
+                                observation,
+                                "tool.exit_code",
+                                JsonValue::Integer(value),
+                                required_capability,
+                            )
+                        },
+                    ),
+                    _ => absent(selector, required_capability),
+                }
+            }
+            SelectorId::GovernedFacet(governed::TOOL_CALL_ID) => {
                 observation.correlation().call_id().map_or_else(
                     || absent(selector, required_capability),
                     |value| correlation_field(selector, value, required_capability),
                 )
             }
-            SelectorId::GovernedFacet("tool.stage") => {
+            SelectorId::GovernedFacet(governed::TOOL_STAGE) => {
                 if matches!(observation.body(), ObservationBody::Tool(_)) {
                     derived_field(
                         selector,
@@ -727,13 +782,6 @@ impl SelectorRegistry {
             }
             SelectorId::ResourcePath => {
                 facet(selector, observation, "resource.path", required_capability)
-            }
-            SelectorId::GovernedFacet(path) => {
-                if matches!(path, "command.text" | "resource.path") {
-                    facet(selector, observation, path, required_capability)
-                } else {
-                    absent(selector, required_capability)
-                }
             }
             _ => absent(selector, required_capability),
         }
@@ -841,12 +889,10 @@ fn reads_declared_role_text(selector: SelectorId, observation: &CanonicalObserva
         return false;
     };
     match selector {
-        SelectorId::CompatArguments | SelectorId::GovernedFacet("tool.arguments.text") => {
+        SelectorId::CompatArguments | SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_TEXT) => {
             reads_by_role(tool)
         }
-        SelectorId::CompatCommand
-        | SelectorId::CommandText
-        | SelectorId::GovernedFacet("command.text") => command_member_has_role(tool),
+        SelectorId::CompatCommand | SelectorId::CommandText => command_member_has_role(tool),
         _ => false,
     }
 }
@@ -865,10 +911,12 @@ fn reads_omitted_searchable_text(
     let target = match selector {
         SelectorId::ToolSearchableArguments
         | SelectorId::CompatArguments
-        | SelectorId::GovernedFacet("tool.arguments.text") => BoundedTarget::SearchableArguments,
+        | SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_TEXT) => {
+            BoundedTarget::SearchableArguments
+        }
         SelectorId::ToolSearchableResult
         | SelectorId::CompatToolResult
-        | SelectorId::GovernedFacet("tool.result.text") => BoundedTarget::SearchableResult,
+        | SelectorId::GovernedFacet(governed::TOOL_RESULT_TEXT) => BoundedTarget::SearchableResult,
         _ => return false,
     };
     tool.bounded_values()
@@ -907,8 +955,8 @@ fn with_bounded_visibility(
         SelectorId::ToolResult => (BoundedTarget::Result, true, false),
         SelectorId::ToolSearchableArguments
         | SelectorId::CompatArguments
-        | SelectorId::GovernedFacet("tool.arguments.text")
-        | SelectorId::GovernedFacet("tool.arguments.keys")
+        | SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_TEXT)
+        | SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_KEYS)
         | SelectorId::CommandText
         | SelectorId::CompatCommand
         | SelectorId::ResourcePath
@@ -918,7 +966,9 @@ fn with_bounded_visibility(
         }
         SelectorId::ToolSearchableResult
         | SelectorId::CompatToolResult
-        | SelectorId::GovernedFacet("tool.result.text") => (BoundedTarget::Result, false, false),
+        | SelectorId::GovernedFacet(governed::TOOL_RESULT_TEXT) => {
+            (BoundedTarget::Result, false, false)
+        }
         _ => return resolution,
     };
     if !tool
@@ -928,7 +978,7 @@ fn with_bounded_visibility(
     {
         return resolution;
     }
-    if resolution.selector == SelectorId::GovernedFacet("tool.arguments.keys")
+    if resolution.selector == SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_KEYS)
         && resolution.presence == SelectorPresence::Present
     {
         resolution.partial = tool.bounded_values().iter().any(|value| {
@@ -967,7 +1017,7 @@ fn typed_body_value(
     observation: &CanonicalObservationV2,
 ) -> Option<(&'static str, JsonValue)> {
     match selector {
-        SelectorId::GovernedFacet("tool.arguments.text") => match observation.body() {
+        SelectorId::GovernedFacet(governed::TOOL_ARGUMENTS_TEXT) => match observation.body() {
             ObservationBody::Tool(body) => body
                 .searchable_arguments()
                 .map(|value| ("tool.searchable_arguments", JsonValue::string(value)))
@@ -979,7 +1029,7 @@ fn typed_body_value(
                 }),
             _ => None,
         },
-        SelectorId::GovernedFacet("tool.result.text") => match observation.body() {
+        SelectorId::GovernedFacet(governed::TOOL_RESULT_TEXT) => match observation.body() {
             ObservationBody::Tool(body) => body
                 .searchable_result()
                 .map(|value| ("tool.searchable_result", JsonValue::string(value)))
@@ -991,175 +1041,181 @@ fn typed_body_value(
                 }),
             _ => None,
         },
-        SelectorId::GovernedFacet("tool.result.is_error") => match observation.body() {
+        SelectorId::GovernedFacet(governed::TOOL_RESULT_IS_ERROR) => match observation.body() {
             ObservationBody::Tool(body) => body
                 .is_error()
                 .map(|value| ("tool.is_error", JsonValue::Bool(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("tool.result.exit_code") => match observation.body() {
+        SelectorId::GovernedFacet(governed::TOOL_RESULT_EXIT_CODE) => match observation.body() {
             ObservationBody::Tool(body) => body
                 .exit_code()
                 .map(|value| ("tool.exit_code", JsonValue::Integer(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("network.domain") => match observation.body() {
+        SelectorId::GovernedFacet(governed::NETWORK_DOMAIN) => match observation.body() {
             ObservationBody::Network(body) => body
                 .domain()
                 .map(|value| ("network.domain", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("network.destination_class") => match observation.body() {
-            ObservationBody::Network(body) => body
-                .destination_class()
-                .map(|value| ("network.destination_class", JsonValue::string(value))),
-            _ => None,
-        },
-        SelectorId::GovernedFacet("network.operation") => match observation.body() {
+        SelectorId::GovernedFacet(governed::NETWORK_DESTINATION_CLASS) => {
+            match observation.body() {
+                ObservationBody::Network(body) => body
+                    .destination_class()
+                    .map(|value| ("network.destination_class", JsonValue::string(value))),
+                _ => None,
+            }
+        }
+        SelectorId::GovernedFacet(governed::NETWORK_OPERATION) => match observation.body() {
             ObservationBody::Network(body) => body
                 .operation()
                 .map(|value| ("network.operation", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("network.port") => match observation.body() {
+        SelectorId::GovernedFacet(governed::NETWORK_PORT) => match observation.body() {
             ObservationBody::Network(body) => body
                 .port()
                 .map(|value| ("network.port", JsonValue::Unsigned(value as u64))),
             _ => None,
         },
-        SelectorId::GovernedFacet("network.protocol") => match observation.body() {
+        SelectorId::GovernedFacet(governed::NETWORK_PROTOCOL) => match observation.body() {
             ObservationBody::Network(body) => body
                 .protocol()
                 .map(|value| ("network.protocol", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("process.name") => match observation.body() {
+        SelectorId::GovernedFacet(governed::PROCESS_NAME) => match observation.body() {
             ObservationBody::Process(body) => body
                 .name()
                 .map(|value| ("process.name", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("process.pid") => match observation.body() {
+        SelectorId::GovernedFacet(governed::PROCESS_PID) => match observation.body() {
             ObservationBody::Process(body) => body
                 .pid()
                 .map(|value| ("process.pid", JsonValue::Unsigned(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("process.instance_id") => match observation.body() {
+        SelectorId::GovernedFacet(governed::PROCESS_INSTANCE_ID) => match observation.body() {
             ObservationBody::Process(body) => body
                 .instance_id()
                 .map(|value| ("process.instance_id", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("process.privilege") => match observation.body() {
+        SelectorId::GovernedFacet(governed::PROCESS_PRIVILEGE) => match observation.body() {
             ObservationBody::Process(body) => body
                 .privilege()
                 .map(|value| ("process.privilege", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("inference.provider") => match observation.body() {
+        SelectorId::GovernedFacet(governed::INFERENCE_PROVIDER) => match observation.body() {
             ObservationBody::Inference(body) => body
                 .provider()
                 .map(|value| ("inference.provider", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("inference.requested_model") => match observation.body() {
-            ObservationBody::Inference(body) => body
-                .requested_model()
-                .map(|value| ("inference.requested_model", JsonValue::string(value))),
-            _ => None,
-        },
-        SelectorId::GovernedFacet("inference.resolved_model") => match observation.body() {
+        SelectorId::GovernedFacet(governed::INFERENCE_REQUESTED_MODEL) => {
+            match observation.body() {
+                ObservationBody::Inference(body) => body
+                    .requested_model()
+                    .map(|value| ("inference.requested_model", JsonValue::string(value))),
+                _ => None,
+            }
+        }
+        SelectorId::GovernedFacet(governed::INFERENCE_RESOLVED_MODEL) => match observation.body() {
             ObservationBody::Inference(body) => body
                 .resolved_model()
                 .map(|value| ("inference.resolved_model", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("inference.streaming") => match observation.body() {
+        SelectorId::GovernedFacet(governed::INFERENCE_STREAMING) => match observation.body() {
             ObservationBody::Inference(body) => body
                 .streaming()
                 .map(|value| ("inference.streaming", JsonValue::Bool(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("inference.stop_reason") => match observation.body() {
+        SelectorId::GovernedFacet(governed::INFERENCE_STOP_REASON) => match observation.body() {
             ObservationBody::Inference(body) => body
                 .stop_reason()
                 .map(|value| ("inference.stop_reason", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("mcp.server.id") => match observation.body() {
+        SelectorId::GovernedFacet(governed::MCP_SERVER_ID) => match observation.body() {
             ObservationBody::Mcp(body) => body
                 .server_id()
                 .map(|value| ("mcp.server_id", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("mcp.server.transport") => match observation.body() {
+        SelectorId::GovernedFacet(governed::MCP_SERVER_TRANSPORT) => match observation.body() {
             ObservationBody::Mcp(body) => body
                 .transport()
                 .map(|value| ("mcp.transport", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("mcp.server.location_class") => match observation.body() {
-            ObservationBody::Mcp(body) => body
-                .location_class()
-                .map(|value| ("mcp.location_class", JsonValue::string(value))),
-            _ => None,
-        },
-        SelectorId::GovernedFacet("mcp.tool.name") => match observation.body() {
+        SelectorId::GovernedFacet(governed::MCP_SERVER_LOCATION_CLASS) => {
+            match observation.body() {
+                ObservationBody::Mcp(body) => body
+                    .location_class()
+                    .map(|value| ("mcp.location_class", JsonValue::string(value))),
+                _ => None,
+            }
+        }
+        SelectorId::GovernedFacet(governed::MCP_TOOL_NAME) => match observation.body() {
             ObservationBody::Mcp(body) => body
                 .tool_name()
                 .map(|value| ("mcp.tool_name", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("runtime.execution_mode") => match observation.body() {
+        SelectorId::GovernedFacet(governed::RUNTIME_EXECUTION_MODE) => match observation.body() {
             ObservationBody::Runtime(body) => body
                 .execution_mode()
                 .map(|value| ("runtime.execution_mode", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("runtime.isolation.state") => match observation.body() {
+        SelectorId::GovernedFacet(governed::RUNTIME_ISOLATION_STATE) => match observation.body() {
             ObservationBody::Runtime(body) => body
                 .isolation_state()
                 .map(|value| ("runtime.isolation_state", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("runtime.workspace.class") => match observation.body() {
+        SelectorId::GovernedFacet(governed::RUNTIME_WORKSPACE_CLASS) => match observation.body() {
             ObservationBody::Runtime(body) => body
                 .workspace_class()
                 .map(|value| ("runtime.workspace_class", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("runtime.privilege") => match observation.body() {
+        SelectorId::GovernedFacet(governed::RUNTIME_PRIVILEGE) => match observation.body() {
             ObservationBody::Runtime(body) => body
                 .privilege()
                 .map(|value| ("runtime.privilege", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("browser.surface") => match observation.body() {
+        SelectorId::GovernedFacet(governed::BROWSER_SURFACE) => match observation.body() {
             ObservationBody::Browser(body) => body
                 .surface()
                 .map(|value| ("browser.surface", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("browser.origin_class") => match observation.body() {
+        SelectorId::GovernedFacet(governed::BROWSER_ORIGIN_CLASS) => match observation.body() {
             ObservationBody::Browser(body) => body
                 .origin_class()
                 .map(|value| ("browser.origin_class", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("browser.navigation_id") => match observation.body() {
+        SelectorId::GovernedFacet(governed::BROWSER_NAVIGATION_ID) => match observation.body() {
             ObservationBody::Browser(body) => body
                 .navigation_id()
                 .map(|value| ("browser.navigation_id", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("resource.operation") => match observation.body() {
+        SelectorId::GovernedFacet(governed::RESOURCE_OPERATION) => match observation.body() {
             ObservationBody::File(body) => body
                 .operation()
                 .map(|value| ("file.operation", JsonValue::string(value))),
             _ => None,
         },
-        SelectorId::GovernedFacet("resource.path_class") => match observation.body() {
+        SelectorId::GovernedFacet(governed::RESOURCE_PATH_CLASS) => match observation.body() {
             ObservationBody::File(body) => body
                 .path_class()
                 .map(|value| ("file.path_class", JsonValue::string(value))),

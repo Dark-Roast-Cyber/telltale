@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use telltale_core::hooks::config::{Config, Mode};
+use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::Runtime;
 
@@ -78,6 +79,28 @@ pub fn template(event: &str, tool: Option<&str>) -> Value {
         .unwrap_or_else(|| panic!("no captured {event} payload"))
 }
 
+/// Time limits no host's load reaches. A test of what an evaluation covers
+/// (that a deny is found) runs within these, so the runner's speed cannot
+/// decide it; what a call gets when time runs out is tested with tiny limits.
+/// The hook deadline is generous too: every other limit is cut to what is
+/// left of it, and its clock includes the engine's cold build.
+pub fn generous() -> Limits {
+    Limits {
+        recovery: std::time::Duration::from_secs(3600),
+        piece_scan: std::time::Duration::from_secs(3600),
+        ..no_deadline()
+    }
+}
+
+/// The default limits with a hook deadline no host's load reaches: a harness
+/// answers `hook_deadline` only in the tests that set a deadline themselves.
+pub fn no_deadline() -> Limits {
+    Limits {
+        hook_deadline: std::time::Duration::from_secs(3600),
+        ..Limits::default()
+    }
+}
+
 pub struct Harness {
     pub dir: tempfile::TempDir,
     pub runtime: Runtime,
@@ -91,6 +114,11 @@ impl Harness {
     }
 
     pub fn with(edit: impl FnOnce(&mut Config)) -> Self {
+        Self::with_limits(no_deadline(), edit)
+    }
+
+    /// A harness whose runtime works within `limits`.
+    pub fn with_limits(limits: Limits, edit: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         // The suites test what the hook returns, so they enforce; detect-only
         // (the default) is tested where it is the subject.
@@ -103,7 +131,7 @@ impl Harness {
         edit(&mut config);
         Self {
             dir,
-            runtime: Runtime::new(config),
+            runtime: Runtime::new(config).with_limits(limits),
             session_id: "synthetic-session-0001".into(),
             telemetry_reader: RefCell::default(),
         }

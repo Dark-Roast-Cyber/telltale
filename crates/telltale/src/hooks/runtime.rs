@@ -3,7 +3,7 @@
 //! Telltale evaluation, policy, outcome correlation, telemetry) lives here once.
 //! See docs/architecture.md for the contract adapters must uphold.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::ObservationStage;
 use serde_json::{Value, json};
@@ -13,10 +13,12 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
-use crate::hooks::engine::{Engine, EvalStatus, Evaluation, Focus, RecoveryBudget};
+use crate::hooks::engine::{
+    Engine, EvalStatus, Evaluation, Focus, Limits, PendingScan, RecoveryBudget, Request, ScanTrace,
+};
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
-use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
+use crate::hooks::state::{PendingDecision, SessionHandle, Settled, Verdict};
 use crate::hooks::telemetry::{
     Action, DecisionInfo, EvaluationInfo, Harness, Kind, OutcomeInfo, Producer, Record, Session,
     Sink, TelltaleAction, new_record_id, sha256_hex,
@@ -227,8 +229,15 @@ pub struct Runtime {
     evaluator: &'static str,
     /// Why an in-process evaluation did not use the long-lived evaluator.
     evaluator_fallback: Option<&'static str>,
-    /// How long to wait behind a session's other calls.
-    session_lock_wait: Duration,
+    /// The time limits of a call, the wait behind a session's other calls
+    /// among them.
+    limits: Limits,
+    /// When the hook started, if before this runtime handles its call
+    /// ([`Self::started_at`]); otherwise each call starts when it is handled.
+    started: Option<Instant>,
+    /// The current call's deadline ([`Limits::hook_deadline`] from its start); none
+    /// before a call starts, or when it is too far away to represent.
+    deadline: Option<Instant>,
     /// When the evaluator's client stops waiting (ms since the epoch).
     answer_by: Option<i64>,
 }
@@ -237,6 +246,9 @@ pub struct Runtime {
 pub const STATE_LOCK_TIMEOUT: &str = "state_lock_timeout";
 /// The evaluator finished after its client stopped waiting; nothing was recorded.
 pub const ANSWER_TOO_LATE: &str = "evaluator_answer_too_late";
+/// The call had no time left before its evaluation started; it is not evaluated
+/// and no decision is recorded.
+pub const HOOK_DEADLINE_PASSED: &str = "hook_deadline";
 /// No state directory resolves. On a tool request it is also the visibility
 /// limit of a call evaluated without its session (`Runtime::tool_requested`).
 pub const STATE_DIR_UNRESOLVED: &str = "state_dir_unresolved";
@@ -298,10 +310,14 @@ struct RequestEvaluation {
     result: Result<Evaluation, &'static str>,
     window_records: usize,
     window_truncated: bool,
-    /// The variants evaluated in place of an input Telltale excluded.
-    projection: Option<Vec<Value>>,
+    /// The projection evaluated in place of an input Telltale excluded.
+    projection: Option<crate::hooks::projection::Projection>,
     projection_limit: Option<String>,
     separated: bool,
+    /// Past the projection budget: part of the input is in no variant.
+    past_budget: bool,
+    /// What the call's scans did, whole and projected.
+    scans: ScanTrace,
 }
 
 /// The policy decision for one request, with the session scores it was taken
@@ -430,20 +446,56 @@ impl Runtime {
             engine_error: None,
             evaluator: "in_process",
             evaluator_fallback: None,
-            session_lock_wait: SESSION_LOCK_WAIT,
+            limits: Limits::default(),
+            started: None,
+            deadline: None,
             answer_by: None,
         }
+    }
+
+    /// The same runtime working within `limits` instead of the default ones.
+    pub fn with_limits(self, limits: Limits) -> Self {
+        Self { limits, ..self }
+    }
+
+    /// The same runtime for a hook that started at `started`: its one
+    /// deadline counts from there, so time spent before the runtime existed
+    /// (loading the configuration, waiting on the evaluator) is spent.
+    pub fn started_at(self, started: Instant) -> Self {
+        Self {
+            started: Some(started),
+            ..self
+        }
+    }
+
+    /// A call starts: its deadline is set ([`Limits::hook_deadline`]). One too
+    /// far away for an `Instant` to hold is none.
+    fn start_call(&mut self) {
+        let started = self.started.unwrap_or_else(Instant::now);
+        self.deadline = started.checked_add(self.limits.hook_deadline);
+    }
+
+    /// What is left of the call's deadline.
+    fn remaining(&self) -> Duration {
+        self.deadline.map_or(Duration::MAX, |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        })
+    }
+
+    /// The call's limits, none longer than what is left of its deadline.
+    fn call_limits(&self) -> Limits {
+        self.limits.within(self.remaining())
+    }
+
+    /// A scan budget for the call, starting now.
+    fn call_budget(&self) -> RecoveryBudget {
+        RecoveryBudget::start(self.call_limits())
     }
 
     /// Label evaluations with the process that made them (telemetry).
     pub fn set_evaluator(&mut self, evaluator: &'static str, fallback: Option<&'static str>) {
         self.evaluator = evaluator;
         self.evaluator_fallback = fallback;
-    }
-
-    /// How long a call waits behind a session's other calls.
-    pub fn set_session_lock_wait(&mut self, wait: Duration) {
-        self.session_lock_wait = wait;
     }
 
     /// Use a prebuilt engine (a long-lived host or tests).
@@ -454,7 +506,9 @@ impl Runtime {
             engine_error: None,
             evaluator: "in_process",
             evaluator_fallback: None,
-            session_lock_wait: SESSION_LOCK_WAIT,
+            limits: Limits::default(),
+            started: None,
+            deadline: None,
             answer_by: None,
         }
     }
@@ -549,6 +603,12 @@ impl Runtime {
     /// hook's own infrastructure, the stricter of `on_error` and
     /// `on_unevaluable` for what `is_strict_failure` names.
     pub fn handle(&mut self, ctx: &Context, event: Event) -> Response {
+        self.start_call();
+        self.handle_started(ctx, event)
+    }
+
+    /// [`Self::handle`] for a call whose deadline is already set.
+    fn handle_started(&mut self, ctx: &Context, event: Event) -> Response {
         match self.try_handle(ctx, &event) {
             Ok(response) => response,
             Err(code) => self.answer_failure(ctx, &event, code),
@@ -575,14 +635,15 @@ impl Runtime {
         answer_by: i64,
         lock_wait: Duration,
     ) -> Result<Response, &'static str> {
+        self.start_call();
         self.answer_by = Some(answer_by);
-        self.session_lock_wait = lock_wait;
+        let own_wait = std::mem::replace(&mut self.limits.session_lock_wait, lock_wait);
         let outcome = self.try_handle(ctx, &event);
         self.answer_by = None;
-        self.session_lock_wait = SESSION_LOCK_WAIT;
+        self.limits.session_lock_wait = own_wait;
         match outcome {
             Ok(response) => Ok(response),
-            Err(code @ (STATE_LOCK_TIMEOUT | ANSWER_TOO_LATE)) => Err(code),
+            Err(code @ (STATE_LOCK_TIMEOUT | ANSWER_TOO_LATE | HOOK_DEADLINE_PASSED)) => Err(code),
             Err(code) => Ok(self.answer_failure(ctx, &event, code)),
         }
     }
@@ -593,8 +654,12 @@ impl Runtime {
     /// so once this hook holds that lock the evaluator either has recorded the
     /// call or never will. A recorded decision is answered as recorded, so the
     /// harness gets what telemetry says. Otherwise the call is evaluated here,
-    /// as when the evaluator is busy: a stalled evaluator costs time, not the
-    /// call's verdict, and cannot turn a deny into a failure policy's allow.
+    /// as when the evaluator is busy. With the default waits a stalled
+    /// evaluator costs time, not the call's verdict: the evaluator wait, the
+    /// lock wait and the piece limit fit in the hook's deadline. With
+    /// `request_timeout_ms` raised so far that the evaluator wait and the lock
+    /// wait use up the deadline, the call is not evaluated here and gets the
+    /// stricter of `on_error` and `on_unevaluable` instead (`hook_deadline`).
     /// A call with no correlation id cannot be looked up and is evaluated here:
     /// if its answer was only delayed, the session then has a second decision,
     /// the later one being what the harness was told.
@@ -608,6 +673,7 @@ impl Runtime {
         code: &'static str,
         asked_at: i64,
     ) -> Response {
+        self.start_call();
         let Event::ToolRequested(call) = &event else {
             return self.fail_strict(ctx, &event, code);
         };
@@ -626,9 +692,12 @@ impl Runtime {
             }
         }
         // One wait for this hook, however many times it takes the lock.
-        self.session_lock_wait = self.session_lock_wait.saturating_sub(looking.elapsed());
+        self.limits.session_lock_wait = self
+            .limits
+            .session_lock_wait
+            .saturating_sub(looking.elapsed());
         self.set_evaluator("in_process", Some(code));
-        self.handle(ctx, event)
+        self.handle_started(ctx, event)
     }
 
     /// The answer to a decision on call `id` that was recorded since `asked_at`.
@@ -698,6 +767,7 @@ impl Runtime {
             || matches!(
                 code,
                 STATE_DIR_UNRESOLVED
+                    | HOOK_DEADLINE_PASSED
                     | "rule_content_unreadable"
                     | "pipeline_build_failed"
                     | "semantic_provenance_failed"
@@ -777,9 +847,13 @@ impl Runtime {
 
     /// The session of `ctx` under state directory `dir`.
     fn open_in(&self, ctx: &Context, dir: &std::path::Path) -> Result<SessionHandle, &'static str> {
-        let session =
-            SessionHandle::open_within(dir, ctx.harness, &ctx.session_id, self.session_lock_wait)
-                .map_err(|error| error.code())?;
+        let session = SessionHandle::open_within(
+            dir,
+            ctx.harness,
+            &ctx.session_id,
+            self.call_limits().session_lock_wait,
+        )
+        .map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
         // call is still evaluated) but never silent.
         for code in &session.anomalies {
@@ -939,7 +1013,7 @@ impl Runtime {
         session: &SessionHandle,
         pending: Vec<Line>,
         focus: &[Focus],
-        past_budget: bool,
+        scan: PendingScan,
         budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
         let window = &self.config.window;
@@ -957,17 +1031,19 @@ impl Runtime {
             self.engine(),
         ) {
             (None, _) => Err("harness_unregistered"),
-            (Some(harness), Ok(engine)) => engine
-                .evaluate(
-                    harness.adapter().client,
-                    &window_path,
-                    &tail.lines,
-                    &pending,
+            (Some(harness), Ok(engine)) => {
+                let request = Request {
+                    client: harness.adapter().client,
+                    window_path: &window_path,
+                    history: &tail.lines,
+                    pending: &pending,
                     focus,
-                    past_budget,
-                    budget,
-                )
-                .map_err(|error| error.code()),
+                    scan,
+                };
+                engine
+                    .evaluate(request, budget)
+                    .map_err(|error| error.code())
+            }
             (Some(_), Err(code)) => Err(code),
         };
         // What was actually scanned: recovery from a failed source can leave
@@ -997,6 +1073,7 @@ impl Runtime {
                 build_ms,
                 scan_ms: Some(evaluation.scan_ms),
                 evaluator: self.evaluator,
+                scans: None,
                 evaluator_fallback: self.evaluator_fallback,
             },
             Err(code) => EvaluationInfo {
@@ -1009,6 +1086,7 @@ impl Runtime {
                 build_ms,
                 scan_ms: None,
                 evaluator: self.evaluator,
+                scans: None,
                 evaluator_fallback: self.evaluator_fallback,
             },
         }
@@ -1032,12 +1110,34 @@ impl Runtime {
             None => self.open(ctx)?,
         };
         let stateless = scratch.is_some();
+        // No time left before the evaluation starts (the lock wait can use it
+        // up): the call is not evaluated, and nothing is recorded but why.
+        if self.remaining().is_zero() {
+            return Err(HOOK_DEADLINE_PASSED);
+        }
         let id = RequestIdentity::next(&mut session, call);
         // The call is evaluated as the harness reported it (ADR 0002): the
         // journal reader declares it with that harness's own tool table.
         let evaluated = self.evaluate_request(ctx, &mut session, &id, call);
+        self.record_request(ctx, session, scratch, id, call, evaluated, stateless)
+    }
+
+    /// Record and answer a request whose evaluation has finished: its decision,
+    /// journal line and pending decision, then the decision record.
+    #[allow(clippy::too_many_arguments)]
+    fn record_request(
+        &mut self,
+        ctx: &Context,
+        mut session: SessionHandle,
+        scratch: Option<crate::hooks::state::ScratchDir>,
+        id: RequestIdentity,
+        call: &ToolCall,
+        evaluated: RequestEvaluation,
+        stateless: bool,
+    ) -> Result<Response, &'static str> {
         // The evaluator's client has stopped waiting and will evaluate this call
-        // itself. Nothing has been recorded yet, and nothing is.
+        // itself. Nothing has been recorded yet, and nothing is. The hook's
+        // deadline is not asked here: a finished verdict is always delivered.
         if self.answer_by.is_some_and(|by| now_ms() > by) {
             return Err(ANSWER_TOO_LATE);
         }
@@ -1059,7 +1159,8 @@ impl Runtime {
             stateless,
         );
         apply_decision(&mut session, &decision);
-        self.journal_request(ctx, &session, &id, call, evaluated.projection.as_deref())?;
+        let history = evaluated.projection.as_ref().map(|p| &p.history);
+        self.journal_request(ctx, &session, &id, call, history)?;
         session.state.remember(
             &id.journal_id,
             PendingDecision {
@@ -1123,33 +1224,39 @@ impl Runtime {
             stage: ObservationStage::ToolRequested,
             native_id: id.uuid.clone(),
         };
-        let mut budget = RecoveryBudget::start();
+        let mut budget = self.call_budget();
         let (mut result, mut window_records, mut window_truncated) = self.evaluate(
             ctx,
             session,
             vec![pending],
             std::slice::from_ref(&focus),
-            false,
+            PendingScan::Together,
             &mut budget,
         );
         // Telltale excluded the call (oversized or too deeply nested input):
         // evaluate a bounded projection that still covers every byte.
-        let mut projection: Option<Vec<serde_json::Value>> = None;
+        let mut projection = None;
         let mut projection_limit = None;
         // The projection could not keep together what a rule may need
         // together (projection.rs), so "no finding" is not an allow.
         let mut separated = false;
+        let mut past_budget = false;
         if let Ok(first) = &result
             && first.status == EvalStatus::NotEvaluated
         {
             projection_limit = first.failure_code.clone();
             if let Some(projected) = crate::hooks::projection::project(&call.input) {
                 separated = projected.separated;
+                past_budget = projected.past_budget;
                 (result, window_records, window_truncated) =
                     self.evaluate_projected(ctx, session, id, call, &projected, &mut budget);
-                projection = Some(projected.variants);
+                projection = Some(projected);
             }
         }
+        let scans = ScanTrace {
+            variants: projection.as_ref().map_or(0, |p| p.variants.len()),
+            ..budget.trace().clone()
+        };
         RequestEvaluation {
             result,
             window_records,
@@ -1157,6 +1264,8 @@ impl Runtime {
             projection,
             projection_limit,
             separated,
+            past_budget,
+            scans,
         }
     }
 
@@ -1189,7 +1298,12 @@ impl Runtime {
                 native_id: variant_id,
             });
         }
-        self.evaluate(ctx, session, lines, &focuses, projected.past_budget, budget)
+        let scan = if projected.past_budget {
+            PendingScan::PiecesOnly
+        } else {
+            PendingScan::Together
+        };
+        self.evaluate(ctx, session, lines, &focuses, scan, budget)
     }
 
     /// The evaluation's telemetry, with every limit on what it could see.
@@ -1204,6 +1318,7 @@ impl Runtime {
             evaluated.window_records,
             evaluated.window_truncated,
         );
+        evaluation_info.scans = Some(evaluated.scans.clone());
         if evaluated.projection.is_some() {
             evaluation_info
                 .visibility_limits
@@ -1212,7 +1327,12 @@ impl Runtime {
                 evaluation_info.failure_code = evaluated.projection_limit.clone();
             }
         }
-        if evaluated.separated {
+        // Bytes not evaluated at all, or every byte evaluated but apart.
+        if evaluated.past_budget {
+            evaluation_info
+                .visibility_limits
+                .push("pending_input_truncated".to_owned());
+        } else if evaluated.separated {
             evaluation_info
                 .visibility_limits
                 .push("pending_input_separated".to_owned());
@@ -1385,17 +1505,18 @@ impl Runtime {
         session: &SessionHandle,
         id: &RequestIdentity,
         call: &ToolCall,
-        projection: Option<&[Value]>,
+        projection: Option<&Value>,
     ) -> Result<(), &'static str> {
         // Attempts stay in history whatever the verdict: a denied download
         // still informs how a later execute of the same artifact is judged.
         // History stays within Telltale's per-value bound so later scans
-        // can use it; a projected call is journaled as its first variant.
+        // can use it; a projected call is journaled as the line its
+        // projection keeps for history (every command's start, together).
         // Every call, projected or refused, costs the window at most what a
         // call Telltale evaluates whole does. A variant's strings are
         // already within Telltale's bound and stay as evaluated.
         let (input, string_bytes) = match projection {
-            Some(variants) => (&variants[0], usize::MAX),
+            Some(history) => (history, usize::MAX),
             None => (
                 &call.input,
                 HISTORY_STRING_BYTES.min(self.config.window.max_result_bytes),
@@ -1554,7 +1675,9 @@ impl Runtime {
     /// Evaluate the result against the history as a line of its own, then
     /// journal it. Both are bounded by `max_result_bytes`: the evaluated text
     /// in bytes, the journaled text as the line encodes it, so text that
-    /// escapes long takes no more of the window than ordinary text.
+    /// escapes long takes no more of the window than ordinary text. When the
+    /// journaled text is the shorter, the evaluation records
+    /// `result_history_truncated`: later calls see less of it than this one.
     fn evaluate_result(
         &mut self,
         ctx: &Context,
@@ -1577,21 +1700,30 @@ impl Runtime {
                 completion != Completion::Completed,
             )
         };
-        let line = result_line(cut_utf8(result_text, max));
-        let journaled = result_line(cut_escaped(result_text, max));
+        let evaluated_text = cut_utf8(result_text, max);
+        let journaled_text = cut_escaped(result_text, max);
+        let line = result_line(evaluated_text);
+        let journaled = result_line(journaled_text);
         let focus = Focus {
             occurred_at: timestamp,
             stage: ObservationStage::ToolResultReturned,
             native_id: uuid,
         };
-        let evaluated = self.evaluate(
+        let mut evaluated = self.evaluate(
             ctx,
             session,
             vec![line],
             std::slice::from_ref(&focus),
-            false,
-            &mut RecoveryBudget::start(),
+            PendingScan::Together,
+            &mut self.call_budget(),
         );
+        if let Ok(evaluation) = &mut evaluated.0
+            && journaled_text.len() < evaluated_text.len()
+        {
+            evaluation
+                .visibility_limits
+                .push("result_history_truncated".to_owned());
+        }
         session
             .journal()
             .append(&journaled)
@@ -2075,6 +2207,133 @@ mod tests {
         let response = runtime.handle(&ctx, Event::ToolRequested(call));
         let base = dir.path().file_name().unwrap().to_string_lossy();
         (response, base.into_owned())
+    }
+
+    /// A projection past its budget goes straight to its pieces. When the
+    /// hook's deadline has already passed, the piece time limit is cut to what
+    /// remains of it, so none is scanned, and the call gets `on_unevaluable`,
+    /// never an allow on "no finding".
+    #[test]
+    fn a_projection_past_its_budget_with_no_time_left_before_the_deadline_gets_on_unevaluable() {
+        use crate::hooks::config::OnError;
+        for (policy, expected) in [(OnError::Ask, Verdict::Ask), (OnError::Deny, Verdict::Deny)] {
+            let dir = tempfile::tempdir().unwrap();
+            let no_time_left = Limits {
+                piece_scan: Duration::from_secs(3600),
+                hook_deadline: Duration::ZERO,
+                ..Limits::default()
+            };
+            let mut runtime = Runtime::new(Config {
+                mode: Mode::Enforce,
+                state_dir: Some(dir.path().join("state")),
+                on_unevaluable: policy,
+                ..Config::default()
+            })
+            .with_limits(no_time_left);
+            runtime.start_call();
+            let ctx = Context {
+                harness: "claude-code",
+                hook_event: "PreToolUse".to_owned(),
+                session_id: "s".to_owned(),
+                agent_id: None,
+                agent_type: None,
+                prompt_id: None,
+                permission_mode: None,
+                cwd: None,
+                can_ask: true,
+            };
+            let call = ToolCall {
+                tool_use_id: Some("toolu_1".to_owned()),
+                tool_name: "Bash".to_owned(),
+                input: json!({"command": "ls", "d": "d".repeat(400_000)}),
+            };
+            let projected = crate::hooks::projection::project(&call.input).unwrap();
+            assert!(projected.past_budget);
+            let mut session = runtime.open(&ctx).unwrap();
+            let id = RequestIdentity::next(&mut session, &call);
+            let mut budget = runtime.call_budget();
+            let (result, _, _) =
+                runtime.evaluate_projected(&ctx, &mut session, &id, &call, &projected, &mut budget);
+            assert_eq!(budget.trace().pieces_scanned, 0);
+            let decision = runtime.decide_request(
+                &ctx,
+                &session,
+                result,
+                projected.separated,
+                false,
+                false,
+                false,
+            );
+            assert_eq!(decision.outcome.verdict, expected);
+            assert_eq!(decision.outcome.basis, Basis::UnevaluableInput);
+        }
+    }
+
+    /// A deadline too far away to represent is no deadline, not a panic.
+    #[test]
+    fn a_deadline_past_what_an_instant_holds_leaves_all_the_time() {
+        let mut runtime = Runtime::new(Config::default()).with_limits(Limits {
+            hook_deadline: Duration::MAX,
+            ..Limits::default()
+        });
+        runtime.start_call();
+        assert_eq!(runtime.remaining(), Duration::MAX);
+    }
+
+    /// The deadline bounds waits and work not yet started: a call whose
+    /// evaluation has finished is recorded and answered with its verdict even
+    /// when the deadline passed while it was being evaluated.
+    #[test]
+    fn a_call_evaluated_before_the_deadline_keeps_its_verdict_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let telemetry = dir.path().join("telemetry.jsonl");
+        let mut runtime = Runtime::new(Config {
+            mode: Mode::Enforce,
+            state_dir: Some(dir.path().join("state")),
+            telemetry_path: Some(telemetry.clone()),
+            ..Config::default()
+        });
+        runtime.start_call();
+        let ctx = Context {
+            harness: "claude-code",
+            hook_event: "PreToolUse".to_owned(),
+            session_id: "s".to_owned(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: true,
+        };
+        let call = ToolCall {
+            tool_use_id: Some("toolu_1".to_owned()),
+            tool_name: "Bash".to_owned(),
+            input: json!({"command": "rm -f ~/.claude/settings.json"}),
+        };
+        let mut session = runtime.open(&ctx).unwrap();
+        let id = RequestIdentity::next(&mut session, &call);
+        let evaluated = runtime.evaluate_request(&ctx, &mut session, &id, &call);
+
+        runtime.deadline = Some(Instant::now() - Duration::from_secs(1));
+        let response = runtime
+            .record_request(&ctx, session, None, id, &call, evaluated, false)
+            .unwrap();
+
+        let Response::Decision(decision) = response else {
+            panic!("{response:?}");
+        };
+        assert_eq!(decision.verdict(), Verdict::Deny);
+        let records: Vec<Value> = std::fs::read_to_string(&telemetry)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let kinds: Vec<&str> = records
+            .iter()
+            .map(|r| r["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["decision"]);
+        assert_eq!(records[0]["decision"]["verdict"], "deny");
     }
 
     #[test]

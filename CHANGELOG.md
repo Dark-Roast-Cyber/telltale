@@ -11,6 +11,28 @@
 - **The native action profile is 15.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
+
+- **Each hook has one deadline.** A hook's waits are now bounded together:
+  25 s from its start, below the timeouts of 30 s or more that the tool-call
+  hooks are installed with. The wait for the evaluator, the wait for the
+  session's lock, the recovery budget and the piece time limit are each cut
+  to what is left of it; the default waits fit in it, and a
+  `hooks.evaluator.request_timeout_ms` raised well above its default can use
+  it up. A tool call that
+  has no time left before its evaluation starts is not evaluated: it records
+  no decision and journals nothing, and gets the stricter of `on_error` and
+  `on_unevaluable` (default `ask`) and one `error` record with the new code
+  `hook_deadline`. A decision already evaluated is always delivered. One scan
+  already in flight is not interrupted.
+
+- **Hooks embedding API: time limits are built in.** `Runtime::with_limits`
+  (with `engine::Limits`) replaces `Runtime::set_session_lock_wait`, and
+  `RecoveryBudget::start` takes the `Limits` to work within. New:
+  `Runtime::started_at` (the hook's start, from which its deadline counts),
+  `engine::HOOK_DEADLINE` and `Limits::within`. An embedder that never calls
+  `started_at` gets the deadline counted per call from `Runtime::handle`, the
+  engine's first build included.
+
 - **Override reasons are bounded.** An override entry's `reason`, in
   `overrides.d` or a builder override document, must be at most 256
   characters without control or invisible formatting characters other than
@@ -26,9 +48,10 @@
   command ahead of other values, then the start of other values while variants
   remain. A rule finding there keeps its force, and the unprojected remainder
   floors the decision at `on_unevaluable` (recorded as
-  `pending_input_separated`). An input of 1,025 to 2,048 values, previously
-  unevaluable, is now projected in full. The work per call stays bounded by
-  the same variant limit:
+  `pending_input_truncated`, distinct from `pending_input_separated` for an
+  input evaluated in full but in parts kept apart). An input of 1,025 to
+  2,048 values, previously unevaluable, is now projected in full. The work
+  per call stays bounded by the same variant limit:
   - a call with no session history is no longer scanned twice ahead of the
     piece loop;
   - a call past the projection budget goes straight to the piece loop, its
@@ -37,8 +60,28 @@
     is not scanned there at all: it records `pending_pieces_unscanned` and
     follows `on_unevaluable`.
 
-  A host that calls `telltale_core::hooks::Engine::evaluate` directly passes
-  the new `past_budget` argument (`false` for a call evaluated whole).
+  A command comes ahead of every other value whatever the member names sort
+  as, so it is in the variants. A value cut short for room in the variants is
+  reported as separated. A projected call with more than one command member
+  (which Telltale reads as one command text) evaluates each command in
+  variants without the others, first chunks first, and floors the decision
+  at `on_unevaluable`. History keeps the start of every command member
+  together, with the call's short top-level values, so a later call still
+  links to what each command did.
+
+  A hooks request record now traces its scans in an optional
+  `evaluation.scans` object (schema `telltale_hooks.record.v1`, additive):
+  variants projected, pieces scanned of the total, pieces refused and the
+  first refusal code, whether the whole-window scan and the scan of the
+  pending lines together ran or were skipped and why (`passed`, `refused`,
+  `skipped_pieces_only`, `skipped_budget`, `skipped_late`, `same_as_whole`),
+  and milliseconds per phase. It holds counts, closed values and times only.
+
+  A host that calls `telltale_core::hooks::Engine::evaluate` directly now
+  passes a named `engine::Request` (client, window path, history, pending
+  lines, focus and `scan`) and the budget. `scan` is
+  `PendingScan::Together` for a call evaluated whole, and
+  `PendingScan::PiecesOnly` for a projection past its budget.
 
 - **Inline remote-script execution now links `chain.download_then_execute`.**
   A download whose output the same command runs as code now links like a
@@ -434,6 +477,9 @@
   journaled unchanged, and a result is still evaluated up to the bound in
   bytes. When a call's input is bounded for history, the members Telltale
   reads as its command are kept first. Existing journals read unchanged.
+  A result with a finding whose journaled text is shorter than the text it
+  was evaluated on records `result_history_truncated` among its visibility
+  limits.
 
 - **Windows paths are now redacted in more spellings.** The privacy sanitizer
   replaces drive, UNC and device-namespace paths written with escaped

@@ -488,6 +488,27 @@ fn selector_registry_has_only_contract_backed_names() {
 }
 
 #[test]
+fn every_governed_facet_the_resolver_handles_is_a_registered_governed_selector() {
+    let unregistered: Vec<&str> = super::selector::governed::ALL
+        .iter()
+        .copied()
+        .filter(|name| SelectorId::parse(name).ok() != Some(SelectorId::GovernedFacet(name)))
+        .collect();
+    assert_eq!(unregistered, Vec::<&str>::new());
+}
+
+#[test]
+fn every_registered_governed_selector_is_named_for_the_resolver() {
+    let unhandled: Vec<&str> = SelectorId::all()
+        .iter()
+        .copied()
+        .filter(|name| matches!(SelectorId::parse(name), Ok(SelectorId::GovernedFacet(_))))
+        .filter(|name| !super::selector::governed::ALL.contains(name))
+        .collect();
+    assert_eq!(unhandled, Vec::<&str>::new());
+}
+
+#[test]
 fn selector_tool_text_and_compatibility_fallbacks_are_equivalent() {
     let registry = SelectorRegistry::new();
     for availability in [

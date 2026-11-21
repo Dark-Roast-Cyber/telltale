@@ -336,18 +336,35 @@ impl Engine {
     /// that is past capacity, because nothing else secures the verdict. Those
     /// stop at [`PIECE_SCAN_LIMIT`] instead, and so does the scan of a
     /// projection's lines together: past it, a projected call is not scanned.
-    /// A projection `past_budget` goes straight to the scans of its lines.
-    #[allow(clippy::too_many_arguments)]
+    /// A projection past its budget ([`PendingScan::PiecesOnly`]) goes
+    /// straight to the scans of its lines.
     pub fn evaluate(
         &self,
-        client: ClientId,
-        window_path: &Path,
-        history: &[Line],
-        pending: &[Line],
-        focus: &[Focus],
-        past_budget: bool,
+        request: Request<'_>,
         budget: &mut RecoveryBudget,
     ) -> Result<Evaluation, EngineError> {
+        // The trace goes back into the budget however the evaluation ends, so
+        // a call whose scan failed still records what its scans did.
+        let mut trace = std::mem::take(&mut budget.trace);
+        let evaluated = self.evaluate_traced(request, budget, &mut trace);
+        budget.trace = trace;
+        evaluated
+    }
+
+    fn evaluate_traced(
+        &self,
+        request: Request<'_>,
+        budget: &mut RecoveryBudget,
+        trace: &mut ScanTrace,
+    ) -> Result<Evaluation, EngineError> {
+        let Request {
+            client,
+            window_path,
+            history,
+            pending,
+            focus,
+            scan,
+        } = request;
         let sizes: Vec<usize> = history.iter().map(|line| line.to_jsonl().len()).collect();
         let pending_bytes = pending.iter().map(|line| line.to_jsonl().len()).sum();
         let whole_bytes = pending_bytes + sizes.iter().sum::<usize>();
@@ -357,16 +374,24 @@ impl Engine {
         // A projection past its budget holds more than Telltale takes in one
         // scan: it is not scanned whole nor its variants together, so the
         // time goes to its pieces, the command's first.
-        let pieces_only = past_budget && pending.len() > 1;
-        if !pieces_only && budget.admits(whole_bytes) {
+        let pieces_only = scan == PendingScan::PiecesOnly && pending.len() > 1;
+        trace.together = None;
+        if pieces_only {
+            trace.whole = Some(StepOutcome::SkippedPiecesOnly);
+        } else if !budget.admits(whole_bytes) {
+            trace.whole = Some(StepOutcome::SkippedBudget);
+        } else {
             let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
+            trace.whole_ms += whole.scan_ms;
             if !whole.source_failed {
+                trace.whole = Some(StepOutcome::Passed);
                 return Ok(Evaluation {
                     history_kept: history.len(),
                     ..whole
                 });
             }
+            trace.whole = Some(StepOutcome::Refused);
             failure_code = whole.failure_code.clone();
             alone = history.is_empty().then_some(whole);
         }
@@ -374,19 +399,33 @@ impl Engine {
         // loop and are bound by the same limit: past it, none is scanned.
         let late = pieces_only || (pending.len() > 1 && !budget.pieces_in_time());
         let mut best = if late {
+            trace.together = Some(if pieces_only {
+                StepOutcome::SkippedPiecesOnly
+            } else {
+                StepOutcome::SkippedLate
+            });
             Evaluation::not_evaluated(focus.len(), 0)
         } else if let Some(alone) = alone {
+            trace.together = Some(StepOutcome::SameAsWhole);
             alone
         } else {
             let scan = self.scan(client, window_path, pending.iter(), focus)?;
             budget.observe(pending_bytes, scan.scan_ms);
+            trace.together_ms += scan.scan_ms;
+            trace.together = Some(if scan.source_failed {
+                StepOutcome::Refused
+            } else {
+                StepOutcome::Passed
+            });
             scan
         };
         let mut kept = vec![false; history.len()];
+        let phase = Instant::now();
         if (late || best.source_failed) && pending.len() > 1 {
-            best = self.scan_each(client, window_path, pending, focus, || {
+            best = self.scan_each(client, window_path, pending, focus, trace, || {
                 budget.pieces_in_time()
             })?;
+            trace.pieces_ms += phase.elapsed().as_millis() as u64;
         } else if best.status != EvalStatus::NotEvaluated {
             let window = Window {
                 client,
@@ -398,6 +437,7 @@ impl Engine {
                 focus,
             };
             best = self.restore_history(&window, budget, best, &mut kept)?;
+            trace.history_ms += phase.elapsed().as_millis() as u64;
         }
         best.scan_ms = budget.elapsed_ms();
         best.failure_code = best.failure_code.or(failure_code);
@@ -494,9 +534,11 @@ impl Engine {
         window_path: &Path,
         pending: &[Line],
         focus: &[Focus],
+        trace: &mut ScanTrace,
         mut in_time: impl FnMut() -> bool,
     ) -> Result<Evaluation, EngineError> {
         let mut merged = Evaluation::not_evaluated(focus.len(), 0);
+        trace.pieces_total += pending.len();
         for (line, one) in pending.iter().zip(focus) {
             if !in_time() {
                 merged
@@ -510,7 +552,12 @@ impl Engine {
                 std::iter::once(line),
                 std::slice::from_ref(one),
             )?;
+            trace.pieces_scanned += 1;
             if scan.status == EvalStatus::NotEvaluated {
+                trace.pieces_refused += 1;
+                if trace.first_refusal.is_none() {
+                    trace.first_refusal = scan.failure_code;
+                }
                 continue;
             }
             merged.status = EvalStatus::VisibilityLimited;
@@ -681,6 +728,54 @@ pub const RECOVERY_BUDGET: Duration = Duration::from_secs(2);
 /// together starts past it either; the scan of a call whole is not limited by it. Load decides how far a call gets: what the pieces scanned found
 /// keeps its force, and the rest goes to `on_unevaluable`.
 pub const PIECE_SCAN_LIMIT: Duration = Duration::from_secs(5);
+
+/// The time limits one hook works within. Production code uses the
+/// [`Default`], the constants the fields name; tests build a runtime with
+/// generous limits to prove what an evaluation covers, and with tiny or spent
+/// ones to prove what a call gets when time runs out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// [`RECOVERY_BUDGET`].
+    pub recovery: Duration,
+    /// [`PIECE_SCAN_LIMIT`].
+    pub piece_scan: Duration,
+    /// [`crate::hooks::state::SESSION_LOCK_WAIT`].
+    pub session_lock_wait: Duration,
+    /// [`HOOK_DEADLINE`].
+    pub hook_deadline: Duration,
+}
+
+/// Time from the start of a hook after which nothing more is waited for: every
+/// later wait is cut to what remains of it ([`Limits::within`]), and a call with
+/// none left before its evaluation starts is not evaluated. A verdict already
+/// evaluated is always recorded and delivered. The hooks that evaluate tool
+/// calls are installed with a timeout of 30 s or more; this leaves room before
+/// it for one scan already in flight, which is not interrupted, and for the
+/// process to exit.
+pub const HOOK_DEADLINE: Duration = Duration::from_secs(25);
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            recovery: RECOVERY_BUDGET,
+            piece_scan: PIECE_SCAN_LIMIT,
+            session_lock_wait: crate::hooks::state::SESSION_LOCK_WAIT,
+            hook_deadline: HOOK_DEADLINE,
+        }
+    }
+}
+
+impl Limits {
+    /// These limits, none longer than `remaining`.
+    pub fn within(self, remaining: Duration) -> Self {
+        Self {
+            recovery: self.recovery.min(remaining),
+            piece_scan: self.piece_scan.min(remaining),
+            session_lock_wait: self.session_lock_wait.min(remaining),
+            hook_deadline: self.hook_deadline.min(remaining),
+        }
+    }
+}
 /// Scans smaller than this do not set the forecast's rate: their cost is mostly
 /// a scan's fixed setup, which would make a larger scan look far too expensive.
 const MIN_MEASURED_BYTES: usize = 64 * 1024;
@@ -696,22 +791,41 @@ const SMALL_LINE_BYTES: usize = 1024;
 /// One call's allowance for scanning, shared by every evaluation it needs.
 pub struct RecoveryBudget {
     started: Instant,
+    limits: Limits,
     /// The slowest rate measured so far, in milliseconds per byte.
     ms_per_byte: f64,
+    /// What the call's scans did; the budget spans all of them.
+    trace: ScanTrace,
 }
 
 impl RecoveryBudget {
     /// The call starts now: call this once the session lock is held, because
     /// the wait for the lock is bounded on its own.
-    pub fn start() -> Self {
+    pub fn start(limits: Limits) -> Self {
         Self {
             started: Instant::now(),
+            limits,
             ms_per_byte: 0.0,
+            trace: ScanTrace::default(),
+        }
+    }
+
+    /// What the call's scans did so far.
+    pub fn trace(&self) -> &ScanTrace {
+        &self.trace
+    }
+
+    /// A budget of which `used` is already spent.
+    #[cfg(test)]
+    pub(crate) fn already_spent(used: Duration) -> Self {
+        Self {
+            started: Instant::now() - used,
+            ..Self::start(Limits::default())
         }
     }
 
     fn spent(&self) -> bool {
-        self.started.elapsed() >= RECOVERY_BUDGET
+        self.started.elapsed() >= self.limits.recovery
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -720,7 +834,7 @@ impl RecoveryBudget {
 
     /// Whether another piece of a call past capacity may still be scanned.
     fn pieces_in_time(&self) -> bool {
-        self.started.elapsed() < PIECE_SCAN_LIMIT
+        self.started.elapsed() < self.limits.piece_scan
     }
 
     /// Whether a scan of `bytes` should fit in what is left. Twice the forecast,
@@ -728,7 +842,7 @@ impl RecoveryBudget {
     /// and a scan that fails at acquisition ends before the expensive stages.
     fn admits(&self, bytes: usize) -> bool {
         let forecast = Duration::from_secs_f64(self.ms_per_byte * bytes as f64 / 1000.0);
-        self.started.elapsed() + forecast * 2 < RECOVERY_BUDGET
+        self.started.elapsed() + forecast * 2 < self.limits.recovery
     }
 
     fn observe(&mut self, bytes: usize, ms: u64) {
@@ -739,6 +853,72 @@ impl RecoveryBudget {
 }
 
 /// What a recovery scan is made of.
+/// What [`Engine::evaluate`] scans: the call's `pending` lines (and `focus`,
+/// one per pending line) with as much of `history` as Telltale accepts,
+/// written to `window_path` as one hook-journal source of `client`.
+#[derive(Clone, Copy, Debug)]
+pub struct Request<'a> {
+    pub client: ClientId,
+    pub window_path: &'a Path,
+    pub history: &'a [Line],
+    pub pending: &'a [Line],
+    pub focus: &'a [Focus],
+    pub scan: PendingScan,
+}
+
+/// How the pending lines of a [`Request`] may be scanned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingScan {
+    /// Whole, with history, and together before one by one: a call, or a
+    /// projection within its budget.
+    Together,
+    /// Each line on its own only: a projection past its budget holds more
+    /// than Telltale takes in one scan.
+    PiecesOnly,
+}
+
+/// How one scan step of a call went: a closed value for its record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepOutcome {
+    /// Scanned, and Telltale accepted the source.
+    Passed,
+    /// Scanned, and Telltale failed the source.
+    Refused,
+    /// Not scanned: a projection past its budget goes to its pieces.
+    SkippedPiecesOnly,
+    /// Not scanned: the recovery budget did not admit it.
+    SkippedBudget,
+    /// Not scanned: the piece time limit had passed.
+    SkippedLate,
+    /// Not scanned again: with no history the whole-window scan was this one.
+    SameAsWhole,
+}
+
+/// What the scans of one call did, for its record: counts, closed values and
+/// milliseconds, never content. It spans every evaluation of the call (the
+/// call whole, then its projection): counts and times add up, and `whole`
+/// and `together` say what the last evaluation did.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct ScanTrace {
+    /// Variants projected in place of an input Telltale excluded.
+    pub variants: usize,
+    /// The scan of history and the pending lines together.
+    pub whole: Option<StepOutcome>,
+    /// The scan of the pending lines together, without history.
+    pub together: Option<StepOutcome>,
+    /// Pending lines scanned one by one, of those offered to that loop.
+    pub pieces_scanned: usize,
+    pub pieces_total: usize,
+    /// Pieces Telltale refused, and the failure code of the first.
+    pub pieces_refused: usize,
+    pub first_refusal: Option<String>,
+    pub whole_ms: u64,
+    pub together_ms: u64,
+    pub pieces_ms: u64,
+    pub history_ms: u64,
+}
+
 struct Window<'a> {
     client: ClientId,
     path: &'a Path,
@@ -1952,10 +2132,11 @@ mod recovery_tests {
         assert!(tried_first_to_last(&[]).is_empty());
     }
 
-    fn budget_used(used: Duration, ms_per_byte: f64) -> RecoveryBudget {
+    fn budget_used(limits: Limits, used: Duration, ms_per_byte: f64) -> RecoveryBudget {
         RecoveryBudget {
-            started: Instant::now() - used,
             ms_per_byte,
+            limits,
+            ..RecoveryBudget::already_spent(used)
         }
     }
 
@@ -1993,6 +2174,46 @@ mod recovery_tests {
         (lines, focus)
     }
 
+    /// The call's trace says which scans ran: past the budget the whole and
+    /// together scans are skipped, every piece is scanned, and a piece
+    /// Telltale refuses is counted with its failure code.
+    #[test]
+    fn the_trace_counts_scanned_and_refused_pieces_with_the_first_code() {
+        let inputs = [
+            serde_json::json!({"command": "curl http://a\u{1}b.test/x"}),
+            serde_json::json!({"command": "ls"}),
+        ];
+        let mut lines = Vec::new();
+        let mut focus = Vec::new();
+        for (n, input) in inputs.iter().enumerate() {
+            let at = format!("2026-11-06T00:00:00.{n:03}Z");
+            let uuid = format!("uuid-{n}");
+            lines.push(Line::tool_use("s", &uuid, &at, "toolu_1", "Bash", input));
+            focus.push(Focus {
+                occurred_at: at,
+                stage: ObservationStage::ToolRequested,
+                native_id: uuid,
+            });
+        }
+        let (dir, engine) = engine();
+        let mut budget = RecoveryBudget::start(Limits::default());
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("window.jsonl"),
+            history: &[],
+            pending: &lines,
+            focus: &focus,
+            scan: PendingScan::PiecesOnly,
+        };
+        engine.evaluate(request, &mut budget).unwrap();
+        let trace = budget.trace();
+        assert_eq!(trace.whole, Some(StepOutcome::SkippedPiecesOnly));
+        assert_eq!(trace.together, Some(StepOutcome::SkippedPiecesOnly));
+        assert_eq!((trace.pieces_scanned, trace.pieces_total), (2, 2));
+        assert_eq!(trace.pieces_refused, 1);
+        assert!(trace.first_refusal.is_some(), "{trace:?}");
+    }
+
     /// The window path and the engine, for a scan of `pieces` alone.
     fn engine() -> (tempfile::TempDir, Engine) {
         let dir = tempfile::tempdir().unwrap();
@@ -2002,35 +2223,45 @@ mod recovery_tests {
 
     /// `used` is what the evaluation has already spent. The budget starts after the
     /// engine is built, so that the build is not charged to it.
-    fn evaluate_with(command: String, used: Duration) -> (Evaluation, usize) {
-        evaluate_projected_with(pieces(command), used)
+    /// `limits` are the evaluation's.
+    fn evaluate_with(command: String, limits: Limits, used: Duration) -> (Evaluation, usize) {
+        evaluate_projected_with(pieces(command), limits, used)
     }
 
     fn evaluate_projected_with(
         lines: (Vec<Line>, Vec<Focus>),
+        limits: Limits,
         used: Duration,
     ) -> (Evaluation, usize) {
-        evaluate_lines(lines, used, false)
+        evaluate_lines(lines, limits, used, PendingScan::Together)
+    }
+
+    /// No piece time limit a loaded host reaches: a test of what the pieces
+    /// find does not depend on the runner's speed.
+    fn time_for_every_piece() -> Limits {
+        Limits {
+            piece_scan: Duration::from_secs(3600),
+            ..Limits::default()
+        }
     }
 
     fn evaluate_lines(
         (lines, focus): (Vec<Line>, Vec<Focus>),
+        limits: Limits,
         used: Duration,
-        past_budget: bool,
+        scan: PendingScan,
     ) -> (Evaluation, usize) {
         let (dir, engine) = engine();
-        let mut budget = budget_used(used, 0.0);
-        let evaluation = engine
-            .evaluate(
-                ClientId::Claude,
-                &dir.path().join("window.jsonl"),
-                &[],
-                &lines,
-                &focus,
-                past_budget,
-                &mut budget,
-            )
-            .unwrap();
+        let mut budget = budget_used(limits, used, 0.0);
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("window.jsonl"),
+            history: &[],
+            pending: &lines,
+            focus: &focus,
+            scan,
+        };
+        let evaluation = engine.evaluate(request, &mut budget).unwrap();
         (evaluation, lines.len())
     }
 
@@ -2045,6 +2276,7 @@ mod recovery_tests {
                 &dir.path().join("window.jsonl"),
                 &lines,
                 &focus,
+                &mut ScanTrace::default(),
                 || {
                     let in_time = left > 0;
                     left = 0;
@@ -2083,6 +2315,7 @@ mod recovery_tests {
     fn a_spent_budget_does_not_stop_the_pieces_of_a_call_past_capacity() {
         let (evaluation, lines) = evaluate_with(
             format!("echo {}; {DENY}; echo {}", hosts(0, 400), hosts(400, 14600)),
+            time_for_every_piece(),
             RECOVERY_BUDGET,
         );
         assert_eq!(evaluation.unevaluated_focus, lines, "in pieces");
@@ -2124,6 +2357,7 @@ mod recovery_tests {
     fn an_evaluation_already_past_the_limit_scans_no_piece() {
         let (evaluation, lines) = evaluate_with(
             format!("{DENY}; echo {}", hosts(0, 15000)),
+            Limits::default(),
             PIECE_SCAN_LIMIT,
         );
         assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
@@ -2148,7 +2382,8 @@ mod recovery_tests {
     /// scanned, and the runtime applies `on_unevaluable`.
     #[test]
     fn a_projection_already_past_the_limit_is_not_scanned_together() {
-        let (evaluation, lines) = evaluate_projected_with(accepted_whole(), PIECE_SCAN_LIMIT);
+        let (evaluation, lines) =
+            evaluate_projected_with(accepted_whole(), Limits::default(), PIECE_SCAN_LIMIT);
         assert!(!has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(evaluation.status, EvalStatus::NotEvaluated);
         assert_eq!(evaluation.unevaluated_focus, lines);
@@ -2160,7 +2395,8 @@ mod recovery_tests {
     /// found keeps its force.
     #[test]
     fn a_projection_within_the_limit_is_scanned_together_and_keeps_its_deny() {
-        let (evaluation, _) = evaluate_projected_with(accepted_whole(), RECOVERY_BUDGET);
+        let (evaluation, _) =
+            evaluate_projected_with(accepted_whole(), time_for_every_piece(), RECOVERY_BUDGET);
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
         assert_eq!(evaluation.unevaluated_focus, 0);
@@ -2184,7 +2420,12 @@ mod recovery_tests {
     /// and a deny in the last of them is found.
     #[test]
     fn a_projection_past_the_budget_goes_straight_to_its_pieces() {
-        let (evaluation, lines) = evaluate_lines(past_the_budget(), Duration::ZERO, true);
+        let (evaluation, lines) = evaluate_lines(
+            past_the_budget(),
+            time_for_every_piece(),
+            Duration::ZERO,
+            PendingScan::PiecesOnly,
+        );
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(verdict(&evaluation), crate::hooks::state::Verdict::Deny);
         assert_eq!(
@@ -2204,7 +2445,12 @@ mod recovery_tests {
     /// the piece loop, which finds the deny.
     #[test]
     fn variants_past_the_budget_are_never_scanned_together() {
-        let (evaluation, lines) = evaluate_lines(split_command(), Duration::ZERO, true);
+        let (evaluation, lines) = evaluate_lines(
+            split_command(),
+            time_for_every_piece(),
+            Duration::ZERO,
+            PendingScan::PiecesOnly,
+        );
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(
             evaluation.unevaluated_focus, lines,
@@ -2215,33 +2461,73 @@ mod recovery_tests {
     /// The same variants within the budget are scanned together, as before.
     #[test]
     fn variants_within_the_budget_are_scanned_together() {
-        let (evaluation, _) = evaluate_lines(split_command(), Duration::ZERO, false);
+        let (evaluation, _) = evaluate_lines(
+            split_command(),
+            time_for_every_piece(),
+            Duration::ZERO,
+            PendingScan::Together,
+        );
         assert!(has_deny_rule(&evaluation), "{:?}", evaluation.rule_ids());
         assert_eq!(evaluation.unevaluated_focus, 0, "scanned together");
     }
 
     #[test]
     fn the_piece_limit_is_later_than_the_budget() {
-        assert!(budget_used(RECOVERY_BUDGET, 0.0).pieces_in_time());
-        assert!(!budget_used(PIECE_SCAN_LIMIT, 0.0).pieces_in_time());
+        assert!(budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).pieces_in_time());
+        assert!(!budget_used(Limits::default(), PIECE_SCAN_LIMIT, 0.0).pieces_in_time());
+    }
+
+    /// A call evaluated twice (whole, then projected) spends one budget and
+    /// one trace: an evaluation that fails keeps what the earlier one traced.
+    #[test]
+    fn a_failed_evaluation_keeps_the_calls_trace() {
+        let (dir, engine) = engine();
+        let at = "2026-11-06T00:00:00.000Z";
+        let line = Line::tool_use(
+            "s",
+            "uuid-0",
+            at,
+            "toolu_1",
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+        );
+        let focus = Focus {
+            occurred_at: at.to_owned(),
+            stage: ObservationStage::ToolRequested,
+            native_id: "uuid-0".to_owned(),
+        };
+        let mut budget = RecoveryBudget::start(Limits::default());
+        budget.trace.variants = 3;
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("missing").join("window.jsonl"),
+            history: &[],
+            pending: std::slice::from_ref(&line),
+            focus: std::slice::from_ref(&focus),
+            scan: PendingScan::Together,
+        };
+        assert!(engine.evaluate(request, &mut budget).is_err());
+        assert_eq!(budget.trace().variants, 3);
     }
 
     #[test]
     fn a_scan_that_may_not_fit_is_not_admitted() {
-        let fresh = RecoveryBudget::start();
+        let fresh = RecoveryBudget::start(Limits::default());
         assert!(fresh.admits(usize::MAX / 2), "nothing measured yet");
         // 1 MB at 0.5 ms per KB: 500 ms, doubled.
         let rate = 0.0005;
-        assert!(budget_used(Duration::from_millis(900), rate).admits(1_000_000));
-        assert!(!budget_used(Duration::from_millis(1100), rate).admits(1_000_000));
-        assert!(budget_used(Duration::from_millis(1100), rate).admits(500_000));
-        assert!(!budget_used(RECOVERY_BUDGET, 0.0).admits(1));
-        assert!(budget_used(RECOVERY_BUDGET, 0.0).spent());
+        assert!(budget_used(Limits::default(), Duration::from_millis(900), rate).admits(1_000_000));
+        assert!(
+            !budget_used(Limits::default(), Duration::from_millis(1100), rate).admits(1_000_000)
+        );
+        assert!(budget_used(Limits::default(), Duration::from_millis(1100), rate).admits(500_000));
+        assert!(!budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).admits(1));
+        assert!(budget_used(Limits::default(), RECOVERY_BUDGET, 0.0).spent());
     }
 
     #[test]
     fn the_slowest_rate_counts_and_small_scans_do_not_set_it() {
-        let mut budget = RecoveryBudget::start();
+        let mut budget = RecoveryBudget::start(Limits::default());
         budget.observe(100, 50);
         assert_eq!(budget.ms_per_byte, 0.0, "mostly a scan's fixed setup");
         budget.observe(MIN_MEASURED_BYTES, 100);

@@ -55,7 +55,7 @@ and not a sandbox. It is one enforcement point among several; see the
 | `policy` | Host promotion thresholds (Telltale's contract assigns these to the host). |
 | `state` | Session directory (hashed ID), advisory lock, cumulative score, denied/asked counts, pending decisions for outcome correlation. |
 | `telemetry` | `telltale_hooks.record.v1` JSONL envelopes ([schema](../../schemas/telltale-hooks-record-v1.schema.json)). |
-| `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. Keeps short top-level values and the head of a command with every variant, and reports what it had to separate (`pending_input_separated`, floored at `on_unevaluable`). Past its budget it still yields a bounded set of variants: a short command and the first block of short top-level values with every variant, every chunk of a longer command ahead of other values, then the start of other values while variants remain; the rest is unprojected and reported as separated. |
+| `projection` | Bounded, every-byte projection of tool input that Telltale quarantined. Keeps short top-level values with every variant and the head of a command with each of its later chunks; more than one command member (read by Telltale as one command text) is evaluated in variants without the others. Reports what it had to separate (`pending_input_separated`, floored at `on_unevaluable`). Past its budget it still yields a bounded set of variants: a short command and the first block of short top-level values with every variant, every chunk of a longer command ahead of other values, then the start of other values while variants remain; the rest is unprojected and reported as truncated (`pending_input_truncated`, floored the same way). |
 | `codex_cli` | Parse Codex CLI 0.166.0 hook payloads; composite, escaped correlation key (`session:agent:turn:tool_use_id`); `Stop`/`SubagentStop` settle by `turn_id`; render only `hookSpecificOutput` deny (ask becomes deny, allow prints nothing); generate `hooks.json` and the exec-policy backstop rules. |
 | `evaluator` | Long-lived evaluator: Unix-socket protocol, trust checks, autostart, fallback rules (`evaluator/unix.rs`). Other platforms report `evaluator_unsupported_platform` and evaluate in-process. |
 | `rules/` | Host-owned Rule v2 content (hook self-protection), the shared document and each adapter's own (`Adapter::rules`), loaded additively into the one pipeline that serves every harness, plus a generated rule for this installation's own paths. |
@@ -267,10 +267,24 @@ group; failed cleanup cannot release a still-live slot.
   but goes straight to its pieces, a longer command's first, and a projected call's
   variants are not scanned at all once the piece limit has passed
   (`pending_pieces_unscanned`, then `on_unevaluable`).
-- Waiting is bounded. A call waits 10 s for its session's lock, then gets the
-  strict policy. The evaluator never records what its client stopped waiting for,
-  and a client that gets no answer returns what was recorded or evaluates in-process
-  (ADR 0003).
+- Waiting is bounded, by one deadline per hook: 25 s from the hook's start
+  (`HOOK_DEADLINE`, below the timeouts of 30 s or more that the tool-call hooks
+  are installed with). Every later wait is cut to what is left of it: the wait
+  for the evaluator, the wait for the session's lock (10 s at most), the
+  recovery budget and the piece time limit (`Limits::within`). The default
+  waits fit in it; a `hooks.evaluator.request_timeout_ms` raised well above its
+  default can use it up. A call waits for its session's lock, then gets the
+  strict policy (`state_lock_timeout`). A call that has no time left before its
+  evaluation starts is not evaluated: it records no decision and journals
+  nothing, and gets the strict policy and one `error` record (`hook_deadline`).
+  A decision already evaluated is always recorded and delivered, however late.
+  One scan already in flight is not interrupted, so a single slow scan can
+  still run past the deadline. The evaluator never records what its client
+  stopped waiting for, and a client that gets no answer returns what was
+  recorded or evaluates in-process (ADR 0003).
+  The limits are values the runtime is built with (`engine::Limits`, defaults
+  only in production); tests use generous ones to prove coverage and tiny ones
+  to prove the degraded outcome.
 - State and journal are written by the same OS user as the agent. They are
   integrity-relevant but not tamper-proof; self-protection rules raise the
   bar, and managed settings plus out-of-user placement are the real fix.

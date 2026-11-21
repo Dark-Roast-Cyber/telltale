@@ -915,6 +915,55 @@ fn prompt_and_result_text_is_bounded_by_its_encoded_size() {
     assert_eq!(lines[4]["message"]["content"][0]["content"], kept.as_str());
 }
 
+/// A flagged result, given at the size limit: every byte is evaluated, and its
+/// four newlines take two bytes each in the journal line.
+const FLAGGED_RESULT: &str = "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
+
+fn flagged_result_record(max_result_bytes: usize) -> Value {
+    let mut h = Harness::with(|c| c.window.max_result_bytes = max_result_bytes);
+    h.runtime.handle(
+        &ctx("PreToolUse"),
+        Event::ToolRequested(bash("call_cat", "cat notes.txt")),
+    );
+    h.runtime.handle(
+        &ctx("PostToolUse"),
+        Event::ToolFinished {
+            call: bash("call_cat", "cat notes.txt"),
+            completion: Completion::Completed,
+            result_text: FLAGGED_RESULT.to_owned(),
+            duration_ms: None,
+        },
+    );
+    h.records("result_finding").pop().unwrap()
+}
+
+/// When the journaled copy of a result holds less than was evaluated, the
+/// result's record says so: later calls are judged against the shorter copy.
+#[test]
+fn a_result_journaled_shorter_than_evaluated_records_the_history_limit() {
+    let record = flagged_result_record(184);
+    assert!(
+        record["evaluation"]["visibility_limits"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("result_history_truncated")),
+        "{record:#}"
+    );
+}
+
+/// A result journaled whole records no history limit.
+#[test]
+fn a_result_journaled_whole_records_no_history_limit() {
+    let record = flagged_result_record(188);
+    assert!(
+        !record["evaluation"]["visibility_limits"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("result_history_truncated")),
+        "{record:#}"
+    );
+}
+
 /// Ordinary prompt and result text is journaled as before: whole within the
 /// bound, and cut at the bound past it.
 #[test]

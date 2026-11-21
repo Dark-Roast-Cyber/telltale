@@ -3,24 +3,32 @@
 //! in one call (too large together, or a URL it refuses) are projected into
 //! bounded variants; a deny found in any of them decides, under the default
 //! policy and under `on_unevaluable: allow`.
+//!
+//! The hook gives up scanning pieces of an input at a time limit, so these run
+//! within [`common::generous`] limits: what they prove does not depend on the
+//! runner's speed. What a call gets when that limit has passed is tested apart.
+
+use std::time::Duration;
 
 use crate::common;
 
 use common::{Harness, verdict};
 use serde_json::{Value, json};
-use telltale_core::hooks::config::OnError;
+use telltale_core::hooks::config::{Config, OnError};
+use telltale_core::hooks::engine::Limits;
 
 /// A command the self-protection rules deny on its own.
 const DENIED: &str = "rm -f ~/.claude/settings.json";
 
+fn harness(edit: impl FnOnce(&mut Config)) -> Harness {
+    Harness::with_limits(common::generous(), edit)
+}
+
 /// Both policies for what cannot be evaluated: the default (`ask`) and fail-open.
 fn policies() -> [(&'static str, Harness); 2] {
     [
-        ("default", Harness::new()),
-        (
-            "fail-open",
-            Harness::with(|c| c.on_unevaluable = OnError::Allow),
-        ),
+        ("default", harness(|_| {})),
+        ("fail-open", harness(|c| c.on_unevaluable = OnError::Allow)),
     ]
 }
 
@@ -148,12 +156,12 @@ fn a_control_character_in_a_url_cannot_lower_a_deny() {
 /// finding, a call holding such a URL still gets `on_unevaluable`.
 #[test]
 fn a_rewritten_url_without_a_finding_is_floored() {
-    let mut h = Harness::new();
+    let mut h = harness(|_| {});
     let command = "echo http://a\u{1}b.test/x";
     let (verdict, basis) = decide(&mut h, "rewritten", json!({ "command": command }));
     assert_eq!(verdict.as_deref(), Some("ask"));
     assert_eq!(basis, "unevaluable_input");
-    let mut h = Harness::with(|c| c.on_unevaluable = OnError::Deny);
+    let mut h = harness(|c| c.on_unevaluable = OnError::Deny);
     let (verdict, _) = decide(&mut h, "rewritten", json!({ "command": command }));
     assert_eq!(verdict.as_deref(), Some("deny"));
 }
@@ -242,7 +250,72 @@ fn past_the_budget(command: &str) -> Vec<(String, Value)> {
             "pieces".to_owned(),
             json!({ "command": command, "a": values("k", 20, 300_000) }),
         ),
+        (
+            "every value flattened, the command not first by name".to_owned(),
+            top(2047, 1024),
+        ),
+        (
+            "two command keys".to_owned(),
+            json!({ "cmd": "c".repeat(400_000), "command": command }),
+        ),
+        (
+            "pieces cut to what the variants hold".to_owned(),
+            json!({ "a": vec!["p"; 2046], "command": command, "z": "z".repeat(9000) }),
+        ),
     ]
+}
+
+/// The record tells an input evaluated in full but in parts kept apart
+/// (`pending_input_separated`) from one with bytes left unevaluated past the
+/// projection budget (`pending_input_truncated`).
+#[test]
+fn a_truncated_input_is_recorded_apart_from_a_separated_one() {
+    let mut h = harness(|_| {});
+    let split = json!({
+        "command": format!("echo {}; ls", "a".repeat(4000)),
+        "description": "d".repeat(5000),
+    });
+    let record = decision(&mut h, "split", split);
+    let limits = &record["evaluation"]["visibility_limits"];
+    assert!(
+        limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_separated"))
+    );
+    assert!(
+        !limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_truncated"))
+    );
+
+    let cut = json!({ "command": "ls", "d": "d".repeat(400_000) });
+    let record = decision(&mut h, "cut", cut);
+    let limits = &record["evaluation"]["visibility_limits"];
+    assert!(
+        limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_truncated"))
+    );
+    assert!(
+        !limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_separated"))
+    );
+}
+
+/// A value cut short because the variants hold no more pieces is not
+/// evaluated whole: with no finding, the call gets `on_unevaluable`.
+#[test]
+fn a_value_cut_for_room_gets_on_unevaluable() {
+    let input = json!({ "a": vec!["p"; 2047], "b": "b".repeat(4000) });
+    let mut h = harness(|c| c.on_unevaluable = OnError::Deny);
+    let (verdict, basis) = decide(&mut h, "cut-for-room", input);
+    assert_eq!(verdict.as_deref(), Some("deny"));
+    assert_eq!(basis, "unevaluable_input");
 }
 
 /// A denied command just over the anchor size, and one of several chunks
@@ -283,10 +356,10 @@ fn an_input_past_the_projection_budget_keeps_a_rule_deny() {
 fn an_input_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
     let mut failures = Vec::new();
     for (policy, mut h, expected) in [
-        ("default", Harness::new(), "ask"),
+        ("default", harness(|_| {}), "ask"),
         (
             "deny",
-            Harness::with(|c| c.on_unevaluable = OnError::Deny),
+            harness(|c| c.on_unevaluable = OnError::Deny),
             "deny",
         ),
     ] {
@@ -304,7 +377,7 @@ fn an_input_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
 /// variants: its window holds no more records than that.
 #[test]
 fn an_input_past_the_projection_budget_evaluates_a_bounded_number_of_variants() {
-    let mut h = Harness::new();
+    let mut h = harness(|_| {});
     let mut failures = Vec::new();
     for (n, (label, input)) in past_the_budget(DENIED).into_iter().enumerate() {
         let record = decision(&mut h, &format!("bound-{n}"), input);
@@ -315,4 +388,27 @@ fn an_input_past_the_projection_budget_evaluates_a_bounded_number_of_variants() 
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Past the piece time limit, no piece of an input past the projection budget
+/// is scanned: the call gets `on_unevaluable` even when it holds a denied
+/// command, never an allow on "no finding".
+#[test]
+fn past_the_piece_time_limit_an_input_past_the_projection_budget_gets_on_unevaluable() {
+    let no_piece_time = Limits {
+        piece_scan: Duration::ZERO,
+        ..common::generous()
+    };
+    let input = json!({ "command": DENIED, "description": "d".repeat(400_000) });
+
+    let mut h = Harness::with_limits(no_piece_time, |_| {});
+    let record = decision(&mut h, "no-piece-time", input.clone());
+    assert_eq!(record["decision"]["verdict"], "ask");
+    assert_eq!(record["decision"]["basis"], "unevaluable_input");
+    assert_eq!(record["evaluation"]["scans"]["pieces_scanned"], 0);
+
+    let mut h = Harness::with_limits(no_piece_time, |c| c.on_unevaluable = OnError::Deny);
+    let (verdict, basis) = decide(&mut h, "no-piece-time-deny", input);
+    assert_eq!(verdict.as_deref(), Some("deny"));
+    assert_eq!(basis, "unevaluable_input");
 }
