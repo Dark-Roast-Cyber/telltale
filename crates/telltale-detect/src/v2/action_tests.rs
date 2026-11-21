@@ -670,12 +670,13 @@ fn a_url_named_in_text_does_not_supply_the_egress_step_of_a_chain() {
             ["network.controlled_test_domain.mention"]
         );
         assert_eq!(session.rule_score(), 0);
-        assert!(!session.action_findings().iter().any(|finding| {
-            finding
-                .rule_ids()
-                .iter()
-                .any(|id| id == "network.controlled_test_domain.darkroast")
-        }));
+        // The native action view reads the same reference and nothing more.
+        let native = session
+            .action_findings()
+            .iter()
+            .map(|finding| finding.rule_ids().to_vec())
+            .collect::<Vec<_>>();
+        assert_eq!(native, [["network.controlled_test_domain.mention"]]);
         for (opener, chain) in egress_chain_openers() {
             assert_eq!(
                 chain_in_both_views(&[opener, mention.clone()], chain),
@@ -722,8 +723,7 @@ fn url_call(id: &str, name: &str, arguments: serde_json::Value) -> CanonicalObse
     .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
     .capability_context(
         CapabilityContext::new()
-            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
-            .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
     )
     .fact_metadata("tool.name", FactMetadata::reported().unwrap())
     .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())
@@ -1515,8 +1515,7 @@ fn parsed_shell_call(id: &str, command: &str) -> CanonicalObservationV2 {
     .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
     .capability_context(
         CapabilityContext::new()
-            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
-            .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
     )
     .fact_metadata("tool.name", FactMetadata::reported().unwrap())
     .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())

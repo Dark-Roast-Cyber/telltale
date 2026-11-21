@@ -13,7 +13,7 @@
   </a>
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Supported_Agents-6-green?style=flat-square" alt="Supported Agents" />
-  <img src="https://img.shields.io/badge/Detection_Categories-20-orange?style=flat-square" alt="Detection Categories" />
+  <img src="https://img.shields.io/badge/Detection_Categories-23-orange?style=flat-square" alt="Detection Categories" />
 </p>
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
