@@ -56,9 +56,12 @@ static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_r
 /// can contain one, so this pass runs only then.
 static ESCAPED_WINDOWS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[2, 4]));
 
-/// Windows paths whose separators are `widths` backslashes. Each form keeps
-/// one separator width throughout, so a single escaped backslash
-/// (`HKCU\\Software`, `\\n`) is not read as a UNC start.
+/// Windows paths whose start is written with `widths` backslashes: the UNC
+/// or device prefix, the separator after a UNC server and the separator after
+/// a drive. That start keeps one width, so a single escaped backslash
+/// (`HKCU\\Software`, `\\n`) is not read as a UNC start. Separators after the
+/// start may be any width, so a path whose escaping changes part way is
+/// matched whole.
 ///
 /// Device branches come first so they win at a shared start: their first
 /// component may be a drive (`C:`) or a volume name with braces, which the UNC
@@ -69,14 +72,14 @@ static ESCAPED_WINDOWS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_
 fn windows_path_regex(widths: &[usize]) -> Regex {
     const PART_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
     const DEVICE_NAME_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]:&|]"#;
+    // Directories may hold spaces; the last component may not.
+    let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*\\+)*{PART_CHAR}+");
     let (mut devices, mut uncs, mut drives) = (Vec::new(), Vec::new(), Vec::new());
     for width in widths {
         let sep = format!(r"\\{{{width}}}");
         let start = format!(r"\\{{{}}}", width * 2);
-        // Directories may hold spaces; the last component may not.
-        let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*{sep})*{PART_CHAR}+");
         devices.push(format!(
-            r"{start}[?.]{sep}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:{sep}{tail})?"
+            r"{start}[?.]{sep}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:\\+{tail})?"
         ));
         uncs.push(format!(r"{start}{PART_CHAR}+{sep}{tail}"));
         drives.push(format!(r"[A-Z]:{sep}{tail}"));
@@ -3761,35 +3764,54 @@ safe=value"#,
             sanitize(r"open C:\\Users\\alice\secret.txt now"),
             "open <path> now"
         );
+        assert_eq!(sanitize(r"open C:\Users\\alice\\secret.txt"), "open <path>");
+        assert_eq!(sanitize(r"open C:\Users\alice\\secret.txt"), "open <path>");
+        assert_eq!(sanitize(r"dir \\server\share\\team\\a.txt"), "dir <path>");
+        assert_eq!(sanitize(r"open C:\\Users\alice\secret.txt"), "open <path>");
+        assert_eq!(
+            sanitize(r"open C:\Users\\alice\\\\Desktop\secret.txt:12 now"),
+            "open <path>:12 now"
+        );
+        assert_eq!(
+            sanitize(r"open \\?\C:\Users\\alice\\\\secret.txt now"),
+            "open <path> now"
+        );
     }
 
-    /// Generated mixed-width paths: every component the plain single-width
-    /// pattern hides stays hidden.
     #[test]
-    fn mixed_width_windows_paths_hide_what_single_width_matching_hid() {
-        let part = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
-        let tail = format!(r"(?:{part}+(?:\s+{part}+)*\\)*{part}+");
-        let single_width = regex::Regex::new(&format!(
-            r#"(?i)\\\\[?.]\\(?:[A-Z]:{part}*|[^\s\\<>"'`,;()\[\]:&|]+)(?:\\{tail})?|\b[A-Z]:\\{tail}|\\\\{part}+\\{tail}"#
-        ))
-        .unwrap();
-        let separators = [r"\", r"\\"];
-        for prefix in ["C:", r"\\server", r"\\\\server", r"\\?\C:", r"\\\\?\\C:"] {
+    fn plain_start_windows_paths_with_escaped_tails_are_redacted_in_every_context() {
+        assert_every_context(
+            r"open C:\Users\\alice\\secret.txt and \\server\share\\team\\a.txt",
+            "open [sensitive-path] and [sensitive-path]",
+            "open <path> and <path>",
+        );
+    }
+
+    /// Generated paths for every drive, UNC and device-namespace start, plain
+    /// or escaped, whose later separators are 1, 2 or 4 backslashes in any
+    /// order: each is replaced whole.
+    #[test]
+    fn mixed_width_windows_paths_are_redacted_whole_for_every_separator_mix() {
+        let separators = [r"\", r"\\", r"\\\\"];
+        for prefix in [
+            "C:",
+            r"\\server\share",
+            r"\\\\server\\share",
+            r"\\?\C:",
+            r"\\\\?\\C:",
+            r"\\?\UNC\server\share",
+        ] {
             for first in separators {
                 for second in separators {
                     for third in separators {
                         let input = format!(
                             "read {prefix}{first}Alphaone{second}Bravotwo{third}Charlie.txt now"
                         );
-                        let before = single_width.replace_all(&input, "<path>");
-                        let after =
-                            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &input);
-                        for token in ["Alphaone", "Bravotwo", "Charlie"] {
-                            assert!(
-                                before.contains(token) || !after.contains(token),
-                                "{input} -> {after}"
-                            );
-                        }
+                        assert_eq!(
+                            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &input),
+                            "read <path> now",
+                            "{input}"
+                        );
                     }
                 }
             }
