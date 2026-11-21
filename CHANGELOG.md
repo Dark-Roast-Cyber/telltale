@@ -41,14 +41,16 @@
 - **Object-storage uploads are matched by transfer direction.**
   `exfil.outbound_upload` keeps its name, UUID and 60-point contribution. Its
   session rule and native action now agree: an `aws s3 cp`, `gsutil cp` or
-  `rclone copy` request matches only when a local source operand, or standard
-  input, precedes a remote destination, and Azure matches only
-  `storage blob|file upload` and `upload-batch`. Downloads, copies between two
-  remote locations and storage inventory such as `az storage account list` no
-  longer match. The native action profile version rises to 11, which also
-  covers the inline-execution and GitHub CLI changes above. The rule's
-  behaviour fingerprint changes, so affected sessions can emit once after
-  upgrade. Fixes #179.
+  `rclone copy` request matches only when its first operand is local (a path,
+  standard input or a `file://` or HTTP URL) and a remote location follows.
+  Azure matches only the `az storage` upload and sync verbs of `blob`, `file`
+  and `fs`, and `az storage copy` from a local source. Downloads, copies between
+  two remote locations and storage inventory or settings commands such as
+  `az storage account list` no longer match, and a command run in the
+  background beside one of them is still read on its own. The native action
+  profile version rises to 11, which also covers the inline-execution and
+  GitHub CLI changes above. The rule's behaviour fingerprint changes, so
+  affected sessions can emit once after upgrade. Fixes #179.
 - **Destructive Git detection distinguishes more requests from plain previews.**
   `destructive.git_discard` now covers explicit file restores, forced checkouts,
   branch switches that discard changes, forced worktree removal, the long clean

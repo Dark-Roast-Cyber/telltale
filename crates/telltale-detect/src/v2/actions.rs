@@ -1639,11 +1639,10 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
                     .filter(|s| s.as_str() == "-" || !s.starts_with('-'));
                 words.next().is_some_and(|first| !remote(first)) && words.any(|s| remote(s))
             }),
-        "az" => tokens.windows(3).any(|w| {
-            w[0] == "storage"
-                && matches!(w[1].as_str(), "blob" | "file")
-                && matches!(w[2].as_str(), "upload" | "upload-batch")
-        }),
+        "az" => tokens
+            .iter()
+            .position(|s| s == "storage")
+            .is_some_and(|position| azure_upload(&tokens[position + 1..])),
         _ => false,
     })
 }
@@ -1675,15 +1674,62 @@ fn publishes_cloud_credential(tokens: &[String]) -> bool {
     }
 }
 
-/// `s3://`, `gs://` or an rclone remote: a name of two or more word
-/// characters, dots or dashes before a colon. A drive letter is local.
+/// An `az storage` command that sends local content: an upload or sync verb
+/// of `blob`, `file` or `fs`, at most one word after the group, or a `copy`
+/// whose every source is local.
+fn azure_upload(words: &[String]) -> bool {
+    let verb = |word: &String| word.starts_with("upload") || word.starts_with("sync");
+    match words {
+        [group, rest @ ..] if matches!(group.as_str(), "blob" | "file" | "fs") => match rest {
+            [first, ..] if verb(first) => true,
+            [first, second, ..] => {
+                first
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    && verb(second)
+            }
+            _ => false,
+        },
+        [copy, rest @ ..] if copy == "copy" => {
+            // A source that does not start like a local path is remote.
+            let local = |value: &str| {
+                value.starts_with(['.', '/', '~', '$']) || value.as_bytes().get(1) == Some(&b':')
+            };
+            let mut sources = rest.iter().enumerate().filter_map(|(index, word)| {
+                let (option, value) = word.split_once('=').unwrap_or((word.as_str(), ""));
+                matches!(option, "-s" | "--s" | "-source" | "--source").then(|| {
+                    if word.contains('=') {
+                        value
+                    } else {
+                        rest.get(index + 1).map_or("", String::as_str)
+                    }
+                })
+            });
+            sources.all(local)
+        }
+        _ => false,
+    }
+}
+
+/// `s3://`, `gs://`, an on-the-fly backend (a leading colon) or a named
+/// remote: two or more word characters, dots or dashes before a colon that
+/// `//` does not follow. A drive letter or another URL scheme is local.
 fn remote(value: &str) -> bool {
-    value.split_once(':').is_some_and(|(name, _)| {
-        name.len() >= 2
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
-    })
+    let scheme = |prefix: &str| {
+        value
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    };
+    scheme("s3://")
+        || scheme("gs://")
+        || value.starts_with(':')
+        || value.split_once(':').is_some_and(|(name, rest)| {
+            name.len() >= 2
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+                && !rest.starts_with("//")
+        })
 }
 
 /// A field a native predicate selects: the field name, the selected text, its
