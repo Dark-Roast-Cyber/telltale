@@ -730,7 +730,17 @@ pub struct Limits {
     pub piece_scan: Duration,
     /// [`crate::hooks::state::SESSION_LOCK_WAIT`].
     pub session_lock_wait: Duration,
+    /// [`HOOK_DEADLINE`].
+    pub hook_deadline: Duration,
 }
+
+/// Time from the start of a hook after which nothing more is waited for: every
+/// later wait is cut to what remains of it ([`Limits::within`]), and a call that
+/// reaches it before recording a decision records none. A harness kills a hook
+/// at 30 s (the shortest timeout installed) and then runs the call; this leaves
+/// room for one scan already in flight, which is not interrupted, and for the
+/// process to exit.
+pub const HOOK_DEADLINE: Duration = Duration::from_secs(25);
 
 impl Default for Limits {
     fn default() -> Self {
@@ -738,6 +748,19 @@ impl Default for Limits {
             recovery: RECOVERY_BUDGET,
             piece_scan: PIECE_SCAN_LIMIT,
             session_lock_wait: crate::hooks::state::SESSION_LOCK_WAIT,
+            hook_deadline: HOOK_DEADLINE,
+        }
+    }
+}
+
+impl Limits {
+    /// These limits, none longer than `remaining`.
+    pub fn within(self, remaining: Duration) -> Self {
+        Self {
+            recovery: self.recovery.min(remaining),
+            piece_scan: self.piece_scan.min(remaining),
+            session_lock_wait: self.session_lock_wait.min(remaining),
+            hook_deadline: self.hook_deadline.min(remaining),
         }
     }
 }

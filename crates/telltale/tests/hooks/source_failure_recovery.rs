@@ -1030,6 +1030,58 @@ fn a_session_locked_past_the_wait_gets_the_strict_policy() {
     }
 }
 
+/// The wait for a session's lock is cut to what remains of the hook's
+/// deadline: past it, the call gets the strict policy without waiting out the
+/// lock wait (here a minute).
+#[test]
+fn the_lock_wait_ends_at_the_hook_deadline() {
+    let minute = std::time::Duration::from_secs(60);
+    let limits = Limits {
+        session_lock_wait: minute,
+        hook_deadline: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    let mut h = Harness::with_limits(limits, |_| {});
+    let holder = session_handle(&h);
+    let started = std::time::Instant::now();
+    let response = pre(&mut h, true, "late", command(EXFIL));
+    assert!(started.elapsed() < minute);
+    assert_eq!(verdict(&response), Some(Verdict::Ask));
+    let errors = h.records("error");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0]["error_code"], "state_lock_timeout");
+    assert!(h.records("decision").is_empty());
+    drop(holder);
+}
+
+/// A call that reaches the hook's deadline before its decision is recorded
+/// records none and journals nothing: the harness gets the strict policy, and
+/// one error record says why.
+#[test]
+fn a_call_past_the_hook_deadline_records_no_decision() {
+    let past = Limits {
+        hook_deadline: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    for (edit, expected) in [
+        ((|_| {}) as ConfigEdit, Some(Verdict::Ask)),
+        (
+            (|config| config.on_unevaluable = OnError::Deny) as ConfigEdit,
+            Some(Verdict::Deny),
+        ),
+    ] {
+        let mut h = Harness::with_limits(past, edit);
+        let response = pre(&mut h, true, "late", command(EXFIL));
+        assert_eq!(verdict(&response), expected);
+        assert_eq!(journal_len(&h), 0);
+        let errors = h.records("error");
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert_eq!(errors[0]["error_code"], "hook_deadline");
+        assert_eq!(errors[0]["action"]["tool_use_id"], "late");
+        assert!(h.records("decision").is_empty());
+    }
+}
+
 #[test]
 fn the_lock_wait_is_a_bound_and_the_lock_is_still_exclusive() {
     use telltale_core::hooks::state::SessionHandle;

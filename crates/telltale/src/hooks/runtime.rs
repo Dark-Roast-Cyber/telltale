@@ -3,7 +3,7 @@
 //! Telltale evaluation, policy, outcome correlation, telemetry) lives here once.
 //! See docs/architecture.md for the contract adapters must uphold.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::ObservationStage;
 use serde_json::{Value, json};
@@ -14,7 +14,8 @@ use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{
-    Engine, EvalStatus, Evaluation, Focus, Limits, PendingScan, RecoveryBudget, Request, ScanTrace,
+    Engine, EvalStatus, Evaluation, Focus, HOOK_DEADLINE, Limits, PendingScan, RecoveryBudget,
+    Request, ScanTrace,
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
@@ -232,6 +233,11 @@ pub struct Runtime {
     /// The time limits of a call, the wait behind a session's other calls
     /// among them.
     limits: Limits,
+    /// When the hook started, if before this runtime handles its call
+    /// ([`Self::started_at`]); otherwise each call starts when it is handled.
+    started: Option<Instant>,
+    /// The current call's deadline ([`Limits::hook_deadline`] from its start).
+    deadline: Instant,
     /// When the evaluator's client stops waiting (ms since the epoch).
     answer_by: Option<i64>,
 }
@@ -240,6 +246,9 @@ pub struct Runtime {
 pub const STATE_LOCK_TIMEOUT: &str = "state_lock_timeout";
 /// The evaluator finished after its client stopped waiting; nothing was recorded.
 pub const ANSWER_TOO_LATE: &str = "evaluator_answer_too_late";
+/// The call reached the hook's deadline before its decision was recorded; no
+/// decision is recorded.
+pub const HOOK_DEADLINE_PASSED: &str = "hook_deadline";
 /// No state directory resolves. On a tool request it is also the visibility
 /// limit of a call evaluated without its session (`Runtime::tool_requested`).
 pub const STATE_DIR_UNRESOLVED: &str = "state_dir_unresolved";
@@ -438,6 +447,8 @@ impl Runtime {
             evaluator: "in_process",
             evaluator_fallback: None,
             limits: Limits::default(),
+            started: None,
+            deadline: Instant::now() + HOOK_DEADLINE,
             answer_by: None,
         }
     }
@@ -445,6 +456,37 @@ impl Runtime {
     /// The same runtime working within `limits` instead of the default ones.
     pub fn with_limits(self, limits: Limits) -> Self {
         Self { limits, ..self }
+    }
+
+    /// The same runtime for a hook that started at `started`: its one
+    /// deadline counts from there, so time spent before the runtime existed
+    /// (loading the configuration, waiting on the evaluator) is spent.
+    pub fn started_at(self, started: Instant) -> Self {
+        Self {
+            started: Some(started),
+            ..self
+        }
+    }
+
+    /// A call starts: its deadline is set ([`Limits::hook_deadline`]).
+    fn start_call(&mut self) {
+        let started = self.started.unwrap_or_else(Instant::now);
+        self.deadline = started + self.limits.hook_deadline;
+    }
+
+    /// What is left of the call's deadline.
+    fn remaining(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
+    }
+
+    /// The call's limits, none longer than what is left of its deadline.
+    fn call_limits(&self) -> Limits {
+        self.limits.within(self.remaining())
+    }
+
+    /// A scan budget for the call, starting now.
+    fn call_budget(&self) -> RecoveryBudget {
+        RecoveryBudget::start(self.call_limits())
     }
 
     /// Label evaluations with the process that made them (telemetry).
@@ -462,6 +504,8 @@ impl Runtime {
             evaluator: "in_process",
             evaluator_fallback: None,
             limits: Limits::default(),
+            started: None,
+            deadline: Instant::now() + HOOK_DEADLINE,
             answer_by: None,
         }
     }
@@ -556,6 +600,12 @@ impl Runtime {
     /// hook's own infrastructure, the stricter of `on_error` and
     /// `on_unevaluable` for what `is_strict_failure` names.
     pub fn handle(&mut self, ctx: &Context, event: Event) -> Response {
+        self.start_call();
+        self.handle_started(ctx, event)
+    }
+
+    /// [`Self::handle`] for a call whose deadline is already set.
+    fn handle_started(&mut self, ctx: &Context, event: Event) -> Response {
         match self.try_handle(ctx, &event) {
             Ok(response) => response,
             Err(code) => self.answer_failure(ctx, &event, code),
@@ -582,6 +632,7 @@ impl Runtime {
         answer_by: i64,
         lock_wait: Duration,
     ) -> Result<Response, &'static str> {
+        self.start_call();
         self.answer_by = Some(answer_by);
         let own_wait = std::mem::replace(&mut self.limits.session_lock_wait, lock_wait);
         let outcome = self.try_handle(ctx, &event);
@@ -589,7 +640,7 @@ impl Runtime {
         self.limits.session_lock_wait = own_wait;
         match outcome {
             Ok(response) => Ok(response),
-            Err(code @ (STATE_LOCK_TIMEOUT | ANSWER_TOO_LATE)) => Err(code),
+            Err(code @ (STATE_LOCK_TIMEOUT | ANSWER_TOO_LATE | HOOK_DEADLINE_PASSED)) => Err(code),
             Err(code) => Ok(self.answer_failure(ctx, &event, code)),
         }
     }
@@ -615,6 +666,7 @@ impl Runtime {
         code: &'static str,
         asked_at: i64,
     ) -> Response {
+        self.start_call();
         let Event::ToolRequested(call) = &event else {
             return self.fail_strict(ctx, &event, code);
         };
@@ -638,7 +690,7 @@ impl Runtime {
             .session_lock_wait
             .saturating_sub(looking.elapsed());
         self.set_evaluator("in_process", Some(code));
-        self.handle(ctx, event)
+        self.handle_started(ctx, event)
     }
 
     /// The answer to a decision on call `id` that was recorded since `asked_at`.
@@ -708,6 +760,7 @@ impl Runtime {
             || matches!(
                 code,
                 STATE_DIR_UNRESOLVED
+                    | HOOK_DEADLINE_PASSED
                     | "rule_content_unreadable"
                     | "pipeline_build_failed"
                     | "semantic_provenance_failed"
@@ -791,7 +844,7 @@ impl Runtime {
             dir,
             ctx.harness,
             &ctx.session_id,
-            self.limits.session_lock_wait,
+            self.call_limits().session_lock_wait,
         )
         .map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
@@ -1055,9 +1108,13 @@ impl Runtime {
         // journal reader declares it with that harness's own tool table.
         let evaluated = self.evaluate_request(ctx, &mut session, &id, call);
         // The evaluator's client has stopped waiting and will evaluate this call
-        // itself. Nothing has been recorded yet, and nothing is.
+        // itself, or the hook's deadline has passed. Nothing has been recorded
+        // yet, and no decision is.
         if self.answer_by.is_some_and(|by| now_ms() > by) {
             return Err(ANSWER_TOO_LATE);
+        }
+        if self.remaining().is_zero() {
+            return Err(HOOK_DEADLINE_PASSED);
         }
         let name_malformed = crate::hooks::journal::tool_name_is_malformed(&call.tool_name);
         let mut evaluation_info = self.request_evaluation_info(&evaluated, call, name_malformed);
@@ -1141,7 +1198,7 @@ impl Runtime {
             stage: ObservationStage::ToolRequested,
             native_id: id.uuid.clone(),
         };
-        let mut budget = RecoveryBudget::start(self.limits);
+        let mut budget = self.call_budget();
         let (mut result, mut window_records, mut window_truncated) = self.evaluate(
             ctx,
             session,
@@ -1627,7 +1684,7 @@ impl Runtime {
             vec![line],
             std::slice::from_ref(&focus),
             PendingScan::Together,
-            &mut RecoveryBudget::start(self.limits),
+            &mut self.call_budget(),
         );
         session
             .journal()
@@ -2115,19 +2172,27 @@ mod tests {
     }
 
     /// A projection past its budget goes straight to its pieces. When the
-    /// piece time limit has already passed, none is scanned, and the call
-    /// gets `on_unevaluable`, never an allow on "no finding".
+    /// hook's deadline has already passed, the piece time limit is cut to what
+    /// remains of it, so none is scanned, and the call gets `on_unevaluable`,
+    /// never an allow on "no finding".
     #[test]
-    fn a_projection_past_its_budget_with_no_piece_time_left_gets_on_unevaluable() {
+    fn a_projection_past_its_budget_with_no_time_left_before_the_deadline_gets_on_unevaluable() {
         use crate::hooks::config::OnError;
         for (policy, expected) in [(OnError::Ask, Verdict::Ask), (OnError::Deny, Verdict::Deny)] {
             let dir = tempfile::tempdir().unwrap();
+            let no_time_left = Limits {
+                piece_scan: Duration::from_secs(3600),
+                hook_deadline: Duration::ZERO,
+                ..Limits::default()
+            };
             let mut runtime = Runtime::new(Config {
                 mode: Mode::Enforce,
                 state_dir: Some(dir.path().join("state")),
                 on_unevaluable: policy,
                 ..Config::default()
-            });
+            })
+            .with_limits(no_time_left);
+            runtime.start_call();
             let ctx = Context {
                 harness: "claude-code",
                 hook_event: "PreToolUse".to_owned(),
@@ -2148,7 +2213,7 @@ mod tests {
             assert!(projected.past_budget);
             let mut session = runtime.open(&ctx).unwrap();
             let id = RequestIdentity::next(&mut session, &call);
-            let mut budget = RecoveryBudget::already_spent(crate::hooks::engine::PIECE_SCAN_LIMIT);
+            let mut budget = runtime.call_budget();
             let (result, _, _) =
                 runtime.evaluate_projected(&ctx, &mut session, &id, &call, &projected, &mut budget);
             assert_eq!(budget.trace().pieces_scanned, 0);

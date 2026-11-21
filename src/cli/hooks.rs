@@ -22,9 +22,10 @@ compile_error!(
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use telltale_core::hooks::config::{Config, OnError, RuleContent};
-use telltale_core::hooks::engine::Engine;
+use telltale_core::hooks::engine::{Engine, Limits};
 use telltale_core::hooks::evaluator;
 #[cfg(unix)]
 use telltale_core::hooks::evaluator::ClientOutcome;
@@ -793,6 +794,8 @@ fn hook(
     detect_only: bool,
     expect_enforce: bool,
 ) -> i32 {
+    // The hook's one deadline counts from here (`Limits::hook_deadline`).
+    let started = std::time::Instant::now();
     // A panic anywhere before the answer is caught, since most harnesses read
     // a crash as "run the call". A configuration whose loading panicked did
     // not load.
@@ -838,7 +841,7 @@ fn hook(
     let config = caught(|| resolve_config(harness, loaded, gate)).unwrap_or(Err(()));
     let answer = match caught(read_payload) {
         Some(None) => Answer::exit(1),
-        Some(Some(bytes)) => caught(|| evaluate(harness, &config, &bytes, config_dirs))
+        Some(Some(bytes)) => caught(|| evaluate(harness, &config, &bytes, config_dirs, started))
             .unwrap_or_else(|| unreadable_answer(harness, &config, HOOK_PANICKED, &bytes)),
         // The payload is lost with the panic: it names no event.
         None => unreadable_answer(harness, &config, HOOK_PANICKED, &[]),
@@ -914,6 +917,7 @@ fn evaluate(
     config: &Result<Config, ()>,
     bytes: &[u8],
     config_dirs: &[PathBuf],
+    started: Instant,
 ) -> Answer {
     let oversized = bytes.len() as u64 > MAX_PAYLOAD_BYTES;
     let parsed = if oversized {
@@ -942,7 +946,15 @@ fn evaluate(
         Ok(pair) => pair,
         Err(code) => return unusable_event_answer(harness, config, &hook_event, code),
     };
-    answer_from_runtime(harness, config.clone(), ctx, event, bytes, config_dirs)
+    answer_from_runtime(
+        harness,
+        config.clone(),
+        ctx,
+        event,
+        bytes,
+        config_dirs,
+        started,
+    )
 }
 
 /// The configuration an event is evaluated under, or `Err(())` when it did not
@@ -1058,7 +1070,11 @@ fn answer_from_runtime(
     event: Event,
     bytes: &[u8],
     config_dirs: &[PathBuf],
+    started: Instant,
 ) -> Answer {
+    // The runtime's waits are cut to what is left of the hook's deadline, and
+    // so is the wait for the evaluator.
+    let runtime = |config: Config| Runtime::new(config).started_at(started);
     // No evaluator transport off Unix: skip the socket path and the
     // fingerprint (which hashes rule files) and record why.
     #[cfg(not(unix))]
@@ -1076,12 +1092,16 @@ fn answer_from_runtime(
     if config.evaluator.enabled
         && let Ok(socket) = config.resolved_socket_path()
     {
-        let timeout = std::time::Duration::from_millis(config.evaluator.request_timeout_ms);
+        let remaining = Limits::default()
+            .hook_deadline
+            .saturating_sub(started.elapsed());
+        let timeout =
+            std::time::Duration::from_millis(config.evaluator.request_timeout_ms).min(remaining);
         let asked_at = telltale_core::hooks::runtime::now_ms();
         match evaluator::request(&socket, harness, &config.fingerprint(), bytes, timeout) {
             ClientOutcome::Answered(output) => return Answer::output(output),
             ClientOutcome::DeliveredNoAnswer(code) => {
-                let mut runtime = Runtime::new(config);
+                let mut runtime = runtime(config);
                 let response = runtime.handle_unanswered(&ctx, event, code, asked_at);
                 return Answer::output(harness.render(&ctx.hook_event, &response));
             }
@@ -1097,7 +1117,7 @@ fn answer_from_runtime(
             }
         }
     }
-    let mut runtime = Runtime::new(config);
+    let mut runtime = runtime(config);
     runtime.set_evaluator("in_process", fallback);
     evaluator::panic_if_forced("evaluate");
     let response = runtime.handle(&ctx, event);
