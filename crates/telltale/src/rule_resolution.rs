@@ -40,6 +40,9 @@ pub struct RuleProvenance {
     pub kind: String,
     pub winner: String,
     pub replaced_sources: Vec<String>,
+    /// The tier of `winner`.
+    #[serde(skip)]
+    pub(crate) tier: RuleTier,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,7 +66,7 @@ impl RuleResolution {
     /// A pipeline over the effective set, which keeps [`Self::content`] for
     /// its rule catalog.
     pub fn into_pipeline(self) -> Result<Pipeline, PipelineError> {
-        Pipeline::from_compiled(self.content, self.rule_set, self.diagnostics.packages)
+        Pipeline::from_compiled(self.content, self.rule_set, self.diagnostics)
     }
 }
 
@@ -484,6 +487,7 @@ fn merge_rule_documents(
             kind: location.kind.as_str().to_string(),
             winner: location.source,
             replaced_sources: location.replaced_sources,
+            tier: location.tier,
         })
         .collect();
     // Names are unique by now; a Rule v2 id on two names is what remains.

@@ -1,8 +1,18 @@
 //! Rule catalog: presentation metadata for the rules and chain modifiers of a
 //! pipeline's content and, when enabled, the bundled process-chain pack, as
-//! Rust values and as the versioned catalog v2 document.
+//! Rust values and as the versioned catalog v2 document. The effective
+//! configuration document reports the same definitions with where each came
+//! from and what changed it.
+use std::collections::BTreeMap;
+
+use crate::rule_resolution::RuleTier;
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
 use telltale_rules::{DefinitionKind, LoadedDefinition};
+use telltale_schema::effective_configuration::{
+    AppliedOverrideV1, DefinitionKindV1, DocumentKindV1, EFFECTIVE_CONFIGURATION_V1_ID,
+    EffectiveConfigurationV1, EffectiveDefinitionV1, EffectivePackageV1, PackageOriginV1,
+    RuleTierV1,
+};
 use telltale_schema::event::TELLTALE_VERSION;
 use telltale_schema::rule_catalog::{
     RULE_CATALOG_V2_ID, RuleCatalogEntryV2, RuleCatalogLogSourceV2, RuleCatalogRelatedV2,
@@ -334,6 +344,116 @@ impl Pipeline {
                 .map(RuleCatalogEntry::into_wire)
                 .collect(),
         })
+    }
+}
+
+impl Pipeline {
+    /// What this pipeline runs, as a versioned [`EffectiveConfigurationV1`]
+    /// document: its rule packages and the builder's text inputs by content
+    /// SHA-256, and for every entry of [`Self::rule_catalog_document`] its
+    /// effective `enabled` flag and scores, the tier whose definition is in
+    /// effect, and the overrides applied to it with their reasons. It holds no
+    /// matchers, paths or document text. No source, environment, or
+    /// filesystem access is performed.
+    pub fn effective_configuration(
+        &self,
+        options: &DetailedEvaluationOptions,
+    ) -> Result<EffectiveConfigurationV1, PipelineError> {
+        let entries = self.rule_catalog(options)?;
+        let semantic_identity = self.semantic_provenance(options)?.identity().to_owned();
+        let definitions = self
+            .content
+            .definitions()
+            .iter()
+            .map(|definition| (definition.id(), definition))
+            .collect::<BTreeMap<_, _>>();
+        let provenance = self
+            .provenance
+            .iter()
+            .map(|provenance| (provenance.id.as_str(), provenance))
+            .collect::<BTreeMap<_, _>>();
+        // The label of the supplied document named `source`; `None` for any
+        // other source, such as a rule file path.
+        let label = |kind: DocumentKindV1, prefix: &str, source: &str| {
+            let label = source.strip_prefix(prefix)?.strip_prefix(':')?;
+            self.documents
+                .iter()
+                .any(|document| document.kind == kind && document.label == label)
+                .then(|| label.to_owned())
+        };
+        let mut packages = self
+            .rule_packages
+            .iter()
+            .map(|package| EffectivePackageV1 {
+                id: package.id.clone(),
+                version: package.version.clone(),
+                content_sha256: package.content_sha256.clone(),
+                origin: if package.embedded {
+                    PackageOriginV1::Embedded
+                } else {
+                    PackageOriginV1::Supplied
+                },
+            })
+            .collect::<Vec<_>>();
+        packages.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut effective = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let kind = match entry.kind {
+                RuleCatalogKind::Rule => DefinitionKindV1::Rule,
+                RuleCatalogKind::Modifier => DefinitionKindV1::Modifier,
+                RuleCatalogKind::ProcessChain => DefinitionKindV1::ProcessChain,
+            };
+            // Process-chain rules are bundled and never overridden.
+            let loaded = (kind != DefinitionKindV1::ProcessChain)
+                .then(|| definitions.get(entry.id.as_str()).copied())
+                .flatten();
+            let winner = loaded.and_then(|_| provenance.get(entry.id.as_str()).copied());
+            let tier = winner.map_or(RuleTier::Builtin, |winner| winner.tier);
+            let document = winner.and_then(|winner| match tier {
+                RuleTier::Organization => {
+                    label(DocumentKindV1::Organization, "organization", &winner.winner)
+                }
+                RuleTier::Explicit => label(DocumentKindV1::Explicit, "explicit", &winner.winner),
+                _ => None,
+            });
+            let overrides = loaded.map_or(&[][..], LoadedDefinition::overrides);
+            effective.push(EffectiveDefinitionV1 {
+                kind,
+                enabled: entry.enabled,
+                session_score: entry.session_score,
+                action_score: entry.action_score,
+                tier: match tier {
+                    RuleTier::Builtin => RuleTierV1::Builtin,
+                    RuleTier::Package => RuleTierV1::Package,
+                    RuleTier::Organization => RuleTierV1::Organization,
+                    RuleTier::Deployment => RuleTierV1::Deployment,
+                    RuleTier::Local => RuleTierV1::Local,
+                    RuleTier::Explicit => RuleTierV1::Explicit,
+                },
+                package_id: entry.package_id,
+                document,
+                overrides: overrides
+                    .iter()
+                    .map(|applied| AppliedOverrideV1 {
+                        document: label(DocumentKindV1::Override, "override", &applied.source),
+                        reason: applied.reason.clone(),
+                        enabled: applied.enabled,
+                        score: applied.score,
+                    })
+                    .collect(),
+                id: entry.id,
+            });
+        }
+        let document = EffectiveConfigurationV1 {
+            schema: EFFECTIVE_CONFIGURATION_V1_ID.to_owned(),
+            telltale_version: TELLTALE_VERSION.to_owned(),
+            semantic_identity,
+            packages,
+            documents: self.documents.clone(),
+            definitions: effective,
+        };
+        document.to_json().map_err(|_| catalog_bounds())?;
+        Ok(document)
     }
 }
 

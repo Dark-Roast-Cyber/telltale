@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/effective-configuration-v1.schema.json",
+  "title": "Telltale Effective Configuration v1",
+  "description": "What one built pipeline runs: its rule packages and supplied documents by content hash, and per rule and chain modifier whether it is enabled, what it scores, which tier supplied it and which overrides changed it. No rule matchers, paths or document text. Every key is always present; absent values are null.",
+  "$defs": {
+    "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "optionalLabel": { "anyOf": [{ "$ref": "#/$defs/label" }, { "type": "null" }] },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "score": { "type": "integer", "minimum": 0 },
+    "package": {
+      "type": "object",
+      "required": ["id", "version", "content_sha256", "origin"],
+      "properties": {
+        "id": { "$ref": "#/$defs/label" },
+        "version": { "$ref": "#/$defs/label" },
+        "content_sha256": { "$ref": "#/$defs/sha256" },
+        "origin": { "type": "string", "enum": ["embedded", "supplied"] }
+      },
+      "additionalProperties": false
+    },
+    "document": {
+      "type": "object",
+      "required": ["kind", "label", "content_sha256"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["organization", "explicit", "override", "policy"] },
+        "label": { "$ref": "#/$defs/label" },
+        "content_sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "additionalProperties": false
+    },
+    "override": {
+      "type": "object",
+      "required": ["document", "reason", "enabled", "score"],
+      "properties": {
+        "document": { "$ref": "#/$defs/optionalLabel" },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u0008\\u000B-\\u001F\\u007F-\\u009F\\u061C\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u2069\\uFEFF]*$"
+        },
+        "enabled": { "type": ["boolean", "null"] },
+        "score": { "anyOf": [{ "$ref": "#/$defs/score" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "definition": {
+      "type": "object",
+      "required": [
+        "id", "kind", "enabled", "session_score", "action_score", "tier",
+        "package_id", "document", "overrides"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/label" },
+        "kind": { "type": "string", "enum": ["rule", "modifier", "process_chain"] },
+        "enabled": { "type": "boolean" },
+        "session_score": { "$ref": "#/$defs/score" },
+        "action_score": { "anyOf": [{ "$ref": "#/$defs/score" }, { "type": "null" }] },
+        "tier": {
+          "type": "string",
+          "enum": ["builtin", "package", "organization", "deployment", "local", "explicit"]
+        },
+        "package_id": { "$ref": "#/$defs/optionalLabel" },
+        "document": { "$ref": "#/$defs/optionalLabel" },
+        "overrides": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/override" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schema", "telltale_version", "semantic_identity", "packages", "documents", "definitions"],
+  "properties": {
+    "schema": { "const": "telltale.effective_configuration.v1" },
+    "telltale_version": { "$ref": "#/$defs/label" },
+    "semantic_identity": { "type": "string", "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" },
+    "packages": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/package" } },
+    "documents": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/document" } },
+    "definitions": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/definition" } }
+  },
+  "additionalProperties": false
+}

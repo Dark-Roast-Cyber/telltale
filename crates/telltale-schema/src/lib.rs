@@ -7,6 +7,7 @@
 pub mod action_record;
 pub mod activity_facts;
 pub mod clients;
+pub mod effective_configuration;
 pub mod event;
 pub mod event4;
 pub mod observation;
