@@ -5649,6 +5649,7 @@ fn receive_committed_rows(receive: &std::sync::mpsc::Receiver<Value>, committed:
 /// Test-only SQLite VFS that can hold one writer inside the WAL sync of a
 /// commit: its frames are already written to the WAL, but SQLite has not yet
 /// published the commit to new readers.
+#[cfg(unix)]
 mod wal_sync_gate {
     use rusqlite::ffi;
     use std::ffi::c_int;
@@ -6042,6 +6043,12 @@ fn opencode_relocation_watch_reads_wal_without_shm_loops_or_recursive_parent_wat
 /// publishes the commit to readers, which notifies nothing. A scan that reads
 /// in between sees the previous snapshot; watch must still read the commit
 /// without waiting for a later write, and must then settle.
+///
+/// Unix only: on Windows CI the watcher was not woken while the writer was
+/// held before its WAL sync (run 44904064572), so the held-commit state this
+/// test needs cannot be produced there. The re-check logic itself is covered
+/// on every platform by the `sqlite_recheck` unit tests.
+#[cfg(unix)]
 #[test]
 fn opencode_relocation_watch_reads_a_commit_published_after_its_scan() {
     use std::io::BufRead;
