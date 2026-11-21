@@ -248,12 +248,18 @@ otherwise ambiguous zero-detection result without exposing session content:
   tool values the observation cannot hold together with the call's other
   fields or the fields derived from them, where the largest are replaced
   until the call fits and, when that is not enough, every tool value of the
-  call. A call that cannot be held even with its values replaced keeps the
-  handling above. Each unit is counted once even when an
+  call. A searchable text derived from a call that is over its own bound is
+  omitted before the values are fitted or replaced whole; values within
+  their own bounds are kept unless the cap on recorded replacements is
+  reached. A rule condition that reads an omitted searchable text is not
+  evaluated for that call. A call that cannot be held even with its values replaced
+  keeps the handling above. Each unit is counted once even when an
   overlapping window re-reads it, and `bounded_value_units` lists every
   entry (one per replaced field and bound) of up to 1,000 units as `{source,
   session_id, native_id, source_sequence, target, dimension}`, where `target`
-  is `arguments` or `result` and `dimension` is the bound; a count above the
+  is `arguments` or `result` (a replaced value) or `searchable_arguments` or
+  `searchable_result` (an omitted searchable text) and `dimension` is the
+  bound; a count above the
   distinct units listed means the list was cut. These are coordinates only,
   never content, and also make `selected_source_coverage` `partial`. Each
   evaluated window of such a source emits one `scanner_error` with `error`

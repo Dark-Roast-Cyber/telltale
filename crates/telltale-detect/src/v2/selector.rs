@@ -3,8 +3,8 @@
 use std::fmt;
 
 use telltale_schema::observation::{
-    CanonicalObservationV2, CapabilityId, CorrelationOrigin, FactMetadata, FactProvenance,
-    JsonValue, ObservationBody,
+    BoundedTarget, CanonicalObservationV2, CapabilityId, CorrelationOrigin, FactMetadata,
+    FactProvenance, JsonValue, ObservationBody,
 };
 
 use super::tool_arguments::{
@@ -380,6 +380,15 @@ impl SelectorRegistry {
                 | SelectorId::CompatUserContext
         ) {
             return message_text(selector, observation, budget);
+        }
+        if reads_omitted_searchable_text(selector, observation) {
+            return Ok(SelectorResolution {
+                selector,
+                presence: SelectorPresence::UnavailableVisibility,
+                value: None,
+                metadata: None,
+                required_capability: selector.required_capability(),
+            });
         }
         // Canonical direct result strings are already NFC. Copy the selected
         // text once, without normalizing or reserving unrelated fields for each
@@ -830,6 +839,31 @@ fn reads_declared_role_text(selector: SelectorId, observation: &CanonicalObserva
     }
 }
 
+/// Whether `selector` reads a call's searchable text (alone or before its
+/// value) that was omitted for its size. Such a selector has no visibility
+/// into the call: it is not evaluated, rather than read as absent or from the
+/// value it would otherwise fall back to.
+fn reads_omitted_searchable_text(
+    selector: SelectorId,
+    observation: &CanonicalObservationV2,
+) -> bool {
+    let ObservationBody::Tool(tool) = observation.body() else {
+        return false;
+    };
+    let target = match selector {
+        SelectorId::ToolSearchableArguments
+        | SelectorId::CompatArguments
+        | SelectorId::GovernedFacet("tool.arguments.text") => BoundedTarget::SearchableArguments,
+        SelectorId::ToolSearchableResult
+        | SelectorId::CompatToolResult
+        | SelectorId::GovernedFacet("tool.result.text") => BoundedTarget::SearchableResult,
+        _ => return false,
+    };
+    tool.bounded_values()
+        .iter()
+        .any(|value| value.target() == target)
+}
+
 fn absent(selector: SelectorId, required_capability: Option<CapabilityId>) -> SelectorResolution {
     SelectorResolution {
         selector,
@@ -1266,7 +1300,9 @@ pub(crate) fn borrow_tool_result_text<'a>(
     let ObservationBody::Tool(tool) = observation.body() else {
         return Ok(None);
     };
-    if tool.searchable_result().is_some() {
+    if tool.searchable_result().is_some()
+        || reads_omitted_searchable_text(SelectorId::CompatToolResult, observation)
+    {
         return Ok(None);
     }
     let Some(JsonValue::String(text)) = tool.result() else {

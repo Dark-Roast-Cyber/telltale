@@ -5,16 +5,16 @@ use std::fmt;
 
 use serde_json::Value;
 use telltale_schema::observation::{
-    CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
-    CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds, FactMetadata,
-    FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
-    ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
-    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
+    BoundedTarget, CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability,
+    CapabilityContext, CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds,
+    FactMetadata, FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation,
+    MessageRole, ObservationBody, ObservationBuilder, ObservationError, ObservationStage,
+    ObservedAt, SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
 use crate::tool_operation::{
     ResultText, ValueBounds, build_fitted, declare, replaced_arguments, with_declared_arguments,
-    with_source_result,
+    with_searchable_text, with_source_result,
 };
 
 use super::native::{CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem};
@@ -214,10 +214,18 @@ fn project_function_call(
                 metadata.push(("tool.arguments", FactProvenance::Reported));
             }
             // Searchable text is the raw request; it is never kept beside
-            // arguments whose values were replaced.
+            // arguments whose values were replaced, and is omitted (and
+            // recorded) when it alone is over its bound.
             if body.bounded_values().is_empty() {
-                body = body.with_searchable_arguments(arguments)?;
-                metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+                body = with_searchable_text(
+                    body,
+                    BoundedTarget::SearchableArguments,
+                    arguments,
+                    bounds,
+                )?;
+                if body.searchable_arguments().is_some() {
+                    metadata.push(("tool.searchable_arguments", FactProvenance::Reported));
+                }
             }
         }
 
