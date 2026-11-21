@@ -1639,12 +1639,7 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
         "gsutil" => operands(args, |word, after_verb| {
             super::http::takes_next(word, &[], if after_verb { "ajLsxyz" } else { "hiou" })
         }),
-        // Every rclone long option but a listed flag takes a value, so a
-        // value never reads as the source.
-        "rclone" => operands(args, |word, _| {
-            word.strip_prefix("--")
-                .is_some_and(|name| !name.contains('=') && !RCLONE_FLAGS.contains(&name))
-        }),
+        // rclone reads its own operands (`rclone_source`).
         _ => operands(args, |word, _| {
             super::http::takes_next(word, &["repo", "hostname"], "R")
         }),
@@ -1667,8 +1662,7 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
             .is_some_and(|words| matches!(words[1], "cp" | "mv" | "sync") && !object_url(words[2])),
         ("gsutil", _) => source(|word| matches!(word, "cp" | "mv" | "rsync"))
             .is_some_and(|source| !object_url(source)),
-        ("rclone", _) => source(|word| word.starts_with("copy") || matches!(word, "sync" | "move"))
-            .is_some_and(|source| !rclone_remote(source)),
+        ("rclone", _) => rclone_source(args).is_some_and(|source| !rclone_remote(source)),
         ("az", _) => command
             .iter()
             .position(|s| s == "storage")
@@ -1736,6 +1730,30 @@ const RCLONE_FLAGS: &[&str] = &[
     "no-gzip-encoding",
     "server-side-across-configs",
 ];
+
+/// The source of an rclone copy, sync or move that also names a destination.
+/// A long option that is not a listed flag is first read as taking the next
+/// word as its value, so a value never reads as the source. When that reading
+/// leaves no complete transfer, the unlisted options were flags, and the
+/// words after them are read as operands.
+fn rclone_source(args: &[String]) -> Option<&str> {
+    let read = |unlisted_take_a_value: bool| {
+        let operands = operands(args, |word, _| {
+            unlisted_take_a_value
+                && word
+                    .strip_prefix("--")
+                    .is_some_and(|name| !name.contains('=') && !RCLONE_FLAGS.contains(&name))
+        });
+        let verb = operands
+            .iter()
+            .position(|word| word.starts_with("copy") || matches!(*word, "sync" | "move"))?;
+        match operands.get(verb + 1..verb + 3) {
+            Some([source, _]) => Some(*source),
+            _ => None,
+        }
+    };
+    read(true).or_else(|| read(false))
+}
 
 /// The operands among a command's arguments: the words that are neither an
 /// option nor the separate value of one, and every word after `--`. A lone

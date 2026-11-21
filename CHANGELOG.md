@@ -106,7 +106,8 @@
   finds the command group and verb among the operands, so the operand after
   the verb is the copy source. An `aws` copy is read in the `s3` command
   group and needs a source and a destination. An rclone long option that is
-  not a known flag takes the next word as its value, and a gsutil letter
+  not a known flag takes the next word as its value, unless that leaves no
+  complete transfer, in which case it is read as a flag; a gsutil letter
   that takes a value as a global option is a flag after the verb.
   `az storage copy` reads a remote source when a storage-account source
   option names it and no local source is given. GitHub CLI publication

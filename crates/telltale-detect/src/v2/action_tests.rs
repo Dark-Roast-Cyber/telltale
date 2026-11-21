@@ -1118,6 +1118,42 @@ fn rclone_uploads_after_option_values_with_a_colon_match_in_the_action_view() {
     }
 }
 
+/// An rclone flag the reader does not list is first read as taking a value.
+/// When that leaves no complete transfer, it was a flag, and the words after
+/// it are the verb, the source and the destination.
+#[test]
+fn rclone_transfers_after_unlisted_flags_are_read_by_their_source_in_the_action_view() {
+    for (command, upload) in [
+        (
+            "rclone copy --s3-no-check-bucket ./dump synthetic-remote:b",
+            true,
+        ),
+        (
+            "rclone --drive-shared-with-me copy ./dump synthetic-remote:b",
+            true,
+        ),
+        (
+            "rclone sync --s3-no-check-bucket --drive-shared-with-me ./dump synthetic-remote:b",
+            true,
+        ),
+        (
+            "rclone copy --s3-no-check-bucket synthetic-remote:src ./local",
+            false,
+        ),
+        (
+            "rclone --drive-shared-with-me copy synthetic-remote:src ./local",
+            false,
+        ),
+        ("rclone lsd --max-depth 1 synthetic-remote:", false),
+    ] {
+        assert_eq!(
+            session_and_action_match(command, "exfil.outbound_upload").1,
+            upload,
+            "{command}"
+        );
+    }
+}
+
 /// gsutil letters that take a value as global options are flags after the
 /// verb.
 #[test]
