@@ -6,7 +6,7 @@ Additional local macOS validation passed 18 of 19 checks. JSONL and Elastic bulk
 
 | Release | GitHub Release ID | Release source commit | Verification workflow commit on `main` |
 | --- | --- | --- | --- |
-| `v0.7.3` | `453067866` | `7da3922168ab2173d652a38124b22ce326d66438` | `d54e8f21b03cde0d84d2376f2fef6cc6f96be1d5` |
+| `v0.7.3` | `453067866` | `7da3922168ab2173d652a38124b22ce326d66438` | `a76521b748ae308e5f6b64bff1785ca1962547d9` |
 
 ## GitHub Actions evidence
 
@@ -82,7 +82,7 @@ On 2026-11-20, the published `aarch64-apple-darwin` archive ran on macOS 27.2.1 
 
 The archive digest matched the release pin, published `SHA256SUMS`, and GitHub asset digest. The executable digest matched the release pin. Signed build attestations passed for all five downloaded archives, enforcing the release workflow, source ref `refs/tags/v0.7.3`, source commit `7da3922168ab2173d652a38124b22ce326d66438`, and GitHub-hosted builder. The exact bundle inventory and CycloneDX SBOM also passed validation.
 
-The existing native verification script passed on this Mac with the same four terminal gates as the Windows run. Its `RUNNER_LABEL=macos-latest` was set manually to satisfy the script contract. The host was a local Mac, not a GitHub runner. The verifier used the workflow source snapshot at `d54e8f21b03cde0d84d2376f2fef6cc6f96be1d5`; the extra checks used fixtures and the schema from the exact `v0.7.3` release.
+The existing native verification script passed on this Mac with the same four terminal gates as the Windows run. Its `RUNNER_LABEL=macos-latest` was set manually to satisfy the script contract. The host was a local Mac, not a GitHub runner. The verifier used the workflow source snapshot at `a76521b748ae308e5f6b64bff1785ca1962547d9`; the extra checks used fixtures and the schema from the exact `v0.7.3` release.
 
 ### Additional checks
 
