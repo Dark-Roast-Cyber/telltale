@@ -86,7 +86,8 @@ pub struct Window {
     pub max_records: usize,
     /// Byte bound on the journal tail that is read.
     pub max_bytes: u64,
-    /// Bound on one tool result stored in the journal (bytes, UTF-8 safe cut).
+    /// Bound on one prompt or tool result stored in the journal: bytes as the
+    /// journal line encodes the text (escaped JSON), cut on a char boundary.
     pub max_result_bytes: usize,
 }
 

@@ -285,6 +285,15 @@
 
 ### Changes
 
+- **`telltale hooks` bounds journaled prompts and tool results by encoded
+  size.** `hooks.window.max_result_bytes` now bounds a prompt, a tool result
+  or a settlement line's text as the journal line encodes it (escaped JSON),
+  not by raw bytes, so text heavy with escaped characters takes no more of
+  the history window than ordinary text. Ordinary text within the bound is
+  journaled unchanged, and a result is still evaluated up to the bound in
+  bytes. When a call's input is bounded for history, the members Telltale
+  reads as its command are kept first. Existing journals read unchanged.
+
 - **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
   acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions
   (session format version 3) from `~/.pi/agent/sessions`. User and assistant

@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::hooks::projection::is_command_key;
 use crate::hooks::state::open_regular;
 
 /// Longest identity value kept readable in a journal line. Telltale bounds a
@@ -209,8 +210,9 @@ impl Line {
 /// (too many members, leaves or variants) able to outgrow the window. Used
 /// for history only; the pending action is always evaluated unmodified.
 ///
-/// Short top-level scalars go in first, shortest first: a call's command,
-/// path or URL, which Telltale reads by member name. Then the rest in order,
+/// The members Telltale reads as the call's command go in first, then short
+/// top-level scalars, shortest first: a call's path or URL, which Telltale
+/// also reads by member name. Then the rest in order,
 /// a string cut and a member left out where the budget ends. Only an input
 /// Telltale did not evaluate whole loses more than its long strings' ends,
 /// and its record already says so (`pending_input_projected` or an
@@ -226,17 +228,20 @@ pub fn bound_history(value: &Value, max_string_bytes: usize, max_bytes: usize) -
         Value::Object(_) | Value::Array(_) => None,
         other => Some(other.to_string().len()),
     };
-    let mut order: Vec<(Option<usize>, usize)> = map
-        .values()
+    let mut order: Vec<(bool, Option<usize>, usize)> = map
+        .iter()
         .enumerate()
-        .map(|(n, item)| (short(item).filter(|len| *len <= SHORT_HISTORY_BYTES), n))
+        .map(|(n, (key, item))| {
+            let len = short(item).filter(|len| *len <= SHORT_HISTORY_BYTES);
+            (!is_command_key(key), len, n)
+        })
         .collect();
-    // Short scalars first (`Some` sorts after `None`, hence the key).
-    order.sort_by_key(|(len, n)| (len.is_none(), *len, *n));
+    // Commands, then short scalars (`Some` sorts after `None`, hence the key).
+    order.sort_by_key(|(other, len, n)| (*other, len.is_none(), *len, *n));
     let members: Vec<(&String, &Value)> = map.iter().collect();
     budget = budget.saturating_sub(2);
     let mut kept = Map::new();
-    for (_, n) in order {
+    for (_, _, n) in order {
         let (key, item) = members[n];
         if let Some(item) =
             member_within(key, item, !kept.is_empty(), max_string_bytes, &mut budget)
@@ -325,8 +330,9 @@ fn escaped_len(text: &str) -> usize {
     text.chars().map(escaped_char_len).sum()
 }
 
-/// Longest prefix of `text` that takes at most `max` bytes escaped.
-fn cut_escaped(text: &str, max: usize) -> &str {
+/// Longest prefix of `text` that takes at most `max` bytes escaped, and so
+/// at most `max` bytes raw.
+pub fn cut_escaped(text: &str, max: usize) -> &str {
     let mut used = 0;
     for (at, c) in text.char_indices() {
         used += escaped_char_len(c);
@@ -643,6 +649,16 @@ mod tests {
         // Filled close to the budget, not left far short of it.
         let bounded = bound_history(&cases[0], 4000, 16 * 1024);
         assert!(bounded.to_string().len() > 16 * 1024 - 4100);
+    }
+
+    /// A command member goes into history ahead of members shorter than it.
+    #[test]
+    fn bound_history_keeps_the_command_ahead_of_shorter_members() {
+        let mut map: Map<String, Value> =
+            (0..3000).map(|i| (format!("a{i:04}"), json!(1))).collect();
+        map.insert("command".to_owned(), json!("sh /tmp/x.sh"));
+        let bounded = bound_history(&Value::Object(map), 4000, 16 * 1024);
+        assert_eq!(bounded["command"], "sh /tmp/x.sh");
     }
 
     /// A line longer than the whole budget is skipped, not left to empty the

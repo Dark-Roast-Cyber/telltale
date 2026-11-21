@@ -3,14 +3,15 @@
 //! rejects a whole source whose IDs are not path-safe. A call ID is
 //! harness- or model-supplied (Codex `tool_use_id`, OpenCode `callID`), so a
 //! crafted key must neither be left unevaluated nor poison later calls.
-//! Correlation and telemetry keep the raw key throughout.
+//! Correlation and telemetry keep the raw key throughout. Prompt and result
+//! text is bounded by its size as the journal line encodes it.
 
 use crate::common;
 
 use common::Harness;
 use serde_json::{Value, json};
 use telltale_core::hooks::config::{Config, OnError};
-use telltale_core::hooks::runtime::{Completion, Context, Event, Response, ToolCall};
+use telltale_core::hooks::runtime::{Completion, Context, Event, Response, SettledCall, ToolCall};
 use telltale_core::hooks::state::Verdict;
 
 const EXFIL: &str =
@@ -862,4 +863,89 @@ fn the_name_floor_keeps_rule_denies_and_spares_ordinary_names() {
             "{tool}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Prompt and result text: bounded as the journal line encodes it.
+// ---------------------------------------------------------------------------
+
+/// Prompt, result and settlement lines are bounded by the size of their text
+/// as the journal line encodes it, so text that escapes long costs the window
+/// no more than ordinary text does.
+#[test]
+fn prompt_and_result_text_is_bounded_by_its_encoded_size() {
+    let mut h = Harness::with(|c| c.window.max_result_bytes = 1200);
+    // Each character takes six bytes encoded (`\u0001`).
+    let control = "\u{1}".repeat(1200);
+    h.runtime.handle(
+        &ctx("UserPromptSubmit"),
+        Event::UserPrompt {
+            prompt: control.clone(),
+        },
+    );
+    h.runtime.handle(
+        &ctx("PreToolUse"),
+        Event::ToolRequested(bash("call_done", "ls")),
+    );
+    h.runtime.handle(
+        &ctx("PostToolUse"),
+        Event::ToolFinished {
+            call: bash("call_done", "ls"),
+            completion: Completion::Completed,
+            result_text: control.clone(),
+            duration_ms: None,
+        },
+    );
+    h.runtime.handle(
+        &ctx("PreToolUse"),
+        Event::ToolRequested(bash("call_settled", "ls")),
+    );
+    h.runtime.handle(
+        &ctx("PostToolBatch"),
+        Event::BatchSettled(vec![SettledCall {
+            tool_use_id: "call_settled".into(),
+            tool_name: "Bash".into(),
+            result_text: control,
+        }]),
+    );
+    let lines = journal_lines(&h);
+    let kept = "\u{1}".repeat(200);
+    assert_eq!(lines[0]["message"]["content"], kept.as_str());
+    assert_eq!(lines[2]["message"]["content"][0]["content"], kept.as_str());
+    assert_eq!(lines[4]["message"]["content"][0]["content"], kept.as_str());
+}
+
+/// Ordinary prompt and result text is journaled as before: whole within the
+/// bound, and cut at the bound past it.
+#[test]
+fn ordinary_prompt_and_result_text_is_kept_up_to_the_bound() {
+    let mut h = Harness::with(|c| c.window.max_result_bytes = 64);
+    h.runtime.handle(
+        &ctx("UserPromptSubmit"),
+        Event::UserPrompt {
+            prompt: "list the \"src\" files\n\tthen stop".into(),
+        },
+    );
+    h.runtime.handle(
+        &ctx("PreToolUse"),
+        Event::ToolRequested(bash("call_done", "ls")),
+    );
+    h.runtime.handle(
+        &ctx("PostToolUse"),
+        Event::ToolFinished {
+            call: bash("call_done", "ls"),
+            completion: Completion::Completed,
+            result_text: "x".repeat(100),
+            duration_ms: None,
+        },
+    );
+    let lines = journal_lines(&h);
+    assert_eq!(
+        lines[0]["message"]["content"],
+        "list the \"src\" files\n\tthen stop"
+    );
+    assert_eq!(
+        lines[2]["message"]["content"][0]["content"],
+        "x".repeat(64).as_str()
+    );
 }
