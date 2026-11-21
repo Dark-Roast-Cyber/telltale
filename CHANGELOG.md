@@ -8,18 +8,18 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 16.** Several changes below change what the
+- **The native action profile is 15.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
 
-- **A chain's exfiltration step comes from a tool call.** In a chain that
-  declares `within_calls`, as `chain.secret_then_network`,
-  `chain.mcp_injection_then_egress` and `chain.harvest_then_exfil` do, an
-  exfiltration match supplies the step when a matched exfiltration or
-  download rule reads no message or tool-result text, or when the call names
-  a destination URL in its own arguments. A URL named only in assistant text
-  or a tool result still raises its own finding but no longer completes such
-  a chain. Session scores and action findings both follow this.
+- **A reference to the controlled tester domain is not exfiltration.**
+  `network.controlled_test_domain.darkroast` (exfiltration, 45 points) now
+  reads only a tool call's command, arguments and destination URL. A
+  message or tool result that names the domain raises the new zero-point
+  hunt rule `network.controlled_test_domain.mention` (category
+  `network_reference`), which supplies no exfiltration chain step. A session
+  that only names the domain scores 45 points less. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md).
 
 - **Each hook has one deadline.** A hook's waits are now bounded together:
   25 s from its start, below the timeouts of 30 s or more that the tool-call
