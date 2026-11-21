@@ -939,6 +939,7 @@ impl Runtime {
         session: &SessionHandle,
         pending: Vec<Line>,
         focus: &[Focus],
+        past_budget: bool,
         budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
         let window = &self.config.window;
@@ -963,6 +964,7 @@ impl Runtime {
                     &tail.lines,
                     &pending,
                     focus,
+                    past_budget,
                     budget,
                 )
                 .map_err(|error| error.code()),
@@ -1127,6 +1129,7 @@ impl Runtime {
             session,
             vec![pending],
             std::slice::from_ref(&focus),
+            false,
             &mut budget,
         );
         // Telltale excluded the call (oversized or too deeply nested input):
@@ -1141,11 +1144,10 @@ impl Runtime {
         {
             projection_limit = first.failure_code.clone();
             if let Some(projected) = crate::hooks::projection::project(&call.input) {
-                let variants = projected.variants;
                 separated = projected.separated;
                 (result, window_records, window_truncated) =
-                    self.evaluate_projected(ctx, session, id, call, &variants, &mut budget);
-                projection = Some(variants);
+                    self.evaluate_projected(ctx, session, id, call, &projected, &mut budget);
+                projection = Some(projected.variants);
             }
         }
         RequestEvaluation {
@@ -1165,12 +1167,12 @@ impl Runtime {
         session: &mut SessionHandle,
         id: &RequestIdentity,
         call: &ToolCall,
-        variants: &[Value],
+        projected: &crate::hooks::projection::Projection,
         budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
         let mut lines = Vec::new();
         let mut focuses = Vec::new();
-        for (n, variant) in variants.iter().enumerate() {
+        for (n, variant) in projected.variants.iter().enumerate() {
             let at = format_ms(session.state.next_time_ms(now_ms()));
             let variant_id = format!("{}-p{n}", id.uuid);
             lines.push(Line::tool_use(
@@ -1187,7 +1189,7 @@ impl Runtime {
                 native_id: variant_id,
             });
         }
-        self.evaluate(ctx, session, lines, &focuses, budget)
+        self.evaluate(ctx, session, lines, &focuses, projected.past_budget, budget)
     }
 
     /// The evaluation's telemetry, with every limit on what it could see.
@@ -1587,6 +1589,7 @@ impl Runtime {
             session,
             vec![line],
             std::slice::from_ref(&focus),
+            false,
             &mut RecoveryBudget::start(),
         );
         session

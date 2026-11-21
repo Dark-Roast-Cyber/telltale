@@ -207,3 +207,112 @@ fn thirty_one_siblings_cannot_lower_a_deny() {
     }
     assert_denied(&cases);
 }
+
+/// Inputs past each limit of the projection budget beside `command`: more
+/// values than the variants hold (nested, and at the top level), more variants
+/// than the budget, a value of more chunks than the budget, and more pieces
+/// than the budget.
+fn past_the_budget(command: &str) -> Vec<(String, Value)> {
+    let values = |prefix: &str, n: usize, size: usize| -> serde_json::Map<String, Value> {
+        (0..n)
+            .map(|i| (format!("{prefix}{i:04}"), json!(pad(i % 1000, size, 'p'))))
+            .collect()
+    };
+    let top = |n: usize, size: usize| {
+        let mut members = values("a", n, size);
+        members.insert("command".to_owned(), json!(command));
+        Value::Object(members)
+    };
+    vec![
+        (
+            "values nested".to_owned(),
+            json!({ "command": command, "meta": values("k", 3000, 4) }),
+        ),
+        ("values at the top level".to_owned(), top(3000, 4)),
+        ("larger values at the top level".to_owned(), top(2100, 1000)),
+        (
+            "variants".to_owned(),
+            padded(command, Shape::Nested, 700, 3000, 'p'),
+        ),
+        (
+            "chunks".to_owned(),
+            json!({ "command": command, "description": "d".repeat(400_000) }),
+        ),
+        (
+            "pieces".to_owned(),
+            json!({ "command": command, "a": values("k", 20, 300_000) }),
+        ),
+    ]
+}
+
+/// A denied command just over the anchor size, and one of several chunks
+/// with the denied part in its last chunk.
+fn long_denied_commands() -> [String; 2] {
+    [
+        format!("{DENIED}; echo {}", "a".repeat(1100)),
+        format!("echo {}; {DENIED}", "a".repeat(9000)),
+    ]
+}
+
+/// The decision record of a Bash call with `input`, in a session of its own.
+fn decision(h: &mut Harness, label: &str, input: Value) -> Value {
+    h.session_id = format!("budget-{label}");
+    let id = format!("toolu_{label}");
+    h.pre("Bash", &id, input);
+    h.decision_for(&id)
+}
+
+/// An input past the projection budget is evaluated on a bounded set of
+/// variants that holds its command: a rule deny still decides, under both
+/// policies, whether the command is short, just over the anchor size, or
+/// several chunks long.
+#[test]
+fn an_input_past_the_projection_budget_keeps_a_rule_deny() {
+    let mut cases = past_the_budget(DENIED);
+    for command in long_denied_commands() {
+        for (label, input) in past_the_budget(&command) {
+            cases.push((format!("{} byte command, {label}", command.len()), input));
+        }
+    }
+    assert_denied(&cases);
+}
+
+/// What could not be evaluated is not an allow: the same input beside a
+/// command no rule denies gets `on_unevaluable`, whatever it is set to.
+#[test]
+fn an_input_past_the_projection_budget_without_a_finding_gets_on_unevaluable() {
+    let mut failures = Vec::new();
+    for (policy, mut h, expected) in [
+        ("default", Harness::new(), "ask"),
+        (
+            "deny",
+            Harness::with(|c| c.on_unevaluable = OnError::Deny),
+            "deny",
+        ),
+    ] {
+        for (n, (label, input)) in past_the_budget("ls -la").into_iter().enumerate() {
+            let (verdict, basis) = decide(&mut h, &format!("benign-{policy}-{n}"), input);
+            if verdict.as_deref() != Some(expected) || basis != "unevaluable_input" {
+                failures.push(format!("{policy} {label}: {verdict:?} ({basis})"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// However large the input, a call past the budget evaluates at most 128
+/// variants: its window holds no more records than that.
+#[test]
+fn an_input_past_the_projection_budget_evaluates_a_bounded_number_of_variants() {
+    let mut h = Harness::new();
+    let mut failures = Vec::new();
+    for (n, (label, input)) in past_the_budget(DENIED).into_iter().enumerate() {
+        let record = decision(&mut h, &format!("bound-{n}"), input);
+        let evaluation = &record["evaluation"];
+        let records = evaluation["window_records"].as_u64().unwrap();
+        if !(1..=128).contains(&records) || evaluation["status"] == "not_evaluated" {
+            failures.push(format!("{label}: {evaluation}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

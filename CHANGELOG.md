@@ -8,6 +8,28 @@
 
 ### Compatibility and operator impact
 
+- **A hooks tool call past the projection budget is still evaluated.** A tool
+  input with more values or bytes than the bounded projection variants hold
+  used to be unevaluable as a whole and got `on_unevaluable`. It is now
+  evaluated on a bounded set of variants: a short command and the first block
+  of short top-level values with every variant, every chunk of a longer
+  command ahead of other values, then the start of other values while variants
+  remain. A rule finding there keeps its force, and the unprojected remainder
+  floors the decision at `on_unevaluable` (recorded as
+  `pending_input_separated`). An input of 1,025 to 2,048 values, previously
+  unevaluable, is now projected in full. The work per call stays bounded by
+  the same variant limit:
+  - a call with no session history is no longer scanned twice ahead of the
+    piece loop;
+  - a call past the projection budget goes straight to the piece loop, its
+    command's pieces first, instead of first being scanned whole;
+  - a projected call whose evaluation has already passed the piece time limit
+    is not scanned there at all: it records `pending_pieces_unscanned` and
+    follows `on_unevaluable`.
+
+  A host that calls `telltale_core::hooks::Engine::evaluate` directly passes
+  the new `past_budget` argument (`false` for a call evaluated whole).
+
 - **Inline remote-script execution now links `chain.download_then_execute`.**
   A download whose output the same command runs as code now links like a
   download piped to an interpreter: a shell or `source` reading a process
