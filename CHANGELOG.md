@@ -37,6 +37,13 @@
     is not scanned there at all: it records `pending_pieces_unscanned` and
     follows `on_unevaluable`.
 
+  A command comes ahead of every other value whatever the member names sort
+  as, so it is in the variants, and in the first one, which history keeps. A
+  value cut short for room in the variants is reported as separated. A
+  projected call with more than one command member (which Telltale reads as
+  one command text) evaluates each command in variants without the others,
+  first chunks first, and floors the decision at `on_unevaluable`.
+
   A host that calls `telltale_core::hooks::Engine::evaluate` directly passes
   the new `past_budget` argument (`false` for a call evaluated whole).
 

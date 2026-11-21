@@ -242,7 +242,30 @@ fn past_the_budget(command: &str) -> Vec<(String, Value)> {
             "pieces".to_owned(),
             json!({ "command": command, "a": values("k", 20, 300_000) }),
         ),
+        (
+            "every value flattened, the command not first by name".to_owned(),
+            top(2047, 1024),
+        ),
+        (
+            "two command keys".to_owned(),
+            json!({ "cmd": "c".repeat(400_000), "command": command }),
+        ),
+        (
+            "pieces cut to what the variants hold".to_owned(),
+            json!({ "a": vec!["p"; 2046], "command": command, "z": "z".repeat(9000) }),
+        ),
     ]
+}
+
+/// A value cut short because the variants hold no more pieces is not
+/// evaluated whole: with no finding, the call gets `on_unevaluable`.
+#[test]
+fn a_value_cut_for_room_gets_on_unevaluable() {
+    let input = json!({ "a": vec!["p"; 2047], "b": "b".repeat(4000) });
+    let mut h = Harness::with(|c| c.on_unevaluable = OnError::Deny);
+    let (verdict, basis) = decide(&mut h, "cut-for-room", input);
+    assert_eq!(verdict.as_deref(), Some("deny"));
+    assert_eq!(basis, "unevaluable_input");
 }
 
 /// A denied command just over the anchor size, and one of several chunks
