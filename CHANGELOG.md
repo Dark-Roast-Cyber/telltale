@@ -45,7 +45,8 @@
   input, precedes a remote destination, and Azure matches only
   `storage blob|file upload` and `upload-batch`. Downloads, copies between two
   remote locations and storage inventory such as `az storage account list` no
-  longer match. The native action profile version rises to 11. The rule's
+  longer match. The native action profile version rises to 11, which also
+  covers the inline-execution and GitHub CLI changes above. The rule's
   behaviour fingerprint changes, so affected sessions can emit once after
   upgrade. Fixes #179.
 - **Destructive Git detection distinguishes more requests from plain previews.**
