@@ -29,7 +29,8 @@ fn tool(id: &str, command: &str, time: Option<&str>) -> CanonicalObservationV2 {
     .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
     .capability_context(
         CapabilityContext::new()
-            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
+            .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
     )
     .fact_metadata(
         "tool.arguments",

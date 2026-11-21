@@ -100,7 +100,37 @@ pub(super) fn session_steps(
             step.categories.extend(category.clone());
         }
     }
+    for step in steps.values_mut() {
+        step.categories = link_categories(export, &step.ids, std::mem::take(&mut step.categories));
+    }
     Ok(steps)
+}
+
+/// The categories an observation that matched `ids` supplies to a link. It
+/// supplies `exfiltration` only when it shows network use: one of its rules
+/// in the exfiltration or download category reads tool-call fields alone
+/// (command, arguments, URL). A rule that also reads message or tool-result
+/// text can match a URL that is only named there, so on its own it keeps its
+/// atomic finding but completes no chain.
+pub(super) fn link_categories(
+    export: &RuleV1CompatibilityExport,
+    ids: &BTreeSet<String>,
+    mut categories: BTreeSet<String>,
+) -> BTreeSet<String> {
+    let network_use = || {
+        export.rules().iter().any(|rule| {
+            ids.contains(&rule.id)
+                && matches!(rule.category.as_str(), "exfiltration" | "download")
+                && !rule.matchers.is_empty()
+                && rule.matchers.iter().all(|matcher| {
+                    matches!(matcher.target.as_str(), "command" | "arguments" | "url")
+                })
+        })
+    };
+    if categories.contains("exfiltration") && !network_use() {
+        categories.remove("exfiltration");
+    }
+    categories
 }
 
 /// The observations that link `modifier`'s steps when the step at `end`

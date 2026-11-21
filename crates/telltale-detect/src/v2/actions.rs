@@ -22,7 +22,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 15;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 16;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -2576,7 +2576,11 @@ pub(crate) fn evaluate(
                 super::modifier_link::Step {
                     time,
                     ids: atomic_ids.clone(),
-                    categories: categories.clone(),
+                    categories: super::modifier_link::link_categories(
+                        export,
+                        &atomic_ids,
+                        categories.clone(),
+                    ),
                 },
             );
             for modifier in export.modifiers().iter().filter(|m| !linked_modifier(m)) {
