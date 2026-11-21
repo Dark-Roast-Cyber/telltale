@@ -310,8 +310,8 @@ struct RequestEvaluation {
     result: Result<Evaluation, &'static str>,
     window_records: usize,
     window_truncated: bool,
-    /// The variants evaluated in place of an input Telltale excluded.
-    projection: Option<Vec<Value>>,
+    /// The projection evaluated in place of an input Telltale excluded.
+    projection: Option<crate::hooks::projection::Projection>,
     projection_limit: Option<String>,
     separated: bool,
     /// Past the projection budget: part of the input is in no variant.
@@ -1159,7 +1159,8 @@ impl Runtime {
             stateless,
         );
         apply_decision(&mut session, &decision);
-        self.journal_request(ctx, &session, &id, call, evaluated.projection.as_deref())?;
+        let history = evaluated.projection.as_ref().map(|p| &p.history);
+        self.journal_request(ctx, &session, &id, call, history)?;
         session.state.remember(
             &id.journal_id,
             PendingDecision {
@@ -1234,7 +1235,7 @@ impl Runtime {
         );
         // Telltale excluded the call (oversized or too deeply nested input):
         // evaluate a bounded projection that still covers every byte.
-        let mut projection: Option<Vec<serde_json::Value>> = None;
+        let mut projection = None;
         let mut projection_limit = None;
         // The projection could not keep together what a rule may need
         // together (projection.rs), so "no finding" is not an allow.
@@ -1249,11 +1250,11 @@ impl Runtime {
                 past_budget = projected.past_budget;
                 (result, window_records, window_truncated) =
                     self.evaluate_projected(ctx, session, id, call, &projected, &mut budget);
-                projection = Some(projected.variants);
+                projection = Some(projected);
             }
         }
         let scans = ScanTrace {
-            variants: projection.as_ref().map_or(0, Vec::len),
+            variants: projection.as_ref().map_or(0, |p| p.variants.len()),
             ..budget.trace().clone()
         };
         RequestEvaluation {
@@ -1504,17 +1505,18 @@ impl Runtime {
         session: &SessionHandle,
         id: &RequestIdentity,
         call: &ToolCall,
-        projection: Option<&[Value]>,
+        projection: Option<&Value>,
     ) -> Result<(), &'static str> {
         // Attempts stay in history whatever the verdict: a denied download
         // still informs how a later execute of the same artifact is judged.
         // History stays within Telltale's per-value bound so later scans
-        // can use it; a projected call is journaled as its first variant.
+        // can use it; a projected call is journaled as the line its
+        // projection keeps for history (every command's start, together).
         // Every call, projected or refused, costs the window at most what a
         // call Telltale evaluates whole does. A variant's strings are
         // already within Telltale's bound and stay as evaluated.
         let (input, string_bytes) = match projection {
-            Some(variants) => (&variants[0], usize::MAX),
+            Some(history) => (history, usize::MAX),
             None => (
                 &call.input,
                 HISTORY_STRING_BYTES.min(self.config.window.max_result_bytes),

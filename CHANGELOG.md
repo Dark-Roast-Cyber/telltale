@@ -61,11 +61,13 @@
     follows `on_unevaluable`.
 
   A command comes ahead of every other value whatever the member names sort
-  as, so it is in the variants, and in the first one, which history keeps. A
-  value cut short for room in the variants is reported as separated. A
-  projected call with more than one command member (which Telltale reads as
-  one command text) evaluates each command in variants without the others,
-  first chunks first, and floors the decision at `on_unevaluable`.
+  as, so it is in the variants. A value cut short for room in the variants is
+  reported as separated. A projected call with more than one command member
+  (which Telltale reads as one command text) evaluates each command in
+  variants without the others, first chunks first, and floors the decision
+  at `on_unevaluable`. History keeps the start of every command member
+  together, with the call's short top-level values, so a later call still
+  links to what each command did.
 
   A hooks request record now traces its scans in an optional
   `evaluation.scans` object (schema `telltale_hooks.record.v1`, additive):
