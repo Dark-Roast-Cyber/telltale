@@ -10,12 +10,15 @@
 
 - Windows paths are now redacted in more spellings. The privacy sanitizer
   replaces drive, UNC and device-namespace paths written with escaped
-  backslashes, as inside a JSON string, paths that mix escaped and plain
+  backslashes, as inside a JSON string, and paths that mix escaped and plain
   separators in any order after their start (plain then escaped, escaped then
-  plain, or alternating component by component), and forward-slash UNC paths (`//server/share/...`) whole with
-  the path marker in every sanitization context, and recognizes more
-  drive-path boundaries. URLs and other `//` text keep their treatment, and
-  there is no change to detection, state or the Event 3.0 shape.
+  plain, or alternating component by component) whole with the path marker in
+  every sanitization context, and recognizes more drive-path boundaries. Text
+  that starts with `//name/` (a build label, a document query, a depot path
+  or a network path written with forward slashes) is ambiguous and keeps its
+  URL treatment, as do URLs. A UNC start whose separator after the server is
+  doubled keeps the server name; see the privacy model. There is no change to
+  detection, state or the Event 3.0 shape.
 
 ## 0.7.4 — published stable (2026-11-20)
 

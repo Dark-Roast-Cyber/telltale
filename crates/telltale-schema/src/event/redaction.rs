@@ -2035,38 +2035,12 @@ fn redact_urls_at_depth<E>(
     for capture in URL_RE.find_iter(text) {
         redacted.push_str(&text[offset..capture.start()]);
         let (url, trailing) = split_url_trailing_punctuation(capture.as_str());
-        // Nested text is a decoded URL component, where `//` is URL syntax.
-        let glued = text[..capture.start()].ends_with(char::is_alphanumeric);
-        if depth == 0 && !glued && is_forward_slash_unc(url) {
-            redacted.push_str(SENSITIVE_PATH);
-        } else {
-            redacted.push_str(&sanitize_url_at_depth(url, depth, charge)?);
-        }
+        redacted.push_str(&sanitize_url_at_depth(url, depth, charge)?);
         redacted.push_str(trailing);
         offset = capture.end();
     }
     redacted.push_str(&text[offset..]);
     Ok(redacted)
-}
-
-/// A forward-slash UNC path, `//server/share[/...]`: a scheme-relative
-/// candidate whose host is a single label with a letter (a server name) or
-/// an IPv4 address, with no port or userinfo, followed by a share name.
-/// Any other scheme-relative candidate is sanitized as a URL.
-fn is_forward_slash_unc(url: &str) -> bool {
-    let Some((host, path)) = url.strip_prefix("//").and_then(|rest| rest.split_once('/')) else {
-        return false;
-    };
-    let server_name = host.bytes().any(|byte| byte.is_ascii_alphabetic())
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-    let address = host.parse::<std::net::Ipv4Addr>().is_ok();
-    let share = path
-        .chars()
-        .next()
-        .is_some_and(|character| !matches!(character, '/' | '?' | '#'));
-    (server_name || address) && share
 }
 
 fn sanitize_url_at_depth<E>(
@@ -3831,21 +3805,44 @@ safe=value"#,
         }
     }
 
+    /// A known limit, pinned so a change to it is deliberate: a UNC start
+    /// whose separator after the server is doubled reads like an escaped
+    /// registry key, so the server name is kept and the rest is redacted.
     #[test]
-    fn forward_slash_unc_paths_are_redacted_in_every_context() {
-        assert_every_context(
-            "open //server/share/example/notes.txt now",
-            "open [sensitive-path] now",
-            "open <path> now",
+    fn a_unc_start_with_a_doubled_server_separator_keeps_the_server_name() {
+        assert_eq!(
+            redact_sensitive_text(r"dir \\fileserver\\share\notes.txt"),
+            r"dir \\fileserver[sensitive-path]"
         );
     }
 
+    /// Text that starts with `//name/` is ambiguous: a build label, a document
+    /// query and a depot path are spelled like a network path with forward
+    /// slashes. It is read as a scheme-relative URL, never redacted whole as
+    /// a Windows path.
     #[test]
-    fn forward_slash_unc_paths_with_address_hosts_are_redacted() {
-        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+    fn double_slash_names_are_read_as_urls_not_as_windows_paths() {
+        for kept in [
+            "bazel build //app/server:binary",
+            "xpath //div/span/text()",
+            "p4 sync //depot/main/src/...",
+            "open //server/share/example/notes.txt now",
+            "copy //192.0.2.10/share/a.txt .",
+            "dir //FILESRV01/share",
+        ] {
+            assert_eq!(redact_sensitive_text(kept), kept);
+            assert_eq!(
+                PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, kept),
+                kept
+            );
+        }
+    }
 
-        assert_eq!(sanitize("copy //192.0.2.10/share/a.txt ."), "copy <path> .");
-        assert_eq!(sanitize("dir //FILESRV01/share"), "dir <path>");
+    /// The URL reading still redacts what a URL may not show.
+    #[test]
+    fn double_slash_names_keep_url_redaction_of_home_directories() {
+        let redacted = redact_sensitive_text("open //server/Users/example/notes.txt now");
+        assert!(!redacted.contains("example"), "{redacted}");
     }
 
     /// Scheme-relative URLs, URLs with doubled slashes and ordinary `//` text
