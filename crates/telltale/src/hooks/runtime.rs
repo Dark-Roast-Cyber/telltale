@@ -14,11 +14,11 @@ use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{
-    Engine, EvalStatus, Evaluation, Focus, PendingScan, RecoveryBudget, Request, ScanTrace,
+    Engine, EvalStatus, Evaluation, Focus, Limits, PendingScan, RecoveryBudget, Request, ScanTrace,
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
-use crate::hooks::state::{PendingDecision, SESSION_LOCK_WAIT, SessionHandle, Settled, Verdict};
+use crate::hooks::state::{PendingDecision, SessionHandle, Settled, Verdict};
 use crate::hooks::telemetry::{
     Action, DecisionInfo, EvaluationInfo, Harness, Kind, OutcomeInfo, Producer, Record, Session,
     Sink, TelltaleAction, new_record_id, sha256_hex,
@@ -229,8 +229,9 @@ pub struct Runtime {
     evaluator: &'static str,
     /// Why an in-process evaluation did not use the long-lived evaluator.
     evaluator_fallback: Option<&'static str>,
-    /// How long to wait behind a session's other calls.
-    session_lock_wait: Duration,
+    /// The time limits of a call, the wait behind a session's other calls
+    /// among them.
+    limits: Limits,
     /// When the evaluator's client stops waiting (ms since the epoch).
     answer_by: Option<i64>,
 }
@@ -436,20 +437,20 @@ impl Runtime {
             engine_error: None,
             evaluator: "in_process",
             evaluator_fallback: None,
-            session_lock_wait: SESSION_LOCK_WAIT,
+            limits: Limits::default(),
             answer_by: None,
         }
+    }
+
+    /// The same runtime working within `limits` instead of the default ones.
+    pub fn with_limits(self, limits: Limits) -> Self {
+        Self { limits, ..self }
     }
 
     /// Label evaluations with the process that made them (telemetry).
     pub fn set_evaluator(&mut self, evaluator: &'static str, fallback: Option<&'static str>) {
         self.evaluator = evaluator;
         self.evaluator_fallback = fallback;
-    }
-
-    /// How long a call waits behind a session's other calls.
-    pub fn set_session_lock_wait(&mut self, wait: Duration) {
-        self.session_lock_wait = wait;
     }
 
     /// Use a prebuilt engine (a long-lived host or tests).
@@ -460,7 +461,7 @@ impl Runtime {
             engine_error: None,
             evaluator: "in_process",
             evaluator_fallback: None,
-            session_lock_wait: SESSION_LOCK_WAIT,
+            limits: Limits::default(),
             answer_by: None,
         }
     }
@@ -582,10 +583,10 @@ impl Runtime {
         lock_wait: Duration,
     ) -> Result<Response, &'static str> {
         self.answer_by = Some(answer_by);
-        self.session_lock_wait = lock_wait;
+        let own_wait = std::mem::replace(&mut self.limits.session_lock_wait, lock_wait);
         let outcome = self.try_handle(ctx, &event);
         self.answer_by = None;
-        self.session_lock_wait = SESSION_LOCK_WAIT;
+        self.limits.session_lock_wait = own_wait;
         match outcome {
             Ok(response) => Ok(response),
             Err(code @ (STATE_LOCK_TIMEOUT | ANSWER_TOO_LATE)) => Err(code),
@@ -632,7 +633,10 @@ impl Runtime {
             }
         }
         // One wait for this hook, however many times it takes the lock.
-        self.session_lock_wait = self.session_lock_wait.saturating_sub(looking.elapsed());
+        self.limits.session_lock_wait = self
+            .limits
+            .session_lock_wait
+            .saturating_sub(looking.elapsed());
         self.set_evaluator("in_process", Some(code));
         self.handle(ctx, event)
     }
@@ -783,9 +787,13 @@ impl Runtime {
 
     /// The session of `ctx` under state directory `dir`.
     fn open_in(&self, ctx: &Context, dir: &std::path::Path) -> Result<SessionHandle, &'static str> {
-        let session =
-            SessionHandle::open_within(dir, ctx.harness, &ctx.session_id, self.session_lock_wait)
-                .map_err(|error| error.code())?;
+        let session = SessionHandle::open_within(
+            dir,
+            ctx.harness,
+            &ctx.session_id,
+            self.limits.session_lock_wait,
+        )
+        .map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
         // call is still evaluated) but never silent.
         for code in &session.anomalies {
@@ -1133,7 +1141,7 @@ impl Runtime {
             stage: ObservationStage::ToolRequested,
             native_id: id.uuid.clone(),
         };
-        let mut budget = RecoveryBudget::start();
+        let mut budget = RecoveryBudget::start(self.limits);
         let (mut result, mut window_records, mut window_truncated) = self.evaluate(
             ctx,
             session,
@@ -1619,7 +1627,7 @@ impl Runtime {
             vec![line],
             std::slice::from_ref(&focus),
             PendingScan::Together,
-            &mut RecoveryBudget::start(),
+            &mut RecoveryBudget::start(self.limits),
         );
         session
             .journal()

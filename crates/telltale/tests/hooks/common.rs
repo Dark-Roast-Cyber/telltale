@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use telltale_core::hooks::config::{Config, Mode};
+use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::Runtime;
 
@@ -91,6 +92,11 @@ impl Harness {
     }
 
     pub fn with(edit: impl FnOnce(&mut Config)) -> Self {
+        Self::with_limits(Limits::default(), edit)
+    }
+
+    /// A harness whose runtime works within `limits`.
+    pub fn with_limits(limits: Limits, edit: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         // The suites test what the hook returns, so they enforce; detect-only
         // (the default) is tested where it is the subject.
@@ -103,7 +109,7 @@ impl Harness {
         edit(&mut config);
         Self {
             dir,
-            runtime: Runtime::new(config),
+            runtime: Runtime::new(config).with_limits(limits),
             session_id: "synthetic-session-0001".into(),
             telemetry_reader: RefCell::default(),
         }

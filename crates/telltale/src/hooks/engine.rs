@@ -717,6 +717,30 @@ pub const RECOVERY_BUDGET: Duration = Duration::from_secs(2);
 /// together starts past it either; the scan of a call whole is not limited by it. Load decides how far a call gets: what the pieces scanned found
 /// keeps its force, and the rest goes to `on_unevaluable`.
 pub const PIECE_SCAN_LIMIT: Duration = Duration::from_secs(5);
+
+/// The time limits one hook works within. Production code uses the
+/// [`Default`], the constants the fields name; tests build a runtime with
+/// generous limits to prove what an evaluation covers, and with tiny or spent
+/// ones to prove what a call gets when time runs out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// [`RECOVERY_BUDGET`].
+    pub recovery: Duration,
+    /// [`PIECE_SCAN_LIMIT`].
+    pub piece_scan: Duration,
+    /// [`crate::hooks::state::SESSION_LOCK_WAIT`].
+    pub session_lock_wait: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            recovery: RECOVERY_BUDGET,
+            piece_scan: PIECE_SCAN_LIMIT,
+            session_lock_wait: crate::hooks::state::SESSION_LOCK_WAIT,
+        }
+    }
+}
 /// Scans smaller than this do not set the forecast's rate: their cost is mostly
 /// a scan's fixed setup, which would make a larger scan look far too expensive.
 const MIN_MEASURED_BYTES: usize = 64 * 1024;
@@ -732,6 +756,7 @@ const SMALL_LINE_BYTES: usize = 1024;
 /// One call's allowance for scanning, shared by every evaluation it needs.
 pub struct RecoveryBudget {
     started: Instant,
+    limits: Limits,
     /// The slowest rate measured so far, in milliseconds per byte.
     ms_per_byte: f64,
     /// What the call's scans did; the budget spans all of them.
@@ -741,9 +766,10 @@ pub struct RecoveryBudget {
 impl RecoveryBudget {
     /// The call starts now: call this once the session lock is held, because
     /// the wait for the lock is bounded on its own.
-    pub fn start() -> Self {
+    pub fn start(limits: Limits) -> Self {
         Self {
             started: Instant::now(),
+            limits,
             ms_per_byte: 0.0,
             trace: ScanTrace::default(),
         }
@@ -759,12 +785,12 @@ impl RecoveryBudget {
     pub(crate) fn already_spent(used: Duration) -> Self {
         Self {
             started: Instant::now() - used,
-            ..Self::start()
+            ..Self::start(Limits::default())
         }
     }
 
     fn spent(&self) -> bool {
-        self.started.elapsed() >= RECOVERY_BUDGET
+        self.started.elapsed() >= self.limits.recovery
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -773,7 +799,7 @@ impl RecoveryBudget {
 
     /// Whether another piece of a call past capacity may still be scanned.
     fn pieces_in_time(&self) -> bool {
-        self.started.elapsed() < PIECE_SCAN_LIMIT
+        self.started.elapsed() < self.limits.piece_scan
     }
 
     /// Whether a scan of `bytes` should fit in what is left. Twice the forecast,
@@ -781,7 +807,7 @@ impl RecoveryBudget {
     /// and a scan that fails at acquisition ends before the expensive stages.
     fn admits(&self, bytes: usize) -> bool {
         let forecast = Duration::from_secs_f64(self.ms_per_byte * bytes as f64 / 1000.0);
-        self.started.elapsed() + forecast * 2 < RECOVERY_BUDGET
+        self.started.elapsed() + forecast * 2 < self.limits.recovery
     }
 
     fn observe(&mut self, bytes: usize, ms: u64) {
@@ -2134,7 +2160,7 @@ mod recovery_tests {
             });
         }
         let (dir, engine) = engine();
-        let mut budget = RecoveryBudget::start();
+        let mut budget = RecoveryBudget::start(Limits::default());
         let request = Request {
             client: ClientId::Claude,
             window_path: &dir.path().join("window.jsonl"),
@@ -2389,7 +2415,7 @@ mod recovery_tests {
 
     #[test]
     fn a_scan_that_may_not_fit_is_not_admitted() {
-        let fresh = RecoveryBudget::start();
+        let fresh = RecoveryBudget::start(Limits::default());
         assert!(fresh.admits(usize::MAX / 2), "nothing measured yet");
         // 1 MB at 0.5 ms per KB: 500 ms, doubled.
         let rate = 0.0005;
@@ -2402,7 +2428,7 @@ mod recovery_tests {
 
     #[test]
     fn the_slowest_rate_counts_and_small_scans_do_not_set_it() {
-        let mut budget = RecoveryBudget::start();
+        let mut budget = RecoveryBudget::start(Limits::default());
         budget.observe(100, 50);
         assert_eq!(budget.ms_per_byte, 0.0, "mostly a scan's fixed setup");
         budget.observe(MIN_MEASURED_BYTES, 100);

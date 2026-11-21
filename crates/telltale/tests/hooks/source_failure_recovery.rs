@@ -13,6 +13,7 @@ use crate::common;
 use common::Harness;
 use serde_json::{Map, Value, json};
 use telltale_core::hooks::config::{Config, OnError};
+use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::runtime::{Completion, Context, Event, Response, ToolCall};
 use telltale_core::hooks::state::Verdict;
 
@@ -1000,8 +1001,11 @@ fn a_session_locked_past_the_wait_gets_the_strict_policy() {
             None,
         ),
     ] {
-        let mut h = Harness::with(edit);
-        h.runtime.set_session_lock_wait(wait);
+        let limits = Limits {
+            session_lock_wait: wait,
+            ..Limits::default()
+        };
+        let mut h = Harness::with_limits(limits, edit);
         let holder = session_handle(&h);
         let started = std::time::Instant::now();
         let response = pre(&mut h, true, "late", command(EXFIL));

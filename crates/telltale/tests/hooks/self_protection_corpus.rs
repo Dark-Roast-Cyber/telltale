@@ -3271,7 +3271,7 @@ fn evaluate_with(
     engine
         .evaluate(
             request,
-            &mut telltale_core::hooks::engine::RecoveryBudget::start(),
+            &mut telltale_core::hooks::engine::RecoveryBudget::start(Default::default()),
         )
         .unwrap()
 }
