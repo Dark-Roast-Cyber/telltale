@@ -34,9 +34,21 @@ fn all_record_kinds_match_the_published_schema() {
         c.rules.packs.deployment = vec!["/nonexistent/rules.yaml".into()];
     });
     broken.pre_bash("toolu_e", "ls");
+    // A call Telltale excludes whole, evaluated as a projection: its record
+    // traces both evaluations.
+    let mut projected = Harness::new();
+    projected.pre(
+        "Bash",
+        "toolu_p",
+        serde_json::json!({"command": "ls", "description": "d".repeat(5000)}),
+    );
+    let scans = &projected.decision_for("toolu_p")["evaluation"]["scans"];
+    assert!(scans["variants"].as_u64().unwrap() >= 2, "{scans}");
+    assert_eq!(scans["whole"], "passed", "{scans}");
 
     let mut kinds = std::collections::BTreeSet::new();
-    for record in h.telemetry().into_iter().chain(broken.telemetry()) {
+    let records = h.telemetry().into_iter().chain(broken.telemetry());
+    for record in records.chain(projected.telemetry()) {
         kinds.insert(record["kind"].as_str().unwrap().to_owned());
         let errors: Vec<String> = validator
             .iter_errors(&record)

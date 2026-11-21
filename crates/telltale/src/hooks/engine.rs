@@ -361,15 +361,25 @@ impl Engine {
         // scan: it is not scanned whole nor its variants together, so the
         // time goes to its pieces, the command's first.
         let pieces_only = scan == PendingScan::PiecesOnly && pending.len() > 1;
-        if !pieces_only && budget.admits(whole_bytes) {
+        let mut trace = std::mem::take(&mut budget.trace);
+        trace.together = None;
+        if pieces_only {
+            trace.whole = Some(StepOutcome::SkippedPiecesOnly);
+        } else if !budget.admits(whole_bytes) {
+            trace.whole = Some(StepOutcome::SkippedBudget);
+        } else {
             let whole = self.scan(client, window_path, history.iter().chain(pending), focus)?;
             budget.observe(whole_bytes, whole.scan_ms);
+            trace.whole_ms += whole.scan_ms;
             if !whole.source_failed {
+                trace.whole = Some(StepOutcome::Passed);
+                budget.trace = trace;
                 return Ok(Evaluation {
                     history_kept: history.len(),
                     ..whole
                 });
             }
+            trace.whole = Some(StepOutcome::Refused);
             failure_code = whole.failure_code.clone();
             alone = history.is_empty().then_some(whole);
         }
@@ -377,19 +387,33 @@ impl Engine {
         // loop and are bound by the same limit: past it, none is scanned.
         let late = pieces_only || (pending.len() > 1 && !budget.pieces_in_time());
         let mut best = if late {
+            trace.together = Some(if pieces_only {
+                StepOutcome::SkippedPiecesOnly
+            } else {
+                StepOutcome::SkippedLate
+            });
             Evaluation::not_evaluated(focus.len(), 0)
         } else if let Some(alone) = alone {
+            trace.together = Some(StepOutcome::SameAsWhole);
             alone
         } else {
             let scan = self.scan(client, window_path, pending.iter(), focus)?;
             budget.observe(pending_bytes, scan.scan_ms);
+            trace.together_ms += scan.scan_ms;
+            trace.together = Some(if scan.source_failed {
+                StepOutcome::Refused
+            } else {
+                StepOutcome::Passed
+            });
             scan
         };
         let mut kept = vec![false; history.len()];
+        let phase = Instant::now();
         if (late || best.source_failed) && pending.len() > 1 {
-            best = self.scan_each(client, window_path, pending, focus, || {
+            best = self.scan_each(client, window_path, pending, focus, &mut trace, || {
                 budget.pieces_in_time()
             })?;
+            trace.pieces_ms += phase.elapsed().as_millis() as u64;
         } else if best.status != EvalStatus::NotEvaluated {
             let window = Window {
                 client,
@@ -401,7 +425,9 @@ impl Engine {
                 focus,
             };
             best = self.restore_history(&window, budget, best, &mut kept)?;
+            trace.history_ms += phase.elapsed().as_millis() as u64;
         }
+        budget.trace = trace;
         best.scan_ms = budget.elapsed_ms();
         best.failure_code = best.failure_code.or(failure_code);
         best.history_kept = kept.iter().filter(|kept| **kept).count();
@@ -497,9 +523,11 @@ impl Engine {
         window_path: &Path,
         pending: &[Line],
         focus: &[Focus],
+        trace: &mut ScanTrace,
         mut in_time: impl FnMut() -> bool,
     ) -> Result<Evaluation, EngineError> {
         let mut merged = Evaluation::not_evaluated(focus.len(), 0);
+        trace.pieces_total += pending.len();
         for (line, one) in pending.iter().zip(focus) {
             if !in_time() {
                 merged
@@ -513,7 +541,12 @@ impl Engine {
                 std::iter::once(line),
                 std::slice::from_ref(one),
             )?;
+            trace.pieces_scanned += 1;
             if scan.status == EvalStatus::NotEvaluated {
+                trace.pieces_refused += 1;
+                if trace.first_refusal.is_none() {
+                    trace.first_refusal = scan.failure_code;
+                }
                 continue;
             }
             merged.status = EvalStatus::VisibilityLimited;
@@ -701,6 +734,8 @@ pub struct RecoveryBudget {
     started: Instant,
     /// The slowest rate measured so far, in milliseconds per byte.
     ms_per_byte: f64,
+    /// What the call's scans did; the budget spans all of them.
+    trace: ScanTrace,
 }
 
 impl RecoveryBudget {
@@ -710,6 +745,21 @@ impl RecoveryBudget {
         Self {
             started: Instant::now(),
             ms_per_byte: 0.0,
+            trace: ScanTrace::default(),
+        }
+    }
+
+    /// What the call's scans did so far.
+    pub fn trace(&self) -> &ScanTrace {
+        &self.trace
+    }
+
+    /// A budget of which `used` is already spent.
+    #[cfg(test)]
+    pub(crate) fn already_spent(used: Duration) -> Self {
+        Self {
+            started: Instant::now() - used,
+            ..Self::start()
         }
     }
 
@@ -764,6 +814,48 @@ pub enum PendingScan {
     /// Each line on its own only: a projection past its budget holds more
     /// than Telltale takes in one scan.
     PiecesOnly,
+}
+
+/// How one scan step of a call went: a closed value for its record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepOutcome {
+    /// Scanned, and Telltale accepted the source.
+    Passed,
+    /// Scanned, and Telltale failed the source.
+    Refused,
+    /// Not scanned: a projection past its budget goes to its pieces.
+    SkippedPiecesOnly,
+    /// Not scanned: the recovery budget did not admit it.
+    SkippedBudget,
+    /// Not scanned: the piece time limit had passed.
+    SkippedLate,
+    /// Not scanned again: with no history the whole-window scan was this one.
+    SameAsWhole,
+}
+
+/// What the scans of one call did, for its record: counts, closed values and
+/// milliseconds, never content. It spans every evaluation of the call (the
+/// call whole, then its projection): counts and times add up, and `whole`
+/// and `together` say what the last evaluation did.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct ScanTrace {
+    /// Variants projected in place of an input Telltale excluded.
+    pub variants: usize,
+    /// The scan of history and the pending lines together.
+    pub whole: Option<StepOutcome>,
+    /// The scan of the pending lines together, without history.
+    pub together: Option<StepOutcome>,
+    /// Pending lines scanned one by one, of those offered to that loop.
+    pub pieces_scanned: usize,
+    pub pieces_total: usize,
+    /// Pieces Telltale refused, and the failure code of the first.
+    pub pieces_refused: usize,
+    pub first_refusal: Option<String>,
+    pub whole_ms: u64,
+    pub together_ms: u64,
+    pub pieces_ms: u64,
+    pub history_ms: u64,
 }
 
 struct Window<'a> {
@@ -1981,8 +2073,8 @@ mod recovery_tests {
 
     fn budget_used(used: Duration, ms_per_byte: f64) -> RecoveryBudget {
         RecoveryBudget {
-            started: Instant::now() - used,
             ms_per_byte,
+            ..RecoveryBudget::already_spent(used)
         }
     }
 
@@ -2018,6 +2110,46 @@ mod recovery_tests {
             });
         }
         (lines, focus)
+    }
+
+    /// The call's trace says which scans ran: past the budget the whole and
+    /// together scans are skipped, every piece is scanned, and a piece
+    /// Telltale refuses is counted with its failure code.
+    #[test]
+    fn the_trace_counts_scanned_and_refused_pieces_with_the_first_code() {
+        let inputs = [
+            serde_json::json!({"command": "curl http://a\u{1}b.test/x"}),
+            serde_json::json!({"command": "ls"}),
+        ];
+        let mut lines = Vec::new();
+        let mut focus = Vec::new();
+        for (n, input) in inputs.iter().enumerate() {
+            let at = format!("2026-11-06T00:00:00.{n:03}Z");
+            let uuid = format!("uuid-{n}");
+            lines.push(Line::tool_use("s", &uuid, &at, "toolu_1", "Bash", input));
+            focus.push(Focus {
+                occurred_at: at,
+                stage: ObservationStage::ToolRequested,
+                native_id: uuid,
+            });
+        }
+        let (dir, engine) = engine();
+        let mut budget = RecoveryBudget::start();
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("window.jsonl"),
+            history: &[],
+            pending: &lines,
+            focus: &focus,
+            scan: PendingScan::PiecesOnly,
+        };
+        engine.evaluate(request, &mut budget).unwrap();
+        let trace = budget.trace();
+        assert_eq!(trace.whole, Some(StepOutcome::SkippedPiecesOnly));
+        assert_eq!(trace.together, Some(StepOutcome::SkippedPiecesOnly));
+        assert_eq!((trace.pieces_scanned, trace.pieces_total), (2, 2));
+        assert_eq!(trace.pieces_refused, 1);
+        assert!(trace.first_refusal.is_some(), "{trace:?}");
     }
 
     /// The window path and the engine, for a scan of `pieces` alone.
@@ -2070,6 +2202,7 @@ mod recovery_tests {
                 &dir.path().join("window.jsonl"),
                 &lines,
                 &focus,
+                &mut ScanTrace::default(),
                 || {
                     let in_time = left > 0;
                     left = 0;

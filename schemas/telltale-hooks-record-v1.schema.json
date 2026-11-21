@@ -68,7 +68,25 @@
         "build_ms": { "type": ["integer", "null"], "minimum": 0 },
         "scan_ms": { "type": ["integer", "null"], "minimum": 0 },
         "evaluator": { "enum": ["daemon", "in_process"] },
-        "evaluator_fallback": { "type": ["string", "null"] }
+        "evaluator_fallback": { "type": ["string", "null"] },
+        "scans": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["variants", "whole", "together", "pieces_scanned", "pieces_total", "pieces_refused", "first_refusal", "whole_ms", "together_ms", "pieces_ms", "history_ms"],
+          "properties": {
+            "variants": { "type": "integer", "minimum": 0 },
+            "whole": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
+            "together": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
+            "pieces_scanned": { "type": "integer", "minimum": 0 },
+            "pieces_total": { "type": "integer", "minimum": 0 },
+            "pieces_refused": { "type": "integer", "minimum": 0 },
+            "first_refusal": { "type": ["string", "null"] },
+            "whole_ms": { "type": "integer", "minimum": 0 },
+            "together_ms": { "type": "integer", "minimum": 0 },
+            "pieces_ms": { "type": "integer", "minimum": 0 },
+            "history_ms": { "type": "integer", "minimum": 0 }
+          }
+        }
       }
     },
     "decision": {

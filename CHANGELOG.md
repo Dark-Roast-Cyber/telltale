@@ -45,6 +45,14 @@
   one command text) evaluates each command in variants without the others,
   first chunks first, and floors the decision at `on_unevaluable`.
 
+  A hooks request record now traces its scans in an optional
+  `evaluation.scans` object (schema `telltale_hooks.record.v1`, additive):
+  variants projected, pieces scanned of the total, pieces refused and the
+  first refusal code, whether the whole-window scan and the scan of the
+  pending lines together ran or were skipped and why (`passed`, `refused`,
+  `skipped_pieces_only`, `skipped_budget`, `skipped_late`, `same_as_whole`),
+  and milliseconds per phase. It holds counts, closed values and times only.
+
   A host that calls `telltale_core::hooks::Engine::evaluate` directly now
   passes a named `engine::Request` (client, window path, history, pending
   lines, focus and `scan`) and the budget. `scan` is

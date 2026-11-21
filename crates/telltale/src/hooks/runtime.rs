@@ -14,7 +14,7 @@ use time::macros::format_description;
 
 use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{
-    Engine, EvalStatus, Evaluation, Focus, PendingScan, RecoveryBudget, Request,
+    Engine, EvalStatus, Evaluation, Focus, PendingScan, RecoveryBudget, Request, ScanTrace,
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
@@ -306,6 +306,8 @@ struct RequestEvaluation {
     separated: bool,
     /// Past the projection budget: part of the input is in no variant.
     past_budget: bool,
+    /// What the call's scans did, whole and projected.
+    scans: ScanTrace,
 }
 
 /// The policy decision for one request, with the session scores it was taken
@@ -1003,6 +1005,7 @@ impl Runtime {
                 build_ms,
                 scan_ms: Some(evaluation.scan_ms),
                 evaluator: self.evaluator,
+                scans: None,
                 evaluator_fallback: self.evaluator_fallback,
             },
             Err(code) => EvaluationInfo {
@@ -1015,6 +1018,7 @@ impl Runtime {
                 build_ms,
                 scan_ms: None,
                 evaluator: self.evaluator,
+                scans: None,
                 evaluator_fallback: self.evaluator_fallback,
             },
         }
@@ -1158,6 +1162,10 @@ impl Runtime {
                 projection = Some(projected.variants);
             }
         }
+        let scans = ScanTrace {
+            variants: projection.as_ref().map_or(0, Vec::len),
+            ..budget.trace().clone()
+        };
         RequestEvaluation {
             result,
             window_records,
@@ -1166,6 +1174,7 @@ impl Runtime {
             projection_limit,
             separated,
             past_budget,
+            scans,
         }
     }
 
@@ -1218,6 +1227,7 @@ impl Runtime {
             evaluated.window_records,
             evaluated.window_truncated,
         );
+        evaluation_info.scans = Some(evaluated.scans.clone());
         if evaluated.projection.is_some() {
             evaluation_info
                 .visibility_limits
