@@ -257,6 +257,48 @@ fn past_the_budget(command: &str) -> Vec<(String, Value)> {
     ]
 }
 
+/// The record tells an input evaluated in full but in parts kept apart
+/// (`pending_input_separated`) from one with bytes left unevaluated past the
+/// projection budget (`pending_input_truncated`).
+#[test]
+fn a_truncated_input_is_recorded_apart_from_a_separated_one() {
+    let mut h = Harness::new();
+    let split = json!({
+        "command": format!("echo {}; ls", "a".repeat(4000)),
+        "description": "d".repeat(5000),
+    });
+    let record = decision(&mut h, "split", split);
+    let limits = &record["evaluation"]["visibility_limits"];
+    assert!(
+        limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_separated"))
+    );
+    assert!(
+        !limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_truncated"))
+    );
+
+    let cut = json!({ "command": "ls", "d": "d".repeat(400_000) });
+    let record = decision(&mut h, "cut", cut);
+    let limits = &record["evaluation"]["visibility_limits"];
+    assert!(
+        limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_truncated"))
+    );
+    assert!(
+        !limits
+            .as_array()
+            .unwrap()
+            .contains(&json!("pending_input_separated"))
+    );
+}
+
 /// A value cut short because the variants hold no more pieces is not
 /// evaluated whole: with no finding, the call gets `on_unevaluable`.
 #[test]

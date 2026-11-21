@@ -26,7 +26,8 @@
   command ahead of other values, then the start of other values while variants
   remain. A rule finding there keeps its force, and the unprojected remainder
   floors the decision at `on_unevaluable` (recorded as
-  `pending_input_separated`). An input of 1,025 to 2,048 values, previously
+  `pending_input_truncated`, distinct from `pending_input_separated` for an
+  input evaluated in full but in parts kept apart). An input of 1,025 to 2,048 values, previously
   unevaluable, is now projected in full. The work per call stays bounded by
   the same variant limit:
   - a call with no session history is no longer scanned twice ahead of the

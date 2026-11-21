@@ -304,6 +304,8 @@ struct RequestEvaluation {
     projection: Option<Vec<Value>>,
     projection_limit: Option<String>,
     separated: bool,
+    /// Past the projection budget: part of the input is in no variant.
+    past_budget: bool,
 }
 
 /// The policy decision for one request, with the session scores it was taken
@@ -1143,12 +1145,14 @@ impl Runtime {
         // The projection could not keep together what a rule may need
         // together (projection.rs), so "no finding" is not an allow.
         let mut separated = false;
+        let mut past_budget = false;
         if let Ok(first) = &result
             && first.status == EvalStatus::NotEvaluated
         {
             projection_limit = first.failure_code.clone();
             if let Some(projected) = crate::hooks::projection::project(&call.input) {
                 separated = projected.separated;
+                past_budget = projected.past_budget;
                 (result, window_records, window_truncated) =
                     self.evaluate_projected(ctx, session, id, call, &projected, &mut budget);
                 projection = Some(projected.variants);
@@ -1161,6 +1165,7 @@ impl Runtime {
             projection,
             projection_limit,
             separated,
+            past_budget,
         }
     }
 
@@ -1221,7 +1226,12 @@ impl Runtime {
                 evaluation_info.failure_code = evaluated.projection_limit.clone();
             }
         }
-        if evaluated.separated {
+        // Bytes not evaluated at all, or every byte evaluated but apart.
+        if evaluated.past_budget {
+            evaluation_info
+                .visibility_limits
+                .push("pending_input_truncated".to_owned());
+        } else if evaluated.separated {
             evaluation_info
                 .visibility_limits
                 .push("pending_input_separated".to_owned());
