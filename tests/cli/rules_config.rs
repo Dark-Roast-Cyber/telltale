@@ -690,6 +690,64 @@ fn rules_list_reports_pack_winner_and_replaced_sources() {
 }
 
 #[test]
+fn rules_list_agrees_with_the_embedding_effective_configuration() {
+    let organization = custom_rule_yaml("org.synthetic.parity", "parity-marker");
+    let overrides = "version: 1\noverrides:\n  - rule_id: network.download\n    reason: Synthetic.\n    score: 7\n  - rule_id: secret.env.read\n    reason: Synthetic.\n    enabled: false\n";
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    fs::create_dir_all(config_root.join("organization-rules.d")).expect("organization dir");
+    fs::create_dir_all(config_root.join("overrides.d")).expect("overrides dir");
+    fs::write(
+        config_root.join("organization-rules.d/parity.yaml"),
+        &organization,
+    )
+    .expect("organization rule");
+    fs::write(config_root.join("overrides.d/parity.yaml"), overrides).expect("override");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "list", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run telltale rules list");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let listed = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            let columns = line.split('\t').collect::<Vec<_>>();
+            (
+                columns[0].to_owned(),
+                columns[3].parse::<u64>().expect("score"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let document = telltale_core::Pipeline::builder()
+        .organization_rules_document(&organization)
+        .override_document(overrides)
+        .build()
+        .expect("builder pipeline")
+        .effective_configuration(&telltale_core::DetailedEvaluationOptions::default())
+        .expect("effective configuration");
+    let enabled = document
+        .definitions
+        .iter()
+        .filter(|definition| {
+            definition.kind == telltale_core::DefinitionKindV1::Rule && definition.enabled
+        })
+        .map(|definition| (definition.id.clone(), definition.session_score))
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(listed, enabled);
+    assert_eq!(listed.get("network.download"), Some(&7));
+    assert_eq!(listed.get("org.synthetic.parity"), Some(&10));
+    assert!(!listed.contains_key("secret.env.read"));
+}
+
+#[test]
 fn operational_rule_outputs_terminalize_policy_and_source_provenance() {
     let temp = tempdir().expect("tempdir");
     let marker = "CONTROLLED_RULE_OUTPUT_SECRET";

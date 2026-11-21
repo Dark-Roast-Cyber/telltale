@@ -5,7 +5,7 @@
 //! from and what changed it.
 use std::collections::BTreeMap;
 
-use crate::rule_resolution::RuleTier;
+use crate::rule_resolution::effective_definitions;
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
 use telltale_rules::{DefinitionKind, LoadedDefinition};
 use telltale_schema::effective_configuration::{
@@ -361,16 +361,10 @@ impl Pipeline {
     ) -> Result<EffectiveConfigurationV1, PipelineError> {
         let entries = self.rule_catalog(options)?;
         let semantic_identity = self.semantic_provenance(options)?.identity().to_owned();
-        let definitions = self
-            .content
-            .definitions()
+        let view = effective_definitions(&self.content, &self.rule_set, &self.provenance);
+        let view = view
             .iter()
-            .map(|definition| (definition.id(), definition))
-            .collect::<BTreeMap<_, _>>();
-        let provenance = self
-            .provenance
-            .iter()
-            .map(|provenance| (provenance.id.as_str(), provenance))
+            .map(|effective| (effective.definition.id(), effective))
             .collect::<BTreeMap<_, _>>();
         // The label of the supplied document named `source`; `None` for any
         // other source, such as a rule file path.
@@ -403,33 +397,26 @@ impl Pipeline {
                 RuleCatalogKind::Modifier => DefinitionKindV1::Modifier,
                 RuleCatalogKind::ProcessChain => DefinitionKindV1::ProcessChain,
             };
-            // Process-chain rules are bundled and never overridden.
+            // Process-chain rules are bundled, never overridden, and not part
+            // of the rule content.
             let loaded = (kind != DefinitionKindV1::ProcessChain)
-                .then(|| definitions.get(entry.id.as_str()).copied())
+                .then(|| view.get(entry.id.as_str()).copied())
                 .flatten();
-            let winner = loaded.and_then(|_| provenance.get(entry.id.as_str()).copied());
-            let tier = winner.map_or(RuleTier::Builtin, |winner| winner.tier);
-            let document = winner.and_then(|winner| match tier {
-                RuleTier::Organization => {
-                    label(DocumentKindV1::Organization, "organization", &winner.winner)
+            let document = loaded.and_then(|loaded| match loaded.tier {
+                RuleTierV1::Organization => {
+                    label(DocumentKindV1::Organization, "organization", loaded.source)
                 }
-                RuleTier::Explicit => label(DocumentKindV1::Explicit, "explicit", &winner.winner),
+                RuleTierV1::Explicit => label(DocumentKindV1::Explicit, "explicit", loaded.source),
                 _ => None,
             });
-            let overrides = loaded.map_or(&[][..], LoadedDefinition::overrides);
+            let overrides = loaded.map_or(&[][..], |loaded| loaded.definition.overrides());
             effective.push(EffectiveDefinitionV1 {
                 kind,
-                enabled: entry.enabled,
-                session_score: entry.session_score,
+                enabled: loaded.map_or(entry.enabled, |loaded| loaded.enabled),
+                session_score: loaded
+                    .map_or(entry.session_score, |loaded| loaded.definition.score()),
                 action_score: entry.action_score,
-                tier: match tier {
-                    RuleTier::Builtin => RuleTierV1::Builtin,
-                    RuleTier::Package => RuleTierV1::Package,
-                    RuleTier::Organization => RuleTierV1::Organization,
-                    RuleTier::Deployment => RuleTierV1::Deployment,
-                    RuleTier::Local => RuleTierV1::Local,
-                    RuleTier::Explicit => RuleTierV1::Explicit,
-                },
+                tier: loaded.map_or(RuleTierV1::Builtin, |loaded| loaded.tier),
                 package_id: entry.package_id,
                 document,
                 overrides: overrides

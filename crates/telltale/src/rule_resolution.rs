@@ -20,6 +20,7 @@ use telltale_rules::{
     CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode,
     RuleOverrideDocument, RuleOverrideError, bundled_default_rules, parse_rule_policy,
 };
+use telltale_schema::effective_configuration::RuleTierV1;
 
 use crate::{Pipeline, PipelineError};
 
@@ -68,6 +69,75 @@ impl RuleResolution {
     pub fn into_pipeline(self) -> Result<Pipeline, PipelineError> {
         Pipeline::from_compiled(self.content, self.rule_set, self.diagnostics)
     }
+
+    /// Every definition as it takes effect, in content order: the view the
+    /// CLI's rule listing and [`Pipeline::effective_configuration`] share.
+    pub fn effective_definitions(&self) -> Vec<EffectiveDefinition<'_>> {
+        effective_definitions(&self.content, &self.rule_set, &self.diagnostics.provenance)
+    }
+}
+
+/// One rule or chain modifier as it takes effect. Its session score, kind
+/// and applied overrides are on [`Self::definition`], overrides included.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct EffectiveDefinition<'a> {
+    pub definition: &'a LoadedDefinition,
+    /// Compiled into the effective set: its own `enabled`, overrides and the
+    /// policy decide.
+    pub enabled: bool,
+    /// The tier whose definition is in effect.
+    pub tier: RuleTierV1,
+    /// The source name of the input that supplied it, which for a rule file
+    /// names its path.
+    pub source: &'a str,
+}
+
+/// [`RuleResolution::effective_definitions`] over a resolution's parts.
+pub(crate) fn effective_definitions<'a>(
+    content: &'a LoadedRules,
+    rule_set: &CompiledRuleSet,
+    provenance: &'a [RuleProvenance],
+) -> Vec<EffectiveDefinition<'a>> {
+    let export = rule_set.compatibility_export();
+    let rules = export
+        .rules()
+        .iter()
+        .map(|rule| rule.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let modifiers = export
+        .modifiers()
+        .iter()
+        .map(|modifier| modifier.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let provenance = provenance
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+    content
+        .definitions()
+        .iter()
+        .map(|definition| {
+            let id = definition.id();
+            let winner = provenance.get(id);
+            EffectiveDefinition {
+                definition,
+                enabled: match definition.kind() {
+                    DefinitionKind::Rule => rules.contains(id),
+                    DefinitionKind::Modifier => modifiers.contains(id),
+                },
+                tier: match winner.map_or(RuleTier::Builtin, |winner| winner.tier) {
+                    RuleTier::Builtin => RuleTierV1::Builtin,
+                    RuleTier::Package => RuleTierV1::Package,
+                    RuleTier::Organization => RuleTierV1::Organization,
+                    RuleTier::Deployment => RuleTierV1::Deployment,
+                    RuleTier::Local => RuleTierV1::Local,
+                    RuleTier::Explicit => RuleTierV1::Explicit,
+                },
+                source: winner.map_or("", |winner| winner.winner.as_str()),
+            }
+        })
+        .collect()
 }
 
 /// Closed reasons [`crate::PipelineBuilder::build`] rejects rule content.

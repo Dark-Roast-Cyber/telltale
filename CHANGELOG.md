@@ -345,6 +345,19 @@
 
 ### Changes
 
+- **An embedded pipeline can describe its effective configuration.**
+  `Pipeline::effective_configuration` returns a versioned, strict
+  `telltale.effective_configuration.v1` document: rule packages and the
+  builder's text inputs by content SHA-256, and per rule and chain modifier
+  its effective `enabled` flag and scores, the tier that supplied it and the
+  overrides applied with their reasons. It holds no matchers, paths or
+  document text. `telltale-schema` adds the wire form with `to_json`,
+  `from_json` and a JSON Schema; the rule catalog is unchanged. `telltale
+  rules list` now reads enabled rules and scores from the same view; its
+  output is unchanged. An override `reason` over 256 characters or with
+  control or invisible formatting characters now fails to load, in
+  `overrides.d` and in the builder.
+
 - **`telltale hooks` bounds journaled prompts and tool results by encoded
   size.** `hooks.window.max_result_bytes` now bounds a prompt, a tool result
   or a settlement line's text as the journal line encodes it (escaped JSON),
