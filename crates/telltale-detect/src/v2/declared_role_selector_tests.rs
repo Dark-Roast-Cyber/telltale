@@ -535,11 +535,64 @@ fn a_fact_missing_from_a_call_with_kept_values_is_absent() {
     assert_eq!(state.state(), &MatchState::Match);
 }
 
+/// A replaced member leaves `null` under its key, so the argument keys are
+/// all there: a condition on them is decided as for any call.
+#[test]
+fn argument_keys_beside_a_replaced_member_are_exact() {
+    use super::{MatchState, MatcherOperator, MatcherSpec};
+    let call = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "pad": "x".repeat(4_097)}),
+        json!("kept"),
+        false,
+    );
+    let keys_equal = |keys: &[&str]| {
+        let expected = JsonValue::array(keys.iter().copied().map(JsonValue::string).collect());
+        MatcherSpec::predicate(
+            "tool.arguments.keys",
+            MatcherOperator::Equals,
+            Some(expected),
+        )
+        .compile()
+        .unwrap()
+        .evaluate(&call)
+        .unwrap()
+        .state()
+        .clone()
+    };
+    assert_eq!(keys_equal(&["other"]), MatchState::NoMatch);
+    assert_eq!(keys_equal(&["pad", "url"]), MatchState::Match);
+}
+
+/// A member whose key is over its bound is dropped from the object, so the
+/// argument keys may miss it: a no-match on them is not evaluated.
+#[test]
+fn argument_keys_missing_a_dropped_key_are_partial() {
+    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
+    let call = bounded_call(
+        json!({"url": "https://kept.example.invalid/", "k".repeat(65): "v"}),
+        json!("kept"),
+        false,
+    );
+    let state = MatcherSpec::predicate(
+        "tool.arguments.keys",
+        MatcherOperator::Equals,
+        Some(JsonValue::array(vec![JsonValue::string("other")])),
+    )
+    .compile()
+    .unwrap()
+    .evaluate(&call)
+    .unwrap();
+    assert_eq!(
+        state.state(),
+        &MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility)
+    );
+}
+
 /// A call with one argument member and one result member replaced, beside a
 /// kept URL: the whole values are not evaluated, and neither is a fact the
 /// replaced member could have given. The URL list derived from the kept
-/// members holds whole values: a match on it counts, while a no-match or a
-/// negated condition is not taken as confident.
+/// members holds whole values: a match on it counts as it did before, while a
+/// no-match or a negated condition is not evaluated.
 #[test]
 fn a_fact_derived_beside_a_replaced_member_counts_only_its_matches() {
     use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};

@@ -786,7 +786,7 @@ pub(super) fn evaluate_content_matcher(
                         }
                         _ => unknown.push(NonEvaluationReason::TypeMismatch),
                     }
-                    // A partial field's match counts; its no-match does not.
+                    // A partial field's match counts as before; its no-match does not.
                     if resolution.is_partial() {
                         unknown.push(NonEvaluationReason::InsufficientVisibility);
                     }

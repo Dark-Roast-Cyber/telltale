@@ -599,8 +599,9 @@ fn evaluate_resolved_predicate(
         budget.charge(bytes.saturating_add(predicate.expected_bytes))?;
         apply_operator(predicate, actual, expected)
     };
-    // A partial value may miss what it was not given: only a positive match
-    // on what it holds is confident.
+    // A partial value may miss what it was not given: a positive match on
+    // what it holds counts as it did before, while a no-match or a negated
+    // condition is not evaluated.
     let partial = resolved.is_partial();
     let negated = matches!(
         predicate.operator,

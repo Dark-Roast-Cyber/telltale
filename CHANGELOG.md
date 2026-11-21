@@ -52,9 +52,11 @@
   with a replacement, and a text or fact read from those values (argument
   and result text, command, path, URL, written path, argument keys) that is
   absent while its field has a replacement, are not evaluated, in Rule v1
-  content as in native conditions. A URL, written-path or argument-key list
-  read beside a replacement is partial: a match on it counts and a no-match
-  is not evaluated (`SelectorResolution::is_partial`). A string whose normalized form is over its
+  content as in native conditions. A URL or written-path list read beside a
+  replacement is partial (`SelectorResolution::is_partial`): a match on it
+  counts as it did before, and a no-match or a negated condition is not
+  evaluated. Argument keys stay exact beside a replaced value and are
+  partial only when a member was dropped for an over-long key. A string whose normalized form is over its
   bound counts as over it. The unit is reported, never hidden: the source
   gets one content-free `scanner_error` per evaluated window with the new
   `error` value `canonical_values_bounded` (only when no unit of that window was

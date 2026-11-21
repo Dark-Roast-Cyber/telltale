@@ -3,8 +3,8 @@
 use std::fmt;
 
 use telltale_schema::observation::{
-    BoundedTarget, CanonicalObservationV2, CapabilityId, CorrelationOrigin, FactMetadata,
-    FactProvenance, JsonValue, ObservationBody,
+    BoundDimension, BoundedTarget, CanonicalObservationV2, CapabilityId, CorrelationOrigin,
+    FactMetadata, FactProvenance, JsonValue, ObservationBody,
 };
 
 use super::tool_arguments::{
@@ -332,7 +332,8 @@ impl SelectorResolution {
     }
     /// Whether a present value was derived from a call's tool values while
     /// some of them were replaced: it holds whole values, but maybe not all
-    /// of them. A match on it counts; a no-match is not evaluated.
+    /// of them. A match on it counts as it did before; a no-match or a negated
+    /// condition is not evaluated.
     pub fn is_partial(&self) -> bool {
         self.partial
     }
@@ -887,9 +888,13 @@ fn reads_omitted_searchable_text(
 ///   and detection cannot tell which member a source would have read, so any
 ///   replacement in the field counts;
 /// - a present text or fact is a value seen whole and stays present, except
-///   that a list derived from several members (`tool.arguments.keys`,
-///   `compat.v1.url`, `compat.v1.written_path`) may miss the replaced ones:
-///   it is partial, so a match on it counts and a no-match is not evaluated.
+///   that a URL or written-path list derived from several members
+///   (`compat.v1.url`, `compat.v1.written_path`) may miss the replaced ones:
+///   it is partial, so a match on it counts as it did before, and a no-match
+///   or a negated condition is not evaluated;
+/// - the argument keys stay exact beside a replaced member, which leaves
+///   `null` under its key; they are partial only when a member was dropped
+///   from the arguments object for its over-long key.
 fn with_bounded_visibility(
     mut resolution: SelectorResolution,
     observation: &CanonicalObservationV2,
@@ -903,13 +908,14 @@ fn with_bounded_visibility(
         SelectorId::ToolSearchableArguments
         | SelectorId::CompatArguments
         | SelectorId::GovernedFacet("tool.arguments.text")
+        | SelectorId::GovernedFacet("tool.arguments.keys")
         | SelectorId::CommandText
         | SelectorId::CompatCommand
         | SelectorId::ResourcePath
         | SelectorId::CompatFilePath => (BoundedTarget::Arguments, false, false),
-        SelectorId::GovernedFacet("tool.arguments.keys")
-        | SelectorId::CompatUrl
-        | SelectorId::CompatWrittenPath => (BoundedTarget::Arguments, false, true),
+        SelectorId::CompatUrl | SelectorId::CompatWrittenPath => {
+            (BoundedTarget::Arguments, false, true)
+        }
         SelectorId::ToolSearchableResult
         | SelectorId::CompatToolResult
         | SelectorId::GovernedFacet("tool.result.text") => (BoundedTarget::Result, false, false),
@@ -920,6 +926,16 @@ fn with_bounded_visibility(
         .iter()
         .any(|value| value.target() == target)
     {
+        return resolution;
+    }
+    if resolution.selector == SelectorId::GovernedFacet("tool.arguments.keys")
+        && resolution.presence == SelectorPresence::Present
+    {
+        resolution.partial = tool.bounded_values().iter().any(|value| {
+            value.target() == BoundedTarget::Arguments
+                && value.pointer().is_empty()
+                && value.dimension() == BoundDimension::KeyBytes
+        });
         return resolution;
     }
     match resolution.presence {
