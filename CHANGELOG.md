@@ -37,8 +37,9 @@
   brace group or a function body. A quoted command handed to another shell
   is read as a `bash -c` script is. Uploads and downloads written this way
   add action findings, and session findings for the upload rule. A
-  download is linked to a later run of its file on the host or in the
-  container that downloaded it. See the
+  download made on the local host is linked to a later local run of its
+  file, and a download piped into a local shell is linked to that shell
+  whichever program ran the download. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md).
 
 - **A reference to the controlled tester domain is not exfiltration.**
