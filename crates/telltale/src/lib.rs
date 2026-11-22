@@ -1183,6 +1183,7 @@ impl PipelineBuilder {
                 .collect(),
             documents: Vec::new(),
             host_documents: Vec::new(),
+            unloaded_override_prefixes: &[],
             overrides,
             policy,
         };

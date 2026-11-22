@@ -84,10 +84,14 @@
   then invalid configuration. Earlier development builds locked these rules
   whenever they were on: set `hooks.tamper_prevention.enabled: true` to keep
   that. What a harness applies on its own stays explicit and is in no
-  default install: `settings --fail-closed` and `codex-cli execpolicy`. See
+  default install: `settings --fail-closed` and `codex-cli execpolicy`. An
+  `overrides.d` entry for a `tth.tamper.*` rule is left out by a pipeline
+  that does not carry that rule (the scanner, a hook with the rules off)
+  instead of failing as an unknown `rule_id`. See
   [Tamper prevention](docs/hooks/README.md#tamper-prevention). Embedding API:
-  `hooks::config::RuleContent` has a new `tamper_prevention` field, and
-  `hooks::harness::Adapter` a new `harness_protections` field.
+  `hooks::config::RuleContent` has a new `tamper_prevention` field,
+  `hooks::harness::Adapter` a new `harness_protections` field, and
+  `telltale_rules::LoadedRules` a new `apply_override_document_skipping`.
 
 - **`telltale hooks check` says what is in effect.** It prints the ask and
   deny thresholds, whether tamper prevention is on, how many self-protection

@@ -67,7 +67,20 @@ pub struct RuleResolution {
     /// disabled ones included.
     pub content: LoadedRules,
     pub diagnostics: RuleResolutionDiagnostics,
+    /// The `rule_id` of each override entry that was left out because it
+    /// names a rule of Telltale Hooks that this content does not carry
+    /// ([`HOOKS_RULE_PREFIXES`]), in order.
+    pub skipped_overrides: Vec<String>,
 }
+
+/// What the name of every rule that Telltale Hooks owns starts with. Hooks
+/// loads these rules into its own pipeline only, and only where its settings
+/// ask for them, while the override files of a config root are read by every
+/// pipeline the CLI builds. An override entry for one of them that names no
+/// loaded rule is therefore left out, not an unknown `rule_id`: the scanner
+/// never carries them, and a hook does not while
+/// `hooks.self_protection_rules` is off.
+pub const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper."];
 
 impl RuleResolution {
     /// A pipeline over the effective set, which keeps [`Self::content`] for
@@ -319,6 +332,9 @@ pub(crate) struct RuleContent {
     pub(crate) host_documents: Vec<(InputName, LoadedRules)>,
     /// Override documents: (name, text), applied in order.
     pub(crate) overrides: Vec<(InputName, String)>,
+    /// An override entry that names no loaded rule is left out, not an
+    /// error, when its `rule_id` starts with one of these.
+    pub(crate) unloaded_override_prefixes: &'static [&'static str],
     /// The policy: (name, text).
     pub(crate) policy: Option<(InputName, String)>,
 }
@@ -442,6 +458,7 @@ pub(crate) fn resolve_rule_set_with_host(
             .map(|(source, rules)| (InputName::unlabeled(source), rules))
             .collect(),
         overrides,
+        unloaded_override_prefixes: HOOKS_RULE_PREFIXES,
         policy: policy_path
             .map(|path| {
                 Ok::<_, std::io::Error>((
@@ -467,6 +484,7 @@ pub(crate) fn resolve_rule_content(
         documents,
         host_documents,
         overrides,
+        unloaded_override_prefixes,
         policy,
     } = content;
     let (documents, packages) =
@@ -506,13 +524,20 @@ pub(crate) fn resolve_rule_content(
         )));
     }
     diagnostics.packages = packages;
+    let mut skipped_overrides = Vec::new();
     for (name, raw) in &overrides {
-        apply_rule_override(&mut content, name, raw)?;
+        skipped_overrides.extend(apply_rule_override(
+            &mut content,
+            name,
+            raw,
+            unloaded_override_prefixes,
+        )?);
     }
     Ok(RuleResolution {
         rule_set: content.compile(policy.as_ref())?,
         content,
         diagnostics,
+        skipped_overrides,
     })
 }
 
@@ -867,12 +892,15 @@ fn source_label_path(path: &Path) -> String {
     }
 }
 
-/// Parse and apply one override document named `name`.
+/// Parse and apply one override document named `name`. An entry that names
+/// no loaded rule is an error unless its `rule_id` starts with one of
+/// `unloaded_prefixes`; those are returned.
 fn apply_rule_override(
     content: &mut LoadedRules,
     name: &InputName,
     raw: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+    unloaded_prefixes: &[&str],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let source = name.source.as_str();
     let document = serde_yaml::from_str::<RuleOverrideDocument>(raw).map_err(|error| {
         ContentFailure::new(
@@ -881,8 +909,13 @@ fn apply_rule_override(
             format!("invalid rule override file '{source}': {error}"),
         )
     })?;
+    let skip = |id: &str| {
+        unloaded_prefixes
+            .iter()
+            .any(|prefix| id.starts_with(prefix))
+    };
     content
-        .apply_override_document(&document, source, name.label.as_deref())
+        .apply_override_document_skipping(&document, source, name.label.as_deref(), &skip)
         .map_err(|error| {
             let code = match &error {
                 RuleOverrideError::UnsupportedVersion(_) => {

@@ -415,7 +415,13 @@ bundled rules. An override can turn one off or change its score, a policy can
 leave them out (their category is `approval_bypass`), and a managed tier can
 replace one by name, exactly as for any other rule. `check` says how many of
 them run, and `check --rules` lists them, with the names of the rules
-generated for this installation's own paths. A shared policy with a whitelist
+generated for this installation's own paths. `overrides.d` is shared with the
+scanner, which does not carry these rules: an entry for a `tth.tamper.` rule
+is applied where the rule is loaded and left out elsewhere (by the scanner,
+and by a hook that does not have that rule, where `check` prints
+`override left out`). An entry for any other unknown rule stays an error. A
+replacement rule file is different: to the scanner it is a rule of its own,
+which it then evaluates in scans too. A shared policy with a whitelist
 that does not include `approval_bypass` turns all of them off without an
 error: that is what the lock refuses.
 
