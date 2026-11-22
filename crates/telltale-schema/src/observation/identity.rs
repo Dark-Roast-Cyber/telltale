@@ -619,11 +619,7 @@ fn local_identity_value(
 }
 
 pub fn valid_observation_id(value: &str) -> bool {
-    value.len() == OBSERVATION_ID_PREFIX.len() + 64
-        && value.starts_with(OBSERVATION_ID_PREFIX)
-        && value[OBSERVATION_ID_PREFIX.len()..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    valid_hex_digest(value, OBSERVATION_ID_PREFIX)
 }
 
 fn valid_hex_digest(value: &str, prefix: &str) -> bool {
