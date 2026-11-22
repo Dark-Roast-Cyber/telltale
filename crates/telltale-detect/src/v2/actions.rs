@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 use std::sync::LazyLock;
+use telltale_rules::command_effect::{self, scheme};
 use telltale_rules::{
     ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier,
     RuleV1CompatibilityRule, RuleV1ContentMatcher,
@@ -1624,188 +1625,27 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
         return Ok(false);
     };
     charge_tokens(command, budget)?;
-    let client = super::http::client_name(&command[0]);
-    // The operands after options and their values: the command group,
-    // subcommand, then the source and destination of a copy, move or sync,
-    // which is an upload unless it reads a remote source. The group and verb
-    // are found among the operands, so the value of an unlisted global option
-    // before them does not hide the transfer.
-    let args = &command[1..];
-    let operands = match client.as_str() {
-        "aws" => operands(args, |word, _| {
-            super::http::takes_next(word, AWS_VALUE_OPTIONS, "")
-        }),
-        // gsutil letters that take a value before the verb can be flags after it.
-        "gsutil" => operands(args, |word, after_verb| {
-            super::http::takes_next(word, &[], if after_verb { "ajLsxyz" } else { "hiou" })
-        }),
-        // rclone reads its own operands (`rclone_source`).
-        _ => operands(args, |word, _| {
-            super::http::takes_next(word, &["repo", "hostname"], "R")
-        }),
-    };
-    // The source after the first operand that `verb` accepts, when a
-    // destination follows it.
-    let source = |verb: fn(&str) -> bool| match operands.iter().position(|word| verb(word)) {
-        Some(at) => match operands.get(at + 1..at + 3) {
-            Some([source, _]) => Some(*source),
-            _ => None,
-        },
-        None => None,
-    };
-    Ok(match (client.as_str(), operands.as_slice()) {
-        ("gh", [group, verb, ..]) => publishes_cloud_credential(command, group, verb),
-        // The verb directly follows the `s3` group.
-        ("aws", _) => operands
-            .windows(4)
-            .find(|words| words[0] == "s3")
-            .is_some_and(|words| matches!(words[1], "cp" | "mv" | "sync") && !object_url(words[2])),
-        ("gsutil", _) => source(|word| matches!(word, "cp" | "mv" | "rsync"))
-            .is_some_and(|source| !object_url(source)),
-        ("rclone", _) => rclone_source(args).is_some_and(|source| !rclone_remote(source)),
-        ("az", _) => command
+    if super::http::client_name(&command[0]) == "az" {
+        return Ok(command
             .iter()
             .position(|s| s == "storage")
-            .is_some_and(|position| azure_upload(&command[position + 1..])),
-        _ => false,
-    })
-}
-
-/// The AWS CLI long options that take a separate value.
-const AWS_VALUE_OPTIONS: &[&str] = &[
-    "profile",
-    "color",
-    "cli-binary-format",
-    "region",
-    "endpoint-url",
-    "output",
-    "query",
-    "ca-bundle",
-    "cli-read-timeout",
-    "cli-connect-timeout",
-    "source-region",
-    "storage-class",
-    "acl",
-    "include",
-    "exclude",
-    "content-type",
-    "cache-control",
-    "expires",
-    "sse-kms-key-id",
-];
-
-/// The rclone long options that take no value.
-const RCLONE_FLAGS: &[&str] = &[
-    "progress",
-    "verbose",
-    "quiet",
-    "dry-run",
-    "interactive",
-    "checksum",
-    "size-only",
-    "ignore-existing",
-    "ignore-times",
-    "ignore-size",
-    "ignore-checksum",
-    "update",
-    "no-traverse",
-    "no-check-dest",
-    "no-update-modtime",
-    "create-empty-src-dirs",
-    "delete-before",
-    "delete-during",
-    "delete-after",
-    "delete-excluded",
-    "fast-list",
-    "immutable",
-    "inplace",
-    "links",
-    "copy-links",
-    "skip-links",
-    "metadata",
-    "check-first",
-    "use-server-modtime",
-    "human-readable",
-    "stats-one-line",
-    "no-gzip-encoding",
-    "server-side-across-configs",
-];
-
-/// The source of an rclone copy, sync or move that also names a destination.
-/// A long option that is not a listed flag is first read as taking the next
-/// word as its value, so a value never reads as the source. When that reading
-/// leaves no complete transfer, the unlisted options were flags, and the
-/// words after them are read as operands.
-fn rclone_source(args: &[String]) -> Option<&str> {
-    let read = |unlisted_take_a_value: bool| {
-        let operands = operands(args, |word, _| {
-            unlisted_take_a_value
-                && word
-                    .strip_prefix("--")
-                    .is_some_and(|name| !name.contains('=') && !RCLONE_FLAGS.contains(&name))
-        });
-        let verb = operands
-            .iter()
-            .position(|word| word.starts_with("copy") || matches!(*word, "sync" | "move"))?;
-        match operands.get(verb + 1..verb + 3) {
-            Some([source, _]) => Some(*source),
-            _ => None,
-        }
-    };
-    read(true).or_else(|| read(false))
-}
-
-/// The operands among a command's arguments: the words that are neither an
-/// option nor the separate value of one, and every word after `--`. A lone
-/// `-` (standard input or output) is an operand. `takes_value` reads an
-/// option and whether an operand came before it.
-fn operands(args: &[String], takes_value: impl Fn(&str, bool) -> bool) -> Vec<&str> {
-    let mut operands = Vec::new();
-    let mut words = args.iter();
-    while let Some(word) = words.next() {
-        if word == "--" {
-            operands.extend(words.map(String::as_str));
-            break;
-        }
-        if word.len() > 1 && word.starts_with('-') {
-            if takes_value(word, !operands.is_empty()) {
-                words.next();
-            }
-        } else {
-            operands.push(word.as_str());
-        }
+            .is_some_and(|position| azure_upload(&command[position + 1..])));
     }
-    operands
+    // A requested transfer from a local source is an upload. Publishing an
+    // ordinary file with the GitHub CLI is routine and counts only when the
+    // file is a cloud credential.
+    static CREDENTIAL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(CLOUD_CREDENTIAL_PATH).unwrap());
+    Ok(command_effect::transfers(command).iter().any(|transfer| {
+        transfer.direction == command_effect::Direction::Outbound
+            && (transfer.client != command_effect::Client::Gh
+                || CREDENTIAL.is_match(transfer.source))
+    }))
 }
 
 /// A cloud credential file path, as the bundled upload and harvest rules name
 /// them.
 pub(super) const CLOUD_CREDENTIAL_PATH: &str = r"(?i)\.aws[/\\](?:credentials|config)|\.kube[/\\]config|\.docker[/\\]config\.json|(?:credentials|service-account)\.json|accessTokens\.json|credentials\.db";
-
-/// Whether a GitHub CLI call publishes a cloud credential file: a file operand of
-/// `gist create`, or the body file of an `issue` or `pr` `comment` or `create`.
-/// A secret gist is unlisted, not private, so either is readable by others.
-/// Ordinary files are routine publication and do not count.
-fn publishes_cloud_credential(command: &[String], group: &str, verb: &str) -> bool {
-    static CREDENTIAL: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(CLOUD_CREDENTIAL_PATH).unwrap());
-    let rest = command[1..].iter().map(String::as_str).collect::<Vec<_>>();
-    match (group, verb) {
-        ("gist", "create") => rest
-            .iter()
-            .any(|word| !word.starts_with('-') && CREDENTIAL.is_match(word)),
-        ("issue" | "pr", "comment" | "create") => rest.iter().enumerate().any(|(at, word)| {
-            let file = match *word {
-                "-F" | "--body-file" => rest.get(at + 1).copied(),
-                _ => word
-                    .strip_prefix("--body-file=")
-                    .or_else(|| word.strip_prefix("-F").filter(|file| !file.is_empty())),
-            };
-            file.is_some_and(|file| CREDENTIAL.is_match(file))
-        }),
-        _ => false,
-    }
-}
 
 /// An `az storage` command that sends local content: an upload or sync verb
 /// of `blob`, `file` or `fs`, at most one word after the group, or a `copy`
@@ -1869,32 +1709,6 @@ fn azure_upload(words: &[String]) -> bool {
         }
         _ => false,
     }
-}
-
-fn scheme(value: &str, prefix: &str) -> bool {
-    value
-        .get(..prefix.len())
-        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-}
-
-/// An `s3://` or `gs://` location.
-fn object_url(value: &str) -> bool {
-    scheme(value, "s3://") || scheme(value, "gs://")
-}
-
-/// An rclone remote: an on-the-fly backend (a leading colon) or a name of a
-/// letter and one or more word characters, dots or dashes before a colon that
-/// `//` does not follow. A drive letter or a URL is local.
-fn rclone_remote(value: &str) -> bool {
-    value.starts_with(':')
-        || value.split_once(':').is_some_and(|(name, rest)| {
-            name.len() >= 2
-                && name.starts_with(|c: char| c.is_ascii_alphabetic())
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
-                && !rest.starts_with("//")
-        })
 }
 
 /// A field a native predicate selects: the field name, the selected text, its
