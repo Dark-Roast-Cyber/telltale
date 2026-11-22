@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use telltale_core::hooks::config::OnError;
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::{
-    CANNOT_ASK_NOTE, Completion, Context, Event, Response, SYNTHETIC_ID_PREFIX, ToolCall,
+    ASK_THROUGH_MODEL_NOTE, Completion, Context, Event, Response, SYNTHETIC_ID_PREFIX, ToolCall,
     synthetic_call_id,
 };
 use telltale_core::hooks::state::Verdict;
@@ -134,7 +134,7 @@ fn an_ask_on_a_harness_that_cannot_ask_is_returned_as_deny() {
         .handle(&ctx, Event::ToolRequested(bash("c1", HARVEST)));
     let (verdict, reason) = decision(&response).expect("a decision");
     assert_eq!(verdict, Verdict::Deny);
-    assert!(reason.ends_with(CANNOT_ASK_NOTE), "{reason}");
+    assert!(reason.ends_with(ASK_THROUGH_MODEL_NOTE), "{reason}");
     let record = h.decision_for("c1");
     assert_eq!(record["decision"]["verdict"], "ask");
     assert_eq!(record["decision"]["returned"], true);
@@ -147,7 +147,7 @@ fn an_ask_on_a_harness_that_cannot_ask_is_returned_as_deny() {
         .handle(&ctx, Event::ToolRequested(bash("c2", EXFIL)));
     let (verdict, reason) = decision(&response).unwrap();
     assert_eq!(verdict, Verdict::Deny);
-    assert!(!reason.contains(CANNOT_ASK_NOTE));
+    assert!(!reason.contains(ASK_THROUGH_MODEL_NOTE));
     assert!(
         h.decision_for("c2")["decision"]
             .get("returned_verdict")
@@ -163,7 +163,7 @@ fn an_ask_on_a_harness_that_cannot_ask_is_returned_as_deny() {
         .handle(&ctx, Event::ToolRequested(bash("c1", HARVEST)));
     let (verdict, reason) = decision(&response).unwrap();
     assert_eq!(verdict, Verdict::Ask);
-    assert!(!reason.contains(CANNOT_ASK_NOTE));
+    assert!(!reason.contains(ASK_THROUGH_MODEL_NOTE));
     assert!(
         h.decision_for("c1")["decision"]
             .get("returned_verdict")
@@ -205,7 +205,7 @@ fn failure_policy_asks_are_substituted_on_every_path() {
     let response = h.runtime.handle(&cannot, event.clone());
     let (verdict, reason) = decision(&response).unwrap();
     assert_eq!(verdict, Verdict::Deny);
-    assert!(reason.ends_with(CANNOT_ASK_NOTE));
+    assert!(reason.ends_with(ASK_THROUGH_MODEL_NOTE));
     let record = h.decision_for("f1");
     assert_eq!(record["decision"]["basis"], "evaluation_gap");
     assert_eq!(record["decision"]["returned_verdict"], "deny");
@@ -220,7 +220,7 @@ fn failure_policy_asks_are_substituted_on_every_path() {
     let failed = h.runtime.fail(&cannot, &event, "x");
     let (verdict, reason) = decision(&failed).unwrap();
     assert_eq!(verdict, Verdict::Deny);
-    assert!(reason.contains("(x)") && reason.ends_with(CANNOT_ASK_NOTE));
+    assert!(reason.contains("(x)") && reason.ends_with(ASK_THROUGH_MODEL_NOTE));
     assert_eq!(
         decision(&h.runtime.fail(&can, &event, "x")).unwrap().0,
         Verdict::Ask
@@ -776,7 +776,7 @@ fn a_strict_session_file_failure_on_a_harness_that_cannot_ask_denies() {
         .handle(&ctx, Event::ToolRequested(bash("c1", EXFIL)));
     let (verdict, reason) = decision(&response).expect("a decision");
     assert_eq!(verdict, Verdict::Deny);
-    assert!(reason.ends_with(CANNOT_ASK_NOTE), "{reason}");
+    assert!(reason.ends_with(ASK_THROUGH_MODEL_NOTE), "{reason}");
     let record = h.decision_for("c1");
     assert_eq!(record["decision"]["verdict"], "ask");
     assert_eq!(record["decision"]["returned_verdict"], "deny");
@@ -796,7 +796,7 @@ fn a_strict_session_file_failure_on_a_harness_that_cannot_ask_denies() {
     let (verdict, reason) = decision(&response).expect("a decision");
     assert_eq!(verdict, Verdict::Deny);
     assert!(
-        reason.contains("(state_read_failed)") && reason.ends_with(CANNOT_ASK_NOTE),
+        reason.contains("(state_read_failed)") && reason.ends_with(ASK_THROUGH_MODEL_NOTE),
         "{reason}"
     );
     assert!(

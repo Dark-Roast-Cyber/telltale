@@ -118,7 +118,8 @@ Then start `codex` once interactively and choose "Trust all and continue":
 Codex never runs an untrusted user hook. Trust is per handler: changing a
 handler un-trusts it and the call then runs unchecked, while reformatting the
 file does not, and replacing the binary at a trusted path keeps trust. Codex
-cannot ask from a hook, so every `ask` is returned as a deny. Codex fails open
+cannot ask from a hook, so every `ask` is returned as a deny that tells the
+model to ask the user ([how an ask reaches the user](#how-an-ask-reaches-the-user)). Codex fails open
 on every hook failure and has no fail-closed option (`settings --fail-closed`
 refuses). All of this was verified on Linux with a scripted model only.
 Codex can also refuse plain relaunches of itself without hooks through native
@@ -228,6 +229,7 @@ hooks:
   on_unevaluable: ask    # tool call too large, nested or damaged to evaluate: ask, deny, allow
                          # (both are recorded, not returned, unless mode is enforce)
   reason_detail: full    # full: reasons name rules and thresholds; minimal: verdict and record ID only
+  ask: human             # human: the harness's own approval prompt where it has one; model: every ask is a deny that tells the model to ask the user
                          # (a human approving an `ask` then sees little; use minimal for unattended agents)
   # state_dir: <path>    # TELLTALE_HOOKS_STATE_DIR
   # telemetry_path: <path>  # TELLTALE_HOOKS_TELEMETRY
@@ -313,8 +315,9 @@ load:
   being changed. `check` loads the configuration, builds the rules and exits
   1 on an error; a check of one root alone does not see, for example, a
   second policy file in another root.
-- Add rule files before the override files that name their rule IDs: an
-  override for a rule ID no rule defines fails the rule build.
+- An override entry for a rule ID that no rule or chain defines is left out
+  and the rest of the file applies: `check` prints `override left out`, so
+  add rule files before the override files that name their rule IDs.
 
 While its configuration does not load, an observing hook detects on the
 defaults and records `config_invalid`; an enforcing one (the configuration or
@@ -337,9 +340,10 @@ user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-conf
 | Make a rule count less, or more | `overrides.d`: `score` |
 | Change a deny into an approval request | A `score` for the rule below `hooks.thresholds.action_deny`, or a higher threshold |
 | Stop a rule restricting an approved activity | Turn it off, score it below `action_ask`, or replace it with a copy that leaves the activity out |
-| Change what a rule matches, or its explanation | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)) |
+| Change what a rule matches, or its explanation or title | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)); override entries set only `enabled` and `score` |
 | Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
 | Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
+| Have the model ask the user, not the harness's approval prompt | `hooks.ask: model` ([how an ask reaches the user](#how-an-ask-reaches-the-user)) |
 | Configure a fleet | The same folders in `/etc/telltale`; the user's root is read after it |
 
 How tuning behaves:
@@ -352,16 +356,19 @@ How tuning behaves:
 - **A chain follows its rules.** A chain adds points when the rules it names
   match. Turn a rule off and its chains no longer match through it. A rule
   scored 0 still matches, so its chains still add their points: lowering a
-  score removes only the rule's own. Turn a chain off with
-  `disabled_rules` in the policy; change its score with a replacement.
-  Override entries name rules, not chains.
+  score removes only the rule's own. An override entry on the chain's name
+  turns the chain off (`enabled: false`) or rescores it (`score`); a chain
+  turned off, by an override or by `disabled_rules` in the policy, leaves its
+  rules their own points.
 - **The session score keeps what it counted.** A changed configuration
   applies from the next tool call. Points an earlier call added stay in that
   session's score, so calls that still score can be asked about or denied on
   it until the session ends; calls with no finding are never restricted.
-- **One policy file.** Hooks read at most one file in `policies.d` across
-  their config roots. Local tuning beside a managed policy belongs in
-  `overrides.d`, whose files from every root apply in order.
+- **One policy file.** Policies do not merge: a second file in `policies.d`,
+  in any of the hook's config roots, is a configuration error that `check`
+  reports. Local tuning beside a managed policy belongs in `overrides.d`,
+  whose files from every root apply in order
+  ([why](../install.md#local-rule-policy-and-allowlist-config)).
 - **A later root wins.** A user's settings and overrides are read after the
   system root's and decide each key or field both set. Where the user must
   not undo managed configuration, name only the managed root on the hook
@@ -421,7 +428,10 @@ generated for this installation's own paths. `overrides.d` is shared with the
 scanner, which does not carry these rules: an entry for a `tth.tamper.` rule
 is applied where the rule is loaded and left out elsewhere (by the scanner,
 and by a hook that does not have that rule, where `check` prints
-`override left out`). An entry for any other unknown rule stays an error. A
+`override left out`). An entry for any other rule that is not loaded is left
+out the same way, and `telltale rules validate` lists it as a notice. A scan
+or a hook does not report it while it runs, so run `check` and
+`telltale rules validate` after changing override files. A
 replacement rule file is different: to the scanner it is a rule of its own,
 which it then evaluates in scans too. A shared policy with a whitelist
 that does not include `approval_bypass` turns all of them off without an
@@ -488,7 +498,7 @@ it for each test command:
 | --- | --- |
 | `test_signatures` off (the default) | No rule matches: an ordinary command |
 | `hooks.mode: observe` | The verdict is recorded with `returned: false`; the harness is told nothing |
-| `hooks.mode: enforce`, ask test | The harness's own approval prompt (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot cannot ask: they are given a deny whose reason says that the call was not executed and that approval was required, and the record keeps `verdict: ask` with `returned_verdict: deny` |
+| `hooks.mode: enforce`, ask test | The harness's own approval prompt (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot have none: they are given a deny whose reason says that the call was not executed and tells the model to ask the user, and the record keeps `verdict: ask` with `returned_verdict: deny`. With `hooks.ask: model` every harness is given that deny |
 | `hooks.mode: enforce`, deny test | A deny with a reason the user and the model can act on |
 | An override, policy, threshold or replacement for a test rule | Applies as to any rule: `enabled: false` makes it an ordinary command again, a lower score or a higher threshold turns the deny into an ask or into no opinion |
 
@@ -518,6 +528,40 @@ session:
 They test the hook and the harness's answer to it, not a detection. For a
 harness with a live model, see [harness testing](harness-testing.md).
 
+### How an ask reaches the user
+
+`hooks.ask` sets the route of every `ask`: the policy's, and those of
+`on_error: ask` and `on_unevaluable: ask`. It changes how an ask is
+returned, never whether a verdict is: detect-only returns nothing on either
+route, and a deny is the same on both.
+
+| `hooks.ask` | What the harness is given | Who asks the user |
+| --- | --- | --- |
+| `human` (default) | The ask, where the harness has an approval prompt that a person answers (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot have none and get the `model` route | The harness, with its own prompt, which shows the call |
+| `model` | On every harness, a deny whose reason ends by telling the model to stop, tell the user what it was about to do and why it was stopped, and ask how to proceed | The model, in the conversation |
+
+On the `model` route:
+
+- The call is not executed. The record keeps `verdict: ask` with
+  `returned_verdict: deny`, and the session counts an ask, not a denial.
+- Telltale takes no approval from the conversation. Nothing the model or
+  the user writes there lets the call run, and the same call asked again
+  is not run either; the reason says so. What the user can do is give
+  other instructions, run the command themselves, or have the rule tuned
+  ([tuning](#tuning-rules-and-policy)).
+- The user is told about the call by the model and does not see the call
+  itself, as the harness's prompt would show it. Prefer `human` where that
+  prompt is available and a person is there to answer it.
+
+`telltale hooks check` prints the route in effect and the harnesses it
+applies to (`asks:`). A reason on the `model` route ends:
+
+```text
+This call needs the user's approval, which is asked through you: stop, tell the user what
+you were about to do and why it was stopped, and ask how to proceed. Repeating the call will
+not run it; the user can run it themselves or have an exception configured.
+```
+
 ### What a denied or asked call says
 
 Under `reason_detail: full` (the default) the reason given to the harness,
@@ -532,9 +576,10 @@ authorized configuration exception. Detections: chain.harvest_then_exfil,
 credential.cloud_harvest, exfil.outbound_upload. Record tth:<id>.
 ```
 
-An ask starts `this tool call needs approval before it runs`; on a harness
-that cannot ask it is the deny above, ending with a note that approval was
-required. The concern is the categories of the rules that matched (at most
+An ask starts `this tool call needs approval before it runs`. An ask that
+goes through the model opens like the deny above, has no advice sentence and
+ends with the note shown in the previous section. A call that could not be
+evaluated or read opens the same way and then gives the cause. The concern is the categories of the rules that matched (at most
 three, letters and digits only), and at most eight rule names are listed,
 the rest counted. A reason never contains a rule's pattern, its explanation, the matched
 text, a file's content or a path from the configuration; those stay in the

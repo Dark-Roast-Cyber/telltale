@@ -13,7 +13,7 @@ use common::Harness;
 use serde_json::{Value, json};
 use telltale_core::hooks::harness::{Harness as Registry, Parsed};
 use telltale_core::hooks::harnesses::codex_cli;
-use telltale_core::hooks::runtime::{CANNOT_ASK_NOTE, Completion, Event};
+use telltale_core::hooks::runtime::{ASK_THROUGH_MODEL_NOTE, Completion, Event};
 
 fn fixtures() -> PathBuf {
     common::fixtures("codex-cli/0.166.0")
@@ -240,7 +240,7 @@ fn a_policy_ask_is_returned_as_deny() {
     let reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         .as_str()
         .unwrap();
-    assert!(reason.ends_with(CANNOT_ASK_NOTE), "{reason}");
+    assert!(reason.ends_with(ASK_THROUGH_MODEL_NOTE), "{reason}");
     assert_eq!(out.to_string(), deny_bytes(reason));
     assert!(!out.to_string().contains("\"ask\""));
     let record = h.decision_for(&key(&payload));

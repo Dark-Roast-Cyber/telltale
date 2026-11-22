@@ -236,6 +236,48 @@ fn an_unknown_key_under_tamper_prevention_is_invalid() {
     assert!(stderr.contains("unknown field `enable`"), "{stderr}");
 }
 
+/// `hooks.ask` takes `human` or `model`, defaults to `human`, and is shown
+/// by `config show` with its origin. Any other value is refused, not read as
+/// the default.
+#[cfg(feature = "hooks")]
+#[test]
+fn the_ask_route_is_a_setting_with_two_values() {
+    let show = |text: Option<&str>| {
+        let temp = tempdir().expect("tempdir");
+        let config_root = temp.path().join("config");
+        fs::create_dir_all(&config_root).expect("config root");
+        if let Some(text) = text {
+            settings_file(&config_root, "hooks.yaml", text);
+        }
+        let output = telltale(temp.path())
+            .args(["config", "show", "--config-dir"])
+            .arg(&config_root)
+            .output()
+            .expect("run telltale config show");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let shown = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+        (output.status.success(), shown, stderr)
+    };
+
+    let (ok, shown, stderr) = show(None);
+    assert!(ok, "{stderr}");
+    let ask = &shown["settings"]["hooks.ask"];
+    assert_eq!(ask["value"], "human");
+    assert_eq!(ask["default"], "human");
+    assert_eq!(ask["origin"], "default");
+
+    let (ok, shown, stderr) = show(Some("version: 1\nhooks: {ask: model}\n"));
+    assert!(ok, "{stderr}");
+    let ask = &shown["settings"]["hooks.ask"];
+    assert_eq!(ask["value"], "model");
+    assert_eq!(ask["default"], "human");
+    assert_eq!(ask["origin"], "settings_file");
+
+    let (ok, _, stderr) = show(Some("version: 1\nhooks: {ask: user}\n"));
+    assert!(!ok);
+    assert!(stderr.contains("unknown variant `user`"), "{stderr}");
+}
+
 #[test]
 fn config_show_explains_files_environment_and_defaults() {
     let temp = tempdir().expect("tempdir");

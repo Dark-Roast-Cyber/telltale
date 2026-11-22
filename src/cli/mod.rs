@@ -516,6 +516,12 @@ enum RulesCommand {
         #[arg(long)]
         verbose: bool,
 
+        /// Also list disabled rules and chains, and end every line with its
+        /// kind (`rule` or `chain`) and what disabled it (`definition`,
+        /// `override`, `policy`, or `-` when enabled).
+        #[arg(long)]
+        include_disabled: bool,
+
         #[command(flatten)]
         config: RuleConfigCliArgs,
     },
@@ -997,6 +1003,22 @@ fn pipeline_failure(
     }
 }
 
+/// What left a definition out of the effective set, as `rules show` and
+/// `rules list --include-disabled` name it; `-` when it is enabled.
+fn disabled_by_name(
+    disabled_by: Option<telltale_core::rule_resolution::DisabledBy>,
+) -> &'static str {
+    use telltale_core::rule_resolution::DisabledBy;
+    match disabled_by {
+        Some(DisabledBy::Definition) => "definition",
+        Some(DisabledBy::Override) => "override",
+        Some(DisabledBy::Policy) => "policy",
+        // `DisabledBy` is non-exhaustive.
+        Some(_) => "other",
+        None => "-",
+    }
+}
+
 /// `rules show`: one rule or chain as readable text, or an error naming an
 /// unknown name.
 fn show_rule(
@@ -1056,15 +1078,7 @@ fn show_rule(
     line(
         &mut text,
         "disabled by",
-        match disabled_by {
-            Some(telltale_core::rule_resolution::DisabledBy::Definition) => "definition",
-            Some(telltale_core::rule_resolution::DisabledBy::Override) => "override",
-            Some(telltale_core::rule_resolution::DisabledBy::Policy) => "policy",
-            // `DisabledBy` is non-exhaustive.
-            Some(_) => "other",
-            None => "-",
-        }
-        .to_owned(),
+        disabled_by_name(disabled_by).to_owned(),
     );
     // Each override entry applied to it, in order: what it set, the
     // operator's reason, and its file as an opaque hash, as rule sources
@@ -1924,7 +1938,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Command::Rules { command } => match command {
-            RulesCommand::List { verbose, config } => {
+            RulesCommand::List {
+                verbose,
+                include_disabled,
+                config,
+            } => {
                 let resolution = config.resolve_rule_set()?;
                 let provenance = resolution
                     .diagnostics
@@ -1933,10 +1951,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|entry| (entry.id.as_str(), entry))
                     .collect::<std::collections::BTreeMap<_, _>>();
                 // The enabled rules in compiled order, from the view the
-                // embedding effective configuration also reports.
+                // embedding effective configuration also reports; with
+                // `--include-disabled`, disabled rules and chains too.
                 for effective in resolution.effective_definitions() {
                     let rule = effective.definition;
-                    if rule.kind() != crate::rules::DefinitionKind::Rule || !effective.enabled {
+                    let is_rule = rule.kind() == crate::rules::DefinitionKind::Rule;
+                    let listed = if include_disabled {
+                        is_rule || !effective.enabled
+                    } else {
+                        is_rule && effective.enabled
+                    };
+                    if !listed {
                         continue;
                     }
                     let (category, severity) = (
@@ -1958,27 +1983,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 .join(",")
                         })
                         .unwrap_or_default();
-                    if verbose {
-                        println!(
-                            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                            terminal_rule_identifier(rule.id()),
+                    // A chain has no category or severity.
+                    let (category, severity) = if is_rule {
+                        (
                             terminal_rule_category(category),
                             terminal_rule_severity(severity),
-                            rule.score(),
-                            effective.enabled,
-                            source,
-                            replaced
-                        );
+                        )
                     } else {
-                        println!(
-                            "{}\t{}\t{}\t{}\t{}",
-                            terminal_rule_identifier(rule.id()),
-                            terminal_rule_category(category),
-                            terminal_rule_severity(severity),
-                            rule.score(),
-                            effective.enabled
-                        );
+                        ("-".to_owned(), "-".to_owned())
+                    };
+                    let mut line = format!(
+                        "{}\t{category}\t{severity}\t{}\t{}",
+                        terminal_rule_identifier(rule.id()),
+                        rule.score(),
+                        effective.enabled
+                    );
+                    if verbose {
+                        line.push_str(&format!("\t{source}\t{replaced}"));
                     }
+                    if include_disabled {
+                        line.push_str(&format!(
+                            "\t{}\t{}",
+                            if is_rule { "rule" } else { "chain" },
+                            disabled_by_name(effective.disabled_by)
+                        ));
+                    }
+                    println!("{line}");
                 }
             }
             RulesCommand::Validate { config } => {

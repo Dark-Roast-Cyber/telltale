@@ -157,8 +157,8 @@ pub struct Engine {
     options: DetailedEvaluationOptions,
     semantic_identity: String,
     generated: GeneratedCoverage,
-    /// Override entries left out because they name a hooks rule that is not
-    /// loaded (`rule_resolution::resolve_rule_content`).
+    /// Override entries left out because they name no rule or chain that
+    /// is loaded (`rule_resolution::resolve_rule_content`).
     skipped_overrides: Vec<String>,
     /// The names of the enforcement test signatures, when they are loaded
     /// ([`test_signature_document`]); empty otherwise.
@@ -709,8 +709,8 @@ impl Engine {
     }
 
     /// The `rule_id` of each override entry that was left out because it
-    /// names a hooks rule this engine does not load: a self-protection rule
-    /// while those are off, or a name no such rule has
+    /// names no rule or chain this engine loads: for example a
+    /// self-protection rule while those are off, or a mistyped name
     /// (`telltale hooks check`).
     pub fn skipped_overrides(&self) -> &[String] {
         &self.skipped_overrides

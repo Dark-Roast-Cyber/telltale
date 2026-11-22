@@ -104,6 +104,18 @@
   `disabled by` and `overrides` lines. See
   [Tuning rules and policy](docs/hooks/README.md#tuning-rules-and-policy).
 
+- **`telltale hooks check --rules --json`.** Prints only the rules the hook
+  evaluates, as one `telltale.effective_configuration.v1` document: per rule
+  and chain whether it is enabled and what turned it off, its scores, its
+  tier and the overrides applied to it with their reasons. `--json` without
+  `--rules` is refused; `--rules` given twice is the same as once.
+
+- **`telltale rules list --include-disabled`.** Also lists the disabled rules
+  and chains, and ends every line with two columns: the kind (`rule` or
+  `chain`) and what disabled it (`definition`, `override`, `policy`, or `-`),
+  as `telltale rules show` names it. A chain has `-` for category and
+  severity. Without the flag the listing is unchanged.
+
 - **Hooks: enforcement test signatures.** `hooks.test_signatures.enabled:
   true` (default `false`) loads two rules that each match one harmless
   command, `echo TELLTALE_TEST_ASK` (`tth.test.ask`, score 60) and
@@ -120,13 +132,53 @@
   [Testing enforcement](docs/hooks/README.md#testing-enforcement). Embedding
   API: `hooks::config::RuleContent` has a new `test_signatures` field.
 
+- **Hooks: `hooks.ask` chooses how an ask reaches the user.** `human` (the
+  default, and the behavior until now) gives the harness the ask where it has
+  an approval prompt a person answers (Claude Code, Copilot CLI); Codex CLI
+  and the OpenCode pilot have none and are asked through the model. `model`
+  asks through the model on every harness: the call is denied and the reason
+  ends by telling the model to stop, tell the user what it was about to do
+  and why it was stopped, and ask how to proceed. The setting covers every
+  ask, including those of `on_error: ask` and `on_unevaluable: ask`; a deny
+  and detect-only mode are the same on both routes. An ask through the model
+  is recorded as `verdict: ask` with `returned_verdict: deny` and counted as
+  an ask. Telltale takes no approval from the conversation: the same call
+  asked again is not run either. `telltale hooks check` prints the route
+  per harness (`asks:`). See
+  [How an ask reaches the user](docs/hooks/README.md#how-an-ask-reaches-the-user).
+  Embedding API: `hooks::config::Config` has a new `ask` field
+  (`hooks::config::AskRoute`), and `Harness::render_verdict` and
+  `render_event_verdict` take the route.
+
+- **An override entry that names no loaded rule is left out.** In the CLI
+  (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
+  `rule_id` names no loaded rule or chain is left out and the other entries
+  still apply; the rule build no longer fails. `telltale rules validate`
+  lists it as an `override_left_out` notice (entries for `tth.tamper.*` and
+  `tth.test.*` rules excepted, which the scanner does not carry), and
+  `telltale hooks check` prints `override left out`. An entry that does not
+  parse or sets nothing still fails. The embedding builder still fails
+  `build` with `UnknownRuleId`. Embedding API: `RuleLoadNotice` has a new
+  `OVERRIDE_LEFT_OUT` kind, `CompiledRuleSet` a new `add_notice`.
+
+- **Override entries can name a chain.** An `overrides.d` entry (or a
+  builder override document) whose `rule_id` is a chain's name sets the
+  chain's `enabled` or `score`, and is recorded like a rule override in
+  `telltale rules show`, `telltale hooks check --rules` and the effective
+  configuration. A chain turned off by an override leaves its rules their
+  own points, as when the policy turns it off. See
+  [Tuning rules and policy](docs/hooks/README.md#tuning-rules-and-policy).
+
 - **Hooks: deny and ask reasons say what happened and what to do.** With
   `reason_detail: full`, the reason a harness is given now starts with what
   happened to the call (`this tool call was blocked and has not been
   executed`, or `this tool call needs approval before it runs`), names what
   the matched rules are about by their categories, and for a deny says to
   review the command or request an authorized configuration exception. An
-  ask given as a deny to a harness that cannot ask reads as that deny. The
+  ask given as a deny opens like that deny and ends by telling the model to
+  ask the user. A call that could not be evaluated or read opens the same
+  way and then gives the cause, and a call denied for the session's earlier
+  denials says how many there were. The
   basis, the thresholds, the rule IDs and the record ID follow as before
   (`Reason: …. Detections: …. Record …`), with at most eight rule IDs listed
   and the rest counted. A reason never carries a rule's

@@ -62,9 +62,11 @@ pub fn returned_verdict(can_ask: bool, verdict: Verdict) -> Verdict {
     }
 }
 
-/// Appended to the reason of a substituted deny.
-pub const CANNOT_ASK_NOTE: &str =
-    "Approval was required and this harness cannot ask, so the call is denied.";
+/// Appended to the reason of a substituted deny: an ask that is not put to
+/// a human by the harness (it has no approval prompt, or `hooks.ask: model`)
+/// is asked through the model. Telltale takes no approval from the
+/// conversation, so the note also says what the user can do.
+pub const ASK_THROUGH_MODEL_NOTE: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed. Repeating the call will not run it; the user can run it themselves or have an exception configured.";
 
 /// Prefix of correlation keys an adapter synthesizes when the harness
 /// carries no call ID (Copilot CLI): telemetry consumers tell them from
@@ -211,12 +213,20 @@ impl Response {
         let reason = if returned == verdict {
             reason
         } else {
-            format!("{reason} {CANNOT_ASK_NOTE}")
+            format!("{reason} {ASK_THROUGH_MODEL_NOTE}")
         };
         Self::Decision(Decision {
             verdict: returned,
             reason,
         })
+    }
+
+    /// [`Self::decision`] for a call the hook could not evaluate or read: the
+    /// reason opens with what happened to the call, as a policy reason does,
+    /// then gives `cause`.
+    pub fn failure(can_ask: bool, verdict: Verdict, cause: &str) -> Self {
+        let what = what_happened(returned_verdict(can_ask, verdict));
+        Self::decision(can_ask, verdict, format!("Telltale Hooks: {what}. {cause}"))
     }
 }
 
@@ -482,6 +492,15 @@ fn concerns(records: &[crate::ActionRecordV1]) -> Vec<String> {
         }
     }
     words
+}
+
+/// How a reason opens: what happened to the call the harness is answered
+/// about, by the verdict it is given.
+fn what_happened(returned: Verdict) -> &'static str {
+    match returned {
+        Verdict::Deny => "this tool call was blocked and has not been executed",
+        Verdict::Ask | Verdict::Allow => "this tool call needs approval before it runs",
+    }
 }
 
 /// A reason that names no detection: the record holds the detail.
@@ -805,7 +824,7 @@ impl Runtime {
         }
         let reason = minimal_reason(decision.verdict, &decision.record_id);
         Ok(Some(Response::decision(
-            ctx.can_ask,
+            self.prompts_human(ctx),
             decision.verdict,
             reason,
         )))
@@ -910,13 +929,13 @@ impl Runtime {
         if self.config.mode == Mode::Observe {
             return Response::None;
         }
-        let reason = format!(
-            "Telltale Hooks could not evaluate this tool call ({code}); its failure policy applies."
+        let cause = format!(
+            "Telltale could not evaluate it ({code}), so the configured failure policy applies; `telltale hooks check` shows the state of the hook."
         );
         match policy {
             OnError::Allow => Response::None,
-            OnError::Ask => Response::decision(ctx.can_ask, Verdict::Ask, reason),
-            OnError::Deny => Response::decision(ctx.can_ask, Verdict::Deny, reason),
+            OnError::Ask => Response::failure(self.prompts_human(ctx), Verdict::Ask, &cause),
+            OnError::Deny => Response::failure(self.prompts_human(ctx), Verdict::Deny, &cause),
         }
     }
 
@@ -1300,6 +1319,7 @@ impl Runtime {
             decision.outcome.verdict,
             decision.substituted.unwrap_or(decision.outcome.verdict),
             decision.outcome.basis,
+            decision.denied_before,
             decision.action_score,
             // A test signature was decided as in a fresh session, where the
             // session's risk is the call's own score.
@@ -1315,7 +1335,7 @@ impl Runtime {
             stateless,
         );
         Ok(Response::decision(
-            ctx.can_ask,
+            self.prompts_human(ctx),
             decision.outcome.verdict,
             reason,
         ))
@@ -1525,6 +1545,12 @@ impl Runtime {
         strict_failure
     }
 
+    /// Whether an ask for this event goes to the harness's approval prompt:
+    /// the harness has one for this event and `hooks.ask` is `human`.
+    fn prompts_human(&self, ctx: &Context) -> bool {
+        self.config.ask.prompts_human(ctx.can_ask)
+    }
+
     /// The policy decision for a request, taken against the session's scores
     /// as they are before this call. A `stateless` call was evaluated without
     /// its session (no state directory): no history, scores or denials, so
@@ -1614,7 +1640,7 @@ impl Runtime {
         // What the harness is given when the policy verdict cannot be put to
         // it as is (ask on a harness that cannot ask). The ledger keeps the
         // policy verdict; enforcement is accounted against the returned one.
-        let substituted = Some(returned_verdict(ctx.can_ask, outcome.verdict))
+        let substituted = Some(returned_verdict(self.prompts_human(ctx), outcome.verdict))
             .filter(|v| returned && *v != outcome.verdict);
         RequestDecision {
             concerns: concerns(&telltale),
@@ -1742,14 +1768,16 @@ impl Runtime {
         self.emit(&record);
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// The reason a harness is given for `verdict`, the policy's, when what
-    /// it is handed is `returned` (a deny for an ask it cannot put).
+    /// it is handed is `returned` (a deny for an ask that goes through the
+    /// model).
+    #[allow(clippy::too_many_arguments)]
     fn reason(
         &self,
         verdict: Verdict,
         returned: Verdict,
         basis: Basis,
+        denied_before: u32,
         action_score: u64,
         session_score: u64,
         rule_ids: &[String],
@@ -1782,7 +1810,7 @@ impl Runtime {
                 }
             ),
             Basis::RepeatedDenials => format!(
-                "{} earlier tool calls in this session were denied",
+                "{denied_before} earlier tool calls in this session were denied (the limit is {})",
                 t.repeated_denials
             ),
             Basis::EvaluationGap if self.engine_error == Some("pipeline_build_failed") => {
@@ -1804,10 +1832,7 @@ impl Runtime {
         // enough for a person or a model to act on without the record. The
         // concern is the matched rules' categories; no pattern, explanation
         // or matched text is ever part of a reason.
-        let what = match returned {
-            Verdict::Deny => "this tool call was blocked and has not been executed",
-            Verdict::Ask | Verdict::Allow => "this tool call needs approval before it runs",
-        };
+        let what = what_happened(returned);
         let concern = if concerns.is_empty() {
             String::new()
         } else {
@@ -1816,7 +1841,9 @@ impl Runtime {
                 concerns.join(", ")
             )
         };
-        let advice = if returned == Verdict::Deny && !rule_ids.is_empty() {
+        // A deny that stands for an ask ends with the note that says what
+        // to do ([`Response::decision`]); a policy deny says it here.
+        let advice = if verdict == Verdict::Deny && !rule_ids.is_empty() {
             " Review the command or request an authorized configuration exception."
         } else {
             ""
@@ -2331,7 +2358,7 @@ mod tests {
         match Response::decision(false, Verdict::Ask, "why.".into()) {
             Response::Decision(decision) => {
                 assert_eq!(decision.verdict(), Verdict::Deny);
-                assert_eq!(decision.reason(), format!("why. {CANNOT_ASK_NOTE}"));
+                assert_eq!(decision.reason(), format!("why. {ASK_THROUGH_MODEL_NOTE}"));
             }
             other => panic!("{other:?}"),
         }

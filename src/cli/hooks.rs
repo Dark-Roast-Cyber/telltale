@@ -24,7 +24,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use telltale_core::hooks::config::{Config, OnError, RuleContent};
+use telltale_core::hooks::config::{AskRoute, Config, OnError, RuleContent};
 use telltale_core::hooks::engine::Engine;
 #[cfg(unix)]
 use telltale_core::hooks::engine::Limits;
@@ -61,9 +61,10 @@ const COMMON_USAGE: &str = "  telltale hooks codex-cli execpolicy             pr
   telltale hooks harnesses                        list the harnesses this build has an adapter for
   telltale hooks serve                            run the long-lived evaluator (normally autostarted;
                                                   Linux and macOS only, elsewhere hooks evaluate in-process)
-  telltale hooks check [--rules]                  validate config and build the Telltale pipeline; --rules
+  telltale hooks check [--rules [--json]]         validate config and build the Telltale pipeline; --rules
                                                   lists every rule and chain the hook evaluates as it takes
-                                                  effect: enabled or what turned it off, score, tier, overrides
+                                                  effect: enabled or what turned it off, score, tier, overrides;
+                                                  --json prints only that, as telltale.effective_configuration.v1
   telltale hooks version                          print the version, Git hash and build revision
 
 hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
@@ -129,7 +130,8 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
             }
         },
         ["check", flags @ ..] => match pinned(flags, check_flags) {
-            Some((dirs, list_rules)) => check(&dirs, list_rules),
+            Some((dirs, CheckOutput::Text { list_rules })) => check(&dirs, list_rules),
+            Some((dirs, CheckOutput::RulesJson)) => check_rules_json(&dirs),
             None => {
                 eprintln!("{}", usage());
                 64
@@ -511,14 +513,26 @@ fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
     Some(dirs)
 }
 
-/// `check` switches: the config roots, and `--rules`.
-fn check_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool)> {
+/// What `check` prints.
+#[derive(Debug, PartialEq, Eq)]
+enum CheckOutput {
+    /// The report, with every rule as it takes effect if `list_rules`.
+    Text { list_rules: bool },
+    /// Only the effective configuration document (`--rules --json`).
+    RulesJson,
+}
+
+/// `check` switches: the config roots, `--rules` and `--json`. A switch given
+/// twice means what it means once, as for the hook's switches; `--json`
+/// needs `--rules`.
+fn check_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, CheckOutput)> {
     let mut roots = Vec::new();
-    let mut list_rules = false;
+    let (mut list_rules, mut json) = (false, false);
     let mut flags = flags.iter().copied();
     while let Some(flag) = flags.next() {
         match flag {
             "--rules" => list_rules = true,
+            "--json" => json = true,
             "--config-dir" => {
                 roots.push(flag);
                 roots.push(flags.next()?);
@@ -526,7 +540,12 @@ fn check_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool)> {
             _ => roots.push(flag),
         }
     }
-    Some((config_dirs(&roots)?, list_rules))
+    let output = match (list_rules, json) {
+        (true, true) => CheckOutput::RulesJson,
+        (false, true) => return None,
+        (list_rules, false) => CheckOutput::Text { list_rules },
+    };
+    Some((config_dirs(&roots)?, output))
 }
 
 /// Hook-only switches, without mistaking a config directory's spelling for
@@ -742,6 +761,28 @@ fn print_config_roots(config_dirs: &[PathBuf]) {
     }
 }
 
+/// How an ask reaches the user under `route`, per harness: the `asks` line of
+/// `check`. A harness is listed under its approval prompt only when a human
+/// answers that prompt in every run mode (`Adapter::can_ask`).
+fn ask_route_line(route: AskRoute) -> String {
+    let named = |prompts: bool| -> String {
+        let names: Vec<_> = Harness::ALL
+            .iter()
+            .filter(|harness| harness.can_ask() == prompts)
+            .map(|harness| harness.adapter().name)
+            .collect();
+        names.join(", ")
+    };
+    match route {
+        AskRoute::Human => format!(
+            "asks: human (hooks.ask: human): the harness's approval prompt on {}; through the model on {} (a deny that tells the model to ask the user)",
+            named(true),
+            named(false)
+        ),
+        AskRoute::Model => "asks: model (hooks.ask: model): through the model on every harness (a deny that tells the model to ask the user); no harness approval prompt is used".to_owned(),
+    }
+}
+
 /// What each enforcement test signature gets under the configuration in
 /// effect, one line per rule under `tth.test.`: its command, score and the
 /// verdict a hook reaches for it, or what turned it off.
@@ -877,6 +918,40 @@ fn effective_rule_line(definition: &telltale_core::EffectiveDefinitionV1) -> Str
     )
 }
 
+/// `check --rules --json`: the rules the hook evaluates as the effective
+/// configuration document, one JSON line on stdout and nothing else. A
+/// configuration that does not load or build fails as in [`check`].
+fn check_rules_json(config_dirs: &[PathBuf]) -> i32 {
+    let config = match load_config(config_dirs) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("config: {error}");
+            return 1;
+        }
+    };
+    let effective = Engine::new(&config.rules, &config.protected_paths())
+        .and_then(|engine| engine.effective_configuration());
+    match effective.map(|effective| serde_json::to_string(&effective)) {
+        Ok(Ok(document)) => {
+            println!("{document}");
+            0
+        }
+        Ok(Err(error)) => {
+            eprintln!("telltale: {error}");
+            1
+        }
+        Err(error) => {
+            eprintln!("telltale: {error}");
+            let mut cause = std::error::Error::source(&error);
+            while let Some(source) = cause {
+                eprintln!("  caused by: {source}");
+                cause = source.source();
+            }
+            1
+        }
+    }
+}
+
 fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
     let config = match load_config(config_dirs) {
         Ok(config) => config,
@@ -911,6 +986,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                 thresholds.session_deny,
                 thresholds.repeated_denials
             );
+            println!("{}", ask_route_line(config.ask));
             let effective = match engine.effective_configuration() {
                 Ok(effective) => effective,
                 Err(error) => {
@@ -956,7 +1032,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                     .chars()
                     .map(|c| if c.is_control() { ' ' } else { c })
                     .collect();
-                println!("override left out: {id} names no rule that is loaded");
+                println!("override left out: {id} names no rule or chain that is loaded");
             }
             println!(
                 "tamper prevention: {}",
@@ -971,7 +1047,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                     "test signatures: on (hooks.test_signatures.enabled: true), {}",
                     match config.mode {
                         telltale_core::hooks::config::Mode::Enforce =>
-                            "verdicts are returned to the harness (an ask as a deny where the harness cannot ask)",
+                            "verdicts are returned to the harness (an ask as the asks line says)",
                         telltale_core::hooks::config::Mode::Observe =>
                             "verdicts are recorded and nothing is returned (detect-only)",
                     }
@@ -1234,7 +1310,8 @@ fn evaluate(
             return Answer::output(harness.render_event_verdict(
                 &hook_event,
                 OnError::Deny,
-                "Telltale Hooks is misconfigured and fails closed (config_invalid); details are on the hook's stderr.",
+                "Telltale is misconfigured (config_invalid), so the hook fails closed; `telltale hooks check` and the hook's stderr show why.",
+                AskRoute::Human,
             ));
         }
         return Answer::exit(1);
@@ -1313,21 +1390,21 @@ fn unreadable_answer(
 ) -> Answer {
     let (call_reason, payload_reason) = if code == HOOK_PANICKED {
         eprintln!("telltale hooks: the hook panicked ({code})");
-        let reason = "Telltale Hooks failed while evaluating this tool call (hook_panicked).";
+        let reason = "Telltale failed while evaluating it (hook_panicked).";
         (reason, reason)
     } else {
         eprintln!("telltale hooks: unusable hook payload ({code})");
         (
-            "Telltale Hooks could not read this tool call (payload too large or malformed).",
-            "Telltale Hooks could not read this hook payload and fails closed.",
+            "Telltale could not read it (payload too large or malformed).",
+            "Telltale could not read this hook payload and fails closed.",
         )
     };
-    let policy = match config {
-        Ok(config) => unreadable_call_policy(config),
-        Err(()) => OnError::Deny,
+    let (policy, ask) = match config {
+        Ok(config) => (unreadable_call_policy(config), config.ask),
+        Err(()) => (OnError::Deny, AskRoute::Human),
     };
     let answer = if harness.looks_like_pre_tool_use(bytes) {
-        Answer::output(harness.render_verdict(policy, call_reason))
+        Answer::output(harness.render_verdict(policy, call_reason, ask))
     } else if policy == OnError::Allow || names_event(bytes) {
         // A named event is not pre-execution by now, and exit 2 there is
         // not a block: on a Stop it is a prompt to continue, so a damaged
@@ -1340,7 +1417,7 @@ fn unreadable_answer(
         // harness's block that makes no prompt of anything else.
         match harness.adapter().nameless_block {
             NamelessBlock::DenyOnStdout => {
-                Answer::output(harness.render_verdict(OnError::Deny, payload_reason))
+                Answer::output(harness.render_verdict(OnError::Deny, payload_reason, ask))
             }
             NamelessBlock::Exit(status) => Answer::exit(status),
         }
@@ -1364,7 +1441,8 @@ fn unusable_event_answer(
         return Answer::output(harness.render_event_verdict(
             hook_event,
             unreadable_call_policy(config),
-            "Telltale Hooks could not read this tool call (required fields are missing).",
+            "Telltale could not read it (required fields are missing).",
+            config.ask,
         ));
     }
     Answer::exit(1)

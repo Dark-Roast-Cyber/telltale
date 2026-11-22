@@ -369,7 +369,7 @@ pub enum RuleOverrideError {
     /// An entry has an empty `rule_id` or `reason`, or sets neither `enabled`
     /// nor `score`.
     InvalidEntry(String),
-    /// An entry names no rule in the content.
+    /// An entry names no rule or chain modifier in the content.
     UnknownRuleId(String),
     /// An entry would give a rule more than [`MAX_APPLIED_OVERRIDES`]
     /// applied overrides.
@@ -465,32 +465,42 @@ impl LoadedRules {
         self
     }
 
-    /// Apply one override document: each entry sets a rule's `enabled` or
-    /// `score`. Overrides change rules, never chain modifiers, so a modifier
-    /// ID is an unknown `rule_id` and fails, as does an entry past
-    /// [`MAX_APPLIED_OVERRIDES`] for one rule. `source` names the document in
-    /// error messages (the CLI passes its path); `label` is recorded with
-    /// each applied entry.
+    /// Apply one override document: each entry sets the `enabled` or `score`
+    /// of the rule or chain modifier its `rule_id` names. An entry that names
+    /// nothing here fails as an unknown `rule_id`, as does an entry past
+    /// [`MAX_APPLIED_OVERRIDES`] for one definition. `source` names the
+    /// document in error messages (the CLI passes its path); `label` is
+    /// recorded with each applied entry.
     pub fn apply_override_document(
         &mut self,
         document: &RuleOverrideDocument,
         source: &str,
         label: Option<&str>,
     ) -> Result<(), RuleOverrideError> {
-        self.apply_override_document_skipping(document, source, label, &|_| false)
+        self.apply_overrides(document, source, label, false)
             .map(|_| ())
     }
 
     /// [`Self::apply_override_document`] for content that does not carry
     /// every rule its override files may name: an entry whose `rule_id` names
-    /// no rule or chain modifier here, and for which `skip` holds, is left
-    /// out instead of failing. Returns the `rule_id` of each entry left out, in order.
+    /// no rule or chain modifier here is left out instead of failing. Every
+    /// other failure stays an error. Returns the `rule_id` of each entry left
+    /// out, in order.
     pub fn apply_override_document_skipping(
         &mut self,
         document: &RuleOverrideDocument,
         source: &str,
         label: Option<&str>,
-        skip: &dyn Fn(&str) -> bool,
+    ) -> Result<Vec<String>, RuleOverrideError> {
+        self.apply_overrides(document, source, label, true)
+    }
+
+    fn apply_overrides(
+        &mut self,
+        document: &RuleOverrideDocument,
+        source: &str,
+        label: Option<&str>,
+        skip_unknown: bool,
     ) -> Result<Vec<String>, RuleOverrideError> {
         let mut skipped = Vec::new();
         if document.version != 1 {
@@ -502,12 +512,12 @@ impl LoadedRules {
         let _ = &document.description;
         for entry in &document.overrides {
             validate_rule_override_entry(entry, source).map_err(RuleOverrideError::InvalidEntry)?;
-            let Some(rule) = self.definitions.iter_mut().find(|definition| {
-                definition.kind() == DefinitionKind::Rule && definition.id() == entry.rule_id
-            }) else {
-                // A chain modifier of that name is loaded, so the entry is
-                // not one for a rule this content lacks: it stays an error.
-                if skip(&entry.rule_id) && self.get(&entry.rule_id).is_none() {
+            let Some(rule) = self
+                .definitions
+                .iter_mut()
+                .find(|definition| definition.id() == entry.rule_id)
+            else {
+                if skip_unknown {
                     skipped.push(entry.rule_id.clone());
                     continue;
                 }

@@ -1053,8 +1053,8 @@ impl PipelineBuilder {
 
     /// Add an override v1 document, like a file in `overrides.d`. Documents
     /// apply in call order after all rule content is merged and before the
-    /// policy. They change rules, never chain modifiers: a modifier ID, like
-    /// any `rule_id` no rule has, fails `build` with
+    /// policy. An entry's `rule_id` names a rule or a chain modifier; one
+    /// that names neither fails `build` with
     /// [`RuleContentErrorCode::UnknownRuleId`].
     pub fn override_document(mut self, yaml: impl Into<String>) -> Self {
         self.override_documents.push((None, yaml.into()));
@@ -1183,7 +1183,7 @@ impl PipelineBuilder {
                 .collect(),
             documents: Vec::new(),
             host_documents: Vec::new(),
-            unloaded_override_prefixes: &[],
+            skip_unknown_overrides: false,
             overrides,
             policy,
         };
