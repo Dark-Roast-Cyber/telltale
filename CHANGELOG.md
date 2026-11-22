@@ -31,7 +31,7 @@
 - **A Python one-liner that fetches a response and executes it is read as a
   download followed by execution (experimental).** A `python`, `python3`,
   `python3.x` or `py` invocation whose `-c` code passes the response of an
-  HTTP(S) fetch with a literal URL to `exec` or `eval` now matches the
+  HTTP(S) fetch to `exec` or `eval` now matches the
   bundled `network.download` in session events and action findings, and
   `chain.download_then_execute` links it as it links a download piped into
   a shell. Through `sudo` or `env` it links the same way; on a remote host
