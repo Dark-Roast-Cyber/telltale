@@ -24,7 +24,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
 /// Versions what the action view reads, the shared transfer reading included.
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 17;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 18;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1749,11 +1749,52 @@ pub(super) fn observation_requests_outbound_transfer(
     Ok(false)
 }
 
-/// Whether a loaded rule is the bundled upload rule as shipped, whose session
-/// events also take [`observation_requests_outbound_transfer`]. A custom copy
-/// is read by its own patterns alone.
-pub(super) fn reads_requested_transfers(rule: &RuleV1CompatibilityRule) -> bool {
-    rule.id == "exfil.outbound_upload" && native_profile_applies(rule) == Some(true)
+/// An action-view reading of an observation that session events of a bundled
+/// rule take beside the rule's own patterns.
+pub(super) type CommandReading =
+    fn(&CanonicalObservationV2, &RetentionBudget) -> Result<bool, ProcessingError>;
+
+/// The reading session events of a loaded rule also take, when it is a bundled
+/// rule as shipped that has one: the upload rule takes
+/// [`observation_requests_outbound_transfer`] and the download rule
+/// [`observation_fetches_code`]. A custom copy is read by its own patterns
+/// alone.
+pub(super) fn command_reading(rule: &RuleV1CompatibilityRule) -> Option<CommandReading> {
+    let reading: CommandReading = match rule.id.as_str() {
+        "exfil.outbound_upload" => observation_requests_outbound_transfer,
+        "network.download" => observation_fetches_code,
+        _ => return None,
+    };
+    (native_profile_applies(rule) == Some(true)).then_some(reading)
+}
+
+/// Whether some command stage of an observation, read as the action view
+/// reads it, is a Python one-liner that runs a fetched response (see
+/// [`fetches_code`]). The session view asks this for the bundled download
+/// rule, on a detached budget as [`observation_requests_outbound_transfer`]
+/// does.
+pub(super) fn observation_fetches_code(
+    observation: &CanonicalObservationV2,
+    budget: &RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    let budget = &mut budget.detached();
+    let view = command_view(observation, budget)?;
+    for tokens in &view.commands {
+        if fetches_code(tokens, budget)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The fetch a command stage's Python one-liner runs as code, if any: a
+/// download with inline execution (experimental).
+fn fetches_code<'a>(
+    tokens: &'a [String],
+    budget: &mut RetentionBudget,
+) -> Result<Option<command_effect::FetchedCode<'a>>, ProcessingError> {
+    charge_tokens(tokens, budget)?;
+    Ok(command_effect::fetched_code(tokens))
 }
 
 /// A cloud credential file path, as the bundled upload and harvest rules name
@@ -1858,7 +1899,9 @@ fn native_fields<'a>(
         for (index, (span, tokens)) in view.stage_spans.iter().zip(&view.commands).enumerate() {
             let stage = &view.text("command")[span.clone()];
             let matches = match id {
-                "network.download" => is_download(tokens, budget)?,
+                "network.download" => {
+                    is_download(tokens, budget)? || fetches_code(tokens, budget)?.is_some()
+                }
                 "exfil.outbound_upload" => is_upload(tokens, budget)?,
                 _ => {
                     budget.charge(tokens.first().map_or(0, String::len))?;
@@ -3280,13 +3323,16 @@ fn piped_execution(
 }
 /// The byte range of a command that runs, as code, what a download inside one
 /// of its words prints: `bash <(curl …)`, `source <(…)`, `eval "$(…)"`,
-/// `sh -c "$(…)"` or `iex (iwr …)`. A download in any other word is data.
+/// `sh -c "$(…)"` or `iex (iwr …)`; or of a local Python one-liner that runs a
+/// fetched response. A download in any other word is data.
 fn inline_execution(
     view: &ActionView,
     budget: &mut RetentionBudget,
 ) -> Result<Option<Range<usize>>, ProcessingError> {
     for (outer, tokens) in view.stage_spans.iter().zip(&view.commands) {
-        charge_tokens(tokens, budget)?;
+        if fetches_code(tokens, budget)?.is_some_and(|fetch| !fetch.elsewhere) {
+            return Ok(Some(outer.clone()));
+        }
         let Some(program) = inline_code(tokens) else {
             continue;
         };

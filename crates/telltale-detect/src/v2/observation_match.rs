@@ -152,9 +152,13 @@ pub struct CompiledObservationMatchDetector {
     matcher: CompiledMatcher,
     required_capabilities: BTreeSet<CapabilityId>,
     metadata: FindingMetadata,
-    /// The rule's content matcher, its targets, and whether it also reads
-    /// requested transfers (see `actions::reads_requested_transfers`).
-    rule_v1_content: Option<(RuleV1ContentMatcher, Vec<String>, bool)>,
+    /// The rule's content matcher, its targets, and the action view's reading
+    /// it also takes (see `actions::command_reading`).
+    rule_v1_content: Option<(
+        RuleV1ContentMatcher,
+        Vec<String>,
+        Option<super::actions::CommandReading>,
+    )>,
 }
 
 impl CompiledObservationMatchDetector {
@@ -162,9 +166,9 @@ impl CompiledObservationMatchDetector {
         mut self,
         matcher: RuleV1ContentMatcher,
         targets: Vec<String>,
-        reads_transfers: bool,
+        reading: Option<super::actions::CommandReading>,
     ) -> Self {
-        self.rule_v1_content = Some((matcher, targets, reads_transfers));
+        self.rule_v1_content = Some((matcher, targets, reading));
         self
     }
     pub fn detector(&self) -> &DetectorIdentity {
@@ -254,13 +258,11 @@ impl CompiledObservationMatchDetector {
                 .expect("validated match surface remains valid"));
         }
 
-        let (state, paths) = if let Some((matcher, targets, reads_transfers)) =
-            &self.rule_v1_content
-        {
+        let (state, paths) = if let Some((matcher, targets, reading)) = &self.rule_v1_content {
             super::rule_v1::evaluate_content_matcher(
                 matcher,
                 targets,
-                *reads_transfers,
+                *reading,
                 observation,
                 budget,
             )?
