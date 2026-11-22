@@ -1048,6 +1048,51 @@ fn show_rule(
         "enabled before policy",
         definition.enabled().to_string(),
     );
+    let disabled_by = resolution
+        .effective_definitions()
+        .into_iter()
+        .find(|effective| effective.definition.id() == name)
+        .and_then(|effective| effective.disabled_by);
+    line(
+        &mut text,
+        "disabled by",
+        match disabled_by {
+            Some(telltale_core::rule_resolution::DisabledBy::Definition) => "definition",
+            Some(telltale_core::rule_resolution::DisabledBy::Override) => "override",
+            Some(telltale_core::rule_resolution::DisabledBy::Policy) => "policy",
+            // `DisabledBy` is non-exhaustive.
+            Some(_) => "other",
+            None => "-",
+        }
+        .to_owned(),
+    );
+    // Each override entry applied to it, in order: what it set, the
+    // operator's reason, and its file as an opaque hash, as rule sources
+    // are shown.
+    let overrides = definition
+        .overrides()
+        .iter()
+        .map(|applied| {
+            let mut sets = Vec::new();
+            if let Some(enabled) = applied.enabled {
+                sets.push(format!("enabled={enabled}"));
+            }
+            if let Some(score) = applied.score {
+                sets.push(format!("score={score}"));
+            }
+            let reason = applied
+                .reason
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect::<String>();
+            format!(
+                "{} ({reason}) {}",
+                sets.join(" "),
+                opaque_identifier("override-source", &applied.source)
+            )
+        })
+        .collect::<Vec<_>>();
+    list(&mut text, "overrides", &overrides);
     line(
         &mut text,
         "severity",

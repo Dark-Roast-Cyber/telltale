@@ -78,13 +78,14 @@ deployments the agent must not be able to change, managed settings with
 hook`; pass an absolute command when `telltale` is not on the harness's `PATH`:
 
 ```bash
-./target/release/telltale hooks claude-code settings --fail-closed "$PWD/target/release/telltale hooks claude-code hook"
+./target/release/telltale hooks claude-code settings "$PWD/target/release/telltale hooks claude-code hook"
 ```
 
 The hook is detect-only until the configuration says `hooks.mode: enforce`
-([Detect-only and enforce](#detect-only-and-enforce)). `--fail-closed` makes
-Claude Code block a tool call if the hook crashes, times out, or is missing.
-Without it Claude Code fails open. Details:
+([Detect-only and enforce](#detect-only-and-enforce)), and with these settings
+Claude Code runs a tool call when the hook fails. `settings --fail-closed`
+makes it block instead; that is [tamper prevention](#tamper-prevention), and
+an operator's choice. Details:
 [harnesses/claude-code.md](harnesses/claude-code.md).
 
 ## Quick start (GitHub Copilot CLI)
@@ -100,7 +101,9 @@ cannot turn off) or as `~/.copilot/hooks/telltale-hooks.json`:
 On Windows the command runs under PowerShell: quote a path with spaces as
 `& "C:\...\telltale.exe" hooks copilot-cli hook`, or every call is blocked.
 Copilot blocks a tool call when the hook crashes, exits non-zero or is
-missing, but lets it run when the hook times out (the file sets 60 s). A
+missing, but lets it run when the hook times out (the file sets 60 s). That is
+Copilot's own behavior for every hook, in detect-only mode too: keep the
+binary at the path the hook file names. A
 repository's `.claude/settings.json` Claude Code installation also runs under
 Copilot and is handled as Copilot input. Details:
 [harnesses/copilot-cli.md](harnesses/copilot-cli.md).
@@ -118,8 +121,10 @@ file does not, and replacing the binary at a trusted path keeps trust. Codex
 cannot ask from a hook, so every `ask` is returned as a deny. Codex fails open
 on every hook failure and has no fail-closed option (`settings --fail-closed`
 refuses). All of this was verified on Linux with a scripted model only.
-Optional native backstop against plain relaunches of Codex without hooks (the
-hook denies removing it, for as long as the hook runs):
+Codex can also refuse plain relaunches of itself without hooks through native
+exec-policy rules. They act without the hook, in detect-only mode too, so
+they are [tamper prevention](#tamper-prevention) and not part of a default
+install (an enforcing hook denies removing them, for as long as it runs):
 
 ```bash
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/rules"
@@ -176,11 +181,13 @@ enforce`; a file that is not counts when any line holds a `mode: enforce`
 pair, in any quoting or style. One such file is enough, so a broken file
 beside the one that enforces cannot switch enforcement off.
 
-Two things are outside the setting, because they are installed into the
+Some things are outside the setting, because they are installed into the
 harness and act without the hook: `telltale hooks codex-cli execpolicy`
 (native Codex rules that refuse nested launches) and a hook command that
-cannot start at all under `settings --fail-closed` (a missing binary). Install
-neither for a deployment that must never block.
+cannot start at all under `settings --fail-closed` (a missing binary). No
+Telltale command installs either on its own, and `hooks.mode: enforce` does
+not either; see [Tamper prevention](#tamper-prevention). Copilot CLI blocks a
+tool call whose hook command cannot start whatever Telltale is set to.
 
 Verdicts recorded in detect-only mode are what each call would get on its own
 score and the session's score. They are not counted as denials: the
@@ -224,7 +231,9 @@ hooks:
                          # (a human approving an `ask` then sees little; use minimal for unattended agents)
   # state_dir: <path>    # TELLTALE_HOOKS_STATE_DIR
   # telemetry_path: <path>  # TELLTALE_HOOKS_TELEMETRY
-  self_protection_rules: true
+  self_protection_rules: true   # detect tampering with hooks (the tth.tamper.* rules)
+  tamper_prevention:
+    enabled: false       # true: lock those rules against overrides and policies
   thresholds:            # Telltale promotion scores (host policy)
     action_ask: 50
     action_deny: 90
@@ -243,20 +252,9 @@ hooks:
     # socket: <path>     # default: <state dir>/evaluator.sock
 ```
 
-While `hooks.self_protection_rules` is on, rule names that start with
-`tth.tamper.` belong to hooks (the self-protection rules are
-[Rule v2](../rule-format.md) documents). Rule content and policy cannot change the
-self-protection rules: a rule document, rule package or override file that names
-such a name is invalid configuration, and so is a policy under which any
-self-protection rule would not stay enabled. A shared policy with a whitelist
-(`enabled_categories` or `enabled_rules`) must therefore include the
-self-protection rules when hooks read it: list the `approval_bypass` category,
-or every `tth.tamper.` rule name. A policy that only turns off other rules or
-categories is unaffected. `telltale hooks check` names the file (never its
-content) and exits 1, a hook whose settings ask for `hooks.mode: enforce` denies
-tool calls until it is fixed, and any other hook is detect-only on the defaults
-with a `config_invalid` record. Turn the rules off with
-`hooks.self_protection_rules: false` to manage them yourself.
+The self-protection rules and what locks them are described under
+[Tamper prevention](#tamper-prevention); changing what rules do is described
+under [Tuning rules and policy](#tuning-rules-and-policy).
 
 The config roots are `/etc/telltale` (Windows: `%ProgramData%\telltale`), then
 `$XDG_CONFIG_HOME/telltale` or `~/.config/telltale`; a later root wins per key. `--config-dir DIR` on
@@ -323,6 +321,132 @@ records `config_invalid`. The record goes to the records file in a pinned
 `--state-dir`, else to the one `TELLTALE_HOOKS_TELEMETRY` names, else to
 `telemetry.jsonl` in the state directory `TELLTALE_HOOKS_STATE_DIR` names or
 the default one.
+
+## Tuning rules and policy
+
+Hooks evaluate the rules `telltale scan` evaluates, plus the self-protection
+rules, so one set of files tunes both. None of this edits a bundled rule, and
+the same folders work in a fleet-managed root (`/etc/telltale`) and in a
+user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-config)).
+
+| To | Use |
+| --- | --- |
+| Turn off a noisy rule | `overrides.d`: `enabled: false` for its `rule_id` |
+| Make a rule count less, or more | `overrides.d`: `score` |
+| Change a deny into an approval request | A `score` for the rule below `hooks.thresholds.action_deny`, or a higher threshold |
+| Stop a rule restricting an approved activity | Turn it off, score it below `action_ask`, or replace it with a copy that leaves the activity out |
+| Change what a rule matches, or its explanation | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)) |
+| Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
+| Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
+| Configure a fleet | The same folders in `/etc/telltale`; the user's root is read after it |
+
+How tuning behaves:
+
+- **It removes a restriction and never grants one.** A rule that is off or
+  scored low leaves the call to the harness's own permission rules and
+  prompts. A hook never returns an `allow`.
+- **Rules are independent.** Turning one off leaves every other rule's
+  finding for the same call in place.
+- **A chain follows its rules.** A chain adds points when the rules it names
+  match. Turn a rule off and its chains no longer match through it. A rule
+  scored 0 still matches, so its chains still add their points: lowering a
+  score removes only the rule's own. Turn a chain off with
+  `disabled_rules` in the policy; change its score with a replacement.
+  Override entries name rules, not chains.
+- **The session score keeps what it counted.** A changed configuration
+  applies from the next tool call. Points an earlier call added stay in that
+  session's score, so calls that still score can be asked about or denied on
+  it until the session ends; calls with no finding are never restricted.
+- **One policy file.** Hooks read at most one file in `policies.d` across
+  their config roots. Local tuning beside a managed policy belongs in
+  `overrides.d`, whose files from every root apply in order.
+- **A later root wins.** A user's settings and overrides are read after the
+  system root's and decide each key or field both set. Where the user must
+  not undo managed configuration, name only the managed root on the hook
+  command (`--config-dir /etc/telltale`).
+
+What is in effect:
+
+| Question | Command |
+| --- | --- |
+| Is the hook observing or enforcing, and on which thresholds? | `telltale hooks check` |
+| Which rules are on, with what score, and what changed them? | `telltale hooks check --rules`: one line per rule and chain with `enabled` or what turned it off (its definition, an override, the policy), its score, the tier that defines it, and each override applied to it with the operator's reason |
+| The same for one rule of the scanner | `telltale rules show <name>` (`disabled by`, `overrides`) |
+| Which file or variable set a setting? | `telltale config show` |
+| Why was this call asked about or denied? | Its `decision` record: `verdict`, `basis`, scores, `rule_ids`; `decision.returned` says whether the harness was given it |
+| Is tamper prevention on? | `telltale hooks check` and `hooks.tamper_prevention.enabled` in `telltale config show` |
+
+`check --rules` shows the score a session event carries and, where it
+differs, the score hooks decide on (`action`).
+
+## Tamper prevention
+
+**Detecting** an agent that tampers with its hooks is monitoring, and on by
+default. The self-protection rules (`tth.tamper.*`, loaded while
+`hooks.self_protection_rules` is on) match writes to harness hook settings and
+to Telltale's configuration, state and binary, and commands that switch hooks
+off. Like every rule they are recorded in detect-only mode and returned as
+ask or deny under `hooks.mode: enforce`.
+
+**Preventing** it is a separate choice. Nothing in this table is on until an
+operator turns it on, and `hooks.mode: enforce` turns none of it on:
+
+| Protection | Acts in | Turned on by | Turned off by |
+| --- | --- | --- | --- |
+| Lock on the self-protection rules | The hook | `hooks.tamper_prevention.enabled: true` | The same setting |
+| Block a tool call when the hook fails (Claude Code `onFailure: block`) | Claude Code | Merging settings generated with `settings --fail-closed` | Merging settings generated without the flag |
+| Refuse nested Codex launches (exec-policy rules) | Codex | Saving the output of `telltale hooks codex-cli execpolicy` in the Codex rules folder | Deleting that file |
+
+The last two are installed into a harness and act there without the hook, so
+no Telltale setting switches them on or off, a detect-only hook does not make
+them harmless (a missing binary under `--fail-closed` blocks every tool
+call), and removing them is a change to the harness's files. Telltale only
+prints them: no command writes harness files. `telltale hooks check` lists
+them per harness and does not read harness files to see what is installed.
+Two harness behaviors are not Telltale's to switch: Copilot CLI blocks a tool
+call whose hook command crashes, exits non-zero or cannot start, and the
+OpenCode pilot plugin denies when the hook is unavailable only if its own
+options say `mode: "enforce"`.
+
+**Without the lock** (the default) the self-protection rules are ordinary
+bundled rules. An override can turn one off or change its score, a policy can
+leave them out (their category is `approval_bypass`), and a managed tier can
+replace one by name, exactly as for any other rule. `check --rules` lists
+them, with the names of the rules generated for this installation's own
+paths.
+
+**With the lock** the `tth.tamper.` names belong to hooks. A rule document,
+rule package or override file that names one is invalid configuration, and so
+is a policy under which any self-protection rule would not stay enabled: a
+shared policy with a whitelist (`enabled_categories` or `enabled_rules`) must
+include the `approval_bypass` category or every `tth.tamper.` rule name. A
+policy that only turns off other rules or categories is unaffected. The lock
+needs the rules, so it is invalid together with
+`hooks.self_protection_rules: false`. `telltale hooks check` names the file
+(never its content) and exits 1, a hook whose settings ask for
+`hooks.mode: enforce` denies tool calls until it is fixed, and any other hook
+is detect-only on the defaults with a `config_invalid` record.
+
+### Who may change the rules
+
+Telltale reads configuration files. It cannot tell an administrator's edit
+from an edit an agent made as the same OS user, so it does not try: whoever
+can write a config root the hook reads is the operator. An override that
+names a self-protection rule is therefore tuning, not tampering, unless the
+lock says the rules are fixed.
+
+- The agent changing those files is a tool call, and the self-protection
+  rules detect it (and deny it under enforcement) whatever the files then
+  say.
+- The lock guards content, not files. It stops a shared policy, a rule
+  package or an override from dropping the self-protection rules unnoticed.
+  One who can write a settings file the hook reads can turn the lock off, as
+  they can turn enforcement off.
+- The boundary against an agent is file ownership: configuration in a root
+  the agent's user cannot write, named alone on the hook command
+  (`--config-dir /etc/telltale`), with the binary and the harness's managed
+  settings out of its reach as well
+  ([threat model](../security/hooks-threat-model.md)).
 
 ## Documentation
 

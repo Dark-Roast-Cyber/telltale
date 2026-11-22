@@ -243,8 +243,8 @@ group; failed cleanup cannot release a still-live slot.
   describes what is returned while enforcing and what is only recorded
   otherwise.
 - **Fail-open by default** (`on_error: allow`) because Claude Code itself
-  fails open; operators can choose `ask`/`deny`, and `settings --fail-closed`
-  makes hook crashes and timeouts block (verified).
+  fails open; operators can choose `ask`/`deny`, and on Claude Code
+  `settings --fail-closed` makes hook crashes and timeouts block (verified).
 - A configuration that does not load denies tool calls when it asks for
   enforcement (an operator error should be loud), and is detect-only on the
   defaults when it does not.

@@ -1182,6 +1182,7 @@ impl PipelineBuilder {
                 )
                 .collect(),
             documents: Vec::new(),
+            host_documents: Vec::new(),
             overrides,
             policy,
         };

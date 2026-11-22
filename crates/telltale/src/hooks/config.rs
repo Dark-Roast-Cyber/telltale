@@ -15,7 +15,7 @@ use crate::hooks::identity;
 use crate::rule_resolution::RulePackPaths;
 
 /// What every ID of a host self-protection rule, bundled or generated, starts
-/// with. With [`RuleContent::self_protection`] on, the namespace is the
+/// with. With [`RuleContent::tamper_prevention`] on, the namespace is the
 /// host's: no user rule content may name an ID in it.
 pub const HOST_RULE_ID_PREFIX: &str = "tth.tamper.";
 
@@ -118,6 +118,12 @@ pub struct RuleContent {
     /// The bundled host self-protection rules (`engine::host_rule_documents`)
     /// and the generated rule for this installation's own paths.
     pub self_protection: bool,
+    /// Tamper prevention: the self-protection rules are locked. Rule content
+    /// that names one of their IDs, and a policy under which one would not
+    /// stay enabled, is invalid configuration. Off by default: the rules are
+    /// then ordinary bundled rules that overrides, policies and replacement
+    /// rules can tune or disable. Needs [`Self::self_protection`].
+    pub tamper_prevention: bool,
 }
 
 impl Default for RuleContent {
@@ -128,6 +134,7 @@ impl Default for RuleContent {
             policy: None,
             process_chain: true,
             self_protection: true,
+            tamper_prevention: false,
         }
     }
 }
@@ -135,10 +142,10 @@ impl Default for RuleContent {
 impl RuleContent {
     /// The first file of user rule content that names an ID in the host rules'
     /// namespace (an override entry, or a rule or modifier in a rule document
-    /// or package), while self-protection is on. A file that does not parse is
-    /// not reported here: building the rules fails on it.
+    /// or package), while tamper prevention is on. A file that does not parse
+    /// is not reported here: building the rules fails on it.
     fn host_rule_claim(&self) -> Option<&Path> {
-        if !self.self_protection {
+        if !self.tamper_prevention {
             return None;
         }
         let read = |path: &Path| crate::hooks::state::read_operator_input(path).ok();
@@ -298,12 +305,12 @@ impl std::fmt::Display for ConfigError {
             Self::Invalid(what) => write!(f, "invalid config: {what}"),
             Self::HostRuleClaimed(path) => write!(
                 f,
-                "invalid config: {} names a rule ID under {HOST_RULE_ID_PREFIX}*, which hooks reserves for its self-protection rules while hooks.self_protection_rules is on",
+                "invalid config: {} names a rule ID under {HOST_RULE_ID_PREFIX}*, which hooks reserves for its self-protection rules while hooks.tamper_prevention.enabled is on",
                 path.display()
             ),
             Self::PolicyDropsHostRule(path) => write!(
                 f,
-                "invalid config: the policy {} would turn off hooks self-protection rules, which stay on while hooks.self_protection_rules is on; a policy that selects by category must include {HOST_RULE_CATEGORY}, and one that selects by rule ID must list every {HOST_RULE_ID_PREFIX}* rule",
+                "invalid config: the policy {} would turn off hooks self-protection rules, which stay on while hooks.tamper_prevention.enabled is on; a policy that selects by category must include {HOST_RULE_CATEGORY}, and one that selects by rule ID must list every {HOST_RULE_ID_PREFIX}* rule",
                 path.display()
             ),
             Self::NoStateDir => write!(f, "no state directory: set {NO_STATE_DIR_HINT}"),
@@ -362,10 +369,15 @@ impl Config {
         if self.window.max_records == 0 || self.window.max_bytes == 0 {
             return Err(ConfigError::Invalid("window bounds must be positive"));
         }
+        if self.rules.tamper_prevention && !self.rules.self_protection {
+            return Err(ConfigError::Invalid(
+                "hooks.tamper_prevention.enabled needs hooks.self_protection_rules: it locks those rules",
+            ));
+        }
         if let Some(path) = self.rules.host_rule_claim() {
             return Err(ConfigError::HostRuleClaimed(path.to_owned()));
         }
-        if self.rules.self_protection
+        if self.rules.tamper_prevention
             && let Some(policy) = &self.rules.policy
             && crate::hooks::engine::policy_drops_host_rule(policy, &self.protected_paths())
         {
@@ -648,6 +660,7 @@ mod tests {
         assert_eq!(config.on_error, OnError::Allow);
         assert_eq!(config.thresholds.action_deny, 90);
         assert!(config.rules.self_protection);
+        assert!(!config.rules.tamper_prevention);
         assert!(config.rules.process_chain);
     }
 

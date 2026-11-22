@@ -314,6 +314,9 @@ pub(crate) struct RuleContent {
     pub(crate) files: Vec<(RuleTier, InputName, String)>,
     /// Parsed documents at the explicit tier, after `files`.
     pub(crate) documents: Vec<(InputName, LoadedRules)>,
+    /// Parsed documents a host bundles, at the builtin tier after the bundled
+    /// core rules: a managed tier can replace their definitions by name.
+    pub(crate) host_documents: Vec<(InputName, LoadedRules)>,
     /// Override documents: (name, text), applied in order.
     pub(crate) overrides: Vec<(InputName, String)>,
     /// The policy: (name, text).
@@ -352,6 +355,34 @@ pub fn resolve_rule_set(
     pack_paths: &RulePackPaths,
     explicit_rule_paths: &[PathBuf],
     documents: Vec<(String, LoadedRules)>,
+    policy_path: Option<&Path>,
+    mode: RuleLoadMode,
+    override_paths: &[PathBuf],
+    replacements: &[(PathBuf, &str)],
+) -> Result<RuleResolution, Box<dyn std::error::Error>> {
+    resolve_rule_set_with_host(
+        pack_paths,
+        explicit_rule_paths,
+        documents,
+        Vec::new(),
+        policy_path,
+        mode,
+        override_paths,
+        replacements,
+    )
+}
+
+/// [`resolve_rule_set`] with `host_documents`: in-memory rule content a host
+/// bundles, labelled by source and loaded at the builtin tier after the
+/// bundled core rules. Unlike `documents` they are ordinary rule content: a
+/// managed tier can replace one of their definitions by name (keeping its
+/// UUID), and overrides and the policy apply to them.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_rule_set_with_host(
+    pack_paths: &RulePackPaths,
+    explicit_rule_paths: &[PathBuf],
+    documents: Vec<(String, LoadedRules)>,
+    host_documents: Vec<(String, LoadedRules)>,
     policy_path: Option<&Path>,
     mode: RuleLoadMode,
     override_paths: &[PathBuf],
@@ -406,6 +437,10 @@ pub fn resolve_rule_set(
             .into_iter()
             .map(|(source, rules)| (InputName::unlabeled(source), rules))
             .collect(),
+        host_documents: host_documents
+            .into_iter()
+            .map(|(source, rules)| (InputName::unlabeled(source), rules))
+            .collect(),
         overrides,
         policy: policy_path
             .map(|path| {
@@ -430,10 +465,12 @@ pub(crate) fn resolve_rule_content(
         packages,
         files,
         documents,
+        host_documents,
         overrides,
         policy,
     } = content;
-    let (documents, packages) = load_rule_documents(mode, community, packages, files, documents)?;
+    let (documents, packages) =
+        load_rule_documents(mode, community, packages, files, documents, host_documents)?;
     if documents.is_empty() {
         return Err(Box::new(NoRuleDocuments));
     }
@@ -524,6 +561,7 @@ fn load_rule_documents(
     packages: Vec<(String, String)>,
     files: Vec<(RuleTier, InputName, String)>,
     extra_documents: Vec<(InputName, LoadedRules)>,
+    host_documents: Vec<(InputName, LoadedRules)>,
 ) -> Result<(Vec<RuleDocument>, Vec<RulePackageSummary>), Box<dyn std::error::Error>> {
     let mut documents = Vec::new();
     if matches!(mode, RuleLoadMode::IncludeDefault) {
@@ -532,6 +570,14 @@ fn load_rule_documents(
             source: "builtin:telltale.default".to_string(),
             label: None,
             rules: bundled_default_rules()?,
+        });
+    }
+    for (InputName { source, label }, rules) in host_documents {
+        documents.push(RuleDocument {
+            tier: RuleTier::Builtin,
+            source,
+            label,
+            rules,
         });
     }
     let packages = load_package_documents(mode, community, packages, &mut documents)?;

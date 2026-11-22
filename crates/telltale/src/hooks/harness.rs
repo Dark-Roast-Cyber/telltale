@@ -92,6 +92,12 @@ pub struct Adapter {
     pub rules: HostRules,
     /// The program names an agent launches this harness by.
     pub launchers: &'static [&'static str],
+    /// What can block a tool call on this harness without a verdict from the
+    /// hook, one line each: what it does and how it comes to be installed.
+    /// Each acts inside the harness, so neither `hooks.mode` nor
+    /// `hooks.tamper_prevention` turns it on or off (`telltale hooks check`
+    /// lists them).
+    pub harness_protections: &'static [&'static str],
 }
 
 /// The install output of one harness.

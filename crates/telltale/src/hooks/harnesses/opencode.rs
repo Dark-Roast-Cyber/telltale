@@ -40,6 +40,9 @@ pub const ADAPTER: Adapter = Adapter {
     home: None,
     rules: HostRules::Shared,
     launchers: &["opencode"],
+    harness_protections: &[
+        "the pilot plugin denies a tool call when the hook is unavailable, only where its own options say mode: enforce and leave onError at deny",
+    ],
 };
 
 #[derive(Deserialize)]

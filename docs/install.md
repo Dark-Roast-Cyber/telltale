@@ -695,6 +695,8 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
   # state_dir: <path>                # TELLTALE_HOOKS_STATE_DIR; default under XDG_STATE_HOME or LOCALAPPDATA
   # telemetry_path: <path>           # TELLTALE_HOOKS_TELEMETRY; default telemetry.jsonl in the state dir
   self_protection_rules: true
+  tamper_prevention:
+    enabled: false                   # true locks the self-protection rules against overrides and policies
   thresholds:
     action_ask: 50
     action_deny: 90

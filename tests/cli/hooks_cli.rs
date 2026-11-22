@@ -37,9 +37,20 @@ fn run_in(
     env: &[(&str, &std::path::Path)],
     extra: &[(&str, &str)],
 ) -> (i32, String, String) {
+    run_in_roots(config.as_slice(), payload, env, extra)
+}
+
+/// One hook run reading the config roots `configs` in order (one
+/// `--config-dir` each), or the default roots when there are none.
+pub(crate) fn run_in_roots(
+    configs: &[&std::path::Path],
+    payload: &Value,
+    env: &[(&str, &std::path::Path)],
+    extra: &[(&str, &str)],
+) -> (i32, String, String) {
     let mut command = isolated();
     command.args(["claude-code", "hook"]);
-    if let Some(config) = config {
+    for config in configs {
         command.arg("--config-dir").arg(config);
     }
     command
@@ -75,7 +86,7 @@ fn slashed(path: impl std::fmt::Display) -> String {
     path.to_string().replace('\\', "/")
 }
 
-fn pre(command: &str) -> Value {
+pub(crate) fn pre(command: &str) -> Value {
     let mut payload = common::template("PreToolUse", Some("Bash"));
     payload["tool_use_id"] = "toolu_cli".into();
     payload["tool_input"] = json!({"command": command});
@@ -311,7 +322,11 @@ fn misconfiguration_reason_carries_no_paths() {
 }
 
 /// An override file for `config` naming `rule_id`, in `overrides.d`.
-fn write_override(config: &std::path::Path, rule_id: &str, change: &str) -> std::path::PathBuf {
+pub(crate) fn write_override(
+    config: &std::path::Path,
+    rule_id: &str,
+    change: &str,
+) -> std::path::PathBuf {
     let path = config.join("overrides.d").join("override.yaml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -415,8 +430,9 @@ fn an_override_in_a_config_root_changes_the_hook_and_the_scanner_the_same_way() 
     assert!(scanner_matches(&quiet, CALL).is_empty());
 }
 
-/// Rule content that names a hooks self-protection rule is invalid
-/// configuration: enforcement that was asked for fails closed for tool calls,
+/// Under tamper prevention, rule content that names a hooks self-protection
+/// rule is invalid configuration: enforcement that was asked for fails closed
+/// for tool calls,
 /// whatever `on_error` says, and `check` reports it without the file's content.
 #[test]
 fn user_rule_content_that_names_a_self_protection_rule_is_invalid_configuration() {
@@ -424,7 +440,7 @@ fn user_rule_content_that_names_a_self_protection_rule_is_invalid_configuration(
         let dir = tempfile::tempdir().unwrap();
         let config = common::config_root(
             dir.path(),
-            "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n",
+            "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n  tamper_prevention:\n    enabled: true\n",
         );
         let file = write_override(&config, "tth.tamper.hook_settings_write", change);
         let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
@@ -463,7 +479,10 @@ fn user_rule_content_that_names_a_self_protection_rule_is_invalid_configuration(
 #[test]
 fn a_detect_only_hook_with_such_content_records_it_and_keeps_the_host_rules() {
     let dir = tempfile::tempdir().unwrap();
-    let config = common::config_root(dir.path(), "hooks:\n  mode: observe\n");
+    let config = common::config_root(
+        dir.path(),
+        "hooks:\n  mode: observe\n  tamper_prevention:\n    enabled: true\n",
+    );
     write_override(&config, "tth.tamper.hook_settings_write", "enabled: false");
     let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
     let (code, stdout, stderr) = run_in(
@@ -491,7 +510,7 @@ fn a_detect_only_hook_with_such_content_records_it_and_keeps_the_host_rules() {
 }
 
 /// A policy file for `config`, in `policies.d`.
-fn write_policy(config: &std::path::Path, policy: &str) -> std::path::PathBuf {
+pub(crate) fn write_policy(config: &std::path::Path, policy: &str) -> std::path::PathBuf {
     let path = config.join("policies.d").join("policy.yaml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, policy).unwrap();
@@ -506,16 +525,16 @@ const POLICIES_THAT_DROP_HOST_RULES: &[&str] = &[
     "version: 1\nenabled_categories: [network]\n",
 ];
 
-/// A policy is rule content like the rest: one that would turn a
-/// self-protection rule off is invalid configuration, and `check` names its
-/// file and nothing of what it says.
+/// A policy is rule content like the rest: under tamper prevention, one that
+/// would turn a self-protection rule off is invalid configuration, and `check`
+/// names its file and nothing of what it says.
 #[test]
 fn a_policy_that_would_turn_off_a_self_protection_rule_is_invalid_configuration() {
     for policy in POLICIES_THAT_DROP_HOST_RULES {
         let dir = tempfile::tempdir().unwrap();
         let config = common::config_root(
             dir.path(),
-            "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n",
+            "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n  tamper_prevention:\n    enabled: true\n",
         );
         let file = write_policy(&config, policy);
         let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
@@ -539,7 +558,10 @@ fn a_policy_that_would_turn_off_a_self_protection_rule_is_invalid_configuration(
         // Without a request for enforcement: detect-only, recorded, and the
         // self-protection rules still detect.
         let dir = tempfile::tempdir().unwrap();
-        let config = common::config_root(dir.path(), "hooks:\n  mode: observe\n");
+        let config = common::config_root(
+            dir.path(),
+            "hooks:\n  mode: observe\n  tamper_prevention:\n    enabled: true\n",
+        );
         write_policy(&config, policy);
         let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
         let (code, stdout, stderr) = run_in(
@@ -563,6 +585,183 @@ fn a_policy_that_would_turn_off_a_self_protection_rule_is_invalid_configuration(
         let decision = records.iter().find(|r| r["kind"] == "decision").unwrap();
         assert_eq!(decision["decision"]["verdict"], "deny", "{policy}");
     }
+}
+
+/// Tamper prevention is off by default: the self-protection rules are then
+/// rules like any other, which an operator's override or policy tunes or
+/// turns off, and `check` says which of the two applies.
+#[test]
+fn by_default_an_operator_tunes_the_self_protection_rules() {
+    const CALL: &str = "rm -f ~/.claude/settings.json";
+    let enforce = "hooks:\n  mode: enforce\n";
+    let check = |config: &std::path::Path, state: &std::path::Path| {
+        let out = isolated()
+            .arg("check")
+            .arg("--config-dir")
+            .arg(config)
+            .env("TELLTALE_HOOKS_STATE_DIR", state)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(0), "{stderr}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // Untuned, a self-protection rule denies the call.
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), enforce);
+    assert_eq!(hook_decision(&config, CALL).as_deref(), Some("deny"));
+    let stdout = check(&config, dir.path());
+    assert!(stdout.contains("tamper prevention: off"), "{stdout}");
+
+    // Policies the lock refuses load, and the ones that turn the category
+    // or every self-protection rule off leave the call to the harness. (No
+    // rule has the category `network`, so the policy that lists only it
+    // selects nothing and fails for that reason; `download` stands in.)
+    let policies = POLICIES_THAT_DROP_HOST_RULES
+        .iter()
+        .map(|policy| policy.replace("[network]", "[download]"));
+    for policy in policies {
+        let policy = policy.as_str();
+        let dir = tempfile::tempdir().unwrap();
+        let config = common::config_root(dir.path(), enforce);
+        write_policy(&config, policy);
+        check(&config, dir.path());
+        let decision = hook_decision(&config, CALL);
+        if policy.contains("hook_settings_write") {
+            // Other self-protection rules still match the command.
+            assert_eq!(decision.as_deref(), Some("deny"), "{policy}");
+        } else {
+            assert_eq!(decision, None, "{policy}");
+        }
+    }
+
+    // An override that names a self-protection rule loads too.
+    for change in ["enabled: false", "score: 5"] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = common::config_root(dir.path(), enforce);
+        write_override(&config, "tth.tamper.hook_settings_write", change);
+        check(&config, dir.path());
+    }
+
+    // With the lock on, `check` says so.
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(
+        dir.path(),
+        "hooks:\n  mode: enforce\n  tamper_prevention:\n    enabled: true\n",
+    );
+    let stdout = check(&config, dir.path());
+    assert!(stdout.contains("tamper prevention: on"), "{stdout}");
+    assert_eq!(hook_decision(&config, CALL).as_deref(), Some("deny"));
+}
+
+/// The lock needs the rules it locks: asking for it with the self-protection
+/// rules off is invalid configuration, not a lock on nothing.
+#[test]
+fn tamper_prevention_without_the_self_protection_rules_is_invalid_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(
+        dir.path(),
+        "hooks:\n  self_protection_rules: false\n  tamper_prevention:\n    enabled: true\n",
+    );
+    let out = isolated()
+        .arg("check")
+        .arg("--config-dir")
+        .arg(&config)
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("hooks.tamper_prevention.enabled"),
+        "{stderr}"
+    );
+}
+
+/// `check` says why a hook asks or denies (the thresholds), what is installed
+/// outside its settings, and with `--rules` every rule as it takes effect:
+/// what an override changed, with its reason, and what a policy turned off.
+#[test]
+fn check_rules_lists_every_rule_as_it_takes_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n");
+    write_override(&config, "tth.tamper.hook_settings_write", "score: 5");
+    write_policy(&config, "version: 1\ndisabled_rules: [network.download]\n");
+    let check = |flags: &[&str]| {
+        let out = isolated()
+            .arg("check")
+            .args(flags)
+            .arg("--config-dir")
+            .arg(&config)
+            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(0), "{stderr}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let plain = check(&[]);
+    assert!(
+        plain.contains(
+            "thresholds: ask at action score 50 or session score 150, deny at action score 90 or session score 300, repeated denials: 3"
+        ),
+        "{plain}"
+    );
+    for harness in ["claude-code", "copilot-cli", "codex-cli", "opencode"] {
+        assert!(plain.contains(&format!("\n  {harness}: ")), "{plain}");
+    }
+    assert!(!plain.contains("\nrule: "), "{plain}");
+
+    let listed = check(&["--rules"]);
+    let rule = |name: &str| {
+        listed
+            .lines()
+            .find(|line| line.starts_with(&format!("rule: {name}\t")))
+            .unwrap_or_else(|| panic!("{name} is not listed\n{listed}"))
+            .to_owned()
+    };
+    assert_eq!(
+        rule("tth.tamper.hook_settings_write"),
+        "rule: tth.tamper.hook_settings_write\trule\tenabled\tscore 5\tbuiltin\toverride score=5 (synthetic reason text)"
+    );
+    assert_eq!(
+        rule("network.download"),
+        "rule: network.download\trule\tdisabled by policy\tscore 20\tbuiltin\t-"
+    );
+    // A chain whose action score differs from its session score shows both.
+    assert!(
+        rule("chain.download_then_execute").contains("\tchain\tenabled\tscore 35 (action 50)\t"),
+        "{listed}"
+    );
+    // Nothing of the override file but its reason.
+    assert!(!listed.contains("override.yaml"), "{listed}");
+}
+
+/// A rule build that fails names its cause on `check`'s stderr: the file and
+/// the rule ID an operator has to fix.
+#[test]
+fn check_names_the_cause_of_a_rule_build_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: observe\n");
+    let file = write_override(&config, "synthetic.no_such_rule", "enabled: false");
+    let out = isolated()
+        .arg("check")
+        .arg("--config-dir")
+        .arg(&config)
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("pipeline_build_failed"), "{stderr}");
+    assert!(
+        stderr.contains("caused by: unknown rule_id 'synthetic.no_such_rule'"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&*file.display().to_string()), "{stderr}");
+    assert!(out.stdout.is_empty());
 }
 
 /// A policy that leaves the self-protection rules alone loads, and changes the

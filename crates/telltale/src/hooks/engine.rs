@@ -126,7 +126,19 @@ impl std::fmt::Display for EngineError {
     }
 }
 
-impl std::error::Error for EngineError {}
+impl std::error::Error for EngineError {
+    /// What made the pipeline fail, which can name a file and a rule ID: for
+    /// an operator's terminal (`telltale hooks check`), never for telemetry,
+    /// which carries [`Self::code`].
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Build(error) | Self::Provenance(error) | Self::Scan(error) => {
+                std::error::Error::source(error)
+            }
+            Self::Content(..) | Self::Window(_) | Self::NoResult => None,
+        }
+    }
+}
 
 pub struct Engine {
     pipeline: Pipeline,
@@ -268,11 +280,23 @@ impl Engine {
         } else {
             Vec::new()
         };
+        // With tamper prevention on, the self-protection rules are loaded
+        // where no other content can replace them, and the rules that are
+        // built must carry each one as its document defines it. Without it
+        // they are ordinary bundled rules: a managed tier can replace one by
+        // name, and overrides and the policy apply to them.
+        let locked = rules.tamper_prevention;
         let host_rules = host_rule_definitions(&documents);
-        let resolution = crate::rule_resolution::resolve_rule_set(
+        let (fixed, replaceable) = if locked {
+            (documents, Vec::new())
+        } else {
+            (Vec::new(), documents)
+        };
+        let resolution = crate::rule_resolution::resolve_rule_set_with_host(
             &rules.packs,
             &[],
-            documents,
+            fixed,
+            replaceable,
             rules.policy.as_deref(),
             telltale_rules::RuleLoadMode::IncludeDefault,
             &rules.overrides,
@@ -281,12 +305,12 @@ impl Engine {
         .map_err(|error| {
             EngineError::Build(PipelineError::Compilation(error.to_string().into()))
         })?;
-        if let Some(id) = altered_host_rule(&host_rules, &resolution.content) {
+        if locked && let Some(id) = altered_host_rule(&host_rules, &resolution.content) {
             return Err(EngineError::Build(PipelineError::Compilation(
                 format!("user rule content changes the self-protection rule {id}").into(),
             )));
         }
-        if let Some(id) = dropped_host_rule(&host_rules, &resolution.rule_set) {
+        if locked && let Some(id) = dropped_host_rule(&host_rules, &resolution.rule_set) {
             return Err(EngineError::Build(PipelineError::Compilation(
                 format!("the policy removes the self-protection rule {id}").into(),
             )));
@@ -649,6 +673,17 @@ impl Engine {
     /// What the generated self-protection rules cover (`telltale hooks check`).
     pub fn generated_coverage(&self) -> &GeneratedCoverage {
         &self.generated
+    }
+
+    /// The rules this engine evaluates as they take effect: for every rule
+    /// and chain whether it is enabled and what turned it off, its scores,
+    /// the tier whose definition is in effect, and the overrides applied to
+    /// it with their reasons (`telltale hooks check --rules`). No matchers,
+    /// paths or document text.
+    pub fn effective_configuration(&self) -> Result<crate::EffectiveConfigurationV1, EngineError> {
+        self.pipeline
+            .effective_configuration(&self.options)
+            .map_err(EngineError::Provenance)
     }
 
     /// Evaluate `lines` as one hook-journal source of `harness`, the focus lines
