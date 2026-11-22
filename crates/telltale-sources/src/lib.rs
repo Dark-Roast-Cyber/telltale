@@ -33,29 +33,21 @@ pub struct DeclaredTool {
 /// Every built-in tool each source declares.
 #[doc(hidden)]
 pub fn declared_tools() -> Vec<DeclaredTool> {
-    use telltale_schema::clients::ClientId;
-    [
-        ClientId::Claude,
-        ClientId::Codex,
-        ClientId::Copilot,
-        ClientId::OpenClaw,
-        ClientId::OpenCode,
-        ClientId::Qwen,
-        ClientId::Pi,
-    ]
-    .into_iter()
-    .flat_map(|client| {
-        tool_operation::table(client)
-            .unwrap_or_default()
-            .iter()
-            .map(move |spec| DeclaredTool {
-                client,
-                name: spec.name(),
-                kind: spec.kind(),
-                operand_keys: spec.operand_keys().into_iter().collect(),
-            })
-    })
-    .collect()
+    clients::supported_clients()
+        .iter()
+        .flat_map(|def| {
+            let client = def.id;
+            tool_operation::table(client)
+                .unwrap_or_default()
+                .iter()
+                .map(move |spec| DeclaredTool {
+                    client,
+                    name: spec.name(),
+                    kind: spec.kind(),
+                    operand_keys: spec.operand_keys().into_iter().collect(),
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]

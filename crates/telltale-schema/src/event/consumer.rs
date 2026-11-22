@@ -12,18 +12,17 @@ use std::sync::LazyLock;
 use jsonschema::{Validator, validator_for};
 use serde::Deserialize;
 use serde_json::Value;
-use uuid::Uuid;
 
 use super::{
     NATIVE_SCHEMA_VERSION, VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SIGNAL_TYPES,
-    is_canonical_opaque_identifier_for_kind, parse_event_timestamp, validate_risk_accounting_scope,
-    validate_rule_ids,
+    is_canonical_event_id, is_canonical_opaque_identifier_for_kind, parse_event_timestamp,
+    validate_risk_accounting_scope, validate_rule_ids,
 };
 use crate::scoring::{RiskContribution, canonicalize_contributions, checked_risk_sum};
 
 #[cfg(test)]
-#[path = "inventory_tests.rs"]
-mod inventory_tests;
+#[path = "consumer_field_inventory_tests.rs"]
+mod consumer_field_inventory_tests;
 
 /// The exact Event 3.0 schema used by the consumer boundary.
 pub const EVENT3_SCHEMA: &str = include_str!("../../data/event-3.0.schema.json");
@@ -747,7 +746,7 @@ fn classify_schema_failure(object: &serde_json::Map<String, Value>) -> Event3Con
     }
     if object
         .get("event_id")
-        .is_some_and(|value| value.as_str().is_some_and(|id| !is_event_id(id)))
+        .is_some_and(|value| value.as_str().is_some_and(|id| !is_canonical_event_id(id)))
         || object.get("timestamp").is_some_and(|value| {
             value
                 .as_str()
@@ -919,7 +918,7 @@ fn validate_wire(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
             "unsupported_schema_version",
         ));
     }
-    if !is_event_id(&wire.event_id)
+    if !is_canonical_event_id(&wire.event_id)
         || parse_event_timestamp(&wire.timestamp).is_none()
         || parse_event_timestamp(&wire.observed_at).is_none()
         || parse_event_timestamp(&wire.ingested_at).is_none()
@@ -1336,18 +1335,6 @@ fn no_process_fields(wire: &Event3Wire) -> bool {
         && wire.risk_entity_type.is_none()
         && wire.risk_entity_value.is_none()
         && wire.process.is_none()
-}
-
-fn is_event_id(value: &str) -> bool {
-    let Some(uuid_text) = value.strip_prefix("telltale-") else {
-        return false;
-    };
-    uuid_text.len() == 36
-        && Uuid::parse_str(uuid_text).is_ok_and(|uuid| {
-            uuid.get_version_num() == 4
-                && matches!(uuid_text.as_bytes()[19], b'8' | b'9' | b'a' | b'b')
-                && uuid.to_string().as_str() == uuid_text
-        })
 }
 
 fn is_rule_id(value: &str) -> bool {
@@ -2436,6 +2423,29 @@ mod tests {
             .expect_err("invalid identity");
         assert_eq!(error.category(), Event3ErrorCategory::Identity);
         assert!(!error.to_string().contains(canary));
+    }
+
+    #[test]
+    fn event_id_must_be_a_lowercase_prefixed_uuid_v4() {
+        for event_id in [
+            "00000000-0000-4000-8000-000000000000",
+            "event-00000000-0000-4000-8000-000000000000",
+            "telltale-0000000A-0000-4000-8000-000000000000",
+            "telltale-00000000-0000-1000-8000-000000000000",
+            "telltale-00000000-0000-4000-c000-000000000000",
+            "telltale-00000000-0000-4000-8000-00000000000",
+            "telltale-00000000000040008000000000000000",
+        ] {
+            let mut value = serde_json::from_slice::<Value>(&health_bytes()).expect("health JSON");
+            value["event_id"] = Value::String(event_id.to_string());
+            let error = Event3Record::from_json(&serde_json::to_vec(&value).expect("JSON"))
+                .expect_err(event_id);
+            assert_eq!(
+                (error.category(), error.code()),
+                (Event3ErrorCategory::Identity, "invalid_identity_or_time"),
+                "{event_id}"
+            );
+        }
     }
 
     #[test]

@@ -48,6 +48,33 @@
   `hook_deadline`. A decision already evaluated is always delivered. One scan
   already in flight is not interrupted.
 
+- **Hooks records say how long a call waited for its session's lock.** A
+  decision or result-finding record now carries `evaluation.lock_wait_ms`,
+  and the `error` record of a tool call that gave up waiting
+  (`state_lock_timeout`) or failed after taking the lock carries
+  `lock_wait_ms` (schema `telltale_hooks.record.v1`, additive), so time spent
+  behind the session's other calls reads apart from `scan_ms`. Both evaluator
+  paths record it; `make hooks-load-bench` reports its percentiles. Embedding
+  API: `SessionHandle::lock_wait` is new, the new fields
+  `telemetry::EvaluationInfo::lock_wait_ms` and `telemetry::Record::lock_wait_ms`
+  must be set where those structs are built field by field, and a lock timeout
+  is now `StateError::LockTimeout` (code `state_lock_timeout` as before).
+
+- **A tool call past the projection budget is also read with its session
+  history.** After its pieces, such a call with session history now gets one
+  more scan: the history and the line the call is journaled as, which later
+  calls read. It starts only if the existing recovery budget admits it and the
+  piece time limit has not passed. Its findings, multi-call chain findings
+  included, are added to what the pieces found and remove nothing; the call
+  keeps the `on_unevaluable` floor and `pending_input_truncated`.
+  `history_lost` on such a call now means the history could not be read
+  within the budget, and the new `evaluation.scans.history` says whether that
+  scan passed, was refused or was skipped, and is null when there was no
+  history to read (schema `telltale_hooks.record.v1`, additive;
+  `make hooks-load-bench` counts it). No setting or limit changed. Embedding
+  API: `engine::Request` has a new `journaled` field (`None` keeps the
+  previous behaviour) and `engine::ScanTrace` a new `history` field.
+
 - **Hooks embedding API: time limits are built in.** `Runtime::with_limits`
   (with `engine::Limits`) replaces `Runtime::set_session_lock_wait`, and
   `RecoveryBudget::start` takes the `Limits` to work within. New:

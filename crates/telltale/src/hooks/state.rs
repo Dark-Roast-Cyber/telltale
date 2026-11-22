@@ -238,12 +238,16 @@ pub struct SessionHandle {
     /// here: they surface as `StateError` and the runtime applies its
     /// session-file failure policy.
     pub anomalies: Vec<&'static str>,
+    /// How long opening waited for the session's lock.
+    pub lock_wait: Duration,
 }
 
 #[derive(Debug)]
 pub enum StateError {
     Io(&'static str, std::io::Error),
     Corrupt,
+    /// The session's lock stayed taken; how long the open waited for it.
+    LockTimeout(Duration),
 }
 
 impl StateError {
@@ -251,6 +255,7 @@ impl StateError {
         match self {
             Self::Io(code, _) => code,
             Self::Corrupt => "state_corrupt",
+            Self::LockTimeout(_) => "state_lock_timeout",
         }
     }
 }
@@ -260,6 +265,7 @@ impl std::fmt::Display for StateError {
         match self {
             Self::Io(code, error) => write!(f, "{code}: {error}"),
             Self::Corrupt => f.write_str("state_corrupt"),
+            Self::LockTimeout(_) => f.write_str("state_lock_timeout: timed out"),
         }
     }
 }
@@ -365,24 +371,23 @@ pub fn create_fresh(path: &Path) -> std::io::Result<File> {
     open_regular(OpenOptions::new().write(true).create_new(true), path)
 }
 
-/// Take a session's lock, or give up after `wait`. A blocking lock cannot time
-/// out, and polling behaves the same on every platform.
-fn lock_within(lock: &File, wait: Duration) -> Result<(), StateError> {
+/// Take a session's lock, or give up after `wait`, and say how long it took. A
+/// blocking lock cannot time out, and polling behaves the same on every
+/// platform.
+fn lock_within(lock: &File, wait: Duration) -> Result<Duration, StateError> {
     let started = Instant::now();
     let mut pause = Duration::from_millis(1);
     loop {
         match lock.try_lock() {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(started.elapsed()),
             Err(TryLockError::WouldBlock) => {}
             Err(TryLockError::Error(error)) => {
                 return Err(StateError::Io("state_lock_failed", error));
             }
         }
-        if started.elapsed() >= wait {
-            return Err(StateError::Io(
-                "state_lock_timeout",
-                std::io::ErrorKind::TimedOut.into(),
-            ));
+        let waited = started.elapsed();
+        if waited >= wait {
+            return Err(StateError::LockTimeout(waited));
         }
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(20));
@@ -410,7 +415,7 @@ impl SessionHandle {
             &dir.join("lock"),
         )
         .map_err(|e| StateError::Io("state_lock_open_failed", e))?;
-        lock_within(&lock, wait)?;
+        let lock_wait = lock_within(&lock, wait)?;
         let fresh = || SessionState {
             version: STATE_VERSION,
             ..SessionState::default()
@@ -460,6 +465,7 @@ impl SessionHandle {
             _lock: lock,
             state,
             anomalies,
+            lock_wait,
         })
     }
 

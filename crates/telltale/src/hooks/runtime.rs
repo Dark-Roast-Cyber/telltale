@@ -3,6 +3,7 @@
 //! Telltale evaluation, policy, outcome correlation, telemetry) lives here once.
 //! See docs/architecture.md for the contract adapters must uphold.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::ObservationStage;
@@ -18,7 +19,7 @@ use crate::hooks::engine::{
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
-use crate::hooks::state::{PendingDecision, SessionHandle, Settled, Verdict};
+use crate::hooks::state::{PendingDecision, SessionHandle, Settled, StateError, Verdict};
 use crate::hooks::telemetry::{
     Action, DecisionInfo, EvaluationInfo, Harness, Kind, OutcomeInfo, Producer, Record, Session,
     Sink, TelltaleAction, new_record_id, sha256_hex,
@@ -240,7 +241,14 @@ pub struct Runtime {
     deadline: Option<Instant>,
     /// When the evaluator's client stops waiting (ms since the epoch).
     answer_by: Option<i64>,
+    /// How long the current call has waited for its session's lock, over
+    /// every time it took it, in nanoseconds; [`NO_LOCK_WAIT`] before it
+    /// first tries. Atomic so that the runtime stays `Sync`.
+    lock_wait: AtomicU64,
 }
+
+/// [`Runtime::lock_wait`] of a call that has not tried to take the lock.
+const NO_LOCK_WAIT: u64 = u64::MAX;
 
 /// A session's lock stayed taken for as long as this call could wait.
 pub const STATE_LOCK_TIMEOUT: &str = "state_lock_timeout";
@@ -318,6 +326,9 @@ struct RequestEvaluation {
     past_budget: bool,
     /// What the call's scans did, whole and projected.
     scans: ScanTrace,
+    /// The line the call is journaled as ([`Runtime::journal_line`]): the one
+    /// a call past the projection budget was scanned with history as.
+    journaled: Line,
 }
 
 /// The policy decision for one request, with the session scores it was taken
@@ -450,6 +461,7 @@ impl Runtime {
             started: None,
             deadline: None,
             answer_by: None,
+            lock_wait: AtomicU64::new(NO_LOCK_WAIT),
         }
     }
 
@@ -473,6 +485,15 @@ impl Runtime {
     fn start_call(&mut self) {
         let started = self.started.unwrap_or_else(Instant::now);
         self.deadline = started.checked_add(self.limits.hook_deadline);
+        self.lock_wait.store(NO_LOCK_WAIT, Ordering::Relaxed);
+    }
+
+    /// [`Self::lock_wait`] in milliseconds, for telemetry.
+    fn lock_wait_ms(&self) -> Option<u64> {
+        match self.lock_wait.load(Ordering::Relaxed) {
+            NO_LOCK_WAIT => None,
+            nanos => Some(nanos / 1_000_000),
+        }
     }
 
     /// What is left of the call's deadline.
@@ -510,6 +531,7 @@ impl Runtime {
             started: None,
             deadline: None,
             answer_by: None,
+            lock_wait: AtomicU64::new(NO_LOCK_WAIT),
         }
     }
 
@@ -569,6 +591,7 @@ impl Runtime {
             outcome: None,
             lifecycle: None,
             error_code: None,
+            lock_wait_ms: None,
             telltale: Vec::new(),
         }
     }
@@ -684,6 +707,7 @@ impl Runtime {
                     let mut record = self.record(ctx, Kind::Error);
                     record.error_code = Some(code.to_owned());
                     record.action = Some(action_of(call));
+                    record.lock_wait_ms = self.lock_wait_ms();
                     self.emit(&record);
                     return response;
                 }
@@ -813,6 +837,7 @@ impl Runtime {
     ) -> Response {
         let mut record = self.record(ctx, Kind::Error);
         record.error_code = Some(code.to_owned());
+        record.lock_wait_ms = self.lock_wait_ms();
         if let Event::ToolRequested(call) = event {
             record.action = Some(action_of(call));
         }
@@ -847,13 +872,27 @@ impl Runtime {
 
     /// The session of `ctx` under state directory `dir`.
     fn open_in(&self, ctx: &Context, dir: &std::path::Path) -> Result<SessionHandle, &'static str> {
-        let session = SessionHandle::open_within(
+        let opened = SessionHandle::open_within(
             dir,
             ctx.harness,
             &ctx.session_id,
             self.call_limits().session_lock_wait,
-        )
-        .map_err(|error| error.code())?;
+        );
+        let waited = match &opened {
+            Ok(session) => Some(session.lock_wait),
+            Err(StateError::LockTimeout(waited)) => Some(*waited),
+            Err(_) => None,
+        };
+        if let Some(waited) = waited {
+            let before = match self.lock_wait.load(Ordering::Relaxed) {
+                NO_LOCK_WAIT => 0,
+                nanos => nanos,
+            };
+            let waited = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+            let total = before.saturating_add(waited).min(NO_LOCK_WAIT - 1);
+            self.lock_wait.store(total, Ordering::Relaxed);
+        }
+        let session = opened.map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
         // call is still evaluated) but never silent.
         for code in &session.anomalies {
@@ -1007,6 +1046,9 @@ impl Runtime {
         self.emit(&record);
     }
 
+    /// `journaled` is what a projection past its budget is journaled as
+    /// (`Request::journaled`).
+    #[allow(clippy::too_many_arguments)]
     fn evaluate(
         &mut self,
         ctx: &Context,
@@ -1014,6 +1056,7 @@ impl Runtime {
         pending: Vec<Line>,
         focus: &[Focus],
         scan: PendingScan,
+        journaled: Option<(&Line, &Focus)>,
         budget: &mut RecoveryBudget,
     ) -> (Result<Evaluation, &'static str>, usize, bool) {
         let window = &self.config.window;
@@ -1039,6 +1082,7 @@ impl Runtime {
                     pending: &pending,
                     focus,
                     scan,
+                    journaled,
                 };
                 engine
                     .evaluate(request, budget)
@@ -1072,6 +1116,7 @@ impl Runtime {
                 window_truncated,
                 build_ms,
                 scan_ms: Some(evaluation.scan_ms),
+                lock_wait_ms: self.lock_wait_ms(),
                 evaluator: self.evaluator,
                 scans: None,
                 evaluator_fallback: self.evaluator_fallback,
@@ -1085,6 +1130,7 @@ impl Runtime {
                 window_truncated,
                 build_ms,
                 scan_ms: None,
+                lock_wait_ms: self.lock_wait_ms(),
                 evaluator: self.evaluator,
                 scans: None,
                 evaluator_fallback: self.evaluator_fallback,
@@ -1159,8 +1205,11 @@ impl Runtime {
             stateless,
         );
         apply_decision(&mut session, &decision);
-        let history = evaluated.projection.as_ref().map(|p| &p.history);
-        self.journal_request(ctx, &session, &id, call, history)?;
+        // Journal the request as history for later scans.
+        session
+            .journal()
+            .append(&evaluated.journaled)
+            .map_err(|_| "journal_append_failed")?;
         session.state.remember(
             &id.journal_id,
             PendingDecision {
@@ -1231,6 +1280,7 @@ impl Runtime {
             vec![pending],
             std::slice::from_ref(&focus),
             PendingScan::Together,
+            None,
             &mut budget,
         );
         // Telltale excluded the call (oversized or too deeply nested input):
@@ -1241,6 +1291,7 @@ impl Runtime {
         // together (projection.rs), so "no finding" is not an allow.
         let mut separated = false;
         let mut past_budget = false;
+        let mut journaled = None;
         if let Ok(first) = &result
             && first.status == EvalStatus::NotEvaluated
         {
@@ -1248,8 +1299,10 @@ impl Runtime {
             if let Some(projected) = crate::hooks::projection::project(&call.input) {
                 separated = projected.separated;
                 past_budget = projected.past_budget;
-                (result, window_records, window_truncated) =
+                let line;
+                (result, window_records, window_truncated, line) =
                     self.evaluate_projected(ctx, session, id, call, &projected, &mut budget);
+                journaled = Some(line);
                 projection = Some(projected);
             }
         }
@@ -1266,10 +1319,13 @@ impl Runtime {
             separated,
             past_budget,
             scans,
+            journaled: journaled.unwrap_or_else(|| self.journal_line(ctx, id, call, None)),
         }
     }
 
-    /// Evaluate the projection's variants, each as a pending line of its own.
+    /// Evaluate the projection's variants, each as a pending line of its own,
+    /// and return the line the call is journaled as with the evaluation. Past
+    /// its budget the call is also read with history as that line.
     fn evaluate_projected(
         &mut self,
         ctx: &Context,
@@ -1278,7 +1334,8 @@ impl Runtime {
         call: &ToolCall,
         projected: &crate::hooks::projection::Projection,
         budget: &mut RecoveryBudget,
-    ) -> (Result<Evaluation, &'static str>, usize, bool) {
+    ) -> (Result<Evaluation, &'static str>, usize, bool, Line) {
+        let journaled = self.journal_line(ctx, id, call, Some(&projected.history));
         let mut lines = Vec::new();
         let mut focuses = Vec::new();
         for (n, variant) in projected.variants.iter().enumerate() {
@@ -1298,12 +1355,35 @@ impl Runtime {
                 native_id: variant_id,
             });
         }
-        let scan = if projected.past_budget {
-            PendingScan::PiecesOnly
-        } else {
-            PendingScan::Together
+        if !projected.past_budget {
+            let (result, records, truncated) = self.evaluate(
+                ctx,
+                session,
+                lines,
+                &focuses,
+                PendingScan::Together,
+                None,
+                budget,
+            );
+            return (result, records, truncated, journaled);
+        }
+        // Read with history after the pieces as later calls will read it: the
+        // line it is journaled as, at the call's own time.
+        let focus = Focus {
+            occurred_at: id.timestamp.clone(),
+            stage: ObservationStage::ToolRequested,
+            native_id: id.uuid.clone(),
         };
-        self.evaluate(ctx, session, lines, &focuses, scan, budget)
+        let (result, records, truncated) = self.evaluate(
+            ctx,
+            session,
+            lines,
+            &focuses,
+            PendingScan::PiecesOnly,
+            Some((&journaled, &focus)),
+            budget,
+        );
+        (result, records, truncated, journaled)
     }
 
     /// The evaluation's telemetry, with every limit on what it could see.
@@ -1498,15 +1578,14 @@ impl Runtime {
         outcome
     }
 
-    /// Journal the request as history for later scans.
-    fn journal_request(
+    /// The line a request is journaled as, the history later calls read.
+    fn journal_line(
         &self,
         ctx: &Context,
-        session: &SessionHandle,
         id: &RequestIdentity,
         call: &ToolCall,
         projection: Option<&Value>,
-    ) -> Result<(), &'static str> {
+    ) -> Line {
         // Attempts stay in history whatever the verdict: a denied download
         // still informs how a later execute of the same artifact is judged.
         // History stays within Telltale's per-value bound so later scans
@@ -1523,18 +1602,14 @@ impl Runtime {
             ),
         };
         let history_input = bound_history(input, string_bytes, LOCAL_MAX_VALUE_BYTES);
-        let journaled = Line::tool_use(
+        Line::tool_use(
             &ctx.session_id,
             &id.uuid,
             &id.timestamp,
             &id.journal_id,
             &call.tool_name,
             &history_input,
-        );
-        session
-            .journal()
-            .append(&journaled)
-            .map_err(|_| "journal_append_failed")
+        )
     }
 
     /// The decision record for a request, with the Telltale actions it was
@@ -1715,6 +1790,7 @@ impl Runtime {
             vec![line],
             std::slice::from_ref(&focus),
             PendingScan::Together,
+            None,
             &mut self.call_budget(),
         );
         if let Ok(evaluation) = &mut evaluated.0
@@ -2252,7 +2328,7 @@ mod tests {
             let mut session = runtime.open(&ctx).unwrap();
             let id = RequestIdentity::next(&mut session, &call);
             let mut budget = runtime.call_budget();
-            let (result, _, _) =
+            let (result, _, _, _) =
                 runtime.evaluate_projected(&ctx, &mut session, &id, &call, &projected, &mut budget);
             assert_eq!(budget.trace().pieces_scanned, 0);
             let decision = runtime.decide_request(

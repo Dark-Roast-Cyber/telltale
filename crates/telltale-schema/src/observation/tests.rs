@@ -1209,6 +1209,21 @@ fn invalid_stage_and_other_registry_are_rejected() {
 }
 
 #[test]
+fn observation_id_shape_is_the_lowercase_prefixed_sha256_digest() {
+    assert!(ObservationId::new(format!("obs:v2:sha256:{}", "0a".repeat(32))).is_ok());
+    for value in [
+        "0a".repeat(32),
+        format!("obs:v1:sha256:{}", "0a".repeat(32)),
+        format!("obs:v2:sha256:{}", "0A".repeat(32)),
+        format!("obs:v2:sha256:{}", "0g".repeat(32)),
+        format!("obs:v2:sha256:{}", "a".repeat(63)),
+        format!("obs:v2:sha256:{}", "a".repeat(65)),
+    ] {
+        assert!(ObservationId::new(&value).is_err(), "{value}");
+    }
+}
+
+#[test]
 fn identity_is_deterministic_ordered_and_child_specific() {
     let first = build(
         ObservationBody::Message(MessageObservation::new(MessageRole::User)),

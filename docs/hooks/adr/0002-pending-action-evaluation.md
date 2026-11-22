@@ -231,6 +231,18 @@ hole, since everything before the newest poison goes. So:
   and the limit `pending_pieces_unscanned`, so a deny in a piece past the limit
   becomes `ask`. That is the trade for a hook that answers more often. It does not
   bound the scans ahead of the pieces.
+- (2026-11-22) A projection past its budget is not scanned whole. After its pieces,
+  a call with session history gets one more scan: the history and the line the call
+  is journaled as, the same line later calls read. It runs after the pieces so it
+  never delays the piece carrying a deny, starts only if the 2 s recovery budget
+  admits it on its forecast and the piece time limit has not passed, and is not
+  split or retried when refused. Its findings are added to the pieces' and remove
+  nothing; the call keeps the `on_unevaluable` floor, since its full input still was
+  not evaluated, and a scan that finds nothing does not make a call whose pieces were
+  all refused count as evaluated. If it passes, history counts as kept; if it is
+  skipped or refused, a call with an evaluated piece records `history_lost` and a
+  call with none stays `not_evaluated`. A first call has no history,
+  so it gets no such scan. No setting and no limit changed.
 
 Nothing about the recovery is persisted, so a poisoned window pays for it on
 every call until the line leaves. That is simple and bounded; remembering what
