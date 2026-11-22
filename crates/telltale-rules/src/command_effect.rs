@@ -451,6 +451,26 @@ impl Wrapper {
     }
 }
 
+/// The wrappers that hand their command words, joined with blanks, to a shell.
+const SHELL_LAUNCHERS: [&str; 6] = ["ssh", "watch", "parallel", "cmd", "powershell", "pwsh"];
+
+/// The text a wrapper hands to another shell when one of its command words
+/// holds a blank, as a quoted command does (`ssh host '…'`, `cmd /c "…"`,
+/// `powershell -Command "…"`): its command words joined with blanks, as that
+/// shell receives them. The caller reads it as it reads a `bash -c` script.
+pub fn launched_script(tokens: &[String]) -> Option<String> {
+    let launcher = invocation(tokens, &SHELL_LAUNCHERS)?;
+    let start = WRAPPERS
+        .iter()
+        .find(|wrapper| wrapper.invoked(launcher, 0))?
+        .command(launcher, 0)?;
+    let words = launcher.get(start..)?;
+    words
+        .iter()
+        .any(|word| word.contains(char::is_whitespace))
+        .then(|| words.join(" "))
+}
+
 /// Wrapper long options that take a separate value (`--user deploy`).
 const WRAPPER_VALUE_OPTIONS: [&str; 34] = [
     "user",
@@ -881,6 +901,54 @@ mod tests {
                 "watch -n5 echo aws s3 cp ./d s3://synthetic-bucket/k"
             )),
             []
+        );
+    }
+
+    #[test]
+    fn a_quoted_command_another_shell_receives_is_its_script() {
+        let quoted = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            super::launched_script(&quoted(&[
+                "ssh",
+                "-p",
+                "2222",
+                "host",
+                "cd /srv && aws s3 cp ./d s3://b/"
+            ])),
+            Some("cd /srv && aws s3 cp ./d s3://b/".to_owned())
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&[
+                "sudo",
+                "-u",
+                "app",
+                "cmd",
+                "/c",
+                "aws s3 cp ./d s3://b/"
+            ])),
+            Some("aws s3 cp ./d s3://b/".to_owned())
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&[
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "aws s3 cp ./d s3://b/"
+            ])),
+            Some("aws s3 cp ./d s3://b/".to_owned())
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&["ssh", "host", "aws", "s3", "ls"])),
+            None
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&["docker", "exec", "c", "aws s3 cp ./d s3://b/"])),
+            None
         );
     }
 

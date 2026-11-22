@@ -1016,12 +1016,13 @@ fn read_view(
                         ));
                         opened.extend(input_files(reading, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        let launched = launched_commands(&tokens, budget)?;
                         if index == 0 && split.contains(&(start, end)) {
                             recorded.push(out.commands.len());
                         }
                         out.stage_spans.push(start..end);
                         out.commands.push(tokens);
-                        if let Some(script) = script {
+                        for script in script.into_iter().chain(launched) {
                             out.stage_spans.push(start..end);
                             out.commands.push(script);
                         }
@@ -1323,6 +1324,38 @@ fn joined_script(tokens: &[String]) -> Option<&[String]> {
         .first()
         .filter(|word| !word.contains(char::is_whitespace))?;
     Some(script)
+}
+
+/// The commands of the text a wrapper hands to another shell as a quoted word
+/// (`ssh host '…'`, `cmd /c "…"`, `powershell -Command "…"`), read as the shell
+/// reader reads a `bash -c` script. A wrapper inside that text is read by its
+/// words alone.
+fn launched_commands(
+    tokens: &[String],
+    budget: &mut RetentionBudget,
+) -> Result<Vec<Vec<String>>, ProcessingError> {
+    let Some(script) = command_effect::launched_script(tokens) else {
+        return Ok(Vec::new());
+    };
+    budget.charge(script.len())?;
+    let shell = super::shell_text::read(&script);
+    budget.charge(shell.work)?;
+    let spans = shell
+        .stages
+        .iter()
+        .chain(&shell.inner_commands)
+        .cloned()
+        .chain(statement_spans(&shell.code))
+        .map(|span| trimmed(&shell.code, span))
+        .filter(|span| !span.is_empty())
+        .map(|span| (span.start, span.end))
+        .collect::<BTreeSet<_>>();
+    let mut commands = Vec::new();
+    for (start, end) in spans {
+        budget.charge(2 * (end - start))?;
+        commands.push(tokenize(&shell.command[start..end]));
+    }
+    Ok(commands)
 }
 
 /// A command stage whose parameters name files it reads.
