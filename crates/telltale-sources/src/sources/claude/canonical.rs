@@ -8,7 +8,7 @@ use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
     ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
     IngestionMode, JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
-    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
+    ObservationError, ObservationStage, ObservedAt, SemanticFacet, Sensitivity, SourceProvenance,
     SourceTimestamp, ToolObservation,
 };
 
@@ -464,7 +464,7 @@ fn emit_message_body(
     .into_iter()
     .flatten()
     {
-        builder = builder.fact_metadata(path, normal_reported()?);
+        builder = builder.fact_metadata(path, FactMetadata::reported()?);
     }
     observations.push(builder.build()?)?;
     *child_ordinal += 1;
@@ -516,7 +516,7 @@ fn tool_observation(
         child_ordinal,
     )?;
     for (path, provenance) in facts {
-        builder = builder.fact_metadata(path, normal(provenance)?);
+        builder = builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
     }
     if let ClaudeContentBlock::ToolUse {
         input: Some(serde_json::Value::Object(input)),
@@ -538,12 +538,12 @@ fn tool_observation(
                 "command.text",
                 SemanticFacet::new(JsonValue::string(command)),
             )?
-            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+            .fact_metadata("command.text", FactMetadata::parsed()?);
     }
     if let Some(path) = resource_path {
         builder = builder
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+            .fact_metadata("resource.path", FactMetadata::parsed()?);
     }
     Ok(builder.build()?)
 }
@@ -702,21 +702,6 @@ fn capabilities() -> CapabilityContext {
             CapabilityAvailability::Unsupported,
         )
         .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported)
-}
-
-fn normal_reported() -> Result<FactMetadata, ClaudeCanonicalError> {
-    normal(FactProvenance::Reported)
-}
-
-fn normal(provenance: FactProvenance) -> Result<FactMetadata, ClaudeCanonicalError> {
-    Ok(match provenance {
-        FactProvenance::Reported => FactMetadata::reported()?,
-        FactProvenance::Parsed => FactMetadata::parsed()?,
-        _ => FactMetadata::new(
-            provenance,
-            telltale_schema::observation::Sensitivity::Normal,
-        )?,
-    })
 }
 
 fn resource_path(value: &JsonValue) -> Option<&str> {

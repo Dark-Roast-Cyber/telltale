@@ -9,8 +9,8 @@ use telltale_schema::observation::{
     CapabilityContext, CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds,
     FactMetadata, FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation,
     MessageRole, ObservationBody, ObservationBuilder, ObservationError, ObservationStage,
-    ObservedAt, SemanticFacet, SourceProvenance, SourceTimestamp, ToolKind, ToolObservation,
-    ToolOperation,
+    ObservedAt, SemanticFacet, Sensitivity, SourceProvenance, SourceTimestamp, ToolKind,
+    ToolObservation, ToolOperation,
 };
 
 use telltale_schema::observation::BoundedTarget;
@@ -298,7 +298,7 @@ fn emit_message(
     .into_iter()
     .flatten()
     {
-        builder = builder.fact_metadata(path, normal(FactProvenance::Reported)?);
+        builder = builder.fact_metadata(path, FactMetadata::reported()?);
     }
     observations.push(builder.build()?)?;
     *child_ordinal += 1;
@@ -389,7 +389,8 @@ fn emit_tool_call(
             *child_ordinal,
         )?;
         for (path, provenance) in paths {
-            builder = builder.fact_metadata(path, normal(provenance)?);
+            builder =
+                builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
         }
         if let Some(arguments) = call.arguments.and_then(Value::as_object) {
             if let Some(command) = arguments
@@ -402,7 +403,7 @@ fn emit_tool_call(
                         "command.text",
                         SemanticFacet::new(JsonValue::string(command)),
                     )?
-                    .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+                    .fact_metadata("command.text", FactMetadata::parsed()?);
             }
             if let Some(path) = arguments
                 .get("path")
@@ -411,7 +412,7 @@ fn emit_tool_call(
             {
                 builder = builder
                     .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                    .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+                    .fact_metadata("resource.path", FactMetadata::parsed()?);
             }
         }
         Ok(builder.build()?)
@@ -464,7 +465,8 @@ fn emit_tool_result(
             *child_ordinal,
         )?;
         for (path, provenance) in paths {
-            builder = builder.fact_metadata(path, normal(provenance)?);
+            builder =
+                builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
         }
         Ok(builder.build()?)
     })?;
@@ -515,14 +517,15 @@ fn emit_bash_execution(
             *child_ordinal,
         )?;
         for (path, provenance) in paths {
-            builder = builder.fact_metadata(path, normal(provenance)?);
+            builder =
+                builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
         }
         builder = builder
             .facet(
                 "command.text",
                 SemanticFacet::new(JsonValue::string(command)),
             )?
-            .fact_metadata("command.text", normal(FactProvenance::Reported)?);
+            .fact_metadata("command.text", FactMetadata::reported()?);
         Ok(builder.build()?)
     })?;
     observations.push(observation)?;
@@ -618,17 +621,6 @@ fn capabilities() -> CapabilityContext {
         .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
         .with_override(CapabilityId::ToolExecution, CapabilityAvailability::Unknown)
         .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported)
-}
-
-fn normal(provenance: FactProvenance) -> Result<FactMetadata, PiCanonicalError> {
-    Ok(match provenance {
-        FactProvenance::Reported => FactMetadata::reported()?,
-        FactProvenance::Parsed => FactMetadata::parsed()?,
-        _ => FactMetadata::new(
-            provenance,
-            telltale_schema::observation::Sensitivity::Normal,
-        )?,
-    })
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> PiCanonicalError {
