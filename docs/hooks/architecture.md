@@ -400,3 +400,75 @@ differently, and other platforms are outside it. On Linux the evaluator needs
 a Unix socket; in a sandbox that refuses one, `evaluator_ready` is false.
 `tests/hooks_load_bench_test.py` (in `make hooks-plugin-check`) checks the
 report, the isolation and `--check` against a stand-in binary.
+
+#### Figures, 2026-11-21
+
+Release build of the 0.8 line on a 20-CPU Linux host that was otherwise
+lightly used (load average 4 to 8, no builds). Sixteen workers, four calls
+each, so 64 calls per scenario; wall time of the hook process in
+milliseconds. Reproduce with:
+
+    make hooks-load-bench ARGS="--concurrency 16 --calls 4 --payload small,projected,past-budget --session same,distinct --evaluator on,off --cpus 0,1 --check"
+
+Pinned to two CPUs (`--cpus 0,1`):
+
+| Payload | Session | Evaluator | p50 | p95 | p99 | max |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| small | same | on | 20 | 351 | 471 | 471 |
+| small | same | off | 2,561 | 3,548 | 3,835 | 3,835 |
+| small | distinct | on | 7 | 166 | 205 | 205 |
+| small | distinct | off | 2,688 | 2,734 | 2,739 | 2,739 |
+| projected | same | on | 119 | 2,477 | 3,203 | 3,203 |
+| projected | same | off | 1,686 | 8,362 | 9,530 | 9,530 |
+| projected | distinct | on | 23 | 946 | 1,089 | 1,089 |
+| projected | distinct | off | 2,882 | 2,914 | 2,922 | 2,922 |
+| past-budget | same | on | 1,274 | 8,746 | 10,521 | 10,521 |
+| past-budget | same | off | 2,900 | 10,331 | 12,898 | 12,898 |
+| past-budget | distinct | on | 1,076 | 7,328 | 7,370 | 7,370 |
+| past-budget | distinct | off | 5,036 | 5,122 | 5,141 | 5,141 |
+
+Without the pin (all 20 CPUs), the same scenarios:
+
+| Payload | Session | Evaluator | p50 | p95 | p99 | max |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| small | same | on | 16 | 374 | 681 | 681 |
+| small | same | off | 303 | 594 | 1,351 | 1,351 |
+| small | distinct | on | 5 | 338 | 398 | 398 |
+| small | distinct | off | 313 | 374 | 376 | 376 |
+| projected | same | on | 83 | 2,712 | 3,249 | 3,249 |
+| projected | same | off | 551 | 2,086 | 3,863 | 3,863 |
+| projected | distinct | on | 295 | 575 | 714 | 714 |
+| projected | distinct | off | 346 | 405 | 411 | 411 |
+| past-budget | same | on | 1,870 | 5,927 | 7,397 | 7,397 |
+| past-budget | same | off | 1,225 | 7,764 | 9,020 | 9,020 |
+| past-budget | distinct | on | 860 | 4,463 | 4,563 | 4,563 |
+| past-budget | distinct | off | 620 | 720 | 729 | 729 |
+
+What the runs show:
+
+- **The deadline held.** In all 1,536 calls every hook answered, none
+  recorded `hook_deadline`, and none ran past 25 s. The slowest call took
+  12.9 s (two CPUs, one session, in-process, past-budget input), about half
+  the deadline.
+- **Per-call evaluation is small beside the waits.** With the evaluator, the
+  evaluation of a small call took 1 to 8 ms at the median and 18 ms at most;
+  a projected call 13 to 32 ms (54 ms at most); a past-budget call about
+  200 ms at the median, nearly all of it the piece scans. Most of a slow call's wall time
+  is waiting: for the session's lock when calls share a session, and for a
+  CPU.
+- **Without the evaluator, building the pipeline dominates.** In-process,
+  each hook builds it: about 0.2 to 0.35 s on the full host and up to 2.5 s
+  when sixteen processes share two CPUs. The evaluator pays
+  that once (about 0.2 to 0.3 s at warm-up).
+- **Lock wait is not recorded by the hook.** It shows only as wall time
+  beyond the build and scan times. Four of the 64 in-process past-budget
+  calls in one session on two CPUs gave up waiting for the session's lock
+  (`state_lock_timeout`) and were answered through `on_error`; no other
+  scenario recorded one.
+- **Past-budget input.** Every such call was floored at `on_unevaluable`
+  (`ask`), as designed. With the evaluator on, 12 to 17 of 64 such calls were
+  answered in-process after an `evaluator_expired` or `evaluator_busy`
+  fallback, and still within the deadline.
+
+These figures are from one host and one harness adapter; they bound nothing
+on a slower disk or a busier machine.
