@@ -513,6 +513,13 @@
 
 ### Changes
 
+- **Repeated scans prepare faster.** The process-chain rules' patterns are
+  compiled once per process, through the cache the other bundled patterns
+  already use, instead of at every scan. On an empty root the preparation
+  phase of each scan after the first in one process (`scan --iterations`,
+  `watch`) took a median of 6.9 ms instead of 17.1 ms, and of the first
+  14.0 ms instead of 18.0 ms. No rule matches differently.
+
 - **`watch` re-checks SQLite stores briefly after a change.** A commit that
   becomes visible to readers only after its write notification is now read
   without waiting for the next change to the store. After a scan of a changed

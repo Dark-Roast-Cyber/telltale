@@ -758,7 +758,7 @@ fn compile_all(rule_id: &str, patterns: &[String]) -> Result<Vec<Regex>, Process
     patterns
         .iter()
         .map(|pattern| {
-            Regex::new(&format!("(?i:{pattern})")).map_err(|error| {
+            crate::shared_regex(&format!("(?i:{pattern})")).map_err(|error| {
                 ProcessChainError::InvalidRegex {
                     rule_id: rule_id.to_string(),
                     message: error.to_string(),
