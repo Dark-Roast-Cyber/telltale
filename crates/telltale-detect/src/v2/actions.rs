@@ -24,7 +24,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
 /// Versions what the action view reads, the shared transfer reading included.
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 16;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 17;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;

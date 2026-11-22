@@ -8,7 +8,7 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 16.** Several changes below change what the
+- **The native action profile is 17.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
 
@@ -24,6 +24,17 @@
   leading shell reserved word and in a command `find` runs with `-exec`,
   which adds action findings for uploads and downloads written that way.
   A custom copy of the rule keeps its own patterns alone. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md).
+
+- **Commands run through another program are read as the command they
+  run.** The shared reading of transfers now reads the command run on a
+  remote host (`ssh`), in a container (`docker exec`, `podman exec`,
+  `kubectl exec … --`), under a runner (`watch`, `parallel`, `uv run`,
+  `npx`, `aws-vault exec`), by another shell (`cmd /c`,
+  `powershell -Command`, `pwsh -Command`), and the command that opens a
+  brace group or a function body. A quoted command handed to another shell
+  is read as a `bash -c` script is. Uploads and downloads written this way
+  add action findings, and session findings for the upload rule. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md).
 
 - **A reference to the controlled tester domain is not exfiltration.**
