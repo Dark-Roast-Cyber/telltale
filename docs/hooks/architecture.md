@@ -274,7 +274,11 @@ group; failed cleanup cannot release a still-live slot.
   recovery budget and the piece time limit (`Limits::within`). The default
   waits fit in it; a `hooks.evaluator.request_timeout_ms` raised well above its
   default can use it up. A call waits for its session's lock, then gets the
-  strict policy (`state_lock_timeout`). A call that has no time left before its
+  strict policy (`state_lock_timeout`). How long it waited is recorded apart
+  from its scans, in milliseconds: `evaluation.lock_wait_ms` on its decision
+  or result finding (from the process that took the lock, the evaluator's
+  included), and `lock_wait_ms` on the `error` record of a call that gave up
+  waiting or failed after it. A call that has no time left before its
   evaluation starts is not evaluated: it records no decision and journals
   nothing, and gets the strict policy and one `error` record (`hook_deadline`).
   A decision already evaluated is always recorded and delivered, however late.
@@ -386,9 +390,10 @@ counts, closed codes and milliseconds, never payload text or paths:
   (`whole_ms`, `together_ms`, `pieces_ms`, `history_ms`), pieces scanned of
   those offered, pieces refused with the first refusal codes, and how the
   whole and together scans ended.
-- `lock_wait_ms` is null: the hook does not record how long it waited for the
-  session lock. A long wait shows as wall time beyond `scan_ms` and, past the
-  wait, as `state_lock_timeout`.
+- `lock_wait_ms`: percentiles of how long calls waited for the session lock
+  (`evaluation.lock_wait_ms` of decisions, and `lock_wait_ms` of the error
+  records of calls that gave up waiting with `state_lock_timeout`); the table's
+  `lock99` column is its p99. Null for a build that does not record the wait.
 - `evaluator_ready` is false when `--evaluator on` was asked for and no
   evaluator answered; those calls evaluated in-process.
 

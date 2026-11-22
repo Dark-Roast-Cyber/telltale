@@ -216,6 +216,12 @@ fn daemon_decisions_match_the_in_process_path() {
             "{decision:#}"
         );
         assert_eq!(decision["evaluation"]["evaluator_fallback"], Value::Null);
+        // The evaluator took the session's lock itself, and says how long
+        // it waited for it.
+        assert!(
+            decision["evaluation"]["lock_wait_ms"].is_u64(),
+            "{decision:#}"
+        );
     }
     // The daemon keeps one pipeline: no build cost after the first evaluation.
     assert_eq!(

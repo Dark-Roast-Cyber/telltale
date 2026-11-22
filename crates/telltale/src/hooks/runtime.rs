@@ -3,6 +3,7 @@
 //! Telltale evaluation, policy, outcome correlation, telemetry) lives here once.
 //! See docs/architecture.md for the contract adapters must uphold.
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use crate::ObservationStage;
@@ -18,7 +19,7 @@ use crate::hooks::engine::{
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
-use crate::hooks::state::{PendingDecision, SessionHandle, Settled, Verdict};
+use crate::hooks::state::{PendingDecision, SessionHandle, Settled, StateError, Verdict};
 use crate::hooks::telemetry::{
     Action, DecisionInfo, EvaluationInfo, Harness, Kind, OutcomeInfo, Producer, Record, Session,
     Sink, TelltaleAction, new_record_id, sha256_hex,
@@ -240,6 +241,9 @@ pub struct Runtime {
     deadline: Option<Instant>,
     /// When the evaluator's client stops waiting (ms since the epoch).
     answer_by: Option<i64>,
+    /// How long the current call has waited for its session's lock, over
+    /// every time it took it; none before it first tries.
+    lock_wait: Cell<Option<Duration>>,
 }
 
 /// A session's lock stayed taken for as long as this call could wait.
@@ -450,6 +454,7 @@ impl Runtime {
             started: None,
             deadline: None,
             answer_by: None,
+            lock_wait: Cell::new(None),
         }
     }
 
@@ -473,6 +478,12 @@ impl Runtime {
     fn start_call(&mut self) {
         let started = self.started.unwrap_or_else(Instant::now);
         self.deadline = started.checked_add(self.limits.hook_deadline);
+        self.lock_wait.set(None);
+    }
+
+    /// [`Self::lock_wait`] in milliseconds, for telemetry.
+    fn lock_wait_ms(&self) -> Option<u64> {
+        self.lock_wait.get().map(|wait| wait.as_millis() as u64)
     }
 
     /// What is left of the call's deadline.
@@ -510,6 +521,7 @@ impl Runtime {
             started: None,
             deadline: None,
             answer_by: None,
+            lock_wait: Cell::new(None),
         }
     }
 
@@ -569,6 +581,7 @@ impl Runtime {
             outcome: None,
             lifecycle: None,
             error_code: None,
+            lock_wait_ms: None,
             telltale: Vec::new(),
         }
     }
@@ -813,6 +826,7 @@ impl Runtime {
     ) -> Response {
         let mut record = self.record(ctx, Kind::Error);
         record.error_code = Some(code.to_owned());
+        record.lock_wait_ms = self.lock_wait_ms();
         if let Event::ToolRequested(call) = event {
             record.action = Some(action_of(call));
         }
@@ -847,13 +861,22 @@ impl Runtime {
 
     /// The session of `ctx` under state directory `dir`.
     fn open_in(&self, ctx: &Context, dir: &std::path::Path) -> Result<SessionHandle, &'static str> {
-        let session = SessionHandle::open_within(
+        let opened = SessionHandle::open_within(
             dir,
             ctx.harness,
             &ctx.session_id,
             self.call_limits().session_lock_wait,
-        )
-        .map_err(|error| error.code())?;
+        );
+        let waited = match &opened {
+            Ok(session) => Some(session.lock_wait),
+            Err(StateError::LockTimeout(waited)) => Some(*waited),
+            Err(_) => None,
+        };
+        if let Some(waited) = waited {
+            let before = self.lock_wait.get().unwrap_or_default();
+            self.lock_wait.set(Some(before + waited));
+        }
+        let session = opened.map_err(|error| error.code())?;
         // Same-user tampering with the session files is recoverable (the
         // call is still evaluated) but never silent.
         for code in &session.anomalies {
@@ -1072,6 +1095,7 @@ impl Runtime {
                 window_truncated,
                 build_ms,
                 scan_ms: Some(evaluation.scan_ms),
+                lock_wait_ms: self.lock_wait_ms(),
                 evaluator: self.evaluator,
                 scans: None,
                 evaluator_fallback: self.evaluator_fallback,
@@ -1085,6 +1109,7 @@ impl Runtime {
                 window_truncated,
                 build_ms,
                 scan_ms: None,
+                lock_wait_ms: self.lock_wait_ms(),
                 evaluator: self.evaluator,
                 scans: None,
                 evaluator_fallback: self.evaluator_fallback,

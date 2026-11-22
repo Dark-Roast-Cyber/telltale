@@ -48,6 +48,16 @@
   `hook_deadline`. A decision already evaluated is always delivered. One scan
   already in flight is not interrupted.
 
+- **Hooks records say how long a call waited for its session's lock.** A
+  decision or result-finding record now carries `evaluation.lock_wait_ms`,
+  and the `error` record of a tool call that gave up waiting
+  (`state_lock_timeout`) or failed after taking the lock carries
+  `lock_wait_ms` (schema `telltale_hooks.record.v1`, additive), so time spent
+  behind the session's other calls reads apart from `scan_ms`. Both evaluator
+  paths record it; `make hooks-load-bench` reports its percentiles. Embedding
+  API: `SessionHandle::lock_wait` is new, and a lock timeout is now
+  `StateError::LockTimeout` (code `state_lock_timeout` as before).
+
 - **Hooks embedding API: time limits are built in.** `Runtime::with_limits`
   (with `engine::Limits`) replaces `Runtime::set_session_lock_wait`, and
   `RecoveryBudget::start` takes the `Limits` to work within. New:

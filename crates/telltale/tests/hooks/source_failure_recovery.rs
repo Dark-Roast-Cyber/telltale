@@ -1096,6 +1096,94 @@ fn the_lock_wait_is_a_bound_and_the_lock_is_still_exclusive() {
     assert!(SessionHandle::open_within(dir.path(), "h", "s", wait).is_ok());
 }
 
+/// How long the session's lock is held from the test while a call waits.
+const HOLD: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Run `call` on another thread while the test holds the session's lock for
+/// [`HOLD`] from the moment the call is about to start.
+fn behind_a_held_lock<R: Send>(h: &mut Harness, call: impl FnOnce(&mut Harness) -> R + Send) -> R {
+    let holder = session_handle(h);
+    std::thread::scope(|scope| {
+        let (starting, started) = std::sync::mpsc::channel();
+        let caller = scope.spawn(move || {
+            starting.send(()).unwrap();
+            call(h)
+        });
+        started.recv().unwrap();
+        std::thread::sleep(HOLD);
+        drop(holder);
+        caller.join().unwrap()
+    })
+}
+
+/// A call that had to wait behind its session's other calls says so in its
+/// decision record, apart from the time its scans took.
+#[test]
+fn a_call_that_waited_for_its_session_records_the_wait() {
+    let mut h = Harness::new();
+    // The pipeline is built before the lock is taken: built here, it is not
+    // part of what the next call does before it waits.
+    pre(&mut h, true, "first", command("ls"));
+    behind_a_held_lock(&mut h, |h| pre(h, true, "queued", command("ls")));
+    let waited = h.decision_for("queued")["evaluation"]["lock_wait_ms"]
+        .as_u64()
+        .expect("lock_wait_ms is a number");
+    // A lower bound only: the call starts waiting a moment after it is
+    // started, and how long it then takes to get the lock depends on the host.
+    assert!(waited >= 200, "waited {waited} ms behind a 400 ms hold");
+}
+
+/// The long-lived evaluator records its calls through `handle_until`, in its
+/// own process: its decision records carry the wait it had for the lock.
+#[test]
+fn an_evaluator_call_that_waited_for_its_session_records_the_wait() {
+    use telltale_core::hooks::runtime::now_ms;
+    let mut h = Harness::new();
+    pre(&mut h, true, "first", command("ls"));
+    let answered = behind_a_held_lock(&mut h, |h| {
+        h.runtime.handle_until(
+            &ctx(true),
+            request("queued", "ls"),
+            now_ms() + 60_000,
+            std::time::Duration::from_secs(30),
+        )
+    });
+    assert!(answered.is_ok());
+    let waited = h.decision_for("queued")["evaluation"]["lock_wait_ms"]
+        .as_u64()
+        .expect("lock_wait_ms is a number");
+    assert!(waited >= 200, "waited {waited} ms behind a 400 ms hold");
+}
+
+/// A call nothing else held up still reports its wait, as a number.
+#[test]
+fn an_uncontended_call_records_its_lock_wait() {
+    let mut h = Harness::new();
+    pre(&mut h, true, "alone", command("ls"));
+    assert!(h.decision_for("alone")["evaluation"]["lock_wait_ms"].is_u64());
+}
+
+/// A call that gave up on its session's lock says how long it waited first.
+#[test]
+fn a_lock_timeout_record_says_how_long_the_call_waited() {
+    let wait = std::time::Duration::from_millis(100);
+    let limits = Limits {
+        session_lock_wait: wait,
+        ..common::no_deadline()
+    };
+    let mut h = Harness::with_limits(limits, |_| {});
+    let holder = session_handle(&h);
+    pre(&mut h, true, "late", command("ls"));
+    drop(holder);
+    let errors = h.records("error");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0]["error_code"], "state_lock_timeout");
+    let waited = errors[0]["lock_wait_ms"]
+        .as_u64()
+        .expect("lock_wait_ms is a number");
+    assert!(waited >= 100, "gave up after {waited} ms of a 100 ms wait");
+}
+
 fn journal_len(h: &Harness) -> u64 {
     std::fs::metadata(session_dir(h).join("journal.jsonl"))
         .map(|m| m.len())

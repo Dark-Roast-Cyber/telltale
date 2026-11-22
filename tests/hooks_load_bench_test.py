@@ -18,7 +18,8 @@ BENCH = pathlib.Path(__file__).resolve().parents[1] / "scripts/hooks/load-bench.
 # The stand-in answers every tool call after `delay` seconds with `answer`
 # ("deny", "allow" or "fail": exit 1 and print nothing), records the call's
 # environment and arguments in `seen`, and writes one decision record whose
-# scans took 40 ms of pieces, as the hook would.
+# scans took 40 ms of pieces after a 120 ms wait for the session lock, as the
+# hook would.
 STAND_IN = textwrap.dedent(
     """\
     #!{python}
@@ -40,7 +41,7 @@ STAND_IN = textwrap.dedent(
         "kind": "decision",
         "action": {{"tool_use_id": payload["tool_use_id"]}},
         "evaluation": {{"status": "evaluated", "evaluator": "in_process",
-                        "build_ms": 500, "scan_ms": 45,
+                        "build_ms": 500, "scan_ms": 45, "lock_wait_ms": 120,
                         "scans": {{"variants": 0, "whole": None, "together": None,
                                    "pieces_scanned": 3, "pieces_total": 4,
                                    "pieces_refused": 0, "first_refusal": None,
@@ -113,6 +114,9 @@ class LoadBenchTests(unittest.TestCase):
         self.assertEqual(scenario["records"]["hook_deadline"], 0)
         self.assertEqual(scenario["records"]["state_lock_timeout"], 0)
         self.assertEqual(scenario["scans"]["pieces_ms"]["p50"], 40)
+        self.assertEqual(
+            scenario["lock_wait_ms"], {"p50": 120, "p95": 120, "p99": 120, "max": 120}
+        )
         self.assertEqual(scenario["scans"]["history_ms"]["max"], 5)
         self.assertEqual(scenario["scans"]["pieces_scanned"], 12)
         self.assertEqual(scenario["scans"]["pieces_total"], 16)
