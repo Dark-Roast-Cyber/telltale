@@ -225,6 +225,12 @@ pub struct Config {
     /// agent cannot quietly change what the hook reads next.
     pub sources: Vec<PathBuf>,
     pub evaluator: EvaluatorSettings,
+    /// The sources whose different value a pin on the hook command replaced
+    /// in this invocation's launch, by name only (an environment variable, or
+    /// a settings key such as `hooks.state_dir`), sorted: the `session_start`
+    /// record lists them in `lifecycle.pinned_over`. Empty when nothing was
+    /// pinned over. Not part of [`Self::fingerprint`].
+    pub pinned_over: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -271,6 +277,7 @@ impl Default for Config {
             rules: RuleContent::default(),
             sources: Vec::new(),
             evaluator: EvaluatorSettings::default(),
+            pinned_over: Vec::new(),
         }
     }
 }
@@ -435,7 +442,13 @@ impl Config {
         part("host_build", identity::host_build().as_bytes());
         part("executable", identity::executable_identity().as_bytes());
         part("revision", identity::revision().as_bytes());
-        part("config", format!("{self:?}").as_bytes());
+        // `pinned_over` describes one invocation's launch, not what is
+        // evaluated: hooks launched differently share an evaluator.
+        let evaluated = Self {
+            pinned_over: Vec::new(),
+            ..self.clone()
+        };
+        part("config", format!("{evaluated:?}").as_bytes());
         // Every input to Engine::new, including environment-derived paths
         // (XDG_STATE_HOME, HOME, XDG_RUNTIME_DIR; LOCALAPPDATA, USERPROFILE on
         // Windows; each harness's home variable).
@@ -602,20 +615,25 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Linux and macOS: `$XDG_STATE_HOME/telltale/hooks`, else
-/// `~/.local/state/telltale/hooks`.
-#[cfg(not(windows))]
 fn default_state_dir() -> Option<PathBuf> {
+    default_state_dir_source().map(|(_, dir)| dir)
+}
+
+/// The state directory used when none is configured, and the environment
+/// variable that decided it. Linux and macOS: `$XDG_STATE_HOME/telltale/hooks`,
+/// else `~/.local/state/telltale/hooks`.
+#[cfg(not(windows))]
+pub fn default_state_dir_source() -> Option<(&'static str, PathBuf)> {
     if let Some(dir) = env_path("XDG_STATE_HOME") {
-        return Some(dir.join("telltale/hooks"));
+        return Some(("XDG_STATE_HOME", dir.join("telltale/hooks")));
     }
-    env_path("HOME").map(|home| home.join(".local/state/telltale/hooks"))
+    env_path("HOME").map(|home| ("HOME", home.join(".local/state/telltale/hooks")))
 }
 
 /// Windows: `%LOCALAPPDATA%\telltale\hooks` (machine-local, never roamed).
 #[cfg(windows)]
-fn default_state_dir() -> Option<PathBuf> {
-    env_path("LOCALAPPDATA").map(|dir| dir.join("telltale").join("hooks"))
+pub fn default_state_dir_source() -> Option<(&'static str, PathBuf)> {
+    env_path("LOCALAPPDATA").map(|dir| ("LOCALAPPDATA", dir.join("telltale").join("hooks")))
 }
 
 #[cfg(test)]
@@ -738,6 +756,18 @@ mod tests {
         assert!(protected.contains(&PathBuf::from("/state")));
         assert!(protected.contains(&PathBuf::from("/etc/telltale")));
         assert!(protected.contains(&PathBuf::from("/etc/telltale/policies.d/p.yaml")));
+    }
+
+    /// The names a pin replaced describe one invocation's launch, not the
+    /// configuration: they do not key the evaluator.
+    #[test]
+    fn fingerprint_ignores_the_sources_a_pin_replaced() {
+        let plain = Config::default();
+        let pinned = Config {
+            pinned_over: vec!["TELLTALE_HOOKS_STATE_DIR".into()],
+            ..Config::default()
+        };
+        assert_eq!(plain.fingerprint(), pinned.fingerprint());
     }
 
     #[test]

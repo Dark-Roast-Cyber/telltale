@@ -230,6 +230,65 @@ fn daemon_decisions_match_the_in_process_path() {
     );
 }
 
+/// A hook launched with another state-directory variable than the running
+/// evaluator, under the same `--state-dir` pin, records its own launch's
+/// replaced sources at session start, and the evaluator goes on serving it.
+#[test]
+fn a_session_start_names_its_own_launch_and_the_evaluator_keeps_serving() {
+    let env = Env::new("");
+    let state = env.state.display().to_string();
+    let child = env
+        .command(&env.config(), &["serve", "--state-dir", &state])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for(|| answers(&env.socket()));
+    let mut daemon = Daemon(child);
+    let elsewhere = env.dir.path().join("elsewhere");
+    let hook = |payload: &Value| {
+        let mut child = env
+            .command(
+                &env.config(),
+                &["claude-code", "hook", "--state-dir", &state],
+            )
+            .env("TELLTALE_HOOKS_STATE_DIR", &elsewhere)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(&serde_json::to_vec(payload).unwrap())
+            .unwrap();
+        drop(stdin);
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+    };
+    hook(&common::template("SessionStart", None));
+    hook(&pre("toolu_1", "ls"));
+    let records: Vec<Value> = std::fs::read_to_string(env.state.join("telemetry.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        records[0]["lifecycle"],
+        json!({"event": "session_start", "source": "startup",
+               "pinned_over": ["TELLTALE_HOOKS_STATE_DIR"]})
+    );
+    assert_eq!(
+        records[1]["evaluation"]["evaluator"], "daemon",
+        "{:#}",
+        records[1]
+    );
+    assert!(
+        daemon.0.try_wait().unwrap().is_none(),
+        "the evaluator retired"
+    );
+}
+
 #[test]
 fn configuration_change_falls_back_and_retires_the_daemon() {
     let env = Env::new("");

@@ -131,7 +131,19 @@
         "supersedes": { "type": ["string", "null"] }
       }
     },
-    "lifecycle": { "type": "object" },
+    "lifecycle": {
+      "type": "object",
+      "description": "Event-specific, content-free lifecycle details, named by `event`.",
+      "properties": {
+        "pinned_over": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "On `session_start` records: the sources whose different value a pin on the hook command (`--state-dir`, `--user-config-dir`) replaced in the launch of the hook invocation that received the event, by name only (an environment variable such as `TELLTALE_HOOKS_STATE_DIR`, or a settings key such as `hooks.state_dir`), sorted; never a value. Absent when no pin replaced anything. Added 2026-11."
+        }
+      }
+    },
     "error_code": {
       "type": "string",
       "description": "Content-free code. On `error` records: why the hook could not do its job. On `outcome` records: `outcome_ambiguous`, a result reported under a synthetic correlation key (`tth-syn-`) that only matched an already settled call; it may belong to that call or to a later identical one, so `result` is `unknown` and the settlement it supersedes is neither confirmed nor contradicted. It is followed by a second outcome for the same tool_use_id carrying the reported result with `enforcement: no_decision`: the execution happened, no decision is known to apply. A consumer keeping the latest outcome per tool_use_id sees that `no_decision` record (ADR 0004 addendum, point 11)."

@@ -444,6 +444,10 @@ roots are checked in deterministic order:
   `%USERPROFILE%\.config\telltale` is the final fallback; it is the same
   directory Git Bash resolves through `HOME`.
 
+A deployment tool that changes these files under running hooks should follow
+the update order in
+[hooks/README.md](hooks/README.md#updating-configuration-in-place).
+
 ### Windows system config root
 
 On Windows the system root is `telltale` in the `ProgramData` known folder,

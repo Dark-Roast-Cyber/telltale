@@ -167,7 +167,7 @@ The gate opens only for a configuration that **was read and says
 | None | Detect-only |
 | Loaded, `hooks.mode` unset, `observe` or `detect` | Detect-only |
 | Loaded, `hooks.mode: enforce` | Enforcing |
-| Does not load (an unknown key or invalid value in any section, a file that is not YAML, an inverted threshold), and a `settings.d` file says `hooks.mode: enforce` | Enforcing, and tool calls are denied until it is fixed (an operator error should be loud) |
+| Does not load (an unknown key or invalid value in any section, a file that is not YAML, an inverted threshold), and a `settings.d` file says `hooks.mode: enforce` | Enforcing, and tool calls are denied until it is fixed (an operator error should be loud); `config_invalid` in telemetry and on stderr |
 | Does not load, and no `settings.d` file says `hooks.mode: enforce`; or a `--config-dir` folder is missing | Detect-only on the defaults; `config_invalid` in telemetry and on stderr |
 
 When the configuration does not load, the hook still reads each `settings.d`
@@ -274,6 +274,55 @@ State and telemetry default to `$XDG_STATE_HOME/telltale/hooks/` or
 `hooks.telemetry_path`, or `TELLTALE_HOOKS_STATE_DIR` and
 `TELLTALE_HOOKS_TELEMETRY`). Telemetry schema:
 [schemas/telltale-hooks-record-v1.schema.json](../../schemas/telltale-hooks-record-v1.schema.json).
+
+`telltale hooks <harness> settings` pins the user config root
+(`--user-config-dir`) and the state directory (`--state-dir`) on the hook
+command it prints, so the environment a harness is launched with does not move
+them. A hook command with `--state-dir` writes its records to
+`hooks.telemetry_path` when a settings file of its config roots sets it, else
+to `telemetry.jsonl` in that directory; the environment decides neither. A
+relative `hooks.telemetry_path` is resolved against the hook's working
+directory, as it is without the pin. When `--state-dir` or
+`--user-config-dir` replaces a source that is set to a different value, the
+hook names that source in its `session_start` record, in
+`lifecycle.pinned_over` (for example `["TELLTALE_HOOKS_STATE_DIR"]`): the name
+of the environment variable or settings key, never its value. The names are
+those of the hook invocation that received the event, which records it
+itself; they do not key the long-lived evaluator. `telltale hooks check` with
+the same switches prints one `pinned over:` line per name.
+
+### Updating configuration in place
+
+Every hook invocation reads the configuration again, so a deployment tool
+that changes it while harnesses run should never leave a state that does not
+load:
+
+- Write a new or changed rule, settings or override file under a name without
+  a `.yaml` or `.yml` extension in the same folder, then rename it into place.
+  Only YAML names are read, and a rename within one directory on one
+  filesystem replaces the file with the new one rather than writing it in
+  pieces.
+- Replace the policy file by renaming the new one over it. Hooks read at most
+  one file in `policies.d` across the config roots they read; two do not
+  load.
+- Never leave a symlink whose target is missing: a config folder, or a file
+  with a YAML name, that is a dangling link does not load.
+- Check the staged configuration first with `telltale hooks check` and every
+  root the hook reads: the same `--config-dir` or `--user-config-dir`
+  arguments as the hook command, with the staged copy in place of the root
+  being changed. `check` loads the configuration, builds the rules and exits
+  1 on an error; a check of one root alone does not see, for example, a
+  second policy file in another root.
+- Add rule files before the override files that name their rule IDs: an
+  override for a rule ID no rule defines fails the rule build.
+
+While its configuration does not load, an observing hook detects on the
+defaults and records `config_invalid`; an enforcing one (the configuration or
+`--expect-enforce` asks for `hooks.mode: enforce`) denies tool calls and
+records `config_invalid`. The record goes to the records file in a pinned
+`--state-dir`, else to the one `TELLTALE_HOOKS_TELEMETRY` names, else to
+`telemetry.jsonl` in the state directory `TELLTALE_HOOKS_STATE_DIR` names or
+the default one.
 
 ## Documentation
 

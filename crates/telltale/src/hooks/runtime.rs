@@ -941,7 +941,11 @@ impl Runtime {
                 Ok(Response::None)
             }
             Event::SessionStart { source } => {
-                self.lifecycle(ctx, json!({"event": "session_start", "source": source}));
+                let mut details = json!({"event": "session_start", "source": source});
+                if !self.config.pinned_over.is_empty() {
+                    details["pinned_over"] = json!(self.config.pinned_over);
+                }
+                self.lifecycle(ctx, details);
                 Ok(Response::None)
             }
             Event::Other => {

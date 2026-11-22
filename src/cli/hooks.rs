@@ -71,7 +71,8 @@ content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan
 --user-config-dir DIR replaces only the user root, which must then exist; settings
 adds it to the hook command when the user root exists, so the environment a harness
 is launched with cannot move it.
---state-dir DIR sets the state directory, and the environment no longer decides it;
+--state-dir DIR sets the state directory, and the environment decides neither it nor
+the records file (hooks.telemetry_path from settings files applies);
 settings adds it to the hook command with the state directory in use, which a hook
 creates owner-only when it is missing.
 hook also accepts --json-reply: frame the gated native output (including null)
@@ -601,12 +602,50 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
     config.sources = roots;
     config.sources.extend(settings.files().iter().cloned());
     config.sources.extend(targets);
+    config.pinned_over = pinned_over(&settings.hooks);
     if let Some(state) = pinned_state_dir() {
+        // A pinned state directory holds the records file, unless the
+        // settings files name one.
+        config.telemetry_path = settings.hooks.telemetry_path_in_files().0;
         config.state_dir = Some(state);
     }
     config.validate().map_err(|error| error.to_string())?;
     config.make_paths_absolute();
     Ok(config)
+}
+
+/// The sources whose value a pin on this hook command replaced, by name,
+/// sorted: a source counts when it is set and its value differs from what
+/// the pin put in its place. `--state-dir` replaces the source that would
+/// have decided the state directory (its variable, `hooks.state_dir`, or the
+/// variable the default follows), and the records file variable: the records
+/// file of a hook with `--state-dir` is the one its state directory and
+/// settings files give. `--user-config-dir` replaces the variable that names
+/// the user root. `--config-dir` names nothing.
+fn pinned_over(hooks: &crate::settings::HooksSettings) -> Vec<String> {
+    let absolute = |path: &std::path::Path| std::path::absolute(path).unwrap_or(path.to_owned());
+    let mut names = std::collections::BTreeSet::new();
+    if let Some(state) = pinned_state_dir()
+        && let Some((name, dir)) = hooks
+            .state_dir_source()
+            .or_else(telltale_core::hooks::config::default_state_dir_source)
+        && absolute(&dir) != state
+    {
+        names.insert(name);
+    }
+    if let Some(state) = pinned_state_dir()
+        && let (in_files, Some(environment)) = hooks.telemetry_path_in_files()
+        && absolute(&environment) != absolute(&in_files.unwrap_or(state.join("telemetry.jsonl")))
+    {
+        names.insert(crate::settings::TELEMETRY_ENV);
+    }
+    if let Some(pinned) = crate::config::pinned_user_config_root()
+        && let Some((name, root)) = crate::config::user_config_root_source()
+        && absolute(&root) != absolute(pinned)
+    {
+        names.insert(name);
+    }
+    names.into_iter().map(str::to_owned).collect()
 }
 
 /// Whether a settings file in `config_dirs` says `hooks.mode: enforce`, asked
@@ -731,6 +770,9 @@ fn check(config_dirs: &[PathBuf]) -> i32 {
                     };
                     println!("state dir: {} ({origin})", state.display());
                     println!("telemetry: {}", telemetry.display());
+                    for name in &config.pinned_over {
+                        println!("pinned over: {name}");
+                    }
                 }
                 (Err(error), _) | (_, Err(error)) => {
                     eprintln!("paths: {error}");
@@ -992,13 +1034,16 @@ fn resolve_config(
 }
 
 /// The configuration of a hook whose configuration did not load: the
-/// defaults, with the state directory and records file it can still
-/// determine.
+/// defaults, with the state directory and records file it can determine. A
+/// pinned state directory holds the records file.
 fn fallback_config() -> Config {
-    Config::detect_only_fallback(
-        pinned_state_dir().or_else(|| env_path(crate::settings::STATE_DIR_ENV)),
-        env_path(crate::settings::TELEMETRY_ENV),
-    )
+    match pinned_state_dir() {
+        Some(state) => Config::detect_only_fallback(Some(state), None),
+        None => Config::detect_only_fallback(
+            env_path(crate::settings::STATE_DIR_ENV),
+            env_path(crate::settings::TELEMETRY_ENV),
+        ),
+    }
 }
 
 /// The answer for a payload that could not be parsed at all (oversized or
@@ -1098,8 +1143,12 @@ fn answer_from_runtime(
     let _ = (bytes, config_dirs);
     #[cfg(unix)]
     let mut fallback = None;
+    // A session start is recorded in-process, with the sources this
+    // invocation's pins replaced (`Config::pinned_over`); it builds no
+    // pipeline, so the evaluator would save nothing.
     #[cfg(unix)]
     if config.evaluator.enabled
+        && !matches!(event, Event::SessionStart { .. })
         && let Ok(socket) = config.resolved_socket_path()
     {
         let remaining = Limits::default()
@@ -1164,7 +1213,11 @@ fn serve_args(config_dirs: &[PathBuf]) -> Vec<OsString> {
 
 fn serve(config_dirs: &[PathBuf]) -> i32 {
     let config = match load_config(config_dirs) {
-        Ok(config) => config,
+        // The evaluator's own launch is no hook's: it names nothing.
+        Ok(config) => Config {
+            pinned_over: Vec::new(),
+            ..config
+        },
         Err(error) => {
             eprintln!("config: {error}");
             return 1;
