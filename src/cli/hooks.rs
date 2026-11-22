@@ -1144,8 +1144,9 @@ fn answer_from_runtime(
     #[cfg(unix)]
     let mut fallback = None;
     // A session start is recorded in-process, with the sources this
-    // invocation's pins replaced (`Config::pinned_over`); it builds no
-    // pipeline, so the evaluator would save nothing.
+    // invocation's pins replaced (`Config::pinned_over`). It builds no
+    // pipeline, so the evaluator would save nothing; the next evaluated
+    // event starts the evaluator when none is running.
     #[cfg(unix)]
     if config.evaluator.enabled
         && !matches!(event, Event::SessionStart { .. })

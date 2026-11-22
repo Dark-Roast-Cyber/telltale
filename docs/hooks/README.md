@@ -237,7 +237,7 @@ hooks:
     max_result_bytes: 16384
   evaluator:             # long-lived evaluator (telltale hooks serve)
     enabled: true        # TELLTALE_HOOKS_EVALUATOR
-    autostart: true      # first hook starts it detached; hooks fall back in-process
+    autostart: true      # first evaluated hook starts it detached; hooks fall back in-process
     idle_timeout_secs: 1800
     request_timeout_ms: 10000
     # socket: <path>     # default: <state dir>/evaluator.sock
