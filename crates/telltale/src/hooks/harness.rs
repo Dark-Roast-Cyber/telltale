@@ -424,6 +424,26 @@ mod tests {
         }
     }
 
+    /// `hooks.ask: model`: a payload-less ask is a deny that asks through
+    /// the model on every harness, also one with an approval prompt.
+    #[test]
+    fn verdicts_without_a_payload_follow_the_ask_route() {
+        use crate::hooks::runtime::ASK_THROUGH_MODEL_NOTE;
+        for harness in Harness::ALL {
+            let out = harness
+                .render_verdict(OnError::Ask, "why", AskRoute::Model)
+                .unwrap()
+                .to_string();
+            assert!(out.contains("\"deny\""), "{harness:?}: {out}");
+            assert!(!out.contains("\"ask\""), "{harness:?}: {out}");
+            assert!(out.contains(ASK_THROUGH_MODEL_NOTE), "{harness:?}: {out}");
+            assert_eq!(
+                harness.render_verdict(OnError::Allow, "why", AskRoute::Model),
+                None
+            );
+        }
+    }
+
     #[test]
     fn codex_verdicts_without_a_payload_are_deny_or_nothing() {
         let harness = Harness::CodexCli;

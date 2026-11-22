@@ -429,7 +429,9 @@ scanner, which does not carry these rules: an entry for a `tth.tamper.` rule
 is applied where the rule is loaded and left out elsewhere (by the scanner,
 and by a hook that does not have that rule, where `check` prints
 `override left out`). An entry for any other rule that is not loaded is left
-out the same way; the scanner also lists it as a notice. A
+out the same way, and `telltale rules validate` lists it as a notice. A scan
+or a hook does not report it while it runs, so run `check` and
+`telltale rules validate` after changing override files. A
 replacement rule file is different: to the scanner it is a rule of its own,
 which it then evaluates in scans too. A shared policy with a whitelist
 that does not include `approval_bypass` turns all of them off without an
@@ -543,8 +545,8 @@ On the `model` route:
 - The call is not executed. The record keeps `verdict: ask` with
   `returned_verdict: deny`, and the session counts an ask, not a denial.
 - Telltale takes no approval from the conversation. Nothing the model or
-  the user writes there changes the answer, and the same call asked again
-  gets the same answer; the reason says so. What the user can do is give
+  the user writes there lets the call run, and the same call asked again
+  is not run either; the reason says so. What the user can do is give
   other instructions, run the command themselves, or have the rule tuned
   ([tuning](#tuning-rules-and-policy)).
 - The user is told about the call by the model and does not see the call
@@ -556,8 +558,8 @@ applies to (`asks:`). A reason on the `model` route ends:
 
 ```text
 This call needs the user's approval, which is asked through you: stop, tell the user what
-you were about to do and why it was stopped, and ask how to proceed. Repeating the call gets
-the same answer; the user can run it themselves or have an exception configured.
+you were about to do and why it was stopped, and ask how to proceed. Repeating the call will
+not run it; the user can run it themselves or have an exception configured.
 ```
 
 ### What a denied or asked call says

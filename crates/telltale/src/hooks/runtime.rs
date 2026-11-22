@@ -66,7 +66,7 @@ pub fn returned_verdict(can_ask: bool, verdict: Verdict) -> Verdict {
 /// a human by the harness (it has no approval prompt, or `hooks.ask: model`)
 /// is asked through the model. Telltale takes no approval from the
 /// conversation, so the note also says what the user can do.
-pub const ASK_THROUGH_MODEL_NOTE: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed. Repeating the call gets the same answer; the user can run it themselves or have an exception configured.";
+pub const ASK_THROUGH_MODEL_NOTE: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed. Repeating the call will not run it; the user can run it themselves or have an exception configured.";
 
 /// Prefix of correlation keys an adapter synthesizes when the harness
 /// carries no call ID (Copilot CLI): telemetry consumers tell them from

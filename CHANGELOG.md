@@ -143,7 +143,7 @@
   and detect-only mode are the same on both routes. An ask through the model
   is recorded as `verdict: ask` with `returned_verdict: deny` and counted as
   an ask. Telltale takes no approval from the conversation: the same call
-  asked again gets the same answer. `telltale hooks check` prints the route
+  asked again is not run either. `telltale hooks check` prints the route
   per harness (`asks:`). See
   [How an ask reaches the user](docs/hooks/README.md#how-an-ask-reaches-the-user).
   Embedding API: `hooks::config::Config` has a new `ask` field

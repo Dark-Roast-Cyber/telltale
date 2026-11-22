@@ -734,7 +734,8 @@ fn an_override_for_a_test_signature_is_left_out_when_the_setting_is_off() {
     let (code, stdout, stderr) = check(&config);
     assert_eq!(code, Some(0), "{stderr}");
     assert!(
-        stdout.contains("\noverride left out: tth.test.deny names no rule that is loaded\n"),
+        stdout
+            .contains("\noverride left out: tth.test.deny names no rule or chain that is loaded\n"),
         "{stdout}"
     );
     for entry in ENTRIES {

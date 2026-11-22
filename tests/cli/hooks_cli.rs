@@ -280,6 +280,34 @@ fn oversized_pre_tool_use_gets_the_unevaluable_verdict() {
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
 }
 
+/// With `hooks.ask: model` the ask for a payload the hook cannot read is a
+/// deny that asks through the model, on a harness that has an approval
+/// prompt of its own.
+#[test]
+fn oversized_pre_tool_use_follows_the_ask_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n  ask: model\n");
+    let mut payload = pre("ls");
+    payload["tool_input"] = json!({"content": "x".repeat(33 * 1024 * 1024), "file_path": "/tmp/x"});
+    let env = [("TELLTALE_HOOKS_STATE_DIR", dir.path())];
+    let (code, stdout, stderr) = run_in(Some(&config), &payload, &env, &[]);
+    assert_eq!(code, 0, "{stderr}");
+    let output: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(
+        reason
+            .starts_with("Telltale Hooks: this tool call was blocked and has not been executed. "),
+        "{reason}"
+    );
+    assert!(
+        reason.ends_with("Repeating the call will not run it; the user can run it themselves or have an exception configured."),
+        "{reason}"
+    );
+}
+
 /// A denied command in an input past the projection budget is still denied;
 /// the same input beside a command no rule denies gets the unevaluable
 /// verdict.
@@ -916,7 +944,7 @@ fn an_override_for_a_self_protection_rule_is_left_out_where_the_rule_is_not_load
     assert_eq!(code, Some(0), "{stderr}");
     assert!(
         stdout.contains(
-            "override left out: tth.tamper.hook_settings_write names no rule that is loaded"
+            "override left out: tth.tamper.hook_settings_write names no rule or chain that is loaded"
         ),
         "{stdout}"
     );
@@ -930,7 +958,9 @@ fn an_override_for_a_self_protection_rule_is_left_out_where_the_rule_is_not_load
     let (code, stdout, stderr) = check(&config, dir.path());
     assert_eq!(code, Some(0), "{stderr}");
     assert!(
-        stdout.contains("override left out: synthetic.no_such_rule names no rule that is loaded"),
+        stdout.contains(
+            "override left out: synthetic.no_such_rule names no rule or chain that is loaded"
+        ),
         "{stdout}"
     );
     assert_eq!(hook_decision(&config, CALL).as_deref(), Some("deny"));

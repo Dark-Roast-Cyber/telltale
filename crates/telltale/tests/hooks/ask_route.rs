@@ -92,14 +92,14 @@ fn through_the_model_an_ask_is_a_deny_that_tells_the_model_to_ask_the_user() {
 }
 
 /// What the note tells the model: stop, tell the user, ask how to proceed,
-/// and that asking again changes nothing.
+/// and that asking again does not run the call.
 #[test]
 fn the_note_tells_the_model_to_stop_and_ask_the_user() {
     for part in [
         "needs the user's approval",
         "stop, tell the user what you were about to do",
         "ask how to proceed",
-        "Repeating the call gets the same answer",
+        "Repeating the call will not run it",
     ] {
         assert!(ASK_THROUGH_MODEL_NOTE.contains(part), "{part}");
     }

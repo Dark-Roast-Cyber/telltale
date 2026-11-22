@@ -185,7 +185,7 @@ substitutes on every harness. Decisions:
    was returned for an ask, and the ledger still counts an ask.
 3. The substituted deny's reason tells the model what to do: stop, tell the
    user what it was about to do and why it was stopped, and ask how to
-   proceed. It says that repeating the call changes nothing, because that is
+   proceed. It says that repeating the call will not run it, because that is
    true: Telltale takes no approval from the conversation. Text there is
    written by the model or passes through it, and a model must not be able
    to approve its own exception.

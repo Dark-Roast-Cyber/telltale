@@ -1032,7 +1032,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                     .chars()
                     .map(|c| if c.is_control() { ' ' } else { c })
                     .collect();
-                println!("override left out: {id} names no rule that is loaded");
+                println!("override left out: {id} names no rule or chain that is loaded");
             }
             println!(
                 "tamper prevention: {}",

@@ -232,7 +232,7 @@ pub enum AskRoute {
     /// whose reason tells the model to stop and ask the user how to proceed
     /// (`runtime::ASK_THROUGH_MODEL_NOTE`). The harness's approval prompt is
     /// not used. Telltale takes no approval from the conversation: the same
-    /// call asked again gets the same answer.
+    /// call asked again is not run either.
     Model,
 }
 
