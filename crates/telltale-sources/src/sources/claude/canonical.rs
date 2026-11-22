@@ -1126,11 +1126,19 @@ mod tests {
     fn additional_tool_result_fixture_links_call_ids() {
         let observations =
             project("session_stores/claude/projects/project-c/uc001-claude-tool-result.jsonl");
-        assert_eq!(observations.len(), 4);
+        // The status call and its result, then the message and the transfer
+        // call that follow it.
+        assert_eq!(observations.len(), 6);
         assert_eq!(observations[2].stage(), ObservationStage::ToolRequested);
         assert_eq!(
             observations[3].stage(),
             ObservationStage::ToolResultReturned
+        );
+        assert_eq!(observations[4].kind(), ObservationFamily::Message);
+        assert_eq!(observations[5].stage(), ObservationStage::ToolRequested);
+        assert_eq!(
+            observations[5].correlation().call_id().unwrap().value(),
+            "toolu_fixture_upload"
         );
         assert_eq!(
             observations[2].correlation().call_id().unwrap().value(),
