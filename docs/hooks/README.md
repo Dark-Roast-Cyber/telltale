@@ -118,7 +118,8 @@ Then start `codex` once interactively and choose "Trust all and continue":
 Codex never runs an untrusted user hook. Trust is per handler: changing a
 handler un-trusts it and the call then runs unchecked, while reformatting the
 file does not, and replacing the binary at a trusted path keeps trust. Codex
-cannot ask from a hook, so every `ask` is returned as a deny. Codex fails open
+cannot ask from a hook, so every `ask` is returned as a deny that tells the
+model to ask the user ([how an ask reaches the user](#how-an-ask-reaches-the-user)). Codex fails open
 on every hook failure and has no fail-closed option (`settings --fail-closed`
 refuses). All of this was verified on Linux with a scripted model only.
 Codex can also refuse plain relaunches of itself without hooks through native
@@ -228,6 +229,7 @@ hooks:
   on_unevaluable: ask    # tool call too large, nested or damaged to evaluate: ask, deny, allow
                          # (both are recorded, not returned, unless mode is enforce)
   reason_detail: full    # full: reasons name rules and thresholds; minimal: verdict and record ID only
+  ask: human             # human: the harness's own approval prompt where it has one; model: every ask is a deny that tells the model to ask the user
                          # (a human approving an `ask` then sees little; use minimal for unattended agents)
   # state_dir: <path>    # TELLTALE_HOOKS_STATE_DIR
   # telemetry_path: <path>  # TELLTALE_HOOKS_TELEMETRY
@@ -340,6 +342,7 @@ user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-conf
 | Change what a rule matches, or its explanation | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)) |
 | Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
 | Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
+| Have the model ask the user, not the harness's approval prompt | `hooks.ask: model` ([how an ask reaches the user](#how-an-ask-reaches-the-user)) |
 | Configure a fleet | The same folders in `/etc/telltale`; the user's root is read after it |
 
 How tuning behaves:
@@ -488,7 +491,7 @@ it for each test command:
 | --- | --- |
 | `test_signatures` off (the default) | No rule matches: an ordinary command |
 | `hooks.mode: observe` | The verdict is recorded with `returned: false`; the harness is told nothing |
-| `hooks.mode: enforce`, ask test | The harness's own approval prompt (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot cannot ask: they are given a deny whose reason says that the call was not executed and that approval was required, and the record keeps `verdict: ask` with `returned_verdict: deny` |
+| `hooks.mode: enforce`, ask test | The harness's own approval prompt (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot have none: they are given a deny whose reason says that the call was not executed and tells the model to ask the user, and the record keeps `verdict: ask` with `returned_verdict: deny`. With `hooks.ask: model` every harness is given that deny |
 | `hooks.mode: enforce`, deny test | A deny with a reason the user and the model can act on |
 | An override, policy, threshold or replacement for a test rule | Applies as to any rule: `enabled: false` makes it an ordinary command again, a lower score or a higher threshold turns the deny into an ask or into no opinion |
 
@@ -518,6 +521,40 @@ session:
 They test the hook and the harness's answer to it, not a detection. For a
 harness with a live model, see [harness testing](harness-testing.md).
 
+### How an ask reaches the user
+
+`hooks.ask` sets the route of every `ask`: the policy's, and those of
+`on_error: ask` and `on_unevaluable: ask`. It changes how an ask is
+returned, never whether a verdict is: detect-only returns nothing on either
+route, and a deny is the same on both.
+
+| `hooks.ask` | What the harness is given | Who asks the user |
+| --- | --- | --- |
+| `human` (default) | The ask, where the harness has an approval prompt that a person answers (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot have none and get the `model` route | The harness, with its own prompt, which shows the call |
+| `model` | On every harness, a deny whose reason ends by telling the model to stop, tell the user what it was about to do and why it was stopped, and ask how to proceed | The model, in the conversation |
+
+On the `model` route:
+
+- The call is not executed. The record keeps `verdict: ask` with
+  `returned_verdict: deny`, and the session counts an ask, not a denial.
+- Telltale takes no approval from the conversation. Nothing the model or
+  the user writes there changes the answer, and the same call asked again
+  gets the same answer; the reason says so. What the user can do is give
+  other instructions, run the command themselves, or have the rule tuned
+  ([tuning](#tuning-rules-and-policy)).
+- The user is told about the call by the model and does not see the call
+  itself, as the harness's prompt would show it. Prefer `human` where that
+  prompt is available and a person is there to answer it.
+
+`telltale hooks check` prints the route in effect and the harnesses it
+applies to (`asks:`). A reason on the `model` route ends:
+
+```text
+This call needs the user's approval, which is asked through you: stop, tell the user what
+you were about to do and why it was stopped, and ask how to proceed. Repeating the call gets
+the same answer; the user can run it themselves or have an exception configured.
+```
+
 ### What a denied or asked call says
 
 Under `reason_detail: full` (the default) the reason given to the harness,
@@ -532,9 +569,10 @@ authorized configuration exception. Detections: chain.harvest_then_exfil,
 credential.cloud_harvest, exfil.outbound_upload. Record tth:<id>.
 ```
 
-An ask starts `this tool call needs approval before it runs`; on a harness
-that cannot ask it is the deny above, ending with a note that approval was
-required. The concern is the categories of the rules that matched (at most
+An ask starts `this tool call needs approval before it runs`. An ask that
+goes through the model opens like the deny above, has no advice sentence and
+ends with the note shown in the previous section. A call that could not be
+evaluated or read opens the same way and then gives the cause. The concern is the categories of the rules that matched (at most
 three, letters and digits only), and at most eight rule names are listed,
 the rest counted. A reason never contains a rule's pattern, its explanation, the matched
 text, a file's content or a path from the configuration; those stay in the

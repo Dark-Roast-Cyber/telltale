@@ -220,6 +220,29 @@ pub enum ReasonDetail {
     Minimal,
 }
 
+/// How an `ask` verdict reaches the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AskRoute {
+    /// The harness's own approval prompt, where the harness has one that a
+    /// human answers (`Adapter::can_ask`). A harness without one is given
+    /// the ask as [`Self::Model`] does.
+    Human,
+    /// Through the model, on every harness: the call is returned as a deny
+    /// whose reason tells the model to stop and ask the user how to proceed
+    /// (`runtime::ASK_THROUGH_MODEL_NOTE`). The harness's approval prompt is
+    /// not used. Telltale takes no approval from the conversation: the same
+    /// call asked again gets the same answer.
+    Model,
+}
+
+impl AskRoute {
+    /// Whether an ask is put to a human by a harness that can (`can_ask`).
+    pub fn prompts_human(self, can_ask: bool) -> bool {
+        can_ask && self == Self::Human
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub mode: Mode,
@@ -231,6 +254,8 @@ pub struct Config {
     /// What deny/ask reasons disclose (docs/threat-model.md "Learn the rules
     /// from deny reasons").
     pub reason_detail: ReasonDetail,
+    /// How an `ask` reaches the user (`hooks.ask`).
+    pub ask: AskRoute,
     /// Directory for per-session journals and state.
     pub state_dir: Option<PathBuf>,
     /// Telemetry JSONL path. Defaults to `<state_dir>/telemetry.jsonl`.
@@ -288,6 +313,7 @@ impl Default for Config {
             on_error: OnError::Allow,
             on_unevaluable: OnError::Ask,
             reason_detail: ReasonDetail::Full,
+            ask: AskRoute::Human,
             state_dir: None,
             telemetry_path: None,
             thresholds: Thresholds::default(),

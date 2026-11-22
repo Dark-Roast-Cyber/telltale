@@ -692,6 +692,7 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
   on_error: allow                    # allow, ask or deny when evaluation fails
   on_unevaluable: ask                # allow, ask or deny for a call that cannot be read
   reason_detail: full                # full or minimal reason text for the harness
+  ask: human                         # human: the harness's approval prompt; model: a deny that tells the model to ask the user
   # state_dir: <path>                # TELLTALE_HOOKS_STATE_DIR; default under XDG_STATE_HOME or LOCALAPPDATA
   # telemetry_path: <path>           # TELLTALE_HOOKS_TELEMETRY; default telemetry.jsonl in the state dir
   self_protection_rules: true

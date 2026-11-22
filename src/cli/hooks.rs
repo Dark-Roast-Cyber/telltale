@@ -24,7 +24,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use telltale_core::hooks::config::{Config, OnError, RuleContent};
+use telltale_core::hooks::config::{AskRoute, Config, OnError, RuleContent};
 use telltale_core::hooks::engine::Engine;
 #[cfg(unix)]
 use telltale_core::hooks::engine::Limits;
@@ -742,6 +742,28 @@ fn print_config_roots(config_dirs: &[PathBuf]) {
     }
 }
 
+/// How an ask reaches the user under `route`, per harness: the `asks` line of
+/// `check`. A harness is listed under its approval prompt only when a human
+/// answers that prompt in every run mode (`Adapter::can_ask`).
+fn ask_route_line(route: AskRoute) -> String {
+    let named = |prompts: bool| -> String {
+        let names: Vec<_> = Harness::ALL
+            .iter()
+            .filter(|harness| harness.can_ask() == prompts)
+            .map(|harness| harness.adapter().name)
+            .collect();
+        names.join(", ")
+    };
+    match route {
+        AskRoute::Human => format!(
+            "asks: human (hooks.ask: human): the harness's approval prompt on {}; through the model on {} (a deny that tells the model to ask the user)",
+            named(true),
+            named(false)
+        ),
+        AskRoute::Model => "asks: model (hooks.ask: model): through the model on every harness (a deny that tells the model to ask the user); no harness approval prompt is used".to_owned(),
+    }
+}
+
 /// What each enforcement test signature gets under the configuration in
 /// effect, one line per rule under `tth.test.`: its command, score and the
 /// verdict a hook reaches for it, or what turned it off.
@@ -911,6 +933,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                 thresholds.session_deny,
                 thresholds.repeated_denials
             );
+            println!("{}", ask_route_line(config.ask));
             let effective = match engine.effective_configuration() {
                 Ok(effective) => effective,
                 Err(error) => {
@@ -971,7 +994,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                     "test signatures: on (hooks.test_signatures.enabled: true), {}",
                     match config.mode {
                         telltale_core::hooks::config::Mode::Enforce =>
-                            "verdicts are returned to the harness (an ask as a deny where the harness cannot ask)",
+                            "verdicts are returned to the harness (an ask as the asks line says)",
                         telltale_core::hooks::config::Mode::Observe =>
                             "verdicts are recorded and nothing is returned (detect-only)",
                     }
@@ -1234,7 +1257,8 @@ fn evaluate(
             return Answer::output(harness.render_event_verdict(
                 &hook_event,
                 OnError::Deny,
-                "Telltale Hooks is misconfigured and fails closed (config_invalid); details are on the hook's stderr.",
+                "Telltale is misconfigured (config_invalid), so the hook fails closed; `telltale hooks check` and the hook's stderr show why.",
+                AskRoute::Human,
             ));
         }
         return Answer::exit(1);
@@ -1313,21 +1337,21 @@ fn unreadable_answer(
 ) -> Answer {
     let (call_reason, payload_reason) = if code == HOOK_PANICKED {
         eprintln!("telltale hooks: the hook panicked ({code})");
-        let reason = "Telltale Hooks failed while evaluating this tool call (hook_panicked).";
+        let reason = "Telltale failed while evaluating it (hook_panicked).";
         (reason, reason)
     } else {
         eprintln!("telltale hooks: unusable hook payload ({code})");
         (
-            "Telltale Hooks could not read this tool call (payload too large or malformed).",
-            "Telltale Hooks could not read this hook payload and fails closed.",
+            "Telltale could not read it (payload too large or malformed).",
+            "Telltale could not read this hook payload and fails closed.",
         )
     };
-    let policy = match config {
-        Ok(config) => unreadable_call_policy(config),
-        Err(()) => OnError::Deny,
+    let (policy, ask) = match config {
+        Ok(config) => (unreadable_call_policy(config), config.ask),
+        Err(()) => (OnError::Deny, AskRoute::Human),
     };
     let answer = if harness.looks_like_pre_tool_use(bytes) {
-        Answer::output(harness.render_verdict(policy, call_reason))
+        Answer::output(harness.render_verdict(policy, call_reason, ask))
     } else if policy == OnError::Allow || names_event(bytes) {
         // A named event is not pre-execution by now, and exit 2 there is
         // not a block: on a Stop it is a prompt to continue, so a damaged
@@ -1340,7 +1364,7 @@ fn unreadable_answer(
         // harness's block that makes no prompt of anything else.
         match harness.adapter().nameless_block {
             NamelessBlock::DenyOnStdout => {
-                Answer::output(harness.render_verdict(OnError::Deny, payload_reason))
+                Answer::output(harness.render_verdict(OnError::Deny, payload_reason, ask))
             }
             NamelessBlock::Exit(status) => Answer::exit(status),
         }
@@ -1364,7 +1388,8 @@ fn unusable_event_answer(
         return Answer::output(harness.render_event_verdict(
             hook_event,
             unreadable_call_policy(config),
-            "Telltale Hooks could not read this tool call (required fields are missing).",
+            "Telltale could not read it (required fields are missing).",
+            config.ask,
         ));
     }
     Answer::exit(1)

@@ -383,38 +383,51 @@ fn a_test_decided_on_session_risk_reports_its_own_score() {
     assert_eq!(decision["session_score_after"], before);
 }
 
-/// A reason lists a bounded number of rule names and counts the rest; the
-/// record keeps them all.
+/// A reason lists at most eight rule names and counts the rest; the record
+/// keeps them all. Exactly eight are all listed, with nothing counted.
 #[test]
 fn a_reason_lists_a_bounded_number_of_rules() {
-    let dir = tempfile::tempdir().unwrap();
-    let rules: Vec<_> = (10..22u8)
-        .map(|n| {
-            operator_rule(
-                dir.path(),
-                &format!("synthetic.many_{n}"),
-                n,
-                "SYNTHETIC_MANY",
-                u32::from(n),
-            )
-        })
-        .collect();
-    let mut h = Harness::with(|c| c.rules.packs.deployment = rules.clone());
-    let denied = reason(&h.pre_bash("toolu_m", "echo SYNTHETIC_MANY"));
-    let listed = denied
-        .split_once(" Detections: ")
-        .and_then(|(_, rest)| rest.split_once(" Record "))
-        .map(|(listed, _)| listed)
-        .unwrap_or_else(|| panic!("{denied}"));
-    assert!(listed.ends_with(" and 4 more."), "{denied}");
-    assert_eq!(listed.matches("synthetic.many_").count(), 8, "{denied}");
-    assert_eq!(
-        h.decision_for("toolu_m")["decision"]["rule_ids"]
-            .as_array()
-            .unwrap()
-            .len(),
-        12
-    );
+    for (matched, tail) in [
+        (8u8, None),
+        (9, Some(" and 1 more.")),
+        (12, Some(" and 4 more.")),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let rules: Vec<_> = (10..10 + matched)
+            .map(|n| {
+                operator_rule(
+                    dir.path(),
+                    &format!("synthetic.many_{n}"),
+                    n,
+                    "SYNTHETIC_MANY",
+                    u32::from(n),
+                )
+            })
+            .collect();
+        let mut h = Harness::with(|c| c.rules.packs.deployment = rules.clone());
+        let denied = reason(&h.pre_bash("toolu_m", "echo SYNTHETIC_MANY"));
+        let listed = denied
+            .split_once(" Detections: ")
+            .and_then(|(_, rest)| rest.split_once(" Record "))
+            .map(|(listed, _)| listed)
+            .unwrap_or_else(|| panic!("{denied}"));
+        match tail {
+            Some(tail) => assert!(listed.ends_with(tail), "{matched}: {denied}"),
+            None => assert!(!listed.contains(" more"), "{matched}: {denied}"),
+        }
+        assert_eq!(
+            listed.matches("synthetic.many_").count(),
+            8,
+            "{matched}: {denied}"
+        );
+        assert_eq!(
+            h.decision_for("toolu_m")["decision"]["rule_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            usize::from(matched)
+        );
+    }
 }
 
 /// Every test signature is named under the prefix by which a pipeline that

@@ -719,7 +719,7 @@ mod hooks_section {
 
     use serde::Deserialize;
     use telltale_core::hooks::config::{
-        Config, EvaluatorSettings, Mode, OnError, ReasonDetail, Thresholds, Window,
+        AskRoute, Config, EvaluatorSettings, Mode, OnError, ReasonDetail, Thresholds, Window,
     };
 
     use super::{InvalidEnvironment, Origin, Setting, entry, path_entry};
@@ -736,6 +736,7 @@ mod hooks_section {
         on_error: Option<OnError>,
         on_unevaluable: Option<OnError>,
         reason_detail: Option<ReasonDetail>,
+        ask: Option<AskRoute>,
         state_dir: Option<PathBuf>,
         telemetry_path: Option<PathBuf>,
         self_protection_rules: Option<bool>,
@@ -797,6 +798,7 @@ mod hooks_section {
         on_error: Setting<OnError>,
         on_unevaluable: Setting<OnError>,
         reason_detail: Setting<ReasonDetail>,
+        ask: Setting<AskRoute>,
         state_dir: Setting<Option<PathBuf>>,
         telemetry_path: Setting<Option<PathBuf>>,
         pub(crate) self_protection_rules: Setting<bool>,
@@ -847,6 +849,7 @@ mod hooks_section {
                 on_error: Setting::new(config.on_error),
                 on_unevaluable: Setting::new(config.on_unevaluable),
                 reason_detail: Setting::new(config.reason_detail),
+                ask: Setting::new(config.ask),
                 state_dir: Setting::new(config.state_dir),
                 telemetry_path: Setting::new(config.telemetry_path),
                 self_protection_rules: Setting::new(config.rules.self_protection),
@@ -877,6 +880,7 @@ mod hooks_section {
             self.on_error.set(section.on_error, origin());
             self.on_unevaluable.set(section.on_unevaluable, origin());
             self.reason_detail.set(section.reason_detail, origin());
+            self.ask.set(section.ask, origin());
             self.state_dir.set(section.state_dir.map(Some), origin());
             self.telemetry_path
                 .set(section.telemetry_path.map(Some), origin());
@@ -924,6 +928,7 @@ mod hooks_section {
                 ("hooks.on_error", entry(&self.on_error)),
                 ("hooks.on_unevaluable", entry(&self.on_unevaluable)),
                 ("hooks.reason_detail", entry(&self.reason_detail)),
+                ("hooks.ask", entry(&self.ask)),
                 ("hooks.state_dir", path_entry(&self.state_dir)),
                 ("hooks.telemetry_path", path_entry(&self.telemetry_path)),
                 (
@@ -1003,6 +1008,7 @@ mod hooks_section {
                 on_error: self.on_error.value,
                 on_unevaluable: self.on_unevaluable.value,
                 reason_detail: self.reason_detail.value,
+                ask: self.ask.value,
                 state_dir: self.state_dir.value.clone(),
                 telemetry_path: self.telemetry_path.value.clone(),
                 thresholds: Thresholds {

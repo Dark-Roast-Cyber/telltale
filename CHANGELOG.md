@@ -120,13 +120,34 @@
   [Testing enforcement](docs/hooks/README.md#testing-enforcement). Embedding
   API: `hooks::config::RuleContent` has a new `test_signatures` field.
 
+- **Hooks: `hooks.ask` chooses how an ask reaches the user.** `human` (the
+  default, and the behavior until now) gives the harness the ask where it has
+  an approval prompt a person answers (Claude Code, Copilot CLI); Codex CLI
+  and the OpenCode pilot have none and are asked through the model. `model`
+  asks through the model on every harness: the call is denied and the reason
+  ends by telling the model to stop, tell the user what it was about to do
+  and why it was stopped, and ask how to proceed. The setting covers every
+  ask, including those of `on_error: ask` and `on_unevaluable: ask`; a deny
+  and detect-only mode are the same on both routes. An ask through the model
+  is recorded as `verdict: ask` with `returned_verdict: deny` and counted as
+  an ask. Telltale takes no approval from the conversation: the same call
+  asked again gets the same answer. `telltale hooks check` prints the route
+  per harness (`asks:`). See
+  [How an ask reaches the user](docs/hooks/README.md#how-an-ask-reaches-the-user).
+  Embedding API: `hooks::config::Config` has a new `ask` field
+  (`hooks::config::AskRoute`), and `Harness::render_verdict` and
+  `render_event_verdict` take the route.
+
 - **Hooks: deny and ask reasons say what happened and what to do.** With
   `reason_detail: full`, the reason a harness is given now starts with what
   happened to the call (`this tool call was blocked and has not been
   executed`, or `this tool call needs approval before it runs`), names what
   the matched rules are about by their categories, and for a deny says to
   review the command or request an authorized configuration exception. An
-  ask given as a deny to a harness that cannot ask reads as that deny. The
+  ask given as a deny opens like that deny and ends by telling the model to
+  ask the user. A call that could not be evaluated or read opens the same
+  way and then gives the cause, and a call denied for the session's earlier
+  denials says how many there were. The
   basis, the thresholds, the rule IDs and the record ID follow as before
   (`Reason: …. Detections: …. Record …`), with at most eight rule IDs listed
   and the rest counted. A reason never carries a rule's

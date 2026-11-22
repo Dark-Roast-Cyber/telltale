@@ -12,7 +12,7 @@
 use serde_json::Value;
 
 use crate::ClientId;
-use crate::hooks::config::OnError;
+use crate::hooks::config::{AskRoute, OnError};
 use crate::hooks::harnesses::{claude_code, codex_cli, copilot_cli, opencode};
 use crate::hooks::runtime::{Context, Event, Response};
 use crate::hooks::state::Verdict;
@@ -211,11 +211,12 @@ impl Harness {
     }
 
     /// Native stdout answering a pre-execution event with a policy verdict
-    /// when no parsed payload is available. `allow` prints nothing, and an
-    /// `ask` on a harness that cannot ask is rendered as `deny`
-    /// (`Response::decision`).
-    pub fn render_verdict(self, policy: OnError, reason: &str) -> Option<Value> {
-        self.render_event_verdict(self.adapter().pre_tool_use[0], policy, reason)
+    /// when no parsed payload is available. `allow` prints nothing. `reason`
+    /// is the cause: the answer opens with what happened to the call
+    /// (`Response::failure`). An `ask` that `ask` or the harness does not put
+    /// to a human is rendered as `deny` (`Response::decision`).
+    pub fn render_verdict(self, policy: OnError, reason: &str, ask: AskRoute) -> Option<Value> {
+        self.render_event_verdict(self.adapter().pre_tool_use[0], policy, reason, ask)
     }
 
     /// [`Self::render_verdict`] for a pre-execution event whose name is known,
@@ -226,6 +227,7 @@ impl Harness {
         hook_event: &str,
         policy: OnError,
         reason: &str,
+        ask: AskRoute,
     ) -> Option<Value> {
         let verdict = match policy {
             OnError::Allow => return None,
@@ -234,7 +236,7 @@ impl Harness {
         };
         self.render(
             hook_event,
-            &Response::decision(self.can_ask(), verdict, reason.to_owned()),
+            &Response::failure(ask.prompts_human(self.can_ask()), verdict, reason),
         )
     }
 }
@@ -393,15 +395,29 @@ mod tests {
     #[test]
     fn verdicts_without_a_payload_never_allow() {
         let harness = Harness::ClaudeCode;
-        assert_eq!(harness.render_verdict(OnError::Allow, "r"), None);
-        for (policy, decision) in [(OnError::Ask, "ask"), (OnError::Deny, "deny")] {
+        assert_eq!(
+            harness.render_verdict(OnError::Allow, "r", AskRoute::Human),
+            None
+        );
+        for (policy, decision, what) in [
+            (
+                OnError::Ask,
+                "ask",
+                "this tool call needs approval before it runs",
+            ),
+            (
+                OnError::Deny,
+                "deny",
+                "this tool call was blocked and has not been executed",
+            ),
+        ] {
             assert_eq!(
-                harness.render_verdict(policy, "why"),
+                harness.render_verdict(policy, "why", AskRoute::Human),
                 Some(json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": decision,
-                        "permissionDecisionReason": "why",
+                        "permissionDecisionReason": format!("Telltale Hooks: {what}. why"),
                     }
                 }))
             );
@@ -412,9 +428,14 @@ mod tests {
     fn codex_verdicts_without_a_payload_are_deny_or_nothing() {
         let harness = Harness::CodexCli;
         assert!(!harness.can_ask());
-        assert_eq!(harness.render_verdict(OnError::Allow, "r"), None);
+        assert_eq!(
+            harness.render_verdict(OnError::Allow, "r", AskRoute::Human),
+            None
+        );
         for policy in [OnError::Ask, OnError::Deny] {
-            let out = harness.render_verdict(policy, "why").unwrap();
+            let out = harness
+                .render_verdict(policy, "why", AskRoute::Human)
+                .unwrap();
             assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
             assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         }

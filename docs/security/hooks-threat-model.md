@@ -86,7 +86,12 @@ detections are recorded and the verdicts are not returned.
 
 Wherever this table says `ask`, a human sees the prompt only where the harness
 puts an ask to one in that run; a harness or run mode that cannot ask is given
-a `deny` instead, and a headless run treats an ask as a denial.
+a `deny` instead, and a headless run treats an ask as a denial. With
+`hooks.ask: model` every harness is given that deny. Its reason tells the
+model to ask the user, which is advice to the model and not a control: the
+call stays denied whatever the model does next, the user hears of it only
+through the model's own account, and nothing said in the conversation is
+taken as approval.
 
 | Condition | Default | Option |
 | --- | --- | --- |

@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 
 use common::Harness as Rig;
 use serde_json::{Value, json};
-use telltale_core::hooks::config::OnError;
+use telltale_core::hooks::config::{AskRoute, OnError};
 use telltale_core::hooks::harness::{Harness, Parsed};
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::harnesses::copilot_cli;
@@ -418,15 +418,20 @@ fn a_denied_call_that_ran_is_a_violation() {
 #[test]
 fn verdicts_without_a_payload_render_the_flat_form() {
     let harness = Harness::CopilotCli;
-    assert_eq!(harness.render_verdict(OnError::Allow, "r"), None);
+    assert_eq!(
+        harness.render_verdict(OnError::Allow, "r", AskRoute::Human),
+        None
+    );
     for (policy, decision) in [(OnError::Ask, "ask"), (OnError::Deny, "deny")] {
-        let output = harness.render_verdict(policy, "why").unwrap();
+        let output = harness
+            .render_verdict(policy, "why", AskRoute::Human)
+            .unwrap();
         assert_eq!(output["permissionDecision"], decision);
         assert!(
             output["permissionDecisionReason"]
                 .as_str()
                 .unwrap()
-                .starts_with("why")
+                .contains(". why")
         );
     }
     assert!(harness.is_pre_tool_use("preToolUse") && harness.is_pre_tool_use("PreToolUse"));

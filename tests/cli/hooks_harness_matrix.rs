@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
-use telltale_core::hooks::runtime::CANNOT_ASK_NOTE;
+use telltale_core::hooks::runtime::ASK_THROUGH_MODEL_NOTE;
 
 use super::hooks_cli::{write_override, write_policy};
 
@@ -340,10 +340,19 @@ fn once(entry: &Entry, command: &str, config: &Path) -> Run {
     run
 }
 
-/// What a harness is given for a policy ask: the ask where it can ask, and
-/// where it cannot a deny whose reason says that the call was not executed,
-/// what to do, and that approval was required.
+/// What a harness is given for a policy ask under the default route: the
+/// ask where the harness can ask, and where it cannot a deny that asks
+/// through the model.
 fn assert_asked(entry: &Entry, run: &Run) {
+    assert_asked_by(entry, run, entry.can_ask);
+}
+
+/// What a harness is given for a policy ask. `prompts`: the harness's own
+/// approval prompt is used, so the answer is the ask with a reason for the
+/// person who answers it. Otherwise the answer is a deny that says the call
+/// was not executed and ends by telling the model to stop and ask the user.
+/// The record keeps the policy's `ask` either way.
+fn assert_asked_by(entry: &Entry, run: &Run, prompts: bool) {
     let harness = entry.harness;
     let (verdict, reason) = run
         .answer(harness)
@@ -351,33 +360,32 @@ fn assert_asked(entry: &Entry, run: &Run) {
     let decision = &run.decision["decision"];
     assert_eq!(decision["verdict"], "ask", "{harness}");
     assert_eq!(decision["returned"], true, "{harness}");
-    if entry.can_ask {
+    assert!(
+        !reason.contains("request an authorized"),
+        "{harness}: {reason}"
+    );
+    if prompts {
         assert_eq!(verdict, "ask", "{harness}");
-        assert!(!reason.contains(CANNOT_ASK_NOTE), "{harness}: {reason}");
+        assert!(
+            !reason.contains(ASK_THROUGH_MODEL_NOTE),
+            "{harness}: {reason}"
+        );
         assert!(decision.get("returned_verdict").is_none(), "{harness}");
         assert!(
             reason.starts_with("Telltale Hooks: this tool call needs approval before it runs. "),
             "{harness}: {reason}"
         );
+    } else {
+        assert_eq!(verdict, "deny", "{harness}");
         assert!(
-            !reason.contains("request an authorized"),
+            reason.ends_with(ASK_THROUGH_MODEL_NOTE),
             "{harness}: {reason}"
         );
-    } else {
-        // A deny is what the harness is given, so the reason is a deny's:
-        // not executed, what to do, and that approval was what was needed.
-        assert_eq!(verdict, "deny", "{harness}");
-        assert!(reason.ends_with(CANNOT_ASK_NOTE), "{harness}: {reason}");
         assert_eq!(decision["returned_verdict"], "deny", "{harness}");
         assert!(
             reason.starts_with(
                 "Telltale Hooks: this tool call was blocked and has not been executed. "
             ),
-            "{harness}: {reason}"
-        );
-        assert!(
-            reason
-                .contains(" Review the command or request an authorized configuration exception. "),
             "{harness}: {reason}"
         );
     }
@@ -442,6 +450,62 @@ fn the_ask_test_asks_where_the_harness_can_and_is_denied_where_it_cannot() {
             json!(["tth.test.ask"])
         );
     }
+}
+
+/// `hooks.ask: model` asks through the model on every harness: the ask test
+/// is a deny that tells the model to stop and ask the user, also where the
+/// harness has an approval prompt of its own. The deny test is unchanged.
+#[test]
+fn with_ask_model_every_harness_is_asked_through_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, "  ask: model\n");
+    for entry in ENTRIES {
+        let harness = entry.harness;
+        assert_asked_by(entry, &once(entry, TEST_ASK, &config), false);
+        let run = once(entry, TEST_DENY, &config);
+        let (verdict, reason) = run.answer(harness).expect(harness);
+        assert_eq!(verdict, "deny", "{harness}");
+        assert!(
+            !reason.contains(ASK_THROUGH_MODEL_NOTE),
+            "{harness}: {reason}"
+        );
+        assert!(
+            run.decision["decision"].get("returned_verdict").is_none(),
+            "{harness}"
+        );
+    }
+    // Detect-only stays detect-only on this route.
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "observe", true, "  ask: model\n");
+    for entry in ENTRIES {
+        let run = once(entry, TEST_ASK, &config);
+        assert_eq!(run.answer(entry.harness), None, "{}", run.stdout);
+    }
+}
+
+/// `check` says how an ask reaches the user, per harness, for either route.
+#[test]
+fn check_says_how_an_ask_reaches_the_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = check(&root(dir.path(), "enforce", false, ""));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stdout.contains(
+            "\nasks: human (hooks.ask: human): the harness's approval prompt on claude-code, copilot-cli; \
+             through the model on codex-cli, opencode (a deny that tells the model to ask the user)\n"
+        ),
+        "{stdout}"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = check(&root(dir.path(), "enforce", false, "  ask: model\n"));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stdout.contains(
+            "\nasks: model (hooks.ask: model): through the model on every harness \
+             (a deny that tells the model to ask the user); no harness approval prompt is used\n"
+        ),
+        "{stdout}"
+    );
 }
 
 /// Under enforcement the deny test is denied on every harness, with a reason
@@ -784,7 +848,7 @@ fn check_says_what_each_test_command_gets() {
     assert_eq!(code, Some(0), "{stderr}");
     assert!(
         stdout.contains(
-            "verdicts are returned to the harness (an ask as a deny where the harness cannot ask)\n  \
+            "verdicts are returned to the harness (an ask as the asks line says)\n  \
              tth.test.ask: off (disabled by an override)\n  \
              tth.test.deny: `echo TELLTALE_TEST_DENY` scores 95: ask\n"
         ),

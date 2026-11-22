@@ -71,8 +71,8 @@ real binaries with stub hooks.
    `Response::decision`, which applies the substitution: a type guarantee
    covering policy verdicts, `on_unevaluable`, `on_error` (`fail`,
    `fail_strict`, `policy_response`) and any failure policy added later.
-   The reason says approval was required and the harness
-   cannot ask. Telemetry keeps the policy verdict (`decision.verdict`,
+   The reason ends by telling the model to ask the user (see the 2026-11-22
+   addendum). Telemetry keeps the policy verdict (`decision.verdict`,
    ledger counts) and records the substitution as `decision.returned_verdict`
    and `outcome.prior_returned_verdict`, present only when they differ.
    Enforcement is accounted against the returned verdict: a substituted deny
@@ -166,3 +166,34 @@ Decisions:
    harness's own block under `on_error = "deny"`. A verdict here takes the
    stricter of `on_error` and `on_unevaluable`, the runtime's rule for failures
    an agent can bring about.
+
+## Addendum (2026-11-22): the route of an ask is a setting
+
+`hooks.ask` chooses how an ask reaches the user. `human`, the default, is the
+rule of the first addendum: the ask goes to the harness where a person
+answers its prompt, and is substituted with a deny elsewhere. `model`
+substitutes on every harness. Decisions:
+
+1. One setting for every harness, not one per harness. The operator's
+   question is whether a person at the harness's prompt or the model in the
+   conversation carries the ask, and a harness that cannot ask has only the
+   second answer.
+2. The model route is the existing substitution, through the one place that
+   applies it (`Response::decision`), so policy asks, `on_error`,
+   `on_unevaluable` and payload-less answers all follow the setting. Nothing
+   is added to the record: `decision.returned_verdict` already says a deny
+   was returned for an ask, and the ledger still counts an ask.
+3. The substituted deny's reason tells the model what to do: stop, tell the
+   user what it was about to do and why it was stopped, and ask how to
+   proceed. It says that repeating the call changes nothing, because that is
+   true: Telltale takes no approval from the conversation. Text there is
+   written by the model or passes through it, and a model must not be able
+   to approve its own exception.
+4. An approval that takes effect is a separate feature with its own trust
+   boundary (who approved, bound to which call, for how long), tracked
+   outside this decision. Until it exists, the user's ways forward are other
+   instructions, running the command themselves, or tuning the rule.
+
+Rejected: returning an `allow` once the model reports that the user agreed
+(the model's report is the thing not trusted); a per-harness route map (no
+harness needs a different answer than its capability gives).
