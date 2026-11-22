@@ -673,6 +673,9 @@ mod tests {
         assert!(config.rules.self_protection);
         assert!(!config.rules.tamper_prevention);
         assert!(!config.rules.test_signatures);
+        // Pipelines that do not carry the self-protection rules leave out
+        // override entries for them by this prefix.
+        assert!(crate::rule_resolution::HOOKS_RULE_PREFIXES.contains(&HOST_RULE_ID_PREFIX));
         assert!(config.rules.process_chain);
     }
 

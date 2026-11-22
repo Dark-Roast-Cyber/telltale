@@ -157,6 +157,9 @@ pub struct Engine {
     options: DetailedEvaluationOptions,
     semantic_identity: String,
     generated: GeneratedCoverage,
+    /// Override entries left out because they name a hooks rule that is not
+    /// loaded (`RuleResolution::skipped_overrides`).
+    skipped_overrides: Vec<String>,
     pub build_ms: u64,
 }
 
@@ -334,6 +337,7 @@ impl Engine {
                 format!("the policy removes the self-protection rule {id}").into(),
             )));
         }
+        let skipped_overrides = resolution.skipped_overrides.clone();
         let pipeline = resolution.into_pipeline().map_err(EngineError::Build)?;
         let mut options = DetailedEvaluationOptions::default();
         options.process_chain = rules.process_chain;
@@ -347,6 +351,7 @@ impl Engine {
             options,
             semantic_identity,
             generated,
+            skipped_overrides,
             build_ms: started.elapsed().as_millis() as u64,
         })
     }
@@ -692,6 +697,14 @@ impl Engine {
     /// What the generated self-protection rules cover (`telltale hooks check`).
     pub fn generated_coverage(&self) -> &GeneratedCoverage {
         &self.generated
+    }
+
+    /// The `rule_id` of each override entry that was left out because it
+    /// names a hooks rule this engine does not load: a self-protection rule
+    /// while those are off, or a name no such rule has
+    /// (`telltale hooks check`).
+    pub fn skipped_overrides(&self) -> &[String] {
+        &self.skipped_overrides
     }
 
     /// The rules this engine evaluates as they take effect: for every rule

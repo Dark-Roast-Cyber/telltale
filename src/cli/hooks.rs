@@ -943,6 +943,13 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
             } else {
                 println!("self-protection: off (hooks.self_protection_rules: false)");
             }
+            for id in engine.skipped_overrides() {
+                let id: String = id
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect();
+                println!("override left out: {id} names no rule that is loaded");
+            }
             println!(
                 "tamper prevention: {}",
                 if config.rules.tamper_prevention {
