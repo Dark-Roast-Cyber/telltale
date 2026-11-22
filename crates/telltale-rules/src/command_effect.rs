@@ -402,11 +402,14 @@ pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [Str
             continue;
         }
         if name == "find" {
-            let exec = tokens[index..].iter().position(|token| {
-                matches!(token.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
-            })?;
-            index += exec + 1;
-            continue;
+            // Each command `find` runs is read in turn.
+            return tokens[index + 1..]
+                .iter()
+                .enumerate()
+                .filter(|(_, token)| {
+                    matches!(token.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
+                })
+                .find_map(|(at, _)| invocation(&tokens[index + at + 2..], clients));
         }
         let (_, values, positional) = WRAPPERS.iter().find(|(wrapper, ..)| *wrapper == name)?;
         index += 1;
@@ -429,7 +432,7 @@ pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [Str
 /// without an attached `=value` (`--user deploy`), or a short cluster whose
 /// first value-taking letter in `short` ends it (`-u deploy`, `-iu deploy`,
 /// but not `-uroot`).
-pub fn takes_next(option: &str, long: &[&str], short: &str) -> bool {
+fn takes_next(option: &str, long: &[&str], short: &str) -> bool {
     match option.strip_prefix("--") {
         Some(name) => long.contains(&name),
         None => option[1..]

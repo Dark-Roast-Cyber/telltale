@@ -23,8 +23,7 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-/// Versions the native readings, including the requested-transfer reading the
-/// session view also takes for the bundled upload rule.
+/// Versions what the action view reads, the shared transfer reading included.
 const NATIVE_ACTION_PROFILE_VERSION: u32 = 16;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
@@ -1653,13 +1652,15 @@ fn requests_outbound_transfer(tokens: &[String]) -> bool {
 
 /// Whether some command stage of an observation, read as the action view
 /// reads it, requests an outbound transfer (see [`requests_outbound_transfer`]).
-/// The session view asks this for the bundled upload rule. It reads the
-/// observation's view on `budget`: the session view runs before the action
-/// view and shares no reading with it.
+/// The session view asks this for the bundled upload rule. It runs before the
+/// action view and shares no reading with it, so this reads the observation
+/// itself, on a detached budget as a declared reading does: the source keeps
+/// the work it had before session events took this reading.
 pub(super) fn observation_requests_outbound_transfer(
     observation: &CanonicalObservationV2,
-    budget: &mut RetentionBudget,
+    budget: &RetentionBudget,
 ) -> Result<bool, ProcessingError> {
+    let budget = &mut budget.detached();
     let view = view(observation, budget)?;
     for tokens in &view.commands {
         charge_tokens(tokens, budget)?;
