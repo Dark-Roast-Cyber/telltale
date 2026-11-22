@@ -903,11 +903,42 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                 thresholds.session_deny,
                 thresholds.repeated_denials
             );
+            let effective = match engine.effective_configuration() {
+                Ok(effective) => effective,
+                Err(error) => {
+                    eprintln!("telltale: {error}");
+                    return 1;
+                }
+            };
             let generated = engine.generated_coverage();
             if config.rules.self_protection {
                 println!(
                     "self-protection: {} paths in {} generated rules",
                     generated.paths, generated.rules
+                );
+                // Without tamper prevention an override, a policy or a
+                // replacement can turn these rules off; say how many run.
+                let (enabled, all) = effective
+                    .definitions
+                    .iter()
+                    .filter(|definition| {
+                        definition
+                            .id
+                            .starts_with(telltale_core::hooks::config::HOST_RULE_ID_PREFIX)
+                    })
+                    .fold((0, 0), |(enabled, all), definition| {
+                        (
+                            enabled + usize::from(definition.disabled_by.is_none()),
+                            all + 1,
+                        )
+                    });
+                println!(
+                    "self-protection rules: {enabled} of {all} enabled{}",
+                    if enabled == all {
+                        ""
+                    } else {
+                        " (an override or the policy turned the others off: check --rules lists them)"
+                    }
                 );
             } else {
                 println!("self-protection: off (hooks.self_protection_rules: false)");
@@ -974,7 +1005,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                 }
             }
             println!(
-                "harness protections (installed into a harness, where no Telltale setting turns them on or off; check does not read harness files):"
+                "harness protections (what a harness does on its own, where no Telltale setting turns it on or off; check does not read harness files):"
             );
             for harness in Harness::ALL {
                 let adapter = harness.adapter();
@@ -983,16 +1014,8 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                 }
             }
             if list_rules {
-                match engine.effective_configuration() {
-                    Ok(effective) => {
-                        for definition in &effective.definitions {
-                            println!("rule: {}", effective_rule_line(definition));
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("telltale: {error}");
-                        return 1;
-                    }
+                for definition in &effective.definitions {
+                    println!("rule: {}", effective_rule_line(definition));
                 }
             }
             0

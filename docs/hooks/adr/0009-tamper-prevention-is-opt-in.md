@@ -1,7 +1,10 @@
 # ADR 0009: Tamper detection by default, tamper prevention by choice
 
 Status: Accepted. Amends the consequences of
-[ADR 0008](0008-detect-only-by-default.md).
+[ADR 0008](0008-detect-only-by-default.md): its statement that
+`settings --fail-closed` is harmless in detect-only mode is superseded. A
+hook command that cannot start at all (a missing binary) is blocked by Claude
+Code under `onFailure: "block"`, whatever mode the hook would have run in.
 
 ## Context
 
@@ -64,9 +67,13 @@ set to observe.
 ## Consequences
 
 - A configuration that names a `tth.tamper.` rule in an override, or drops
-  the rules by policy, loaded as invalid before and now applies. A deployment
-  that wants the old refusal sets `hooks.tamper_prevention.enabled: true`.
-- Deployments that already work are unchanged: none can hold such content.
+  the rules by policy, loaded as invalid before and now applies.
+- An installation of an earlier development build had the lock whenever the
+  rules were on. After this change it has it only with
+  `hooks.tamper_prevention.enabled: true`: its configuration loads as before
+  and detects as before, but content added later can tune or drop the rules.
+  `telltale hooks check` prints the lock's state and how many self-protection
+  rules run.
 - The lock, like enforcement, is as strong as the write protection of the
   files that hold it. A boundary that separates an administrator from the
   agent belongs to managed deployment.
