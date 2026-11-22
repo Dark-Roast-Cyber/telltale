@@ -8,9 +8,23 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 15.** Several changes below change what the
+- **The native action profile is 16.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
+
+- **Session events read uploads to object storage as actions do.** For the
+  bundled `exfil.outbound_upload`, a session event now matches whenever
+  the native action view reads an upload by the AWS CLI, gsutil or rclone,
+  or GitHub CLI publication of a cloud credential file. Both take it from
+  one reading of the command, so move and sync verbs, client options,
+  wrappers and a body file given to `gh issue create` or `gh pr create`
+  now raise the session finding that copy commands already did. The
+  rule's own patterns still apply, so nothing that matched stops
+  matching. That reading now also finds a client after a leading shell
+  reserved word and in the command `find` runs with `-exec`, which adds
+  action findings for uploads and downloads written that way. A custom
+  copy of the rule keeps its own patterns alone. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md).
 
 - **A reference to the controlled tester domain is not exfiltration.**
   `network.controlled_test_domain.darkroast` (exfiltration, 45 points) now
