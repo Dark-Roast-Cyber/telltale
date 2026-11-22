@@ -81,17 +81,18 @@
   replace one by name. `hooks.tamper_prevention.enabled: true` (default
   `false`, needs `hooks.self_protection_rules`) locks them: rule content
   that names one, or a policy under which one would not stay enabled, is
-  then invalid configuration, as it was on earlier development builds
-  whenever the rules were on. A configuration those builds loaded is
-  unchanged. What a harness applies on its own stays explicit and is in no
+  then invalid configuration. Earlier development builds locked these rules
+  whenever they were on: set `hooks.tamper_prevention.enabled: true` to keep
+  that. What a harness applies on its own stays explicit and is in no
   default install: `settings --fail-closed` and `codex-cli execpolicy`. See
   [Tamper prevention](docs/hooks/README.md#tamper-prevention). Embedding API:
   `hooks::config::RuleContent` has a new `tamper_prevention` field, and
   `hooks::harness::Adapter` a new `harness_protections` field.
 
 - **`telltale hooks check` says what is in effect.** It prints the ask and
-  deny thresholds, whether tamper prevention is on, and per harness what can
-  block a tool call from inside the harness. `check --rules` adds one line
+  deny thresholds, whether tamper prevention is on, how many self-protection
+  rules run, and per harness what can block a tool call from inside the
+  harness. `check --rules` adds one line
   per rule and chain the hook evaluates: enabled or what turned it off (its
   definition, an override, the policy), its score, the tier that defines it,
   and each override applied to it with the operator's reason. A rule build

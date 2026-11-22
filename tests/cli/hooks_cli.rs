@@ -712,6 +712,14 @@ fn check_rules_lists_every_rule_as_it_takes_effect() {
     for harness in ["claude-code", "copilot-cli", "codex-cli", "opencode"] {
         assert!(plain.contains(&format!("\n  {harness}: ")), "{plain}");
     }
+    // A changed score leaves every self-protection rule running.
+    let running = plain
+        .lines()
+        .find_map(|line| line.strip_prefix("self-protection rules: "))
+        .unwrap_or_else(|| panic!("{plain}"));
+    let (enabled, all) = running.split_once(" of ").unwrap();
+    assert_eq!(format!("{enabled} enabled"), all, "{running}");
+    assert_ne!(enabled, "0", "{running}");
     assert!(!plain.contains("\nrule: "), "{plain}");
 
     let listed = check(&["--rules"]);
@@ -737,6 +745,33 @@ fn check_rules_lists_every_rule_as_it_takes_effect() {
     );
     // Nothing of the override file but its reason.
     assert!(!listed.contains("override.yaml"), "{listed}");
+}
+
+/// With tamper prevention off a policy may leave the self-protection rules
+/// out. `check` then says that none runs, beside the count of generated rules.
+#[test]
+fn check_says_how_many_self_protection_rules_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n");
+    write_policy(
+        &config,
+        "version: 1\ndisabled_categories: [approval_bypass]\n",
+    );
+    let out = isolated()
+        .arg("check")
+        .arg("--config-dir")
+        .arg(&config)
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    let running = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("self-protection rules: "))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(running.starts_with("0 of "), "{running}");
+    assert!(running.contains("check --rules"), "{running}");
 }
 
 /// A rule build that fails names its cause on `check`'s stderr: the file and

@@ -74,5 +74,7 @@ never happened and a session switched to enforce started from them.
 - The generated settings, `settings --fail-closed` and the Codex exec-policy
   backstop are unchanged. The first two are harmless in detect-only mode
   because the hook always answers in time with exit 0; the exec-policy file
-  acts natively and is for enforcing deployments only.
+  acts natively and is for enforcing deployments only. (Amended by
+  [ADR 0009](0009-tamper-prevention-is-opt-in.md): `--fail-closed` blocks
+  when the hook command cannot start, in detect-only mode too.)
 - The real-harness scripts set `mode = "enforce"` explicitly.

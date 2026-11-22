@@ -377,7 +377,9 @@ What is in effect:
 | Is tamper prevention on? | `telltale hooks check` and `hooks.tamper_prevention.enabled` in `telltale config show` |
 
 `check --rules` shows the score a session event carries and, where it
-differs, the score hooks decide on (`action`).
+differs, the score hooks decide on (`action`). When the rules do not build,
+`check` prints the cause on stderr: the file, the rule ID and the parser's
+message, which can quote the line it could not read.
 
 ## Tamper prevention
 
@@ -411,9 +413,11 @@ options say `mode: "enforce"`.
 **Without the lock** (the default) the self-protection rules are ordinary
 bundled rules. An override can turn one off or change its score, a policy can
 leave them out (their category is `approval_bypass`), and a managed tier can
-replace one by name, exactly as for any other rule. `check --rules` lists
-them, with the names of the rules generated for this installation's own
-paths.
+replace one by name, exactly as for any other rule. `check` says how many of
+them run, and `check --rules` lists them, with the names of the rules
+generated for this installation's own paths. A shared policy with a whitelist
+that does not include `approval_bypass` turns all of them off without an
+error: that is what the lock refuses.
 
 **With the lock** the `tth.tamper.` names belong to hooks. A rule document,
 rule package or override file that names one is invalid configuration, and so
