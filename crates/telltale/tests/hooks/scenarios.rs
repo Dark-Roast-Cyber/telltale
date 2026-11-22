@@ -104,6 +104,85 @@ fn a_projected_call_with_two_command_members_keeps_both_in_history() {
 }
 
 #[test]
+fn a_registry_credential_read_or_a_container_push_alone_is_allowed() {
+    for (id, command) in [
+        ("toolu_rr", "cat ~/.npmrc"),
+        ("toolu_cp", "docker push registry.example.invalid/app:1"),
+    ] {
+        let mut h = Harness::new();
+        assert_eq!(h.pre_bash(id, command), None, "{command}");
+        let decision = h.decision_for(id);
+        assert_eq!(decision["decision"]["basis"], "no_finding", "{decision:#}");
+    }
+}
+
+#[test]
+fn a_publish_given_its_registry_config_file_is_not_a_credential_chain() {
+    for command in [
+        "twine upload --config-file /home/synthetic/.pypirc dist/*",
+        "npm --userconfig ~/.npmrc publish",
+    ] {
+        let mut h = Harness::new();
+        h.pre_bash("toolu_pub", command);
+        let decision = h.decision_for("toolu_pub");
+        let rules = decision["decision"]["rule_ids"].as_array().unwrap();
+        assert!(
+            !rules
+                .iter()
+                .any(|r| r == "credential.package_registry_read"
+                    || r == "chain.credential_then_publish"),
+            "{command}: {rules:?}"
+        );
+    }
+}
+
+/// The publish step's decision after `read` ran in the same session.
+fn publish_after(read: &str, publish: &str) -> serde_json::Value {
+    let mut h = Harness::new();
+    h.pre_bash("toolu_read", read);
+    h.post_bash("toolu_read", read, "ok");
+    h.pre_bash("toolu_pub", publish);
+    h.decision_for("toolu_pub")
+}
+
+#[test]
+fn a_credential_read_then_a_publish_links_the_publish_chain_in_hooks() {
+    for (read, publish, verdict, score) in [
+        // The cloud credential chain: publish 45 + chain 40.
+        ("cat ~/.aws/credentials", "npm publish", "ask", 85),
+        ("cat ~/.npmrc", "npm publish", "ask", 85),
+        // Push 0 + chain 40.
+        (
+            "jq .auths ~/.docker/config.json",
+            "docker push registry.example.invalid/app:1",
+            "allow",
+            40,
+        ),
+        (
+            "cat ~/.npmrc",
+            "docker push registry.example.invalid/app:1",
+            "allow",
+            40,
+        ),
+    ] {
+        let decision = publish_after(read, publish);
+        let rules = decision["decision"]["rule_ids"].as_array().unwrap();
+        assert!(
+            rules.iter().any(|r| r == "chain.credential_then_publish"),
+            "{read} then {publish}: {rules:?}"
+        );
+        assert_eq!(
+            decision["decision"]["verdict"], verdict,
+            "{read} then {publish}"
+        );
+        assert_eq!(
+            decision["decision"]["action_score"], score,
+            "{read} then {publish}"
+        );
+    }
+}
+
+#[test]
 fn harvest_then_exfil_is_denied_and_enforcement_tracked() {
     let mut h = Harness::new();
     assert_eq!(

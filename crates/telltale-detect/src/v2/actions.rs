@@ -24,7 +24,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
 /// Versions what the action view reads, the shared transfer reading included.
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 17;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 18;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1749,11 +1749,103 @@ pub(super) fn observation_requests_outbound_transfer(
     Ok(false)
 }
 
-/// Whether a loaded rule is the bundled upload rule as shipped, whose session
-/// events also take [`observation_requests_outbound_transfer`]. A custom copy
-/// is read by its own patterns alone.
-pub(super) fn reads_requested_transfers(rule: &RuleV1CompatibilityRule) -> bool {
-    rule.id == "exfil.outbound_upload" && native_profile_applies(rule) == Some(true)
+/// An action-view reading of an observation that session events of a bundled
+/// rule take beside the rule's own patterns.
+pub(super) type CommandReading =
+    fn(&CanonicalObservationV2, &RetentionBudget) -> Result<bool, ProcessingError>;
+
+/// Whether session events of a bundled rule read one of its targets' fields
+/// for an observation, as the rule's action-view arm does.
+pub(super) type FieldGuard = fn(&str, &CanonicalObservationV2) -> bool;
+
+/// The action-view readings session events of a bundled rule as shipped take
+/// beside the rule's own patterns.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct SessionReading {
+    /// Selects each command field when it reads the observation.
+    pub(super) command: Option<CommandReading>,
+    /// A field it does not read is skipped: neither a match nor unknown.
+    pub(super) field: Option<FieldGuard>,
+}
+
+/// The readings session events of a loaded rule also take, when it is a bundled
+/// rule as shipped that has them: the upload rule takes
+/// [`observation_requests_outbound_transfer`], the download rule
+/// [`observation_fetches_code`], and the registry credential rule
+/// [`reads_registry_credential_field`]. A custom copy is read by its own
+/// patterns alone.
+pub(super) fn session_reading(rule: &RuleV1CompatibilityRule) -> SessionReading {
+    let reading = match rule.id.as_str() {
+        "exfil.outbound_upload" => SessionReading {
+            command: Some(observation_requests_outbound_transfer),
+            field: None,
+        },
+        "network.download" => SessionReading {
+            command: Some(observation_fetches_code),
+            field: None,
+        },
+        "credential.package_registry_read" => SessionReading {
+            command: None,
+            field: Some(reads_registry_credential_field),
+        },
+        _ => return SessionReading::default(),
+    };
+    if native_profile_applies(rule) == Some(true) {
+        reading
+    } else {
+        SessionReading::default()
+    }
+}
+
+/// The path of a native file-read tool is a read. A shell names the file for
+/// reads and writes alike, which its command field tells apart; the path of
+/// any other tool is not read. The kind is the one the action view reads.
+fn reads_registry_credential_field(target: &str, observation: &CanonicalObservationV2) -> bool {
+    target != "file_path"
+        || matches!(
+            observation.body(),
+            ObservationBody::Tool(tool)
+                if tool_arguments::named_tool_kind(tool) == Some(ToolKind::FileRead)
+        )
+}
+
+/// Whether some command stage of an observation, read as the action view
+/// reads it, is a Python one-liner that runs a fetched response (see
+/// [`fetches_code`]). The session view asks this for the bundled download
+/// rule, on a detached budget as [`observation_requests_outbound_transfer`]
+/// does.
+pub(super) fn observation_fetches_code(
+    observation: &CanonicalObservationV2,
+    budget: &RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    let budget = &mut budget.detached();
+    let view = command_view(observation, budget)?;
+    for tokens in &view.commands {
+        if fetches_code(tokens, budget)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The fetch a command stage's Python one-liner runs as code, if any: a
+/// download with inline execution (experimental). As for a download client,
+/// a URL naming a literal loopback address is no download.
+fn fetches_code<'a>(
+    tokens: &'a [String],
+    budget: &mut RetentionBudget,
+) -> Result<Option<command_effect::FetchedCode<'a>>, ProcessingError> {
+    charge_tokens(tokens, budget)?;
+    Ok(command_effect::fetched_code(tokens).filter(|fetch| {
+        let authority = fetch
+            .url
+            .split_once("://")
+            .map_or("", |(_, rest)| rest)
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        !super::http::literal_loopback(authority)
+    }))
 }
 
 /// A cloud credential file path, as the bundled upload and harvest rules name
@@ -1858,7 +1950,9 @@ fn native_fields<'a>(
         for (index, (span, tokens)) in view.stage_spans.iter().zip(&view.commands).enumerate() {
             let stage = &view.text("command")[span.clone()];
             let matches = match id {
-                "network.download" => is_download(tokens, budget)?,
+                "network.download" => {
+                    is_download(tokens, budget)? || fetches_code(tokens, budget)?.is_some()
+                }
                 "exfil.outbound_upload" => is_upload(tokens, budget)?,
                 _ => {
                     budget.charge(tokens.first().map_or(0, String::len))?;
@@ -1990,6 +2084,11 @@ fn native_fields<'a>(
                     && (field != "file_path"
                         || view.reads_paths
                         || view.text("command").is_empty()),
+            ),
+            // The path of a native read tool is a read. A shell names the file
+            // for reads and writes alike, which its command field tells apart.
+            "credential.package_registry_read" => whole(
+                action(field) && (field != "file_path" || view.kind == Some(ToolKind::FileRead)),
             ),
             "persistence.shell_profile"
             | "execution.encoded_payload"
@@ -3280,13 +3379,16 @@ fn piped_execution(
 }
 /// The byte range of a command that runs, as code, what a download inside one
 /// of its words prints: `bash <(curl …)`, `source <(…)`, `eval "$(…)"`,
-/// `sh -c "$(…)"` or `iex (iwr …)`. A download in any other word is data.
+/// `sh -c "$(…)"` or `iex (iwr …)`; or of a local Python one-liner that runs a
+/// fetched response. A download in any other word is data.
 fn inline_execution(
     view: &ActionView,
     budget: &mut RetentionBudget,
 ) -> Result<Option<Range<usize>>, ProcessingError> {
     for (outer, tokens) in view.stage_spans.iter().zip(&view.commands) {
-        charge_tokens(tokens, budget)?;
+        if fetches_code(tokens, budget)?.is_some_and(|fetch| !fetch.elsewhere) {
+            return Ok(Some(outer.clone()));
+        }
         let Some(program) = inline_code(tokens) else {
             continue;
         };

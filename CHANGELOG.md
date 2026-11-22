@@ -8,7 +8,7 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 17.** Several changes below change what the
+- **The native action profile is 18.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
 
@@ -26,6 +26,16 @@
   leading shell reserved word and in a command `find` runs with `-exec`,
   which adds action findings for uploads and downloads written that way.
   A custom copy of the rule keeps its own patterns alone. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md).
+
+- **A Python one-liner that fetches a response and executes it is read as a
+  download followed by execution (experimental).** A `python`, `python3`,
+  `python3.x` or `py` invocation whose `-c` code passes the response of an
+  HTTP(S) fetch to `exec` or `eval` now matches the
+  bundled `network.download` in session events and action findings, and
+  `chain.download_then_execute` links it as it links a download piped into
+  a shell. Through `sudo` or `env` it links the same way; on a remote host
+  or in a container it reads as a download there. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md).
 
 - **Commands run through another program are read as the command they
@@ -546,6 +556,20 @@
   phase of each scan after the first in one process (`scan --iterations`,
   `watch`) took a median of 6.9 ms instead of 17.1 ms, and of the first
   14.0 ms instead of 18.0 ms. No rule matches differently.
+
+- **Experimental rules tag registry credential reads and container pushes.**
+  `credential.package_registry_read` (`credential_harvesting`) matches a read,
+  copy-out, encode or send of an npm, PyPI, Cargo, RubyGems, NuGet, Maven,
+  Gradle or Composer credential file in the user's home directory, or a native
+  file-read tool opening one. Writing the file and passing it to a tool as its
+  configuration are release setup and do not match; project-level files do
+  not match. `supply_chain.container_push` (`supply_chain`) matches a push
+  command (`docker`, `podman`, `buildah`, `oras`, `helm` or `crane` push, or
+  `skopeo copy` to `docker://`), or an image build whose output option pushes
+  to a registry. Both are informational and score 0, so alone they only mark
+  the timeline. The credential rule supplies the credential step of
+  `chain.credential_then_publish` and `chain.harvest_then_exfil`; the push
+  rule supplies the publish step of `chain.credential_then_publish`.
 
 - **`watch` re-checks SQLite stores briefly after a change.** A commit that
   becomes visible to readers only after its write notification is now read

