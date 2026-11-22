@@ -32,6 +32,18 @@ const SHARED_RULE_TEMPLATE: (&str, &str) = (
     include_str!("rules/telltale-hooks-self-protection.yaml"),
 );
 
+/// The enforcement test signatures (name, content): two rules that match one
+/// harmless command each. Loaded only on request
+/// ([`RuleContent::test_signatures`]), and never part of
+/// [`host_rule_documents`]: they are not self-protection, so tamper prevention
+/// does not lock them.
+pub fn test_signature_document() -> (&'static str, &'static str) {
+    (
+        "telltale-hooks-test-signatures.yaml",
+        include_str!("rules/telltale-hooks-test-signatures.yaml"),
+    )
+}
+
 /// Every host rule template (name, content): the shared one, then each
 /// adapter's own (`Adapter::rules`). All are loaded into the one pipeline that
 /// serves every harness.
@@ -287,11 +299,18 @@ impl Engine {
         // name, and overrides and the policy apply to them.
         let locked = rules.tamper_prevention;
         let host_rules = host_rule_definitions(&documents);
-        let (fixed, replaceable) = if locked {
+        let (fixed, mut replaceable) = if locked {
             (documents, Vec::new())
         } else {
             (Vec::new(), documents)
         };
+        // Test signatures are ordinary bundled rules whatever the lock says.
+        if rules.test_signatures {
+            let (name, document) = test_signature_document();
+            let parsed = LoadedRules::parse(document)
+                .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))?;
+            replaceable.push((format!("hooks:{name}"), parsed));
+        }
         let resolution = crate::rule_resolution::resolve_rule_set_with_host(
             &rules.packs,
             &[],
@@ -2148,9 +2167,10 @@ mod tests {
         assert!(written.is_match(path), "{doc}");
     }
 
-    /// A rules file that is not listed would silently never load.
+    /// A rules file that is not listed would silently never load. The
+    /// self-protection documents and the test signatures are the two lists.
     #[test]
-    fn every_bundled_rules_file_is_a_host_rule_document() {
+    fn every_bundled_rules_file_is_a_listed_document() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hooks/rules");
         let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
             .unwrap()
@@ -2164,6 +2184,7 @@ mod tests {
         files.sort();
         let mut listed: Vec<(String, String)> = super::host_rule_templates()
             .into_iter()
+            .chain([super::test_signature_document()])
             .map(|(name, content)| (name.to_owned(), content.to_owned()))
             .collect();
         listed.sort();

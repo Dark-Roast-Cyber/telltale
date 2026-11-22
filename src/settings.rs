@@ -742,6 +742,8 @@ mod hooks_section {
         #[serde(default)]
         tamper_prevention: TamperPreventionSection,
         #[serde(default)]
+        test_signatures: TestSignaturesSection,
+        #[serde(default)]
         thresholds: ThresholdsSection,
         #[serde(default)]
         window: WindowSection,
@@ -752,6 +754,12 @@ mod hooks_section {
     #[derive(Debug, Default, Deserialize)]
     #[serde(deny_unknown_fields)]
     struct TamperPreventionSection {
+        enabled: Option<bool>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TestSignaturesSection {
         enabled: Option<bool>,
     }
 
@@ -793,6 +801,7 @@ mod hooks_section {
         telemetry_path: Setting<Option<PathBuf>>,
         pub(crate) self_protection_rules: Setting<bool>,
         pub(crate) tamper_prevention_enabled: Setting<bool>,
+        pub(crate) test_signatures_enabled: Setting<bool>,
         action_ask: Setting<u64>,
         action_deny: Setting<u64>,
         session_ask: Setting<u64>,
@@ -842,6 +851,7 @@ mod hooks_section {
                 telemetry_path: Setting::new(config.telemetry_path),
                 self_protection_rules: Setting::new(config.rules.self_protection),
                 tamper_prevention_enabled: Setting::new(config.rules.tamper_prevention),
+                test_signatures_enabled: Setting::new(config.rules.test_signatures),
                 action_ask: Setting::new(action_ask),
                 action_deny: Setting::new(action_deny),
                 session_ask: Setting::new(session_ask),
@@ -874,6 +884,8 @@ mod hooks_section {
                 .set(section.self_protection_rules, origin());
             self.tamper_prevention_enabled
                 .set(section.tamper_prevention.enabled, origin());
+            self.test_signatures_enabled
+                .set(section.test_signatures.enabled, origin());
             let thresholds = section.thresholds;
             self.action_ask.set(thresholds.action_ask, origin());
             self.action_deny.set(thresholds.action_deny, origin());
@@ -921,6 +933,10 @@ mod hooks_section {
                 (
                     "hooks.tamper_prevention.enabled",
                     entry(&self.tamper_prevention_enabled),
+                ),
+                (
+                    "hooks.test_signatures.enabled",
+                    entry(&self.test_signatures_enabled),
                 ),
                 ("hooks.thresholds.action_ask", entry(&self.action_ask)),
                 ("hooks.thresholds.action_deny", entry(&self.action_deny)),
