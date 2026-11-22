@@ -11,9 +11,10 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, CorrelationId,
-    CorrelationIds, FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation,
-    MessageRole, ObservationBody, ObservationBuilder, ObservationError, ObservationStage,
-    ObservedAt, SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
+    CorrelationIds, FactMetadata, FactProvenance, Fidelity, IngestionMode, JsonValue,
+    MessageObservation, MessageRole, ObservationBody, ObservationBuilder, ObservationError,
+    ObservationStage, ObservedAt, SemanticFacet, Sensitivity, SourceProvenance, SourceTimestamp,
+    ToolObservation, ToolStatus,
 };
 
 use crate::tool_operation::{
@@ -21,10 +22,7 @@ use crate::tool_operation::{
     with_source_result,
 };
 
-use super::canonical::{
-    OpenCodeCanonicalError, mapping, normal, normal_reported, require_source_id,
-    with_argument_facets,
-};
+use super::canonical::{OpenCodeCanonicalError, mapping, require_source_id, with_argument_facets};
 use super::session_message::{
     OpenCodeAssistantContent, OpenCodeAssistantTool, OpenCodeSessionMessageBody,
     OpenCodeSessionMessageRecord, OpenCodeShell, OpenCodeShellStatus, OpenCodeToolStatus,
@@ -190,8 +188,8 @@ impl Context<'_> {
                 self.record.occurrence_time.as_deref(),
                 CapabilityAvailability::Unknown,
             )?
-            .fact_metadata("message.role", normal_reported()?)
-            .fact_metadata("message.content", normal_reported()?);
+            .fact_metadata("message.role", FactMetadata::reported()?)
+            .fact_metadata("message.content", FactMetadata::reported()?);
         observations.push(builder.build()?);
         Ok(())
     }
@@ -292,7 +290,8 @@ impl Context<'_> {
                     CapabilityAvailability::Unknown,
                 )?;
                 for (path, provenance) in metadata {
-                    builder = builder.fact_metadata(path, normal(provenance)?);
+                    builder = builder
+                        .fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
                 }
                 if let Some(Value::Object(input)) = &tool.input {
                     builder = with_argument_facets(
@@ -308,7 +307,7 @@ impl Context<'_> {
                     {
                         builder = builder
                             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+                            .fact_metadata("resource.path", FactMetadata::parsed()?);
                     }
                 }
                 if let Some(executed) = tool.executed {
@@ -317,7 +316,7 @@ impl Context<'_> {
                             "tool.executed",
                             SemanticFacet::new(JsonValue::Bool(executed)),
                         )?
-                        .fact_metadata("tool.executed", normal_reported()?);
+                        .fact_metadata("tool.executed", FactMetadata::reported()?);
                 }
                 let facts = tool.result_facts.as_deref().filter(|_| outcome);
                 if let Some(error_type) = facts
@@ -329,7 +328,7 @@ impl Context<'_> {
                             "tool.error_type",
                             SemanticFacet::new(JsonValue::string(error_type)),
                         )?
-                        .fact_metadata("tool.error_type", normal_reported()?);
+                        .fact_metadata("tool.error_type", FactMetadata::reported()?);
                 }
                 if let Some(omitted) = facts.and_then(|facts| facts.omitted_bytes) {
                     builder = builder
@@ -341,14 +340,14 @@ impl Context<'_> {
                         )?
                         .fact_metadata(
                             "tool.result.omitted_bytes",
-                            normal(FactProvenance::Derived)?,
+                            FactMetadata::new(FactProvenance::Derived, Sensitivity::Normal)?,
                         );
                 }
                 if let Some(signal) = settlement.and_then(|settlement| settlement.signal.as_deref())
                 {
                     builder = builder
                         .facet("tool.signal", SemanticFacet::new(JsonValue::string(signal)))?
-                        .fact_metadata("tool.signal", normal_reported()?);
+                        .fact_metadata("tool.signal", FactMetadata::reported()?);
                 }
                 builder = builder.correlation(
                     CorrelationIds::new().with_call_id(CorrelationId::source_reported(call_id)?),
@@ -440,7 +439,8 @@ impl Context<'_> {
                     CapabilityAvailability::Supported,
                 )?;
                 for (path, provenance) in metadata {
-                    builder = builder.fact_metadata(path, normal(provenance)?);
+                    builder = builder
+                        .fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
                 }
                 if !replaced {
                     builder = builder
@@ -448,7 +448,7 @@ impl Context<'_> {
                             "command.text",
                             SemanticFacet::new(JsonValue::string(command)),
                         )?
-                        .fact_metadata("command.text", normal_reported()?);
+                        .fact_metadata("command.text", FactMetadata::reported()?);
                 }
                 if let Some(shell_id) = &shell.shell_id {
                     builder = builder.correlation(

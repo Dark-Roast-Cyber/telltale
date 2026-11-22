@@ -9,8 +9,8 @@ use telltale_schema::observation::{
     CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds, FactMetadata,
     FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
     ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
-    SemanticFacet, SourceProvenance, SourceTimestamp, ToolKind, ToolObservation, ToolOperation,
-    ToolStatus,
+    SemanticFacet, Sensitivity, SourceProvenance, SourceTimestamp, ToolKind, ToolObservation,
+    ToolOperation, ToolStatus,
 };
 
 use telltale_schema::observation::{BoundedTarget, CanonicalBoundContext};
@@ -592,7 +592,7 @@ fn emit_message_body(
     .into_iter()
     .flatten()
     {
-        builder = builder.fact_metadata(path, normal_reported()?);
+        builder = builder.fact_metadata(path, FactMetadata::reported()?);
     }
     observations.push(builder.build()?)?;
     *child_ordinal += 1;
@@ -772,7 +772,7 @@ fn tool_observation(
         child_ordinal,
     )?;
     for (path, provenance) in paths {
-        builder = builder.fact_metadata(path, normal(provenance)?);
+        builder = builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
     }
 
     if fields.completed_command {
@@ -783,18 +783,18 @@ fn tool_observation(
                     fields.status.as_deref().expect("validated status"),
                 )),
             )?
-            .fact_metadata("tool.source_status", normal_reported()?)
+            .fact_metadata("tool.source_status", FactMetadata::reported()?)
             .facet(
                 "tool.output_fidelity",
                 SemanticFacet::new(JsonValue::string(
                     fields.output_fidelity.expect("native output fidelity"),
                 )),
             )?
-            .fact_metadata("tool.output_fidelity", normal(FactProvenance::Parsed)?);
+            .fact_metadata("tool.output_fidelity", FactMetadata::parsed()?);
         if let Some(cwd) = &fields.cwd {
             builder = builder
                 .facet("resource.path", SemanticFacet::new(JsonValue::string(cwd)))?
-                .fact_metadata("resource.path", normal_reported()?);
+                .fact_metadata("resource.path", FactMetadata::reported()?);
         }
     }
 
@@ -806,7 +806,7 @@ fn tool_observation(
                 "tool.source_status",
                 SemanticFacet::new(JsonValue::string(status)),
             )?
-            .fact_metadata("tool.source_status", normal_reported()?);
+            .fact_metadata("tool.source_status", FactMetadata::reported()?);
     }
 
     let argument_view = fields.arguments.as_ref().and_then(parsed_argument_view);
@@ -822,7 +822,7 @@ fn tool_observation(
                 "command.text",
                 SemanticFacet::new(JsonValue::string(command)),
             )?
-            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+            .fact_metadata("command.text", FactMetadata::parsed()?);
     }
     if let Some(path) = argument_view
         .as_ref()
@@ -831,7 +831,7 @@ fn tool_observation(
     {
         builder = builder
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+            .fact_metadata("resource.path", FactMetadata::parsed()?);
     }
 
     // Completed commands report argv only. A shell-quoted rendering gives
@@ -853,7 +853,10 @@ fn tool_observation(
     };
     Ok(match derived {
         Some(with_command) => match with_command
-            .fact_metadata("command.text", normal(FactProvenance::Derived)?)
+            .fact_metadata(
+                "command.text",
+                FactMetadata::new(FactProvenance::Derived, Sensitivity::Normal)?,
+            )
             .build()
         {
             Ok(observation) => observation,
@@ -1037,7 +1040,7 @@ fn common_builder(
                 "session.root_id",
                 SemanticFacet::new(JsonValue::string(root_id)),
             )?
-            .fact_metadata("session.root_id", normal_reported()?);
+            .fact_metadata("session.root_id", FactMetadata::reported()?);
     }
     if let Some(timestamp) = &record.timestamp
         && let Ok(timestamp) = SourceTimestamp::new(timestamp)
@@ -1059,21 +1062,6 @@ fn capabilities() -> CapabilityContext {
             CapabilityAvailability::Unsupported,
         )
         .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported)
-}
-
-fn normal_reported() -> Result<FactMetadata, CodexCanonicalError> {
-    normal(FactProvenance::Reported)
-}
-
-fn normal(provenance: FactProvenance) -> Result<FactMetadata, CodexCanonicalError> {
-    Ok(match provenance {
-        FactProvenance::Reported => FactMetadata::reported()?,
-        FactProvenance::Parsed => FactMetadata::parsed()?,
-        _ => FactMetadata::new(
-            provenance,
-            telltale_schema::observation::Sensitivity::Normal,
-        )?,
-    })
 }
 
 fn parsed_argument_view(value: &Value) -> Option<Value> {
