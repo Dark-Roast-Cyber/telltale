@@ -3267,6 +3267,7 @@ fn evaluate_with(
         pending: std::slice::from_ref(&line),
         focus: std::slice::from_ref(&focus),
         scan: telltale_core::hooks::engine::PendingScan::Together,
+        journaled: None,
     };
     engine
         .evaluate(

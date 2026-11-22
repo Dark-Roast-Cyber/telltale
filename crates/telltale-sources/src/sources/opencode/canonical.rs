@@ -9,7 +9,7 @@ use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, FactMetadata,
     FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
     ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
-    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
+    SemanticFacet, Sensitivity, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
 use crate::tool_operation::{
@@ -185,8 +185,8 @@ fn project_message(
         ObservationStage::MessageObserved,
         observed_at,
     )?;
-    builder = builder.fact_metadata("message.role", normal_reported()?);
-    builder = builder.fact_metadata("message.content", normal_reported()?);
+    builder = builder.fact_metadata("message.role", FactMetadata::reported()?);
+    builder = builder.fact_metadata("message.content", FactMetadata::reported()?);
     observations.push(builder.build()?)?;
     Ok(())
 }
@@ -212,8 +212,8 @@ fn project_text_part(
         ObservationStage::MessageObserved,
         observed_at,
     )?;
-    builder = builder.fact_metadata("message.role", normal_reported()?);
-    builder = builder.fact_metadata("message.content", normal_reported()?);
+    builder = builder.fact_metadata("message.role", FactMetadata::reported()?);
+    builder = builder.fact_metadata("message.content", FactMetadata::reported()?);
     observations.push(builder.build()?)?;
     Ok(())
 }
@@ -522,7 +522,7 @@ fn tool_observation(
         observed_at,
     )?;
     for (path, provenance) in metadata {
-        builder = builder.fact_metadata(path, normal(provenance)?);
+        builder = builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
     }
 
     if let Some(arguments) = arguments {
@@ -558,12 +558,12 @@ pub(super) fn with_argument_facets(
                 "command.text",
                 SemanticFacet::new(JsonValue::string(command)),
             )?
-            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+            .fact_metadata("command.text", FactMetadata::parsed()?);
     }
     if let Some(path) = argument_string(view, "file_path").filter(|_| admitted("file_path")) {
         builder = builder
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+            .fact_metadata("resource.path", FactMetadata::parsed()?);
     }
     Ok(builder)
 }
@@ -625,21 +625,6 @@ fn capabilities() -> CapabilityContext {
             CapabilityAvailability::Supported,
         )
         .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported)
-}
-
-pub(super) fn normal_reported() -> Result<FactMetadata, OpenCodeCanonicalError> {
-    normal(FactProvenance::Reported)
-}
-
-pub(super) fn normal(provenance: FactProvenance) -> Result<FactMetadata, OpenCodeCanonicalError> {
-    Ok(match provenance {
-        FactProvenance::Reported => FactMetadata::reported()?,
-        FactProvenance::Parsed => FactMetadata::parsed()?,
-        _ => FactMetadata::new(
-            provenance,
-            telltale_schema::observation::Sensitivity::Normal,
-        )?,
-    })
 }
 
 fn parsed_argument_view(value: &Value) -> Option<Value> {

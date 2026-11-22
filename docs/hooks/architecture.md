@@ -266,7 +266,19 @@ group; failed cleanup cannot release a still-live slot.
   a projection past its budget is not scanned whole or with its variants together
   but goes straight to its pieces, a longer command's first, and a projected call's
   variants are not scanned at all once the piece limit has passed
-  (`pending_pieces_unscanned`, then `on_unevaluable`).
+  (`pending_pieces_unscanned`, then `on_unevaluable`). After its pieces, a call
+  past the projection budget that has session history is also read with it: one
+  scan of the history and the line the call is journaled as (what later calls
+  read), started only if the recovery budget still admits it and the piece time
+  limit has not passed. What that scan finds is added to what the pieces found,
+  and nothing is taken away: the call keeps the `on_unevaluable` floor and
+  `pending_input_truncated`, because its full input still was not evaluated, and
+  a scan that finds nothing does not make a call whose pieces were all refused
+  count as evaluated. When the budget does not admit the scan or Telltale refuses
+  it, nothing else is tried: a call with an evaluated piece records
+  `history_lost`, and a call with none stays `not_evaluated`;
+  `evaluation.scans.history` says which happened (null when there was no history
+  to read).
 - Waiting is bounded, by one deadline per hook: 25 s from the hook's start
   (`HOOK_DEADLINE`, below the timeouts of 30 s or more that the tool-call hooks
   are installed with). Every later wait is cut to what is left of it: the wait
@@ -274,7 +286,11 @@ group; failed cleanup cannot release a still-live slot.
   recovery budget and the piece time limit (`Limits::within`). The default
   waits fit in it; a `hooks.evaluator.request_timeout_ms` raised well above its
   default can use it up. A call waits for its session's lock, then gets the
-  strict policy (`state_lock_timeout`). A call that has no time left before its
+  strict policy (`state_lock_timeout`). How long it waited is recorded apart
+  from its scans, in milliseconds: `evaluation.lock_wait_ms` on its decision
+  or result finding (from the process that took the lock, the evaluator's
+  included), and `lock_wait_ms` on the `error` record of a call that gave up
+  waiting or failed after it. A call that has no time left before its
   evaluation starts is not evaluated: it records no decision and journals
   nothing, and gets the strict policy and one `error` record (`hook_deadline`).
   A decision already evaluated is always recorded and delivered, however late.
@@ -385,10 +401,11 @@ counts, closed codes and milliseconds, never payload text or paths:
   the whole evaluation and of each scan phase in `evaluation.scans`
   (`whole_ms`, `together_ms`, `pieces_ms`, `history_ms`), pieces scanned of
   those offered, pieces refused with the first refusal codes, and how the
-  whole and together scans ended.
-- `lock_wait_ms` is null: the hook does not record how long it waited for the
-  session lock. A long wait shows as wall time beyond `scan_ms` and, past the
-  wait, as `state_lock_timeout`.
+  whole, together and history scans ended.
+- `lock_wait_ms`: percentiles of how long calls waited for the session lock
+  (`evaluation.lock_wait_ms` of decisions, and `lock_wait_ms` of the error
+  records of calls that gave up waiting with `state_lock_timeout`); the table's
+  `lock99` column is its p99. Null for a build that does not record the wait.
 - `evaluator_ready` is false when `--evaluator on` was asked for and no
   evaluator answered; those calls evaluated in-process.
 

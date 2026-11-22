@@ -9,7 +9,7 @@ use telltale_schema::observation::{
     CapabilityContext, CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds,
     FactMetadata, FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation,
     MessageRole, ObservationBody, ObservationBuilder, ObservationError, ObservationStage,
-    ObservedAt, SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
+    ObservedAt, SemanticFacet, Sensitivity, SourceProvenance, SourceTimestamp, ToolObservation,
 };
 
 use crate::tool_operation::{
@@ -242,7 +242,8 @@ fn project_function_call(
             options,
         )?;
         for (path, provenance) in metadata {
-            builder = builder.fact_metadata(path, normal(provenance)?);
+            builder =
+                builder.fact_metadata(path, FactMetadata::new(provenance, Sensitivity::Normal)?);
         }
         add_argument_facets(&mut builder, item.arguments.as_deref(), &replaced)?;
         Ok(builder.build()?)
@@ -269,7 +270,7 @@ fn project_function_call(
                 options,
             )?;
             Ok(builder
-                .fact_metadata("tool.result", normal_reported()?)
+                .fact_metadata("tool.result", FactMetadata::reported()?)
                 .build()?)
         })?;
         observations.push(observation)?;
@@ -344,8 +345,8 @@ fn project_message(
         options,
     )?;
     builder = builder
-        .fact_metadata("message.role", normal_reported()?)
-        .fact_metadata("message.content_parts", normal_reported()?);
+        .fact_metadata("message.role", FactMetadata::reported()?)
+        .fact_metadata("message.content_parts", FactMetadata::reported()?);
     observations.push(builder.build()?)?;
     Ok(())
 }
@@ -407,7 +408,7 @@ fn add_argument_facets(
                 "command.text",
                 SemanticFacet::new(JsonValue::string(command)),
             )?
-            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+            .fact_metadata("command.text", FactMetadata::parsed()?);
     }
     if let Some(path) = fields
         .get("path")
@@ -422,7 +423,7 @@ fn add_argument_facets(
         *builder = builder
             .clone()
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+            .fact_metadata("resource.path", FactMetadata::parsed()?);
     }
     Ok(())
 }
@@ -435,21 +436,6 @@ fn capabilities() -> CapabilityContext {
             CapabilityAvailability::Unsupported,
         )
         .with_override(CapabilityId::ToolExecution, CapabilityAvailability::Unknown)
-}
-
-fn normal_reported() -> Result<FactMetadata, CopilotCanonicalError> {
-    normal(FactProvenance::Reported)
-}
-
-fn normal(provenance: FactProvenance) -> Result<FactMetadata, CopilotCanonicalError> {
-    Ok(match provenance {
-        FactProvenance::Reported => FactMetadata::reported()?,
-        FactProvenance::Parsed => FactMetadata::parsed()?,
-        _ => FactMetadata::new(
-            provenance,
-            telltale_schema::observation::Sensitivity::Normal,
-        )?,
-    })
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> CopilotCanonicalError {

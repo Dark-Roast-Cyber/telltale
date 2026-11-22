@@ -337,7 +337,10 @@ impl Engine {
     /// stop at [`PIECE_SCAN_LIMIT`] instead, and so does the scan of a
     /// projection's lines together: past it, a projected call is not scanned.
     /// A projection past its budget ([`PendingScan::PiecesOnly`]) goes
-    /// straight to the scans of its lines.
+    /// straight to the scans of its lines, and after them, if the budget
+    /// admits it, to one scan of history with the line the call is journaled
+    /// as ([`Request::journaled`]). That scan only adds findings: every focus
+    /// line still counts as unevaluated.
     pub fn evaluate(
         &self,
         request: Request<'_>,
@@ -364,6 +367,7 @@ impl Engine {
             pending,
             focus,
             scan,
+            journaled,
         } = request;
         let sizes: Vec<usize> = history.iter().map(|line| line.to_jsonl().len()).collect();
         let pending_bytes = pending.iter().map(|line| line.to_jsonl().len()).sum();
@@ -376,6 +380,7 @@ impl Engine {
         // time goes to its pieces, the command's first.
         let pieces_only = scan == PendingScan::PiecesOnly && pending.len() > 1;
         trace.together = None;
+        trace.history = None;
         if pieces_only {
             trace.whole = Some(StepOutcome::SkippedPiecesOnly);
         } else if !budget.admits(whole_bytes) {
@@ -426,6 +431,21 @@ impl Engine {
                 budget.pieces_in_time()
             })?;
             trace.pieces_ms += phase.elapsed().as_millis() as u64;
+            // With no history there is nothing to read with the call.
+            if let Some(journaled) = journaled.filter(|_| pieces_only && !history.is_empty()) {
+                let window = Window {
+                    client,
+                    path: window_path,
+                    history,
+                    sizes: &sizes,
+                    pending: std::slice::from_ref(journaled.0),
+                    pending_bytes: journaled.0.to_jsonl().len(),
+                    focus: std::slice::from_ref(journaled.1),
+                };
+                if self.read_history(&window, budget, trace, &mut best)? {
+                    kept.fill(true);
+                }
+            }
         } else if best.status != EvalStatus::NotEvaluated {
             let window = Window {
                 client,
@@ -517,6 +537,60 @@ impl Engine {
             }
         }
         Ok(best)
+    }
+
+    /// After the pieces of a projection past its budget: one scan of history
+    /// with the line the call is journaled as (`window.pending`), if `budget`
+    /// admits it and the piece time limit has not passed, and none otherwise.
+    /// Nothing is split or retried. What the scan finds is added to `best`,
+    /// which loses nothing: its unevaluated focus and failure code stay.
+    /// Returns whether history was read.
+    fn read_history(
+        &self,
+        window: &Window<'_>,
+        budget: &mut RecoveryBudget,
+        trace: &mut ScanTrace,
+        best: &mut Evaluation,
+    ) -> Result<bool, EngineError> {
+        let bytes = window.pending_bytes + window.sizes.iter().sum::<usize>();
+        let skipped = if !budget.pieces_in_time() {
+            Some(StepOutcome::SkippedLate)
+        } else if !budget.admits(bytes) {
+            Some(StepOutcome::SkippedBudget)
+        } else {
+            None
+        };
+        if skipped.is_some() {
+            trace.history = skipped;
+            return Ok(false);
+        }
+        let scan = self.scan(
+            window.client,
+            window.path,
+            window.history.iter().chain(window.pending),
+            window.focus,
+        )?;
+        budget.observe(bytes, scan.scan_ms);
+        trace.history_ms += scan.scan_ms;
+        if scan.status == EvalStatus::NotEvaluated {
+            trace.history = Some(StepOutcome::Refused);
+            return Ok(false);
+        }
+        trace.history = Some(StepOutcome::Passed);
+        // With no piece evaluated, only a finding makes the call evaluated: a
+        // scan that found nothing evaluated none of the call's own input.
+        if best.status == EvalStatus::NotEvaluated && scan.focus_records.is_empty() {
+            return Ok(true);
+        }
+        best.status = EvalStatus::VisibilityLimited;
+        best.coverage = Some("partial");
+        best.focus_records.extend(scan.focus_records);
+        for limit in scan.visibility_limits {
+            if !best.visibility_limits.contains(&limit) {
+                best.visibility_limits.push(limit);
+            }
+        }
+        Ok(true)
     }
 
     /// Evaluate each line of a pending call that is past capacity as a whole,
@@ -864,6 +938,10 @@ pub struct Request<'a> {
     pub pending: &'a [Line],
     pub focus: &'a [Focus],
     pub scan: PendingScan,
+    /// For a projection past its budget: the line the call is journaled as,
+    /// which later calls read as history, and its focus. Scanned with history
+    /// after the pieces, when the budget admits it.
+    pub journaled: Option<(&'a Line, &'a Focus)>,
 }
 
 /// How the pending lines of a [`Request`] may be scanned.
@@ -883,7 +961,8 @@ pub enum PendingScan {
 pub enum StepOutcome {
     /// Scanned, and Telltale accepted the source.
     Passed,
-    /// Scanned, and Telltale failed the source.
+    /// Scanned, and Telltale failed the source, or for the history scan
+    /// quarantined the call's own line.
     Refused,
     /// Not scanned: a projection past its budget goes to its pieces.
     SkippedPiecesOnly,
@@ -898,7 +977,7 @@ pub enum StepOutcome {
 /// What the scans of one call did, for its record: counts, closed values and
 /// milliseconds, never content. It spans every evaluation of the call (the
 /// call whole, then its projection): counts and times add up, and `whole`
-/// and `together` say what the last evaluation did.
+/// `together` and `history` say what the last evaluation did.
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct ScanTrace {
     /// Variants projected in place of an input Telltale excluded.
@@ -907,6 +986,9 @@ pub struct ScanTrace {
     pub whole: Option<StepOutcome>,
     /// The scan of the pending lines together, without history.
     pub together: Option<StepOutcome>,
+    /// The scan of history with the line a projection past its budget is
+    /// journaled as, after its pieces.
+    pub history: Option<StepOutcome>,
     /// Pending lines scanned one by one, of those offered to that loop.
     pub pieces_scanned: usize,
     pub pieces_total: usize,
@@ -2204,6 +2286,7 @@ mod recovery_tests {
             pending: &lines,
             focus: &focus,
             scan: PendingScan::PiecesOnly,
+            journaled: None,
         };
         engine.evaluate(request, &mut budget).unwrap();
         let trace = budget.trace();
@@ -2212,6 +2295,83 @@ mod recovery_tests {
         assert_eq!((trace.pieces_scanned, trace.pieces_total), (2, 2));
         assert_eq!(trace.pieces_refused, 1);
         assert!(trace.first_refusal.is_some(), "{trace:?}");
+    }
+
+    /// Two pieces Telltale refuses, a history line, and the line the call is
+    /// journaled as, holding `journaled`: evaluated past the projection budget.
+    fn refused_pieces_then_history(journaled: &str) -> (Evaluation, ScanTrace) {
+        let refused = serde_json::json!({"command": "curl http://a\u{1}b.test/x"});
+        let (lines, focus): (Vec<Line>, Vec<Focus>) = (0..2)
+            .map(|n| {
+                let at = format!("2026-11-06T00:00:01.{n:03}Z");
+                let uuid = format!("uuid-{n}");
+                let line = Line::tool_use("s", &uuid, &at, "toolu_2", "Bash", &refused);
+                let focus = Focus {
+                    occurred_at: at,
+                    stage: ObservationStage::ToolRequested,
+                    native_id: uuid,
+                };
+                (line, focus)
+            })
+            .unzip();
+        let history = [Line::tool_use(
+            "s",
+            "uuid-h",
+            "2026-11-06T00:00:00.000Z",
+            "toolu_1",
+            "Bash",
+            &serde_json::json!({"command": "ls"}),
+        )];
+        let own_at = "2026-11-06T00:00:00.500Z";
+        let own = Line::tool_use(
+            "s",
+            "uuid-own",
+            own_at,
+            "toolu_2",
+            "Bash",
+            &serde_json::json!({ "command": journaled }),
+        );
+        let own_focus = Focus {
+            occurred_at: own_at.to_owned(),
+            stage: ObservationStage::ToolRequested,
+            native_id: "uuid-own".to_owned(),
+        };
+        let (dir, engine) = engine();
+        let mut budget = RecoveryBudget::start(time_for_every_piece());
+        let request = Request {
+            client: ClientId::Claude,
+            window_path: &dir.path().join("window.jsonl"),
+            history: &history,
+            pending: &lines,
+            focus: &focus,
+            scan: PendingScan::PiecesOnly,
+            journaled: Some((&own, &own_focus)),
+        };
+        let evaluation = engine.evaluate(request, &mut budget).unwrap();
+        (evaluation, budget.trace().clone())
+    }
+
+    /// Every piece refused, and the history scan finds a deny: the finding
+    /// counts, and no piece of the call counts as evaluated.
+    #[test]
+    fn a_finding_of_the_history_scan_counts_when_every_piece_was_refused() {
+        let (evaluation, trace) = refused_pieces_then_history(DENY);
+        assert_eq!(trace.pieces_refused, 2);
+        assert_eq!(trace.history, Some(StepOutcome::Passed));
+        assert_eq!(evaluation.status, EvalStatus::VisibilityLimited);
+        assert!(evaluation.rule_ids().iter().any(|id| id == DENY_RULE));
+        assert_eq!(evaluation.unevaluated_focus, 2);
+    }
+
+    /// Every piece refused, and the history scan finds nothing: the call's
+    /// own input was not evaluated, so it stays not evaluated.
+    #[test]
+    fn a_history_scan_without_a_finding_does_not_make_refused_pieces_evaluated() {
+        let (evaluation, trace) = refused_pieces_then_history("ls");
+        assert_eq!(trace.pieces_refused, 2);
+        assert_eq!(trace.history, Some(StepOutcome::Passed));
+        assert_eq!(evaluation.status, EvalStatus::NotEvaluated);
+        assert!(evaluation.rule_ids().is_empty());
     }
 
     /// The window path and the engine, for a scan of `pieces` alone.
@@ -2260,6 +2420,7 @@ mod recovery_tests {
             pending: &lines,
             focus: &focus,
             scan,
+            journaled: None,
         };
         let evaluation = engine.evaluate(request, &mut budget).unwrap();
         (evaluation, lines.len())
@@ -2505,6 +2666,7 @@ mod recovery_tests {
             pending: std::slice::from_ref(&line),
             focus: std::slice::from_ref(&focus),
             scan: PendingScan::Together,
+            journaled: None,
         };
         assert!(engine.evaluate(request, &mut budget).is_err());
         assert_eq!(budget.trace().variants, 3);
