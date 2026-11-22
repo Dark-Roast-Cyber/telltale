@@ -346,10 +346,10 @@ claim that a transfer succeeded.
 For object-storage copy, move and sync commands (the AWS CLI, gsutil and
 rclone) and GitHub CLI publication of a file, the action view takes the
 transfer's client, operation, source, destination and direction from one
-reading of the command, and a session event of the bundled upload rule matches
-whenever that reading finds an upload. The rule's own patterns also read
-session events, so a session event can match where no action finding does.
-The reading describes a requested transfer, not a performed one.
+reading of the command. A session event of the bundled upload rule also
+matches when that reading finds an upload in the command text the rule reads,
+beside the rule's own patterns. The reading describes a requested transfer,
+not a performed one.
 
 Chains may key off categories or exact rule names (`correlation.categories` or `correlation.rules`). Exact rule-name chains cover chains where both signals share one category, such as `execution.shell` plus `execution.encoded_payload` emitting `chain.shell_encoded_payload`.
 
