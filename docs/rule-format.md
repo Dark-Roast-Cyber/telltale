@@ -456,8 +456,9 @@ tags:
 `status`. `deprecated` and `unsupported` rules and chains load disabled: they
 stay in the catalog and keep their `name` and `id`, but do not run.
 `telltale.enabled: false` disables a rule regardless of status. Overrides
-(`overrides.d`) and policies (`policies.d`) select rules by `name` and category
-without editing the rule; see [Install](install.md#community-rules-and-rule-packages).
+(`overrides.d`) set the `enabled` or `score` of a rule or chain by `name`, and
+policies (`policies.d`) select rules by `name` and category, without editing
+the rule; see [Install](install.md#community-rules-and-rule-packages).
 
 ## Chains
 

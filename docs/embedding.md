@@ -497,16 +497,17 @@ tier order:
 | `rule_package` | `rule-packages.d` | adds definitions |
 | `organization_rules_document` | `organization-rules.d` | a rule or chain whose ID a lower tier defines replaces it in place and must keep its Rule v2 `id`; other IDs are added |
 | `rules_document` | `--rules` | adds definitions; never replaces one |
-| `override_document` | `overrides.d` | override v1 entries set a rule's `enabled` or `score`, in call order, after all content is merged |
+| `override_document` | `overrides.d` | override v1 entries set a rule's or chain's `enabled` or `score`, in call order, after all content is merged |
 | `policy_document` | `policies.d`, `--policy` | applied last |
 
 An ID repeated within one tier, or reused by a tier that only adds, fails. The
 builder has no `rules.d` or `ui-rules.d` input: those CLI tiers replace
 definitions the same way the organization tier does.
 
-Overrides apply to rules, not to chain modifiers: a chain's ID in an override
-is an unknown `rule_id`, and an unknown `rule_id` fails `build`, as it fails
-the CLI. A replacing rule whose matchers differ from the bundled rule's uses
+An override entry's `rule_id` names a rule or a chain modifier. One that
+names neither fails `build` as an unknown `rule_id`; the CLI, whose config
+roots serve pipelines that carry different rules, leaves such an entry out
+and reports it. A replacing rule whose matchers differ from the bundled rule's uses
 its own matchers, not the bundled rule's native precision profile; one that
 keeps the bundled matchers and changes only metadata or score keeps the
 profile. Start a replacement from `telltale rules export-default` and keep its
@@ -533,7 +534,7 @@ IDs, or paths. `Display` is the code's text.
 | `UnsupportedVersion` | an override document whose `version` is not 1 |
 | `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
 | `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, a `reason` over 256 characters or with control or invisible formatting characters other than tab and newline, or that sets nothing |
-| `UnknownRuleId` | an override `rule_id` that no rule has |
+| `UnknownRuleId` | an override `rule_id` that no rule or chain modifier has |
 | `ExceedsBounds` | more than 1024 text inputs in all, more than 256 rule packages, more than 3725 rules and chain modifiers (with the 371 bundled process-chain rules, a 4096-entry catalog), or more than 256 override entries applied to one rule |
 
 ```rust,no_run

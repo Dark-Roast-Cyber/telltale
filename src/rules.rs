@@ -804,7 +804,7 @@ overrides:
     }
 
     #[test]
-    fn rule_overrides_reject_unknown_rule_ids() {
+    fn rule_overrides_apply_to_chains_and_leave_out_unknown_rule_ids() {
         let temp = tempdir().expect("tempdir");
         let override_path = temp.path().join("override.yaml");
         fs::write(
@@ -813,21 +813,39 @@ overrides:
 overrides:
   - rule_id: chain.download_then_execute
     enabled: false
-    reason: Modifier override is not supported yet.
+    reason: Synthetic chain override.
+  - rule_id: synthetic.missing
+    enabled: false
+    reason: Synthetic override for a rule that is not loaded.
+  - rule_id: tth.tamper.synthetic_missing
+    enabled: false
+    reason: Synthetic override for a hooks rule.
 "#,
         )
         .expect("write override");
 
-        let error = super::load_rule_set_from_paths_with_mode_and_override_paths(
+        let rule_set = super::load_rule_set_from_paths_with_mode_and_override_paths(
             &[],
             None,
             super::RuleLoadMode::IncludeDefault,
             &[override_path],
         )
-        .expect_err("modifier override should fail")
-        .to_string();
+        .expect("an unknown rule_id is left out");
 
-        assert!(error.contains("unknown rule_id 'chain.download_then_execute'"));
+        assert!(
+            !rule_set
+                .compatibility_export()
+                .modifiers()
+                .iter()
+                .any(|modifier| modifier.id == "chain.download_then_execute")
+        );
+        let left_out = rule_set
+            .notices()
+            .iter()
+            .filter(|notice| notice.kind == super::RuleLoadNotice::OVERRIDE_LEFT_OUT)
+            .map(|notice| notice.rule_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(left_out, ["synthetic.missing"]);
     }
 
     #[test]

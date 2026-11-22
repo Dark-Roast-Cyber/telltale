@@ -504,7 +504,12 @@ its `id`; unique names are additive. Equal-tier duplicate names, and one `id`
 under two names, fail with source diagnostics. Repeated explicit `--rules` paths are
 loaded afterward as additive-only documents and cannot replace managed packs.
 `overrides.d` files are sorted the same way and applied after packs are merged,
-before policy filtering. If no explicit `--policy` is provided, exactly one
+before policy filtering. An entry's `rule_id` names a rule or a chain and sets
+its `enabled` or `score`. An entry that names nothing loaded is left out and
+the rest still apply: `telltale rules validate` lists it as an
+`override_left_out` notice, and `telltale hooks check` prints
+`override left out`. An entry that does not parse or sets nothing still fails
+the rule build. If no explicit `--policy` is provided, exactly one
 discovered `policies.d` file may be used; multiple discovered policies require
 passing `--policy` explicitly or removing extras. `scan` and `watch` apply the
 same single-file rule for discovered `allowlists.d` files when `--allowlist` is

@@ -313,8 +313,9 @@ load:
   being changed. `check` loads the configuration, builds the rules and exits
   1 on an error; a check of one root alone does not see, for example, a
   second policy file in another root.
-- Add rule files before the override files that name their rule IDs: an
-  override for a rule ID no rule defines fails the rule build.
+- An override entry for a rule ID that no rule or chain defines is left out
+  and the rest of the file applies: `check` prints `override left out`, so
+  add rule files before the override files that name their rule IDs.
 
 While its configuration does not load, an observing hook detects on the
 defaults and records `config_invalid`; an enforcing one (the configuration or
@@ -352,9 +353,10 @@ How tuning behaves:
 - **A chain follows its rules.** A chain adds points when the rules it names
   match. Turn a rule off and its chains no longer match through it. A rule
   scored 0 still matches, so its chains still add their points: lowering a
-  score removes only the rule's own. Turn a chain off with
-  `disabled_rules` in the policy; change its score with a replacement.
-  Override entries name rules, not chains.
+  score removes only the rule's own. An override entry on the chain's name
+  turns the chain off (`enabled: false`) or rescores it (`score`); a chain
+  turned off, by an override or by `disabled_rules` in the policy, leaves its
+  rules their own points.
 - **The session score keeps what it counted.** A changed configuration
   applies from the next tool call. Points an earlier call added stay in that
   session's score, so calls that still score can be asked about or denied on
@@ -421,7 +423,8 @@ generated for this installation's own paths. `overrides.d` is shared with the
 scanner, which does not carry these rules: an entry for a `tth.tamper.` rule
 is applied where the rule is loaded and left out elsewhere (by the scanner,
 and by a hook that does not have that rule, where `check` prints
-`override left out`). An entry for any other unknown rule stays an error. A
+`override left out`). An entry for any other rule that is not loaded is left
+out the same way; the scanner also lists it as a notice. A
 replacement rule file is different: to the scanner it is a rule of its own,
 which it then evaluates in scans too. A shared policy with a whitelist
 that does not include `approval_bypass` turns all of them off without an

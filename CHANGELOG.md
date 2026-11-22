@@ -120,6 +120,25 @@
   [Testing enforcement](docs/hooks/README.md#testing-enforcement). Embedding
   API: `hooks::config::RuleContent` has a new `test_signatures` field.
 
+- **An override entry that names no loaded rule is left out.** In the CLI
+  (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
+  `rule_id` names no loaded rule or chain is left out and the other entries
+  still apply; the rule build no longer fails. `telltale rules validate`
+  lists it as an `override_left_out` notice (entries for `tth.tamper.*` and
+  `tth.test.*` rules excepted, which the scanner does not carry), and
+  `telltale hooks check` prints `override left out`. An entry that does not
+  parse or sets nothing still fails. The embedding builder still fails
+  `build` with `UnknownRuleId`. Embedding API: `RuleLoadNotice` has a new
+  `OVERRIDE_LEFT_OUT` kind, `CompiledRuleSet` a new `add_notice`.
+
+- **Override entries can name a chain.** An `overrides.d` entry (or a
+  builder override document) whose `rule_id` is a chain's name sets the
+  chain's `enabled` or `score`, and is recorded like a rule override in
+  `telltale rules show`, `telltale hooks check --rules` and the effective
+  configuration. A chain turned off by an override leaves its rules their
+  own points, as when the policy turns it off. See
+  [Tuning rules and policy](docs/hooks/README.md#tuning-rules-and-policy).
+
 - **Hooks: deny and ask reasons say what happened and what to do.** With
   `reason_detail: full`, the reason a harness is given now starts with what
   happened to the call (`this tool call was blocked and has not been
