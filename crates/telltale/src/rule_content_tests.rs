@@ -169,6 +169,17 @@ fn rules_document_cannot_replace_a_lower_tier_rule() {
     assert_eq!(error.document(), Some("explicit:2"));
 }
 
+/// The CLI leaves out an override for a hooks rule that its pipeline does
+/// not carry. A pipeline an embedder builds has no such rules to expect: the
+/// same entry is an unknown `rule_id` there.
+#[test]
+fn an_override_for_a_hooks_rule_is_unknown_to_an_embedded_pipeline() {
+    let error = rejected(base_builder().override_document(overrides(
+        "  - rule_id: tth.tamper.hook_settings_write\n    reason: Synthetic.\n    enabled: false\n",
+    )));
+    assert_eq!(error.code(), RuleContentErrorCode::UnknownRuleId);
+}
+
 #[test]
 fn unknown_override_rule_id_fails_without_echoing_it() {
     let error = rejected(base_builder().labeled_override_document(

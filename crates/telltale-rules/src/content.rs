@@ -483,8 +483,8 @@ impl LoadedRules {
 
     /// [`Self::apply_override_document`] for content that does not carry
     /// every rule its override files may name: an entry whose `rule_id` names
-    /// no rule here, and for which `skip` holds, is left out instead of
-    /// failing. Returns the `rule_id` of each entry left out, in order.
+    /// no rule or chain modifier here, and for which `skip` holds, is left
+    /// out instead of failing. Returns the `rule_id` of each entry left out, in order.
     pub fn apply_override_document_skipping(
         &mut self,
         document: &RuleOverrideDocument,
@@ -505,7 +505,9 @@ impl LoadedRules {
             let Some(rule) = self.definitions.iter_mut().find(|definition| {
                 definition.kind() == DefinitionKind::Rule && definition.id() == entry.rule_id
             }) else {
-                if skip(&entry.rule_id) {
+                // A chain modifier of that name is loaded, so the entry is
+                // not one for a rule this content lacks: it stays an error.
+                if skip(&entry.rule_id) && self.get(&entry.rule_id).is_none() {
                     skipped.push(entry.rule_id.clone());
                     continue;
                 }

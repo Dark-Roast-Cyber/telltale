@@ -67,10 +67,6 @@ pub struct RuleResolution {
     /// disabled ones included.
     pub content: LoadedRules,
     pub diagnostics: RuleResolutionDiagnostics,
-    /// The `rule_id` of each override entry that was left out because it
-    /// names a rule of Telltale Hooks that this content does not carry
-    /// ([`HOOKS_RULE_PREFIXES`]), in order.
-    pub skipped_overrides: Vec<String>,
 }
 
 /// What the name of every rule that Telltale Hooks owns starts with. Hooks
@@ -80,7 +76,7 @@ pub struct RuleResolution {
 /// loaded rule is therefore left out, not an unknown `rule_id`: the scanner
 /// never carries them, and a hook does not while
 /// `hooks.self_protection_rules` is off.
-pub const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper."];
+pub(crate) const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper."];
 
 impl RuleResolution {
     /// A pipeline over the effective set, which keeps [`Self::content`] for
@@ -386,13 +382,15 @@ pub fn resolve_rule_set(
         override_paths,
         replacements,
     )
+    .map(|(resolution, _)| resolution)
 }
 
 /// [`resolve_rule_set`] with `host_documents`: in-memory rule content a host
 /// bundles, labelled by source and loaded at the builtin tier after the
 /// bundled core rules. Unlike `documents` they are ordinary rule content: a
 /// managed tier can replace one of their definitions by name (keeping its
-/// UUID), and overrides and the policy apply to them.
+/// UUID), and overrides and the policy apply to them. Also returns the
+/// override entries that were left out ([`resolve_rule_content`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_rule_set_with_host(
     pack_paths: &RulePackPaths,
@@ -403,7 +401,7 @@ pub(crate) fn resolve_rule_set_with_host(
     mode: RuleLoadMode,
     override_paths: &[PathBuf],
     replacements: &[(PathBuf, &str)],
-) -> Result<RuleResolution, Box<dyn std::error::Error>> {
+) -> Result<(RuleResolution, Vec<String>), Box<dyn std::error::Error>> {
     // Keyed by the path as given and by its canonical form: a caller that
     // supplies every file it names (hooks) is found by the exact path, with no
     // second resolution that a changed symlink could send elsewhere.
@@ -472,10 +470,12 @@ pub(crate) fn resolve_rule_set_with_host(
 
 /// Merge the tiers of `content`, apply its overrides in order, and compile
 /// with its policy: the one resolution the CLI, hooks and the embedding
-/// builder share.
+/// builder share. Beside the resolution it returns the `rule_id` of each
+/// override entry that was left out, in order: one that names no loaded
+/// rule and starts with one of the content's `unloaded_override_prefixes`.
 pub(crate) fn resolve_rule_content(
     content: RuleContent,
-) -> Result<RuleResolution, Box<dyn std::error::Error>> {
+) -> Result<(RuleResolution, Vec<String>), Box<dyn std::error::Error>> {
     let RuleContent {
         mode,
         community,
@@ -533,12 +533,14 @@ pub(crate) fn resolve_rule_content(
             unloaded_override_prefixes,
         )?);
     }
-    Ok(RuleResolution {
-        rule_set: content.compile(policy.as_ref())?,
-        content,
-        diagnostics,
+    Ok((
+        RuleResolution {
+            rule_set: content.compile(policy.as_ref())?,
+            content,
+            diagnostics,
+        },
         skipped_overrides,
-    })
+    ))
 }
 
 /// Rule content tiers, lowest first; a higher tier replaces a definition in

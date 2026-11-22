@@ -800,7 +800,7 @@ fn an_override_for_a_self_protection_rule_is_left_out_where_the_rule_is_not_load
     );
     assert_eq!(hook_decision(&config, CALL), None);
 
-    // Any other unknown rule is still an error, for hooks and scanner alike.
+    // Any other unknown rule is still an error (the scanner has its own test).
     let dir = tempfile::tempdir().unwrap();
     let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n");
     write_override(&config, "synthetic.no_such_rule", "enabled: false");
