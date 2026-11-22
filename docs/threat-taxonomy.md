@@ -98,7 +98,7 @@ Chain modifiers add score and derived rule IDs when the steps they name are link
 | Modifier | Trigger | Meaning |
 | --- | --- | --- |
 | `chain.secret_then_network` | `secret_access` + `exfiltration` | Secret access, then an outbound transfer within three tool calls. A secret read and a download do not chain. |
-| `chain.download_then_execute` | `download` + `execution`, linked | Downloaded content ran: a download piped to an interpreter, a download whose output the same command runs as code (a shell's or `source`'s process-substitution script, `eval` or `sh -c` of a command substitution, PowerShell `iex` of a web request), or a downloaded file executed within 15 minutes. A download and an unrelated shell call do not chain. |
+| `chain.download_then_execute` | `download` + `execution`, linked | Downloaded content ran: a download piped to an interpreter, a download whose output the same command runs as code (a shell's or `source`'s process-substitution script, `eval` or `sh -c` of a command substitution, PowerShell `iex` of a web request, a Python one-liner that runs a fetched response (experimental)), or a downloaded file executed within 15 minutes. A download and an unrelated shell call do not chain. |
 | `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | Shell execution and decoded payload behavior in the same call. |
 | `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | Prompt/tool poisoning, then outbound transfer within three tool calls. |
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting, then package publishing within three tool calls. |

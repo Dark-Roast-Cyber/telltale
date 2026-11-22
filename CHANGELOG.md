@@ -8,7 +8,7 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 17.** Several changes below change what the
+- **The native action profile is 18.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
 
@@ -26,6 +26,16 @@
   leading shell reserved word and in a command `find` runs with `-exec`,
   which adds action findings for uploads and downloads written that way.
   A custom copy of the rule keeps its own patterns alone. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md).
+
+- **A Python one-liner that fetches a response and executes it is read as a
+  download followed by execution (experimental).** A `python`, `python3`,
+  `python3.x` or `py` invocation whose `-c` code passes the response of an
+  HTTP(S) fetch with a literal URL to `exec` or `eval` now matches the
+  bundled `network.download` in session events and action findings, and
+  `chain.download_then_execute` links it as it links a download piped into
+  a shell. Through `sudo` or `env` it links the same way; on a remote host
+  or in a container it reads as a download there. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md).
 
 - **Commands run through another program are read as the command they
