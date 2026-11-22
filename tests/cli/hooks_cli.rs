@@ -119,6 +119,17 @@ fn invalid_config_that_asks_for_enforcement_fails_closed_for_tool_calls_only() {
             .unwrap()
             .contains("misconfigured")
     );
+    // The failure is recorded where the hook's records go without a
+    // configuration, once per invocation.
+    let telemetry = std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap_or_default();
+    let records: Vec<Value> = telemetry
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 1, "{telemetry}");
+    assert_eq!(records[0]["kind"], "error");
+    assert_eq!(records[0]["error_code"], "config_invalid");
+    assert!(crate::hooks_record_validator().is_valid(&records[0]));
 
     let mut prompt = common::template("UserPromptSubmit", None);
     prompt["prompt"] = "hello".into();

@@ -277,6 +277,21 @@ pub(crate) fn user_config_root() -> Option<PathBuf> {
     )
 }
 
+/// [`user_config_root`], with the environment variable that named it.
+#[cfg(feature = "hooks")]
+pub(crate) fn user_config_root_source() -> Option<(&'static str, PathBuf)> {
+    let root = user_config_root()?;
+    let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let name = if set("XDG_CONFIG_HOME") {
+        "XDG_CONFIG_HOME"
+    } else if set("HOME") {
+        "HOME"
+    } else {
+        "USERPROFILE"
+    };
+    Some((name, root))
+}
+
 fn user_config_root_from(
     xdg_config_home: Option<OsString>,
     home: Option<OsString>,

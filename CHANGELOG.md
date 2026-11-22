@@ -74,6 +74,33 @@
   `hook_deadline`. A decision already evaluated is always delivered. One scan
   already in flight is not interrupted.
 
+- **An enforcing hook whose configuration does not load records it.** Such a
+  hook still denies tool calls (`config_invalid`), and now also writes an
+  `error` record with code `config_invalid`, as an observing hook already
+  did, to the records file it can determine without a configuration: the
+  one in a pinned `--state-dir`, else the one the state and telemetry
+  variables name. A record that cannot be written changes no answer.
+
+- **Records of a hook with `--state-dir` go to its state directory.** A hook
+  command with `--state-dir` (which `settings` adds) writes its records to
+  `hooks.telemetry_path` when a settings file of its config roots sets it,
+  else to `telemetry.jsonl` in that directory, also when its configuration
+  does not load; `lifecycle.pinned_over` names `TELLTALE_HOOKS_TELEMETRY` when
+  it names another file.
+
+- **A hook names the sources its pins replaced.** When `--state-dir` or
+  `--user-config-dir` on the hook command replaces a source set to a
+  different value (`TELLTALE_HOOKS_STATE_DIR`, `hooks.state_dir`,
+  `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, `HOME`, …), the `session_start` record
+  lists its name in `lifecycle.pinned_over`, never its value (schema
+  `telltale_hooks.record.v1`, additive), and `telltale hooks check` prints one
+  `pinned over:` line per name. The names belong to the hook invocation that
+  received the event: the hook records `session_start` itself, and they do
+  not key the long-lived evaluator. Embedding API: `hooks::config::Config` has
+  a new `pinned_over` field (empty keeps the previous records, and
+  `fingerprint` ignores it), and `hooks::config::default_state_dir_source` is
+  new.
+
 - **Hooks records say how long a call waited for its session's lock.** A
   decision or result-finding record now carries `evaluation.lock_wait_ms`,
   and the `error` record of a tool call that gave up waiting

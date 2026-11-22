@@ -47,9 +47,21 @@ fn all_record_kinds_match_the_published_schema() {
     assert!(scans["variants"].as_u64().unwrap() >= 2, "{scans}");
     assert_eq!(scans["whole"], "passed", "{scans}");
 
+    // A session started under a pin that replaced a source names it.
+    let mut pinned = Harness::with(|c| {
+        c.pinned_over = vec!["HOME".into(), "TELLTALE_HOOKS_STATE_DIR".into()];
+    });
+    pinned.send(&common::template("SessionStart", None));
+    let starts = pinned.records("lifecycle");
+    assert_eq!(
+        starts[0]["lifecycle"]["pinned_over"],
+        serde_json::json!(["HOME", "TELLTALE_HOOKS_STATE_DIR"])
+    );
+
     let mut kinds = std::collections::BTreeSet::new();
     let records = h.telemetry().into_iter().chain(broken.telemetry());
-    for record in records.chain(projected.telemetry()) {
+    let records = records.chain(projected.telemetry());
+    for record in records.chain(pinned.telemetry()) {
         kinds.insert(record["kind"].as_str().unwrap().to_owned());
         let errors: Vec<String> = validator
             .iter_errors(&record)

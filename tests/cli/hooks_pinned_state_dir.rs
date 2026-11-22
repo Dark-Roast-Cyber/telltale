@@ -378,6 +378,159 @@ fn a_configuration_that_does_not_load_records_in_the_pinned_state_dir() {
     );
 }
 
+/// The `lifecycle` objects of the `session_start` records in `dir`'s records
+/// file, each checked against the published schema.
+fn session_starts(dir: &Path) -> Vec<Value> {
+    std::fs::read_to_string(dir.join("telemetry.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["lifecycle"]["event"] == "session_start")
+        .inspect(|record| assert!(crate::hooks_record_validator().is_valid(record), "{record}"))
+        .map(|record| record["lifecycle"].clone())
+        .collect()
+}
+
+/// A hook command that pins its state directory writes its records there
+/// whatever the launch environment says about the records file, and its
+/// `session_start` record names the variable the pin replaced.
+#[test]
+fn a_pinned_state_dir_keeps_its_records_file_whatever_the_launch_says() {
+    let install = Install::quoted();
+    let command = install.generated_command();
+    let elsewhere = install.elsewhere().join("records.jsonl");
+    let launch = move |c: &mut Command| {
+        c.env("TELLTALE_HOOKS_TELEMETRY", &elsewhere);
+    };
+    let payload = common::template("SessionStart", None);
+    let (_, stderr) = install.send(&command, &payload, &launch);
+    let (_, stderr_call) = install.pre(&command, "toolu_ls", "ls", &launch);
+    assert_eq!(
+        files(&install.elsewhere()),
+        Vec::<PathBuf>::new(),
+        "{stderr}\n{stderr_call}"
+    );
+    assert_eq!(
+        session_starts(&install.state),
+        [json!({"event": "session_start", "source": "startup",
+                "pinned_over": ["TELLTALE_HOOKS_TELEMETRY"]})],
+        "{stderr}"
+    );
+}
+
+/// A records file set in a settings file of the config roots still applies
+/// under a pinned state directory: those files are the operator's.
+#[test]
+fn a_pinned_state_dir_keeps_the_records_file_its_settings_name() {
+    let install = Install::quoted();
+    let configured = install.base.path().join("configured records.jsonl");
+    install.configure(&format!("  telemetry_path: '{}'\n", configured.display()));
+    let command = install.generated_command();
+    let (_, stderr) = install.pre(&command, "toolu_ls", "ls", install.moved());
+    let records = std::fs::read_to_string(&configured).unwrap_or_default();
+    assert_eq!(records.lines().count(), 1, "{command}\n{stderr}");
+    assert!(!install.state.join("telemetry.jsonl").exists());
+}
+
+/// A session that starts with a state-directory variable other than the pin
+/// names that variable in its `session_start` record, and nothing of its
+/// value.
+#[test]
+fn a_session_start_names_the_state_variable_the_pin_replaced() {
+    let install = Install::quoted();
+    let command = install.generated_command();
+    let payload = common::template("SessionStart", None);
+    let (_, stderr) = install.send(&command, &payload, install.moved());
+    let starts = session_starts(&install.state);
+    assert_eq!(
+        starts,
+        [json!({"event": "session_start", "source": "startup",
+                "pinned_over": ["TELLTALE_HOOKS_STATE_DIR"]})],
+        "{stderr}"
+    );
+    let telemetry = std::fs::read_to_string(install.state.join("telemetry.jsonl")).unwrap();
+    assert!(!telemetry.contains("elsewhere"), "{telemetry}");
+}
+
+/// Without the state-directory variable, `XDG_STATE_HOME` decides the state
+/// directory; a session that starts with it naming another one names it.
+#[test]
+fn a_session_start_names_xdg_state_home_when_it_would_have_decided() {
+    let install = Install::quoted();
+    let command = install.generated_command();
+    let xdg = install.elsewhere().join("xdg");
+    let launch = move |c: &mut Command| {
+        c.env_remove("TELLTALE_HOOKS_STATE_DIR")
+            .env("XDG_STATE_HOME", &xdg);
+    };
+    let payload = common::template("SessionStart", None);
+    let (_, stderr) = install.send(&command, &payload, launch);
+    assert_eq!(
+        session_starts(&install.state),
+        [json!({"event": "session_start", "source": "startup",
+                "pinned_over": ["XDG_STATE_HOME"]})],
+        "{stderr}"
+    );
+}
+
+/// A `hooks.state_dir` in a settings file that differs from the pin is named
+/// by its settings key.
+#[test]
+fn a_session_start_names_the_state_dir_setting_the_pin_replaced() {
+    let install = Install::quoted();
+    let configured = install.base.path().join("configured state");
+    install.configure(&format!("  state_dir: '{}'\n", configured.display()));
+    // `settings` runs with the variable set, which wins over the file.
+    let command = install.generated_command();
+    assert!(command.contains(&pin(&install.state)), "{command}");
+    let launch = |c: &mut Command| {
+        c.env_remove("TELLTALE_HOOKS_STATE_DIR");
+    };
+    let payload = common::template("SessionStart", None);
+    let (_, stderr) = install.send(&command, &payload, launch);
+    assert_eq!(
+        session_starts(&install.state),
+        [json!({"event": "session_start", "source": "startup",
+                "pinned_over": ["hooks.state_dir"]})],
+        "{stderr}"
+    );
+    assert!(!configured.exists());
+}
+
+/// A session that starts with the state-directory variable the pin was taken
+/// from names nothing.
+#[test]
+fn a_session_start_names_nothing_when_the_environment_agrees_with_the_pin() {
+    let install = Install::quoted();
+    let command = install.generated_command();
+    let payload = common::template("SessionStart", None);
+    let (_, stderr) = install.send(&command, &payload, |_| {});
+    assert_eq!(
+        session_starts(&install.state),
+        [json!({"event": "session_start", "source": "startup"})],
+        "{stderr}"
+    );
+}
+
+/// `check` names each source the pins replaced, by name only.
+#[test]
+fn check_names_the_sources_the_pin_replaced() {
+    let install = Install::quoted();
+    let mut check = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    check
+        .args(["hooks", "check", "--state-dir"])
+        .arg(&install.state);
+    install.environment(&mut check);
+    install.moved()(&mut check);
+    let out = check.output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\npinned over: TELLTALE_HOOKS_STATE_DIR\n"),
+        "{stdout}"
+    );
+}
+
 /// `check` shows the state directory in use and whether it is pinned.
 #[test]
 fn check_shows_whether_the_state_dir_is_pinned() {

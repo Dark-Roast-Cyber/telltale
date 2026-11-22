@@ -797,6 +797,9 @@ mod hooks_section {
         evaluator_idle_timeout_secs: Setting<u64>,
         evaluator_request_timeout_ms: Setting<u64>,
         evaluator_socket: Setting<Option<PathBuf>>,
+        /// `hooks.telemetry_path` as the settings files set it, before the
+        /// environment: what a hook with a pinned state directory uses.
+        telemetry_path_in_files: Option<PathBuf>,
     }
 
     impl Default for HooksSettings {
@@ -842,6 +845,7 @@ mod hooks_section {
                 evaluator_idle_timeout_secs: Setting::new(idle_timeout_secs),
                 evaluator_request_timeout_ms: Setting::new(request_timeout_ms),
                 evaluator_socket: Setting::new(socket),
+                telemetry_path_in_files: None,
             }
         }
     }
@@ -885,6 +889,7 @@ mod hooks_section {
             env: &dyn Fn(&str) -> Option<String>,
         ) -> Result<(), InvalidEnvironment> {
             self.state_dir.set_env(env, STATE_DIR_ENV)?;
+            self.telemetry_path_in_files = self.telemetry_path.value.clone();
             self.telemetry_path.set_env(env, TELEMETRY_ENV)?;
             self.evaluator_enabled.set_env(env, EVALUATOR_ENV)
         }
@@ -932,6 +937,29 @@ mod hooks_section {
             ] {
                 map.insert(key.to_owned(), value);
             }
+        }
+
+        /// The configured state directory and the name of what set it: the
+        /// environment variable, or `hooks.state_dir` in a settings file.
+        /// `None` when neither did and the default applies.
+        pub(crate) fn state_dir_source(&self) -> Option<(&'static str, PathBuf)> {
+            let dir = self.state_dir.value.clone()?;
+            let name = match self.state_dir.origin {
+                Origin::Environment(name) | Origin::Cli(name) => name,
+                Origin::Default | Origin::File(_) => "hooks.state_dir",
+            };
+            Some((name, dir))
+        }
+
+        /// The records file the settings files name (`None` for the
+        /// default), and the one `TELLTALE_HOOKS_TELEMETRY` names when it
+        /// is set.
+        pub(crate) fn telemetry_path_in_files(&self) -> (Option<PathBuf>, Option<PathBuf>) {
+            let environment = match self.telemetry_path.origin {
+                Origin::Environment(_) => self.telemetry_path.value.clone(),
+                _ => None,
+            };
+            (self.telemetry_path_in_files.clone(), environment)
         }
 
         /// The hooks configuration these settings describe. Rule content and

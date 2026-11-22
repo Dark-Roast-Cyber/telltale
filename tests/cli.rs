@@ -56,6 +56,19 @@ fn event_schema_validator() -> &'static jsonschema::Validator {
     })
 }
 
+/// `telltale_hooks.record.v1`, as published.
+#[cfg(feature = "hooks")]
+fn hooks_record_validator() -> &'static jsonschema::Validator {
+    static VALIDATOR: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    VALIDATOR.get_or_init(|| {
+        let schema: Value = serde_json::from_str(include_str!(
+            "../schemas/telltale-hooks-record-v1.schema.json"
+        ))
+        .expect("hooks record schema");
+        validator_for(&schema).expect("hooks record schema validator")
+    })
+}
+
 fn native_test_event(
     event_type: &str,
     event_id: &str,

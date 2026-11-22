@@ -53,8 +53,10 @@ impl Install {
         self.home().join(".config").join("telltale")
     }
 
+    /// The records file of the hook command `settings` prints: the one in
+    /// the state directory it pins.
     fn telemetry(&self) -> PathBuf {
-        self.base.path().join("telemetry.jsonl")
+        self.base.path().join("state").join("telemetry.jsonl")
     }
 
     /// The process environment of the install, as the operator ran `settings`.
@@ -63,7 +65,10 @@ impl Install {
             .env_remove("XDG_CONFIG_HOME")
             .env("HOME", self.home())
             .env("TELLTALE_HOOKS_STATE_DIR", self.base.path().join("state"))
-            .env("TELLTALE_HOOKS_TELEMETRY", self.telemetry())
+            .env(
+                "TELLTALE_HOOKS_TELEMETRY",
+                self.base.path().join("telemetry.jsonl"),
+            )
             .env("TELLTALE_HOOKS_EVALUATOR", "0");
     }
 
@@ -107,6 +112,17 @@ impl Install {
         let mut payload = common::template("PreToolUse", Some("Bash"));
         payload["tool_use_id"] = "toolu_pinned".into();
         payload["tool_input"] = json!({"command": call});
+        self.send(command, &payload, launch)
+    }
+
+    /// Send `payload` to the hook `command` through `sh -c`, after `launch`
+    /// changed the environment: the verdict, stderr and exit status.
+    fn send(
+        &self,
+        command: &str,
+        payload: &Value,
+        launch: impl Fn(&mut Command),
+    ) -> (Option<String>, String, Option<i32>) {
         let mut hook = Command::new("sh");
         hook.arg("-c").arg(command);
         self.environment(&mut hook);
@@ -121,7 +137,7 @@ impl Install {
             .stdin
             .take()
             .unwrap()
-            .write_all(&serde_json::to_vec(&payload).unwrap())
+            .write_all(&serde_json::to_vec(payload).unwrap())
             .unwrap();
         let out = child.wait_with_output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -209,6 +225,80 @@ fn an_enforcing_install_whose_pinned_root_is_gone_denies_every_call() {
             "{call}: {stderr}"
         );
     }
+    // Each denied call is recorded as a configuration that did not load.
+    let telemetry = std::fs::read_to_string(install.telemetry()).unwrap_or_default();
+    let codes: Vec<Value> = telemetry
+        .lines()
+        .map(|line| {
+            let record: Value = serde_json::from_str(line).unwrap();
+            assert!(crate::hooks_record_validator().is_valid(&record), "{line}");
+            record["error_code"].clone()
+        })
+        .collect();
+    assert_eq!(codes, [json!("config_invalid"), json!("config_invalid")]);
+}
+
+/// A session that starts with `XDG_CONFIG_HOME` naming another user root
+/// names that variable, and nothing of its value, in its `session_start`
+/// record. One that starts in the install's environment names nothing.
+#[test]
+fn a_session_start_names_the_config_variable_the_pin_replaced() {
+    let install = Install::new(Some("observe"));
+    let (command, _) = install.generated_command();
+    assert!(command.contains("--user-config-dir"), "{command}");
+    let other = install.base.path().join("elsewhere");
+    let state = install.base.path().join("state");
+    let payload = common::template("SessionStart", None);
+    let moved = move |c: &mut Command| {
+        c.env("XDG_CONFIG_HOME", &other)
+            .env_remove("TELLTALE_HOOKS_TELEMETRY");
+    };
+    let (_, stderr, _) = install.send(&command, &payload, moved);
+    let unchanged = |c: &mut Command| {
+        c.env_remove("TELLTALE_HOOKS_TELEMETRY");
+    };
+    let (_, stderr_unchanged, _) = install.send(&command, &payload, unchanged);
+    let telemetry = std::fs::read_to_string(state.join("telemetry.jsonl")).unwrap_or_default();
+    let starts: Vec<Value> = telemetry
+        .lines()
+        .map(|line| {
+            let record: Value = serde_json::from_str(line).unwrap();
+            assert!(crate::hooks_record_validator().is_valid(&record), "{line}");
+            record["lifecycle"].clone()
+        })
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            json!({"event": "session_start", "source": "startup",
+                   "pinned_over": ["XDG_CONFIG_HOME"]}),
+            json!({"event": "session_start", "source": "startup"}),
+        ],
+        "{stderr}\n{stderr_unchanged}"
+    );
+    assert!(!telemetry.contains("elsewhere"), "{telemetry}");
+}
+
+/// Without `XDG_CONFIG_HOME`, `HOME` names the user root; a session that
+/// starts with it naming another one names `HOME`.
+#[test]
+fn a_session_start_names_home_when_it_names_another_user_root() {
+    let install = Install::new(Some("observe"));
+    let (command, _) = install.generated_command();
+    let other = install.base.path().join("other home");
+    let launch = move |c: &mut Command| {
+        c.env("HOME", &other).env_remove("TELLTALE_HOOKS_TELEMETRY");
+    };
+    let payload = common::template("SessionStart", None);
+    let (_, stderr, _) = install.send(&command, &payload, launch);
+    let telemetry = std::fs::read_to_string(install.telemetry()).unwrap_or_default();
+    let record: Value = serde_json::from_str(telemetry.trim()).unwrap();
+    assert_eq!(
+        record["lifecycle"],
+        json!({"event": "session_start", "source": "startup",
+               "pinned_over": ["HOME"]}),
+        "{stderr}"
+    );
 }
 
 /// A detect-only install gets no marker. With its pinned root gone the hook
