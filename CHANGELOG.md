@@ -20,7 +20,9 @@
   options, wrappers and a body file given to `gh issue create` or
   `gh pr create` therefore raise the session finding that copy commands
   already did. The rule's own patterns still apply, so nothing that
-  matched stops matching. That reading now also finds a client after a
+  matched stops matching. Commands of an imported session are read the
+  same way in session events, and still raise no action finding. That
+  reading now also finds a client after a
   leading shell reserved word and in a command `find` runs with `-exec`,
   which adds action findings for uploads and downloads written that way.
   A custom copy of the rule keeps its own patterns alone. See the

@@ -736,8 +736,20 @@ fn string(value: &JsonValue) -> Option<&str> {
 /// a detached budget, so the declaration neither spends the source's work nor
 /// makes a read fail that succeeded without it; if that read fails, the call
 /// keeps the first. Most declared calls hold in their arguments all that their
-/// declaration names, and are read once.
+/// declaration names, and are read once. An imported observation is no
+/// action: its view is empty.
 fn view(
+    observation: &CanonicalObservationV2,
+    budget: &mut RetentionBudget,
+) -> Result<ActionView, ProcessingError> {
+    if observation.source().ingestion_mode() == IngestionMode::Import {
+        return Ok(ActionView::default());
+    }
+    command_view(observation, budget)
+}
+
+/// What [`view`] reads, whatever the observation's ingestion mode.
+fn command_view(
     observation: &CanonicalObservationV2,
     budget: &mut RetentionBudget,
 ) -> Result<ActionView, ProcessingError> {
@@ -862,9 +874,6 @@ fn read_view(
     #[cfg(test)]
     READINGS.with(|count| count.set(count.get() + 1));
     let mut out = ActionView::default();
-    if observation.source().ingestion_mode() == IngestionMode::Import {
-        return Ok(out);
-    }
     budget.charge(observation.retained_byte_len())?;
     match observation.body() {
         ObservationBody::Message(message) => {
@@ -1694,7 +1703,9 @@ pub(super) fn observation_requests_outbound_transfer(
     budget: &RetentionBudget,
 ) -> Result<bool, ProcessingError> {
     let budget = &mut budget.detached();
-    let view = view(observation, budget)?;
+    // Session events read an imported command as one from a session store;
+    // that it is no action changes nothing here.
+    let view = command_view(observation, budget)?;
     for tokens in &view.commands {
         charge_tokens(tokens, budget)?;
         if requests_outbound_transfer(tokens) {
