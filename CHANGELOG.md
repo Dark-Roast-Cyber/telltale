@@ -64,6 +64,13 @@
   `hook_deadline`. A decision already evaluated is always delivered. One scan
   already in flight is not interrupted.
 
+- **An enforcing hook whose configuration does not load records it.** Such a
+  hook still denies tool calls (`config_invalid`), and now also writes an
+  `error` record with code `config_invalid`, as an observing hook already
+  did, to the records file it can determine without a configuration: the
+  one in a pinned `--state-dir`, else the one the state and telemetry
+  variables name. A record that cannot be written changes no answer.
+
 - **Hooks records say how long a call waited for its session's lock.** A
   decision or result-finding record now carries `evaluation.lock_wait_ms`,
   and the `error` record of a tool call that gave up waiting

@@ -969,28 +969,36 @@ fn resolve_config(
     // A configuration that does not load and asks for enforcement fails closed
     // for tool calls: an operator error should be visible at once, not
     // silently disable enforcement. One that never asked for it is detect-only
-    // (the gate is already closed): detection carries on with the defaults and
-    // the failure is recorded.
+    // (the gate is already closed): detection carries on with the defaults.
+    // Either way the failure is recorded where records go without a
+    // configuration (best effort: it never changes the answer).
     match loaded {
         Ok(config) => Ok(config),
         Err(error) => {
             // Details (which may include a path) go to stderr only.
             eprintln!("telltale hooks: {error}");
+            let config = fallback_config();
+            record_unhandled(&config, harness, "", "config_invalid");
             if gate == Gate::Enforce {
                 Err(())
             } else {
                 eprintln!(
                     "telltale hooks: the configuration did not load and does not set hooks.mode: enforce: detect-only with the defaults"
                 );
-                let config = Config::detect_only_fallback(
-                    pinned_state_dir().or_else(|| env_path(crate::settings::STATE_DIR_ENV)),
-                    env_path(crate::settings::TELEMETRY_ENV),
-                );
-                record_unhandled(&config, harness, "", "config_invalid");
                 Ok(config)
             }
         }
     }
+}
+
+/// The configuration of a hook whose configuration did not load: the
+/// defaults, with the state directory and records file it can still
+/// determine.
+fn fallback_config() -> Config {
+    Config::detect_only_fallback(
+        pinned_state_dir().or_else(|| env_path(crate::settings::STATE_DIR_ENV)),
+        env_path(crate::settings::TELEMETRY_ENV),
+    )
 }
 
 /// The answer for a payload that could not be parsed at all (oversized or

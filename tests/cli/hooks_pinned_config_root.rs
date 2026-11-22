@@ -209,6 +209,17 @@ fn an_enforcing_install_whose_pinned_root_is_gone_denies_every_call() {
             "{call}: {stderr}"
         );
     }
+    // Each denied call is recorded as a configuration that did not load.
+    let telemetry = std::fs::read_to_string(install.telemetry()).unwrap_or_default();
+    let codes: Vec<Value> = telemetry
+        .lines()
+        .map(|line| {
+            let record: Value = serde_json::from_str(line).unwrap();
+            assert!(crate::hooks_record_validator().is_valid(&record), "{line}");
+            record["error_code"].clone()
+        })
+        .collect();
+    assert_eq!(codes, [json!("config_invalid"), json!("config_invalid")]);
 }
 
 /// A detect-only install gets no marker. With its pinned root gone the hook
