@@ -262,6 +262,18 @@ fn a_python_one_liner_that_does_not_run_its_fetch_is_no_download() {
     }
 }
 
+/// As for a download client, a fetch from a literal loopback address is no
+/// download.
+#[test]
+fn a_python_one_liner_fetching_from_a_literal_loopback_address_is_no_download() {
+    let ids = session(&[(
+        "python3 -c \"import requests; exec(requests.get('http://127.0.0.1:8000/x.py').text)\"",
+        None,
+    )])
+    .1;
+    assert_eq!(ids, ["execution.shell"]);
+}
+
 /// A one-liner another host or a container runs fetches there: a download,
 /// as the launchers' other downloads are, that no local command runs.
 #[test]

@@ -1788,13 +1788,23 @@ pub(super) fn observation_fetches_code(
 }
 
 /// The fetch a command stage's Python one-liner runs as code, if any: a
-/// download with inline execution (experimental).
+/// download with inline execution (experimental). As for a download client,
+/// a URL naming a literal loopback address is no download.
 fn fetches_code<'a>(
     tokens: &'a [String],
     budget: &mut RetentionBudget,
 ) -> Result<Option<command_effect::FetchedCode<'a>>, ProcessingError> {
     charge_tokens(tokens, budget)?;
-    Ok(command_effect::fetched_code(tokens))
+    Ok(command_effect::fetched_code(tokens).filter(|fetch| {
+        let authority = fetch
+            .url
+            .split_once("://")
+            .map_or("", |(_, rest)| rest)
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or_default();
+        !super::http::literal_loopback(authority)
+    }))
 }
 
 /// A cloud credential file path, as the bundled upload and harvest rules name
