@@ -315,8 +315,9 @@ load:
   being changed. `check` loads the configuration, builds the rules and exits
   1 on an error; a check of one root alone does not see, for example, a
   second policy file in another root.
-- Add rule files before the override files that name their rule IDs: an
-  override for a rule ID no rule defines fails the rule build.
+- An override entry for a rule ID that no rule or chain defines is left out
+  and the rest of the file applies: `check` prints `override left out`, so
+  add rule files before the override files that name their rule IDs.
 
 While its configuration does not load, an observing hook detects on the
 defaults and records `config_invalid`; an enforcing one (the configuration or
@@ -339,7 +340,7 @@ user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-conf
 | Make a rule count less, or more | `overrides.d`: `score` |
 | Change a deny into an approval request | A `score` for the rule below `hooks.thresholds.action_deny`, or a higher threshold |
 | Stop a rule restricting an approved activity | Turn it off, score it below `action_ask`, or replace it with a copy that leaves the activity out |
-| Change what a rule matches, or its explanation | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)) |
+| Change what a rule matches, or its explanation or title | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)); override entries set only `enabled` and `score` |
 | Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
 | Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
 | Have the model ask the user, not the harness's approval prompt | `hooks.ask: model` ([how an ask reaches the user](#how-an-ask-reaches-the-user)) |
@@ -355,16 +356,19 @@ How tuning behaves:
 - **A chain follows its rules.** A chain adds points when the rules it names
   match. Turn a rule off and its chains no longer match through it. A rule
   scored 0 still matches, so its chains still add their points: lowering a
-  score removes only the rule's own. Turn a chain off with
-  `disabled_rules` in the policy; change its score with a replacement.
-  Override entries name rules, not chains.
+  score removes only the rule's own. An override entry on the chain's name
+  turns the chain off (`enabled: false`) or rescores it (`score`); a chain
+  turned off, by an override or by `disabled_rules` in the policy, leaves its
+  rules their own points.
 - **The session score keeps what it counted.** A changed configuration
   applies from the next tool call. Points an earlier call added stay in that
   session's score, so calls that still score can be asked about or denied on
   it until the session ends; calls with no finding are never restricted.
-- **One policy file.** Hooks read at most one file in `policies.d` across
-  their config roots. Local tuning beside a managed policy belongs in
-  `overrides.d`, whose files from every root apply in order.
+- **One policy file.** Policies do not merge: a second file in `policies.d`,
+  in any of the hook's config roots, is a configuration error that `check`
+  reports. Local tuning beside a managed policy belongs in `overrides.d`,
+  whose files from every root apply in order
+  ([why](../install.md#local-rule-policy-and-allowlist-config)).
 - **A later root wins.** A user's settings and overrides are read after the
   system root's and decide each key or field both set. Where the user must
   not undo managed configuration, name only the managed root on the hook
@@ -424,7 +428,8 @@ generated for this installation's own paths. `overrides.d` is shared with the
 scanner, which does not carry these rules: an entry for a `tth.tamper.` rule
 is applied where the rule is loaded and left out elsewhere (by the scanner,
 and by a hook that does not have that rule, where `check` prints
-`override left out`). An entry for any other unknown rule stays an error. A
+`override left out`). An entry for any other rule that is not loaded is left
+out the same way; the scanner also lists it as a notice. A
 replacement rule file is different: to the scanner it is a rule of its own,
 which it then evaluates in scans too. A shared policy with a whitelist
 that does not include `approval_bypass` turns all of them off without an

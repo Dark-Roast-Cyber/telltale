@@ -149,7 +149,8 @@ pub struct CompiledRuleSet {
 /// a Rule v2 filter whose case mode differs from its selection's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleLoadNotice {
-    /// The compiled rule or modifier id (the Rule v2 `name`).
+    /// The compiled rule or modifier id (the Rule v2 `name`), or for
+    /// [`RuleLoadNotice::OVERRIDE_LEFT_OUT`] the entry's `rule_id`.
     pub rule_id: String,
     /// A stable machine-readable kind, such as
     /// [`RuleLoadNotice::FILTER_CASE_MISMATCH`].
@@ -160,6 +161,10 @@ pub struct RuleLoadNotice {
 impl RuleLoadNotice {
     /// A Rule v2 filter whose case mode differs from its selection's.
     pub const FILTER_CASE_MISMATCH: &'static str = "filter_case_mismatch";
+    /// An override entry that names no loaded rule or chain modifier, left
+    /// out where the content does not carry every rule its override files
+    /// may name.
+    pub const OVERRIDE_LEFT_OUT: &'static str = "override_left_out";
 }
 
 impl std::fmt::Display for RuleLoadNotice {
@@ -826,6 +831,12 @@ impl CompiledRuleSet {
         &self.notices
     }
 
+    /// Add a finding the resolution of this set's content made, after the
+    /// notices of its definitions.
+    pub fn add_notice(&mut self, notice: RuleLoadNotice) {
+        self.notices.push(notice);
+    }
+
     /// Exposes only the effective compiled plan.  In particular, this
     /// cannot be used to recover a disabled or replaced source definition.
     pub fn compatibility_export(&self) -> RuleV1CompatibilityExport {
@@ -1264,45 +1275,122 @@ mod tests {
         loaded.compile(None).unwrap()
     }
 
-    /// `apply_override_document_skipping` leaves out an entry only when the
-    /// caller's predicate holds for its `rule_id` and nothing of that name is
-    /// loaded. A loaded rule's entry is applied, and an entry that names a
-    /// loaded chain modifier, or a name the predicate does not cover, fails
-    /// as an unknown `rule_id`.
+    /// Two rules and a chain over them, for override tests.
+    fn chained_documents() -> [String; 3] {
+        [
+            hidden_instruction_rule("hosted.present", "test"),
+            hidden_instruction_rule("hosted.second", "other"),
+            chain("hosted.chain", "rules: [hosted.present, hosted.second]", ""),
+        ]
+    }
+
+    /// The override document with one entry per line of `entries`, each a
+    /// flow mapping's fields after `rule_id` and `reason`.
+    fn override_document(entries: &[(&str, &str)]) -> RuleOverrideDocument {
+        let entries = entries
+            .iter()
+            .map(|(id, fields)| format!("  - {{rule_id: {id}, reason: synthetic, {fields}}}\n"))
+            .collect::<String>();
+        serde_yaml::from_str(&format!("version: 1\noverrides:\n{entries}")).unwrap()
+    }
+
+    /// `apply_override_document_skipping` leaves out every entry that names
+    /// nothing loaded, whatever its name, and applies the rest, the chain's
+    /// included. The strict `apply_override_document` fails on the same
+    /// unknown entry and accepts the chain's.
     #[test]
     fn skipping_leaves_out_only_entries_that_name_nothing_loaded() {
-        let documents = [
-            hidden_instruction_rule("hosted.present", "test"),
-            chain("hosted.chain", "rules: [hosted.present]", ""),
-        ];
-        let hosted = |id: &str| id.starts_with("hosted.");
-        let apply = |ids: &[&str]| {
-            let mut loaded = LoadedRules::parse(&file(&documents)).unwrap();
-            let entries = ids
-                .iter()
-                .map(|id| format!("  - {{rule_id: {id}, reason: synthetic, enabled: false}}\n"))
-                .collect::<String>();
-            let overrides: RuleOverrideDocument =
-                serde_yaml::from_str(&format!("version: 1\noverrides:\n{entries}")).unwrap();
-            loaded
-                .apply_override_document_skipping(&overrides, "synthetic.yaml", None, &hosted)
-                .map(|skipped| (skipped, loaded.get("hosted.present").unwrap().enabled()))
-                .map_err(|error| error.to_string())
-        };
+        let documents = chained_documents();
+        let overrides = override_document(&[
+            ("hosted.absent", "enabled: false"),
+            ("hosted.present", "enabled: false"),
+            ("elsewhere.absent", "enabled: false"),
+            ("hosted.chain", "enabled: false"),
+        ]);
+        let mut loaded = LoadedRules::parse(&file(&documents)).unwrap();
+        let skipped = loaded
+            .apply_override_document_skipping(&overrides, "synthetic.yaml", None)
+            .unwrap();
+        assert_eq!(skipped, ["hosted.absent", "elsewhere.absent"]);
+        for id in ["hosted.present", "hosted.chain"] {
+            assert!(!loaded.get(id).unwrap().enabled(), "{id}");
+        }
+        assert!(loaded.get("hosted.second").unwrap().enabled());
+
+        let mut strict = LoadedRules::parse(&file(&documents)).unwrap();
         assert_eq!(
-            apply(&["hosted.absent", "hosted.present", "hosted.other"]),
-            Ok((
-                vec!["hosted.absent".to_owned(), "hosted.other".to_owned()],
-                false
-            ))
+            strict
+                .apply_override_document(&overrides, "synthetic.yaml", None)
+                .map_err(|error| error.to_string()),
+            Err("unknown rule_id 'hosted.absent' in rule override file synthetic.yaml".to_owned()),
         );
-        for unknown in ["hosted.chain", "elsewhere.absent"] {
-            assert_eq!(
-                apply(&["hosted.absent", unknown]),
-                Err(format!(
-                    "unknown rule_id '{unknown}' in rule override file synthetic.yaml"
-                )),
-            );
+        let only_chain = override_document(&[("hosted.chain", "enabled: false")]);
+        strict
+            .apply_override_document(&only_chain, "synthetic.yaml", None)
+            .unwrap();
+        assert!(!strict.get("hosted.chain").unwrap().enabled());
+    }
+
+    /// An override entry on a chain sets its `enabled` and `score` like a
+    /// rule's and records the entry. Disabling it leaves it out of the
+    /// compiled set and keeps its rules; rescoring it changes the compiled
+    /// modifier. Both change the set's fingerprint, as a rule override does.
+    #[test]
+    fn an_override_on_a_chain_sets_it_like_a_rule() {
+        let documents = chained_documents();
+        let compiled = |entries: &[(&str, &str)]| {
+            let mut loaded = LoadedRules::parse(&file(&documents)).unwrap();
+            loaded
+                .apply_override_document(&override_document(entries), "synthetic.yaml", Some("ops"))
+                .unwrap();
+            let set = loaded.compile(None).unwrap();
+            (loaded, set)
+        };
+        let (_, baseline) = compiled(&[]);
+        let modifier_score = |set: &super::CompiledRuleSet| {
+            set.compatibility_export()
+                .modifiers()
+                .iter()
+                .find(|modifier| modifier.id == "hosted.chain")
+                .map(|modifier| modifier.score)
+        };
+        let rule_ids = |set: &super::CompiledRuleSet| {
+            set.compatibility_export()
+                .rules()
+                .iter()
+                .map(|rule| rule.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(modifier_score(&baseline), Some(7));
+        let fingerprint = baseline.compatibility_export().fingerprint();
+
+        let (loaded, disabled) = compiled(&[("hosted.chain", "enabled: false")]);
+        let definition = loaded.get("hosted.chain").unwrap();
+        assert!(!definition.enabled());
+        assert_eq!(
+            definition.overrides(),
+            [super::AppliedOverride {
+                source: "synthetic.yaml".to_owned(),
+                label: Some("ops".to_owned()),
+                reason: "synthetic".to_owned(),
+                enabled: Some(false),
+                score: None,
+            }]
+        );
+        assert_eq!(modifier_score(&disabled), None);
+        assert_eq!(rule_ids(&disabled), rule_ids(&baseline));
+        assert_ne!(disabled.compatibility_export().fingerprint(), fingerprint);
+
+        let (loaded, rescored) = compiled(&[("hosted.chain", "score: 40")]);
+        assert_eq!(loaded.get("hosted.chain").unwrap().score(), 40);
+        assert_eq!(modifier_score(&rescored), Some(40));
+        assert_ne!(rescored.compatibility_export().fingerprint(), fingerprint);
+
+        // The same changes on a rule move the fingerprint the same way.
+        let (_, rule_disabled) = compiled(&[("hosted.second", "enabled: false")]);
+        let (_, rule_rescored) = compiled(&[("hosted.second", "score: 40")]);
+        for set in [&rule_disabled, &rule_rescored] {
+            assert_ne!(set.compatibility_export().fingerprint(), fingerprint);
         }
     }
 

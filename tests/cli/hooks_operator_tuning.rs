@@ -346,6 +346,88 @@ fn a_policy_that_disables_a_chain_keeps_the_points_of_its_rules() {
     );
 }
 
+/// An override that disables a chain acts as a policy that disables it: its
+/// rules keep their points, and a deny only the chain's points reached
+/// becomes the verdict those points give.
+#[test]
+fn an_override_that_disables_a_chain_keeps_the_points_of_its_rules() {
+    const LOWER_UPLOAD: &str =
+        "  - rule_id: exfil.outbound_upload\n    score: 30\n    reason: synthetic\n";
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), ENFORCE);
+    write_overrides(&config, "override.yaml", LOWER_UPLOAD);
+    assert_eq!(
+        once(&[&config], CREDENTIAL_UPLOAD).brief(),
+        expected(
+            "deny",
+            "action_score",
+            115,
+            &[
+                "chain.harvest_then_exfil",
+                "credential.cloud_harvest",
+                "exfil.outbound_upload",
+            ],
+        )
+    );
+
+    write_overrides(
+        &config,
+        "override.yaml",
+        &format!(
+            "{LOWER_UPLOAD}  - rule_id: chain.harvest_then_exfil\n    enabled: false\n    reason: synthetic\n"
+        ),
+    );
+    let disabled = once(&[&config], CREDENTIAL_UPLOAD).brief();
+    assert_eq!(
+        disabled,
+        expected(
+            "ask",
+            "action_score",
+            80,
+            &["credential.cloud_harvest", "exfil.outbound_upload"],
+        )
+    );
+
+    let by_policy = tempfile::tempdir().unwrap();
+    let policy_config = common::config_root(by_policy.path(), ENFORCE);
+    write_overrides(&policy_config, "override.yaml", LOWER_UPLOAD);
+    write_policy(
+        &policy_config,
+        "version: 1\ndisabled_rules: [chain.harvest_then_exfil]\n",
+    );
+    assert_eq!(once(&[&policy_config], CREDENTIAL_UPLOAD).brief(), disabled);
+}
+
+/// A chain's score override sets the points the chain adds: a higher one
+/// turns an ask into a deny, and zero leaves its rules' points.
+#[test]
+fn a_chain_score_override_sets_the_points_the_chain_adds() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), ENFORCE);
+    let rules = [
+        "chain.download_then_execute",
+        "execution.shell",
+        "network.download",
+    ];
+    for (score, verdict, total) in [(75, "deny", 110), (0, "allow", 35)] {
+        write_override(
+            &config,
+            "chain.download_then_execute",
+            &format!("score: {score}"),
+        );
+        let basis = if verdict == "allow" {
+            "below_threshold"
+        } else {
+            "action_score"
+        };
+        assert_eq!(
+            once(&[&config], PIPED_DOWNLOAD).brief(),
+            expected(verdict, basis, total, &rules),
+            "score {score}"
+        );
+    }
+}
+
 #[test]
 fn an_override_on_one_rule_leaves_self_protection_denials_alone() {
     let dir = tempfile::tempdir().unwrap();
