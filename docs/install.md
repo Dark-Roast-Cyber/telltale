@@ -509,9 +509,17 @@ its `enabled` or `score`. An entry that names nothing loaded is left out and
 the rest still apply: `telltale rules validate` lists it as an
 `override_left_out` notice, and `telltale hooks check` prints
 `override left out`. An entry that does not parse or sets nothing still fails
-the rule build. If no explicit `--policy` is provided, exactly one
-discovered `policies.d` file may be used; multiple discovered policies require
-passing `--policy` explicitly or removing extras. `scan` and `watch` apply the
+the rule build. Override entries set `enabled` and `score` only; to change a
+rule's explanation or title, replace the rule (same `name` and `id` in a rules
+tier). Exactly one policy file is in effect across all config roots: policies
+do not merge. If no explicit `--policy` is provided, more than one discovered
+`policies.d` file, in one root or across roots, is a configuration error
+(`telltale hooks check` and the hook report it too); `scan`, `watch` and
+`telltale rules` can pass `--policy` to name the one to use. A merged policy
+would let a later root turn back on what a managed policy turned off without
+that showing in any one file, so local tuning on top of a managed policy goes
+in `overrides.d`, which layers: every root's files apply in order and a later
+root decides a field both set. `scan` and `watch` apply the
 same single-file rule for discovered `allowlists.d` files when `--allowlist` is
 not provided.
 

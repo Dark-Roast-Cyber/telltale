@@ -767,6 +767,105 @@ fn check_rules_lists_every_rule_as_it_takes_effect() {
     assert!(!listed.contains("override.yaml"), "{listed}");
 }
 
+/// `check --rules` shows a chain an override turned off and one an override
+/// rescored, each with the override's reason, and `--rules --json` prints the
+/// same as the effective configuration document and nothing else.
+#[test]
+fn check_rules_shows_chain_overrides_as_text_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(dir.path(), "hooks:\n  mode: enforce\n");
+    let overrides = config.join("overrides.d");
+    std::fs::create_dir_all(&overrides).unwrap();
+    std::fs::write(
+        overrides.join("chains.yaml"),
+        "version: 1\noverrides:\n  - rule_id: chain.secret_then_network\n    enabled: false\n    reason: synthetic chain noise\n  - rule_id: chain.download_then_execute\n    score: 3\n    reason: synthetic chain tuning\n",
+    )
+    .unwrap();
+    let check = |flags: &[&str]| {
+        let out = isolated()
+            .arg("check")
+            .args(flags)
+            .arg("--config-dir")
+            .arg(&config)
+            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let rule_lines = |text: &str| {
+        text.lines()
+            .filter(|line| line.starts_with("rule: "))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+
+    let (code, listed, stderr) = check(&["--rules"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let line = |name: &str| {
+        listed
+            .lines()
+            .find(|line| line.starts_with(&format!("rule: {name}\t")))
+            .unwrap_or_else(|| panic!("{name} is not listed\n{listed}"))
+            .to_owned()
+    };
+    let off = line("chain.secret_then_network");
+    assert!(
+        off.contains("\tchain\tdisabled by override\t")
+            && off.ends_with("\toverride enabled=false (synthetic chain noise)"),
+        "{off}"
+    );
+    let rescored = line("chain.download_then_execute");
+    assert!(
+        rescored.contains("\tchain\tenabled\tscore 3")
+            && rescored.ends_with("\toverride score=3 (synthetic chain tuning)"),
+        "{rescored}"
+    );
+    // `--rules` given twice lists the same rules once.
+    let (code, twice, stderr) = check(&["--rules", "--rules"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(rule_lines(&twice), rule_lines(&listed));
+
+    let (code, stdout, stderr) = check(&["--rules", "--json"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    let document: Value = serde_json::from_str(&stdout).unwrap();
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../schemas/effective-configuration-v1.schema.json"
+    ))
+    .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    assert!(validator.is_valid(&document), "{document}");
+    let definitions = document["definitions"].as_array().unwrap();
+    assert_eq!(definitions.len(), rule_lines(&listed).len());
+    let definition = |name: &str| {
+        definitions
+            .iter()
+            .find(|definition| definition["id"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    let off = definition("chain.secret_then_network");
+    assert_eq!(off["kind"], "modifier");
+    assert_eq!(off["enabled"], false);
+    assert_eq!(off["disabled_by"], "override");
+    assert_eq!(off["overrides"][0]["enabled"], false);
+    assert_eq!(off["overrides"][0]["reason"], "synthetic chain noise");
+    let rescored = definition("chain.download_then_execute");
+    assert_eq!(rescored["enabled"], true);
+    assert_eq!(rescored["session_score"], 3);
+    assert_eq!(rescored["overrides"][0]["score"], 3);
+    assert_eq!(rescored["overrides"][0]["reason"], "synthetic chain tuning");
+    assert!(!stdout.contains("chains.yaml"), "{stdout}");
+
+    // `--json` alone is refused, like any other unknown use of `check`.
+    let (code, stdout, _) = check(&["--json"]);
+    assert_eq!(code, Some(64));
+    assert!(stdout.is_empty(), "{stdout}");
+}
+
 /// `overrides.d` is read by the scanner and by hooks, and only hooks carry the
 /// self-protection rules. An entry that tunes one must not stop the scanner,
 /// or a hook whose self-protection rules are off: it is left out there, and

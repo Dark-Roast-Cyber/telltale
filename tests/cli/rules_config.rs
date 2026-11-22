@@ -3916,6 +3916,111 @@ fn rules_validate_and_test_leave_out_an_override_for_a_rule_that_is_not_loaded()
     );
 }
 
+/// `rules list --include-disabled` adds the disabled rules and chains, and
+/// ends every line with its kind and what disabled it, as `rules show` names
+/// it. Without the flag the listing has the enabled rules alone, five
+/// columns each.
+#[test]
+fn rules_list_include_disabled_adds_what_is_off_and_why() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("config");
+    let write = |folder: &str, text: &str| {
+        let dir = root.join(folder);
+        fs::create_dir_all(&dir).expect("config folder");
+        fs::write(dir.join("local.yaml"), text).expect("config file");
+    };
+    write(
+        "overrides.d",
+        "version: 1\noverrides:\n  - rule_id: network.download\n    enabled: false\n    reason: synthetic noise\n  - rule_id: chain.secret_then_network\n    enabled: false\n    reason: synthetic chain noise\n",
+    );
+    write(
+        "policies.d",
+        "version: 1\ndisabled_rules: [install.package_manager]\n",
+    );
+    write(
+        "rules.d",
+        &custom_rule_yaml("custom.synthetic_off", "synthetic-off").replace(
+            "    tags: [test]\n",
+            "    tags: [test]\n    enabled: false\n",
+        ),
+    );
+    let list = |flags: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["rules", "list"])
+            .args(flags)
+            .arg("--config-dir")
+            .arg(&root)
+            .output()
+            .expect("run telltale rules list");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("utf-8")
+    };
+    let line = |listing: &str, name: &str| {
+        listing
+            .lines()
+            .find(|line| line.starts_with(&format!("{name}\t")))
+            .map(str::to_owned)
+    };
+
+    let plain = list(&[]);
+    assert!(
+        plain
+            .lines()
+            .all(|line| line.split('\t').count() == 5 && line.ends_with("\ttrue")),
+        "{plain}"
+    );
+    for off in [
+        "network.download",
+        "chain.secret_then_network",
+        "install.package_manager",
+        "custom.synthetic_off",
+    ] {
+        assert_eq!(line(&plain, off), None, "{off}");
+    }
+
+    let all = list(&["--include-disabled"]);
+    assert_eq!(
+        all.lines().count(),
+        plain.lines().count() + 4,
+        "every enabled rule and the four that are off\n{all}"
+    );
+    for enabled in plain.lines() {
+        assert!(
+            all.lines()
+                .any(|line| line == format!("{enabled}\trule\t-")),
+            "{enabled}"
+        );
+    }
+    let download = line(&all, "network.download").expect("listed");
+    assert_eq!(download.split('\t').count(), 7, "{download}");
+    assert!(
+        download.ends_with("\t20\tfalse\trule\toverride"),
+        "{download}"
+    );
+    let chain = line(&all, "chain.secret_then_network").expect("chain listed");
+    assert!(chain.ends_with("\tfalse\tchain\toverride"), "{chain}");
+    assert!(
+        chain.starts_with("chain.secret_then_network\t-\t-\t"),
+        "{chain}"
+    );
+    let by_policy = line(&all, "install.package_manager").expect("listed");
+    assert!(by_policy.ends_with("\tfalse\trule\tpolicy"), "{by_policy}");
+    assert_eq!(
+        line(&all, "custom.synthetic_off").as_deref(),
+        Some("custom.synthetic_off\tcustom_agent_behavior\tlow\t10\tfalse\trule\tdefinition")
+    );
+
+    // With --verbose the two columns follow the provenance columns.
+    let verbose = list(&["--include-disabled", "--verbose"]);
+    let download = line(&verbose, "network.download").expect("listed");
+    assert_eq!(download.split('\t').count(), 9, "{download}");
+    assert!(download.ends_with("\trule\toverride"), "{download}");
+}
+
 #[test]
 fn rules_validate_reports_rule_v2_load_notices() {
     let bundled = rules_command(&["validate"]);

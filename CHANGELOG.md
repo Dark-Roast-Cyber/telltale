@@ -104,6 +104,18 @@
   `disabled by` and `overrides` lines. See
   [Tuning rules and policy](docs/hooks/README.md#tuning-rules-and-policy).
 
+- **`telltale hooks check --rules --json`.** Prints only the rules the hook
+  evaluates, as one `telltale.effective_configuration.v1` document: per rule
+  and chain whether it is enabled and what turned it off, its scores, its
+  tier and the overrides applied to it with their reasons. `--json` without
+  `--rules` is refused; `--rules` given twice is the same as once.
+
+- **`telltale rules list --include-disabled`.** Also lists the disabled rules
+  and chains, and ends every line with two columns: the kind (`rule` or
+  `chain`) and what disabled it (`definition`, `override`, `policy`, or `-`),
+  as `telltale rules show` names it. A chain has `-` for category and
+  severity. Without the flag the listing is unchanged.
+
 - **Hooks: enforcement test signatures.** `hooks.test_signatures.enabled:
   true` (default `false`) loads two rules that each match one harmless
   command, `echo TELLTALE_TEST_ASK` (`tth.test.ask`, score 60) and

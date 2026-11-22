@@ -338,7 +338,7 @@ user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-conf
 | Make a rule count less, or more | `overrides.d`: `score` |
 | Change a deny into an approval request | A `score` for the rule below `hooks.thresholds.action_deny`, or a higher threshold |
 | Stop a rule restricting an approved activity | Turn it off, score it below `action_ask`, or replace it with a copy that leaves the activity out |
-| Change what a rule matches, or its explanation | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)) |
+| Change what a rule matches, or its explanation or title | A copy of the rule with the same `name` and `id` in `organization-rules.d`, `rules.d` or `ui-rules.d` ([replacement](../rule-format.md#identity-and-replacement)); override entries set only `enabled` and `score` |
 | Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
 | Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
 | Configure a fleet | The same folders in `/etc/telltale`; the user's root is read after it |
@@ -361,9 +361,11 @@ How tuning behaves:
   applies from the next tool call. Points an earlier call added stay in that
   session's score, so calls that still score can be asked about or denied on
   it until the session ends; calls with no finding are never restricted.
-- **One policy file.** Hooks read at most one file in `policies.d` across
-  their config roots. Local tuning beside a managed policy belongs in
-  `overrides.d`, whose files from every root apply in order.
+- **One policy file.** Policies do not merge: a second file in `policies.d`,
+  in any of the hook's config roots, is a configuration error that `check`
+  reports. Local tuning beside a managed policy belongs in `overrides.d`,
+  whose files from every root apply in order
+  ([why](../install.md#local-rule-policy-and-allowlist-config)).
 - **A later root wins.** A user's settings and overrides are read after the
   system root's and decide each key or field both set. Where the user must
   not undo managed configuration, name only the managed root on the hook
