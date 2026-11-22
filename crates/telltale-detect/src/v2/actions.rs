@@ -1006,6 +1006,7 @@ fn read_view(
                 .map(|span| (span.start, span.end))
                 .collect::<BTreeSet<_>>();
             let mut recorded = Vec::new();
+            let mut launched = Vec::new();
             for (start, end) in every_span {
                 let stage = &command[start..end];
                 budget.charge(stage.len())?;
@@ -1025,13 +1026,15 @@ fn read_view(
                         ));
                         opened.extend(input_files(reading, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
-                        let launched = launched_commands(&tokens, budget)?;
+                        for command in launched_commands(&tokens, budget)? {
+                            launched.push((start..end, command));
+                        }
                         if index == 0 && split.contains(&(start, end)) {
                             recorded.push(out.commands.len());
                         }
                         out.stage_spans.push(start..end);
                         out.commands.push(tokens);
-                        for script in script.into_iter().chain(launched) {
+                        if let Some(script) = script {
                             out.stage_spans.push(start..end);
                             out.commands.push(script);
                         }
@@ -1048,6 +1051,9 @@ fn read_view(
                     {
                         opened.extend(input_files(stage, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        for command in launched_commands(&tokens, budget)? {
+                            launched.push((start..end, command));
+                        }
                         out.stage_spans.push(start..end);
                         out.commands.push(tokens);
                         if let Some(script) = script {
@@ -1055,6 +1061,14 @@ fn read_view(
                             out.commands.push(script);
                         }
                     }
+                }
+            }
+            // A launched command the shell reader already read as a script is
+            // read once.
+            for (span, command) in launched {
+                if !out.commands.contains(&command) {
+                    out.stage_spans.push(span);
+                    out.commands.push(command);
                 }
             }
             charge_commands(&out.commands, budget)?;
@@ -1321,12 +1335,21 @@ fn joined_script(tokens: &[String]) -> Option<&[String]> {
         let flag = tokens
             .iter()
             .position(|token| super::shell_text::script_flag(token))?;
-        tokens[..flag]
-            .iter()
-            .any(|token| {
-                super::shell_text::SHELLS.contains(&super::http::client_name(token).as_str())
-            })
-            .then_some(flag + 1)?
+        let shell = tokens[..flag].iter().position(|token| {
+            super::shell_text::SHELLS.contains(&super::http::client_name(token).as_str())
+        })?;
+        // The words after a PowerShell `-File` are its script's arguments.
+        let powershell = matches!(
+            super::http::client_name(&tokens[shell]).as_str(),
+            "powershell" | "pwsh"
+        );
+        let file = tokens[shell + 1..flag].iter().any(|token| {
+            matches!(
+                token.to_ascii_lowercase().as_str(),
+                "-file" | "-f" | "/file"
+            )
+        });
+        (!(powershell && file)).then_some(flag + 1)?
     };
     let script = tokens.get(from..)?;
     script
@@ -1337,13 +1360,13 @@ fn joined_script(tokens: &[String]) -> Option<&[String]> {
 
 /// The commands of the text a wrapper hands to another shell as a quoted word
 /// (`ssh host '…'`, `cmd /c "…"`, `powershell -Command "…"`), read as the shell
-/// reader reads a `bash -c` script. A wrapper inside that text is read by its
-/// words alone.
+/// reader reads a `bash -c` script. A command sent to another host keeps the
+/// words that send it there in front of it (`ssh host`).
 fn launched_commands(
     tokens: &[String],
     budget: &mut RetentionBudget,
 ) -> Result<Vec<Vec<String>>, ProcessingError> {
-    let Some(script) = command_effect::launched_script(tokens) else {
+    let Some((kept, script)) = command_effect::launched_script(tokens) else {
         return Ok(Vec::new());
     };
     budget.charge(script.len())?;
@@ -1362,7 +1385,9 @@ fn launched_commands(
     let mut commands = Vec::new();
     for (start, end) in spans {
         budget.charge(2 * (end - start))?;
-        commands.push(tokenize(&shell.command[start..end]));
+        let mut command = kept.to_vec();
+        command.extend(tokenize(&shell.command[start..end]));
+        commands.push(command);
     }
     Ok(commands)
 }
@@ -2992,7 +3017,10 @@ fn downloaded_artifacts(
     let mut artifacts = Vec::new();
     for (index, t) in commands.iter().enumerate() {
         // Bindings are read from the downloading invocation, after any wrapper.
-        let Some(t) = download_command(t, budget)? else {
+        // A file written on another host or in a container is not one a
+        // local command runs.
+        let Some(t) = download_command(t, budget)?.filter(|_| !super::http::downloads_elsewhere(t))
+        else {
             continue;
         };
         charge_tokens(t, budget)?;

@@ -335,9 +335,29 @@ struct Wrapper {
     /// The positionals before the command: a `timeout` duration, an `ssh`
     /// destination, a container or a profile.
     positionals: usize,
+    /// Whether options and `--` may also stand between the positionals and
+    /// the command (`ssh host -t cmd`, `aws-vault exec prod -- cmd`).
+    options_after: bool,
     /// When not empty, the command starts after the first of these words
-    /// (`kubectl exec … --`, `cmd /c`), whatever comes before it.
+    /// (`kubectl exec … --`, `cmd /c`).
     markers: &'static [&'static str],
+    /// Options that run a script file: the words after one are the script's.
+    files: &'static [&'static str],
+    /// How the program hands its command to a shell, if it does.
+    script: Script,
+    /// Whether the command runs on another host or in a container.
+    elsewhere: bool,
+}
+
+/// How a wrapper hands its command words to a shell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Script {
+    /// It runs them as a program and its arguments.
+    None,
+    /// It joins them with blanks for a shell (`ssh`, `watch`, PowerShell).
+    Joined,
+    /// Its shell reads a quoted command as written (`cmd /c "…"`).
+    Quoted,
 }
 
 const fn wrapper(name: &'static str, values: &'static str, positionals: usize) -> Wrapper {
@@ -346,14 +366,16 @@ const fn wrapper(name: &'static str, values: &'static str, positionals: usize) -
         subcommand: "",
         values,
         positionals,
+        options_after: false,
         markers: &[],
+        files: &[],
+        script: Script::None,
+        elsewhere: false,
     }
 }
 
-/// The programs read as running their operands as a command. An option that
-/// is not listed reads as a flag, so its value reads as the positional or
-/// the command and the command after it is not read; only the rows with
-/// markers read past words they do not know.
+/// The programs read as running their operands as a command, each with the
+/// options that take a value and the words that come before its command.
 const WRAPPERS: [Wrapper; 27] = [
     wrapper("sudo", "ugCDhprtTU", 0),
     wrapper("doas", "uC", 0),
@@ -371,27 +393,42 @@ const WRAPPERS: [Wrapper; 27] = [
     wrapper("proxychains", "f", 0),
     wrapper("proxychains4", "f", 0),
     // Remote hosts and containers.
-    wrapper("ssh", "BbcDEeFIiJLlmOoPpQRSWw", 1),
+    Wrapper {
+        options_after: true,
+        script: Script::Joined,
+        elsewhere: true,
+        ..wrapper("ssh", "BbcDEeFIiJLlmOoPpQRSWw", 1)
+    },
     Wrapper {
         subcommand: "exec",
+        elsewhere: true,
         ..wrapper("docker", "euw", 1)
     },
     Wrapper {
         subcommand: "exec",
+        elsewhere: true,
         ..wrapper("podman", "euw", 1)
     },
     Wrapper {
         subcommand: "exec",
         markers: &["--"],
+        elsewhere: true,
         ..wrapper("kubectl", "", 0)
     },
+    // Runners.
     Wrapper {
         subcommand: "exec",
+        options_after: true,
         ..wrapper("aws-vault", "dt", 1)
     },
-    // Runners.
-    wrapper("watch", "nq", 0),
-    wrapper("parallel", "aCdEIjLNnPSs", 0),
+    Wrapper {
+        script: Script::Joined,
+        ..wrapper("watch", "nq", 0)
+    },
+    Wrapper {
+        script: Script::Joined,
+        ..wrapper("parallel", "aCdEIjLNnPSs", 0)
+    },
     Wrapper {
         subcommand: "run",
         ..wrapper("uv", "p", 0)
@@ -400,26 +437,34 @@ const WRAPPERS: [Wrapper; 27] = [
     // Other shells' command strings.
     Wrapper {
         markers: &["/c", "/k"],
+        script: Script::Quoted,
         ..wrapper("cmd", "", 0)
     },
     Wrapper {
         markers: &["-c", "-command", "/c", "/command"],
+        files: &["-file", "-f", "/file"],
+        script: Script::Joined,
         ..wrapper("powershell", "", 0)
     },
     Wrapper {
         markers: &["-c", "-command", "/c", "/command"],
+        files: &["-file", "-f", "/file"],
+        script: Script::Joined,
         ..wrapper("pwsh", "", 0)
     },
 ];
 
 impl Wrapper {
-    /// Whether `tokens[at]` invokes this program.
-    fn invoked(&self, tokens: &[String], at: usize) -> bool {
-        client_name(&tokens[at]) == self.name
-            && (self.subcommand.is_empty()
-                || tokens
-                    .get(at + 1)
-                    .is_some_and(|word| word == self.subcommand))
+    /// The row of the program `tokens[at]` invokes.
+    fn at(tokens: &[String], at: usize) -> Option<&'static Wrapper> {
+        let name = client_name(&tokens[at]);
+        WRAPPERS.iter().find(|wrapper| {
+            name == wrapper.name
+                && (wrapper.subcommand.is_empty()
+                    || tokens
+                        .get(at + 1)
+                        .is_some_and(|word| word == wrapper.subcommand))
+        })
     }
 
     /// Where the command this invocation at `at` runs starts.
@@ -427,14 +472,18 @@ impl Wrapper {
         let mut index = at + 1 + usize::from(!self.subcommand.is_empty());
         if !self.markers.is_empty() {
             let words = tokens.get(index..)?;
-            let marker = words.iter().position(|word| {
-                self.markers
-                    .iter()
-                    .any(|marker| word.eq_ignore_ascii_case(marker))
-            })?;
-            return Some(index + marker + 1);
+            let listed = |list: &[&str], word: &String| {
+                list.iter().any(|item| word.eq_ignore_ascii_case(item))
+            };
+            let found = words
+                .iter()
+                .position(|word| listed(self.markers, word) || listed(self.files, word))?;
+            return (!listed(self.files, &words[found])).then_some(index + found + 1);
         }
-        for positional in 0..=self.positionals {
+        // Options come before each positional, and after the last one where
+        // the row says so.
+        let rounds = self.positionals + usize::from(self.positionals == 0 || self.options_after);
+        for round in 0..rounds {
             while let Some(option) = tokens
                 .get(index)
                 .filter(|token| token.len() > 1 && token.starts_with('-'))
@@ -445,30 +494,36 @@ impl Wrapper {
                 }
                 index += usize::from(takes_next(option, &WRAPPER_VALUE_OPTIONS, self.values));
             }
-            index += usize::from(positional < self.positionals);
+            index += usize::from(round < self.positionals);
         }
         Some(index)
     }
 }
 
-/// The wrappers that hand their command words, joined with blanks, to a shell.
-const SHELL_LAUNCHERS: [&str; 6] = ["ssh", "watch", "parallel", "cmd", "powershell", "pwsh"];
-
-/// The text a wrapper hands to another shell when one of its command words
-/// holds a blank, as a quoted command does (`ssh host '…'`, `cmd /c "…"`,
-/// `powershell -Command "…"`): its command words joined with blanks, as that
-/// shell receives them. The caller reads it as it reads a `bash -c` script.
-pub fn launched_script(tokens: &[String]) -> Option<String> {
-    let launcher = invocation(tokens, &SHELL_LAUNCHERS)?;
-    let start = WRAPPERS
-        .iter()
-        .find(|wrapper| wrapper.invoked(launcher, 0))?
-        .command(launcher, 0)?;
-    let words = launcher.get(start..)?;
-    words
-        .iter()
-        .any(|word| word.contains(char::is_whitespace))
-        .then(|| words.join(" "))
+/// The text a wrapper hands to another shell, as that shell receives it: its
+/// command words joined with blanks when one of them holds a blank, as a
+/// quoted command does (`ssh host '…'`, `powershell -Command "…"`), or for
+/// `cmd`, a quoted command of its own (`cmd /c "…"`). With it come the words
+/// that send the command to another host (`ssh host`), which a reading of the
+/// command keeps in front of it. The caller reads the text as it reads a
+/// `bash -c` script.
+pub fn launched_script(tokens: &[String]) -> Option<(&[String], String)> {
+    let (at, wrapper, elsewhere) = walk(tokens, &[], true)?;
+    let wrapper = wrapper?;
+    let start = wrapper.command(tokens, at)?;
+    let words = tokens.get(start..)?;
+    let blank = |word: &String| word.contains(char::is_whitespace);
+    let script = match wrapper.script {
+        Script::None => false,
+        Script::Joined => words.iter().any(blank),
+        Script::Quoted => words.first().is_some_and(blank),
+    };
+    let kept = if elsewhere || wrapper.elsewhere {
+        &tokens[..start]
+    } else {
+        &[]
+    };
+    script.then(|| (kept, words.join(" ")))
 }
 
 /// Wrapper long options that take a separate value (`--user deploy`).
@@ -533,11 +588,30 @@ pub fn reserved_word(word: &str) -> bool {
 /// (`-exec`, `-execdir`, `-ok`, `-okdir`). A client named as an argument
 /// (`git fetch`, `echo curl`, `which wget`) is not an invocation.
 pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]> {
+    walk(tokens, clients, false).map(|(at, ..)| &tokens[at..])
+}
+
+/// Whether the client invocation of a command segment runs on another host
+/// or in a container: an `ssh`, `docker exec`, `podman exec` or `kubectl exec`
+/// leads to it, directly or through other wrappers.
+pub fn runs_elsewhere(tokens: &[String], clients: &[&str]) -> bool {
+    walk(tokens, clients, false).is_some_and(|(.., elsewhere)| elsewhere)
+}
+
+/// Where [`invocation`] finds a client, or with `scripts`, the first wrapper
+/// that hands its command to a shell, with that wrapper's row; and whether a
+/// wrapper before it runs its command on another host or in a container.
+fn walk(
+    tokens: &[String],
+    clients: &[&str],
+    scripts: bool,
+) -> Option<(usize, Option<&'static Wrapper>, bool)> {
     let mut index = 0;
+    let mut elsewhere = false;
     while let Some(token) = tokens.get(index) {
         let name = client_name(token);
         if clients.contains(&name.as_str()) {
-            return Some(&tokens[index..]);
+            return Some((index, None, elsewhere));
         }
         if assignment(token) || reserved_word(token) || token == "{" {
             index += 1;
@@ -566,11 +640,17 @@ pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [Str
                 .filter(|(_, token)| {
                     matches!(token.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
                 })
-                .find_map(|(at, _)| invocation(&tokens[index + at + 2..], clients));
+                .find_map(|(at, _)| {
+                    let from = index + at + 2;
+                    walk(&tokens[from..], clients, scripts)
+                        .map(|(at, row, inner)| (from + at, row, elsewhere || inner))
+                });
         }
-        let wrapper = WRAPPERS
-            .iter()
-            .find(|wrapper| wrapper.invoked(tokens, index))?;
+        let wrapper = Wrapper::at(tokens, index)?;
+        if scripts && wrapper.script != Script::None {
+            return Some((index, Some(wrapper), elsewhere));
+        }
+        elsewhere |= wrapper.elsewhere;
         index = wrapper.command(tokens, index)?;
     }
     None
@@ -912,15 +992,16 @@ mod tests {
                 .map(|word| (*word).to_owned())
                 .collect::<Vec<_>>()
         };
+        let ssh = quoted(&[
+            "ssh",
+            "-p",
+            "2222",
+            "host",
+            "cd /srv && aws s3 cp ./d s3://b/",
+        ]);
         assert_eq!(
-            super::launched_script(&quoted(&[
-                "ssh",
-                "-p",
-                "2222",
-                "host",
-                "cd /srv && aws s3 cp ./d s3://b/"
-            ])),
-            Some("cd /srv && aws s3 cp ./d s3://b/".to_owned())
+            super::launched_script(&ssh),
+            Some((&ssh[..4], "cd /srv && aws s3 cp ./d s3://b/".to_owned()))
         );
         assert_eq!(
             super::launched_script(&quoted(&[
@@ -931,7 +1012,7 @@ mod tests {
                 "/c",
                 "aws s3 cp ./d s3://b/"
             ])),
-            Some("aws s3 cp ./d s3://b/".to_owned())
+            Some((&[][..], "aws s3 cp ./d s3://b/".to_owned()))
         );
         assert_eq!(
             super::launched_script(&quoted(&[
@@ -940,7 +1021,7 @@ mod tests {
                 "-Command",
                 "aws s3 cp ./d s3://b/"
             ])),
-            Some("aws s3 cp ./d s3://b/".to_owned())
+            Some((&[][..], "aws s3 cp ./d s3://b/".to_owned()))
         );
         assert_eq!(
             super::launched_script(&quoted(&["ssh", "host", "aws", "s3", "ls"])),
@@ -948,6 +1029,12 @@ mod tests {
         );
         assert_eq!(
             super::launched_script(&quoted(&["docker", "exec", "c", "aws s3 cp ./d s3://b/"])),
+            None
+        );
+        // cmd keeps the quotes inside its command line: only a quoted
+        // command of its own is a script.
+        assert_eq!(
+            super::launched_script(&quoted(&["cmd", "/c", "echo", "x & aws s3 cp ./d s3://b/"])),
             None
         );
     }
@@ -1026,5 +1113,20 @@ mod tests {
         assert_eq!(transfers(&words("gh issue comment 1 --body text")), []);
         assert_eq!(transfers(&words("gh gist view 1234abcd")), []);
         assert_eq!(transfers(&words("rclone ls synthetic-remote:b")), []);
+        for command in [
+            "ssh",
+            "ssh -p",
+            "docker exec",
+            "kubectl exec pod",
+            "cmd",
+            "powershell",
+            "function",
+            "f ()",
+            "sudo ssh",
+            "pwsh -File x.ps1 -c aws s3 cp ./d s3://synthetic-bucket/k",
+            "powershell -f x.ps1 -Command aws s3 cp ./d s3://synthetic-bucket/k",
+        ] {
+            assert_eq!(transfers(&words(command)), [], "{command}");
+        }
     }
 }
