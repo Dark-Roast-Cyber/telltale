@@ -23,7 +23,9 @@ use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 15;
+/// Versions the native readings, including the requested-transfer reading the
+/// session view also takes for the bundled upload rule.
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 16;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -1631,16 +1633,48 @@ fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, Pr
             .position(|s| s == "storage")
             .is_some_and(|position| azure_upload(&command[position + 1..])));
     }
-    // A requested transfer from a local source is an upload. Publishing an
-    // ordinary file with the GitHub CLI is routine and counts only when the
-    // file is a cloud credential.
+    Ok(requests_outbound_transfer(command))
+}
+
+/// Whether a command stage requests a transfer from a local source: an
+/// object-storage copy, move or sync, or a GitHub CLI publication. Publishing
+/// an ordinary file is routine and counts only when the file is a cloud
+/// credential. The action view reads uploads by these clients through this
+/// alone; session events take it beside the upload rule's own patterns.
+fn requests_outbound_transfer(tokens: &[String]) -> bool {
     static CREDENTIAL: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(CLOUD_CREDENTIAL_PATH).unwrap());
-    Ok(command_effect::transfers(command).iter().any(|transfer| {
+    command_effect::transfers(tokens).iter().any(|transfer| {
         transfer.direction == command_effect::Direction::Outbound
             && (transfer.client != command_effect::Client::Gh
                 || CREDENTIAL.is_match(transfer.source))
-    }))
+    })
+}
+
+/// Whether some command stage of an observation, read as the action view
+/// reads it, requests an outbound transfer (see [`requests_outbound_transfer`]).
+/// The session view asks this for the bundled upload rule. It reads the
+/// observation's view on `budget`: the session view runs before the action
+/// view and shares no reading with it.
+pub(super) fn observation_requests_outbound_transfer(
+    observation: &CanonicalObservationV2,
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    let view = view(observation, budget)?;
+    for tokens in &view.commands {
+        charge_tokens(tokens, budget)?;
+        if requests_outbound_transfer(tokens) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether a loaded rule is the bundled upload rule as shipped, whose session
+/// events also take [`observation_requests_outbound_transfer`]. A custom copy
+/// is read by its own patterns alone.
+pub(super) fn reads_requested_transfers(rule: &RuleV1CompatibilityRule) -> bool {
+    rule.id == "exfil.outbound_upload" && native_profile_applies(rule) == Some(true)
 }
 
 /// A cloud credential file path, as the bundled upload and harvest rules name

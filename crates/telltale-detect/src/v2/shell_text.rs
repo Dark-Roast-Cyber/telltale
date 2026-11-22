@@ -32,6 +32,7 @@
 use std::ops::Range;
 
 use super::http::{assignment, client_name};
+use telltale_rules::command_effect::reserved_word;
 
 /// How many bodies may hold further shell text; deeper text is not parsed.
 const MAX_NESTING: usize = 4;
@@ -1637,14 +1638,6 @@ impl Reader<'_> {
             self.append(inner);
         }
     }
-}
-
-/// A reserved word after which the next word is still a command.
-fn reserved_word(word: &str) -> bool {
-    matches!(
-        word,
-        "if" | "elif" | "then" | "else" | "while" | "until" | "do" | "!"
-    )
 }
 
 /// What a double-quoted string leaves of `text`.

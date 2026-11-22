@@ -376,10 +376,20 @@ pub fn assignment(token: &str) -> bool {
     })
 }
 
+/// A reserved word after which the next word is still a command.
+pub fn reserved_word(word: &str) -> bool {
+    matches!(
+        word,
+        "if" | "elif" | "then" | "else" | "while" | "until" | "do" | "!"
+    )
+}
+
 /// The client invocation of a command segment: its command word, after any
-/// leading assignments and wrappers such as `sudo -u user`, `env A=1`,
-/// `xargs -n1` or `timeout 30`. A client named as an argument (`git fetch`,
-/// `echo curl`, `which wget`) is not an invocation.
+/// leading reserved words, assignments and wrappers such as `sudo -u user`,
+/// `env A=1`, `xargs -n1` or `timeout 30`, or the command `find` runs for
+/// each file it finds (`-exec`, `-execdir`, `-ok`, `-okdir`). A client named
+/// as an argument (`git fetch`, `echo curl`, `which wget`) is not an
+/// invocation.
 pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]> {
     let mut index = 0;
     while let Some(token) = tokens.get(index) {
@@ -387,8 +397,15 @@ pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [Str
         if clients.contains(&name.as_str()) {
             return Some(&tokens[index..]);
         }
-        if assignment(token) {
+        if assignment(token) || reserved_word(token) {
             index += 1;
+            continue;
+        }
+        if name == "find" {
+            let exec = tokens[index..].iter().position(|token| {
+                matches!(token.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
+            })?;
+            index += exec + 1;
             continue;
         }
         let (_, values, positional) = WRAPPERS.iter().find(|(wrapper, ..)| *wrapper == name)?;
