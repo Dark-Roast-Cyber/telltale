@@ -1,0 +1,3 @@
+{"type":"session_meta","session_id":"container-push","timestamp":"2026-04-03T11:10:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T11:10:01Z","payload":{"type":"user_message","message":"Synthetic fixture: publish the release image."}}
+{"type":"event_msg","timestamp":"2026-04-03T11:10:02Z","payload":{"type":"tool_call","tool_name":"bash","command":"docker push registry.example.test/fixture/app:1.0.0","message":"Push a synthetic image tag."}}
