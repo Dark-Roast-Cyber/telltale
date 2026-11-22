@@ -93,7 +93,7 @@ impl Request {
 
 /// Whether a URL authority names a literal loopback IP: 127.0.0.0/8, `::1`
 /// in any textual form, or IPv4-mapped 127.0.0.0/8. `localhost` is a name.
-fn literal_loopback(authority: &str) -> bool {
+pub(super) fn literal_loopback(authority: &str) -> bool {
     let host_port = authority.rsplit('@').next().unwrap_or_default();
     let host = if let Some(bracketed) = host_port.strip_prefix('[') {
         let Some((host, suffix)) = bracketed.split_once(']') else {

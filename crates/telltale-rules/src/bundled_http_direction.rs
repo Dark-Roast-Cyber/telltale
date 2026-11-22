@@ -854,8 +854,9 @@ fn upload_flags_veto_a_download_only_in_their_own_segment() {
     for newline in ["\n", "\r\n"] {
         let document = bundled.replace('\n', newline).replace("\r\n", "\n");
         // The scope is a modifier on each selection and filter of the
-        // download rule; without it the rule is field-scoped.
-        assert_eq!(document.matches("|segment:").count(), 6);
+        // download rule (six) and the registry credential rule (four);
+        // without it each rule is field-scoped.
+        assert_eq!(document.matches("|segment:").count(), 10);
         let document = document.replace("|segment:", ":");
         assert!(!document.contains("|segment"));
         let document = document.replace('\n', newline);
