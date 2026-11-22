@@ -961,16 +961,8 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                             "verdicts are recorded and nothing is returned (detect-only)",
                     }
                 );
-                match engine.effective_configuration() {
-                    Ok(effective) => {
-                        for line in test_signature_lines(&effective, &config) {
-                            println!("{line}");
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!("test signatures: {error}");
-                        return 1;
-                    }
+                for line in test_signature_lines(&effective, &config) {
+                    println!("{line}");
                 }
             } else {
                 println!("test signatures: off (hooks.test_signatures.enabled: false)");
