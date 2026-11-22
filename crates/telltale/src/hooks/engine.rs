@@ -160,6 +160,9 @@ pub struct Engine {
     /// Override entries left out because they name a hooks rule that is not
     /// loaded (`RuleResolution::skipped_overrides`).
     skipped_overrides: Vec<String>,
+    /// The names of the enforcement test signatures, when they are loaded
+    /// ([`test_signature_document`]); empty otherwise.
+    test_signatures: Vec<String>,
     pub build_ms: u64,
 }
 
@@ -308,10 +311,16 @@ impl Engine {
             (Vec::new(), documents)
         };
         // Test signatures are ordinary bundled rules whatever the lock says.
+        let mut test_signatures = Vec::new();
         if rules.test_signatures {
             let (name, document) = test_signature_document();
             let parsed = LoadedRules::parse(document)
                 .map_err(|error| EngineError::Build(PipelineError::Compilation(error)))?;
+            test_signatures = parsed
+                .definitions()
+                .iter()
+                .map(|definition| definition.id().to_owned())
+                .collect();
             replaceable.push((format!("hooks:{name}"), parsed));
         }
         let resolution = crate::rule_resolution::resolve_rule_set_with_host(
@@ -352,6 +361,7 @@ impl Engine {
             semantic_identity,
             generated,
             skipped_overrides,
+            test_signatures,
             build_ms: started.elapsed().as_millis() as u64,
         })
     }
@@ -705,6 +715,15 @@ impl Engine {
     /// (`telltale hooks check`).
     pub fn skipped_overrides(&self) -> &[String] {
         &self.skipped_overrides
+    }
+
+    /// The names of the enforcement test signatures this engine loaded: the
+    /// rules of [`test_signature_document`], and empty unless
+    /// [`RuleContent::test_signatures`] is on. A rule a config root replaces
+    /// one of them with keeps the name and so stays a test signature; any
+    /// other rule is not one, whatever it is called.
+    pub fn test_signatures(&self) -> &[String] {
+        &self.test_signatures
     }
 
     /// The rules this engine evaluates as they take effect: for every rule

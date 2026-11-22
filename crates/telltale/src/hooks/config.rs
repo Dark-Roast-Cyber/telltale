@@ -130,9 +130,9 @@ pub struct RuleContent {
     pub tamper_prevention: bool,
     /// The enforcement test signatures (`engine::test_signature_document`):
     /// rules that match one harmless command each, for checking what a hook
-    /// does end to end. Off by default. While on, a call that only rules
-    /// under [`TEST_RULE_ID_PREFIX`] match is decided on its own score and
-    /// stays out of its session's score and attempts.
+    /// does end to end. Off by default. While on, a call that only those
+    /// rules match (`Engine::test_signatures`) is decided on its own score
+    /// and stays out of its session's score and attempts.
     pub test_signatures: bool,
 }
 
@@ -673,9 +673,12 @@ mod tests {
         assert!(config.rules.self_protection);
         assert!(!config.rules.tamper_prevention);
         assert!(!config.rules.test_signatures);
-        // Pipelines that do not carry the self-protection rules leave out
-        // override entries for them by this prefix.
-        assert!(crate::rule_resolution::HOOKS_RULE_PREFIXES.contains(&HOST_RULE_ID_PREFIX));
+        // Pipelines that do not carry the self-protection rules or the test
+        // signatures leave out override entries for them by these prefixes.
+        assert_eq!(
+            crate::rule_resolution::HOOKS_RULE_PREFIXES,
+            [HOST_RULE_ID_PREFIX, TEST_RULE_ID_PREFIX]
+        );
         assert!(config.rules.process_chain);
     }
 

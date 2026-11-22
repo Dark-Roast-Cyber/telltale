@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
-use crate::hooks::config::{Config, Mode, OnError, ReasonDetail, TEST_RULE_ID_PREFIX};
+use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{
     Engine, EvalStatus, Evaluation, Focus, Limits, PendingScan, RecoveryBudget, Request, ScanTrace,
 };
@@ -440,6 +440,9 @@ fn format_ms(ms: i64) -> String {
 /// How many categories a reason names, and how long each may be.
 const REASON_CONCERNS: usize = 3;
 const REASON_CONCERN_CHARS: usize = 48;
+/// How many rule names a reason lists before it counts the rest. A name is
+/// bounded by the rule format, so this bounds the reason.
+const REASON_RULE_IDS: usize = 8;
 
 /// What the rules behind `records` are about, as words for a reason: the
 /// categories of the rules that matched (a chain's category only when no
@@ -1295,9 +1298,16 @@ impl Runtime {
         }
         let reason = self.reason(
             decision.outcome.verdict,
+            decision.substituted.unwrap_or(decision.outcome.verdict),
             decision.outcome.basis,
             decision.action_score,
-            decision.outcome.session_score_after,
+            // A test signature was decided as in a fresh session, where the
+            // session's risk is the call's own score.
+            if decision.test_signature {
+                decision.action_score
+            } else {
+                decision.outcome.session_score_after
+            },
             &decision.rule_ids,
             &decision.concerns,
             &id.record_id,
@@ -1540,12 +1550,14 @@ impl Runtime {
                 // decided on its own score, as in a fresh session, and is
                 // kept out of this session's score: the answer to a test
                 // does not depend on what the session did before, and the
-                // test changes nothing for what it does next.
-                test_signature = self.config.rules.test_signatures
-                    && !rule_ids.is_empty()
-                    && rule_ids
-                        .iter()
-                        .all(|id| id.starts_with(TEST_RULE_ID_PREFIX));
+                // test changes nothing for what it does next. Any other
+                // rule matching beside them makes it an ordinary call.
+                let signatures = self
+                    .engine
+                    .as_ref()
+                    .map_or(&[][..], Engine::test_signatures);
+                test_signature =
+                    !rule_ids.is_empty() && rule_ids.iter().all(|id| signatures.contains(id));
                 let (score, denied) = if test_signature {
                     (0, 0)
                 } else {
@@ -1731,9 +1743,12 @@ impl Runtime {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// The reason a harness is given for `verdict`, the policy's, when what
+    /// it is handed is `returned` (a deny for an ask it cannot put).
     fn reason(
         &self,
         verdict: Verdict,
+        returned: Verdict,
         basis: Basis,
         action_score: u64,
         session_score: u64,
@@ -1789,7 +1804,7 @@ impl Runtime {
         // enough for a person or a model to act on without the record. The
         // concern is the matched rules' categories; no pattern, explanation
         // or matched text is ever part of a reason.
-        let what = match verdict {
+        let what = match returned {
             Verdict::Deny => "this tool call was blocked and has not been executed",
             Verdict::Ask | Verdict::Allow => "this tool call needs approval before it runs",
         };
@@ -1801,15 +1816,18 @@ impl Runtime {
                 concerns.join(", ")
             )
         };
-        let advice = if verdict == Verdict::Deny && !rule_ids.is_empty() {
+        let advice = if returned == Verdict::Deny && !rule_ids.is_empty() {
             " Review the command or request an authorized configuration exception."
         } else {
             ""
         };
-        let rules = if rule_ids.is_empty() {
-            String::new()
-        } else {
-            format!(" Detections: {}.", rule_ids.join(", "))
+        let rules = match rule_ids.len().checked_sub(REASON_RULE_IDS) {
+            _ if rule_ids.is_empty() => String::new(),
+            Some(more @ 1..) => format!(
+                " Detections: {} and {more} more.",
+                rule_ids[..REASON_RULE_IDS].join(", ")
+            ),
+            _ => format!(" Detections: {}.", rule_ids.join(", ")),
         };
         format!(
             "Telltale Hooks: {what}.{concern} Reason: {why}.{advice}{rules} Record {record_id}."

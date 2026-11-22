@@ -747,18 +747,18 @@ fn print_config_roots(config_dirs: &[PathBuf]) {
 /// verdict a hook reaches for it, or what turned it off.
 fn test_signature_lines(
     effective: &telltale_core::EffectiveConfigurationV1,
+    signatures: &[String],
     config: &Config,
 ) -> Vec<String> {
     use telltale_core::hooks::config::TEST_RULE_ID_PREFIX;
     use telltale_core::hooks::policy::{self, Inputs};
     use telltale_core::hooks::state::Verdict;
-    use telltale_core::{DefinitionKindV1, DisabledByV1, RuleTierV1};
+    use telltale_core::{DefinitionKindV1, DisabledByV1};
     effective
         .definitions
         .iter()
         .filter(|definition| {
-            definition.kind == DefinitionKindV1::Rule
-                && definition.id.starts_with(TEST_RULE_ID_PREFIX)
+            definition.kind == DefinitionKindV1::Rule && signatures.contains(&definition.id)
         })
         .map(|definition| {
             let id: String = definition
@@ -775,7 +775,12 @@ fn test_signature_lines(
             if let Some(by) = off {
                 return format!("  {id}: off (disabled by {by})");
             }
-            let score = definition.action_score.unwrap_or(definition.session_score);
+            // A replacement may be a rule that scores no single call.
+            let Some(score) = definition.action_score else {
+                return format!(
+                    "  {id}: replaced by a rule from a config root that scores no single call"
+                );
+            };
             let verdict = match policy::decide(
                 Inputs {
                     action_score: score,
@@ -792,8 +797,11 @@ fn test_signature_lines(
             };
             // The bundled rule's command is its marker; a replacement from a
             // config root may match something else.
-            let command = match (definition.tier, id.strip_prefix(TEST_RULE_ID_PREFIX)) {
-                (RuleTierV1::Builtin, Some(marker)) => {
+            let command = match (
+                definition.replaced_tier,
+                id.strip_prefix(TEST_RULE_ID_PREFIX),
+            ) {
+                (None, Some(marker)) => {
                     format!("`echo TELLTALE_TEST_{}` ", marker.to_ascii_uppercase())
                 }
                 _ => "replaced by a rule from a config root, ".to_owned(),
@@ -968,7 +976,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                             "verdicts are recorded and nothing is returned (detect-only)",
                     }
                 );
-                for line in test_signature_lines(&effective, &config) {
+                for line in test_signature_lines(&effective, engine.test_signatures(), &config) {
                     println!("{line}");
                 }
             } else {

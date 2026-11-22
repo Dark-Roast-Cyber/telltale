@@ -113,7 +113,10 @@
   exact command matches. A call that only test signatures match is decided
   on its own score and stays out of the session's score and denial count.
   Overrides, policies, thresholds and replacements apply to them as to any
-  rule, and `telltale hooks check` prints what each test command gets. See
+  rule, and `telltale hooks check` prints what each test command gets. An
+  `overrides.d` entry for one of them is left out where the rule is not
+  loaded, as for `tth.tamper.*`, so it does not have to be removed with the
+  setting. See
   [Testing enforcement](docs/hooks/README.md#testing-enforcement). Embedding
   API: `hooks::config::RuleContent` has a new `test_signatures` field.
 
@@ -122,9 +125,11 @@
   happened to the call (`this tool call was blocked and has not been
   executed`, or `this tool call needs approval before it runs`), names what
   the matched rules are about by their categories, and for a deny says to
-  review the command or request an authorized configuration exception. The
+  review the command or request an authorized configuration exception. An
+  ask given as a deny to a harness that cannot ask reads as that deny. The
   basis, the thresholds, the rule IDs and the record ID follow as before
-  (`Reason: …. Detections: …. Record …`). A reason never carries a rule's
+  (`Reason: …. Detections: …. Record …`), with at most eight rule IDs listed
+  and the rest counted. A reason never carries a rule's
   pattern or explanation or the matched text. `reason_detail: minimal` is
   unchanged.
 

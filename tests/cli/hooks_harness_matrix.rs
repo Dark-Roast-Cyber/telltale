@@ -341,7 +341,8 @@ fn once(entry: &Entry, command: &str, config: &Path) -> Run {
 }
 
 /// What a harness is given for a policy ask: the ask where it can ask, and
-/// where it cannot a deny whose reason says that approval was required.
+/// where it cannot a deny whose reason says that the call was not executed,
+/// what to do, and that approval was required.
 fn assert_asked(entry: &Entry, run: &Run) {
     let harness = entry.harness;
     let (verdict, reason) = run
@@ -354,15 +355,32 @@ fn assert_asked(entry: &Entry, run: &Run) {
         assert_eq!(verdict, "ask", "{harness}");
         assert!(!reason.contains(CANNOT_ASK_NOTE), "{harness}: {reason}");
         assert!(decision.get("returned_verdict").is_none(), "{harness}");
+        assert!(
+            reason.starts_with("Telltale Hooks: this tool call needs approval before it runs. "),
+            "{harness}: {reason}"
+        );
+        assert!(
+            !reason.contains("request an authorized"),
+            "{harness}: {reason}"
+        );
     } else {
+        // A deny is what the harness is given, so the reason is a deny's:
+        // not executed, what to do, and that approval was what was needed.
         assert_eq!(verdict, "deny", "{harness}");
         assert!(reason.ends_with(CANNOT_ASK_NOTE), "{harness}: {reason}");
         assert_eq!(decision["returned_verdict"], "deny", "{harness}");
+        assert!(
+            reason.starts_with(
+                "Telltale Hooks: this tool call was blocked and has not been executed. "
+            ),
+            "{harness}: {reason}"
+        );
+        assert!(
+            reason
+                .contains(" Review the command or request an authorized configuration exception. "),
+            "{harness}: {reason}"
+        );
     }
-    assert!(
-        reason.starts_with("Telltale Hooks: this tool call needs approval before it runs. "),
-        "{harness}: {reason}"
-    );
 }
 
 /// The call was left to the harness: no answer, and a record with `basis`.
@@ -638,6 +656,56 @@ fn check(config: &Path) -> (Option<i32>, String, String) {
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// `overrides.d` outlives the setting and is read by the scanner too. An
+/// override that tunes a test signature is applied while the signatures are
+/// loaded and left out when they are not: turning the setting off does not
+/// make the configuration invalid, and `check` names the entry left out.
+#[test]
+fn an_override_for_a_test_signature_is_left_out_when_the_setting_is_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", false, "");
+    write_override(&config, "tth.test.deny", "enabled: false");
+    let (code, stdout, stderr) = check(&config);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stdout.contains("\noverride left out: tth.test.deny names no rule that is loaded\n"),
+        "{stdout}"
+    );
+    for entry in ENTRIES {
+        let harness = entry.harness;
+        assert_no_opinion(entry, &once(entry, TEST_DENY, &config), "no_finding");
+        let run = once(entry, DENIED, &config);
+        let (verdict, _) = run.answer(harness).expect(harness);
+        assert_eq!(verdict, "deny", "{harness}");
+    }
+    // The scanner reads the same file and keeps running.
+    let mut rules = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    rules
+        .args(["rules", "validate", "--config-dir"])
+        .arg(&config);
+    for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
+        rules.env(var, "/nonexistent-home-for-test");
+    }
+    let out = rules.env_remove("XDG_CONFIG_HOME").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // With the setting on, the same file turns the deny test off.
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, "");
+    write_override(&config, "tth.test.deny", "enabled: false");
+    let (code, stdout, stderr) = check(&config);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(!stdout.contains("override left out"), "{stdout}");
+    assert!(
+        stdout.contains("\n  tth.test.deny: off (disabled by an override)\n"),
+        "{stdout}"
+    );
 }
 
 /// A test-signature setting that does not load is invalid configuration like
