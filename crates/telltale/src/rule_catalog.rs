@@ -20,7 +20,7 @@ use telltale_schema::rule_catalog::{
 };
 
 /// Most entries one catalog holds.
-const MAX_CATALOG_ENTRIES: usize = 4096;
+pub(crate) const MAX_CATALOG_ENTRIES: usize = 4096;
 /// The Sigma statuses the catalog reports; any other status is reported as
 /// `None`.
 const SIGMA_STATUSES: &[&str] = &[

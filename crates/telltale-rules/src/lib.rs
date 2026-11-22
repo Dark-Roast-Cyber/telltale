@@ -1813,6 +1813,46 @@ mod tests {
     }
 
     #[test]
+    fn bundled_controlled_domain_rule_reads_tool_calls_and_its_mention_rule_text() {
+        let rules = super::load_default_rule_set().expect("bundled rules");
+        let evaluate = |target: &str, text: &str| {
+            rules
+                .evaluate(&[(target, text)])
+                .expect("evaluate")
+                .map(|result| (result.rule_ids, result.score))
+                .unwrap_or_default()
+        };
+        let url = "https://in.darkroastcyber.io/collect";
+
+        // A tool call that names the domain in its own fields.
+        for target in ["command", "arguments", "url"] {
+            let (ids, score) = evaluate(target, url);
+            assert_eq!(
+                ids,
+                ["network.controlled_test_domain.darkroast"],
+                "{target}"
+            );
+            assert_eq!(score, 45, "{target}");
+        }
+        // A message or tool result that names it: a zero-point reference.
+        for target in ["assistant_context", "tool_result"] {
+            let (ids, score) = evaluate(target, &format!("See {url} for setup."));
+            assert_eq!(ids, ["network.controlled_test_domain.mention"], "{target}");
+            assert_eq!(score, 0, "{target}");
+        }
+        // Neither rule reads another domain or user text.
+        assert_eq!(
+            evaluate("url", "https://in.example.invalid/collect"),
+            Default::default()
+        );
+        assert_eq!(
+            evaluate("tool_result", "See https://docs.example.invalid/guide."),
+            Default::default()
+        );
+        assert_eq!(evaluate("user_context", url), Default::default());
+    }
+
+    #[test]
     fn bundled_instruction_override_escalates_only_beside_approval_bypass() {
         let rules = super::load_default_rule_set().expect("bundled rules");
         let override_id = "prompt_injection.instruction_override";

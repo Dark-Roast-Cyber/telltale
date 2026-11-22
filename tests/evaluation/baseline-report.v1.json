@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "459a84c5f9769bfb51d3a105f667fd339747a75b00f262111d7919dea0e354f7",
+    "manifest_sha256": "cc99aee6fe1e5593a3868c029438d25fe3312ab51ec799ebb64f07336c3a2793",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -42,14 +42,14 @@
   "characterization": {
     "note": "Signal and severity characterization of current detector output. Positive-risk (score > 0) is not a false-positive rate and is not the primary efficacy classifier.",
     "positive_risk": {
-      "numerator": 69,
+      "numerator": 68,
       "denominator": 85,
-      "value": 0.8117647058823529
+      "value": 0.8
     },
     "non_informational": {
-      "numerator": 60,
+      "numerator": 59,
       "denominator": 85,
-      "value": 0.7058823529411765
+      "value": 0.6941176470588235
     },
     "review_or_higher": {
       "numerator": 44,
@@ -69,8 +69,8 @@
     "severity_distribution": {
       "critical": 11,
       "high": 19,
-      "informational": 25,
-      "low": 16,
+      "informational": 26,
+      "low": 15,
       "medium": 14
     }
   },
@@ -103,14 +103,14 @@
     "benign_signal_ladder": {
       "scored_denominator": 51,
       "benign_positive_risk_rate": {
-        "numerator": 40,
+        "numerator": 39,
         "denominator": 51,
-        "value": 0.7843137254901961
+        "value": 0.7647058823529411
       },
       "benign_non_informational_rate": {
-        "numerator": 33,
+        "numerator": 32,
         "denominator": 51,
-        "value": 0.6470588235294118
+        "value": 0.6274509803921569
       },
       "benign_review_or_higher_rate": {
         "numerator": 19,
@@ -130,7 +130,7 @@
     }
   },
   "rule_coverage": {
-    "enabled_count": 26,
+    "enabled_count": 27,
     "enabled_ids": [
       "approval.bypass.context",
       "credential.api_key.pattern",
@@ -148,6 +148,7 @@
       "mcp.server_enumeration",
       "mcp.tool_metadata.prompt_injection",
       "network.controlled_test_domain.darkroast",
+      "network.controlled_test_domain.mention",
       "network.download",
       "obfuscation.decode",
       "persistence.agent_instruction_write",
@@ -272,8 +273,10 @@
         "RX-TOOL-SHAPE-001"
       ],
       "network.controlled_test_domain.darkroast": [
-        "BC-CONTROLLED-DOMAIN-001",
         "OC-NT-001"
+      ],
+      "network.controlled_test_domain.mention": [
+        "BC-CONTROLLED-DOMAIN-001"
       ],
       "network.download": [
         "BC-DOWNLOAD-001",
@@ -408,7 +411,7 @@
       "mcp.tool_metadata.prompt_injection": [
         "BC-MCP-INJECTION-DOC-001"
       ],
-      "network.controlled_test_domain.darkroast": [
+      "network.controlled_test_domain.mention": [
         "BC-CONTROLLED-DOMAIN-001"
       ],
       "network.download": [
@@ -676,7 +679,13 @@
       "fn": 0
     },
     "network.controlled_test_domain.darkroast": {
-      "tp": 2,
+      "tp": 1,
+      "fp": 0,
+      "tn": 72,
+      "fn": 0
+    },
+    "network.controlled_test_domain.mention": {
+      "tp": 1,
       "fp": 0,
       "tn": 71,
       "fn": 0
@@ -744,7 +753,7 @@
   },
   "contribution_conformance": {
     "exact_expected_total_checks": 85,
-    "contribution_id_point_checks": 131,
+    "contribution_id_point_checks": 132,
     "failures": []
   },
   "source_coverage": {
@@ -827,7 +836,7 @@
         "unavailable": 0
       },
       "record_kind:tool_call": {
-        "required": 59,
+        "required": 60,
         "optional": 0,
         "unavailable": 0
       },
@@ -1003,18 +1012,12 @@
       "expected_security_review": "not_required",
       "label_rationale": "Referencing the project-controlled validation destination during an authorized test should not require security review.",
       "observed_security_review": false,
-      "observed_severity": "low",
-      "score": 45,
+      "observed_severity": "informational",
+      "score": 0,
       "matched_rule_ids": [
-        "network.controlled_test_domain.darkroast"
+        "network.controlled_test_domain.mention"
       ],
-      "contributions": [
-        {
-          "id": "network.controlled_test_domain.darkroast",
-          "type": "deterministic_rule",
-          "points": 45
-        }
-      ],
+      "contributions": [],
       "efficacy_result": "tn",
       "conformance_failures": []
     },
@@ -2168,21 +2171,34 @@
       "eventfulness": "noteworthy",
       "disposition": "malicious",
       "expected_security_review": "required",
-      "label_rationale": "Synthetic MCP prompt injection followed by attempted controlled-domain egress is intentionally high-signal and should require security review.",
+      "label_rationale": "Synthetic MCP prompt injection followed by an outbound transfer to the controlled domain is intentionally high-signal and should require security review.",
       "observed_security_review": true,
       "observed_severity": "critical",
-      "score": 185,
+      "score": 260,
       "matched_rule_ids": [
         "approval.bypass.context",
         "chain.mcp_injection_then_egress",
+        "execution.shell",
+        "exfil.outbound_upload",
         "mcp.tool_metadata.prompt_injection",
-        "network.controlled_test_domain.darkroast"
+        "network.controlled_test_domain.darkroast",
+        "network.controlled_test_domain.mention"
       ],
       "contributions": [
         {
           "id": "approval.bypass.context",
           "type": "deterministic_rule",
           "points": 45
+        },
+        {
+          "id": "execution.shell",
+          "type": "deterministic_rule",
+          "points": 15
+        },
+        {
+          "id": "exfil.outbound_upload",
+          "type": "deterministic_rule",
+          "points": 60
         },
         {
           "id": "mcp.tool_metadata.prompt_injection",

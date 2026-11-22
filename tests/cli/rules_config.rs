@@ -831,6 +831,110 @@ fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
     assert!(!stderr.contains(&second_root.display().to_string()));
 }
 
+/// The builder reports a Rule v1 document as a coded error with the input's
+/// name alone; the CLI is where the reason and the migration pointer are shown.
+#[test]
+fn rules_validate_explains_a_rule_v1_document() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("v1.yaml");
+    fs::write(
+        &path,
+        concat!(
+            "version: 1\ndescription: synthetic\n",
+            "defaults: {case_insensitive: true, enabled: true}\nrules: []\nmodifiers: []\n",
+        ),
+    )
+    .expect("Rule v1 document");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "validate", "--no-local-config", "--rules"])
+        .arg(&path)
+        .output()
+        .expect("run telltale rules validate");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Rule v1 is no longer supported")
+            && stderr.contains("docs/migrations/0.8.0.md"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn rules_validate_rejects_more_definitions_than_a_rule_catalog_holds() {
+    let temp = tempdir().expect("tempdir");
+    let validate = |count: usize| {
+        let path = temp.path().join(format!("bulk-{count}.yaml"));
+        let rules = (0..count)
+            .map(|index| custom_rule_yaml(&format!("bulk.rule_{index}"), "bulk-marker"))
+            .collect::<Vec<_>>()
+            .join("---\n");
+        fs::write(&path, rules).expect("bulk rules");
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "rules",
+                "validate",
+                "--no-local-config",
+                "--no-default-rules",
+            ])
+            .arg("--rules")
+            .arg(&path)
+            .output()
+            .expect("run telltale rules validate")
+    };
+    // With the 371 bundled process-chain rules, 3725 definitions fill a
+    // catalog of 4096.
+    let at_bound = validate(3725);
+    assert!(
+        at_bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&at_bound.stderr)
+    );
+    let past = validate(3726);
+    assert!(!past.status.success());
+    let stderr = String::from_utf8_lossy(&past.stderr);
+    assert!(
+        stderr.contains("rule content has more than 3725 rules and chain modifiers"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn rules_validate_rejects_more_rule_packages_than_the_effective_configuration_lists() {
+    let temp = tempdir().expect("tempdir");
+    let packages = temp.path().join("rule-packages.d");
+    fs::create_dir_all(&packages).expect("package dir");
+    let add_package = |number: usize| {
+        let raw = format!(
+            "format: telltale-rule-package/v2\nid: bulk{number}.rules\ntitle: Synthetic pack\n\
+             version: \"1.0.0\"\npublisher: Synthetic\nlicense: Apache-2.0\n\
+             rule_namespace: bulk{number}\n---\n{}",
+            custom_rule_yaml(&format!("bulk{number}.rule"), "bulk-marker")
+        );
+        fs::write(packages.join(format!("bulk{number}.yaml")), raw).expect("package");
+    };
+    let validate = || {
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["rules", "validate", "--no-default-rules", "--config-dir"])
+            .arg(temp.path())
+            .env_remove("TELLTALE_COMMUNITY_RULES")
+            .output()
+            .expect("run telltale rules validate")
+    };
+    (1..=256).for_each(add_package);
+    let at_bound = validate();
+    assert!(
+        at_bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&at_bound.stderr)
+    );
+    add_package(257);
+    let past = validate();
+    assert!(!past.status.success());
+    let stderr = String::from_utf8_lossy(&past.stderr);
+    assert!(stderr.contains("more than 256 rule packages"), "{stderr}");
+}
+
 #[test]
 fn rules_validate_discovers_local_overrides_and_can_disable_local_config() {
     let temp = tempdir().expect("tempdir");

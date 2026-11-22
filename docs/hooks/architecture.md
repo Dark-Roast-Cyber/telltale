@@ -329,3 +329,146 @@ short window and 44 to about 190 ms in a full one, depending on what it holds.
 Sources: the experiment and
 `scripts/hooks/bench-hook.sh`. Any evaluator failure falls back to in-process
 evaluation.
+
+### Load benchmark
+
+`make hooks-load-bench` builds the release binary and runs
+`scripts/hooks/load-bench.py`, which starts `telltale hooks claude-code hook`
+processes in parallel and reports what they cost. It answers whether the time
+limits above (the 25 s hook deadline, the session lock wait, the 5 s piece
+limit, the recovery budget) hold under load. Run it on a host that is otherwise
+idle, or say how busy it was. Pass options in `ARGS`:
+
+    make hooks-load-bench ARGS="--concurrency 8 --calls 4 --payload small,projected,past-budget --session same,distinct --evaluator on,off --check"
+    make hooks-load-bench ARGS="--concurrency 8 --calls 4 --cpus 0,1 --out target/hooks-load.json"
+
+Each combination of `--payload`, `--session` and `--evaluator` is a scenario
+with a fresh temporary hooks home: configuration (`hooks.mode: enforce`),
+state, telemetry, the evaluator socket, `HOME`, the `XDG_*` folders and
+`TMPDIR` are all in one temporary directory, nothing else from the environment
+but `PATH` is passed on, and the directory and any evaluator started in it are
+removed at the end. A real installation's configuration, state and journals
+are never read or written. In a scenario, `--concurrency` workers start
+together and each sends `--calls` PreToolUse Bash calls, one after another,
+with synthetic input:
+
+| `--payload` | Input |
+| --- | --- |
+| `small` | a short command |
+| `projected` | a short command beside a few hundred short values, quarantined by Telltale and projected within the projection budget |
+| `past-budget` | a short command beside 3,000 short values, past the projection budget (`pending_input_truncated`, so the verdict is floored at `on_unevaluable`) |
+
+`--session same` puts every call in one session, so calls wait for its lock;
+`distinct` gives each worker its own. `--evaluator on` starts the long-lived
+evaluator with a warm-up call and waits for it; `off` evaluates in-process.
+`--cpus 0,1` runs the hooks, and the evaluator they start, under
+`taskset -c 0,1`, as on a 2 vCPU host; the rest of the host is not limited.
+
+The report is JSON (stdout or `--out`), with a table on stderr. It holds
+counts, closed codes and milliseconds, never payload text or paths:
+
+- `host`: logical CPUs, the CPUs the benchmark may use, and the load average
+  at the start and the end; `telltale_version` names the build.
+- Per scenario, `wall_ms`: p50, p95, p99 and maximum wall time of a hook
+  process, as a harness waits for it, and how many calls took more than 25 s
+  (the deadline), 30 s (the timeout Claude Code and Codex CLI hooks are
+  installed with) and the `--check` limit.
+- `answers` (`allow`: exit 0 and nothing printed; `ask`, `deny`) and
+  `unanswered`: calls that exited non-zero, printed something else or were
+  killed at `--timeout-s` (120 s).
+- `records`, from the run's hooks records: decisions and their `basis`,
+  `floored` (decisions floored at `on_unevaluable`, basis
+  `unevaluable_input`), error codes with `hook_deadline` and
+  `state_lock_timeout` counted apart, evaluation status, visibility limits,
+  which evaluator answered and why one fell back, and calls with no record.
+- `build_ms`, `scan_ms` and `scans`: percentiles of the pipeline build, of
+  the whole evaluation and of each scan phase in `evaluation.scans`
+  (`whole_ms`, `together_ms`, `pieces_ms`, `history_ms`), pieces scanned of
+  those offered, pieces refused with the first refusal codes, and how the
+  whole and together scans ended.
+- `lock_wait_ms` is null: the hook does not record how long it waited for the
+  session lock. A long wait shows as wall time beyond `scan_ms` and, past the
+  wait, as `state_lock_timeout`.
+- `evaluator_ready` is false when `--evaluator on` was asked for and no
+  evaluator answered; those calls evaluated in-process.
+
+`--check` exits 1 when a call took longer than `--deadline-ms` (25,000) plus
+`--margin-ms` (5,000), or ended without an answer, so "the bounds hold" is a
+command. The benchmark does not observe a harness: what a harness does when
+its own timeout kills a hook, a harness that runs calls in parallel
+differently, and other platforms are outside it. On Linux the evaluator needs
+a Unix socket; in a sandbox that refuses one, `evaluator_ready` is false.
+`tests/hooks_load_bench_test.py` (in `make hooks-plugin-check`) checks the
+report, the isolation and `--check` against a stand-in binary.
+
+#### Figures, 2026-11-21
+
+Release build of the 0.8 line on a 20-CPU Linux host that was otherwise
+lightly used (load average 4 to 8, no builds). Sixteen workers, four calls
+each, so 64 calls per scenario; wall time of the hook process in
+milliseconds. Reproduce with:
+
+    make hooks-load-bench ARGS="--concurrency 16 --calls 4 --payload small,projected,past-budget --session same,distinct --evaluator on,off --cpus 0,1 --check"
+
+Pinned to two CPUs (`--cpus 0,1`):
+
+| Payload | Session | Evaluator | p50 | p95 | p99 | max |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| small | same | on | 20 | 351 | 471 | 471 |
+| small | same | off | 2,561 | 3,548 | 3,835 | 3,835 |
+| small | distinct | on | 7 | 166 | 205 | 205 |
+| small | distinct | off | 2,688 | 2,734 | 2,739 | 2,739 |
+| projected | same | on | 119 | 2,477 | 3,203 | 3,203 |
+| projected | same | off | 1,686 | 8,362 | 9,530 | 9,530 |
+| projected | distinct | on | 23 | 946 | 1,089 | 1,089 |
+| projected | distinct | off | 2,882 | 2,914 | 2,922 | 2,922 |
+| past-budget | same | on | 1,274 | 8,746 | 10,521 | 10,521 |
+| past-budget | same | off | 2,900 | 10,331 | 12,898 | 12,898 |
+| past-budget | distinct | on | 1,076 | 7,328 | 7,370 | 7,370 |
+| past-budget | distinct | off | 5,036 | 5,122 | 5,141 | 5,141 |
+
+Without the pin (all 20 CPUs), the same scenarios:
+
+| Payload | Session | Evaluator | p50 | p95 | p99 | max |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| small | same | on | 16 | 374 | 681 | 681 |
+| small | same | off | 303 | 594 | 1,351 | 1,351 |
+| small | distinct | on | 5 | 338 | 398 | 398 |
+| small | distinct | off | 313 | 374 | 376 | 376 |
+| projected | same | on | 83 | 2,712 | 3,249 | 3,249 |
+| projected | same | off | 551 | 2,086 | 3,863 | 3,863 |
+| projected | distinct | on | 295 | 575 | 714 | 714 |
+| projected | distinct | off | 346 | 405 | 411 | 411 |
+| past-budget | same | on | 1,870 | 5,927 | 7,397 | 7,397 |
+| past-budget | same | off | 1,225 | 7,764 | 9,020 | 9,020 |
+| past-budget | distinct | on | 860 | 4,463 | 4,563 | 4,563 |
+| past-budget | distinct | off | 620 | 720 | 729 | 729 |
+
+What the runs show:
+
+- **The deadline held.** In all 1,536 calls every hook answered, none
+  recorded `hook_deadline`, and none ran past 25 s. The slowest call took
+  12.9 s (two CPUs, one session, in-process, past-budget input), about half
+  the deadline.
+- **Per-call evaluation is small beside the waits.** With the evaluator, the
+  evaluation of a small call took 1 to 8 ms at the median and 18 ms at most;
+  a projected call 13 to 32 ms (54 ms at most); a past-budget call about
+  200 ms at the median, nearly all of it the piece scans. Most of a slow call's wall time
+  is waiting: for the session's lock when calls share a session, and for a
+  CPU.
+- **Without the evaluator, building the pipeline dominates.** In-process,
+  each hook builds it: about 0.2 to 0.35 s on the full host and up to 2.5 s
+  when sixteen processes share two CPUs. The evaluator pays
+  that once (about 0.2 to 0.3 s at warm-up).
+- **Lock wait is not recorded by the hook.** It shows only as wall time
+  beyond the build and scan times. Four of the 64 in-process past-budget
+  calls in one session on two CPUs gave up waiting for the session's lock
+  (`state_lock_timeout`) and were answered through `on_error`; no other
+  scenario recorded one.
+- **Past-budget input.** Every such call was floored at `on_unevaluable`
+  (`ask`), as designed. With the evaluator on, 12 to 17 of 64 such calls were
+  answered in-process after an `evaluator_expired` or `evaluator_busy`
+  fallback, and still within the deadline.
+
+These figures are from one host and one harness adapter; they bound nothing
+on a slower disk or a busier machine.

@@ -841,13 +841,15 @@ mod tests {
             "session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl",
         );
         let observations = project(path);
-        assert_eq!(observations.len(), 3);
+        // The status call and its result, then the transfer call.
+        assert_eq!(observations.len(), 4);
         assert_eq!(observations[0].kind(), ObservationFamily::Message);
         assert_eq!(observations[1].stage(), ObservationStage::ToolRequested);
         assert_eq!(
             observations[2].stage(),
             ObservationStage::ToolResultReturned
         );
+        assert_eq!(observations[3].stage(), ObservationStage::ToolRequested);
         assert_eq!(observations[1].correlation().call_id(), None);
         assert_eq!(observations[2].correlation().call_id(), None);
 

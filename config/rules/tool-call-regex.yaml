@@ -467,21 +467,19 @@ telltale:
     detection_class: threat_hunting
     tags: [prompt-injection, tool-result, exfiltration-intent]
 ---
-title: Controlled tester domain in network or injection context
+title: Controlled tester domain in a tool call
 id: 2d7de106-6e33-441f-9dc4-66a16604e85e
 name: network.controlled_test_domain.darkroast
 taxonomy: telltale
 status: stable
 logsource:
     product: ai_agent
-    category: agent_activity
+    category: tool_activity
 detection:
     selection:
         - tool.command|re|i: &pattern 'https?://([A-Za-z0-9_-]+\.)?darkroastcyber\.io(/[^\s"'']*)?'
         - tool.arguments|re|i: *pattern
         - tool.url|re|i: *pattern
-        - message.assistant_text|re|i: *pattern
-        - tool.result|re|i: *pattern
     condition: selection
 falsepositives:
     - 'Telltale fixtures, documentation, and operator validation commands may intentionally reference the controlled test domain.'
@@ -491,7 +489,31 @@ tags:
 telltale:
     category: exfiltration
     score: 45
-    explanation: 'Controlled tester domain appeared in network or injection context.'
+    explanation: 'A tool call named the controlled tester domain in its command, arguments or destination URL.'
+    tags: [network, controlled-domain, test-fixture]
+---
+title: Controlled tester domain named in a message or tool result
+id: 150a4608-d629-4642-a1b5-462482789e43
+name: network.controlled_test_domain.mention
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: agent_activity
+detection:
+    selection:
+        - message.assistant_text|re|i: &pattern 'https?://([A-Za-z0-9_-]+\.)?darkroastcyber\.io(/[^\s"'']*)?'
+        - tool.result|re|i: *pattern
+    condition: selection
+falsepositives:
+    - 'Telltale fixtures, documentation, and operator validation commands may intentionally reference the controlled test domain.'
+level: informational
+telltale:
+    category: network_reference
+    score: 0
+    explanation: 'A message or tool result named the controlled tester domain; a reference alone does not show that anything was sent.'
+    analytic_intent: hunt
+    detection_class: threat_hunting
     tags: [network, controlled-domain, test-fixture]
 ---
 title: Encoded data sent toward a DNS lookup

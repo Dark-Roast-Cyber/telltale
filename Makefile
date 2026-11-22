@@ -39,6 +39,7 @@ session-investigation-check:
 ## Focused subprocess-plugin and qualification regressions (no live models)
 hooks-plugin-check:
 	uv run --no-project python tests/hooks_qualification_test.py
+	uv run --no-project python tests/hooks_load_bench_test.py
 	node --test tests/hooks_opencode_plugin.test.mjs
 
 ## Show this help
@@ -207,6 +208,12 @@ catalog-update:
 .PHONY: hooks-progress-update
 hooks-progress-update:
 	TELLTALE_UPDATE_HOOKS_PROGRESS=1 cargo test $(CARGO_LOCKED) --quiet --test hooks_progress
+
+## Time hooks under parallel load in a temporary hooks home (docs/hooks/architecture.md "Load benchmark")
+.PHONY: hooks-load-bench
+hooks-load-bench:
+	cargo build $(CARGO_LOCKED) --release --bin telltale
+	python3 scripts/hooks/load-bench.py --binary target/release/telltale $(ARGS)
 
 ## Verify upstream harness pins and list newer upstream releases (uses the GitHub API)
 harness-drift-check:

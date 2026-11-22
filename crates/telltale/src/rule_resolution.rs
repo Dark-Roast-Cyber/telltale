@@ -12,11 +12,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::rule_catalog::MAX_CATALOG_ENTRIES;
 use crate::{Pipeline, PipelineError};
 use serde::Serialize;
 use telltale_rules::package::{
     CommunityRules, PackageOrigin, RulePackage, RulePackageSummary, resolve_rule_packages,
 };
+use telltale_rules::process_chain::BUNDLED_PROCESS_CHAIN_RULE_COUNT;
 use telltale_rules::{
     CompiledRuleSet, DefinitionKind, LoadedDefinition, LoadedRules, RuleLoadMode,
     RuleOverrideDocument, RuleOverrideError, bundled_default_rules, parse_rule_policy,
@@ -180,7 +182,8 @@ pub enum RuleContentErrorCode {
     /// An input label is empty, longer than 64 characters, has a character
     /// outside `A-Z a-z 0-9 . _ -`, or names two inputs of one kind.
     InvalidLabel,
-    /// An organization rule document or an override document does not parse.
+    /// A rule document, rule package, override document or policy does not
+    /// parse.
     InvalidDocument,
     /// An override document declares a version other than 1.
     UnsupportedVersion,
@@ -194,7 +197,9 @@ pub enum RuleContentErrorCode {
     /// An override names a `rule_id` that no rule in the content has.
     UnknownRuleId,
     /// More inputs than the effective configuration describes: over 1024
-    /// supplied documents, or over 256 override entries applied to one rule.
+    /// supplied documents, over 256 rule packages, over 3725 rules and chain
+    /// modifiers (a 4096-entry catalog less the bundled process-chain rules),
+    /// or over 256 override entries applied to one rule.
     ExceedsBounds,
 }
 
@@ -233,10 +238,12 @@ impl RuleContentError {
 
     /// The input the failure concerns, as `<kind>:<label>`: `organization` or
     /// `override` with the caller's label or the input's 1-based position among
-    /// its kind, `explicit:<n>` for the n-th `rules_document`,
+    /// its kind, `explicit:<n>` for the n-th `rules_document`, `package:<n>`
+    /// for the n-th `rule_package` itself, `policy:1` for the policy,
     /// `builtin:telltale.default`,
     /// or `package:<id>@<version>:<origin>#document:<n>` with the ID and
-    /// version the package declares. `None` when no single input is to blame.
+    /// version the package declares for one of its rule documents. `None` when
+    /// no single input is to blame.
     pub fn document(&self) -> Option<&str> {
         self.document.as_deref()
     }
@@ -309,7 +316,8 @@ pub(crate) struct RuleContent {
     pub(crate) documents: Vec<(InputName, LoadedRules)>,
     /// Override documents: (name, text), applied in order.
     pub(crate) overrides: Vec<(InputName, String)>,
-    pub(crate) policy: Option<String>,
+    /// The policy: (name, text).
+    pub(crate) policy: Option<(InputName, String)>,
 }
 
 /// An input's source name, for diagnostics and errors, and the label the
@@ -399,7 +407,14 @@ pub fn resolve_rule_set(
             .map(|(source, rules)| (InputName::unlabeled(source), rules))
             .collect(),
         overrides,
-        policy: policy_path.map(read).transpose()?,
+        policy: policy_path
+            .map(|path| {
+                Ok::<_, std::io::Error>((
+                    InputName::unlabeled(path.display().to_string()),
+                    read(path)?,
+                ))
+            })
+            .transpose()?,
     })
 }
 
@@ -422,8 +437,37 @@ pub(crate) fn resolve_rule_content(
     if documents.is_empty() {
         return Err(Box::new(NoRuleDocuments));
     }
-    let policy = policy.as_deref().map(parse_rule_policy).transpose()?;
+    let policy = policy
+        .map(|(name, raw)| {
+            parse_rule_policy(&raw).map_err(|error| {
+                ContentFailure::new(
+                    RuleContentErrorCode::InvalidDocument,
+                    Some(&name.source),
+                    error.to_string(),
+                )
+            })
+        })
+        .transpose()?;
     let (mut content, mut diagnostics) = merge_rule_documents(documents)?;
+    // A rule catalog lists every definition, and the bundled process-chain
+    // rules when a query enables them, which loading cannot know.
+    let limit = MAX_CATALOG_ENTRIES - BUNDLED_PROCESS_CHAIN_RULE_COUNT;
+    if let Some(extra) = content.definitions().get(limit) {
+        let source = diagnostics
+            .provenance
+            .iter()
+            .find(|entry| entry.id == extra.id())
+            .map(|entry| entry.winner.as_str());
+        return Err(Box::new(ContentFailure::new(
+            RuleContentErrorCode::ExceedsBounds,
+            source,
+            format!(
+                "rule content has more than {limit} rules and chain modifiers; with the \
+                 {BUNDLED_PROCESS_CHAIN_RULE_COUNT} bundled process-chain rules a rule \
+                 catalog holds at most {MAX_CATALOG_ENTRIES}"
+            ),
+        )));
+    }
     diagnostics.packages = packages;
     for (name, raw) in &overrides {
         apply_rule_override(&mut content, name, raw)?;
@@ -532,13 +576,34 @@ fn load_package_documents(
     };
     let installed = packages
         .iter()
-        .map(|(location, raw)| {
-            RulePackage::parse(raw)
-                .map_err(|error| format!("invalid rule package '{location}': {error}").into())
+        .enumerate()
+        .map(|(index, (location, raw))| {
+            RulePackage::parse(raw).map_err(|error| {
+                ContentFailure::new(
+                    RuleContentErrorCode::InvalidDocument,
+                    Some(&package_input(index)),
+                    format!("invalid rule package '{location}': {error}"),
+                )
+            })
         })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolved = resolve_rule_packages(community, installed)?;
+    if let Some(extra) = resolved.get(MAX_RULE_PACKAGES) {
+        let source = match extra.origin {
+            PackageOrigin::Supplied(index) => Some(package_input(index)),
+            PackageOrigin::Embedded => None,
+        };
+        return Err(Box::new(ContentFailure::new(
+            RuleContentErrorCode::ExceedsBounds,
+            source.as_deref(),
+            format!(
+                "more than {MAX_RULE_PACKAGES} rule packages; the effective configuration \
+                 lists at most {MAX_RULE_PACKAGES}"
+            ),
+        )));
+    }
     let mut summaries = Vec::new();
-    for resolved in resolve_rule_packages(community, installed)? {
+    for resolved in resolved {
         summaries.push(resolved.summary());
         let location = match resolved.origin {
             PackageOrigin::Embedded => "embedded",
@@ -556,6 +621,16 @@ fn load_package_documents(
         }
     }
     Ok(summaries)
+}
+
+/// Most rule packages the effective configuration lists.
+const MAX_RULE_PACKAGES: usize = 256;
+
+/// A rule package input's name in errors: `package:<n>`, its 1-based position
+/// among the packages supplied, since a package that fails declares no
+/// identity to name it by.
+fn package_input(index: usize) -> String {
+    format!("package:{}", index + 1)
 }
 
 /// A rule file's name: `<tier>:<path>#document:0`.

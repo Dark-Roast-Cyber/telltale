@@ -1769,19 +1769,19 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
     );
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 151);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 159);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
             "user_message": 24,
             "assistant_message": 24,
-            "tool_call": 36,
+            "tool_call": 44,
             "tool_result": 16,
             "session_meta": 49,
             "other": 2,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 134);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 152);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 44);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -2028,8 +2028,8 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
     assert_eq!(detection["event_type"], "detection");
     assert_eq!(detection["severity"], "critical");
     assert_eq!(detection["session_id"], "uc001-positive");
-    // Mentioning a tool in assistant text does not attest an observed tool name.
-    assert!(detection["tool_name"].is_null());
+    // The session's one observed tool is its outbound transfer call.
+    assert_eq!(detection["tool_name"], "bash");
     assert!(
         detection["rule_ids"]
             .as_array()
@@ -2048,27 +2048,29 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
             })
     );
 
-    for session_id in [
+    for fixture in [
         "uc001-positive-server-instructions",
         "uc001-positive-tool-description",
         "uc001-positive-parameter-description",
     ] {
         let event = events
             .iter()
-            .find(|event| event["session_id"] == session_id)
-            .unwrap_or_else(|| panic!("missing detection for {session_id}"));
-        assert!(validator.is_valid(event), "invalid event for {session_id}");
-        assert_eq!(event["event_type"], "detection", "{session_id}");
-        assert_eq!(event["severity"], "critical", "{session_id}");
+            .find(|event| event["session_id"] == fixture)
+            .unwrap_or_else(|| panic!("missing detection for {fixture}"));
+        assert!(validator.is_valid(event), "invalid event for {fixture}");
+        assert_eq!(event["event_type"], "detection", "{fixture}");
+        assert_eq!(event["severity"], "critical", "{fixture}");
+        // Mentioning a tool in assistant text does not attest an observed tool name.
+        assert!(event["tool_name"].is_null(), "{fixture}");
         assert!(
             event["rule_ids"]
                 .as_array()
                 .expect("rule ids")
                 .iter()
                 .any(|rule| rule == "mcp.tool_metadata.prompt_injection"),
-            "{session_id}"
+            "{fixture}"
         );
-        if session_id == "uc001-positive-server-instructions" {
+        if fixture == "uc001-positive-server-instructions" {
             assert!(
                 event["categories"]
                     .as_array()
@@ -2086,7 +2088,7 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
                     let value = item["redacted_value"].as_str().expect("redacted value");
                     !value.contains(".env") && !value.contains("mcp-lab")
                 }),
-            "unredacted evidence for {session_id}"
+            "unredacted evidence for {fixture}"
         );
     }
 
@@ -2108,8 +2110,9 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
             .iter()
             .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
     );
+    // The session names the URL in text and runs no transfer: no egress chain.
     assert!(
-        compliance_tool["rule_ids"]
+        !compliance_tool["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
@@ -2144,8 +2147,9 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
             .iter()
             .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
     );
+    // The session names the URL in text and runs no transfer: no egress chain.
     assert!(
-        reversed_injection["rule_ids"]
+        !reversed_injection["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
@@ -2444,19 +2448,23 @@ fn scan_once_emits_token_injection_and_install_detections() {
         .iter()
         .find(|event| event["session_id"] == "tool-result-injection")
         .expect("tool result detection");
+    // The URL is only named in the tool result: a zero-point reference, no
+    // exfiltration finding and no egress chain.
+    let ids = tool_result["rule_ids"].as_array().expect("rule ids");
     assert!(
-        tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
+        ids.iter()
+            .any(|rule| rule == "network.controlled_test_domain.mention")
+    );
+    assert!(
+        !ids.iter()
             .any(|rule| rule == "network.controlled_test_domain.darkroast")
     );
     assert!(
-        tool_result["rule_ids"]
+        !tool_result["rule_ids"]
             .as_array()
             .expect("rule ids")
             .iter()
-            .any(|rule| rule == "chain.mcp_injection_then_egress")
+            .any(|rule| rule.as_str().is_some_and(|id| id.starts_with("chain.")))
     );
     assert!(
         tool_result["evidence"]
@@ -3284,7 +3292,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 35);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        134
+        152
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -5073,6 +5081,64 @@ fn project_config_failures_are_aggregated_without_path_or_error_leakage() {
 }
 
 #[test]
+fn scan_once_warns_when_a_source_has_no_tool_records() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("messages-only.jsonl"),
+        concat!(
+            r#"{"type":"session_meta","session_id":"messages-only","timestamp":"2026-04-03T00:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-04-03T00:00:01Z","payload":{"type":"user_message","message":"Summarize the README."}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-04-03T00:00:02Z","payload":{"type":"assistant_message","message":"The README describes a synthetic fixture."}}"#,
+            "\n",
+        ),
+    )
+    .expect("message-only fixture");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--install-inventory-disabled", "--log-path"])
+        .arg(temp.path().join("telltale-events.jsonl"))
+        .args(["--state-path"])
+        .arg(temp.path().join("telltale-state.json"))
+        .output()
+        .expect("run telltale");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(
+        summary["source_processing"]["parse_success_source_count"],
+        1
+    );
+    assert!(
+        summary["diagnostic_warnings"]
+            .as_array()
+            .expect("warnings")
+            .contains(&serde_json::json!({
+                "code": "no_tool_records_observed",
+                "classification": "suspicious_zero",
+                "basis": "source_processing"
+            })),
+        "{}",
+        summary["diagnostic_warnings"]
+    );
+}
+
+#[test]
 fn scan_once_continues_after_malformed_source() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
@@ -5136,11 +5202,6 @@ fn scan_once_continues_after_malformed_source() {
             {
                 "code": "source_coverage_partial",
                 "classification": "coverage_limitation",
-                "basis": "source_processing"
-            },
-            {
-                "code": "no_tool_records_observed",
-                "classification": "suspicious_zero",
                 "basis": "source_processing"
             }
         ])

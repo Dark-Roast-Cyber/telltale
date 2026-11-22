@@ -1092,12 +1092,12 @@ impl PipelineBuilder {
     /// rule documents by tier, apply override documents, and compile with the
     /// optional policy, as the CLI does.
     /// Missing documents return [`PipelineError::InvalidConfiguration`].
-    /// Rejected labels, organization or override documents, repeated IDs and
-    /// override entries return [`PipelineError::Compilation`] with a
-    /// [`RuleContentError`] source. Other rejected documents, packages and
-    /// policies, and a rule that fails validation when the merged content
-    /// compiles, keep an untyped source whose text can name rule IDs and quote
-    /// document values.
+    /// Rejected labels, documents, packages and policies that do not parse,
+    /// repeated IDs, override entries and content past a bound return
+    /// [`PipelineError::Compilation`] with a [`RuleContentError`] source. Other
+    /// rejected packages, and a rule that fails validation when the merged
+    /// content compiles, keep an untyped source whose text can name rule IDs
+    /// and quote document values.
     /// Canonical semantics are compiled once here and reused by every scan.
     /// Content that rule loading accepts but canonical compilation rejects
     /// returns [`PipelineError::Compilation`] here, not later from a scan.
@@ -1109,7 +1109,7 @@ impl PipelineBuilder {
         let overrides = labeled_sources(DocumentKindV1::Override, self.override_documents)?;
         let explicit = self
             .extra_rule_documents
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(index, raw)| {
                 (
@@ -1120,7 +1120,6 @@ impl PipelineBuilder {
             .collect::<Vec<_>>();
         let policy = self
             .policy_document
-            .as_ref()
             .map(|raw| (input_name(DocumentKindV1::Policy, "1".to_owned()), raw));
         let supplied = organization
             .iter()
@@ -1156,11 +1155,6 @@ impl PipelineBuilder {
                 content_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
             })
             .collect::<Vec<_>>();
-        let documents = explicit
-            .into_iter()
-            .map(|(name, raw)| Ok((name, LoadedRules::parse(raw)?)))
-            .collect::<Result<Vec<_>, BoxError>>()
-            .map_err(PipelineError::Compilation)?;
         let content = RuleContent {
             mode: if self.custom_only {
                 RuleLoadMode::CustomOnly
@@ -1181,10 +1175,15 @@ impl PipelineBuilder {
             files: organization
                 .into_iter()
                 .map(|(name, raw)| (RuleTier::Organization, name, raw))
+                .chain(
+                    explicit
+                        .into_iter()
+                        .map(|(name, raw)| (RuleTier::Explicit, name, raw)),
+                )
                 .collect(),
-            documents,
+            documents: Vec::new(),
             overrides,
-            policy: self.policy_document,
+            policy,
         };
         resolve_rule_content(content)
             .map_err(|error| {
@@ -1404,41 +1403,44 @@ telltale:
     }
 
     #[test]
-    fn rule_v1_documents_and_packages_fail_with_a_pointer_to_rule_v2() {
+    fn rule_v1_documents_and_packages_fail_as_invalid_documents() {
+        // The CLI shows the pointer to Rule v2; the builder reports the code.
         let v1 = concat!(
             "version: 1\ndescription: synthetic\n",
             "defaults: {case_insensitive: true, enabled: true}\nrules: []\nmodifiers: []\n",
         );
-        let error = Pipeline::builder()
-            .rules_document(v1)
-            .build()
-            .err()
-            .expect("Rule v1 document");
-        assert!(matches!(error, PipelineError::Compilation(_)));
-        let message = error.source().unwrap().to_string();
-        assert!(
-            message.contains("Rule v1 is no longer supported")
-                && message.contains("docs/rule-format.md")
-                && message.contains("docs/migrations/0.8.0.md"),
-            "{message}"
+        let content_error = |error: PipelineError| {
+            let PipelineError::Compilation(cause) = error else {
+                panic!("compilation error, got {error:?}");
+            };
+            cause.downcast_ref::<RuleContentError>().cloned().unwrap()
+        };
+        let document = content_error(
+            Pipeline::builder()
+                .rules_document(v1)
+                .build()
+                .err()
+                .expect("Rule v1 document"),
+        );
+        assert_eq!(
+            (document.code(), document.document()),
+            (RuleContentErrorCode::InvalidDocument, Some("explicit:1"))
         );
         let package = format!(
             "format: telltale-rule-package/v1\nid: acme.rules\nversion: 1.0.0\npublisher: Acme\n\
              license: Apache-2.0\nrule_namespace: acme\ndocuments:\n  - {}",
             v1.replace('\n', "\n    ")
         );
-        let message = Pipeline::builder()
-            .rule_package(package)
-            .build()
-            .err()
-            .expect("format v1 package")
-            .source()
-            .unwrap()
-            .to_string();
-        assert!(
-            message.contains("telltale-rule-package/v1 is no longer supported")
-                && message.contains("docs/migrations/0.8.0.md"),
-            "{message}"
+        let package = content_error(
+            Pipeline::builder()
+                .rule_package(package)
+                .build()
+                .err()
+                .expect("format v1 package"),
+        );
+        assert_eq!(
+            (package.code(), package.document()),
+            (RuleContentErrorCode::InvalidDocument, Some("package:1"))
         );
     }
 
