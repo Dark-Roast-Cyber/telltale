@@ -101,6 +101,9 @@ pub struct EvaluationInfo {
     pub window_truncated: bool,
     pub build_ms: Option<u64>,
     pub scan_ms: Option<u64>,
+    /// How long the call waited for its session's lock, over every time it
+    /// took it: time spent behind the session's other calls, not scanning.
+    pub lock_wait_ms: Option<u64>,
     /// "daemon" (long-lived evaluator) or "in_process".
     pub evaluator: &'static str,
     /// Why an in-process evaluation did not use the evaluator, if it tried.
@@ -177,6 +180,10 @@ pub struct Record {
     /// Content-free error code for `Kind::Error` and degraded records.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+    /// On `error` records of a call that tried to take its session's lock:
+    /// how long it waited, up to giving up (`state_lock_timeout`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_wait_ms: Option<u64>,
     /// Telltale action records anchored at this observation, unmodified,
     /// each with its Telltale delivery key.
     pub telltale: Vec<TelltaleAction>,

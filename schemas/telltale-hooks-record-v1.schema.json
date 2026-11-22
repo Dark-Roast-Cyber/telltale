@@ -67,6 +67,7 @@
         "window_truncated": { "type": "boolean" },
         "build_ms": { "type": ["integer", "null"], "minimum": 0 },
         "scan_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "lock_wait_ms": { "type": ["integer", "null"], "minimum": 0, "description": "How long the call waited for its session's lock, over every time it took it, in milliseconds: time spent behind the session's other calls, apart from `build_ms` and `scan_ms`. Absent from records written before 2026-11." },
         "evaluator": { "enum": ["daemon", "in_process"] },
         "evaluator_fallback": { "type": ["string", "null"] },
         "scans": {
@@ -77,6 +78,7 @@
             "variants": { "type": "integer", "minimum": 0 },
             "whole": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
             "together": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
+            "history": { "enum": ["passed", "refused", "skipped_budget", "skipped_late", null], "description": "The scan of the session history with the line a call past the projection budget is journaled as, after its pieces; `refused` when Telltale failed that source or quarantined the call's line; null when the call was not past the budget or had no history. Absent from records written before 2026-11." },
             "pieces_scanned": { "type": "integer", "minimum": 0 },
             "pieces_total": { "type": "integer", "minimum": 0 },
             "pieces_refused": { "type": "integer", "minimum": 0 },
@@ -133,6 +135,11 @@
     "error_code": {
       "type": "string",
       "description": "Content-free code. On `error` records: why the hook could not do its job. On `outcome` records: `outcome_ambiguous`, a result reported under a synthetic correlation key (`tth-syn-`) that only matched an already settled call; it may belong to that call or to a later identical one, so `result` is `unknown` and the settlement it supersedes is neither confirmed nor contradicted. It is followed by a second outcome for the same tool_use_id carrying the reported result with `enforcement: no_decision`: the execution happened, no decision is known to apply. A consumer keeping the latest outcome per tool_use_id sees that `no_decision` record (ADR 0004 addendum, point 11)."
+    },
+    "lock_wait_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "On `error` records of a call that tried to take its session's lock: how long it waited for it, in milliseconds, up to giving up for `state_lock_timeout`. Added 2026-11."
     },
     "telltale": {
       "type": "array",

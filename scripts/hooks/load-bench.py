@@ -28,8 +28,9 @@ Per call it measures the hook process's wall time and its answer (allow: exit 0
 and nothing printed; ask or deny: the printed decision; anything else is no
 answer). Afterwards it reads the run's hooks records for the scan phases
 (`evaluation.scans`), error codes (`hook_deadline`, `state_lock_timeout`) and
-decisions floored at `on_unevaluable` (basis `unevaluable_input`). The session
-lock wait is not recorded by the hook, so it is reported as null.
+decisions floored at `on_unevaluable` (basis `unevaluable_input`), and the
+session lock wait (`lock_wait_ms`) of decided calls and of calls that gave up
+waiting; it is null for a build that does not record it.
 
 The JSON report goes to stdout (or `--out`), a short table to stderr. It holds
 counts, closed codes and times only: no payload text and no paths. `--check`
@@ -286,6 +287,11 @@ def summarize(args, name: str, results: dict, records: list[dict], evaluator_rea
     basis = Counter((r.get("decision") or {}).get("basis") for r in decisions)
     evaluations = [r.get("evaluation") or {} for r in decisions]
     scans = [e["scans"] for e in evaluations if e.get("scans")]
+    # Every call that waited for the session lock: decided ones, and those
+    # that gave up waiting (their error record carries the wait).
+    lock_waits = [e["lock_wait_ms"] for e in evaluations if e.get("lock_wait_ms") is not None] + [
+        r["lock_wait_ms"] for r in records if r.get("kind") == "error" and r.get("lock_wait_ms") is not None
+    ]
     return {
         "name": name,
         "calls": len(results),
@@ -298,7 +304,7 @@ def summarize(args, name: str, results: dict, records: list[dict], evaluator_rea
             "over_30s": sum(1 for w in walls if w > 30_000),
             "over_check_limit": sum(1 for w in walls if w > limit),
         },
-        "lock_wait_ms": None,
+        "lock_wait_ms": percentiles(lock_waits),
         "records": {
             "decisions": len(decisions),
             "calls_without_record": sum(1 for i in results if i not in recorded),
@@ -322,6 +328,7 @@ def summarize(args, name: str, results: dict, records: list[dict], evaluator_rea
             "first_refusal": dict(Counter(s["first_refusal"] for s in scans if s.get("first_refusal"))),
             "whole": dict(Counter(str(s.get("whole") or "not_run") for s in scans)),
             "together": dict(Counter(str(s.get("together") or "not_run") for s in scans)),
+            "history": dict(Counter(str(s.get("history") or "not_run") for s in scans)),
         },
     }
 
@@ -339,12 +346,13 @@ def version(binary: Path) -> str | None:
 
 
 def table(report: dict) -> str:
-    rows = ["scenario                       calls  p50ms  p95ms  p99ms  maxms  noans  deadl  lockto  floor  >25s  >30s"]
+    rows = ["scenario                       calls  p50ms  p95ms  p99ms  maxms  lock99  noans  deadl  lockto  floor  >25s  >30s"]
     for s in report["scenarios"]:
         w, r = s["wall_ms"], s["records"]
+        lock = (s["lock_wait_ms"] or {}).get("p99", "-")
         rows.append(
             f"{s['name']:30} {s['calls']:5} {w.get('p50', 0):6} {w.get('p95', 0):6} {w.get('p99', 0):6} {w.get('max', 0):6}"
-            f" {s['unanswered']:6} {r['hook_deadline']:6} {r['state_lock_timeout']:7} {r['floored']:6} {w['over_25s']:5} {w['over_30s']:5}"
+            f" {lock:>7} {s['unanswered']:6} {r['hook_deadline']:6} {r['state_lock_timeout']:7} {r['floored']:6} {w['over_25s']:5} {w['over_30s']:5}"
         )
     check = report["check"]
     rows.append(f"check: {'passed' if check['passed'] else 'FAILED'} (limit {check['limit_ms']} ms, answer required)")

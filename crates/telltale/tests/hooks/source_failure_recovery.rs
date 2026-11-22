@@ -973,6 +973,133 @@ fn a_flood_of_excluded_calls_evicts_history_no_faster_than_ordinary_calls() {
     }
 }
 
+// ---- A call past the projection budget, read with its session history
+
+/// `text` as the command of a call past the projection budget: its padding
+/// takes more chunks than the projection's variants hold.
+fn past_budget(text: &str) -> Value {
+    json!({"command": text, "m0": "x-".repeat(200 * 1024)})
+}
+
+/// A chain whose second stage is a call past the projection budget fires on
+/// that call, as on a small one: under a permissive `on_unevaluable` the
+/// chain's ask is the verdict, not the allow the floor would give.
+#[test]
+fn a_call_past_the_projection_budget_completes_a_chain_from_history() {
+    let mut h = Harness::with_limits(common::generous(), policies()[1].1);
+    pre(&mut h, true, "dl", command(DOWNLOAD));
+    let run = pre(&mut h, true, "run", past_budget(RUN_DOWNLOADED));
+    let record = h.decision_for("run");
+    assert_eq!(verdict(&run), Some(Verdict::Ask), "{record:#}");
+    assert!(
+        rule_ids(&record).iter().any(|r| r == CHAIN_RULE),
+        "{record:#}"
+    );
+    assert!(
+        limits(&record)
+            .iter()
+            .any(|l| l == "pending_input_truncated"),
+        "{record:#}"
+    );
+    assert!(
+        !limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "passed");
+}
+
+/// With the recovery budget spent, the history scan after the pieces does not
+/// start: the record says history was lost and why.
+#[test]
+fn a_call_past_the_projection_budget_with_its_budget_spent_skips_history() {
+    let spent = Limits {
+        recovery: std::time::Duration::ZERO,
+        ..common::generous()
+    };
+    let mut h = Harness::with_limits(spent, |_| {});
+    pre(&mut h, true, "dl", command(DOWNLOAD));
+    pre(&mut h, true, "run", past_budget(RUN_DOWNLOADED));
+    let record = h.decision_for("run");
+    assert!(
+        limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert!(
+        !rule_ids(&record).iter().any(|r| r == CHAIN_RULE),
+        "{record:#}"
+    );
+    assert_eq!(
+        record["evaluation"]["scans"]["whole"],
+        "skipped_pieces_only"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "skipped_budget");
+}
+
+/// The history scan does not count as evaluating the call's input: a call past
+/// the projection budget with no finding keeps the `on_unevaluable` floor.
+#[test]
+fn a_benign_call_past_the_projection_budget_read_with_history_keeps_the_floor() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    pre(&mut h, true, "first", command("ls"));
+    let call = pre(&mut h, true, "call", past_budget("ls"));
+    let record = h.decision_for("call");
+    assert_eq!(verdict(&call), Some(Verdict::Ask), "{record:#}");
+    assert_eq!(record["decision"]["basis"], "unevaluable_input");
+    assert!(
+        limits(&record)
+            .iter()
+            .any(|l| l == "pending_input_truncated"),
+        "{record:#}"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "passed");
+}
+
+/// A deny found in the pieces stays the verdict when history is read too.
+#[test]
+fn a_deny_in_the_pieces_holds_when_history_is_read_after_them() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    pre(&mut h, true, "first", command("ls"));
+    let call = pre(&mut h, true, "call", past_budget(EXFIL));
+    let record = h.decision_for("call");
+    assert_eq!(rule_deny_failure("call", &record, &call), None);
+    assert_eq!(record["evaluation"]["scans"]["history"], "passed");
+}
+
+/// History Telltale refuses with the call's line (a line an older version
+/// journaled): the scan is not retried, and the record says history was lost.
+#[test]
+fn a_refused_history_scan_after_the_pieces_reports_history_lost() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    pre(&mut h, true, "first", command("ls"));
+    seed(&h, [colliding_top("echo hello")]);
+    let call = pre(&mut h, true, "call", past_budget("ls"));
+    let record = h.decision_for("call");
+    assert_eq!(verdict(&call), Some(Verdict::Ask), "{record:#}");
+    assert!(
+        limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "refused");
+}
+
+/// The first call of a session has no history to read: no history scan runs,
+/// and nothing is reported lost.
+#[test]
+fn a_first_call_past_the_projection_budget_runs_no_history_scan() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    let call = pre(&mut h, true, "call", past_budget("ls"));
+    let record = h.decision_for("call");
+    assert_eq!(verdict(&call), Some(Verdict::Ask), "{record:#}");
+    assert!(
+        !limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert!(
+        record["evaluation"]["scans"]["history"].is_null(),
+        "{record:#}"
+    );
+}
+
 // ---- Bounds on waiting
 
 fn session_handle(h: &Harness) -> telltale_core::hooks::state::SessionHandle {
@@ -1096,6 +1223,94 @@ fn the_lock_wait_is_a_bound_and_the_lock_is_still_exclusive() {
     assert!(SessionHandle::open_within(dir.path(), "h", "s", wait).is_ok());
 }
 
+/// How long the session's lock is held from the test while a call waits.
+const HOLD: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Run `call` on another thread while the test holds the session's lock for
+/// [`HOLD`] from the moment the call is about to start.
+fn behind_a_held_lock<R: Send>(h: &mut Harness, call: impl FnOnce(&mut Harness) -> R + Send) -> R {
+    let holder = session_handle(h);
+    std::thread::scope(|scope| {
+        let (starting, started) = std::sync::mpsc::channel();
+        let caller = scope.spawn(move || {
+            starting.send(()).unwrap();
+            call(h)
+        });
+        started.recv().unwrap();
+        std::thread::sleep(HOLD);
+        drop(holder);
+        caller.join().unwrap()
+    })
+}
+
+/// A call that had to wait behind its session's other calls says so in its
+/// decision record, apart from the time its scans took.
+#[test]
+fn a_call_that_waited_for_its_session_records_the_wait() {
+    let mut h = Harness::new();
+    // The pipeline is built before the lock is taken: built here, it is not
+    // part of what the next call does before it waits.
+    pre(&mut h, true, "first", command("ls"));
+    behind_a_held_lock(&mut h, |h| pre(h, true, "queued", command("ls")));
+    let waited = h.decision_for("queued")["evaluation"]["lock_wait_ms"]
+        .as_u64()
+        .expect("lock_wait_ms is a number");
+    // A lower bound only: the call starts waiting a moment after it is
+    // started, and how long it then takes to get the lock depends on the host.
+    assert!(waited >= 200, "waited {waited} ms behind a 400 ms hold");
+}
+
+/// The long-lived evaluator records its calls through `handle_until`, in its
+/// own process: its decision records carry the wait it had for the lock.
+#[test]
+fn an_evaluator_call_that_waited_for_its_session_records_the_wait() {
+    use telltale_core::hooks::runtime::now_ms;
+    let mut h = Harness::new();
+    pre(&mut h, true, "first", command("ls"));
+    let answered = behind_a_held_lock(&mut h, |h| {
+        h.runtime.handle_until(
+            &ctx(true),
+            request("queued", "ls"),
+            now_ms() + 60_000,
+            std::time::Duration::from_secs(30),
+        )
+    });
+    assert!(answered.is_ok());
+    let waited = h.decision_for("queued")["evaluation"]["lock_wait_ms"]
+        .as_u64()
+        .expect("lock_wait_ms is a number");
+    assert!(waited >= 200, "waited {waited} ms behind a 400 ms hold");
+}
+
+/// A call nothing else held up still reports its wait, as a number.
+#[test]
+fn an_uncontended_call_records_its_lock_wait() {
+    let mut h = Harness::new();
+    pre(&mut h, true, "alone", command("ls"));
+    assert!(h.decision_for("alone")["evaluation"]["lock_wait_ms"].is_u64());
+}
+
+/// A call that gave up on its session's lock says how long it waited first.
+#[test]
+fn a_lock_timeout_record_says_how_long_the_call_waited() {
+    let wait = std::time::Duration::from_millis(100);
+    let limits = Limits {
+        session_lock_wait: wait,
+        ..common::no_deadline()
+    };
+    let mut h = Harness::with_limits(limits, |_| {});
+    let holder = session_handle(&h);
+    pre(&mut h, true, "late", command("ls"));
+    drop(holder);
+    let errors = h.records("error");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0]["error_code"], "state_lock_timeout");
+    let waited = errors[0]["lock_wait_ms"]
+        .as_u64()
+        .expect("lock_wait_ms is a number");
+    assert!(waited >= 100, "gave up after {waited} ms of a 100 ms wait");
+}
+
 fn journal_len(h: &Harness) -> u64 {
     std::fs::metadata(session_dir(h).join("journal.jsonl"))
         .map(|m| m.len())
@@ -1165,6 +1380,8 @@ fn a_decision_the_evaluator_recorded_is_what_a_client_that_gave_up_returns() {
         let errors = h.records("error");
         assert_eq!(errors.len(), 1, "{errors:#?}");
         assert_eq!(errors[0]["error_code"], "evaluator_no_answer");
+        // The client took the session's lock to find the decision.
+        assert!(errors[0]["lock_wait_ms"].is_u64(), "{errors:#?}");
     }
 }
 
