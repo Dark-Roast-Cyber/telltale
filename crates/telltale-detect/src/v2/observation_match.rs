@@ -152,21 +152,21 @@ pub struct CompiledObservationMatchDetector {
     matcher: CompiledMatcher,
     required_capabilities: BTreeSet<CapabilityId>,
     metadata: FindingMetadata,
-    /// The rule's content matcher, its targets, and the action view's reading
-    /// it also takes (see `actions::command_reading`).
+    /// The rule's content matcher, its targets, and the action view's readings
+    /// it also takes (see `actions::session_reading`).
     rule_v1_content: Option<(
         RuleV1ContentMatcher,
         Vec<String>,
-        Option<super::actions::CommandReading>,
+        super::actions::SessionReading,
     )>,
 }
 
 impl CompiledObservationMatchDetector {
-    pub(crate) fn with_rule_v1_content(
+    pub(super) fn with_rule_v1_content(
         mut self,
         matcher: RuleV1ContentMatcher,
         targets: Vec<String>,
-        reading: Option<super::actions::CommandReading>,
+        reading: super::actions::SessionReading,
     ) -> Self {
         self.rule_v1_content = Some((matcher, targets, reading));
         self

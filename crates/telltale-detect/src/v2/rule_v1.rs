@@ -734,7 +734,7 @@ fn compile_rule(
             _ => RuleV1CompileError::InvalidMetadata,
         })
         .map(|detector| {
-            let reading = super::actions::command_reading(rule);
+            let reading = super::actions::session_reading(rule);
             detector.with_rule_v1_content(content, targets, reading)
         })
 }
@@ -744,15 +744,25 @@ fn compile_rule(
 pub(super) fn evaluate_content_matcher(
     matcher: &RuleV1ContentMatcher,
     targets: &[String],
-    reading: Option<super::actions::CommandReading>,
+    reading: super::actions::SessionReading,
     observation: &telltale_schema::observation::CanonicalObservationV2,
     budget: &mut super::session::RetentionBudget,
 ) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
+    // A field the bundled rule's field guard does not read is neither resolved
+    // nor charged: it is neither a match nor unknown.
+    let targets = targets
+        .iter()
+        .filter(|target| {
+            reading
+                .field
+                .is_none_or(|read| read(target.as_str(), observation))
+        })
+        .collect::<Vec<_>>();
     let registry = super::SelectorRegistry::new();
     let mut resolutions = Vec::new();
     let mut borrowed_results = Vec::new();
     let mut unknown = Vec::new();
-    for target in targets {
+    for target in &targets {
         let selector = super::SelectorId::parse(&format!("compat.v1.{target}"))
             .expect("validated Rule v1 target");
         let borrowed = if selector == super::SelectorId::CompatToolResult {
@@ -815,7 +825,7 @@ pub(super) fn evaluate_content_matcher(
         .map(|name| format!("compat.v1.{name}"))
         .filter(|path| !paths.contains(path))
         .collect::<Vec<_>>();
-    if let Some(read) = reading
+    if let Some(read) = reading.command
         && !transfer_fields.is_empty()
         && read(observation, budget)?
     {

@@ -1754,18 +1754,59 @@ pub(super) fn observation_requests_outbound_transfer(
 pub(super) type CommandReading =
     fn(&CanonicalObservationV2, &RetentionBudget) -> Result<bool, ProcessingError>;
 
-/// The reading session events of a loaded rule also take, when it is a bundled
-/// rule as shipped that has one: the upload rule takes
-/// [`observation_requests_outbound_transfer`] and the download rule
-/// [`observation_fetches_code`]. A custom copy is read by its own patterns
-/// alone.
-pub(super) fn command_reading(rule: &RuleV1CompatibilityRule) -> Option<CommandReading> {
-    let reading: CommandReading = match rule.id.as_str() {
-        "exfil.outbound_upload" => observation_requests_outbound_transfer,
-        "network.download" => observation_fetches_code,
-        _ => return None,
+/// Whether session events of a bundled rule read one of its targets' fields
+/// for an observation, as the rule's action-view arm does.
+pub(super) type FieldGuard = fn(&str, &CanonicalObservationV2) -> bool;
+
+/// The action-view readings session events of a bundled rule as shipped take
+/// beside the rule's own patterns.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct SessionReading {
+    /// Selects each command field when it reads the observation.
+    pub(super) command: Option<CommandReading>,
+    /// A field it does not read is skipped: neither a match nor unknown.
+    pub(super) field: Option<FieldGuard>,
+}
+
+/// The readings session events of a loaded rule also take, when it is a bundled
+/// rule as shipped that has them: the upload rule takes
+/// [`observation_requests_outbound_transfer`], the download rule
+/// [`observation_fetches_code`], and the registry credential rule
+/// [`reads_registry_credential_field`]. A custom copy is read by its own
+/// patterns alone.
+pub(super) fn session_reading(rule: &RuleV1CompatibilityRule) -> SessionReading {
+    let reading = match rule.id.as_str() {
+        "exfil.outbound_upload" => SessionReading {
+            command: Some(observation_requests_outbound_transfer),
+            field: None,
+        },
+        "network.download" => SessionReading {
+            command: Some(observation_fetches_code),
+            field: None,
+        },
+        "credential.package_registry_read" => SessionReading {
+            command: None,
+            field: Some(reads_registry_credential_field),
+        },
+        _ => return SessionReading::default(),
     };
-    (native_profile_applies(rule) == Some(true)).then_some(reading)
+    if native_profile_applies(rule) == Some(true) {
+        reading
+    } else {
+        SessionReading::default()
+    }
+}
+
+/// The path of a native file-read tool is a read. A shell names the file for
+/// reads and writes alike, which its command field tells apart; the path of
+/// any other tool is not read. The kind is the one the action view reads.
+fn reads_registry_credential_field(target: &str, observation: &CanonicalObservationV2) -> bool {
+    target != "file_path"
+        || matches!(
+            observation.body(),
+            ObservationBody::Tool(tool)
+                if tool_arguments::named_tool_kind(tool) == Some(ToolKind::FileRead)
+        )
 }
 
 /// Whether some command stage of an observation, read as the action view
@@ -2043,6 +2084,11 @@ fn native_fields<'a>(
                     && (field != "file_path"
                         || view.reads_paths
                         || view.text("command").is_empty()),
+            ),
+            // The path of a native read tool is a read. A shell names the file
+            // for reads and writes alike, which its command field tells apart.
+            "credential.package_registry_read" => whole(
+                action(field) && (field != "file_path" || view.kind == Some(ToolKind::FileRead)),
             ),
             "persistence.shell_profile"
             | "execution.encoded_payload"

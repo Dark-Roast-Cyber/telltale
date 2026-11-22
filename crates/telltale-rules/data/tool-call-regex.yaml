@@ -619,6 +619,65 @@ telltale:
     explanation: 'Package publishing command detected.'
     tags: [supply-chain, publish]
 ---
+title: Package registry credential file in the home directory read, copied, encoded or sent
+id: 11869540-5303-41e2-b5fa-e69e3a28d37b
+name: credential.package_registry_read
+taxonomy: telltale
+status: experimental
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|segment: &pattern '(?:(?:^|[\s;&|(`''"])(?:\S*[/\\])?(?:(?:n?cat|tac|head|tail|less|more|bat|nl|strings|xxd|od|hexdump|base(?:64|32|nc)|[ef]?grep|rg|awk|sed|cut|jq|yq|openssl|gpg|cp|mv|scp|sftp|rsync|tar|zip|7z|gzip|bzip2|xz|curl|wget|nc|socat|dd|tee|type|get-content|gc|copy-item|compress-archive|invoke-(?:webrequest|restmethod))(?:\.exe)?\s(?:[^;&|\n]*?[\s"''=(])?|(?:python[0-9.]*|node|ruby|perl|php)\s+(?:-\S+\s+)*-[ce]\s[^\n]*?[\s"''(]|gh\s+(?:gist\s+create\b[^;&|\n]*?\s|(?:issue|pr)\s+comment\b[^;&|\n]*?\s(?:-F\s*|--body-file[\s=]\s*))["'']?)|[<@]\s*["'']?)(?:~|\$\{?HOME\}?|(?:\$env:|%)(?:USERPROFILE|APPDATA)%?|/(?:home|Users)/[^/\s"'']+|/root|[a-z]:[/\\]Users[/\\][^/\\\s"'']+)[/\\](?:\.(?:npmrc|pypirc|(?:cargo|gem)[/\\]credentials|m2[/\\]settings(?:-security)?\.xml|gradle[/\\]gradle\.properties)|(?:(?:\.nuget|AppData[/\\]Roaming)[/\\])?NuGet[/\\]NuGet\.Config|(?:\.(?:config[/\\])?|AppData[/\\]Roaming[/\\])?composer[/\\]auth\.json)(?:\.toml)?(?:$|[^\w.-])'
+    filter_command:
+        tool.command|re|i|segment: '(?:>|\btee\s+(?:-\S+\s+)*|\bof=|\s-(?:o|-output(?:-document)?)[\s=]|\b(?:curl|wget)(?:\.exe)?\s(?:[^;&|\n]*\s)?-[a-z]*o[\s=])\s*["'']?(?:~|\$\{?HOME\}?|(?:\$env:|%)(?:USERPROFILE|APPDATA)%?|/(?:home|Users)/[^/\s"'']+|/root|[a-z]:[/\\]Users[/\\][^/\\\s"'']+)[/\\](?:\.(?:npmrc|pypirc|(?:cargo|gem)[/\\]credentials|m2[/\\]settings(?:-security)?\.xml|gradle[/\\]gradle\.properties)|(?:\S*[/\\])?(?:NuGet[/\\]NuGet\.Config|composer[/\\]auth\.json))(?:\.toml)?["'']?(?:$|[^\w.-])|\b(?:cp|mv|install|rsync|scp|copy-item)\s[^;&|\n]*\s["'']?(?:~|\$\{?HOME\}?|(?:\$env:|%)(?:USERPROFILE|APPDATA)%?|/(?:home|Users)/[^/\s"'']+|/root|[a-z]:[/\\]Users[/\\][^/\\\s"'']+)[/\\](?:\.(?:npmrc|pypirc|(?:cargo|gem)[/\\]credentials|m2[/\\]settings(?:-security)?\.xml|gradle[/\\]gradle\.properties)|(?:\S*[/\\])?(?:NuGet[/\\]NuGet\.Config|composer[/\\]auth\.json))(?:\.toml)?["'']?\s*(?:$|[;&|)\n"])|\bsed\s(?:[^;&|\n]*\s)?-(?:-in-place|[a-z]*i)\b'
+    selection_arguments:
+        tool.arguments|re|i|segment: *pattern
+    filter_arguments:
+        tool.arguments|re|i|segment: '"(?:contents?|new_?(?:str(?:ing)?|text|source)|file_text|edits|code_edit)"\s*:|(?:>|\btee\s+(?:-\S+\s+)*|\bof=|\s-(?:o|-output(?:-document)?)[\s=]|\b(?:curl|wget)(?:\.exe)?\s(?:[^;&|\n]*\s)?-[a-z]*o[\s=])\s*["'']?(?:~|\$\{?HOME\}?|(?:\$env:|%)(?:USERPROFILE|APPDATA)%?|/(?:home|Users)/[^/\s"'']+|/root|[a-z]:[/\\]Users[/\\][^/\\\s"'']+)[/\\](?:\.(?:npmrc|pypirc|(?:cargo|gem)[/\\]credentials|m2[/\\]settings(?:-security)?\.xml|gradle[/\\]gradle\.properties)|(?:\S*[/\\])?(?:NuGet[/\\]NuGet\.Config|composer[/\\]auth\.json))(?:\.toml)?["'']?(?:$|[^\w.-])|\b(?:cp|mv|install|rsync|scp|copy-item)\s[^;&|\n]*\s["'']?(?:~|\$\{?HOME\}?|(?:\$env:|%)(?:USERPROFILE|APPDATA)%?|/(?:home|Users)/[^/\s"'']+|/root|[a-z]:[/\\]Users[/\\][^/\\\s"'']+)[/\\](?:\.(?:npmrc|pypirc|(?:cargo|gem)[/\\]credentials|m2[/\\]settings(?:-security)?\.xml|gradle[/\\]gradle\.properties)|(?:\S*[/\\])?(?:NuGet[/\\]NuGet\.Config|composer[/\\]auth\.json))(?:\.toml)?["'']?\s*(?:$|[;&|)\n"])|\bsed\s(?:[^;&|\n]*\s)?-(?:-in-place|[a-z]*i)\b'
+    selection_file_path:
+        tool.path|re|i: '(?m)^(?:~|/(?:home|Users)/[^/\n]+|/root|[a-z]:[/\\]Users[/\\][^/\\\n]+)[/\\](?:\.(?:npmrc|pypirc|(?:cargo|gem)[/\\]credentials|m2[/\\]settings(?:-security)?\.xml|gradle[/\\]gradle\.properties)|(?:(?:\.nuget|AppData[/\\]Roaming)[/\\])?NuGet[/\\]NuGet\.Config|(?:\.(?:config[/\\])?|AppData[/\\]Roaming[/\\])?composer[/\\]auth\.json)(?:\.toml)?$'
+    condition: (selection_command and not filter_command) or (selection_arguments and not filter_arguments) or selection_file_path
+falsepositives:
+    - 'Release troubleshooting may inspect the user''s registry configuration under explicit operator direction; on its own the match is a timeline mark.'
+    - 'Matches a read, copy-out, encode or send of the file, or a native file tool reading it; writing the file is release setup and does not match.'
+level: informational
+tags:
+    - atlas.aml.t0055
+telltale:
+    category: credential_harvesting
+    score: 0
+    explanation: 'A package registry credential file in the user''s home directory was read, copied, encoded or sent, or a native file tool opened it; on its own this is a zero-point timeline mark.'
+    analytic_intent: hunt
+    detection_class: threat_hunting
+    tags: [credentials, package-registry, harvesting]
+---
+title: Container image or chart pushed to a registry
+id: bddab4e1-ed8d-47cf-bfb5-1883ed55990c
+name: supply_chain.container_push
+taxonomy: telltale
+status: experimental
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        - tool.command|re|i: &pattern '(?:(?:^|[\s;&|(`''"])(?:\S*[/\\])?(?:docker|podman|buildah|oras|helm|crane)(?:\.exe)?\s+(?:-{1,2}[\w-]+(?:=\S+|\s+[^-\s]\S*)?\s+)*(?:(?:image|manifest|compose)\s+(?:-{1,2}[\w-]+(?:=\S+|\s+[^-\s]\S*)?\s+)*)?(?:cm-)?push\b|(?:^|[\s;&|(`''"])(?:\S*[/\\])?docker(?:\.exe)?\s+(?:buildx\s+)?(?:build|bake)\b[^;&|\n]*?(?:\s--push\b|\s(?:-o|--output|--set)[\s=]["'']?(?:\S*output=)?\S*(?:push=true|type=registry))|(?:^|[\s;&|(`''"])(?:\S*[/\\])?skopeo(?:\.exe)?\s+(?:-\S+\s+)*copy\b[^;&|\n]*\sdocker://[^\s;&|)]+\s*(?:$|[;&|)\n]))'
+        - tool.arguments|re|i: *pattern
+    condition: selection
+falsepositives:
+    - 'Release and deployment workflows push images and charts; on its own the match is a timeline mark, and it scores only as the publishing step of a credential-then-publish chain.'
+    - 'Matches a push command, or an image build whose output option pushes to a registry.'
+level: informational
+telltale:
+    category: supply_chain
+    score: 0
+    explanation: 'A container image, OCI artifact or chart was pushed to a registry; on its own this is a zero-point timeline mark.'
+    analytic_intent: hunt
+    detection_class: threat_hunting
+    tags: [supply-chain, publish, container]
+---
 title: MCP server enumeration or probing
 id: 24e09d06-6535-4dc7-a4d2-fa5d4599d699
 name: mcp.server_enumeration

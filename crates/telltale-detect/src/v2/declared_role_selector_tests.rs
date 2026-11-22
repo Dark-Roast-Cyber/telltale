@@ -406,7 +406,7 @@ fn rule_v1_content_on_an_omitted_searchable_text_is_not_evaluated() {
         super::rule_v1::evaluate_content_matcher(
             &matcher,
             &targets,
-            None,
+            Default::default(),
             &omitted_text_call(omitted, token),
             &mut super::session::RetentionBudget::new(),
         )
@@ -684,7 +684,7 @@ fn rule_v1_content_over_replaced_values_is_not_evaluated() {
         super::rule_v1::evaluate_content_matcher(
             &matcher,
             &targets,
-            None,
+            Default::default(),
             observation,
             &mut super::session::RetentionBudget::new(),
         )

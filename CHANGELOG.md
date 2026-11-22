@@ -530,6 +530,20 @@
   `watch`) took a median of 6.9 ms instead of 17.1 ms, and of the first
   14.0 ms instead of 18.0 ms. No rule matches differently.
 
+- **Experimental rules tag registry credential reads and container pushes.**
+  `credential.package_registry_read` (`credential_harvesting`) matches a read,
+  copy-out, encode or send of an npm, PyPI, Cargo, RubyGems, NuGet, Maven,
+  Gradle or Composer credential file in the user's home directory, or a native
+  file-read tool opening one. Writing the file and passing it to a tool as its
+  configuration are release setup and do not match; project-level files do
+  not match. `supply_chain.container_push` (`supply_chain`) matches a push
+  command (`docker`, `podman`, `buildah`, `oras`, `helm` or `crane` push, or
+  `skopeo copy` to `docker://`), or an image build whose output option pushes
+  to a registry. Both are informational and score 0, so alone they only mark
+  the timeline. The credential rule supplies the credential step of
+  `chain.credential_then_publish` and `chain.harvest_then_exfil`; the push
+  rule supplies the publish step of `chain.credential_then_publish`.
+
 - **`watch` re-checks SQLite stores briefly after a change.** A commit that
   becomes visible to readers only after its write notification is now read
   without waiting for the next change to the store. After a scan of a changed
