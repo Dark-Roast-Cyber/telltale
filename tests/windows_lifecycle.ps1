@@ -636,7 +636,7 @@ try {
         Assert-True $script:lockWorker.exit_observed 'released worker exited within bound'
         Assert-True ($lockProcess.ExitCode -eq 0) 'released worker closed lock successfully'
         Write-Host ('Windows lifecycle synthetic read lock: ' + ($script:lockWorker | ConvertTo-Json -Depth 6 -Compress))
-        Assert-TTUnlocked $installed
+        Assert-TTReplaceable $installed
         & $installer @layout -DevelopmentBinary $binary
         $recovered = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
         Assert-True ($recovered.id -ceq $previous.id -and $recovered.binary_sha256 -ceq $previous.binary_sha256 -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'explicit post-release recovery preserves identity and clears transaction'
@@ -684,7 +684,7 @@ try {
     $beforeStageDiagnostic = Get-TreeDigest $layout.InstallDirectory
     $stageStream = [IO.File]::Open($stage, 'Open', 'Read', 'Read')
     try {
-        Assert-TTUnlocked $installed
+        Assert-TTReplaceable $installed
         $installErrors = @()
         $installFailure = $null
         try { & $installer @layout -DevelopmentBinary $binary -ErrorVariable installErrors | Out-Null }
@@ -706,7 +706,7 @@ try {
         Assert-True ((Get-TreeDigest $layout.InstallDirectory) -ceq $beforeStageDiagnostic) 'stage diagnostics and refused cleanup preserve transaction evidence'
         Write-Host ('Windows lifecycle controlled stage diagnostic: ' + (@{ original_error = $originalSummary; file = $stageDiagnostic; lock_owner = 'known test stream; resource users are not ownership proof'; bytes_preserved = $true } | ConvertTo-Json -Depth 12 -Compress))
     } finally { $stageStream.Dispose() }
-    Assert-TTUnlocked $stage
+    Assert-TTReplaceable $stage
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq $previous.binary_sha256 -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'controlled stage recovers only after explicit test release'
     & $uninstaller @layout -Confirm:$false
@@ -798,7 +798,7 @@ try {
             }
         } finally { if ($null -ne $reader.Stream) { $reader.Stream.Dispose() } }
     }
-    Assert-TTUnlocked $stage
+    Assert-TTReplaceable $stage
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).binary_sha256 -ceq (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant() -and -not (Test-Path -LiteralPath $journalPath) -and -not (Test-Path -LiteralPath $stage)) 'refused swap recovers only after explicit reader release'
     & $uninstaller @layout -Confirm:$false
