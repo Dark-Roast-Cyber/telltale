@@ -2048,29 +2048,29 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
             })
     );
 
-    for session_id in [
+    for fixture in [
         "uc001-positive-server-instructions",
         "uc001-positive-tool-description",
         "uc001-positive-parameter-description",
     ] {
         let event = events
             .iter()
-            .find(|event| event["session_id"] == session_id)
-            .unwrap_or_else(|| panic!("missing detection for {session_id}"));
-        assert!(validator.is_valid(event), "invalid event for {session_id}");
-        assert_eq!(event["event_type"], "detection", "{session_id}");
-        assert_eq!(event["severity"], "critical", "{session_id}");
+            .find(|event| event["session_id"] == fixture)
+            .unwrap_or_else(|| panic!("missing detection for {fixture}"));
+        assert!(validator.is_valid(event), "invalid event for {fixture}");
+        assert_eq!(event["event_type"], "detection", "{fixture}");
+        assert_eq!(event["severity"], "critical", "{fixture}");
         // Mentioning a tool in assistant text does not attest an observed tool name.
-        assert!(event["tool_name"].is_null(), "{session_id}");
+        assert!(event["tool_name"].is_null(), "{fixture}");
         assert!(
             event["rule_ids"]
                 .as_array()
                 .expect("rule ids")
                 .iter()
                 .any(|rule| rule == "mcp.tool_metadata.prompt_injection"),
-            "{session_id}"
+            "{fixture}"
         );
-        if session_id == "uc001-positive-server-instructions" {
+        if fixture == "uc001-positive-server-instructions" {
             assert!(
                 event["categories"]
                     .as_array()
@@ -2088,7 +2088,7 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
                     let value = item["redacted_value"].as_str().expect("redacted value");
                     !value.contains(".env") && !value.contains("mcp-lab")
                 }),
-            "unredacted evidence for {session_id}"
+            "unredacted evidence for {fixture}"
         );
     }
 
