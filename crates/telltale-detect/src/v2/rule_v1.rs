@@ -733,7 +733,10 @@ fn compile_rule(
             DetectionError::ScoreOutOfRange => RuleV1CompileError::ScoreOutOfRange,
             _ => RuleV1CompileError::InvalidMetadata,
         })
-        .map(|detector| detector.with_rule_v1_content(content, targets))
+        .map(|detector| {
+            let reads_transfers = super::actions::reads_requested_transfers(rule);
+            detector.with_rule_v1_content(content, targets, reads_transfers)
+        })
 }
 
 /// The canonical adapter resolves only truthful compatibility selectors. Rule
@@ -741,6 +744,7 @@ fn compile_rule(
 pub(super) fn evaluate_content_matcher(
     matcher: &RuleV1ContentMatcher,
     targets: &[String],
+    reads_transfers: bool,
     observation: &telltale_schema::observation::CanonicalObservationV2,
     budget: &mut super::session::RetentionBudget,
 ) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
@@ -800,6 +804,22 @@ pub(super) fn evaluate_content_matcher(
         .iter()
         .map(|(name, _)| format!("compat.v1.{name}"))
         .collect::<Vec<_>>();
+    // Beside its own patterns, the bundled upload rule takes the action view's
+    // reading of object-storage and GitHub CLI transfers, which selects each
+    // command field: what an action reads as an upload, a session event does.
+    let transfer_fields = fields
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| matches!(*name, "command" | "arguments"))
+        .map(|name| format!("compat.v1.{name}"))
+        .filter(|path| !paths.contains(path))
+        .collect::<Vec<_>>();
+    if reads_transfers
+        && !transfer_fields.is_empty()
+        && super::actions::observation_requests_outbound_transfer(observation, budget)?
+    {
+        paths.extend(transfer_fields);
+    }
     paths.sort();
     paths.dedup();
     if !paths.is_empty() {

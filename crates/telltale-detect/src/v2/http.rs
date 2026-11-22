@@ -8,6 +8,10 @@
 
 use std::net::IpAddr;
 
+// The client lookup behind wrappers and assignments is shared with the
+// command-effect reader.
+pub(crate) use telltale_rules::command_effect::{assignment, client_name, invocation};
+
 /// Download clients, by normalized command word.
 const DOWNLOAD_CLIENTS: [&str; 8] = [
     "curl",
@@ -22,121 +26,6 @@ const DOWNLOAD_CLIENTS: [&str; 8] = [
 
 /// curl short options that take a value, attached or in the next token.
 const CURL_VALUE_FLAGS: &str = "AbcCdDeEFHKmoPQrtTuUwxXyYz";
-
-/// Wrappers that run their operand as the command: the short options that
-/// take a value, and whether one positional (a `timeout` duration) precedes
-/// the command.
-const WRAPPERS: [(&str, &str, bool); 15] = [
-    ("sudo", "ugCDhprtTU", false),
-    ("doas", "uC", false),
-    ("env", "uCS", false),
-    ("xargs", "adEILnPs", false),
-    ("timeout", "sk", true),
-    ("nice", "n", false),
-    ("ionice", "cnp", false),
-    ("stdbuf", "ioe", false),
-    ("time", "fo", false),
-    ("nohup", "", false),
-    ("command", "", false),
-    ("exec", "a", false),
-    ("torsocks", "", false),
-    ("proxychains", "f", false),
-    ("proxychains4", "f", false),
-];
-
-/// Wrapper long options that take a separate value (`--user deploy`).
-const WRAPPER_VALUE_OPTIONS: [&str; 19] = [
-    "user",
-    "group",
-    "host",
-    "prompt",
-    "chdir",
-    "role",
-    "type",
-    "other-user",
-    "unset",
-    "split-string",
-    "arg-file",
-    "delimiter",
-    "eof",
-    "replace",
-    "max-args",
-    "max-procs",
-    "signal",
-    "kill-after",
-    "adjustment",
-];
-
-/// A leading `NAME=value` shell assignment.
-pub(crate) fn assignment(token: &str) -> bool {
-    token.split_once('=').is_some_and(|(name, _)| {
-        name.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic())
-            && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
-    })
-}
-
-/// The client invocation of a command segment: its command word, after any
-/// leading assignments and wrappers such as `sudo -u user`, `env A=1`,
-/// `xargs -n1` or `timeout 30`. A client named as an argument (`git fetch`,
-/// `echo curl`, `which wget`) is not an invocation.
-pub(crate) fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]> {
-    let mut index = 0;
-    while let Some(token) = tokens.get(index) {
-        let name = client_name(token);
-        if clients.contains(&name.as_str()) {
-            return Some(&tokens[index..]);
-        }
-        if assignment(token) {
-            index += 1;
-            continue;
-        }
-        let (_, values, positional) = WRAPPERS.iter().find(|(wrapper, ..)| *wrapper == name)?;
-        index += 1;
-        while let Some(option) = tokens
-            .get(index)
-            .filter(|token| token.len() > 1 && token.starts_with('-'))
-        {
-            index += 1;
-            if option == "--" {
-                break;
-            }
-            index += usize::from(takes_next(option, &WRAPPER_VALUE_OPTIONS, values));
-        }
-        index += usize::from(*positional);
-    }
-    None
-}
-
-/// Whether an option word takes the next token as its value: a `long` option
-/// without an attached `=value` (`--user deploy`), or a short cluster whose
-/// first value-taking letter in `short` ends it (`-u deploy`, `-iu deploy`,
-/// but not `-uroot`).
-pub(crate) fn takes_next(option: &str, long: &[&str], short: &str) -> bool {
-    match option.strip_prefix("--") {
-        Some(name) => long.contains(&name),
-        None => option[1..]
-            .char_indices()
-            .find(|(_, letter)| short.contains(*letter))
-            .is_some_and(|(offset, _)| offset + 1 == option.len() - 1),
-    }
-}
-
-/// The normalized command word: basename, lowercase, no `.exe`, and the
-/// command of an `X=$(command` assignment.
-pub(crate) fn client_name(token: &str) -> String {
-    let token = token
-        .split_once("=$(")
-        .map_or(token, |(_, command)| command);
-    let name = token
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(token)
-        .to_ascii_lowercase();
-    match name.strip_suffix(".exe") {
-        Some(stem) => stem.to_owned(),
-        None => name,
-    }
-}
 
 /// The segment's client invocation, if it downloads.
 pub(crate) fn download_candidate(tokens: &[String]) -> Option<&[String]> {

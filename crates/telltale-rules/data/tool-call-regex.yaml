@@ -253,7 +253,7 @@ detection:
     condition: (selection_arguments and not filter_arguments) or (selection_command and not filter_command) or (selection_url and not filter_url)
 falsepositives:
     - 'Authorized uploads of build artifacts, logs, or release assets may match when the destination is expected.'
-    - 'Object-storage copies match a local source before a remote destination: aws s3 cp and gsutil cp are excluded when the first operand is an s3:// or gs:// location, and rclone copy when the word after the subcommand is a remote. Azure storage commands match upload and sync verbs, and az storage copy unless a source is an HTTP(S) URL. Downloads and remote-to-remote copies that name the remote source first, listings and other inventory or settings commands do not match.'
+    - 'Object-storage copies match a local source before a remote destination: aws s3 cp and gsutil cp are excluded when the first operand is an s3:// or gs:// location, and rclone copy when the word after the subcommand is a remote. Azure storage commands match upload and sync verbs, and az storage copy unless a source is an HTTP(S) URL. Downloads and remote-to-remote copies that name the remote source first, listings and other inventory or settings commands do not match. Move and sync verbs of the AWS CLI, gsutil and rclone, and GitHub CLI publication of a cloud credential file, are read from the command words after client options and wrappers, and match when the source is local.'
     - 'A bodyless PUT to the literal IMDSv2 token endpoint is excluded only when every other token in the command segment is a listed harmless flag. Other metadata paths, a body, an extra header or another destination still match.'
 level: high
 tags:

@@ -12,6 +12,9 @@
 //! normalized fields as in-memory values, which keeps the engine reusable for
 //! batch session scanning and future inline inference-proxy evaluation alike.
 
+// Shared with the detection views, not a supported embedding API.
+#[doc(hidden)]
+pub mod command_effect;
 mod content;
 pub mod package;
 pub mod process_chain;
