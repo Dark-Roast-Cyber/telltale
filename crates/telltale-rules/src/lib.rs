@@ -1264,6 +1264,48 @@ mod tests {
         loaded.compile(None).unwrap()
     }
 
+    /// `apply_override_document_skipping` leaves out an entry only when the
+    /// caller's predicate holds for its `rule_id` and nothing of that name is
+    /// loaded. A loaded rule's entry is applied, and an entry that names a
+    /// loaded chain modifier, or a name the predicate does not cover, fails
+    /// as an unknown `rule_id`.
+    #[test]
+    fn skipping_leaves_out_only_entries_that_name_nothing_loaded() {
+        let documents = [
+            hidden_instruction_rule("hosted.present", "test"),
+            chain("hosted.chain", "rules: [hosted.present]", ""),
+        ];
+        let hosted = |id: &str| id.starts_with("hosted.");
+        let apply = |ids: &[&str]| {
+            let mut loaded = LoadedRules::parse(&file(&documents)).unwrap();
+            let entries = ids
+                .iter()
+                .map(|id| format!("  - {{rule_id: {id}, reason: synthetic, enabled: false}}\n"))
+                .collect::<String>();
+            let overrides: RuleOverrideDocument =
+                serde_yaml::from_str(&format!("version: 1\noverrides:\n{entries}")).unwrap();
+            loaded
+                .apply_override_document_skipping(&overrides, "synthetic.yaml", None, &hosted)
+                .map(|skipped| (skipped, loaded.get("hosted.present").unwrap().enabled()))
+                .map_err(|error| error.to_string())
+        };
+        assert_eq!(
+            apply(&["hosted.absent", "hosted.present", "hosted.other"]),
+            Ok((
+                vec!["hosted.absent".to_owned(), "hosted.other".to_owned()],
+                false
+            ))
+        );
+        for unknown in ["hosted.chain", "elsewhere.absent"] {
+            assert_eq!(
+                apply(&["hosted.absent", unknown]),
+                Err(format!(
+                    "unknown rule_id '{unknown}' in rule override file synthetic.yaml"
+                )),
+            );
+        }
+    }
+
     #[test]
     fn shared_regex_matches_a_fresh_compile_and_keeps_no_failure() {
         let pattern = r"(?i:shared-regex-test\s+(\d+))";

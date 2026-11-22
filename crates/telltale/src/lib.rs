@@ -1188,6 +1188,7 @@ impl PipelineBuilder {
             policy,
         };
         resolve_rule_content(content)
+            .map(|(resolution, _)| resolution)
             .map_err(|error| {
                 if error.is::<NoRuleDocuments>() {
                     PipelineError::InvalidConfiguration

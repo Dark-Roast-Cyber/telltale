@@ -158,7 +158,7 @@ pub struct Engine {
     semantic_identity: String,
     generated: GeneratedCoverage,
     /// Override entries left out because they name a hooks rule that is not
-    /// loaded (`RuleResolution::skipped_overrides`).
+    /// loaded (`rule_resolution::resolve_rule_content`).
     skipped_overrides: Vec<String>,
     /// The names of the enforcement test signatures, when they are loaded
     /// ([`test_signature_document`]); empty otherwise.
@@ -323,7 +323,7 @@ impl Engine {
                 .collect();
             replaceable.push((format!("hooks:{name}"), parsed));
         }
-        let resolution = crate::rule_resolution::resolve_rule_set_with_host(
+        let (resolution, skipped_overrides) = crate::rule_resolution::resolve_rule_set_with_host(
             &rules.packs,
             &[],
             fixed,
@@ -346,7 +346,6 @@ impl Engine {
                 format!("the policy removes the self-protection rule {id}").into(),
             )));
         }
-        let skipped_overrides = resolution.skipped_overrides.clone();
         let pipeline = resolution.into_pipeline().map_err(EngineError::Build)?;
         let mut options = DetailedEvaluationOptions::default();
         options.process_chain = rules.process_chain;
