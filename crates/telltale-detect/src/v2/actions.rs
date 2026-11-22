@@ -1006,10 +1006,11 @@ fn read_view(
                 .map(|span| (span.start, span.end))
                 .collect::<BTreeSet<_>>();
             let mut recorded = Vec::new();
-            let mut launched = Vec::new();
-            for (start, end) in every_span {
+            for &(start, end) in &every_span {
                 let stage = &command[start..end];
                 budget.charge(stage.len())?;
+                let from = out.commands.len();
+                let mut launched = Vec::new();
                 // A word means what is left once a shell takes its escapes, and
                 // a Windows path keeps them, so both readings count.
                 let plain = stage
@@ -1026,9 +1027,7 @@ fn read_view(
                         ));
                         opened.extend(input_files(reading, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
-                        for command in launched_commands(&tokens, budget)? {
-                            launched.push((start..end, command));
-                        }
+                        launched.extend(launched_commands(&tokens, budget)?);
                         if index == 0 && split.contains(&(start, end)) {
                             recorded.push(out.commands.len());
                         }
@@ -1051,9 +1050,7 @@ fn read_view(
                     {
                         opened.extend(input_files(stage, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
-                        for command in launched_commands(&tokens, budget)? {
-                            launched.push((start..end, command));
-                        }
+                        launched.extend(launched_commands(&tokens, budget)?);
                         out.stage_spans.push(start..end);
                         out.commands.push(tokens);
                         if let Some(script) = script {
@@ -1062,13 +1059,25 @@ fn read_view(
                         }
                     }
                 }
-            }
-            // A launched command the shell reader already read as a script is
-            // read once.
-            for (span, command) in launched {
-                if !out.commands.contains(&command) {
-                    out.stage_spans.push(span);
-                    out.commands.push(command);
+                // The commands a launcher hands to another shell follow their
+                // stage, once each: a stage inside this one may already be the
+                // shell reader's reading of the same script.
+                if !launched.is_empty() {
+                    let mut read = out.commands[from..].to_vec();
+                    for &(inner_start, inner_end) in every_span
+                        .iter()
+                        .filter(|&&span| start <= span.0 && span.1 <= end && span != (start, end))
+                    {
+                        budget.charge(2 * (inner_end - inner_start))?;
+                        read.push(tokenize(&command[inner_start..inner_end]));
+                    }
+                    for tokens in launched {
+                        if !read.contains(&tokens) {
+                            out.stage_spans.push(start..end);
+                            out.commands.push(tokens.clone());
+                            read.push(tokens);
+                        }
+                    }
                 }
             }
             charge_commands(&out.commands, budget)?;
@@ -1335,7 +1344,7 @@ fn joined_script(tokens: &[String]) -> Option<&[String]> {
         let flag = tokens
             .iter()
             .position(|token| super::shell_text::script_flag(token))?;
-        let shell = tokens[..flag].iter().position(|token| {
+        let shell = tokens[..flag].iter().rposition(|token| {
             super::shell_text::SHELLS.contains(&super::http::client_name(token).as_str())
         })?;
         // The words after a PowerShell `-File` are its script's arguments.
