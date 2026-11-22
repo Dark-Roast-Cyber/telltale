@@ -852,8 +852,14 @@ mod hooks_evaluator;
 #[path = "cli/hooks_generated_rule_paths.rs"]
 mod hooks_generated_rule_paths;
 #[cfg(feature = "hooks")]
+#[path = "cli/hooks_harness_matrix.rs"]
+mod hooks_harness_matrix;
+#[cfg(feature = "hooks")]
 #[path = "cli/hooks_opencode_contract.rs"]
 mod hooks_opencode_contract;
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_operator_tuning.rs"]
+mod hooks_operator_tuning;
 #[cfg(all(feature = "hooks", unix))]
 #[path = "cli/hooks_pinned_config_root.rs"]
 mod hooks_pinned_config_root;
