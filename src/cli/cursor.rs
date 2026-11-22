@@ -9,6 +9,7 @@ use clap::Subcommand;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::event::is_canonical_sha256_hex;
 use crate::file_lock::safe_path_info;
 use crate::state::{
     ScanState, SqliteIngestionCursor, StateLock, sqlite_ingestion_cursor_key_for_instance,
@@ -99,8 +100,8 @@ fn run_with_output(command: CursorCommand, output: &mut impl Write) -> Result<()
             accept_history_gap,
             abandon_incomplete_drain,
         } => {
-            if !is_digest(&source_instance_id)
-                || !is_digest(&expect_cursor)
+            if !is_canonical_sha256_hex(&source_instance_id)
+                || !is_canonical_sha256_hex(&expect_cursor)
                 || !matches!(table.as_str(), "part" | "session_message")
             {
                 return Err("cursor_selection_invalid".into());
@@ -173,7 +174,7 @@ fn load(path: &Path) -> Result<(StateLock, ScanState)> {
         }
         if cursor.client != "opencode"
             || cursor.source_id != "opencode.sqlite"
-            || !is_digest(&cursor.source_instance_id)
+            || !is_canonical_sha256_hex(&cursor.source_instance_id)
             || !matches!(cursor.table.as_str(), "part" | "session_message")
             || key
                 != &sqlite_ingestion_cursor_key_for_instance(
@@ -187,13 +188,6 @@ fn load(path: &Path) -> Result<(StateLock, ScanState)> {
         }
     }
     Ok((lock, state))
-}
-
-fn is_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn digest(cursor: &SqliteIngestionCursor) -> Result<String> {

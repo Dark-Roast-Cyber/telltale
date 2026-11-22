@@ -370,6 +370,40 @@ fn start_mock_hec_server() -> (
     )
 }
 
+/// Reads one request from a stream a mock server accepted: the headers and the
+/// body their Content-Length announces (no body when it is missing). A read
+/// error, the 2-second read timeout or an end of stream ends the request early
+/// and returns the bytes read so far.
+fn read_mock_request(stream: &mut TcpStream, buffer_size: usize) -> Vec<u8> {
+    stream.set_nonblocking(false).expect("blocking stream");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read timeout");
+    let mut request = Vec::new();
+    let mut buf = vec![0_u8; buffer_size];
+    while let Ok(read) = stream.read(&mut buf) {
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buf[..read]);
+        if let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find_map(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length").then_some(value)
+                })
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if request.len() - header_end - 4 >= content_length {
+                break;
+            }
+        }
+    }
+    request
+}
+
 fn start_mock_http_server(
     endpoint_path: &str,
     buffer_size: usize,
@@ -395,33 +429,7 @@ fn start_mock_http_server(
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false).expect("blocking stream");
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .expect("read timeout");
-                    let mut request = Vec::new();
-                    let mut buf = vec![0_u8; buffer_size];
-                    while let Ok(read) = stream.read(&mut buf) {
-                        if read == 0 {
-                            break;
-                        }
-                        request.extend_from_slice(&buf[..read]);
-                        if let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n")
-                        {
-                            let headers = String::from_utf8_lossy(&request[..header_end]);
-                            let content_length = headers
-                                .lines()
-                                .filter_map(|line| line.split_once(':'))
-                                .find_map(|(name, value)| {
-                                    name.eq_ignore_ascii_case("content-length").then_some(value)
-                                })
-                                .and_then(|value| value.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
-                            if request.len() - header_end - 4 >= content_length {
-                                break;
-                            }
-                        }
-                    }
+                    let request = read_mock_request(&mut stream, buffer_size);
                     let _ = tx.send(String::from_utf8_lossy(&request).to_string());
                     stream
                         .write_all(response.as_bytes())
@@ -2227,34 +2235,7 @@ fn start_switchable_status_server() -> SwitchableStatusServer {
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false).expect("blocking stream");
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .expect("read timeout");
-                    let mut request = Vec::new();
-                    let mut buf = vec![0_u8; 1024];
-                    while let Ok(read) = stream.read(&mut buf) {
-                        if read == 0 {
-                            break;
-                        }
-                        request.extend_from_slice(&buf[..read]);
-                        if let Some(header_end) =
-                            request.windows(4).position(|window| window == b"\r\n\r\n")
-                        {
-                            let headers = String::from_utf8_lossy(&request[..header_end]);
-                            let content_length = headers
-                                .lines()
-                                .filter_map(|line| line.split_once(':'))
-                                .find_map(|(name, value)| {
-                                    name.eq_ignore_ascii_case("content-length").then_some(value)
-                                })
-                                .and_then(|value| value.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
-                            if request.len() - header_end - 4 >= content_length {
-                                break;
-                            }
-                        }
-                    }
+                    read_mock_request(&mut stream, 1024);
                     requests_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let body = response_thread.lock().expect("synthetic response").clone();
                     stream

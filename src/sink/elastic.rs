@@ -374,30 +374,15 @@ fn bulk_item_errors(body: &str) -> Result<Option<BulkItemErrorSummary>, &'static
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
-    use std::time::Duration;
 
     use super::{
         BulkItemErrorSummary, ElasticBulkSink, bulk_item_errors, elastic_bulk_action_json,
     };
-    use crate::event::health_event_with_metadata;
     use crate::sink::emit_events;
-
-    fn make_health_event() -> crate::event::Event {
-        health_event_with_metadata(crate::event::HealthEventInput {
-            sources: &[],
-            source_inventory_change: None,
-            scan_duration_ms: 7,
-            rule_count: 3,
-            threshold_config: crate::scoring::load_thresholds(),
-            active_policy_name: None,
-            emitted_count: 0,
-            suppressed_count: 0,
-            scanner_error_count: 0,
-        })
-    }
+    use crate::sink::test_support::{make_health_event, read_mock_request};
 
     /// Mock Elasticsearch answering one request with the given body.
     fn start_mock_elastic(
@@ -408,28 +393,7 @@ mod tests {
         let addr = listener.local_addr().expect("mock addr");
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .expect("read timeout");
-            let mut request = Vec::new();
-            let mut buf = [0_u8; 4096];
-            while let Ok(read) = stream.read(&mut buf) {
-                if read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buf[..read]);
-                let text = String::from_utf8_lossy(&request).to_lowercase();
-                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                    let content_length = headers
-                        .lines()
-                        .find_map(|line| line.strip_prefix("content-length: "))
-                        .and_then(|value| value.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if body.len() >= content_length {
-                        break;
-                    }
-                }
-            }
+            let request = read_mock_request(&mut stream);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 response_body.len(),

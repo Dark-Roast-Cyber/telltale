@@ -9,6 +9,8 @@ pub mod http;
 mod jsonl;
 pub(crate) mod outbox;
 mod splunk_hec;
+#[cfg(test)]
+mod test_support;
 
 pub(crate) use elastic::{DEFAULT_ELASTIC_INDEX, ElasticBulkSink, elastic_bulk_action_json};
 pub(crate) use jsonl::{LocalJsonlSink, RotationConfig};
@@ -1099,29 +1101,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::outbox::{CapacityLimits, DeliveryClock, DeliveryState, DeliveryUpdate, Outbox};
+    use super::test_support::{make_health_event, read_mock_request};
     use super::{
         DeliveryError, DeliveryErrorClass, DeliveryPolicy, EventSink, LocalJsonlSink,
         PersistenceRole, RetryConfig, RotationConfig, SinkSet,
     };
     use crate::event::{
         ActivityEventInput, ControlledMarker, Event, Evidence, OperationalAlertInput,
-        check_serialized_event_markers, health_event_with_metadata, operational_alert_event,
+        check_serialized_event_markers, operational_alert_event,
     };
     use telltale_schema::clients::ClientId;
-
-    fn make_health_event() -> Event {
-        health_event_with_metadata(crate::event::HealthEventInput {
-            sources: &[],
-            source_inventory_change: None,
-            scan_duration_ms: 7,
-            rule_count: 3,
-            threshold_config: crate::scoring::load_thresholds(),
-            active_policy_name: None,
-            emitted_count: 0,
-            suppressed_count: 0,
-            scanner_error_count: 0,
-        })
-    }
 
     fn marked_event(marker: &str) -> Event {
         crate::event::activity_event(ActivityEventInput {
@@ -2254,7 +2243,7 @@ mod tests {
 
     #[test]
     fn slow_http_backlog_does_not_delay_fresh_first_write_by_backlog_length() {
-        use std::io::{BufRead, BufReader, Read, Write};
+        use std::io::Write;
         use std::sync::atomic::AtomicBool;
         use std::time::{Duration, Instant};
         let directory = tempdir().unwrap();
@@ -2280,25 +2269,7 @@ mod tests {
                     }
                     Err(error) => panic!("{error}"),
                 };
-                // Darwin can inherit the listener's nonblocking mode. Request
-                // reads must block with the bounded timeout below.
-                stream.set_nonblocking(false).unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut reader = BufReader::new(&mut stream);
-                let mut length = 0;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse::<usize>().unwrap();
-                    }
-                }
-                reader.read_exact(&mut vec![0; length]).unwrap();
+                read_mock_request(&mut stream);
                 std::thread::sleep(Duration::from_millis(50));
                 stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}").unwrap();
                 requests += 1;
