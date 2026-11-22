@@ -324,29 +324,210 @@ fn rclone_remote(value: &str) -> bool {
         })
 }
 
-/// Wrappers that run their operand as the command: the short options that
-/// take a value, and whether one positional (a `timeout` duration) precedes
-/// the command.
-const WRAPPERS: [(&str, &str, bool); 15] = [
-    ("sudo", "ugCDhprtTU", false),
-    ("doas", "uC", false),
-    ("env", "uCS", false),
-    ("xargs", "adEILnPs", false),
-    ("timeout", "sk", true),
-    ("nice", "n", false),
-    ("ionice", "cnp", false),
-    ("stdbuf", "ioe", false),
-    ("time", "fo", false),
-    ("nohup", "", false),
-    ("command", "", false),
-    ("exec", "a", false),
-    ("torsocks", "", false),
-    ("proxychains", "f", false),
-    ("proxychains4", "f", false),
+/// A program that runs its operands as a command: on this host, on a remote
+/// host, in a container or under a runner.
+struct Wrapper {
+    name: &'static str,
+    /// The subcommand that must follow the name (`docker exec`), if any.
+    subcommand: &'static str,
+    /// The short options that take a value.
+    values: &'static str,
+    /// The positionals before the command: a `timeout` duration, an `ssh`
+    /// destination, a container or a profile.
+    positionals: usize,
+    /// Whether options and `--` may also stand between the positionals and
+    /// the command (`ssh host -t cmd`, `aws-vault exec prod -- cmd`).
+    options_after: bool,
+    /// When not empty, the command starts after the first of these words
+    /// (`kubectl exec … --`, `cmd /c`).
+    markers: &'static [&'static str],
+    /// Options that run a script file: the words after one are the script's.
+    files: &'static [&'static str],
+    /// How the program hands its command to a shell, if it does.
+    script: Script,
+    /// Whether the command runs on another host or in a container.
+    elsewhere: bool,
+}
+
+/// How a wrapper hands its command words to a shell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Script {
+    /// It runs them as a program and its arguments.
+    None,
+    /// It joins them with blanks for a shell (`ssh`, `watch`, PowerShell).
+    Joined,
+    /// Its shell reads a quoted command as written (`cmd /c "…"`).
+    Quoted,
+}
+
+const fn wrapper(name: &'static str, values: &'static str, positionals: usize) -> Wrapper {
+    Wrapper {
+        name,
+        subcommand: "",
+        values,
+        positionals,
+        options_after: false,
+        markers: &[],
+        files: &[],
+        script: Script::None,
+        elsewhere: false,
+    }
+}
+
+/// The programs read as running their operands as a command, each with the
+/// options that take a value and the words that come before its command.
+const WRAPPERS: [Wrapper; 27] = [
+    wrapper("sudo", "ugCDhprtTU", 0),
+    wrapper("doas", "uC", 0),
+    wrapper("env", "uCS", 0),
+    wrapper("xargs", "adEILnPs", 0),
+    wrapper("timeout", "sk", 1),
+    wrapper("nice", "n", 0),
+    wrapper("ionice", "cnp", 0),
+    wrapper("stdbuf", "ioe", 0),
+    wrapper("time", "fo", 0),
+    wrapper("nohup", "", 0),
+    wrapper("command", "", 0),
+    wrapper("exec", "a", 0),
+    wrapper("torsocks", "", 0),
+    wrapper("proxychains", "f", 0),
+    wrapper("proxychains4", "f", 0),
+    // Remote hosts and containers.
+    Wrapper {
+        options_after: true,
+        script: Script::Joined,
+        elsewhere: true,
+        ..wrapper("ssh", "BbcDEeFIiJLlmOoPpQRSWw", 1)
+    },
+    Wrapper {
+        subcommand: "exec",
+        elsewhere: true,
+        ..wrapper("docker", "euw", 1)
+    },
+    Wrapper {
+        subcommand: "exec",
+        elsewhere: true,
+        ..wrapper("podman", "euw", 1)
+    },
+    Wrapper {
+        subcommand: "exec",
+        markers: &["--"],
+        elsewhere: true,
+        ..wrapper("kubectl", "", 0)
+    },
+    // Runners.
+    Wrapper {
+        subcommand: "exec",
+        options_after: true,
+        ..wrapper("aws-vault", "dt", 1)
+    },
+    Wrapper {
+        script: Script::Joined,
+        ..wrapper("watch", "nq", 0)
+    },
+    Wrapper {
+        script: Script::Joined,
+        ..wrapper("parallel", "aCdEIjLNnPSs", 0)
+    },
+    Wrapper {
+        subcommand: "run",
+        ..wrapper("uv", "p", 0)
+    },
+    wrapper("npx", "pc", 0),
+    // Other shells' command strings.
+    Wrapper {
+        markers: &["/c", "/k"],
+        script: Script::Quoted,
+        ..wrapper("cmd", "", 0)
+    },
+    Wrapper {
+        markers: &["-c", "-command", "/c", "/command"],
+        files: &["-file", "-f", "/file"],
+        script: Script::Joined,
+        ..wrapper("powershell", "", 0)
+    },
+    Wrapper {
+        markers: &["-c", "-command", "/c", "/command"],
+        files: &["-file", "-f", "/file"],
+        script: Script::Joined,
+        ..wrapper("pwsh", "", 0)
+    },
 ];
 
+impl Wrapper {
+    /// The row of the program `tokens[at]` invokes.
+    fn at(tokens: &[String], at: usize) -> Option<&'static Wrapper> {
+        let name = client_name(&tokens[at]);
+        WRAPPERS.iter().find(|wrapper| {
+            name == wrapper.name
+                && (wrapper.subcommand.is_empty()
+                    || tokens
+                        .get(at + 1)
+                        .is_some_and(|word| word == wrapper.subcommand))
+        })
+    }
+
+    /// Where the command this invocation at `at` runs starts.
+    fn command(&self, tokens: &[String], at: usize) -> Option<usize> {
+        let mut index = at + 1 + usize::from(!self.subcommand.is_empty());
+        if !self.markers.is_empty() {
+            let words = tokens.get(index..)?;
+            let listed = |list: &[&str], word: &String| {
+                list.iter().any(|item| word.eq_ignore_ascii_case(item))
+            };
+            let found = words
+                .iter()
+                .position(|word| listed(self.markers, word) || listed(self.files, word))?;
+            return (!listed(self.files, &words[found])).then_some(index + found + 1);
+        }
+        // Options come before each positional, and after the last one where
+        // the row says so.
+        let rounds = self.positionals + usize::from(self.positionals == 0 || self.options_after);
+        for round in 0..rounds {
+            while let Some(option) = tokens
+                .get(index)
+                .filter(|token| token.len() > 1 && token.starts_with('-'))
+            {
+                index += 1;
+                if option == "--" {
+                    break;
+                }
+                index += usize::from(takes_next(option, &WRAPPER_VALUE_OPTIONS, self.values));
+            }
+            index += usize::from(round < self.positionals);
+        }
+        Some(index)
+    }
+}
+
+/// The text a wrapper hands to another shell, as that shell receives it: its
+/// command words joined with blanks when one of them holds a blank, as a
+/// quoted command does (`ssh host '…'`, `powershell -Command "…"`), or for
+/// `cmd`, a quoted command of its own (`cmd /c "…"`). With it come the words
+/// that send the command to another host (`ssh host`), which a reading of the
+/// command keeps in front of it. The caller reads the text as it reads a
+/// `bash -c` script.
+pub fn launched_script(tokens: &[String]) -> Option<(&[String], String)> {
+    let (at, wrapper, elsewhere) = walk(tokens, &[], true)?;
+    let wrapper = wrapper?;
+    let start = wrapper.command(tokens, at)?;
+    let words = tokens.get(start..)?;
+    let blank = |word: &String| word.contains(char::is_whitespace);
+    let script = match wrapper.script {
+        Script::None => false,
+        Script::Joined => words.iter().any(blank),
+        Script::Quoted => words.first().is_some_and(blank),
+    };
+    let kept = if elsewhere || wrapper.elsewhere {
+        &tokens[..start]
+    } else {
+        &[]
+    };
+    script.then(|| (kept, words.join(" ")))
+}
+
 /// Wrapper long options that take a separate value (`--user deploy`).
-const WRAPPER_VALUE_OPTIONS: [&str; 19] = [
+const WRAPPER_VALUE_OPTIONS: [&str; 34] = [
     "user",
     "group",
     "host",
@@ -366,6 +547,21 @@ const WRAPPER_VALUE_OPTIONS: [&str; 19] = [
     "signal",
     "kill-after",
     "adjustment",
+    "env",
+    "env-file",
+    "workdir",
+    "detach-keys",
+    "duration",
+    "region",
+    "mfa-token",
+    "interval",
+    "with",
+    "with-requirements",
+    "with-editable",
+    "python",
+    "project",
+    "directory",
+    "package",
 ];
 
 /// A leading `NAME=value` shell assignment.
@@ -385,20 +581,55 @@ pub fn reserved_word(word: &str) -> bool {
 }
 
 /// The client invocation of a command segment: its command word, after any
-/// leading reserved words, assignments and wrappers such as `sudo -u user`,
-/// `env A=1`, `xargs -n1` or `timeout 30`, or the command `find` runs for
-/// each file it finds (`-exec`, `-execdir`, `-ok`, `-okdir`). A client named
-/// as an argument (`git fetch`, `echo curl`, `which wget`) is not an
-/// invocation.
+/// leading reserved words, assignments, the opening of a group or a function
+/// body, and wrappers such as `sudo -u user`, `env A=1`, `xargs -n1`,
+/// `timeout 30`, `ssh host`, `docker exec c`, `kubectl exec pod --`, `watch
+/// -n5` or `cmd /c`, or the command `find` runs for each file it finds
+/// (`-exec`, `-execdir`, `-ok`, `-okdir`). A client named as an argument
+/// (`git fetch`, `echo curl`, `which wget`) is not an invocation.
 pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [String]> {
+    walk(tokens, clients, false).map(|(at, ..)| &tokens[at..])
+}
+
+/// Whether the client invocation of a command segment runs on another host
+/// or in a container: an `ssh`, `docker exec`, `podman exec` or `kubectl exec`
+/// leads to it, directly or through other wrappers.
+pub fn runs_elsewhere(tokens: &[String], clients: &[&str]) -> bool {
+    walk(tokens, clients, false).is_some_and(|(.., elsewhere)| elsewhere)
+}
+
+/// Where [`invocation`] finds a client, or with `scripts`, the first wrapper
+/// that hands its command to a shell, with that wrapper's row; and whether a
+/// wrapper before it runs its command on another host or in a container.
+fn walk(
+    tokens: &[String],
+    clients: &[&str],
+    scripts: bool,
+) -> Option<(usize, Option<&'static Wrapper>, bool)> {
     let mut index = 0;
+    let mut elsewhere = false;
     while let Some(token) = tokens.get(index) {
         let name = client_name(token);
         if clients.contains(&name.as_str()) {
-            return Some(&tokens[index..]);
+            return Some((index, None, elsewhere));
         }
-        if assignment(token) || reserved_word(token) {
+        if assignment(token) || reserved_word(token) || token == "{" {
             index += 1;
+            continue;
+        }
+        // A function definition's name: `f() {`, `f () {`, `function f {`.
+        let opens = |at: usize| tokens.get(at).is_some_and(|word| word == "{");
+        if token == "function" && tokens.get(index + 1).is_some() {
+            index += 2;
+            index += usize::from(tokens.get(index).is_some_and(|word| word == "()"));
+            continue;
+        }
+        if token.ends_with("()") && token.len() > 2 && opens(index + 1) {
+            index += 1;
+            continue;
+        }
+        if tokens.get(index + 1).is_some_and(|word| word == "()") && opens(index + 2) {
+            index += 2;
             continue;
         }
         if name == "find" {
@@ -409,21 +640,18 @@ pub fn invocation<'a>(tokens: &'a [String], clients: &[&str]) -> Option<&'a [Str
                 .filter(|(_, token)| {
                     matches!(token.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")
                 })
-                .find_map(|(at, _)| invocation(&tokens[index + at + 2..], clients));
+                .find_map(|(at, _)| {
+                    let from = index + at + 2;
+                    walk(&tokens[from..], clients, scripts)
+                        .map(|(at, row, inner)| (from + at, row, elsewhere || inner))
+                });
         }
-        let (_, values, positional) = WRAPPERS.iter().find(|(wrapper, ..)| *wrapper == name)?;
-        index += 1;
-        while let Some(option) = tokens
-            .get(index)
-            .filter(|token| token.len() > 1 && token.starts_with('-'))
-        {
-            index += 1;
-            if option == "--" {
-                break;
-            }
-            index += usize::from(takes_next(option, &WRAPPER_VALUE_OPTIONS, values));
+        let wrapper = Wrapper::at(tokens, index)?;
+        if scripts && wrapper.script != Script::None {
+            return Some((index, Some(wrapper), elsewhere));
         }
-        index += usize::from(*positional);
+        elsewhere |= wrapper.elsewhere;
+        index = wrapper.command(tokens, index)?;
     }
     None
 }
@@ -635,6 +863,183 @@ mod tests {
     }
 
     #[test]
+    fn a_transfer_run_on_a_remote_host_or_in_a_container_is_read() {
+        let upload = |source| {
+            [transfer(
+                Client::Aws,
+                Operation::Copy,
+                source,
+                "s3://synthetic-bucket/k",
+                Direction::Outbound,
+            )]
+        };
+        for command in [
+            "ssh host aws s3 cp ./d s3://synthetic-bucket/k",
+            "ssh -p 2222 -i key -o BatchMode=yes user@host aws s3 cp ./d s3://synthetic-bucket/k",
+            "ssh -t host -- aws s3 cp ./d s3://synthetic-bucket/k",
+            "sudo -u app ssh host aws s3 cp ./d s3://synthetic-bucket/k",
+            "docker exec c aws s3 cp ./d s3://synthetic-bucket/k",
+            "docker exec -it -u root --env-file vars c aws s3 cp ./d s3://synthetic-bucket/k",
+            "podman exec -w /srv c aws s3 cp ./d s3://synthetic-bucket/k",
+            "kubectl exec pod -- aws s3 cp ./d s3://synthetic-bucket/k",
+            "kubectl exec -n ns pod -c ctr -- aws s3 cp ./d s3://synthetic-bucket/k",
+            "aws-vault exec prod -- aws s3 cp ./d s3://synthetic-bucket/k",
+            "aws-vault exec -d 1h prod aws s3 cp ./d s3://synthetic-bucket/k",
+        ] {
+            assert_eq!(transfers(&words(command)), upload("./d"), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_transfer_a_runner_or_another_shell_starts_is_read() {
+        let upload = |source| {
+            [transfer(
+                Client::Aws,
+                Operation::Copy,
+                source,
+                "s3://synthetic-bucket/k",
+                Direction::Outbound,
+            )]
+        };
+        for (command, source) in [
+            ("watch -n5 aws s3 cp ./d s3://synthetic-bucket/k", "./d"),
+            ("watch -n 5 -d aws s3 cp ./d s3://synthetic-bucket/k", "./d"),
+            (
+                "parallel -j 4 aws s3 cp {} s3://synthetic-bucket/k ::: *.gz",
+                "{}",
+            ),
+            ("uv run aws s3 cp ./d s3://synthetic-bucket/k", "./d"),
+            (
+                "uv run --with awscli aws s3 cp ./d s3://synthetic-bucket/k",
+                "./d",
+            ),
+            ("npx --yes aws s3 cp ./d s3://synthetic-bucket/k", "./d"),
+            ("cmd /c aws s3 cp ./d s3://synthetic-bucket/k", "./d"),
+            (
+                "cmd.exe /d /s /C aws s3 cp ./d s3://synthetic-bucket/k",
+                "./d",
+            ),
+            (
+                "powershell -NoProfile -Command aws s3 cp ./d s3://synthetic-bucket/k",
+                "./d",
+            ),
+            ("pwsh -c aws s3 cp ./d s3://synthetic-bucket/k", "./d"),
+        ] {
+            assert_eq!(transfers(&words(command)), upload(source), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_transfer_in_a_group_or_a_function_body_is_read() {
+        for command in [
+            "{ aws s3 cp ./d s3://synthetic-bucket/k",
+            "f() { aws s3 cp ./d s3://synthetic-bucket/k",
+            "f () { aws s3 cp ./d s3://synthetic-bucket/k",
+            "function f { aws s3 cp ./d s3://synthetic-bucket/k",
+        ] {
+            assert_eq!(
+                transfers(&words(command)),
+                [transfer(
+                    Client::Aws,
+                    Operation::Copy,
+                    "./d",
+                    "s3://synthetic-bucket/k",
+                    Direction::Outbound
+                )],
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_launcher_reads_the_direction_and_command_it_runs() {
+        assert_eq!(
+            transfers(&words("ssh host aws s3 cp s3://synthetic-bucket/k ./d")),
+            [transfer(
+                Client::Aws,
+                Operation::Copy,
+                "s3://synthetic-bucket/k",
+                "./d",
+                Direction::Inbound
+            )]
+        );
+        assert_eq!(
+            transfers(&words(
+                "ssh host echo aws s3 cp ./d s3://synthetic-bucket/k"
+            )),
+            []
+        );
+        assert_eq!(transfers(&words("docker exec c grep aws s3 cp f")), []);
+        assert_eq!(
+            transfers(&words(
+                "kubectl exec pod -- echo aws s3 cp ./d s3://synthetic-bucket/k"
+            )),
+            []
+        );
+        assert_eq!(
+            transfers(&words(
+                "watch -n5 echo aws s3 cp ./d s3://synthetic-bucket/k"
+            )),
+            []
+        );
+    }
+
+    #[test]
+    fn a_quoted_command_another_shell_receives_is_its_script() {
+        let quoted = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let ssh = quoted(&[
+            "ssh",
+            "-p",
+            "2222",
+            "host",
+            "cd /srv && aws s3 cp ./d s3://b/",
+        ]);
+        assert_eq!(
+            super::launched_script(&ssh),
+            Some((&ssh[..4], "cd /srv && aws s3 cp ./d s3://b/".to_owned()))
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&[
+                "sudo",
+                "-u",
+                "app",
+                "cmd",
+                "/c",
+                "aws s3 cp ./d s3://b/"
+            ])),
+            Some((&[][..], "aws s3 cp ./d s3://b/".to_owned()))
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&[
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "aws s3 cp ./d s3://b/"
+            ])),
+            Some((&[][..], "aws s3 cp ./d s3://b/".to_owned()))
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&["ssh", "host", "aws", "s3", "ls"])),
+            None
+        );
+        assert_eq!(
+            super::launched_script(&quoted(&["docker", "exec", "c", "aws s3 cp ./d s3://b/"])),
+            None
+        );
+        // cmd keeps the quotes inside its command line: only a quoted
+        // command of its own is a script.
+        assert_eq!(
+            super::launched_script(&quoted(&["cmd", "/c", "echo", "x & aws s3 cp ./d s3://b/"])),
+            None
+        );
+    }
+
+    #[test]
     fn rclone_after_an_unlisted_flag_is_a_fallback_reading() {
         assert_eq!(
             transfers(&words(
@@ -708,5 +1113,20 @@ mod tests {
         assert_eq!(transfers(&words("gh issue comment 1 --body text")), []);
         assert_eq!(transfers(&words("gh gist view 1234abcd")), []);
         assert_eq!(transfers(&words("rclone ls synthetic-remote:b")), []);
+        for command in [
+            "ssh",
+            "ssh -p",
+            "docker exec",
+            "kubectl exec pod",
+            "cmd",
+            "powershell",
+            "function",
+            "f ()",
+            "sudo ssh",
+            "pwsh -File x.ps1 -c aws s3 cp ./d s3://synthetic-bucket/k",
+            "powershell -f x.ps1 -Command aws s3 cp ./d s3://synthetic-bucket/k",
+        ] {
+            assert_eq!(transfers(&words(command)), [], "{command}");
+        }
     }
 }

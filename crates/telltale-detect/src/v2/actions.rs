@@ -24,7 +24,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
 /// Versions what the action view reads, the shared transfer reading included.
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 16;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 17;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -736,8 +736,20 @@ fn string(value: &JsonValue) -> Option<&str> {
 /// a detached budget, so the declaration neither spends the source's work nor
 /// makes a read fail that succeeded without it; if that read fails, the call
 /// keeps the first. Most declared calls hold in their arguments all that their
-/// declaration names, and are read once.
+/// declaration names, and are read once. An imported observation is no
+/// action: its view is empty.
 fn view(
+    observation: &CanonicalObservationV2,
+    budget: &mut RetentionBudget,
+) -> Result<ActionView, ProcessingError> {
+    if observation.source().ingestion_mode() == IngestionMode::Import {
+        return Ok(ActionView::default());
+    }
+    command_view(observation, budget)
+}
+
+/// What [`view`] reads, whatever the observation's ingestion mode.
+fn command_view(
     observation: &CanonicalObservationV2,
     budget: &mut RetentionBudget,
 ) -> Result<ActionView, ProcessingError> {
@@ -862,9 +874,6 @@ fn read_view(
     #[cfg(test)]
     READINGS.with(|count| count.set(count.get() + 1));
     let mut out = ActionView::default();
-    if observation.source().ingestion_mode() == IngestionMode::Import {
-        return Ok(out);
-    }
     budget.charge(observation.retained_byte_len())?;
     match observation.body() {
         ObservationBody::Message(message) => {
@@ -997,9 +1006,11 @@ fn read_view(
                 .map(|span| (span.start, span.end))
                 .collect::<BTreeSet<_>>();
             let mut recorded = Vec::new();
-            for (start, end) in every_span {
+            for &(start, end) in &every_span {
                 let stage = &command[start..end];
                 budget.charge(stage.len())?;
+                let from = out.commands.len();
+                let mut launched = Vec::new();
                 // A word means what is left once a shell takes its escapes, and
                 // a Windows path keeps them, so both readings count.
                 let plain = stage
@@ -1016,6 +1027,7 @@ fn read_view(
                         ));
                         opened.extend(input_files(reading, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        launched.extend(launched_commands(&tokens, budget)?);
                         if index == 0 && split.contains(&(start, end)) {
                             recorded.push(out.commands.len());
                         }
@@ -1038,11 +1050,32 @@ fn read_view(
                     {
                         opened.extend(input_files(stage, &tokens));
                         let script = joined_script(&tokens).map(<[String]>::to_vec);
+                        launched.extend(launched_commands(&tokens, budget)?);
                         out.stage_spans.push(start..end);
                         out.commands.push(tokens);
                         if let Some(script) = script {
                             out.stage_spans.push(start..end);
                             out.commands.push(script);
+                        }
+                    }
+                }
+                // The commands a launcher hands to another shell follow their
+                // stage, once each: a stage inside this one may already be the
+                // shell reader's reading of the same script.
+                if !launched.is_empty() {
+                    let mut read = out.commands[from..].to_vec();
+                    for &(inner_start, inner_end) in every_span
+                        .iter()
+                        .filter(|&&span| start <= span.0 && span.1 <= end && span != (start, end))
+                    {
+                        budget.charge(2 * (inner_end - inner_start))?;
+                        read.push(tokenize(&command[inner_start..inner_end]));
+                    }
+                    for tokens in launched {
+                        if !read.contains(&tokens) {
+                            out.stage_spans.push(start..end);
+                            out.commands.push(tokens.clone());
+                            read.push(tokens);
                         }
                     }
                 }
@@ -1311,18 +1344,61 @@ fn joined_script(tokens: &[String]) -> Option<&[String]> {
         let flag = tokens
             .iter()
             .position(|token| super::shell_text::script_flag(token))?;
-        tokens[..flag]
-            .iter()
-            .any(|token| {
-                super::shell_text::SHELLS.contains(&super::http::client_name(token).as_str())
-            })
-            .then_some(flag + 1)?
+        let shell = tokens[..flag].iter().rposition(|token| {
+            super::shell_text::SHELLS.contains(&super::http::client_name(token).as_str())
+        })?;
+        // The words after a PowerShell `-File` are its script's arguments.
+        let powershell = matches!(
+            super::http::client_name(&tokens[shell]).as_str(),
+            "powershell" | "pwsh"
+        );
+        let file = tokens[shell + 1..flag].iter().any(|token| {
+            matches!(
+                token.to_ascii_lowercase().as_str(),
+                "-file" | "-f" | "/file"
+            )
+        });
+        (!(powershell && file)).then_some(flag + 1)?
     };
     let script = tokens.get(from..)?;
     script
         .first()
         .filter(|word| !word.contains(char::is_whitespace))?;
     Some(script)
+}
+
+/// The commands of the text a wrapper hands to another shell as a quoted word
+/// (`ssh host '…'`, `cmd /c "…"`, `powershell -Command "…"`), read as the shell
+/// reader reads a `bash -c` script. A command sent to another host keeps the
+/// words that send it there in front of it (`ssh host`).
+fn launched_commands(
+    tokens: &[String],
+    budget: &mut RetentionBudget,
+) -> Result<Vec<Vec<String>>, ProcessingError> {
+    let Some((kept, script)) = command_effect::launched_script(tokens) else {
+        return Ok(Vec::new());
+    };
+    budget.charge(script.len())?;
+    let shell = super::shell_text::read(&script);
+    budget.charge(shell.work)?;
+    let spans = shell
+        .stages
+        .iter()
+        .chain(&shell.inner_commands)
+        .cloned()
+        .chain(statement_spans(&shell.code))
+        .map(|span| trimmed(&shell.code, span))
+        .filter(|span| !span.is_empty())
+        .map(|span| (span.start, span.end))
+        .collect::<BTreeSet<_>>();
+    let mut commands = Vec::new();
+    for (start, end) in spans {
+        budget.charge(2 * (end - start))?;
+        let mut command = kept.to_vec();
+        command.extend(tokenize(&shell.command[start..end]));
+        commands.push(command);
+    }
+    Ok(commands)
 }
 
 /// A command stage whose parameters name files it reads.
@@ -1661,7 +1737,9 @@ pub(super) fn observation_requests_outbound_transfer(
     budget: &RetentionBudget,
 ) -> Result<bool, ProcessingError> {
     let budget = &mut budget.detached();
-    let view = view(observation, budget)?;
+    // Session events read an imported command as one from a session store;
+    // that it is no action changes nothing here.
+    let view = command_view(observation, budget)?;
     for tokens in &view.commands {
         charge_tokens(tokens, budget)?;
         if requests_outbound_transfer(tokens) {
@@ -2948,7 +3026,10 @@ fn downloaded_artifacts(
     let mut artifacts = Vec::new();
     for (index, t) in commands.iter().enumerate() {
         // Bindings are read from the downloading invocation, after any wrapper.
-        let Some(t) = download_command(t, budget)? else {
+        // A file written on another host or in a container is not one a
+        // local command runs.
+        let Some(t) = download_command(t, budget)?.filter(|_| !super::http::downloads_elsewhere(t))
+        else {
             continue;
         };
         charge_tokens(t, budget)?;

@@ -10,6 +10,7 @@ use std::net::IpAddr;
 
 // The client lookup behind wrappers and assignments is shared with the
 // command-effect reader.
+use telltale_rules::command_effect::runs_elsewhere;
 pub(crate) use telltale_rules::command_effect::{assignment, client_name, invocation};
 
 /// Download clients, by normalized command word.
@@ -33,6 +34,12 @@ pub(crate) fn download_candidate(tokens: &[String]) -> Option<&[String]> {
         let request = request(command);
         request.url_seen && (request.non_loopback || request.rerouted) && !request.upload
     })
+}
+
+/// Whether the segment's download client runs on another host or in a
+/// container (`ssh host curl …`, `docker exec c curl …`).
+pub(crate) fn downloads_elsewhere(tokens: &[String]) -> bool {
+    runs_elsewhere(tokens, &DOWNLOAD_CLIENTS)
 }
 
 /// Whether the segment's client is a Windows program (`curl.exe`) or a
