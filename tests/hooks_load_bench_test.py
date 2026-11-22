@@ -43,6 +43,7 @@ STAND_IN = textwrap.dedent(
         "evaluation": {{"status": "evaluated", "evaluator": "in_process",
                         "build_ms": 500, "scan_ms": 45, "lock_wait_ms": 120,
                         "scans": {{"variants": 0, "whole": None, "together": None,
+                                   "history": "skipped_budget",
                                    "pieces_scanned": 3, "pieces_total": 4,
                                    "pieces_refused": 0, "first_refusal": None,
                                    "whole_ms": 0, "together_ms": 0,
@@ -120,6 +121,7 @@ class LoadBenchTests(unittest.TestCase):
         self.assertEqual(scenario["scans"]["history_ms"]["max"], 5)
         self.assertEqual(scenario["scans"]["pieces_scanned"], 12)
         self.assertEqual(scenario["scans"]["pieces_total"], 16)
+        self.assertEqual(scenario["scans"]["history"], {"skipped_budget": 4})
         self.assertEqual(scenario["wall_ms"]["over_25s"], 0)
         self.assertEqual(scenario["wall_ms"]["over_30s"], 0)
 

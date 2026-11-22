@@ -973,6 +973,133 @@ fn a_flood_of_excluded_calls_evicts_history_no_faster_than_ordinary_calls() {
     }
 }
 
+// ---- A call past the projection budget, read with its session history
+
+/// `text` as the command of a call past the projection budget: its padding
+/// takes more chunks than the projection's variants hold.
+fn past_budget(text: &str) -> Value {
+    json!({"command": text, "m0": "x-".repeat(200 * 1024)})
+}
+
+/// A chain whose second stage is a call past the projection budget fires on
+/// that call, as on a small one: under a permissive `on_unevaluable` the
+/// chain's ask is the verdict, not the allow the floor would give.
+#[test]
+fn a_call_past_the_projection_budget_completes_a_chain_from_history() {
+    let mut h = Harness::with_limits(common::generous(), policies()[1].1);
+    pre(&mut h, true, "dl", command(DOWNLOAD));
+    let run = pre(&mut h, true, "run", past_budget(RUN_DOWNLOADED));
+    let record = h.decision_for("run");
+    assert_eq!(verdict(&run), Some(Verdict::Ask), "{record:#}");
+    assert!(
+        rule_ids(&record).iter().any(|r| r == CHAIN_RULE),
+        "{record:#}"
+    );
+    assert!(
+        limits(&record)
+            .iter()
+            .any(|l| l == "pending_input_truncated"),
+        "{record:#}"
+    );
+    assert!(
+        !limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "passed");
+}
+
+/// With the recovery budget spent, the history scan after the pieces does not
+/// start: the record says history was lost and why.
+#[test]
+fn a_call_past_the_projection_budget_with_its_budget_spent_skips_history() {
+    let spent = Limits {
+        recovery: std::time::Duration::ZERO,
+        ..common::generous()
+    };
+    let mut h = Harness::with_limits(spent, |_| {});
+    pre(&mut h, true, "dl", command(DOWNLOAD));
+    pre(&mut h, true, "run", past_budget(RUN_DOWNLOADED));
+    let record = h.decision_for("run");
+    assert!(
+        limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert!(
+        !rule_ids(&record).iter().any(|r| r == CHAIN_RULE),
+        "{record:#}"
+    );
+    assert_eq!(
+        record["evaluation"]["scans"]["whole"],
+        "skipped_pieces_only"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "skipped_budget");
+}
+
+/// The history scan does not count as evaluating the call's input: a call past
+/// the projection budget with no finding keeps the `on_unevaluable` floor.
+#[test]
+fn a_benign_call_past_the_projection_budget_read_with_history_keeps_the_floor() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    pre(&mut h, true, "first", command("ls"));
+    let call = pre(&mut h, true, "call", past_budget("ls"));
+    let record = h.decision_for("call");
+    assert_eq!(verdict(&call), Some(Verdict::Ask), "{record:#}");
+    assert_eq!(record["decision"]["basis"], "unevaluable_input");
+    assert!(
+        limits(&record)
+            .iter()
+            .any(|l| l == "pending_input_truncated"),
+        "{record:#}"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "passed");
+}
+
+/// A deny found in the pieces stays the verdict when history is read too.
+#[test]
+fn a_deny_in_the_pieces_holds_when_history_is_read_after_them() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    pre(&mut h, true, "first", command("ls"));
+    let call = pre(&mut h, true, "call", past_budget(EXFIL));
+    let record = h.decision_for("call");
+    assert_eq!(rule_deny_failure("call", &record, &call), None);
+    assert_eq!(record["evaluation"]["scans"]["history"], "passed");
+}
+
+/// History Telltale refuses with the call's line (a line an older version
+/// journaled): the scan is not retried, and the record says history was lost.
+#[test]
+fn a_refused_history_scan_after_the_pieces_reports_history_lost() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    pre(&mut h, true, "first", command("ls"));
+    seed(&h, [colliding_top("echo hello")]);
+    let call = pre(&mut h, true, "call", past_budget("ls"));
+    let record = h.decision_for("call");
+    assert_eq!(verdict(&call), Some(Verdict::Ask), "{record:#}");
+    assert!(
+        limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert_eq!(record["evaluation"]["scans"]["history"], "refused");
+}
+
+/// The first call of a session has no history to read: no history scan runs,
+/// and nothing is reported lost.
+#[test]
+fn a_first_call_past_the_projection_budget_runs_no_history_scan() {
+    let mut h = Harness::with_limits(common::generous(), |_| {});
+    let call = pre(&mut h, true, "call", past_budget("ls"));
+    let record = h.decision_for("call");
+    assert_eq!(verdict(&call), Some(Verdict::Ask), "{record:#}");
+    assert!(
+        !limits(&record).iter().any(|l| l == HISTORY_LOST),
+        "{record:#}"
+    );
+    assert!(
+        record["evaluation"]["scans"]["history"].is_null(),
+        "{record:#}"
+    );
+}
+
 // ---- Bounds on waiting
 
 fn session_handle(h: &Harness) -> telltale_core::hooks::state::SessionHandle {
@@ -1253,6 +1380,8 @@ fn a_decision_the_evaluator_recorded_is_what_a_client_that_gave_up_returns() {
         let errors = h.records("error");
         assert_eq!(errors.len(), 1, "{errors:#?}");
         assert_eq!(errors[0]["error_code"], "evaluator_no_answer");
+        // The client took the session's lock to find the decision.
+        assert!(errors[0]["lock_wait_ms"].is_u64(), "{errors:#?}");
     }
 }
 

@@ -78,6 +78,7 @@
             "variants": { "type": "integer", "minimum": 0 },
             "whole": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
             "together": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
+            "history": { "enum": ["passed", "refused", "skipped_budget", "skipped_late", null], "description": "The scan of the session history with the line a call past the projection budget is journaled as, after its pieces; `refused` when Telltale failed that source or quarantined the call's line; null when the call was not past the budget or had no history. Absent from records written before 2026-11." },
             "pieces_scanned": { "type": "integer", "minimum": 0 },
             "pieces_total": { "type": "integer", "minimum": 0 },
             "pieces_refused": { "type": "integer", "minimum": 0 },

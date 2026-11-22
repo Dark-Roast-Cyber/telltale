@@ -328,6 +328,7 @@ def summarize(args, name: str, results: dict, records: list[dict], evaluator_rea
             "first_refusal": dict(Counter(s["first_refusal"] for s in scans if s.get("first_refusal"))),
             "whole": dict(Counter(str(s.get("whole") or "not_run") for s in scans)),
             "together": dict(Counter(str(s.get("together") or "not_run") for s in scans)),
+            "history": dict(Counter(str(s.get("history") or "not_run") for s in scans)),
         },
     }
 
