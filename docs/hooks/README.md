@@ -234,6 +234,8 @@ hooks:
   self_protection_rules: true   # detect tampering with hooks (the tth.tamper.* rules)
   tamper_prevention:
     enabled: false       # true: lock those rules against overrides and policies
+  test_signatures:
+    enabled: false       # true: load the two harmless enforcement test rules (tth.test.*)
   thresholds:            # Telltale promotion scores (host policy)
     action_ask: 50
     action_deny: 90
@@ -457,6 +459,88 @@ lock says the rules are fixed.
   (`--config-dir /etc/telltale`), with the binary and the harness's managed
   settings out of its reach as well
   ([threat model](../security/hooks-threat-model.md)).
+
+## Testing enforcement
+
+To see what a hook does end to end, without anything that looks like an
+attack, turn on the enforcement test signatures. They are Telltale's
+equivalent of an antivirus test file: two rules that each match one harmless
+command.
+
+```yaml
+version: 1
+hooks:
+  test_signatures:
+    enabled: true     # default false
+```
+
+| Command | Rule | Score | Under the default thresholds |
+| --- | --- | --- | --- |
+| `echo TELLTALE_TEST_ASK` | `tth.test.ask` | 60 | ask |
+| `echo TELLTALE_TEST_DENY` | `tth.test.deny` | 95 | deny |
+
+Ask the agent to run one of them (the command only prints its marker), or
+send the payload to the hook yourself. What comes back follows the
+configuration in effect, as for any rule, and `telltale hooks check` prints
+it for each test command:
+
+| Configuration | Result |
+| --- | --- |
+| `test_signatures` off (the default) | No rule matches: an ordinary command |
+| `hooks.mode: observe` | The verdict is recorded with `returned: false`; the harness is told nothing |
+| `hooks.mode: enforce`, ask test | The harness's own approval prompt (Claude Code, Copilot CLI). Codex CLI and the OpenCode pilot cannot ask: they are given a deny whose reason says that the call was not executed and that approval was required, and the record keeps `verdict: ask` with `returned_verdict: deny` |
+| `hooks.mode: enforce`, deny test | A deny with a reason the user and the model can act on |
+| An override, policy, threshold or replacement for a test rule | Applies as to any rule: `enabled: false` makes it an ordinary command again, a lower score or a higher threshold turns the deny into an ask or into no opinion |
+
+What makes them safe to leave in a configuration and to run in a working
+session:
+
+- **Only the exact command matches**: the whole command is `echo` and the
+  marker. A command, file, prompt or document that mentions a marker is not a
+  test, and nothing a tool writes or returns is.
+- **They are apart from production rules.** No chain names them or their
+  category (`enforcement_test`), production rules detect the same with them
+  on, and a call that only test signatures match is decided on its own score
+  and stays out of the session's score and denial count: a test is answered
+  the same in a quiet and in a busy session and makes no later call stricter.
+- **Their records are identifiable**: `decision.rule_ids` holds `tth.test.ask`
+  or `tth.test.deny`, `decision.categories` holds `enforcement_test`.
+- **Removing them changes nothing else**: set the setting back to `false`.
+  An `overrides.d` entry for one of them may stay: where the rule is not
+  loaded (a hook with the setting off, the scanner) the entry is left out,
+  and `check` prints `override left out`. Remove a replacement rule file
+  with the setting: without the bundled rule it is a rule of its own.
+- **A test signature is one of these two rules**, or a rule a config root
+  replaces one with (same name and `id`). Another rule named under
+  `tth.test.` is an ordinary rule and counts in the session like any other.
+- Tamper prevention does not lock them.
+
+They test the hook and the harness's answer to it, not a detection. For a
+harness with a live model, see [harness testing](harness-testing.md).
+
+### What a denied or asked call says
+
+Under `reason_detail: full` (the default) the reason given to the harness,
+which shows it to the user, the model or both, says what happened, what the
+matched rules are about, why, and what to do:
+
+```text
+Telltale Hooks: this tool call was blocked and has not been executed. It matched a
+configured security rule for exfiltration, credential harvesting. Reason: Telltale
+action score 145 reached the deny threshold (90). Review the command or request an
+authorized configuration exception. Detections: chain.harvest_then_exfil,
+credential.cloud_harvest, exfil.outbound_upload. Record tth:<id>.
+```
+
+An ask starts `this tool call needs approval before it runs`; on a harness
+that cannot ask it is the deny above, ending with a note that approval was
+required. The concern is the categories of the rules that matched (at most
+three, letters and digits only), and at most eight rule names are listed,
+the rest counted. A reason never contains a rule's pattern, its explanation, the matched
+text, a file's content or a path from the configuration; those stay in the
+decision record, under the record ID the reason ends with.
+`reason_detail: minimal` keeps only `denied by policy` or `needs approval`
+and the record ID.
 
 ## Documentation
 

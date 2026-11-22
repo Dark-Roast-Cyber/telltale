@@ -104,6 +104,35 @@
   `disabled by` and `overrides` lines. See
   [Tuning rules and policy](docs/hooks/README.md#tuning-rules-and-policy).
 
+- **Hooks: enforcement test signatures.** `hooks.test_signatures.enabled:
+  true` (default `false`) loads two rules that each match one harmless
+  command, `echo TELLTALE_TEST_ASK` (`tth.test.ask`, score 60) and
+  `echo TELLTALE_TEST_DENY` (`tth.test.deny`, score 95, category
+  `enforcement_test`), so an operator can see what a hook and a harness do
+  for an ask and a deny without anything that looks like an attack. Only the
+  exact command matches. A call that only test signatures match is decided
+  on its own score and stays out of the session's score and denial count.
+  Overrides, policies, thresholds and replacements apply to them as to any
+  rule, and `telltale hooks check` prints what each test command gets. An
+  `overrides.d` entry for one of them is left out where the rule is not
+  loaded, as for `tth.tamper.*`, so it does not have to be removed with the
+  setting. See
+  [Testing enforcement](docs/hooks/README.md#testing-enforcement). Embedding
+  API: `hooks::config::RuleContent` has a new `test_signatures` field.
+
+- **Hooks: deny and ask reasons say what happened and what to do.** With
+  `reason_detail: full`, the reason a harness is given now starts with what
+  happened to the call (`this tool call was blocked and has not been
+  executed`, or `this tool call needs approval before it runs`), names what
+  the matched rules are about by their categories, and for a deny says to
+  review the command or request an authorized configuration exception. An
+  ask given as a deny to a harness that cannot ask reads as that deny. The
+  basis, the thresholds, the rule IDs and the record ID follow as before
+  (`Reason: …. Detections: …. Record …`), with at most eight rule IDs listed
+  and the rest counted. A reason never carries a rule's
+  pattern or explanation or the matched text. `reason_detail: minimal` is
+  unchanged.
+
 - **An enforcing hook whose configuration does not load records it.** Such a
   hook still denies tool calls (`config_invalid`), and now also writes an
   `error` record with code `config_invalid`, as an observing hook already

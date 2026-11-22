@@ -697,6 +697,8 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
   self_protection_rules: true
   tamper_prevention:
     enabled: false                   # true locks the self-protection rules against overrides and policies
+  test_signatures:
+    enabled: false                   # true loads the harmless enforcement test rules (tth.test.*)
   thresholds:
     action_ask: 50
     action_deny: 90

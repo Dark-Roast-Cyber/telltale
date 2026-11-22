@@ -1,0 +1,47 @@
+# Enforcement test signatures: two harmless commands with which an operator
+# checks what a hook does, end to end, without anything that looks like an
+# attack. Loaded only with `hooks.test_signatures.enabled: true`.
+#
+# Each rule matches one exact shell command and nothing else: the whole
+# command is `echo` and the marker. A command, file, prompt or document that
+# merely mentions a marker does not match. No chain names these rules or
+# their category, and a call that only they match stays out of the session's
+# score (runtime.rs). Like every bundled rule they take overrides, policies
+# and replacements; their names stay under `tth.test.`.
+title: Telltale enforcement test signature that needs approval
+id: 233b3266-d1a4-42b7-9b73-966bd4c8cdab
+name: tth.test.ask
+taxonomy: telltale
+status: test
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        tool.command|re: '^\s*echo\s+TELLTALE_TEST_ASK\s*$'
+    condition: selection
+level: medium
+telltale:
+    category: enforcement_test
+    score: 60
+    explanation: 'The harmless test command `echo TELLTALE_TEST_ASK`, which an operator runs to see an enforcing hook ask for approval. Not a detection of real activity.'
+    tags: [test-only, enforcement-test]
+---
+title: Telltale enforcement test signature that is denied
+id: f1bd6cd4-9c88-44b1-a50f-3513e321f814
+name: tth.test.deny
+taxonomy: telltale
+status: test
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection:
+        tool.command|re: '^\s*echo\s+TELLTALE_TEST_DENY\s*$'
+    condition: selection
+level: high
+telltale:
+    category: enforcement_test
+    score: 95
+    explanation: 'The harmless test command `echo TELLTALE_TEST_DENY`, which an operator runs to see an enforcing hook deny a tool call. Not a detection of real activity.'
+    tags: [test-only, enforcement-test]

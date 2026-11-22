@@ -75,8 +75,9 @@ pub struct RuleResolution {
 /// pipeline the CLI builds. An override entry for one of them that names no
 /// loaded rule is therefore left out, not an unknown `rule_id`: the scanner
 /// never carries them, and a hook does not while
-/// `hooks.self_protection_rules` is off.
-pub(crate) const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper."];
+/// `hooks.self_protection_rules` (the self-protection rules) or
+/// `hooks.test_signatures.enabled` (the enforcement test signatures) is off.
+pub(crate) const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper.", "tth.test."];
 
 impl RuleResolution {
     /// A pipeline over the effective set, which keeps [`Self::content`] for

@@ -34,3 +34,5 @@ mod source_failure_recovery;
 mod state_tampering;
 #[path = "hooks/telemetry_schema.rs"]
 mod telemetry_schema;
+#[path = "hooks/test_signatures.rs"]
+mod test_signatures;

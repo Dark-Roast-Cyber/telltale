@@ -601,6 +601,7 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
         process_chain: settings.process_chain.value,
         self_protection: settings.hooks.self_protection_rules.value,
         tamper_prevention: settings.hooks.tamper_prevention_enabled.value,
+        test_signatures: settings.hooks.test_signatures_enabled.value,
     };
     let roots = crate::config::config_roots(config_dirs);
     // Discovery follows symlinks (dotfile managers link a root, a folder or a
@@ -739,6 +740,75 @@ fn print_config_roots(config_dirs: &[PathBuf]) {
         let missing = if root.exists() { "" } else { ", absent" };
         println!("config root: {} ({origin}{missing})", root.display());
     }
+}
+
+/// What each enforcement test signature gets under the configuration in
+/// effect, one line per rule under `tth.test.`: its command, score and the
+/// verdict a hook reaches for it, or what turned it off.
+fn test_signature_lines(
+    effective: &telltale_core::EffectiveConfigurationV1,
+    signatures: &[String],
+    config: &Config,
+) -> Vec<String> {
+    use telltale_core::hooks::config::TEST_RULE_ID_PREFIX;
+    use telltale_core::hooks::policy::{self, Inputs};
+    use telltale_core::hooks::state::Verdict;
+    use telltale_core::{DefinitionKindV1, DisabledByV1};
+    effective
+        .definitions
+        .iter()
+        .filter(|definition| {
+            definition.kind == DefinitionKindV1::Rule && signatures.contains(&definition.id)
+        })
+        .map(|definition| {
+            let id: String = definition
+                .id
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            let off = match definition.disabled_by {
+                None => None,
+                Some(DisabledByV1::Definition) => Some("its definition"),
+                Some(DisabledByV1::Override) => Some("an override"),
+                Some(DisabledByV1::Policy) => Some("the policy"),
+            };
+            if let Some(by) = off {
+                return format!("  {id}: off (disabled by {by})");
+            }
+            // A replacement may be a rule that scores no single call.
+            let Some(score) = definition.action_score else {
+                return format!(
+                    "  {id}: replaced by a rule from a config root that scores no single call"
+                );
+            };
+            let verdict = match policy::decide(
+                Inputs {
+                    action_score: score,
+                    session_score: 0,
+                    denied_attempts: 0,
+                },
+                &config.thresholds,
+            )
+            .verdict
+            {
+                Verdict::Deny => "deny",
+                Verdict::Ask => "ask",
+                Verdict::Allow => "no opinion (below the ask threshold)",
+            };
+            // The bundled rule's command is its marker; a replacement from a
+            // config root may match something else.
+            let command = match (
+                definition.replaced_tier,
+                id.strip_prefix(TEST_RULE_ID_PREFIX),
+            ) {
+                (None, Some(marker)) => {
+                    format!("`echo TELLTALE_TEST_{}` ", marker.to_ascii_uppercase())
+                }
+                _ => "replaced by a rule from a config root, ".to_owned(),
+            };
+            format!("  {id}: {command}scores {score}: {verdict}")
+        })
+        .collect()
 }
 
 /// One line of `check --rules`: a rule or chain as it takes effect.
@@ -896,6 +966,22 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                     "off (hooks.tamper_prevention.enabled: false): overrides, policies and replacement rules can tune or turn off the tth.tamper.* rules"
                 }
             );
+            if config.rules.test_signatures {
+                println!(
+                    "test signatures: on (hooks.test_signatures.enabled: true), {}",
+                    match config.mode {
+                        telltale_core::hooks::config::Mode::Enforce =>
+                            "verdicts are returned to the harness (an ask as a deny where the harness cannot ask)",
+                        telltale_core::hooks::config::Mode::Observe =>
+                            "verdicts are recorded and nothing is returned (detect-only)",
+                    }
+                );
+                for line in test_signature_lines(&effective, engine.test_signatures(), &config) {
+                    println!("{line}");
+                }
+            } else {
+                println!("test signatures: off (hooks.test_signatures.enabled: false)");
+            }
             for path in &generated.reduced {
                 println!(
                     "self-protection: too long for one rule, matched by its last bytes: {path:?}"

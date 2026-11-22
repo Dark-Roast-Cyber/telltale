@@ -343,10 +343,21 @@ struct RequestDecision {
     action_score: u64,
     returned: bool,
     substituted: Option<Verdict>,
+    /// What the matched rules are about, for the reason: their categories,
+    /// the highest-scoring first ([`concerns`]).
+    concerns: Vec<String>,
+    /// Only enforcement test signatures matched: the call is decided on its
+    /// own score and leaves the session's scores and attempts as they were.
+    test_signature: bool,
 }
 
-/// Count the decision in the session's scores and attempts.
+/// Count the decision in the session's scores and attempts. A call that only
+/// an enforcement test signature matched counts nowhere: a test must not make
+/// the session's later calls stricter.
 fn apply_decision(session: &mut SessionHandle, decision: &RequestDecision) {
+    if decision.test_signature {
+        return;
+    }
     session.state.cumulative_score = decision.outcome.session_score_after;
     if decision.action_score > 0 {
         session.state.scored_actions += 1;
@@ -424,6 +435,53 @@ fn format_ms(ms: i64) -> String {
         .ok()
         .and_then(|time| time.format(TIME_FORMAT).ok())
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_owned())
+}
+
+/// How many categories a reason names, and how long each may be.
+const REASON_CONCERNS: usize = 3;
+const REASON_CONCERN_CHARS: usize = 48;
+/// How many rule names a reason lists before it counts the rest. A name is
+/// bounded by the rule format, so this bounds the reason.
+const REASON_RULE_IDS: usize = 8;
+
+/// What the rules behind `records` are about, as words for a reason: the
+/// categories of the rules that matched (a chain's category only when no
+/// rule's is known), highest points first, at most [`REASON_CONCERNS`]. A
+/// category is rule content, so only its letters and digits are kept
+/// (`credential_harvesting` reads `credential harvesting`), cut to
+/// [`REASON_CONCERN_CHARS`]. Never a pattern, an explanation or matched text.
+fn concerns(records: &[crate::ActionRecordV1]) -> Vec<String> {
+    let mut findings: Vec<_> = records
+        .iter()
+        .flat_map(|record| record.canonical_findings.iter())
+        .collect();
+    if findings
+        .iter()
+        .any(|finding| finding.finding_kind != "correlation")
+    {
+        findings.retain(|finding| finding.finding_kind != "correlation");
+    }
+    findings.sort_by_key(|finding| std::cmp::Reverse(finding.risk_points));
+    let mut words: Vec<String> = Vec::new();
+    for finding in findings {
+        let mut word = String::new();
+        for c in finding.category.chars().take(REASON_CONCERN_CHARS) {
+            match c {
+                c if c.is_ascii_alphanumeric() => word.push(c),
+                // Never two separators in a row, and none at the start.
+                _ if word.ends_with(' ') || word.is_empty() => {}
+                _ => word.push(' '),
+            }
+        }
+        let word = word.trim_end().to_owned();
+        if !word.is_empty() && !words.contains(&word) {
+            words.push(word);
+        }
+        if words.len() == REASON_CONCERNS {
+            break;
+        }
+    }
+    words
 }
 
 /// A reason that names no detection: the record holds the detail.
@@ -1240,10 +1298,18 @@ impl Runtime {
         }
         let reason = self.reason(
             decision.outcome.verdict,
+            decision.substituted.unwrap_or(decision.outcome.verdict),
             decision.outcome.basis,
             decision.action_score,
-            decision.outcome.session_score_after,
+            // A test signature was decided as in a fresh session, where the
+            // session's risk is the call's own score.
+            if decision.test_signature {
+                decision.action_score
+            } else {
+                decision.outcome.session_score_after
+            },
             &decision.rule_ids,
+            &decision.concerns,
             &id.record_id,
             name_malformed,
             stateless,
@@ -1476,18 +1542,32 @@ impl Runtime {
     ) -> RequestDecision {
         let session_before = session.state.cumulative_score;
         let denied_before = session.state.denied_attempts;
+        let mut test_signature = false;
         let (mut outcome, rule_ids, categories, telltale) = match result {
             Ok(evaluation) if evaluation.status != EvalStatus::NotEvaluated => {
-                let outcome = self.scored_outcome(
-                    &evaluation,
-                    session_before,
-                    denied_before,
-                    separated,
-                    name_malformed,
-                );
+                let rule_ids = evaluation.rule_ids();
+                // A call that only enforcement test signatures matched is
+                // decided on its own score, as in a fresh session, and is
+                // kept out of this session's score: the answer to a test
+                // does not depend on what the session did before, and the
+                // test changes nothing for what it does next. Any other
+                // rule matching beside them makes it an ordinary call.
+                let signatures = self
+                    .engine
+                    .as_ref()
+                    .map_or(&[][..], Engine::test_signatures);
+                test_signature =
+                    !rule_ids.is_empty() && rule_ids.iter().all(|id| signatures.contains(id));
+                let (score, denied) = if test_signature {
+                    (0, 0)
+                } else {
+                    (session_before, denied_before)
+                };
+                let outcome =
+                    self.scored_outcome(&evaluation, score, denied, separated, name_malformed);
                 (
                     outcome,
-                    evaluation.rule_ids(),
+                    rule_ids,
                     evaluation.categories(),
                     evaluation.focus_records,
                 )
@@ -1524,7 +1604,12 @@ impl Runtime {
             outcome.verdict = strict;
             outcome.basis = Basis::EvaluationGap;
         }
-        let action_score = outcome.session_score_after - session_before;
+        let action_score = if test_signature {
+            // Decided against an empty session: the score after is the call's.
+            std::mem::replace(&mut outcome.session_score_after, session_before)
+        } else {
+            outcome.session_score_after - session_before
+        };
         let returned = self.config.mode == Mode::Enforce && outcome.verdict != Verdict::Allow;
         // What the harness is given when the policy verdict cannot be put to
         // it as is (ask on a harness that cannot ask). The ledger keeps the
@@ -1532,6 +1617,7 @@ impl Runtime {
         let substituted = Some(returned_verdict(ctx.can_ask, outcome.verdict))
             .filter(|v| returned && *v != outcome.verdict);
         RequestDecision {
+            concerns: concerns(&telltale),
             outcome,
             rule_ids,
             categories,
@@ -1541,6 +1627,7 @@ impl Runtime {
             action_score,
             returned,
             substituted,
+            test_signature,
         }
     }
 
@@ -1656,13 +1743,17 @@ impl Runtime {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// The reason a harness is given for `verdict`, the policy's, when what
+    /// it is handed is `returned` (a deny for an ask it cannot put).
     fn reason(
         &self,
         verdict: Verdict,
+        returned: Verdict,
         basis: Basis,
         action_score: u64,
         session_score: u64,
         rule_ids: &[String],
+        concerns: &[String],
         record_id: &str,
         name_malformed: bool,
         stateless: bool,
@@ -1709,12 +1800,38 @@ impl Runtime {
             }
             Basis::NoFinding | Basis::BelowThreshold => "policy".to_owned(),
         };
-        let rules = if rule_ids.is_empty() {
+        // What happened to the call, what it is about, why, and what to do:
+        // enough for a person or a model to act on without the record. The
+        // concern is the matched rules' categories; no pattern, explanation
+        // or matched text is ever part of a reason.
+        let what = match returned {
+            Verdict::Deny => "this tool call was blocked and has not been executed",
+            Verdict::Ask | Verdict::Allow => "this tool call needs approval before it runs",
+        };
+        let concern = if concerns.is_empty() {
             String::new()
         } else {
-            format!(" Detections: {}.", rule_ids.join(", "))
+            format!(
+                " It matched a configured security rule for {}.",
+                concerns.join(", ")
+            )
         };
-        format!("Telltale Hooks: {why}.{rules} Record {record_id}.")
+        let advice = if returned == Verdict::Deny && !rule_ids.is_empty() {
+            " Review the command or request an authorized configuration exception."
+        } else {
+            ""
+        };
+        let rules = match rule_ids.len().checked_sub(REASON_RULE_IDS) {
+            _ if rule_ids.is_empty() => String::new(),
+            Some(more @ 1..) => format!(
+                " Detections: {} and {more} more.",
+                rule_ids[..REASON_RULE_IDS].join(", ")
+            ),
+            _ => format!(" Detections: {}.", rule_ids.join(", ")),
+        };
+        format!(
+            "Telltale Hooks: {what}.{concern} Reason: {why}.{advice}{rules} Record {record_id}."
+        )
     }
 
     fn tool_finished(

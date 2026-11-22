@@ -19,6 +19,10 @@ use crate::rule_resolution::RulePackPaths;
 /// host's: no user rule content may name an ID in it.
 pub const HOST_RULE_ID_PREFIX: &str = "tth.tamper.";
 
+/// What the ID of every enforcement test signature starts with
+/// ([`RuleContent::test_signatures`]).
+pub const TEST_RULE_ID_PREFIX: &str = "tth.test.";
+
 /// The category of every host and generated rule.
 pub const HOST_RULE_CATEGORY: &str = "approval_bypass";
 
@@ -124,6 +128,12 @@ pub struct RuleContent {
     /// then ordinary bundled rules that overrides, policies and replacement
     /// rules can tune or disable. Needs [`Self::self_protection`].
     pub tamper_prevention: bool,
+    /// The enforcement test signatures (`engine::test_signature_document`):
+    /// rules that match one harmless command each, for checking what a hook
+    /// does end to end. Off by default. While on, a call that only those
+    /// rules match (`Engine::test_signatures`) is decided on its own score
+    /// and stays out of its session's score and attempts.
+    pub test_signatures: bool,
 }
 
 impl Default for RuleContent {
@@ -135,6 +145,7 @@ impl Default for RuleContent {
             process_chain: true,
             self_protection: true,
             tamper_prevention: false,
+            test_signatures: false,
         }
     }
 }
@@ -661,9 +672,13 @@ mod tests {
         assert_eq!(config.thresholds.action_deny, 90);
         assert!(config.rules.self_protection);
         assert!(!config.rules.tamper_prevention);
-        // Pipelines that do not carry the self-protection rules leave out
-        // override entries for them by this prefix.
-        assert!(crate::rule_resolution::HOOKS_RULE_PREFIXES.contains(&HOST_RULE_ID_PREFIX));
+        assert!(!config.rules.test_signatures);
+        // Pipelines that do not carry the self-protection rules or the test
+        // signatures leave out override entries for them by these prefixes.
+        assert_eq!(
+            crate::rule_resolution::HOOKS_RULE_PREFIXES,
+            [HOST_RULE_ID_PREFIX, TEST_RULE_ID_PREFIX]
+        );
         assert!(config.rules.process_chain);
     }
 
