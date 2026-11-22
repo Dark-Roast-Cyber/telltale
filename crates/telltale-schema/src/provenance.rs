@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::event::{
     EVENT3_SCHEMA_SHA256, NATIVE_SCHEMA_VERSION, is_canonical_opaque_identifier_for_kind,
+    is_canonical_sha256_hex,
 };
 
 pub const PRODUCER_PROVENANCE_SCHEMA: &str = "producer_provenance_manifest";
@@ -337,13 +338,9 @@ fn validate_hash(value: &str) -> Result<(), ProducerProvenanceError> {
 }
 
 fn valid_hash(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(is_canonical_sha256_hex)
 }
 
 fn valid_semver(value: &str) -> bool {
@@ -489,6 +486,26 @@ mod tests {
                 .to_string()
                 .contains(&invalid_serialization.producer_manifest_id)
         );
+    }
+
+    #[test]
+    fn rule_fingerprint_must_be_a_lowercase_prefixed_sha256_digest() {
+        for fingerprint in [
+            "1".repeat(64),
+            format!("sha512:{}", "1".repeat(64)),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha256:{}", "g".repeat(64)),
+            format!("sha256:{}", "1".repeat(63)),
+            format!("sha256:{}", "1".repeat(65)),
+        ] {
+            let mut invalid = manifest();
+            invalid.rules.fingerprint = fingerprint.clone();
+            assert_eq!(
+                invalid.validate(),
+                Err(ProducerProvenanceError::InvalidHash),
+                "{fingerprint}"
+            );
+        }
     }
 
     #[test]
