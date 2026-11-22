@@ -1128,7 +1128,7 @@ fn configure_mode(options: &mut OpenOptions, mode: u32) {
 }
 
 #[cfg(unix)]
-fn set_file_mode(file: &File, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn set_file_mode(file: &File, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
 
     let mut permissions = file.metadata()?.permissions();
@@ -1138,7 +1138,7 @@ fn set_file_mode(file: &File, mode: u32) -> Result<(), Box<dyn std::error::Error
 }
 
 #[cfg(not(unix))]
-fn set_file_mode(_file: &File, _mode: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn set_file_mode(_file: &File, _mode: u32) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 

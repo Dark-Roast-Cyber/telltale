@@ -15,7 +15,7 @@ use crate::baseline::BaselineKey;
 use crate::baseline::{
     BASELINE_STATE_VERSION, BaselineSnapshotStore, BaselineSummary, baseline_snapshot_id,
 };
-use crate::event::{Event, Evidence};
+use crate::event::{Event, Evidence, is_canonical_sha256_hex};
 use crate::file_lock::{
     FileInfo, SidecarLock, TempFile, atomic_replace, read_snapshot, safe_path_info, validate_target,
 };
@@ -848,13 +848,9 @@ fn require_fields(value: &Value, fields: &[&str]) -> Result<(), Box<dyn std::err
 }
 
 fn valid_host_hash(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix(crate::baseline::BASELINE_HOST_HASH_PREFIX) else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    value
+        .strip_prefix(crate::baseline::BASELINE_HOST_HASH_PREFIX)
+        .is_some_and(is_canonical_sha256_hex)
 }
 
 fn validate_fields(

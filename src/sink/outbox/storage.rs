@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::MAX_CAPACITY_SCAN_BYTES;
 use super::{OUTBOX_OPEN_PROFILE, Outbox};
 use crate::event::{PrivacySanitizer, SanitizationContext};
-use crate::file_lock::{SidecarLock, paths_identity_equivalent};
+use crate::file_lock::{SidecarLock, paths_identity_equivalent, set_file_mode};
 use crate::sink::{DeliveryError, DeliveryErrorClass};
 
 const OUTBOX_SCHEMA_VERSION: i64 = 6;
@@ -585,19 +585,6 @@ fn set_directory_mode(path: &Path, mode: u32) -> Result<(), Box<dyn std::error::
     #[cfg(not(unix))]
     {
         let _ = (path, mode);
-    }
-    Ok(())
-}
-
-fn set_file_mode(file: &std::fs::File, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(mode))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (file, mode);
     }
     Ok(())
 }
