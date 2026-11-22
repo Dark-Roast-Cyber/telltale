@@ -366,7 +366,7 @@ fn splunk_hec_time(timestamp: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::{TcpListener, TcpStream};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -374,49 +374,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{SplunkHecConfig, SplunkHecHttpSink, hec_url, splunk_hec_envelopes};
-    use crate::event::health_event_with_metadata;
     use crate::sink::emit_events;
-
-    fn make_health_event() -> crate::event::Event {
-        health_event_with_metadata(crate::event::HealthEventInput {
-            sources: &[],
-            source_inventory_change: None,
-            scan_duration_ms: 7,
-            rule_count: 3,
-            threshold_config: crate::scoring::load_thresholds(),
-            active_policy_name: None,
-            emitted_count: 0,
-            suppressed_count: 0,
-            scanner_error_count: 0,
-        })
-    }
-
-    fn read_mock_request(stream: &mut TcpStream) -> Vec<u8> {
-        // Accepted sockets may inherit nonblocking mode on macOS and Windows.
-        stream.set_nonblocking(false).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut request = Vec::new();
-        let mut buffer = [0; 1024];
-        loop {
-            let count = stream.read(&mut buffer).expect("read request");
-            assert_ne!(count, 0);
-            request.extend_from_slice(&buffer[..count]);
-            if let Some(split) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&request[..split]).to_lowercase();
-                let length: usize = headers
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length: "))
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                if request.len() >= split + 4 + length {
-                    return request;
-                }
-            }
-        }
-    }
+    use crate::sink::test_support::{make_health_event, read_mock_request};
 
     #[test]
     fn mock_request_reader_handles_nonblocking_socket_and_fragmented_request() {
@@ -848,28 +807,7 @@ mod tests {
         let addr = listener.local_addr().expect("mock hec addr");
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .expect("read timeout");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-            while let Ok(read) = stream.read(&mut buffer) {
-                if read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..read]);
-                let text = String::from_utf8_lossy(&request).to_lowercase();
-                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                    let content_length = headers
-                        .lines()
-                        .find_map(|line| line.strip_prefix("content-length: "))
-                        .and_then(|value| value.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if body.len() >= content_length {
-                        break;
-                    }
-                }
-            }
+            read_mock_request(&mut stream);
             stream
                 .write_all(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 29\r\nConnection: close\r\n\r\ncredential-marker=do-not-leak",

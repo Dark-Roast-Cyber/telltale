@@ -413,22 +413,8 @@ mod tests {
         LocalJsonlSink, RotationConfig, cleanup_rotated_files, date_from_days_since_epoch,
         maybe_rotate_with_mode, parse_rotated_name, rotated_path,
     };
-    use crate::event::health_event_with_metadata;
+    use crate::sink::test_support::make_health_event;
     use crate::sink::{EventSink, emit_events};
-
-    fn make_health_event() -> crate::event::Event {
-        health_event_with_metadata(crate::event::HealthEventInput {
-            sources: &[],
-            source_inventory_change: None,
-            scan_duration_ms: 7,
-            rule_count: 3,
-            threshold_config: crate::scoring::load_thresholds(),
-            active_policy_name: None,
-            emitted_count: 0,
-            suppressed_count: 0,
-            scanner_error_count: 0,
-        })
-    }
 
     #[test]
     fn local_jsonl_sink_appends_canonical_events() {

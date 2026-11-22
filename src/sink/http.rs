@@ -306,12 +306,13 @@ pub fn chunk_segments(segments: &[Vec<u8>], max_bytes: usize) -> Vec<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
     use std::time::Duration;
 
     use super::{HttpClient, RetryConfig, TlsOptions, chunk_segments, is_retryable_status};
+    use crate::sink::test_support::read_mock_request;
 
     /// Mock HTTP server answering each connection with the next status in
     /// `statuses`, then exiting.
@@ -322,28 +323,7 @@ mod tests {
             let mut requests = Vec::new();
             for status in statuses {
                 let (mut stream, _) = listener.accept().expect("accept");
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .expect("read timeout");
-                let mut request = Vec::new();
-                let mut buf = [0_u8; 1024];
-                while let Ok(read) = stream.read(&mut buf) {
-                    if read == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buf[..read]);
-                    let text = String::from_utf8_lossy(&request).to_lowercase();
-                    if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                        let content_length = headers
-                            .lines()
-                            .find_map(|line| line.strip_prefix("content-length: "))
-                            .and_then(|value| value.trim().parse::<usize>().ok())
-                            .unwrap_or(0);
-                        if body.len() >= content_length {
-                            break;
-                        }
-                    }
-                }
+                let request = read_mock_request(&mut stream);
                 requests.push(String::from_utf8_lossy(&request).to_string());
                 let response = format!(
                     "HTTP/1.1 {status} X\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
@@ -417,19 +397,7 @@ mod tests {
             let location = format!("http://{}/redirected", destination.local_addr().unwrap());
             let server = thread::spawn(move || {
                 let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                use std::io::BufRead;
-                let mut reader = std::io::BufReader::new(&mut stream);
-                loop {
-                    let mut line = String::new();
-                    assert!(reader.read_line(&mut line).unwrap() > 0);
-                    if line == "\r\n" {
-                        break;
-                    }
-                }
-                reader.read_exact(&mut [0; 2]).unwrap();
+                read_mock_request(&mut stream);
                 write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
             });
             let client = HttpClient::new(
