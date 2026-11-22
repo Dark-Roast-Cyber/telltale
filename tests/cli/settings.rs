@@ -214,6 +214,28 @@ fn invalid_setting_fails_before_any_output_and_names_only_the_variable() {
     );
 }
 
+/// A misspelled key under `hooks.tamper_prevention` is refused, not read as
+/// "off".
+#[cfg(feature = "hooks")]
+#[test]
+fn an_unknown_key_under_tamper_prevention_is_invalid() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    settings_file(
+        &config_root,
+        "hooks.yaml",
+        "version: 1\nhooks: {tamper_prevention: {enable: true}}\n",
+    );
+    let output = telltale(temp.path())
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run telltale config validate");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown field `enable`"), "{stderr}");
+}
+
 #[test]
 fn config_show_explains_files_environment_and_defaults() {
     let temp = tempdir().expect("tempdir");
@@ -223,12 +245,12 @@ fn config_show_explains_files_environment_and_defaults() {
     let vendor = settings_file(
         &vendor_root,
         "50-settings.yaml",
-        "version: 1\nlog_rotation: {keep: 2}\nrules: {community: false}\nhooks: {mode: enforce}\n",
+        "version: 1\nlog_rotation: {keep: 2}\nrules: {community: false}\nhooks: {mode: enforce, tamper_prevention: {enabled: true}}\n",
     );
     let local = settings_file(
         &local_root,
         "50-settings.yaml",
-        "version: 1\nlog_rotation: {keep: 3}\n",
+        "version: 1\nlog_rotation: {keep: 3}\nhooks: {tamper_prevention: {enabled: false}}\n",
     );
 
     let show = |args: &[&str]| -> Value {
@@ -273,6 +295,16 @@ fn config_show_explains_files_environment_and_defaults() {
         assert_eq!(settings["hooks.mode"]["value"], "enforce");
         assert_eq!(settings["hooks.mode"]["default"], "observe");
         assert_eq!(settings["hooks.mode"]["source"], path_hash(&vendor));
+        // A later root decides a key both set, for this setting as for any.
+        let lock = &settings["hooks.tamper_prevention.enabled"];
+        assert_eq!(lock["value"], false);
+        assert_eq!(lock["default"], false);
+        assert_eq!(lock["origin"], "settings_file");
+        assert_eq!(lock["source"], path_hash(&local));
+        let vendor_only = show(&["--config-dir", &vendor_root_arg]);
+        let lock = &vendor_only["settings"]["hooks.tamper_prevention.enabled"];
+        assert_eq!(lock["value"], true);
+        assert_eq!(lock["source"], path_hash(&vendor));
     } else {
         assert!(settings.get("hooks.mode").is_none());
     }

@@ -74,6 +74,36 @@
   `hook_deadline`. A decision already evaluated is always delivered. One scan
   already in flight is not interrupted.
 
+- **Hooks: tamper detection is on by default, tamper prevention is a
+  choice.** The rules that detect tampering with hooks (`tth.tamper.*`) load
+  by default and are tuned like any bundled rule: an override turns one off
+  or changes its score, a policy can leave them out, a managed rule tier can
+  replace one by name. `hooks.tamper_prevention.enabled: true` (default
+  `false`, needs `hooks.self_protection_rules`) locks them: rule content
+  that names one, or a policy under which one would not stay enabled, is
+  then invalid configuration. Earlier development builds locked these rules
+  whenever they were on: set `hooks.tamper_prevention.enabled: true` to keep
+  that. What a harness applies on its own stays explicit and is in no
+  default install: `settings --fail-closed` and `codex-cli execpolicy`. An
+  `overrides.d` entry for a `tth.tamper.*` rule is left out by a pipeline
+  that does not carry that rule (the scanner, a hook with the rules off)
+  instead of failing as an unknown `rule_id`. See
+  [Tamper prevention](docs/hooks/README.md#tamper-prevention). Embedding API:
+  `hooks::config::RuleContent` has a new `tamper_prevention` field,
+  `hooks::harness::Adapter` a new `harness_protections` field, and
+  `telltale_rules::LoadedRules` a new `apply_override_document_skipping`.
+
+- **`telltale hooks check` says what is in effect.** It prints the ask and
+  deny thresholds, whether tamper prevention is on, how many self-protection
+  rules run, and per harness what can block a tool call from inside the
+  harness. `check --rules` adds one line
+  per rule and chain the hook evaluates: enabled or what turned it off (its
+  definition, an override, the policy), its score, the tier that defines it,
+  and each override applied to it with the operator's reason. A rule build
+  that fails now names its cause on stderr. `telltale rules show` gains
+  `disabled by` and `overrides` lines. See
+  [Tuning rules and policy](docs/hooks/README.md#tuning-rules-and-policy).
+
 - **An enforcing hook whose configuration does not load records it.** Such a
   hook still denies tool calls (`config_invalid`), and now also writes an
   `error` record with code `config_invalid`, as an observing hook already
@@ -535,8 +565,9 @@
   Hooks are configured like the rest of Telltale: the `hooks:` section of the
   `settings.d` YAML files (shown by `telltale config show`), from the same config
   roots and with the same precedence, and they evaluate the same `rules.d`,
-  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. Rule content and
-  policy cannot change the hooks self-protection rules while they are on: a rule
+  `rule-packages.d`, `overrides.d` and `policies.d` content as `scan`. With
+  `hooks.tamper_prevention.enabled: true`, rule content and
+  policy cannot change the hooks self-protection rules: a rule
   document, package or override file that names one of their IDs
   (`tth.tamper.*`), or a policy under which one would not stay enabled, is
   invalid configuration (a shared policy with a whitelist must include the

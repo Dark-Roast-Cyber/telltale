@@ -1,7 +1,11 @@
-//! User rule content cannot remove, replace or weaken the hooks
-//! self-protection rules while `rules.self_protection` is on. Content that
-//! names one is invalid configuration, and the pipeline that is built carries
-//! the host rules as their documents define them.
+//! With tamper prevention on (`rules.tamper_prevention`), user rule content
+//! cannot remove, replace or weaken the hooks self-protection rules: content
+//! that names one is invalid configuration, and the pipeline that is built
+//! carries the host rules as their documents define them.
+//!
+//! Without it, which is the default, they are ordinary bundled rules that an
+//! operator tunes like any other: an override, a policy or a replacement rule
+//! applies to them.
 
 use crate::common;
 
@@ -12,7 +16,18 @@ use serde_json::json;
 use telltale_core::hooks::config::{Config, RuleContent};
 use telltale_core::hooks::engine::Engine;
 
+/// Rule content under tamper prevention.
 fn content(edit: impl FnOnce(&mut RuleContent)) -> RuleContent {
+    let mut content = RuleContent {
+        tamper_prevention: true,
+        ..RuleContent::default()
+    };
+    edit(&mut content);
+    content
+}
+
+/// Rule content as it is by default: no tamper prevention.
+fn tunable(edit: impl FnOnce(&mut RuleContent)) -> RuleContent {
     let mut content = RuleContent::default();
     edit(&mut content);
     content
@@ -234,7 +249,7 @@ fn a_policy_that_leaves_the_self_protection_rules_alone_still_applies() {
 fn without_self_protection_user_content_is_not_restricted() {
     let dir = tempfile::tempdir().unwrap();
     let file = content_file(dir.path(), "r.yaml", &rule_document(HOST_RULE));
-    let rules = content(|c| {
+    let rules = tunable(|c| {
         c.self_protection = false;
         c.packs.deployment = vec![file];
     });
@@ -265,4 +280,120 @@ fn user_content_that_does_not_name_a_host_rule_is_accepted() {
     };
     config.validate().unwrap();
     Engine::new(&rules, &[]).unwrap();
+}
+
+/// The lock is a setting of its own, and it locks rules that must be loaded.
+#[test]
+fn tamper_prevention_is_off_by_default_and_needs_the_rules_it_locks() {
+    assert!(!RuleContent::default().tamper_prevention);
+    let config = Config {
+        rules: content(|c| c.self_protection = false),
+        ..Config::default()
+    };
+    let error = config.validate().unwrap_err().to_string();
+    assert!(error.contains("hooks.tamper_prevention.enabled"), "{error}");
+    assert!(error.contains("hooks.self_protection_rules"), "{error}");
+}
+
+/// The same rule content loads without tamper prevention, and with it the
+/// only thing that changes is whether it loads.
+#[test]
+fn without_tamper_prevention_the_same_overrides_and_policies_load() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, locked) in content_forms(dir.path()) {
+        // What does not build for a reason of its own, locked or not: a
+        // document with another id cannot replace a rule, a package only
+        // adds, and no rule has the category `network`, so a policy that
+        // lists only it selects nothing.
+        let replaces = PLACES.iter().any(|(place, _)| *place == name)
+            || name == "package rules"
+            || name == "policy lists other categories";
+        let rules = RuleContent {
+            tamper_prevention: false,
+            ..locked
+        };
+        let config = Config {
+            rules: rules.clone(),
+            ..Config::default()
+        };
+        config.validate().expect(&name);
+        let built = Engine::new(&rules, &[]).map(|_| ());
+        assert_eq!(
+            built.is_ok(),
+            !replaces,
+            "{name}: {:?}",
+            built.err().map(|error| error.to_string())
+        );
+    }
+}
+
+/// An operator's override or policy decides what a self-protection rule does,
+/// as for any other rule.
+#[test]
+fn without_tamper_prevention_an_operator_tunes_a_self_protection_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let decided = |rules: RuleContent| {
+        let mut harness = Harness::with(|config| config.rules = rules);
+        let output = write_to_hook_settings(&mut harness);
+        let decision = harness.decision_for("toolu_settings");
+        (
+            verdict(&output).map(str::to_owned),
+            decision["decision"]["rule_ids"].to_string(),
+        )
+    };
+    // Untuned, the rule denies.
+    let (untuned, rule_ids) = decided(tunable(|_| {}));
+    assert_eq!(untuned.as_deref(), Some("deny"));
+    assert!(rule_ids.contains(HOST_RULE), "{rule_ids}");
+
+    // Disabled by override: the rule no longer matches.
+    let off = content_file(dir.path(), "off.yaml", &override_entry("enabled: false"));
+    let (_, rule_ids) = decided(tunable(|c| c.overrides = vec![off]));
+    assert!(!rule_ids.contains(HOST_RULE), "{rule_ids}");
+
+    // Scored below every threshold: it matches and restricts nothing.
+    let low = content_file(dir.path(), "low.yaml", &override_entry("score: 5"));
+    let (lowered, rule_ids) = decided(tunable(|c| c.overrides = vec![low]));
+    assert_eq!(lowered, None);
+    assert!(rule_ids.contains(HOST_RULE), "{rule_ids}");
+
+    // The category disabled by policy: no self-protection rule matches.
+    let policy = content_file(
+        dir.path(),
+        "policy.yaml",
+        "version: 1\ndisabled_categories: [approval_bypass]\n",
+    );
+    let (disabled, rule_ids) = decided(tunable(|c| c.policy = Some(policy)));
+    assert_eq!(disabled, None);
+    assert!(!rule_ids.contains("tth.tamper."), "{rule_ids}");
+}
+
+/// A managed tier replaces a self-protection rule by name when it keeps the
+/// rule's id, as it replaces a bundled core rule.
+#[test]
+fn without_tamper_prevention_a_managed_tier_replaces_a_self_protection_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundled = telltale_core::hooks::engine::host_rule_documents()
+        .iter()
+        .find_map(|(_, document)| {
+            let rules = telltale_rules::LoadedRules::parse(document).unwrap();
+            rules
+                .definitions()
+                .iter()
+                .find(|definition| definition.id() == HOST_RULE)
+                .and_then(|definition| definition.uuid().map(str::to_owned))
+        })
+        .expect("the host rule is bundled");
+    let replacement = rule_document(HOST_RULE).replace(&synthetic_uuid(HOST_RULE), &bundled);
+    for (name, place) in PLACES {
+        let file = content_file(dir.path(), &format!("replace {name}.yaml"), &replacement);
+        let rules = tunable(|c| place(c, file));
+        Engine::new(&rules, &[]).expect(name);
+        // The replacement never matches, so the write is no longer this
+        // rule's finding.
+        let mut harness = Harness::with(|config| config.rules = rules);
+        write_to_hook_settings(&mut harness);
+        let rule_ids = harness.decision_for("toolu_settings")["decision"]["rule_ids"].to_string();
+        assert!(!rule_ids.contains(HOST_RULE), "{name}: {rule_ids}");
+    }
 }

@@ -477,6 +477,22 @@ impl LoadedRules {
         source: &str,
         label: Option<&str>,
     ) -> Result<(), RuleOverrideError> {
+        self.apply_override_document_skipping(document, source, label, &|_| false)
+            .map(|_| ())
+    }
+
+    /// [`Self::apply_override_document`] for content that does not carry
+    /// every rule its override files may name: an entry whose `rule_id` names
+    /// no rule or chain modifier here, and for which `skip` holds, is left
+    /// out instead of failing. Returns the `rule_id` of each entry left out, in order.
+    pub fn apply_override_document_skipping(
+        &mut self,
+        document: &RuleOverrideDocument,
+        source: &str,
+        label: Option<&str>,
+        skip: &dyn Fn(&str) -> bool,
+    ) -> Result<Vec<String>, RuleOverrideError> {
+        let mut skipped = Vec::new();
         if document.version != 1 {
             return Err(RuleOverrideError::UnsupportedVersion(format!(
                 "unsupported rule override version {} in {source}; only version 1 is supported",
@@ -489,6 +505,12 @@ impl LoadedRules {
             let Some(rule) = self.definitions.iter_mut().find(|definition| {
                 definition.kind() == DefinitionKind::Rule && definition.id() == entry.rule_id
             }) else {
+                // A chain modifier of that name is loaded, so the entry is
+                // not one for a rule this content lacks: it stays an error.
+                if skip(&entry.rule_id) && self.get(&entry.rule_id).is_none() {
+                    skipped.push(entry.rule_id.clone());
+                    continue;
+                }
                 return Err(RuleOverrideError::UnknownRuleId(format!(
                     "unknown rule_id '{}' in rule override file {source}",
                     entry.rule_id
@@ -515,7 +537,7 @@ impl LoadedRules {
                 score: entry.score,
             });
         }
-        Ok(())
+        Ok(skipped)
     }
 
     /// Compile the enabled definitions the policy selects, in order. Notices

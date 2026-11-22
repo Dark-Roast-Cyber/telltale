@@ -3771,6 +3771,72 @@ fn assert_rules_show(fixture: &str) {
     );
 }
 
+/// `rules show` says what turned a rule off and which override entries
+/// changed it, with the operator's reason and no file path.
+#[test]
+fn rules_show_names_what_disabled_a_rule_and_the_overrides_applied() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("config");
+    let write = |folder: &str, text: &str| {
+        let dir = root.join(folder);
+        fs::create_dir_all(&dir).expect("config folder");
+        fs::write(dir.join("local.yaml"), text).expect("config file");
+    };
+    write(
+        "overrides.d",
+        "version: 1\noverrides:\n  - rule_id: network.download\n    enabled: false\n    reason: synthetic noise\n  - rule_id: execution.shell\n    score: 5\n    reason: synthetic tuning\n",
+    );
+    write(
+        "policies.d",
+        "version: 1\ndisabled_rules: [install.package_manager]\n",
+    );
+    let show = |name: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["rules", "show", name, "--config-dir"])
+            .arg(&root)
+            .output()
+            .expect("run telltale rules show");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let has = |text: &str, line: &str| text.lines().any(|candidate| candidate == line);
+
+    let disabled = show("network.download");
+    assert!(has(&disabled, "enabled: false"), "{disabled}");
+    assert!(has(&disabled, "disabled by: override"), "{disabled}");
+    assert!(
+        disabled
+            .lines()
+            .any(|line| line.starts_with("  - enabled=false (synthetic noise) [override-source:")),
+        "{disabled}"
+    );
+
+    let tuned = show("execution.shell");
+    assert!(has(&tuned, "enabled: true"), "{tuned}");
+    assert!(has(&tuned, "disabled by: -"), "{tuned}");
+    assert!(has(&tuned, "score: 5"), "{tuned}");
+    assert!(
+        tuned
+            .lines()
+            .any(|line| line.starts_with("  - score=5 (synthetic tuning) [override-source:")),
+        "{tuned}"
+    );
+
+    let by_policy = show("install.package_manager");
+    assert!(has(&by_policy, "disabled by: policy"), "{by_policy}");
+    assert!(has(&by_policy, "overrides: -"), "{by_policy}");
+
+    // No output names the config root.
+    let root_text = root.display().to_string();
+    for text in [&disabled, &tuned, &by_policy] {
+        assert!(!text.contains(&root_text), "{text}");
+    }
+}
+
 #[test]
 fn rules_validate_reports_rule_v2_load_notices() {
     let bundled = rules_command(&["validate"]);

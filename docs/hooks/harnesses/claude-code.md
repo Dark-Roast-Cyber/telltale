@@ -69,7 +69,10 @@ Always generate the fragment with `telltale hooks claude-code settings
 with `-` prints the usage and exits 64 on every harness, so a typo cannot silently
 drop `onFailure`. `--fail-closed` places
 `onFailure: "block"` on the PreToolUse **hook entry**; placed on the matcher
-it is silently ignored (verified).
+it is silently ignored (verified). Leave the flag out for a default install:
+with it Claude Code blocks a tool call whenever the hook fails or is missing,
+in detect-only mode too, which is
+[tamper prevention](../README.md#tamper-prevention) and an operator's choice.
 
 When a user config root (`$XDG_CONFIG_HOME/telltale`, else `~/.config/telltale`)
 exists, `settings` appends `--user-config-dir '<root>'` to the hook command, so the

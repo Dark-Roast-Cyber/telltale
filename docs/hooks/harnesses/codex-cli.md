@@ -122,8 +122,12 @@ which matches every tool; PreToolUse/PostToolUse timeout 30 s, SessionEnd
    run inside the TUI itself (the deny was checked under `codex exec`).
    Automation can pass `--dangerously-bypass-hook-trust`, which also runs every
    other enabled, untrusted hook.
-3. Optional native backstop (below): `mkdir -p $CODEX_HOME/rules`, then
+3. Not part of a default install: the native backstop (below),
+   `mkdir -p $CODEX_HOME/rules`, then
    `telltale hooks codex-cli execpolicy > $CODEX_HOME/rules/telltale-hooks.rules`.
+   Codex applies these rules itself, in detect-only mode too, so install them
+   only as [tamper prevention](../README.md#tamper-prevention); deleting the
+   file removes them.
 
 `settings --fail-closed` prints nothing and exits non-zero with an
 explanation: Codex has no fail-closed option, so no `hooks.json` can make

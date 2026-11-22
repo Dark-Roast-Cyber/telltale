@@ -61,7 +61,9 @@ const COMMON_USAGE: &str = "  telltale hooks codex-cli execpolicy             pr
   telltale hooks harnesses                        list the harnesses this build has an adapter for
   telltale hooks serve                            run the long-lived evaluator (normally autostarted;
                                                   Linux and macOS only, elsewhere hooks evaluate in-process)
-  telltale hooks check                            validate config and build the Telltale pipeline
+  telltale hooks check [--rules]                  validate config and build the Telltale pipeline; --rules
+                                                  lists every rule and chain the hook evaluates as it takes
+                                                  effect: enabled or what turned it off, score, tier, overrides
   telltale hooks version                          print the version, Git hash and build revision
 
 hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
@@ -126,8 +128,8 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
                 64
             }
         },
-        ["check", flags @ ..] => match pinned(flags, config_dirs) {
-            Some(dirs) => check(&dirs),
+        ["check", flags @ ..] => match pinned(flags, check_flags) {
+            Some((dirs, list_rules)) => check(&dirs, list_rules),
             None => {
                 eprintln!("{}", usage());
                 64
@@ -509,6 +511,24 @@ fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
     Some(dirs)
 }
 
+/// `check` switches: the config roots, and `--rules`.
+fn check_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool)> {
+    let mut roots = Vec::new();
+    let mut list_rules = false;
+    let mut flags = flags.iter().copied();
+    while let Some(flag) = flags.next() {
+        match flag {
+            "--rules" => list_rules = true,
+            "--config-dir" => {
+                roots.push(flag);
+                roots.push(flags.next()?);
+            }
+            _ => roots.push(flag),
+        }
+    }
+    Some((config_dirs(&roots)?, list_rules))
+}
+
 /// Hook-only switches, without mistaking a config directory's spelling for
 /// a switch. The common parser still owns config-root validation.
 fn hook_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, bool, bool, bool)> {
@@ -580,6 +600,7 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
         policy,
         process_chain: settings.process_chain.value,
         self_protection: settings.hooks.self_protection_rules.value,
+        tamper_prevention: settings.hooks.tamper_prevention_enabled.value,
     };
     let roots = crate::config::config_roots(config_dirs);
     // Discovery follows symlinks (dotfile managers link a root, a folder or a
@@ -720,7 +741,73 @@ fn print_config_roots(config_dirs: &[PathBuf]) {
     }
 }
 
-fn check(config_dirs: &[PathBuf]) -> i32 {
+/// One line of `check --rules`: a rule or chain as it takes effect.
+/// Tab-separated: name, kind, `enabled` or what turned it off, score, tier
+/// (and the tier it replaced), then each override applied to it in order.
+fn effective_rule_line(definition: &telltale_core::EffectiveDefinitionV1) -> String {
+    use telltale_core::{DefinitionKindV1, DisabledByV1};
+    // Rule names and override reasons are operator text.
+    let plain = |text: &str| -> String {
+        text.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect()
+    };
+    // The tier's name as the effective configuration spells it.
+    fn label(tier: telltale_core::RuleTierV1) -> String {
+        serde_json::to_value(tier)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+    let kind = match definition.kind {
+        DefinitionKindV1::Rule => "rule",
+        DefinitionKindV1::Modifier => "chain",
+        DefinitionKindV1::ProcessChain => "process-chain",
+    };
+    let state = match definition.disabled_by {
+        None => "enabled",
+        Some(DisabledByV1::Definition) => "disabled by its definition",
+        Some(DisabledByV1::Override) => "disabled by override",
+        Some(DisabledByV1::Policy) => "disabled by policy",
+    };
+    let tier = match definition.replaced_tier {
+        Some(replaced) => format!("{} (replaces {})", label(definition.tier), label(replaced)),
+        None => label(definition.tier),
+    };
+    // Hooks decide on action scores, which for some bundled rules and chains
+    // differ from the score a session event carries.
+    let score = match definition.action_score {
+        Some(action) if action != definition.session_score => {
+            format!("score {} (action {action})", definition.session_score)
+        }
+        _ => format!("score {}", definition.session_score),
+    };
+    let overrides = if definition.overrides.is_empty() {
+        "-".to_owned()
+    } else {
+        definition
+            .overrides
+            .iter()
+            .map(|applied| {
+                let mut sets = Vec::new();
+                if let Some(enabled) = applied.enabled {
+                    sets.push(format!("enabled={enabled}"));
+                }
+                if let Some(score) = applied.score {
+                    sets.push(format!("score={score}"));
+                }
+                format!("override {} ({})", sets.join(" "), plain(&applied.reason))
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    format!(
+        "{}\t{kind}\t{state}\t{score}\t{tier}\t{overrides}",
+        plain(&definition.id)
+    )
+}
+
+fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
     let config = match load_config(config_dirs) {
         Ok(config) => config,
         Err(error) => {
@@ -745,10 +832,69 @@ fn check(config_dirs: &[PathBuf]) -> i32 {
                 config.on_error,
                 config.on_unevaluable
             );
-            let generated = engine.generated_coverage();
+            let thresholds = &config.thresholds;
             println!(
-                "self-protection: {} paths in {} generated rules",
-                generated.paths, generated.rules
+                "thresholds: ask at action score {} or session score {}, deny at action score {} or session score {}, repeated denials: {}",
+                thresholds.action_ask,
+                thresholds.session_ask,
+                thresholds.action_deny,
+                thresholds.session_deny,
+                thresholds.repeated_denials
+            );
+            let effective = match engine.effective_configuration() {
+                Ok(effective) => effective,
+                Err(error) => {
+                    eprintln!("telltale: {error}");
+                    return 1;
+                }
+            };
+            let generated = engine.generated_coverage();
+            if config.rules.self_protection {
+                println!(
+                    "self-protection: {} paths in {} generated rules",
+                    generated.paths, generated.rules
+                );
+                // Without tamper prevention an override, a policy or a
+                // replacement can turn these rules off; say how many run.
+                let (enabled, all) = effective
+                    .definitions
+                    .iter()
+                    .filter(|definition| {
+                        definition
+                            .id
+                            .starts_with(telltale_core::hooks::config::HOST_RULE_ID_PREFIX)
+                    })
+                    .fold((0, 0), |(enabled, all), definition| {
+                        (
+                            enabled + usize::from(definition.disabled_by.is_none()),
+                            all + 1,
+                        )
+                    });
+                println!(
+                    "self-protection rules: {enabled} of {all} enabled{}",
+                    if enabled == all {
+                        ""
+                    } else {
+                        " (an override or the policy turned the others off: check --rules lists them)"
+                    }
+                );
+            } else {
+                println!("self-protection: off (hooks.self_protection_rules: false)");
+            }
+            for id in engine.skipped_overrides() {
+                let id: String = id
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect();
+                println!("override left out: {id} names no rule that is loaded");
+            }
+            println!(
+                "tamper prevention: {}",
+                if config.rules.tamper_prevention {
+                    "on (hooks.tamper_prevention.enabled: true): rule content that names a tth.tamper.* rule, or a policy that turns one off, is invalid configuration"
+                } else {
+                    "off (hooks.tamper_prevention.enabled: false): overrides, policies and replacement rules can tune or turn off the tth.tamper.* rules"
+                }
             );
             for path in &generated.reduced {
                 println!(
@@ -779,10 +925,31 @@ fn check(config_dirs: &[PathBuf]) -> i32 {
                     return 1;
                 }
             }
+            println!(
+                "harness protections (what a harness does on its own, where no Telltale setting turns it on or off; check does not read harness files):"
+            );
+            for harness in Harness::ALL {
+                let adapter = harness.adapter();
+                for protection in adapter.harness_protections {
+                    println!("  {}: {protection}", adapter.name);
+                }
+            }
+            if list_rules {
+                for definition in &effective.definitions {
+                    println!("rule: {}", effective_rule_line(definition));
+                }
+            }
             0
         }
         Err(error) => {
             eprintln!("telltale: {error}");
+            // The cause names the file and the rule ID an operator must fix;
+            // like every configuration detail it goes to stderr only.
+            let mut cause = std::error::Error::source(&error);
+            while let Some(source) = cause {
+                eprintln!("  caused by: {source}");
+                cause = source.source();
+            }
             1
         }
     }

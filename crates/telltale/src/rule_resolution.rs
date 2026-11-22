@@ -69,6 +69,15 @@ pub struct RuleResolution {
     pub diagnostics: RuleResolutionDiagnostics,
 }
 
+/// What the name of every rule that Telltale Hooks owns starts with. Hooks
+/// loads these rules into its own pipeline only, and only where its settings
+/// ask for them, while the override files of a config root are read by every
+/// pipeline the CLI builds. An override entry for one of them that names no
+/// loaded rule is therefore left out, not an unknown `rule_id`: the scanner
+/// never carries them, and a hook does not while
+/// `hooks.self_protection_rules` is off.
+pub(crate) const HOOKS_RULE_PREFIXES: &[&str] = &["tth.tamper."];
+
 impl RuleResolution {
     /// A pipeline over the effective set, which keeps [`Self::content`] for
     /// its rule catalog.
@@ -314,8 +323,14 @@ pub(crate) struct RuleContent {
     pub(crate) files: Vec<(RuleTier, InputName, String)>,
     /// Parsed documents at the explicit tier, after `files`.
     pub(crate) documents: Vec<(InputName, LoadedRules)>,
+    /// Parsed documents a host bundles, at the builtin tier after the bundled
+    /// core rules: a managed tier can replace their definitions by name.
+    pub(crate) host_documents: Vec<(InputName, LoadedRules)>,
     /// Override documents: (name, text), applied in order.
     pub(crate) overrides: Vec<(InputName, String)>,
+    /// An override entry that names no loaded rule is left out, not an
+    /// error, when its `rule_id` starts with one of these.
+    pub(crate) unloaded_override_prefixes: &'static [&'static str],
     /// The policy: (name, text).
     pub(crate) policy: Option<(InputName, String)>,
 }
@@ -357,6 +372,36 @@ pub fn resolve_rule_set(
     override_paths: &[PathBuf],
     replacements: &[(PathBuf, &str)],
 ) -> Result<RuleResolution, Box<dyn std::error::Error>> {
+    resolve_rule_set_with_host(
+        pack_paths,
+        explicit_rule_paths,
+        documents,
+        Vec::new(),
+        policy_path,
+        mode,
+        override_paths,
+        replacements,
+    )
+    .map(|(resolution, _)| resolution)
+}
+
+/// [`resolve_rule_set`] with `host_documents`: in-memory rule content a host
+/// bundles, labelled by source and loaded at the builtin tier after the
+/// bundled core rules. Unlike `documents` they are ordinary rule content: a
+/// managed tier can replace one of their definitions by name (keeping its
+/// UUID), and overrides and the policy apply to them. Also returns the
+/// override entries that were left out ([`resolve_rule_content`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_rule_set_with_host(
+    pack_paths: &RulePackPaths,
+    explicit_rule_paths: &[PathBuf],
+    documents: Vec<(String, LoadedRules)>,
+    host_documents: Vec<(String, LoadedRules)>,
+    policy_path: Option<&Path>,
+    mode: RuleLoadMode,
+    override_paths: &[PathBuf],
+    replacements: &[(PathBuf, &str)],
+) -> Result<(RuleResolution, Vec<String>), Box<dyn std::error::Error>> {
     // Keyed by the path as given and by its canonical form: a caller that
     // supplies every file it names (hooks) is found by the exact path, with no
     // second resolution that a changed symlink could send elsewhere.
@@ -406,7 +451,12 @@ pub fn resolve_rule_set(
             .into_iter()
             .map(|(source, rules)| (InputName::unlabeled(source), rules))
             .collect(),
+        host_documents: host_documents
+            .into_iter()
+            .map(|(source, rules)| (InputName::unlabeled(source), rules))
+            .collect(),
         overrides,
+        unloaded_override_prefixes: HOOKS_RULE_PREFIXES,
         policy: policy_path
             .map(|path| {
                 Ok::<_, std::io::Error>((
@@ -420,20 +470,25 @@ pub fn resolve_rule_set(
 
 /// Merge the tiers of `content`, apply its overrides in order, and compile
 /// with its policy: the one resolution the CLI, hooks and the embedding
-/// builder share.
+/// builder share. Beside the resolution it returns the `rule_id` of each
+/// override entry that was left out, in order: one that names no loaded
+/// rule and starts with one of the content's `unloaded_override_prefixes`.
 pub(crate) fn resolve_rule_content(
     content: RuleContent,
-) -> Result<RuleResolution, Box<dyn std::error::Error>> {
+) -> Result<(RuleResolution, Vec<String>), Box<dyn std::error::Error>> {
     let RuleContent {
         mode,
         community,
         packages,
         files,
         documents,
+        host_documents,
         overrides,
+        unloaded_override_prefixes,
         policy,
     } = content;
-    let (documents, packages) = load_rule_documents(mode, community, packages, files, documents)?;
+    let (documents, packages) =
+        load_rule_documents(mode, community, packages, files, documents, host_documents)?;
     if documents.is_empty() {
         return Err(Box::new(NoRuleDocuments));
     }
@@ -469,14 +524,23 @@ pub(crate) fn resolve_rule_content(
         )));
     }
     diagnostics.packages = packages;
+    let mut skipped_overrides = Vec::new();
     for (name, raw) in &overrides {
-        apply_rule_override(&mut content, name, raw)?;
+        skipped_overrides.extend(apply_rule_override(
+            &mut content,
+            name,
+            raw,
+            unloaded_override_prefixes,
+        )?);
     }
-    Ok(RuleResolution {
-        rule_set: content.compile(policy.as_ref())?,
-        content,
-        diagnostics,
-    })
+    Ok((
+        RuleResolution {
+            rule_set: content.compile(policy.as_ref())?,
+            content,
+            diagnostics,
+        },
+        skipped_overrides,
+    ))
 }
 
 /// Rule content tiers, lowest first; a higher tier replaces a definition in
@@ -524,6 +588,7 @@ fn load_rule_documents(
     packages: Vec<(String, String)>,
     files: Vec<(RuleTier, InputName, String)>,
     extra_documents: Vec<(InputName, LoadedRules)>,
+    host_documents: Vec<(InputName, LoadedRules)>,
 ) -> Result<(Vec<RuleDocument>, Vec<RulePackageSummary>), Box<dyn std::error::Error>> {
     let mut documents = Vec::new();
     if matches!(mode, RuleLoadMode::IncludeDefault) {
@@ -532,6 +597,14 @@ fn load_rule_documents(
             source: "builtin:telltale.default".to_string(),
             label: None,
             rules: bundled_default_rules()?,
+        });
+    }
+    for (InputName { source, label }, rules) in host_documents {
+        documents.push(RuleDocument {
+            tier: RuleTier::Builtin,
+            source,
+            label,
+            rules,
         });
     }
     let packages = load_package_documents(mode, community, packages, &mut documents)?;
@@ -821,12 +894,15 @@ fn source_label_path(path: &Path) -> String {
     }
 }
 
-/// Parse and apply one override document named `name`.
+/// Parse and apply one override document named `name`. An entry that names
+/// no loaded rule is an error unless its `rule_id` starts with one of
+/// `unloaded_prefixes`; those are returned.
 fn apply_rule_override(
     content: &mut LoadedRules,
     name: &InputName,
     raw: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+    unloaded_prefixes: &[&str],
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let source = name.source.as_str();
     let document = serde_yaml::from_str::<RuleOverrideDocument>(raw).map_err(|error| {
         ContentFailure::new(
@@ -835,8 +911,13 @@ fn apply_rule_override(
             format!("invalid rule override file '{source}': {error}"),
         )
     })?;
+    let skip = |id: &str| {
+        unloaded_prefixes
+            .iter()
+            .any(|prefix| id.starts_with(prefix))
+    };
     content
-        .apply_override_document(&document, source, name.label.as_deref())
+        .apply_override_document_skipping(&document, source, name.label.as_deref(), &skip)
         .map_err(|error| {
             let code = match &error {
                 RuleOverrideError::UnsupportedVersion(_) => {
