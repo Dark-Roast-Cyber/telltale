@@ -565,6 +565,41 @@ pub(crate) fn write_policy(config: &std::path::Path, policy: &str) -> std::path:
     path
 }
 
+/// The rules loaded with grants are self-protection rules like the others:
+/// under tamper prevention a policy cannot turn one off. With grants off the
+/// rule is not loaded, and the same policy turns nothing off.
+#[test]
+fn a_policy_cannot_turn_off_a_grant_protection_rule_under_tamper_prevention() {
+    let check = |grants: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let config = common::config_root(
+            dir.path(),
+            &format!(
+                "hooks:\n  mode: enforce\n  on_error: allow\n  on_unevaluable: allow\n  \
+                 tamper_prevention:\n    enabled: true\n{grants}"
+            ),
+        );
+        let file = write_policy(
+            &config,
+            "version: 1\ndisabled_rules: [tth.tamper.harness_session_resume]\n",
+        );
+        let out = isolated()
+            .arg("check")
+            .arg("--config-dir")
+            .arg(&config)
+            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        (out.status.code(), stderr, file.display().to_string())
+    };
+    let (code, stderr, file) = check("  grants:\n    enabled: true\n");
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains(&file), "{stderr}");
+    let (code, stderr, _) = check("");
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
 /// Policies under which a self-protection rule would not stay enabled.
 const POLICIES_THAT_DROP_HOST_RULES: &[&str] = &[
     "version: 1\ndisabled_rules: [tth.tamper.hook_settings_write]\n",
@@ -723,6 +758,30 @@ fn tamper_prevention_without_the_self_protection_rules_is_invalid_configuration(
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("hooks.tamper_prevention.enabled"),
+        "{stderr}"
+    );
+}
+
+/// Grants need the self-protection rules: asking for them with those rules
+/// off is invalid configuration.
+#[test]
+fn grants_without_the_self_protection_rules_is_invalid_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(
+        dir.path(),
+        "hooks:\n  self_protection_rules: false\n  grants:\n    enabled: true\n",
+    );
+    let out = isolated()
+        .arg("check")
+        .arg("--config-dir")
+        .arg(&config)
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("hooks.grants.enabled needs hooks.self_protection_rules"),
         "{stderr}"
     );
 }

@@ -194,7 +194,7 @@ fn the_pipeline_refuses_user_content_that_changes_a_host_rule() {
     let dir = tempfile::tempdir().unwrap();
     let built = content_forms(dir.path())
         .into_iter()
-        .filter(|(_, content)| Engine::new(content, &[]).is_ok())
+        .filter(|(_, content)| Engine::new(content, &Default::default(), &[]).is_ok())
         .map(|(name, _)| name)
         .collect::<Vec<_>>();
     assert!(built.is_empty(), "built under: {built:?}");
@@ -237,7 +237,7 @@ fn a_policy_that_leaves_the_self_protection_rules_alone_still_applies() {
             ..Config::default()
         };
         config.validate().expect(name);
-        Engine::new(&rules, &[]).expect(name);
+        Engine::new(&rules, &Default::default(), &[]).expect(name);
         // The host rule still denies under it.
         let mut harness = Harness::with(|config| config.rules = rules);
         let output = write_to_hook_settings(&mut harness);
@@ -258,7 +258,7 @@ fn without_self_protection_user_content_is_not_restricted() {
         ..Config::default()
     };
     config.validate().unwrap();
-    Engine::new(&rules, &[]).unwrap();
+    Engine::new(&rules, &Default::default(), &[]).unwrap();
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn user_content_that_does_not_name_a_host_rule_is_accepted() {
         ..Config::default()
     };
     config.validate().unwrap();
-    Engine::new(&rules, &[]).unwrap();
+    Engine::new(&rules, &Default::default(), &[]).unwrap();
 }
 
 /// The lock is a setting of its own, and it locks rules that must be loaded.
@@ -317,7 +317,7 @@ fn without_tamper_prevention_the_same_overrides_and_policies_load() {
             ..Config::default()
         };
         config.validate().expect(&name);
-        let built = Engine::new(&rules, &[]).map(|_| ());
+        let built = Engine::new(&rules, &Default::default(), &[]).map(|_| ());
         assert_eq!(
             built.is_ok(),
             !replaces,
@@ -388,7 +388,7 @@ fn without_tamper_prevention_a_managed_tier_replaces_a_self_protection_rule() {
     for (name, place) in PLACES {
         let file = content_file(dir.path(), &format!("replace {name}.yaml"), &replacement);
         let rules = tunable(|c| place(c, file));
-        Engine::new(&rules, &[]).expect(name);
+        Engine::new(&rules, &Default::default(), &[]).expect(name);
         // The replacement never matches, so the write is no longer this
         // rule's finding.
         let mut harness = Harness::with(|config| config.rules = rules);

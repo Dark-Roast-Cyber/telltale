@@ -109,7 +109,17 @@
         "session_score_after": { "type": "integer", "minimum": 0 },
         "denied_attempts_before": { "type": "integer", "minimum": 0 },
         "rule_ids": { "type": "array", "items": { "type": "string" } },
-        "categories": { "type": "array", "items": { "type": "string" } }
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "grant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "granted_by"],
+          "properties": {
+            "scope": { "enum": ["once", "session"] },
+            "granted_by": { "type": "string" }
+          },
+          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's, `granted_by` the record ID of the `grant` lifecycle record that made it. Added 2026-11."
+        }
       }
     },
     "outcome": {
@@ -133,7 +143,7 @@
     },
     "lifecycle": {
       "type": "object",
-      "description": "Event-specific, content-free lifecycle details, named by `event`.",
+      "description": "Event-specific, content-free lifecycle details, named by `event`. A `grant` record (the user's grant line allowed a stopped call) has `scope` (`once` or `session`), `tool` (the stopped call's tool name), `rule_ids` (its detections, sorted) and `offer_record_id` (its decision record); a decision record a grant covers names this record in `decision.grant.granted_by`. A `grant_refused` record has `cause`: `not_user_prompt` (the prompt event may not be the user's own: a subagent's, or on a harness that cannot take a grant line) or `no_offer` (no stopped call can be allowed). Neither carries the prompt, a pattern, matched text or a path. Added 2026-11.",
       "properties": {
         "pinned_over": {
           "type": "array",

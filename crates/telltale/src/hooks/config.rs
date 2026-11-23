@@ -243,6 +243,39 @@ impl AskRoute {
     }
 }
 
+/// Grants (`hooks.grants`): the user allows a call the hook stopped by typing
+/// a grant line as a prompt of its own, on a harness that raises an event for
+/// the prompt of the person using it (`Adapter::can_grant`). Telltale still
+/// never returns `allow`: a covered call is given no opinion, and the
+/// harness's own permission rules still apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grants {
+    /// Off by default: no grant is offered or taken.
+    pub enabled: bool,
+    /// Which stopped calls a grant can cover.
+    pub covers: GrantCover,
+}
+
+impl Default for Grants {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            covers: GrantCover::AskAndDeny,
+        }
+    }
+}
+
+/// Which policy verdicts a grant can cover. Host self-protection rules are
+/// never covered, whatever this says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantCover {
+    /// Only calls the policy asked about.
+    Ask,
+    /// Calls the policy asked about or denied.
+    AskAndDeny,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub mode: Mode,
@@ -256,6 +289,8 @@ pub struct Config {
     pub reason_detail: ReasonDetail,
     /// How an `ask` reaches the user (`hooks.ask`).
     pub ask: AskRoute,
+    /// Whether and what the user can allow from the harness's prompt.
+    pub grants: Grants,
     /// Directory for per-session journals and state.
     pub state_dir: Option<PathBuf>,
     /// Telemetry JSONL path. Defaults to `<state_dir>/telemetry.jsonl`.
@@ -314,6 +349,7 @@ impl Default for Config {
             on_unevaluable: OnError::Ask,
             reason_detail: ReasonDetail::Full,
             ask: AskRoute::Human,
+            grants: Grants::default(),
             state_dir: None,
             telemetry_path: None,
             thresholds: Thresholds::default(),
@@ -411,12 +447,21 @@ impl Config {
                 "hooks.tamper_prevention.enabled needs hooks.self_protection_rules: it locks those rules",
             ));
         }
+        if self.grants.enabled && !self.rules.self_protection {
+            return Err(ConfigError::Invalid(
+                "hooks.grants.enabled needs hooks.self_protection_rules: those rules protect the session state that holds a grant",
+            ));
+        }
         if let Some(path) = self.rules.host_rule_claim() {
             return Err(ConfigError::HostRuleClaimed(path.to_owned()));
         }
         if self.rules.tamper_prevention
             && let Some(policy) = &self.rules.policy
-            && crate::hooks::engine::policy_drops_host_rule(policy, &self.protected_paths())
+            && crate::hooks::engine::policy_drops_host_rule(
+                policy,
+                self.grants.enabled,
+                &self.protected_paths(),
+            )
         {
             return Err(ConfigError::PolicyDropsHostRule(policy.clone()));
         }
@@ -708,6 +753,23 @@ mod tests {
         assert!(config.rules.process_chain);
     }
 
+    /// Grants need the self-protection rules: they keep a tool call from
+    /// writing the session state or raising a prompt of its own.
+    #[test]
+    fn grants_without_the_self_protection_rules_are_invalid() {
+        let mut config = Config::default();
+        config.grants.enabled = true;
+        config.validate().unwrap();
+        config.rules.self_protection = false;
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("hooks.grants.enabled needs hooks.self_protection_rules"),
+            "{error}"
+        );
+        config.grants.enabled = false;
+        config.validate().unwrap();
+    }
+
     #[test]
     fn rejects_inverted_thresholds() {
         let mut config = Config::default();
@@ -738,6 +800,12 @@ mod tests {
         assert_ne!(first, second, "rule content change");
         config.thresholds.action_deny = 95;
         assert_ne!(second, config.fingerprint(), "policy change");
+        let third = config.fingerprint();
+        config.grants.enabled = true;
+        assert_ne!(third, config.fingerprint(), "grants change");
+        let fourth = config.fingerprint();
+        config.grants.covers = GrantCover::Ask;
+        assert_ne!(fourth, config.fingerprint(), "grant cover change");
     }
 
     #[test]

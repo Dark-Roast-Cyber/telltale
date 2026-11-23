@@ -60,6 +60,29 @@ class QualificationTests(unittest.TestCase):
             )
             self.assertFalse(pathlib.Path(root, "uncreated").exists())
 
+    def test_claude_grant_driver_rejects_unrecognized_scenario_before_execution(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = subprocess.run(
+                [
+                    sys.executable,
+                    str(PATH.with_name("claude-code-grant-e2e.py")),
+                    "../outside",
+                ],
+                env={
+                    "PATH": os.defpath,
+                    "E2E_ROOT": root + "/uncreated",
+                    "CLAUDE_BIN": "/nonexistent/unused-client",
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(output.returncode, 1)
+            self.assertEqual(
+                output.stderr,
+                "unknown scenario (expected one of control, once, session, resumed)\n",
+            )
+            self.assertFalse(pathlib.Path(root, "uncreated").exists())
+
     def setUp(self):
         self.decision = {
             "kind": "decision",

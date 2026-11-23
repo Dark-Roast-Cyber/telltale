@@ -150,6 +150,38 @@
   (`hooks::config::AskRoute`), and `Harness::render_verdict` and
   `render_event_verdict` take the route.
 
+- **Hooks: grants. The user can allow a stopped call.** With
+  `hooks.grants.enabled: true` (default `false`) the reason of an asked or
+  denied call says what the person using the harness can type as a prompt of
+  its own: `telltale allow` (that call, repeated unchanged, once) or
+  `telltale allow session` (its detections on that tool, for the rest of the
+  session). The hook reads the line on the harness's event for the user's
+  prompt (Claude Code, Codex CLI, Copilot CLI; the OpenCode pilot has none)
+  and only as the whole prompt; the prompt then goes on to the model, which
+  repeats the call. A covered call gets no answer from the hook, so the
+  harness's own permissions decide: no `allow` is returned. Its decision
+  record keeps the verdict the policy reached and names the grant
+  (`decision.grant`); it stays in the session's history and adds nothing to
+  the session's score. Never covered: the `tth.tamper.*` rules, a call the
+  hook could not evaluate in full, a call with a detection that was not
+  granted, and a deny under `hooks.grants.covers: ask` (default
+  `ask_and_deny`). A subagent's prompt, a tool input and a tool result grant
+  nothing. While grants are on, three more rules are loaded that a grant
+  never covers: `tth.tamper.hook_entry_run` (a tool call runs the hook
+  command), `tth.tamper.harness_session_resume` (a tool call starts a
+  harness resuming a session) and its fail-safe, which asks; grants need
+  `hooks.self_protection_rules`. The person
+  is shown what the line did on Claude Code (`systemMessage`).
+  `telltale hooks check` prints the state (`grants:`). A grant is a
+  recorded convenience for the person at the harness, not a boundary: leave
+  it off for unattended agents. See
+  [Allowing a stopped call](docs/hooks/README.md#allowing-a-stopped-call) and
+  [ADR 0010](docs/hooks/adr/0010-grants.md). Embedding API:
+  `hooks::config::Config` has a new `grants` field, `hooks::harness::Adapter`
+  and `hooks::runtime::Context` a new `can_grant` field, `hooks::runtime::Response`
+  a new `Notice` variant, `hooks::engine::Engine::new` takes the grants
+  settings, and the record schema has an optional `decision.grant`.
+
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
   `rule_id` names no loaded rule or chain is left out and the other entries

@@ -106,6 +106,22 @@ CODEX_BIN=/path/to/codex scripts/hooks/harness/codex-cli-e2e.py [scenario ...]
   not other directory names under that home: review a fixture's
   `transcript_path` and `cwd` before committing it.
 
+## Claude Code grants (scripted model)
+
+`scripts/hooks/harness/claude-code-grant-e2e.py` runs the installed Claude Code
+against the scripted Messages provider (`mock-anthropic.py`; no login, no
+tokens) with grants on and the marker rules. Each scenario is one session with
+two prompts sent over `--input-format stream-json` to one process: the first
+gets a call denied, the second is the grant line (`once`, `session`), an
+ordinary prompt (`control`), or the grant line in a later `--resume` run
+(`resumed`). It checks the canaries, the decision and grant records, the offer
+in every denial, what the prompt hook printed and that its context reached the
+model. Set `CLAUDE_BIN`, `TTH_BIN` and a private `E2E_ROOT`.
+
+```bash
+TTH_BIN=target/debug/telltale scripts/hooks/harness/claude-code-grant-e2e.py [scenario ...]
+```
+
 ## Copilot CLI enforcement (scripted model)
 
 `scripts/hooks/harness/copilot-cli-e2e.py` runs the real Copilot CLI binary with

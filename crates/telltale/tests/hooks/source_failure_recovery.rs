@@ -52,6 +52,7 @@ fn ctx(can_ask: bool) -> Context {
         permission_mode: None,
         cwd: None,
         can_ask,
+        can_grant: false,
     }
 }
 

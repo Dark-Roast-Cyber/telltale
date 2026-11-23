@@ -48,6 +48,10 @@ pub const CAMEL_EVENT_KEY: &str = "hookName";
 /// docs/harnesses/copilot-cli.md). The registry and every per-event
 /// `Context` read this one value.
 pub const CAN_ASK: bool = true;
+/// `userPromptSubmitted` outside a subagent is the prompt the person using
+/// Copilot typed; a subagent's task prompt is `Event::Other` (`to_event`),
+/// so a grant line can be taken only from the person's prompt.
+pub const CAN_GRANT: bool = true;
 /// [`HookInput::hook_event`] for a payload that names no event and matches none.
 const UNRECOGNIZED: &str = "unknown";
 /// The keys of a call's tool arguments, in either dialect and in
@@ -287,6 +291,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
         permission_mode: None,
         cwd: input.text(&["cwd"]),
         can_ask: CAN_ASK,
+        can_grant: CAN_GRANT,
     };
     Ok((ctx, event))
 }
@@ -319,6 +324,9 @@ pub fn render(hook_event: &str, response: &Response) -> Option<Value> {
             ) =>
         {
             Some(json!({"additionalContext": text}))
+        }
+        Response::Notice { context, .. } => {
+            render(hook_event, &Response::AdditionalContext(context.clone()))
         }
         Response::Decision(_) | Response::AdditionalContext(_) | Response::None => None,
     }
@@ -393,6 +401,7 @@ pub const ADAPTER: Adapter = Adapter {
     pre_tool_use: &[PRE_TOOL_USE, PASCAL_PRE_TOOL_USE],
     event_keys: &[PASCAL_EVENT_KEY, CAMEL_EVENT_KEY],
     can_ask: CAN_ASK,
+    can_grant: CAN_GRANT,
     parse: parse_payload,
     render,
     looks_like_pre_tool_use,

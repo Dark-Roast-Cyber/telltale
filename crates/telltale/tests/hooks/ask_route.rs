@@ -42,6 +42,7 @@ fn prompting_context() -> Context {
         permission_mode: None,
         cwd: None,
         can_ask: true,
+        can_grant: false,
     }
 }
 

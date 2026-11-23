@@ -16,7 +16,11 @@ use telltale_core::hooks::runtime::{Context, Event, ToolCall};
 /// Decide each command in a fresh session (repeated denials would otherwise
 /// harden later cases) and return `(label, verdict, rule_ids)`.
 fn decide(cases: &[(&str, &str)]) -> Vec<(String, Option<String>, Vec<String>)> {
-    let mut h = Harness::new();
+    decide_in(Harness::new(), cases)
+}
+
+/// [`decide`] in `h`, a harness with its own configuration.
+fn decide_in(mut h: Harness, cases: &[(&str, &str)]) -> Vec<(String, Option<String>, Vec<String>)> {
     cases
         .iter()
         .enumerate()
@@ -1436,6 +1440,7 @@ fn decide_as(
         permission_mode: None,
         // Compare policy verdicts, not a harness's ask -> deny substitution.
         can_ask: true,
+        can_grant: false,
         cwd: Some("/home/synthetic/run/work".into()),
     };
     h.runtime.handle(&ctx, Event::ToolRequested(call));
@@ -1957,7 +1962,8 @@ fn sweep(commands: &[String]) -> (Vec<String>, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let window = dir.path().join("window.jsonl");
     let settings = telltale_core::hooks::config::RuleContent::default();
-    let engine = telltale_core::hooks::engine::Engine::new(&settings, &[]).unwrap();
+    let engine =
+        telltale_core::hooks::engine::Engine::new(&settings, &Default::default(), &[]).unwrap();
     let (mut asks, mut silent) = (Vec::new(), Vec::new());
     for (n, command) in commands.iter().enumerate() {
         let input = json!({"command": command});
@@ -3304,7 +3310,9 @@ fn generated_rules_hold_at_every_rule_file_count() {
             paths.extend((0..count).map(|i| format!("{system}/rules.d/site-{i}.yaml")));
             let built: Vec<std::path::PathBuf> = paths.iter().map(Into::into).collect();
             let settings = telltale_core::hooks::config::RuleContent::default();
-            let engine = telltale_core::hooks::engine::Engine::new(&settings, &built).unwrap();
+            let engine =
+                telltale_core::hooks::engine::Engine::new(&settings, &Default::default(), &built)
+                    .unwrap();
             for (n, path) in paths.iter().enumerate() {
                 let rm = json!({"command": format!("rm -f \"{path}\"")});
                 let write = json!({"file_path": path, "content": "x"});
@@ -3395,7 +3403,7 @@ fn hostile_path_characters_build_and_match_through_the_real_pipeline() {
         .map(|(i, c)| format!("/srv/hostile{i}{c}name/state"))
         .collect();
     let built: Vec<std::path::PathBuf> = paths.iter().map(Into::into).collect();
-    let engine = Engine::new(&RuleContent::default(), &built)
+    let engine = Engine::new(&RuleContent::default(), &Default::default(), &built)
         .unwrap_or_else(|error| panic!("the pipeline must build: {error}"));
     assert!(engine.generated_coverage().reduced.is_empty());
     let mut failures = Vec::new();
@@ -4023,7 +4031,7 @@ fn generated_rules_keep_windows_forms_and_a_single_oversized_literal() {
     let oversized = format!("/srv/{}/state.json", "z".repeat(1500));
     let mut paths: Vec<std::path::PathBuf> = windows.iter().map(Into::into).collect();
     paths.push((&oversized).into());
-    let engine = Engine::new(&RuleContent::default(), &paths).unwrap();
+    let engine = Engine::new(&RuleContent::default(), &Default::default(), &paths).unwrap();
     let window = dir.path().join("window.jsonl");
     let mut failures = Vec::new();
     let mut n = 0;
@@ -4290,4 +4298,258 @@ fn denials_by_addition_harden_the_rest_of_the_session() {
             (3, "deny repeated_denials 60", "silent no_finding 0"),
         ]
     );
+}
+
+/// The grant-protection rules, loaded only while grants are on.
+const HOOK_ENTRY_RUN: &str = "tth.tamper.hook_entry_run";
+const HARNESS_SESSION_RESUME: &str = "tth.tamper.harness_session_resume";
+const HARNESS_SESSION_RESUME_FAILSAFE: &str = "tth.tamper.harness_session_resume_failsafe";
+
+fn granting() -> Harness {
+    Harness::with(|c| c.grants.enabled = true)
+}
+
+/// Commands that run the hook command, one per registered harness and in
+/// the spellings around it.
+fn hook_entry_runs() -> Vec<(String, String)> {
+    let mut cases: Vec<(String, String)> = telltale_core::hooks::harness::Harness::ALL
+        .iter()
+        .map(|harness| {
+            let name = harness.adapter().name;
+            (
+                format!("entry-{name}"),
+                format!("printf '{{}}' | telltale hooks {name} hook"),
+            )
+        })
+        .collect();
+    for (label, command) in [
+        (
+            "entry-path",
+            "/usr/local/bin/telltale hooks claude-code hook < event.json",
+        ),
+        (
+            "entry-relative",
+            "./target/debug/telltale hooks claude-code hook",
+        ),
+        (
+            "entry-config-dir",
+            "telltale hooks codex-cli hook --config-dir /tmp/x <<< '{\"prompt\":\"x\"}'",
+        ),
+        (
+            "entry-pipe",
+            "echo '{}' | telltale hooks copilot-cli hook --json-reply",
+        ),
+        (
+            "entry-here-string",
+            "telltale hooks claude-code hook <<< \"$payload\"",
+        ),
+        (
+            "entry-after-and",
+            "cd /tmp && telltale hooks claude-code hook < e.json",
+        ),
+        ("entry-exe", "telltale.exe hooks claude-code hook"),
+        ("entry-old-name", "telltale-hooks claude-code hook < e.json"),
+    ] {
+        cases.push((label.to_owned(), command.to_owned()));
+    }
+    cases
+}
+
+const HOOK_ENTRY_TWINS: &[(&str, &str)] = &[
+    ("check", "telltale hooks check"),
+    ("check-rules", "telltale hooks check --rules"),
+    ("settings", "telltale hooks claude-code settings"),
+    ("harnesses", "telltale hooks harnesses"),
+    ("version", "telltale --version"),
+    ("hook-help", "telltale hooks claude-code hook --help"),
+    (
+        "commit-quote",
+        "git commit -m \"test: telltale hooks claude-code hook is stopped\"",
+    ),
+    (
+        "grep-quote",
+        "grep -r \"telltale hooks claude-code hook\" docs/",
+    ),
+    (
+        "commit-substitution-body",
+        "git commit -m \"$(cat <<'EOF'\ndocs: hooks\n\ntelltale hooks claude-code hook is what the harness runs\nEOF\n)\"",
+    ),
+    (
+        "commit-heredoc-body",
+        "git commit -F - <<'EOF'\ntelltale hooks claude-code hook is what the harness runs\nEOF",
+    ),
+    (
+        "file-heredoc-body",
+        "cat > notes.md <<'EOF'\ntelltale hooks claude-code hook reads one event\nEOF",
+    ),
+];
+
+const SESSION_RESUMES: &[(&str, &str)] = &[
+    ("claude-continue", "claude --continue"),
+    ("claude-c", "claude -c"),
+    (
+        "claude-resume",
+        "claude --resume 0b0e7c55-1e6f-4c47-9b1e-1f2a3b4c5d6e",
+    ),
+    ("claude-r-prompt", "claude -r abc -p \"x\""),
+    ("claude-prompt-then-resume", "claude -p \"x\" --resume abc"),
+    ("claude-resume-equals", "claude --resume=abc -p x"),
+    ("claude-from-pr", "claude --from-pr 12"),
+    ("claude-teleport", "claude --teleport"),
+    ("claude-attach", "claude attach abc"),
+    ("claude-session-id", "claude --session-id abc -p x"),
+    ("claude-option-then-continue", "claude --model x --continue"),
+    ("claude-path", "~/.local/bin/claude -c -p 'telltale allow'"),
+    ("codex-resume", "codex resume"),
+    ("codex-resume-last", "codex resume --last"),
+    ("codex-fork", "codex fork abc"),
+    ("codex-queue", "codex queue --thread t --message m"),
+    ("codex-exec-resume", "codex exec resume --last \"x\""),
+    ("codex-e-resume", "codex e resume --last"),
+    (
+        "codex-exec-option-resume",
+        "codex exec -m model resume --last",
+    ),
+    ("codex-option-resume", "codex -m model resume"),
+    (
+        "codex-after-and",
+        "cd /repo && codex exec resume --last \"x\"",
+    ),
+    ("bash-c-claude", "bash -c \"claude --continue -p hi\""),
+    ("sh-c-codex", "sh -c 'codex exec resume --last x'"),
+    ("copilot-continue", "copilot --continue"),
+    ("copilot-resume", "copilot --resume abc"),
+    ("copilot-r", "copilot -r abc"),
+    ("copilot-session-id", "copilot --session-id abc -p x"),
+    (
+        "copilot-prompt-then-resume",
+        "copilot -p \"x\" --resume abc",
+    ),
+];
+
+const SESSION_RESUME_TWINS: &[(&str, &str)] = &[
+    ("claude-fresh", "claude -p \"hello\""),
+    ("claude-version", "claude --version"),
+    ("claude-help", "claude --help"),
+    ("codex-fresh", "codex exec \"task\""),
+    ("codex-unquoted-word", "codex exec fix the fork handling"),
+    ("codex-cd", "codex -C /repo exec \"task\""),
+    ("codex-help", "codex --help"),
+    ("copilot-fresh", "copilot -p \"x\""),
+    ("copilot-cd", "copilot -C /repo -p \"x\""),
+    (
+        "commit-quote",
+        "git commit -m \"claude --continue is stopped\"",
+    ),
+    ("grep-quote", "grep -rn \"codex resume\" docs/"),
+    (
+        "commit-substitution-body",
+        "git commit -m \"$(cat <<'EOF'\ndocs: grants\n\nclaude --continue is now stopped while grants are on\nEOF\n)\"",
+    ),
+    (
+        "commit-heredoc-body",
+        "git commit -F - <<'EOF'\nclaude --continue is stopped\nEOF",
+    ),
+    (
+        "file-heredoc-body",
+        "cat > notes.md <<'EOF'\nclaude -c resumes the last session\nEOF",
+    ),
+    ("claude-after-double-dash", "claude -p -- -c"),
+    (
+        "claude-server-arguments",
+        "claude mcp add srv -- npx -y some-server -c cfg.json",
+    ),
+    ("longer-claude", "claudette -c"),
+    ("longer-codex", "mycodex resume"),
+];
+
+/// What only the fail-safe reads: a launch whose words are split by
+/// quoting, and a fresh session whose quoted prompt reads as a resume once
+/// the quoting is taken away.
+const SESSION_RESUME_ASKS: &[(&str, &str)] = &[
+    ("claude-split-program", "cl\"\"aude -c -p hi"),
+    ("claude-split-flag", "claude --res''ume abc -p hi"),
+    ("codex-split-word", "codex exec res\"\"ume --last x"),
+    ("claude-quoted-flag", "claude -p \"what does --resume do\""),
+    ("codex-quoted-word", "codex exec \"resume the migration\""),
+];
+
+fn as_refs(cases: &[(String, String)]) -> Vec<(&str, &str)> {
+    cases
+        .iter()
+        .map(|(label, command)| (label.as_str(), command.as_str()))
+        .collect()
+}
+
+/// Each case is denied by `rule` while grants are on.
+fn assert_denied_by(cases: &[(&str, &str)], rule: &str) {
+    let failures: Vec<String> = decide_in(granting(), cases)
+        .into_iter()
+        .filter(|(_, verdict, rules)| {
+            verdict.as_deref() != Some("deny") || !rules.iter().any(|id| id == rule)
+        })
+        .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// No case gets a detection from the grant-protection rules in `h`.
+fn assert_no_grant_rule(h: Harness, cases: &[(&str, &str)]) {
+    let failures: Vec<String> = decide_in(h, cases)
+        .into_iter()
+        .filter(|(_, _, rules)| {
+            rules.iter().any(|id| {
+                [
+                    HOOK_ENTRY_RUN,
+                    HARNESS_SESSION_RESUME,
+                    HARNESS_SESSION_RESUME_FAILSAFE,
+                ]
+                .contains(&id.as_str())
+            })
+        })
+        .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn running_the_hook_command_is_denied_while_grants_are_on() {
+    assert_denied_by(&as_refs(&hook_entry_runs()), HOOK_ENTRY_RUN);
+}
+
+#[test]
+fn resuming_a_harness_session_is_denied_while_grants_are_on() {
+    assert_denied_by(SESSION_RESUMES, HARNESS_SESSION_RESUME);
+}
+
+/// The fail-safe asks where the deny rule, which reads the command as
+/// written, does not match.
+#[test]
+fn a_resume_only_the_quote_free_reading_shows_asks() {
+    let failures: Vec<String> = decide_in(granting(), SESSION_RESUME_ASKS)
+        .into_iter()
+        .filter(|(_, verdict, rules)| {
+            verdict.as_deref() != Some("ask")
+                || !rules.iter().any(|id| id == HARNESS_SESSION_RESUME_FAILSAFE)
+                || rules.iter().any(|id| id == HARNESS_SESSION_RESUME)
+        })
+        .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn look_alikes_of_the_grant_protection_rules_are_not_matched() {
+    assert_no_grant_rule(granting(), HOOK_ENTRY_TWINS);
+    assert_no_grant_rule(granting(), SESSION_RESUME_TWINS);
+}
+
+/// With grants off the rules are not loaded: nothing they match is detected
+/// by them.
+#[test]
+fn with_grants_off_the_grant_protection_rules_match_nothing() {
+    let entries = hook_entry_runs();
+    assert_no_grant_rule(Harness::new(), &as_refs(&entries));
+    assert_no_grant_rule(Harness::new(), SESSION_RESUMES);
+    assert_no_grant_rule(Harness::new(), SESSION_RESUME_ASKS);
 }

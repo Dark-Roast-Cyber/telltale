@@ -132,6 +132,19 @@ pub struct DecisionInfo {
     pub denied_attempts_before: u32,
     pub rule_ids: Vec<String>,
     pub categories: Vec<String>,
+    /// Present only when a grant covered the call: nothing was returned,
+    /// and the session's score was left as it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant: Option<GrantInfo>,
+}
+
+/// The grant that covered a call (`decision.grant`).
+#[derive(Debug, Clone, Serialize)]
+pub struct GrantInfo {
+    /// `once` or `session`.
+    pub scope: &'static str,
+    /// The record ID of the `grant` lifecycle record that made the grant.
+    pub granted_by: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

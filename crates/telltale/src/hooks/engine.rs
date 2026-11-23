@@ -20,7 +20,7 @@ use crate::{
 use telltale_rules::{DefinitionKind, LoadedDefinition, LoadedRules};
 
 use crate::ClientId;
-use crate::hooks::config::{HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
+use crate::hooks::config::{Grants, HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
 use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
 
@@ -42,6 +42,28 @@ pub fn test_signature_document() -> (&'static str, &'static str) {
         "telltale-hooks-test-signatures.yaml",
         include_str!("rules/telltale-hooks-test-signatures.yaml"),
     )
+}
+
+/// The grant-protection template (name, content): host rules for the tool
+/// calls that could raise a user-prompt event of their own making. Loaded with
+/// the self-protection rules, and only while grants are on
+/// ([`crate::hooks::config::Grants::enabled`]), so with grants off the rule
+/// set is the same as without them.
+const GRANT_RULE_TEMPLATE: (&str, &str) = (
+    "telltale-hooks-grants-protection.yaml",
+    include_str!("rules/telltale-hooks-grants-protection.yaml"),
+);
+
+/// The grant-protection document (name, content), expanded as
+/// [`host_rule_documents`] expands the others.
+pub fn grant_protection_document() -> &'static (&'static str, String) {
+    static DOCUMENT: std::sync::LazyLock<(&str, String)> = std::sync::LazyLock::new(|| {
+        (
+            GRANT_RULE_TEMPLATE.0,
+            expand_fragments(GRANT_RULE_TEMPLATE.1),
+        )
+    });
+    &DOCUMENT
 }
 
 /// Every host rule template (name, content): the shared one, then each
@@ -277,7 +299,13 @@ impl Engine {
     /// and socket paths; with self-protection on, writes to them are detected
     /// even when they are outside the default locations the static rules know.
     /// Custom harness homes and this binary's own path get generated rules too.
-    pub fn new(rules: &RuleContent, protected_paths: &[PathBuf]) -> Result<Self, EngineError> {
+    /// With `grants` on, the self-protection rules include
+    /// [`grant_protection_document`].
+    pub fn new(
+        rules: &RuleContent,
+        grants: &Grants,
+        protected_paths: &[PathBuf],
+    ) -> Result<Self, EngineError> {
         let started = Instant::now();
         // The operator's files are read once, here, as operator input (a
         // symlink is followed, but the target must be a regular file, so a
@@ -294,7 +322,7 @@ impl Engine {
             .collect::<Vec<_>>();
         let mut generated = GeneratedCoverage::default();
         let documents = if rules.self_protection {
-            self_protection_documents(protected_paths, &mut generated)?
+            self_protection_documents(protected_paths, grants.enabled, &mut generated)?
         } else {
             Vec::new()
         };
@@ -1174,6 +1202,12 @@ const DRY_RUN_OR_HELP: &str = r#"^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=
 // inline launch; and the variables that locate the Telltale config root, the hooks
 // state, or the home both derive from.
 const HARNESS_LAUNCHER: &str = r#"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["']?(?:[\s;&|)`]|$)"#;
+// A launcher that takes a grant line, after an optional quote or directory, with an
+// option or subcommand that resumes or continues an existing session (spellings from
+// each harness's own help; the two launchers with options share one list). The words
+// before the option are walked up to a standalone `--`, after which nothing is an
+// option. It follows `COMMAND_START`.
+const SESSION_RESUME: &str = r##"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:(?:claude|copilot)(?:\.exe|\.cmd)?["']?(?:[ \t]+attach|(?:[ \t]+(?:-?(?:'[^']*'|"[^"]*"|[^\s;&|'"-])(?:'[^']*'|"[^"]*"|[^\s;&|'"])*|--(?:'[^']*'|"[^"]*"|[^\s;&|'"])+|-))*[ \t]+["']?(?:--continue|--resume|--from-pr|--teleport|--session-id|(?-i:-[cr])))|codex(?:\.exe|\.cmd)?["']?(?:[ \t]+-\S*(?:[ \t]+[^-\s;&|]\S*)?)*(?:[ \t]+e(?:xec)?(?:[ \t]+-\S*(?:[ \t]+[^-\s;&|]\S*)?)*)?[ \t]+(?:resume|fork|queue))(?:[\s=;&|)`"']|$)"##;
 const LAUNCH_WRAPPERS: &str = r#"(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)"#;
 const CONFIG_LOCATION_VARS: &str =
     r#"(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)"#;
@@ -1202,6 +1236,7 @@ const RULE_FRAGMENTS: &[(&str, &str)] = &[
     ("WRITER_AFTER", WRITER_AFTER),
     ("HARNESS_LAUNCHER", HARNESS_LAUNCHER),
     ("LAUNCH_WRAPPERS", LAUNCH_WRAPPERS),
+    ("SESSION_RESUME", SESSION_RESUME),
     ("CONFIG_LOCATION_VARS", CONFIG_LOCATION_VARS),
 ];
 
@@ -1742,14 +1777,17 @@ fn same_instant(a: &str, b: &str) -> bool {
 /// refused rather than stalling the pipeline build. The configuration
 /// validated these at load time; a failure here is a change since then and
 /// gets the runtime's strict policy.
-/// The host rule documents and the generated rules for `protected_paths`,
-/// parsed and labelled by source.
+/// The host rule documents, the grant-protection document while `grants` are
+/// on, and the generated rules for `protected_paths`, parsed and labelled by
+/// source.
 fn self_protection_documents(
     protected_paths: &[PathBuf],
+    grants: bool,
     generated: &mut GeneratedCoverage,
 ) -> Result<Vec<(String, LoadedRules)>, EngineError> {
     let host = host_rule_documents()
         .iter()
+        .chain(grants.then(grant_protection_document))
         .map(|(name, document)| (format!("hooks:{name}"), document.as_str()));
     let own = generated_documents(protected_paths, generated);
     let own = own
@@ -1769,7 +1807,7 @@ fn self_protection_documents(
 /// alone, leaves any of them out. Decided by effect, so it follows whatever
 /// the policy can select by. A policy that does not parse is not reported
 /// here: building the rules fails on it.
-pub fn policy_drops_host_rule(path: &Path, protected_paths: &[PathBuf]) -> bool {
+pub fn policy_drops_host_rule(path: &Path, grants: bool, protected_paths: &[PathBuf]) -> bool {
     let Some(policy) = read(path)
         .ok()
         .and_then(|text| serde_yaml::from_str::<telltale_rules::RulePolicy>(&text).ok())
@@ -1777,7 +1815,7 @@ pub fn policy_drops_host_rule(path: &Path, protected_paths: &[PathBuf]) -> bool 
         return false;
     };
     let Ok(documents) =
-        self_protection_documents(protected_paths, &mut GeneratedCoverage::default())
+        self_protection_documents(protected_paths, grants, &mut GeneratedCoverage::default())
     else {
         return false;
     };
@@ -1903,7 +1941,10 @@ mod tests {
         let placeholder = regex::Regex::new(r"\{\{([A-Z][A-Z0-9_]*)\}\}").unwrap();
         let quoted = regex::Regex::new(r"^\s*(?:- )?[a-z_.|]+: '.*'$").unwrap();
         let mut named = std::collections::BTreeSet::new();
-        for (name, template) in super::host_rule_templates() {
+        for (name, template) in super::host_rule_templates()
+            .into_iter()
+            .chain([super::GRANT_RULE_TEMPLATE])
+        {
             for line in template.lines() {
                 for found in placeholder.captures_iter(line) {
                     let fragment = found.get(1).unwrap().as_str();
@@ -1921,7 +1962,10 @@ mod tests {
                 }
             }
         }
-        for (name, document) in super::host_rule_documents() {
+        for (name, document) in super::host_rule_documents()
+            .iter()
+            .chain([super::grant_protection_document()])
+        {
             assert!(!placeholder.is_match(document), "{name}");
         }
         let unnamed: Vec<&str> = super::RULE_FRAGMENTS
@@ -2215,7 +2259,7 @@ mod tests {
         files.sort();
         let mut listed: Vec<(String, String)> = super::host_rule_templates()
             .into_iter()
-            .chain([super::test_signature_document()])
+            .chain([super::test_signature_document(), super::GRANT_RULE_TEMPLATE])
             .map(|(name, content)| (name.to_owned(), content.to_owned()))
             .collect();
         listed.sort();
@@ -2234,6 +2278,7 @@ mod tests {
         assert!(!generated.is_empty());
         let host = super::host_rule_documents()
             .iter()
+            .chain([super::grant_protection_document()])
             .map(|(_, document)| document);
         for document in host.chain(&generated) {
             let set = telltale_rules::LoadedRules::parse(document).unwrap();
@@ -2464,8 +2509,50 @@ mod recovery_tests {
     /// The window path and the engine, for a scan of `pieces` alone.
     fn engine() -> (tempfile::TempDir, Engine) {
         let dir = tempfile::tempdir().unwrap();
-        let engine = Engine::new(&RuleContent::default(), &[]).unwrap();
+        let engine = Engine::new(&RuleContent::default(), &Grants::default(), &[]).unwrap();
         (dir, engine)
+    }
+
+    /// The grant-protection rules are host rules loaded only while grants are
+    /// on; with grants off the rule set is the one without them.
+    #[test]
+    fn grant_protection_rules_load_only_with_grants_on() {
+        const GRANT_RULES: [&str; 3] = [
+            "tth.tamper.hook_entry_run",
+            "tth.tamper.harness_session_resume",
+            "tth.tamper.harness_session_resume_failsafe",
+        ];
+        let ids = |grants: bool| -> Vec<String> {
+            super::self_protection_documents(&[], grants, &mut GeneratedCoverage::default())
+                .unwrap()
+                .iter()
+                .flat_map(|(_, rules)| rules.definitions())
+                .map(|definition| definition.id().to_owned())
+                .collect()
+        };
+        let (off, on) = (ids(false), ids(true));
+        assert!(
+            GRANT_RULES
+                .iter()
+                .all(|id| !off.iter().any(|known| known == id))
+        );
+        assert!(
+            GRANT_RULES
+                .iter()
+                .all(|id| on.iter().any(|known| known == id))
+        );
+        assert_eq!(on.len(), off.len() + GRANT_RULES.len());
+        let identity = |enabled: bool| {
+            let grants = Grants {
+                enabled,
+                ..Grants::default()
+            };
+            Engine::new(&RuleContent::default(), &grants, &[])
+                .unwrap()
+                .semantic_identity()
+                .to_owned()
+        };
+        assert_ne!(identity(true), identity(false));
     }
 
     /// `used` is what the evaluation has already spent. The budget starts after the

@@ -103,13 +103,22 @@ A new harness adapter (OpenCode, Cursor, ...) must:
    auto-approves an ask; the adapter starts from that constant and may only
    refine it to `true` per event for a run mode verified to prompt or
    refuse. The runtime then returns `deny` for every `ask` on such events
-   (`Response::decision`, the only constructor of a decision); the adapter
-   never maps verdicts itself.
+   (`Response::decision` and `Response::offered_decision`, the only
+   constructors of a decision); the adapter never maps verdicts itself.
 4. Set `Context::prompt_id` to the harness's per-turn identity (Claude Code
    `prompt_id`, Codex `turn_id`), or `None`.
+   Set `Context::can_grant` from `Adapter::can_grant`: `true` only when the
+   harness raises an event for the prompt of the person using it and the
+   adapter maps nothing else to `Event::UserPrompt`. A prompt a model wrote
+   (a subagent's task prompt) is mapped to `Event::Other`, or carries the
+   subagent's `agent_id`, which the runtime refuses. The runtime takes a
+   grant line only on such an event (ADR 0010).
 5. Render `Response::Decision` only where the harness enforces it, and
    never a decision that loosens the harness's own permissions (no
-   pre-execution `allow`).
+   pre-execution `allow`). Render `Response::Notice` as
+   `Response::AdditionalContext` of its `context`, and add its `user` line
+   only where the harness documents a message shown to the person on that
+   event.
 6. Ship authentic captured payload fixtures with provenance and a real
    enforcement test using the canary method (`scripts/hooks/harness/`).
 7. Record harness identity in `Context::harness`. The journal encoding is
@@ -150,6 +159,8 @@ a harness means:
    - `event_keys`: the top-level payload keys that name the hook event. An
      unreadable payload with no registered harness's key "names no event".
    - `can_ask`: see the runtime contract, point 3.
+   - `can_grant`: see the runtime contract, point 4. `false` until the
+     harness's user-prompt event is captured and shown to be the user's.
    - `parse`: return `Parsed::Unusable` when the hook event is known but the
      payload is not, and `Parsed::Invalid` when nothing is readable.
    - `render`: never a pre-execution `allow`.

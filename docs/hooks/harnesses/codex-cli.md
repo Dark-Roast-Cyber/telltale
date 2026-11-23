@@ -145,7 +145,7 @@ user; they belong to managed deployment.
 | `SubagentStop` | `TurnSettled` | Carries the subagent's `agent_id` and `turn_id`, so a parent `Stop` never settles a subagent's calls and a subagent's calls are still settled. **Differs from Claude Code:** no `subagent_stop` lifecycle record is written. It shows only as `established_by: SubagentStop` on outcomes it settles, so a subagent that ends with nothing pending leaves no record of stopping |
 | `SubagentStart` | `SubagentStart` | |
 | `PermissionRequest` | `PermissionPrompt` | Recorded, never answered |
-| `UserPromptSubmit`, `SessionStart`, `SessionEnd` | as named | |
+| `UserPromptSubmit`, `SessionStart`, `SessionEnd` | as named | With grants on, a `UserPromptSubmit` that is a grant line as a whole allows the most recent stopped call (`CAN_GRANT = true`). A subagent's `UserPromptSubmit` carries the subagent's `agent_id` and the parent's `session_id` (Capture: `subagent.jsonl`); its prompt is the task the parent model wrote, so the runtime refuses it as a grant. Nothing is printed for this event: no output is documented for it here |
 | anything else | `Other` | |
 
 `Context::prompt_id` is `turn_id`; `Context::can_ask` is always `false`.

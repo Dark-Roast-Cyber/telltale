@@ -19,6 +19,8 @@ use crate::hooks::journal::Journal;
 pub const STATE_VERSION: u32 = 1;
 /// Decisions kept for outcome correlation; older ones are dropped.
 const MAX_PENDING: usize = 1024;
+/// Grants a session keeps; a new one past the bound replaces the oldest.
+pub const MAX_GRANTS: usize = 32;
 /// How long a hook waits behind a session's other calls before it gives up with
 /// `state_lock_timeout`. A harness that times a hook out runs the call (fail
 /// open), and the shortest hook timeout installed is 30 s: this, plus the
@@ -94,6 +96,56 @@ pub struct Settled {
     pub outcome_record_id: String,
 }
 
+/// The most recent stopped call the user can allow with a grant line
+/// (`runtime::Runtime`): the latest call returned with an ask or a deny,
+/// when that call can be granted. A later stopped call replaces it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantOffer {
+    /// The call's decision record.
+    pub record_id: String,
+    pub tool_name: String,
+    /// The SHA-256 of the call's input, as the call's records carry it
+    /// (`action.input_sha256`).
+    pub input_sha256: String,
+    /// The rules that matched the call, sorted.
+    pub rule_ids: Vec<String>,
+}
+
+/// How far a grant reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantScope {
+    /// The offered call, unchanged, once.
+    Once,
+    /// The offered call's detections on its tool, for the rest of the session.
+    Session,
+}
+
+impl GrantScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::Session => "session",
+        }
+    }
+}
+
+/// What the user allowed with a grant line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grant {
+    pub scope: GrantScope,
+    pub tool_name: String,
+    /// The detections allowed, sorted.
+    pub rule_ids: Vec<String>,
+    /// The input allowed: `Some` for a [`GrantScope::Once`] grant only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_sha256: Option<String>,
+    /// The record ID of the `grant` lifecycle record that made it.
+    pub granted_by: String,
+    /// The decision record of the call it was offered for.
+    pub offer_record_id: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionState {
     pub version: u32,
@@ -116,6 +168,13 @@ pub struct SessionState {
     /// agent_id -> agent_type for subagents seen in this session.
     pub agents: BTreeMap<String, String>,
     pub prompts: u64,
+    /// The stopped call a grant line would allow, if any.
+    #[serde(default)]
+    pub offer: Option<GrantOffer>,
+    /// What the user allowed in this session, oldest first, at most
+    /// [`MAX_GRANTS`].
+    #[serde(default)]
+    pub grants: Vec<Grant>,
 }
 
 impl SessionState {
@@ -144,6 +203,52 @@ impl SessionState {
             id.push('~');
         }
         id
+    }
+
+    /// Keep `grant`; past [`MAX_GRANTS`] the oldest is dropped.
+    pub fn add_grant(&mut self, grant: Grant) {
+        self.grants.push(grant);
+        if self.grants.len() > MAX_GRANTS {
+            let excess = self.grants.len() - MAX_GRANTS;
+            self.grants.drain(..excess);
+        }
+    }
+
+    /// The grant that covers a call of `tool_name` with input `input_sha256`
+    /// that matched `rule_ids` (non-empty), as `(scope, granted_by)`. A
+    /// `once` grant for the same tool and input whose detections include
+    /// every one of the call's is preferred, and is used up. Otherwise the
+    /// most recent `session` grant for the same tool whose detections
+    /// include every one of the call's covers it. Grants are never combined:
+    /// each allowed one stopped call's detections together.
+    pub fn use_grant(
+        &mut self,
+        tool_name: &str,
+        input_sha256: &str,
+        rule_ids: &[String],
+    ) -> Option<(GrantScope, String)> {
+        if rule_ids.is_empty() {
+            return None;
+        }
+        let once = self.grants.iter().position(|grant| {
+            grant.scope == GrantScope::Once
+                && grant.tool_name == tool_name
+                && grant.input_sha256.as_deref() == Some(input_sha256)
+                && rule_ids.iter().all(|id| grant.rule_ids.contains(id))
+        });
+        if let Some(index) = once {
+            let grant = self.grants.remove(index);
+            return Some((GrantScope::Once, grant.granted_by));
+        }
+        self.grants
+            .iter()
+            .rev()
+            .find(|grant| {
+                grant.scope == GrantScope::Session
+                    && grant.tool_name == tool_name
+                    && rule_ids.iter().all(|id| grant.rule_ids.contains(id))
+            })
+            .map(|grant| (GrantScope::Session, grant.granted_by.clone()))
     }
 
     pub fn remember(&mut self, journal_id: &str, decision: PendingDecision) {
@@ -571,6 +676,74 @@ pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grant(scope: GrantScope, by: &str, rule_ids: &[&str], input: Option<&str>) -> Grant {
+        Grant {
+            scope,
+            tool_name: "Bash".into(),
+            rule_ids: rule_ids.iter().map(|id| (*id).to_owned()).collect(),
+            input_sha256: input.map(str::to_owned),
+            granted_by: by.into(),
+            offer_record_id: format!("offer-{by}"),
+        }
+    }
+
+    /// A state file written before grants existed loads with no offer and
+    /// no grants.
+    #[test]
+    fn a_state_file_without_grant_fields_loads() {
+        let mut value = serde_json::to_value(SessionState::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("offer");
+        object.remove("grants");
+        let state: SessionState = serde_json::from_value(value).unwrap();
+        assert_eq!(state.offer, None);
+        assert!(state.grants.is_empty());
+    }
+
+    /// The grant past the bound replaces the oldest one.
+    #[test]
+    fn the_grant_past_the_bound_replaces_the_oldest() {
+        let mut state = SessionState::default();
+        for n in 0..=MAX_GRANTS {
+            state.add_grant(grant(GrantScope::Session, &format!("g{n}"), &["r"], None));
+        }
+        assert_eq!(state.grants.len(), MAX_GRANTS);
+        assert_eq!(state.grants[0].granted_by, "g1");
+        assert_eq!(
+            state.grants[MAX_GRANTS - 1].granted_by,
+            format!("g{MAX_GRANTS}")
+        );
+    }
+
+    /// A matching `once` grant is preferred over a session grant and is used
+    /// up; a session grant covers only its tool and only calls all of whose
+    /// detections it names itself: two grants are not combined.
+    #[test]
+    fn grants_cover_by_tool_input_and_every_detection() {
+        let ids = |list: &[&str]| list.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        let mut state = SessionState::default();
+        state.add_grant(grant(GrantScope::Session, "s1", &["a"], None));
+        state.add_grant(grant(GrantScope::Session, "s2", &["b"], None));
+        state.add_grant(grant(GrantScope::Session, "s3", &["a", "d"], None));
+        state.add_grant(grant(GrantScope::Once, "o1", &["a", "c"], Some("h1")));
+        assert_eq!(
+            state.use_grant("Bash", "h1", &ids(&["a", "c"])),
+            Some((GrantScope::Once, "o1".into()))
+        );
+        assert_eq!(state.use_grant("Bash", "h1", &ids(&["a", "c"])), None);
+        assert_eq!(state.use_grant("Bash", "h2", &ids(&["a", "b"])), None);
+        assert_eq!(
+            state.use_grant("Bash", "h2", &ids(&["a"])),
+            Some((GrantScope::Session, "s3".into()))
+        );
+        assert_eq!(
+            state.use_grant("Bash", "h2", &ids(&["b"])),
+            Some((GrantScope::Session, "s2".into()))
+        );
+        assert_eq!(state.use_grant("Read", "h2", &ids(&["a"])), None);
+        assert_eq!(state.use_grant("Bash", "h2", &[]), None);
+    }
 
     #[test]
     fn journal_ids_keep_safe_keys_and_encode_the_rest_injectively() {

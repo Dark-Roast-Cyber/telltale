@@ -23,6 +23,9 @@ pub const PRE_TOOL_USE: &str = "PreToolUse";
 /// in 2.1.318, docs/harnesses/claude-code.md). The registry and every
 /// per-event `Context` read this one value.
 pub const CAN_ASK: bool = true;
+/// `UserPromptSubmit` is the prompt the person using Claude Code typed
+/// (docs/harnesses/claude-code.md), so a grant line can be taken from it.
+pub const CAN_GRANT: bool = true;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HookInput {
@@ -118,6 +121,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
         permission_mode: input.permission_mode.clone(),
         cwd: input.cwd.clone(),
         can_ask: CAN_ASK,
+        can_grant: CAN_GRANT,
     };
     let event = match input.hook_event_name.as_str() {
         // Evaluated by its tool input, so a call without the key is
@@ -229,8 +233,13 @@ pub fn render(hook_event: &str, response: &Response) -> Option<Value> {
             }))
         }
         Response::Decision { .. } => None,
+        // `UserPromptSubmit` takes `additionalContext` too (Claude Code's hook
+        // output reference): what a grant line did is told to the model there.
         Response::AdditionalContext(text)
-            if hook_event == "PostToolUse" || hook_event == "PostToolUseFailure" =>
+            if matches!(
+                hook_event,
+                "PostToolUse" | "PostToolUseFailure" | "UserPromptSubmit"
+            ) =>
         {
             Some(json!({
                 "hookSpecificOutput": {
@@ -240,6 +249,18 @@ pub fn render(hook_event: &str, response: &Response) -> Option<Value> {
             }))
         }
         Response::AdditionalContext(_) => None,
+        // The person sees `systemMessage` (Claude Code's common hook output
+        // field); the model gets the context.
+        Response::Notice { context, user } if hook_event == "UserPromptSubmit" => Some(json!({
+            "systemMessage": user,
+            "hookSpecificOutput": {
+                "hookEventName": hook_event,
+                "additionalContext": context,
+            }
+        })),
+        Response::Notice { context, .. } => {
+            render(hook_event, &Response::AdditionalContext(context.clone()))
+        }
     }
 }
 
@@ -325,6 +346,7 @@ pub const ADAPTER: Adapter = Adapter {
     pre_tool_use: &[PRE_TOOL_USE, copilot_cli::PRE_TOOL_USE],
     event_keys: &[EVENT_KEY],
     can_ask: CAN_ASK,
+    can_grant: CAN_GRANT,
     parse: parse_payload,
     render: render_payload,
     looks_like_pre_tool_use,
@@ -407,6 +429,47 @@ mod tests {
         assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         // Decisions are meaningless outside PreToolUse and are not rendered there.
         assert_eq!(render("PostToolUse", &response), None);
+    }
+
+    /// What a grant line did is told to the model on `UserPromptSubmit`;
+    /// context is not rendered on events whose output does not take it.
+    #[test]
+    fn user_prompt_context_renders_hook_specific_output() {
+        let response = Response::AdditionalContext("told".into());
+        let out = render("UserPromptSubmit", &response).unwrap();
+        assert_eq!(
+            out["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        assert_eq!(out["hookSpecificOutput"]["additionalContext"], "told");
+        assert_eq!(render("SessionStart", &response), None);
+    }
+
+    /// A notice gives the model the context and the person the user line on
+    /// `UserPromptSubmit`; elsewhere it is rendered as its context.
+    #[test]
+    fn a_notice_shows_the_person_a_system_message() {
+        let notice = Response::Notice {
+            context: "for the model".into(),
+            user: "for the person".into(),
+        };
+        let out = render("UserPromptSubmit", &notice).unwrap();
+        assert_eq!(out["systemMessage"], "for the person");
+        assert_eq!(
+            out["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        assert_eq!(
+            out["hookSpecificOutput"]["additionalContext"],
+            "for the model"
+        );
+        assert_eq!(render("SessionStart", &notice), None);
+        let post = render("PostToolUse", &notice).unwrap();
+        assert_eq!(
+            post["hookSpecificOutput"]["additionalContext"],
+            "for the model"
+        );
+        assert!(post.get("systemMessage").is_none());
     }
 
     #[test]

@@ -28,6 +28,7 @@ fn ctx(event: &str) -> Context {
         permission_mode: None,
         cwd: None,
         can_ask: false,
+        can_grant: false,
     }
 }
 
@@ -674,6 +675,7 @@ fn an_encoded_tool_name_is_floored_at_on_unevaluable() {
                 });
                 let pre = Context {
                     can_ask,
+                    can_grant: false,
                     ..ctx("PreToolUse")
                 };
                 let response = h
@@ -795,6 +797,7 @@ fn a_whitespace_padded_tool_name_is_floored_and_journaled_as_reported() {
                 });
                 let pre = Context {
                     can_ask,
+                    can_grant: false,
                     ..ctx("PreToolUse")
                 };
                 let response = h

@@ -455,8 +455,8 @@ pub fn serve(config: Config) -> Result<(), ServeError> {
     let mut built = None;
     for _ in 0..3 {
         let before = config.fingerprint();
-        let engine =
-            Engine::new(&config.rules, &config.protected_paths()).map_err(ServeError::Engine)?;
+        let engine = Engine::new(&config.rules, &config.grants, &config.protected_paths())
+            .map_err(ServeError::Engine)?;
         if config.fingerprint() == before {
             built = Some((engine, before));
             break;
@@ -701,7 +701,7 @@ fn handle(
         return Err("bad_request");
     };
     match runtime.handle_until(&ctx, event, answer_by as i64, SESSION_LOCK_WAIT) {
-        Ok(response) => Ok(harness.render(&ctx.hook_event, &response)),
+        Ok(response) => Ok(harness.render_event(&ctx, &response)),
         Err(crate::hooks::runtime::STATE_LOCK_TIMEOUT) => Err("busy"),
         Err(_) => Err("expired"),
     }
