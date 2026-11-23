@@ -1,0 +1,80 @@
+# A {{...}} name is pattern text several rules share, written once in engine.rs (RULE_FRAGMENTS)
+# and expanded when the rules load.
+#
+# Telltale Hooks grant protection. Loaded only while grants are on
+# (hooks.grants.enabled), as host rules beside telltale-hooks-self-protection.yaml,
+# so a grant never covers them. A grant line is taken only from the event a harness
+# raises for its user's prompt; these rules stop the tool calls that would raise such
+# an event themselves: running the hook command with a payload of the call's own
+# making, and starting a harness on an existing session, which would take a prompt the
+# call supplies into that session. Command position follows the shared document
+# (COMMAND_START); crates/telltale/tests/hooks/self_protection_corpus.rs holds the
+# cases and the benign controls.
+title: Agent command runs the Telltale Hooks hook command
+id: 13c26fd3-0648-4768-9f7e-6536a3eee219
+name: tth.tamper.hook_entry_run
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?(?:telltale(?:\.exe|\.cmd)?["'']?(?:[ \t]|\\\n)+["'']?hooks|telltale-hooks(?:\.exe|\.cmd)?)["'']?(?:[ \t]|\\\n)+["'']?[A-Za-z0-9_.-]+["'']?(?:[ \t]|\\\n)+["'']?hook["'']?(?:[\s;&|)`<>]|$)'
+    filter_command:
+        tool.command|re|i|recorded_exclusion: '{{VERSION_OR_HELP}}|{{TEXT_ONLY}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'An operator feeding the hook a saved payload by hand to see what it answers.'
+level: high
+telltale:
+    category: approval_bypass
+    score: 90
+    explanation: '`telltale hooks <harness> hook` (or the old standalone `telltale-hooks <harness> hook`) at command position, with any path, quoting, flags or input: `printf ''{...}'' | telltale hooks claude-code hook`, `/usr/local/bin/telltale hooks codex-cli hook --config-dir /etc/x <<< ''{...}''`. Only a harness runs the hook command; a tool call that runs it can hand the hook an event of its own making, such as a user prompt that allows a stopped call. `telltale hooks check`, `telltale hooks <harness> settings`, `--help` and `--version` alone, and a `git commit` that quotes the command are not matched.'
+    tags: [self-protection, hooks, defense-evasion, grants]
+---
+title: Agent command resumes an existing harness session
+id: c05d7f25-9075-4be1-bfae-a61ce27066eb
+name: tth.tamper.harness_session_resume
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|segment: '{{COMMAND_START}}{{SESSION_RESUME}}'
+    filter_command:
+        tool.command|re|i|segment: '{{VERSION_OR_HELP}}|{{TEXT_ONLY}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'A user deliberately resuming another session of a harness from inside an agent session.'
+level: high
+telltale:
+    category: approval_bypass
+    score: 90
+    explanation: 'A harness started at command position on an existing session: `claude --continue`, `claude -r <id> -p ...`, `claude --from-pr`, `claude --teleport`, `claude attach <id>`; `codex resume`, `codex fork`, `codex queue`, `codex exec resume --last ...`; `copilot --continue`, `copilot --resume <id>`, `copilot --session-id <id>`. A prompt the tool call hands that session is raised as the user''s prompt there, so it could allow a call the hook stopped. A fresh session (`claude -p "hello"`, `codex exec "task"`, `copilot -p "x"`), `--help` and `--version` alone, and a quoted mention of the words are not matched.'
+    tags: [self-protection, hooks, defense-evasion, nested-agent, grants]
+---
+title: Agent command may resume an existing harness session
+id: c53eb9ea-763b-478c-8efb-2c5ebff3968e
+name: tth.tamper.harness_session_resume_failsafe
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}{{SESSION_RESUME}}'
+    filter_command:
+        tool.command|re|i|recorded_exclusion: '{{VERSION_OR_HELP}}|{{TEXT_ONLY}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'A fresh harness session whose prompt names a resume option or begins with a resume word.'
+level: medium
+telltale:
+    category: approval_bypass
+    score: 60
+    explanation: 'The fail-safe for harness_session_resume, which reads each command segment as written. This rule reads the same launch with the quoting taken away, so a launch whose words are split by quoting asks: `cl""aude -c`, `claude --res''''ume <id>`. A fresh session whose quoted prompt names a resume option (`claude -p "what does --resume do"`) or begins with a resume word (`codex exec "resume the migration"`) asks too. A grant never covers it.'
+    tags: [self-protection, hooks, defense-evasion, nested-agent, grants]

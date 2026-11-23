@@ -455,8 +455,8 @@ pub fn serve(config: Config) -> Result<(), ServeError> {
     let mut built = None;
     for _ in 0..3 {
         let before = config.fingerprint();
-        let engine =
-            Engine::new(&config.rules, &config.protected_paths()).map_err(ServeError::Engine)?;
+        let engine = Engine::new(&config.rules, &config.grants, &config.protected_paths())
+            .map_err(ServeError::Engine)?;
         if config.fingerprint() == before {
             built = Some((engine, before));
             break;

@@ -954,15 +954,25 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
     let how = "by typing `telltale allow` or `telltale allow session` as a prompt of its own \
                on claude-code, copilot-cli, codex-cli; not on opencode; \
                rules under tth.tamper. are never covered";
+    let clause = |what: &str| {
+        format!(
+            "; a tool call that runs the hook command or resumes a harness session is {what} \
+             (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume)"
+        )
+    };
     assert_eq!(
         line("enforce", GRANTS_ON),
-        format!("{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}")
+        format!(
+            "{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}{}",
+            clause("stopped")
+        )
     );
     assert_eq!(
         line("observe", &format!("{GRANTS_ON}    covers: ask\n")),
         format!(
-            "{on} a stopped ask (hooks.grants.covers: ask) {how}; \
-             nothing is stopped in observe mode, so nothing is offered"
+            "{on} a stopped ask (hooks.grants.covers: ask) {how}{}; \
+             nothing is stopped in observe mode, so nothing is offered",
+            clause("detected")
         )
     );
     // The asks line comes first.
@@ -1207,4 +1217,37 @@ fn a_copilot_prompt_at_the_claude_code_entry_point_prints_nothing() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.stdout, "");
     covered(copilot, TEST_ASK, "ask", "once", state.path(), &config);
+}
+
+const HOOK_ENTRY_RUN: &str = "printf '{}' | telltale hooks claude-code hook";
+
+/// While grants are on, a tool call that runs the hook command is denied on
+/// every harness and is not offered a grant; with grants off the rule that
+/// stops it is not loaded.
+#[test]
+fn running_the_hook_command_is_denied_on_every_harness_while_grants_are_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let on = root(dir.path(), "enforce", false, GRANTS_ON);
+    let off_dir = tempfile::tempdir().unwrap();
+    let off = root(off_dir.path(), "enforce", false, "");
+    let grant_rule = |run: &Run| {
+        run.decision["decision"]["rule_ids"]
+            .as_array()
+            .is_some_and(|ids| {
+                ids.iter().any(|id| {
+                    id == "tth.tamper.hook_entry_run" || id == "tth.tamper.harness_session_resume"
+                })
+            })
+    };
+    for entry in ENTRIES {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        let reason = stopped(entry, HOOK_ENTRY_RUN, state.path(), &on);
+        assert!(!reason.contains(GRANT_OFFER_NOTE), "{harness}: {reason}");
+        let run = once(entry, HOOK_ENTRY_RUN, &on);
+        assert_eq!(run.decision["decision"]["verdict"], "deny", "{harness}");
+        assert!(grant_rule(&run), "{harness}: {}", run.decision);
+        let run = once(entry, HOOK_ENTRY_RUN, &off);
+        assert!(!grant_rule(&run), "{harness}: {}", run.decision);
+    }
 }

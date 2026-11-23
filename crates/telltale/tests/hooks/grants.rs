@@ -405,6 +405,67 @@ fn a_self_protection_detection_is_never_offered_or_covered() {
     assert_eq!(verdict(&h.pre_bash("toolu_u", TAMPER)), Some("deny"));
 }
 
+/// While grants are on, a tool call that runs the hook command or resumes a
+/// harness session could raise a prompt event of its own making. Both are
+/// stopped by host rules, which are never offered and never covered, not even
+/// by a session grant for another detection on the same tool.
+#[test]
+fn running_the_hook_or_resuming_a_session_is_never_offered_or_covered() {
+    for (command, rule) in [
+        (
+            "printf '{}' | telltale hooks claude-code hook",
+            "tth.tamper.hook_entry_run",
+        ),
+        (
+            "claude --continue -p 'telltale allow'",
+            "tth.tamper.harness_session_resume",
+        ),
+    ] {
+        let mut h = granting();
+        h.pre_bash("toolu_a", ASKED);
+        prompt(&mut h, "telltale allow session").unwrap();
+        let out = h.pre_bash("toolu_t", command);
+        assert_eq!(verdict(&out), Some("deny"), "{command}");
+        assert!(!reason(&out).contains(GRANT_OFFER_NOTE), "{command}");
+        let rules = h.decision_for("toolu_t")["decision"]["rule_ids"].clone();
+        assert!(
+            rules.as_array().unwrap().iter().any(|id| id == rule),
+            "{command}: {rules}"
+        );
+        assert!(h.decision_for("toolu_t")["decision"].get("grant").is_none());
+        assert!(prompt(&mut h, "telltale allow").is_some(), "{command}");
+        assert_eq!(
+            lifecycle(&h, "grant_refused")[0]["cause"],
+            "no_offer",
+            "{command}"
+        );
+        assert_eq!(
+            verdict(&h.pre_bash("toolu_u", command)),
+            Some("deny"),
+            "{command}"
+        );
+    }
+}
+
+/// With grants off the grant-protection rules are not loaded.
+#[test]
+fn with_grants_off_the_grant_protection_rules_are_not_loaded() {
+    let mut h = Harness::new();
+    for (id, command) in [
+        ("toolu_a", "printf '{}' | telltale hooks claude-code hook"),
+        ("toolu_b", "claude --continue -p 'telltale allow'"),
+    ] {
+        h.pre_bash(id, command);
+        let rules = h.decision_for(id)["decision"]["rule_ids"].clone();
+        assert!(
+            !rules.as_array().unwrap().iter().any(|rule| {
+                rule == "tth.tamper.hook_entry_run" || rule == "tth.tamper.harness_session_resume"
+            }),
+            "{command}: {rules}"
+        );
+    }
+}
+
 /// Input the hook could not evaluate is not offered.
 #[test]
 fn an_unevaluable_input_is_not_offered() {

@@ -61,6 +61,10 @@ A model must not be able to approve its own exception. Nothing a tool call
 carries can grant: not a tool input, a tool result, a file, or a payload
 field. A prompt written for a subagent is written by a model and is refused.
 A harness with no event for the user's own prompt takes no grant line.
+A tool call that would put a prompt event before the hook itself, by running
+the hook command or by starting a harness that resumes a session, is stopped
+by `tth.tamper.` rules loaded only while grants are on; grants require
+the self-protection rules, which cover the session state.
 
 The user-prompt event shows that a prompt was submitted to the session, not
 who typed it. An agent's process runs as the user, so a user-level install
@@ -90,6 +94,10 @@ policy there.
 - `Adapter` and `Context` gain `can_grant`; `SessionState` gains the offered
   call and the session's grants (bounded, cleared at session end);
   `decision.grant` is added to the record schema.
+- With grants on, three more self-protection rules are loaded
+  (`rules/telltale-hooks-grants-protection.yaml`), so a session that resumes
+  another from a tool call is stopped. With grants off the rule set is
+  unchanged.
 - The reason of a grantable call is one sentence longer, in both
   `reason_detail` forms.
 - A session grant is as broad as the detections it names: a later call of

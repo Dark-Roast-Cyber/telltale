@@ -714,7 +714,7 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
   test_signatures:
     enabled: false                   # true loads the harmless enforcement test rules (tth.test.*)
   grants:
-    enabled: false                   # true: a stopped call can be allowed by the user's grant line (`telltale allow`)
+    enabled: false                   # true: a stopped call can be allowed by the user's grant line (`telltale allow`); needs self_protection_rules
     covers: ask_and_deny             # ask_and_deny, or ask: a grant then never covers a deny
   thresholds:
     action_ask: 50

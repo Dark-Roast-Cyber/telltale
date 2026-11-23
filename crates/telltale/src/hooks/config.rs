@@ -447,12 +447,21 @@ impl Config {
                 "hooks.tamper_prevention.enabled needs hooks.self_protection_rules: it locks those rules",
             ));
         }
+        if self.grants.enabled && !self.rules.self_protection {
+            return Err(ConfigError::Invalid(
+                "hooks.grants.enabled needs hooks.self_protection_rules: those rules protect the session state that holds a grant",
+            ));
+        }
         if let Some(path) = self.rules.host_rule_claim() {
             return Err(ConfigError::HostRuleClaimed(path.to_owned()));
         }
         if self.rules.tamper_prevention
             && let Some(policy) = &self.rules.policy
-            && crate::hooks::engine::policy_drops_host_rule(policy, &self.protected_paths())
+            && crate::hooks::engine::policy_drops_host_rule(
+                policy,
+                self.grants.enabled,
+                &self.protected_paths(),
+            )
         {
             return Err(ConfigError::PolicyDropsHostRule(policy.clone()));
         }
@@ -742,6 +751,23 @@ mod tests {
             [HOST_RULE_ID_PREFIX, TEST_RULE_ID_PREFIX]
         );
         assert!(config.rules.process_chain);
+    }
+
+    /// Grants need the self-protection rules: they keep a tool call from
+    /// writing the session state or raising a prompt of its own.
+    #[test]
+    fn grants_without_the_self_protection_rules_are_invalid() {
+        let mut config = Config::default();
+        config.grants.enabled = true;
+        config.validate().unwrap();
+        config.rules.self_protection = false;
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("hooks.grants.enabled needs hooks.self_protection_rules"),
+            "{error}"
+        );
+        config.grants.enabled = false;
+        config.validate().unwrap();
     }
 
     #[test]

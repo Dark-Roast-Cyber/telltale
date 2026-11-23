@@ -496,9 +496,9 @@ How it works:
   event for the user's prompt. It must be the whole prompt (case and plain
   spacing do not matter); the same words inside a longer prompt are an
   ordinary prompt. In detect-only mode nothing is stopped, so the line is an
-  ordinary prompt there too. It applies to the most recent stopped call of the session, which
-  can be a subagent's call or the last of several calls stopped together;
-  allow the others when they are stopped again.
+  ordinary prompt there too. It applies to the most recent stopped call of
+  the session, which can be a subagent's call or the last of several calls
+  stopped together; allow the others when they are stopped again.
 - **The prompt still goes to the model**, which then repeats the call. On
   Claude Code the hook also shows the user what was allowed (tool and rule
   IDs), or that there was no stopped call to allow, and gives the model the
@@ -528,6 +528,18 @@ What a grant does not cover:
   session's history was out of its view), and an answer from `on_error` or
   `on_unevaluable`;
 - a deny, with `hooks.grants.covers: ask`.
+
+Three more rules are loaded while grants are on, and none can be granted.
+`tth.tamper.hook_entry_run` stops a tool call that runs the hook command
+(`telltale hooks <harness> hook`), which only a harness runs.
+`tth.tamper.harness_session_resume` stops a tool call that starts Claude
+Code, Codex CLI or Copilot CLI resuming or continuing an existing session.
+Either would put an event before the hook that no person raised.
+`tth.tamper.harness_session_resume_failsafe` asks where such a launch shows
+only once the quoting is taken away; a fresh nested session whose quoted
+prompt names a resume option asks too. Grants need `hooks.self_protection_rules`
+(the default): those rules protect the session state that holds a grant, and
+the configuration is refused without them.
 
 Which harnesses take the line: Claude Code, Codex CLI and Copilot CLI (the
 main agent's prompt; a prompt written for a subagent is refused). The

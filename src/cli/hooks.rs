@@ -808,12 +808,15 @@ fn grants_line(config: &Config) -> String {
         none if none.is_empty() => String::new(),
         names => format!("; not on {names}"),
     };
-    let observe = match Gate::for_mode(config.mode) {
-        Gate::DetectOnly => "; nothing is stopped in observe mode, so nothing is offered",
-        Gate::Enforce => "",
+    let (stopped, observe) = match Gate::for_mode(config.mode) {
+        Gate::DetectOnly => (
+            "detected",
+            "; nothing is stopped in observe mode, so nothing is offered",
+        ),
+        Gate::Enforce => ("stopped", ""),
     };
     format!(
-        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered{observe}",
+        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered; a tool call that runs the hook command or resumes a harness session is {stopped} (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume){observe}",
         named(true),
         telltale_core::hooks::config::HOST_RULE_ID_PREFIX,
     )
@@ -965,7 +968,7 @@ fn check_rules_json(config_dirs: &[PathBuf]) -> i32 {
             return 1;
         }
     };
-    let effective = Engine::new(&config.rules, &config.protected_paths())
+    let effective = Engine::new(&config.rules, &config.grants, &config.protected_paths())
         .and_then(|engine| engine.effective_configuration());
     match effective.map(|effective| serde_json::to_string(&effective)) {
         Ok(Ok(document)) => {
@@ -996,7 +999,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
             return 1;
         }
     };
-    match Engine::new(&config.rules, &config.protected_paths()) {
+    match Engine::new(&config.rules, &config.grants, &config.protected_paths()) {
         Ok(engine) => {
             print_config_roots(config_dirs);
             println!("build revision: {}", identity::revision());

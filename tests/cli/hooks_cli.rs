@@ -727,6 +727,30 @@ fn tamper_prevention_without_the_self_protection_rules_is_invalid_configuration(
     );
 }
 
+/// Grants need the self-protection rules: asking for them with those rules
+/// off is invalid configuration.
+#[test]
+fn grants_without_the_self_protection_rules_is_invalid_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = common::config_root(
+        dir.path(),
+        "hooks:\n  self_protection_rules: false\n  grants:\n    enabled: true\n",
+    );
+    let out = isolated()
+        .arg("check")
+        .arg("--config-dir")
+        .arg(&config)
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("hooks.grants.enabled needs hooks.self_protection_rules"),
+        "{stderr}"
+    );
+}
+
 /// `check` says why a hook asks or denies (the thresholds), what is installed
 /// outside its settings, and with `--rules` every rule as it takes effect:
 /// what an override changed, with its reason, and what a policy turned off.

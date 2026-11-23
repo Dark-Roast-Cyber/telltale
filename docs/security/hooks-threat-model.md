@@ -92,6 +92,7 @@ harness can allow a stopped call for one use or for the session
 | --- | --- |
 | Can a tool call grant? | No. A grant line is read only from the harness's event for the user's prompt, as the whole prompt. A tool input, a tool result, a file and every other payload field grant nothing |
 | Can a subagent's prompt grant? | No. It is written by a model. Where it reaches the runtime as a prompt with the subagent's ID it is refused and recorded (`grant_refused`, `not_user_prompt`); where the adapter already reads it as something other than a user prompt (Copilot CLI) it is never considered |
+| Can a tool call make the hook see a prompt event? | Rules loaded with grants stop the direct ways and cannot be granted: a tool call that runs the hook command (`tth.tamper.hook_entry_run`) and one that starts a harness resuming a session (`tth.tamper.harness_session_resume`, with a fail-safe that asks). The session state that holds a grant is covered by the self-protection rules, which grants require. Like every rule here they read the forms they know; see the last two rows |
 | Can a grant turn off Telltale's own protection? | No. Rules under `tth.tamper.` are never offered or covered |
 | Can a grant widen itself? | No. It names the detections of one stopped call, and grants do not add up: a call is covered only when one grant names all of its detections. A session grant is as broad as those detections on that tool |
 | Does Telltale approve the call? | No. A covered call gets no answer; the harness's own permissions decide |

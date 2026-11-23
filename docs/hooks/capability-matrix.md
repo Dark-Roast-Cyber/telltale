@@ -48,7 +48,7 @@ regressions, not harness qualification.
 | Hook `deny` enforced in subagents | Yes, payload has `agent_id`/`agent_type` | E2E, Capture |
 | `ask` | Yes; headless `-p` declines (no approver); interactive approval runs the call and settles `proceeded_after_ask` | E2E (headless and tmux-driven interactive) |
 | Decision values | allow, deny, ask, defer (`defer` ends a `-p` turn with `stop_reason: tool_deferred`; call not run) | Bin, E2E |
-| Grant line (`hooks.grants.enabled`) | Taken from `UserPromptSubmit`; a payload with an `agent_id` is refused. The hook prints `additionalContext` for the event, saying what was allowed | Bin (contract tests with the real binary); output shape from the hooks reference. Not exercised with a live harness |
+| Grant line (`hooks.grants.enabled`) | Taken from `UserPromptSubmit`; a payload with an `agent_id` is refused. The hook prints `systemMessage` for the person and `additionalContext` for the model, saying what was allowed | Bin (contract tests with the real binary); output shape from the hooks reference. Not exercised with a live harness |
 | Post-execution | `PostToolUse` (result), `PostToolUseFailure` (non-zero exit, `error`, `is_interrupt`), `PostToolBatch` (all calls, incl. denied, with the text the model saw) | Capture |
 | Permission prompt notification | `PermissionRequest`, no `tool_use_id`, fires in `-p` | Capture |
 | Default failure behavior | Fail-open on crash/non-zero exit | E2E |

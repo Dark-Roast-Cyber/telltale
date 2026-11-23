@@ -318,7 +318,7 @@ fn every_character_yaml_refuses_builds_a_real_pipeline() {
         .collect();
     assert_eq!(refused.chars().count(), 63);
     let path = PathBuf::from(format!("/srv/{refused}"));
-    let built = Engine::new(&RuleContent::default(), &[path]);
+    let built = Engine::new(&RuleContent::default(), &Default::default(), &[path]);
     assert!(
         built.is_ok(),
         "{:?}",

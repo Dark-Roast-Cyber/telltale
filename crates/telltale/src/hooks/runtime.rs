@@ -743,7 +743,11 @@ impl Runtime {
     /// Build the Telltale pipeline on first use only: lifecycle events never pay for it.
     fn engine(&mut self) -> Result<&Engine, &'static str> {
         if self.engine.is_none() && self.engine_error.is_none() {
-            match Engine::new(&self.config.rules, &self.config.protected_paths()) {
+            match Engine::new(
+                &self.config.rules,
+                &self.config.grants,
+                &self.config.protected_paths(),
+            ) {
                 Ok(engine) => self.engine = Some(engine),
                 Err(error) => self.engine_error = Some(error.code()),
             }
