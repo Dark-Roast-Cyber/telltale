@@ -160,7 +160,8 @@
   file each in `grants.d` of the user's own configuration root, or of the
   last `--config-dir` the hook is pinned to (never the repository; no other
   root's `grants.d` is read, and a link is not) and cover a call with
-  the same exclusions as the session's grants, after them.
+  the same exclusions as the session's grants, after them, on every
+  harness, the OpenCode pilot included.
   `telltale hooks grants [--json]` lists them and the files left out;
   `telltale hooks revoke <grant>` removes one. Making and revoking a grant
   are lifecycle records (`grant`, `grant_revoked`, `harness.hook_event:

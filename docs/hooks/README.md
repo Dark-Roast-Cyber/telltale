@@ -619,6 +619,10 @@ telltale hooks allow <record> --user           # every directory
   a list to read with tools) with any file left out and why;
   `telltale hooks revoke <grant>` removes one. A file that cannot be read or
   is not a valid grant never grants, and `telltale hooks check` reports it.
+- **Every harness.** An always grant covers calls on the harness it names,
+  the OpenCode pilot included, which has no grant line. A running evaluator
+  is retired when a grant is made or revoked, so the next call reads the
+  change.
 - **Order.** A call is covered by the first of: a once grant, a session
   grant, a project grant, a user grant. One grant must name all of the
   call's detections, as for the session.

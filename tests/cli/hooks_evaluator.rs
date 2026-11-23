@@ -343,6 +343,81 @@ fn a_change_to_a_file_in_the_config_root_retires_the_daemon() {
     wait_for(|| daemon.0.try_wait().unwrap().is_some());
 }
 
+/// Making or revoking an always grant is never answered by an evaluator
+/// that started before it: a grant file is a file in the config root.
+#[test]
+fn making_or_revoking_a_grant_retires_the_evaluator() {
+    use telltale_core::hooks::grants::{AlwaysGrant, AlwaysScope, write};
+    let env = Env::new("  grants:\n    enabled: true\n");
+    let mut daemon = env.serve();
+    let stopped = env.hook(&pre("toolu_1", EXFIL)).expect("deny");
+    assert_eq!(stopped["hookSpecificOutput"]["permissionDecision"], "deny");
+    let first = env.decisions().pop().unwrap();
+    assert_eq!(first["evaluation"]["evaluator"], "daemon", "{first:#}");
+    let mut rule_ids: Vec<String> = first["decision"]["rule_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .collect();
+    rule_ids.sort();
+    rule_ids.dedup();
+    let id = write(
+        &env.config().join("grants.d"),
+        &AlwaysGrant {
+            id: String::new(),
+            version: 1,
+            scope: AlwaysScope::User,
+            project: None,
+            harness: "claude-code".into(),
+            tool: "Bash".into(),
+            rule_ids,
+            created_at: "2026-11-23T00:00:00Z".into(),
+            from_record: first["record_id"].as_str().unwrap().into(),
+        },
+    )
+    .unwrap();
+    let granted = json!({"scope": "user", "granted_by": id});
+
+    assert_eq!(env.hook(&pre("toolu_2", EXFIL)), None);
+    let covered = env.decisions().pop().unwrap();
+    assert_eq!(covered["evaluation"]["evaluator"], "in_process");
+    assert_eq!(
+        covered["evaluation"]["evaluator_fallback"],
+        "evaluator_config_mismatch"
+    );
+    assert_eq!(covered["decision"]["grant"], granted, "{covered:#}");
+    wait_for(|| daemon.0.try_wait().unwrap().is_some());
+
+    // An evaluator started after the grant covers the call itself, and
+    // revoking the grant retires it in turn.
+    let mut daemon = env.serve();
+    assert_eq!(env.hook(&pre("toolu_3", EXFIL)), None);
+    let covered = env.decisions().pop().unwrap();
+    assert_eq!(covered["evaluation"]["evaluator"], "daemon");
+    assert_eq!(covered["decision"]["grant"], granted, "{covered:#}");
+    let revoke = env
+        .command(&env.config(), &["revoke", &id])
+        .output()
+        .unwrap();
+    assert_eq!(
+        revoke.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&revoke.stderr)
+    );
+    let output = env.hook(&pre("toolu_4", EXFIL)).expect("deny");
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    let after = env.decisions().pop().unwrap();
+    assert_eq!(after["evaluation"]["evaluator"], "in_process");
+    assert_eq!(
+        after["evaluation"]["evaluator_fallback"],
+        "evaluator_config_mismatch"
+    );
+    assert_eq!(after["decision"]["grant"], Value::Null);
+    wait_for(|| daemon.0.try_wait().unwrap().is_some());
+}
+
 #[test]
 fn unreachable_evaluator_is_autostarted_and_orphans_exit() {
     let env = Env::new("");
