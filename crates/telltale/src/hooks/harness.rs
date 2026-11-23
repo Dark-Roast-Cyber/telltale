@@ -198,6 +198,23 @@ impl Harness {
         (self.adapter().render)(hook_event, response)
     }
 
+    /// [`Self::render`] for an event this entry point parsed. An event can
+    /// belong to another harness than the entry point's (a payload routed to
+    /// the adapter that recognizes it, `Context::harness`): advisory context
+    /// on it is then printed only where the harness it belongs to takes
+    /// context on that event, since only that harness's documented output
+    /// says the context reaches the model.
+    pub fn render_event(self, ctx: &Context, response: &Response) -> Option<Value> {
+        if matches!(response, Response::AdditionalContext(_))
+            && ctx.harness != self.name()
+            && Self::from_name(ctx.harness)
+                .is_some_and(|own| own.render(&ctx.hook_event, response).is_none())
+        {
+            return None;
+        }
+        self.render(&ctx.hook_event, response)
+    }
+
     /// Whether `hook_event` is the harness's pre-execution enforcement point.
     pub fn is_pre_tool_use(self, hook_event: &str) -> bool {
         self.adapter().pre_tool_use.contains(&hook_event)
@@ -310,6 +327,43 @@ pub fn names_event(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Advisory context on an event routed to another harness's adapter is
+    /// printed only where that harness takes context on the event: a
+    /// Copilot CLI prompt event at the Claude Code entry point gets nothing,
+    /// a Copilot CLI result event keeps its context, and Claude Code's own
+    /// prompt event gets it.
+    #[test]
+    fn routed_context_is_printed_only_where_its_harness_takes_it() {
+        let ctx = |harness: &'static str, hook_event: &str| Context {
+            harness,
+            hook_event: hook_event.to_owned(),
+            session_id: "s".into(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: true,
+            can_grant: true,
+        };
+        let context = Response::AdditionalContext("told".into());
+        let entry = Harness::ClaudeCode;
+        assert_eq!(
+            entry.render_event(&ctx("copilot-cli", "UserPromptSubmit"), &context),
+            None
+        );
+        assert!(
+            entry
+                .render_event(&ctx("copilot-cli", "PostToolUse"), &context)
+                .is_some()
+        );
+        assert!(
+            entry
+                .render_event(&ctx("claude-code", "UserPromptSubmit"), &context)
+                .is_some()
+        );
+    }
 
     /// Every descriptor is complete, and the registry's lookups by name
     /// (`from_name`, relocated homes) reach the adapter that

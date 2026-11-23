@@ -48,6 +48,7 @@ regressions, not harness qualification.
 | Hook `deny` enforced in subagents | Yes, payload has `agent_id`/`agent_type` | E2E, Capture |
 | `ask` | Yes; headless `-p` declines (no approver); interactive approval runs the call and settles `proceeded_after_ask` | E2E (headless and tmux-driven interactive) |
 | Decision values | allow, deny, ask, defer (`defer` ends a `-p` turn with `stop_reason: tool_deferred`; call not run) | Bin, E2E |
+| Grant line (`hooks.grants.enabled`) | Taken from `UserPromptSubmit`; a payload with an `agent_id` is refused. The hook prints `additionalContext` for the event, saying what was allowed | Bin (contract tests with the real binary); output shape from the hooks reference. Not exercised with a live harness |
 | Post-execution | `PostToolUse` (result), `PostToolUseFailure` (non-zero exit, `error`, `is_interrupt`), `PostToolBatch` (all calls, incl. denied, with the text the model saw) | Capture |
 | Permission prompt notification | `PermissionRequest`, no `tool_use_id`, fires in `-p` | Capture |
 | Default failure behavior | Fail-open on crash/non-zero exit | E2E |
@@ -89,6 +90,7 @@ Unless a row names another path, hooks were trusted with
 | Deny served by the autostarted evaluator | Yes, once it is up; the first hook autostarts it and falls back in-process | E2E (`deny-evaluator`) |
 | `apply_patch` deny | Yes: a patch writing `.codex/hooks.json` is denied through native evaluation and the file is not created; a benign patch applies | E2E (`patch-deny`, `patch-allow`) |
 | Policy `ask` | Returned as deny (Codex cannot ask; a returned ask would run). The reason tells the model to ask the user; what a model does with it was not measured | E2E for the deny; Bin for the reason text |
+| Grant line (`hooks.grants.enabled`) | Taken from the main agent's `UserPromptSubmit`; a subagent's is refused by its `agent_id`. No output for the event | Bin; payload shapes from Capture. Not exercised with a live harness |
 | Allow | Nothing printed, call runs | E2E |
 | Correlation | `session:agent:turn:tool_use_id`, escaped; settled by PostToolUse, `Stop`, `SubagentStop` | E2E, Capture |
 | Hook failure (crash, timeout, missing binary) | **Fails open**, no option | E2E |
@@ -122,6 +124,7 @@ Details, payloads and fixtures: [harness contracts](harnesses/README.md).
 | Stable call ID pre/post | **No** (Capture) | `tool_use_id` + `turn_id` (Capture) | `callID` (Capture) | `id`; reused by Code Mode inner calls (Capture) |
 | Deny honored | flat deny or exit 2; hso on PascalCase only (E2E) | hso deny, `decision: block`, exit 2 + stderr (E2E) | throw (E2E) | throw, `Tool.Error`, evaluate `deny` (E2E) |
 | Deny in subagents | Yes (E2E) | Yes (E2E) | Yes (E2E) | Yes (E2E) |
+| Grant line (`hooks.grants.enabled`) | Taken from the main agent's `userPromptSubmitted`; a subagent's is `other`. No output for the event (Bin) | Taken from the main agent's `UserPromptSubmit`; a subagent's carries its `agent_id` and is refused. No output (Bin; shapes from Capture) | Not taken | Not taken: the pilot forwards no user-prompt event |
 | Ask | `-p`: blocks; interactive: prompts the user, also with `--yolo`, in the flat form and in Claude's form on PascalCase (E2E); `--acp`: unknown; cloud agent: ask becomes deny (Docs) | **No: call runs** (E2E) | **No** (`permission.ask` never fires) (E2E) | evaluate `ask`: `--auto` approves, plain `run` rejects (E2E) |
 | Hook allow loosens native permissions | **Yes**, even over `--deny-tool` (E2E) | No (exec-policy rules hold) (E2E) | No (no allow path) (E2E) | **Yes** over native ask; no over native deny (E2E) |
 | Failure default | exit 1 / crash / missing: closed; invalid output / timeout: open (E2E) | open for every failure, no fail-closed option (E2E, Src) | load failure: silently skipped; hang: session hangs (E2E) | same as v1 (E2E) |

@@ -14,3 +14,4 @@ rejected alternatives, consequences. Supersede rather than rewrite.
 | [0007](0007-hooks-inside-telltale.md) | Hooks live inside Telltale as a default-on feature; build identity follows the executable | Accepted; supersedes the pin and build-ID parts of 0001 and 0003 |
 | [0008](0008-detect-only-by-default.md) | Detect-only by default; enforcement is one setting; one gate releases every answer | Accepted; amends points 1, 4 and 5 of 0004 |
 | [0009](0009-tamper-prevention-is-opt-in.md) | Tamper detection by default, tamper prevention by choice; the self-protection rules are operator-tunable unless locked | Accepted; amends the consequences of 0008 |
+| [0010](0010-grants.md) | The user can allow a stopped call for this time or this session by a grant line; a covered call gets no opinion, never an `allow` | Accepted; extends 0004 |

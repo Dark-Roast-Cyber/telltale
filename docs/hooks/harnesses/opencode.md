@@ -103,7 +103,9 @@ authoritative callback per request, not a claim that a returned decision
 proves execution or non-execution. Ordinary and nested outcomes both remain
 unsettled/unknown; no `honored` outcome is fabricated. Agent names such as
 `build` populate `agent_type`, not an invented agent identity. The assistant
-message ID is not treated as a user prompt/turn ID.
+message ID is not treated as a user prompt/turn ID. The pilot forwards no
+event for the user's prompt, so `can_grant` is `false`: no grant is offered
+and no grant line is taken (ADR 0010).
 
 ### Install the pilot
 

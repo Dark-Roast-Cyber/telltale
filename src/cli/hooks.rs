@@ -24,7 +24,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use telltale_core::hooks::config::{AskRoute, Config, OnError, RuleContent};
+use telltale_core::hooks::config::{AskRoute, Config, GrantCover, OnError, RuleContent};
 use telltale_core::hooks::engine::Engine;
 #[cfg(unix)]
 use telltale_core::hooks::engine::Limits;
@@ -783,6 +783,42 @@ fn ask_route_line(route: AskRoute) -> String {
     }
 }
 
+/// Whether and how the user can allow a stopped call, per harness: the
+/// `grants` line of `check`. A harness is listed as taking the grant line
+/// only when it raises an event for the prompt of the person using it
+/// (`Adapter::can_grant`).
+fn grants_line(config: &Config) -> String {
+    let grants = &config.grants;
+    if !grants.enabled {
+        return "grants: off (hooks.grants.enabled: false): a stopped call cannot be allowed from the harness".to_owned();
+    }
+    let named = |can_grant: bool| -> String {
+        let names: Vec<_> = Harness::ALL
+            .iter()
+            .filter(|harness| harness.adapter().can_grant == can_grant)
+            .map(|harness| harness.adapter().name)
+            .collect();
+        names.join(", ")
+    };
+    let (what, covers) = match grants.covers {
+        GrantCover::AskAndDeny => ("a stopped ask or deny", "ask_and_deny"),
+        GrantCover::Ask => ("a stopped ask", "ask"),
+    };
+    let not_on = match named(false) {
+        none if none.is_empty() => String::new(),
+        names => format!("; not on {names}"),
+    };
+    let observe = match Gate::for_mode(config.mode) {
+        Gate::DetectOnly => "; nothing is stopped in observe mode, so nothing is offered",
+        Gate::Enforce => "",
+    };
+    format!(
+        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered{observe}",
+        named(true),
+        telltale_core::hooks::config::HOST_RULE_ID_PREFIX,
+    )
+}
+
 /// What each enforcement test signature gets under the configuration in
 /// effect, one line per rule under `tth.test.`: its command, score and the
 /// verdict a hook reaches for it, or what turned it off.
@@ -987,6 +1023,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                 thresholds.repeated_denials
             );
             println!("{}", ask_route_line(config.ask));
+            println!("{}", grants_line(&config));
             let effective = match engine.effective_configuration() {
                 Ok(effective) => effective,
                 Err(error) => {
@@ -1494,7 +1531,7 @@ fn answer_from_runtime(
             ClientOutcome::DeliveredNoAnswer(code) => {
                 let mut runtime = runtime(config);
                 let response = runtime.handle_unanswered(&ctx, event, code, asked_at);
-                return Answer::output(harness.render(&ctx.hook_event, &response));
+                return Answer::output(harness.render_event(&ctx, &response));
             }
             ClientOutcome::NotDelivered(code) => {
                 if code == "evaluator_unreachable"
@@ -1512,7 +1549,7 @@ fn answer_from_runtime(
     runtime.set_evaluator("in_process", fallback);
     evaluator::panic_if_forced("evaluate");
     let response = runtime.handle(&ctx, event);
-    Answer::output(harness.render(&ctx.hook_event, &response))
+    Answer::output(harness.render_event(&ctx, &response))
 }
 
 /// `hooks serve` arguments for an evaluator that reads the configuration this

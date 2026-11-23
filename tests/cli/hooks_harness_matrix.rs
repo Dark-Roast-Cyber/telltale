@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
-use telltale_core::hooks::runtime::ASK_THROUGH_MODEL_NOTE;
+use telltale_core::hooks::runtime::{ASK_THROUGH_MODEL_NOTE, GRANT_OFFER_NOTE};
 
 use super::hooks_cli::{write_override, write_policy};
 
@@ -42,6 +42,63 @@ pub(crate) struct Entry {
     /// cannot, an ask is returned as a deny that says so.
     pub(crate) can_ask: bool,
     pub(crate) payload: fn(&str) -> Value,
+    /// Whether the harness raises an event for its user's prompt, so the
+    /// user can allow a stopped call by a grant line typed there.
+    pub(crate) can_grant: bool,
+    /// The harness's prompt payload in the session of [`Self::payload`]:
+    /// the user's own (`false`), or one inside a subagent (`true`), in that
+    /// harness's captured shape. `None` where the harness has no prompt event.
+    pub(crate) prompt: Option<fn(&str, bool) -> Value>,
+}
+
+/// A Claude Code prompt in the session of the `PreToolUse` template.
+fn claude_prompt(text: &str, _subagent: bool) -> Value {
+    let mut payload = common::template("UserPromptSubmit", None);
+    payload["session_id"] = common::template("PreToolUse", Some("Bash"))["session_id"].clone();
+    payload["prompt"] = text.into();
+    payload
+}
+
+/// A Codex CLI prompt in the session of the captured `PreToolUse`; inside a
+/// subagent it carries the subagent's `agent_id` and `agent_type`, as the
+/// subagent capture does.
+fn codex_prompt(text: &str, subagent: bool) -> Value {
+    let mut payload = captured(
+        "codex-cli/0.166.0/lifecycle.jsonl",
+        "event",
+        "UserPromptSubmit",
+    );
+    payload["session_id"] =
+        captured("codex-cli/0.166.0/ask-hso.jsonl", "stub", "ask-hso")["session_id"].clone();
+    payload["prompt"] = text.into();
+    if subagent {
+        payload["agent_id"] = "synthetic-subagent".into();
+        payload["agent_type"] = "default".into();
+    }
+    payload
+}
+
+/// A Copilot CLI prompt in the session of the captured `preToolUse`; inside
+/// a subagent it is the task prompt, with `agentId`, `agentType` and
+/// `parentAgentId` as the subagent capture has them.
+fn copilot_prompt(text: &str, subagent: bool) -> Value {
+    let session =
+        captured("copilot-cli/1.0.105/deny-flat.jsonl", "event", "preToolUse")["sessionId"].clone();
+    let mut payload = captured(
+        "copilot-cli/1.0.105/lifecycle.jsonl",
+        "event",
+        "userPromptSubmitted",
+    );
+    payload["prompt"] = text.into();
+    if subagent {
+        payload["sessionId"] = "synthetic-subagent".into();
+        payload["agentId"] = "synthetic-subagent".into();
+        payload["agentType"] = "task".into();
+        payload["parentAgentId"] = session;
+    } else {
+        payload["sessionId"] = session;
+    }
+    payload
 }
 
 pub(crate) const ENTRIES: &[Entry] = &[
@@ -54,6 +111,8 @@ pub(crate) const ENTRIES: &[Entry] = &[
             payload["tool_input"] = json!({"command": command});
             payload
         },
+        can_grant: true,
+        prompt: Some(claude_prompt),
     },
     Entry {
         harness: "codex-cli",
@@ -64,6 +123,8 @@ pub(crate) const ENTRIES: &[Entry] = &[
             payload["tool_input"]["command"] = command.into();
             payload
         },
+        can_grant: true,
+        prompt: Some(codex_prompt),
     },
     Entry {
         harness: "copilot-cli",
@@ -75,6 +136,8 @@ pub(crate) const ENTRIES: &[Entry] = &[
             payload["toolArgs"]["command"] = command.into();
             payload
         },
+        can_grant: true,
+        prompt: Some(copilot_prompt),
     },
     Entry {
         harness: "opencode",
@@ -89,6 +152,8 @@ pub(crate) const ENTRIES: &[Entry] = &[
                           "input": {"command": command}}
             })
         },
+        can_grant: false,
+        prompt: None,
     },
 ];
 
@@ -142,6 +207,12 @@ impl Run {
 /// `state`, reading the config roots `roots` (none: the defaults of a home
 /// directory with no configuration).
 pub(crate) fn call(entry: &Entry, command: &str, state: &Path, roots: &[&Path]) -> Run {
+    send(entry, &(entry.payload)(command), state, roots)
+}
+
+/// One hook run of `entry` on `payload`, reading the config roots `roots`,
+/// with its session's files in `state`.
+fn send(entry: &Entry, payload: &Value, state: &Path, roots: &[&Path]) -> Run {
     let mut hook = Command::new(env!("CARGO_BIN_EXE_telltale"));
     hook.args(["hooks", entry.harness, "hook"])
         .args(entry.flags);
@@ -161,7 +232,6 @@ pub(crate) fn call(entry: &Entry, command: &str, state: &Path, roots: &[&Path]) 
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let payload = (entry.payload)(command);
     // A write error surfaces as a failed assertion on the output.
     let _ = child
         .stdin
@@ -855,4 +925,260 @@ fn check_says_what_each_test_command_gets() {
         ),
         "{stdout}"
     );
+}
+
+/// The `hooks:` lines that turn grants on.
+const GRANTS_ON: &str = "  grants:\n    enabled: true\n";
+
+/// `check` says whether the user can allow a stopped call, what a grant
+/// covers, on which harnesses, and that nothing is offered in observe mode.
+#[test]
+fn check_says_whether_a_stopped_call_can_be_allowed() {
+    let line = |mode: &str, more: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let (code, stdout, stderr) = check(&root(dir.path(), mode, false, more));
+        assert_eq!(code, Some(0), "{stderr}");
+        stdout
+            .lines()
+            .find(|line| line.starts_with("grants: "))
+            .unwrap_or_else(|| panic!("no grants line: {stdout}"))
+            .to_owned()
+    };
+    assert_eq!(
+        line("enforce", ""),
+        "grants: off (hooks.grants.enabled: false): a stopped call cannot be allowed from the harness"
+    );
+    let on = "grants: on (hooks.grants.enabled: true): the user can allow";
+    let how = "by typing `telltale allow` or `telltale allow session` as a prompt of its own \
+               on claude-code, copilot-cli, codex-cli; not on opencode; \
+               rules under tth.tamper. are never covered";
+    assert_eq!(
+        line("enforce", GRANTS_ON),
+        format!("{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}")
+    );
+    assert_eq!(
+        line("observe", &format!("{GRANTS_ON}    covers: ask\n")),
+        format!(
+            "{on} a stopped ask (hooks.grants.covers: ask) {how}; \
+             nothing is stopped in observe mode, so nothing is offered"
+        )
+    );
+    // The asks line comes first.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stdout, _) = check(&root(dir.path(), "enforce", false, ""));
+    let asks = stdout.find("\nasks: ").unwrap();
+    assert!(
+        stdout[asks + 1..]
+            .lines()
+            .nth(1)
+            .unwrap()
+            .starts_with("grants: "),
+        "{stdout}"
+    );
+}
+
+/// The user's prompt `text` on `entry` (a subagent's with `subagent`), in
+/// the session whose files are in `state`.
+fn prompt(entry: &Entry, text: &str, subagent: bool, state: &Path, config: &Path) -> Run {
+    let build = entry.prompt.expect(entry.harness);
+    let run = send(entry, &build(text, subagent), state, &[config]);
+    assert_eq!(run.code, Some(0), "{}: {}", entry.harness, run.stderr);
+    run
+}
+
+/// `command` on `entry` in the session in `state`: the reason it was
+/// stopped with.
+fn stopped(entry: &Entry, command: &str, state: &Path, config: &Path) -> String {
+    let run = call(entry, command, state, &[config]);
+    assert_eq!(run.code, Some(0), "{}: {}", entry.harness, run.stderr);
+    run.answer(entry.harness)
+        .unwrap_or_else(|| panic!("{}: not stopped\n{}", entry.harness, run.stderr))
+        .1
+}
+
+/// `command` on `entry` in the session in `state`, covered by a grant of
+/// `scope`: no answer, and a record with the policy verdict.
+fn covered(entry: &Entry, command: &str, verdict: &str, scope: &str, state: &Path, config: &Path) {
+    let harness = entry.harness;
+    let run = call(entry, command, state, &[config]);
+    assert_eq!(run.code, Some(0), "{harness}: {}", run.stderr);
+    assert_eq!(run.answer(harness), None, "{harness}: {}", run.stdout);
+    assert_eq!(run.stdout, "", "{harness}");
+    let decision = &run.decision["decision"];
+    assert_eq!(decision["verdict"], verdict, "{harness}");
+    assert_eq!(decision["returned"], false, "{harness}");
+    assert_eq!(decision["grant"]["scope"], scope, "{harness}");
+}
+
+fn granting() -> impl Iterator<Item = &'static Entry> {
+    ENTRIES.iter().filter(|entry| entry.can_grant)
+}
+
+/// On every harness that takes a grant line: the stopped test offers it,
+/// `telltale allow` lets the same call through once with no answer, and the
+/// third time it is stopped again.
+#[test]
+fn a_grant_line_allows_a_stopped_call_once_on_every_harness_that_takes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    for entry in granting() {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        let reason = stopped(entry, TEST_ASK, state.path(), &config);
+        assert!(reason.contains(GRANT_OFFER_NOTE), "{harness}: {reason}");
+        prompt(entry, "telltale allow", false, state.path(), &config);
+        covered(entry, TEST_ASK, "ask", "once", state.path(), &config);
+        stopped(entry, TEST_ASK, state.path(), &config);
+    }
+}
+
+/// `telltale allow session` after the deny test: every later run of it gets
+/// no answer; the ask test, another detection, is still stopped.
+#[test]
+fn a_session_grant_covers_its_detection_for_the_session_on_every_harness() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    for entry in granting() {
+        let state = tempfile::tempdir().unwrap();
+        stopped(entry, TEST_DENY, state.path(), &config);
+        prompt(
+            entry,
+            "telltale allow session",
+            false,
+            state.path(),
+            &config,
+        );
+        for _ in 0..2 {
+            covered(entry, TEST_DENY, "deny", "session", state.path(), &config);
+        }
+        stopped(entry, TEST_ASK, state.path(), &config);
+    }
+}
+
+/// With `covers: ask` a denied call is not offered, and the grant line after
+/// it allows nothing.
+#[test]
+fn with_covers_ask_a_deny_cannot_be_allowed_on_any_harness() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(
+        dir.path(),
+        "enforce",
+        true,
+        &format!("{GRANTS_ON}    covers: ask\n"),
+    );
+    for entry in granting() {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        let reason = stopped(entry, TEST_DENY, state.path(), &config);
+        assert!(!reason.contains(GRANT_OFFER_NOTE), "{harness}: {reason}");
+        prompt(entry, "telltale allow", false, state.path(), &config);
+        stopped(entry, TEST_DENY, state.path(), &config);
+    }
+}
+
+/// Grants are off by default: no offer, and the grant line is an ordinary
+/// prompt that changes nothing and prints nothing.
+#[test]
+fn by_default_no_harness_offers_or_takes_a_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, "");
+    for entry in granting() {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        let reason = stopped(entry, TEST_ASK, state.path(), &config);
+        assert!(!reason.contains(GRANT_OFFER_NOTE), "{harness}: {reason}");
+        let run = prompt(entry, "telltale allow", false, state.path(), &config);
+        assert_eq!(run.stdout, "", "{harness}");
+        stopped(entry, TEST_ASK, state.path(), &config);
+    }
+}
+
+/// A harness without a prompt event for its user is never offered a grant.
+#[test]
+fn a_harness_that_cannot_take_a_grant_line_is_not_offered_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    for entry in ENTRIES.iter().filter(|entry| !entry.can_grant) {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        for command in [TEST_ASK, TEST_DENY] {
+            let reason = stopped(entry, command, state.path(), &config);
+            assert!(!reason.contains(GRANT_OFFER_NOTE), "{harness}: {reason}");
+        }
+    }
+}
+
+/// What the prompt hook prints after a grant and after a refusal with no
+/// stopped call: the context for the model where the harness's documented
+/// prompt output takes it (Claude Code), nothing elsewhere; exit 0 always.
+#[test]
+fn the_prompt_hook_tells_the_model_only_where_the_harness_takes_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    for entry in granting() {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        let refused = prompt(entry, "telltale allow", false, state.path(), &config);
+        stopped(entry, TEST_ASK, state.path(), &config);
+        let granted = prompt(entry, "telltale allow", false, state.path(), &config);
+        for (run, context) in [
+            (
+                refused,
+                "Telltale Hooks: there is no stopped call to allow.",
+            ),
+            (granted, "Telltale Hooks: the user allowed the stopped "),
+        ] {
+            if harness == "claude-code" {
+                let output: Value = serde_json::from_str(run.stdout.trim()).unwrap();
+                let specific = &output["hookSpecificOutput"];
+                assert_eq!(specific["hookEventName"], "UserPromptSubmit");
+                assert!(
+                    specific["additionalContext"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with(context),
+                    "{output}"
+                );
+            } else {
+                assert_eq!(run.stdout, "", "{harness}");
+            }
+        }
+    }
+}
+
+/// A prompt inside a subagent (Copilot CLI's task prompt, a Codex CLI prompt
+/// that carries an agent ID) is not the user's: the grant line in it allows
+/// nothing.
+#[test]
+fn a_subagent_prompt_allows_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    for entry in granting().filter(|entry| entry.harness != "claude-code") {
+        let harness = entry.harness;
+        let state = tempfile::tempdir().unwrap();
+        stopped(entry, TEST_ASK, state.path(), &config);
+        let run = prompt(entry, "telltale allow", true, state.path(), &config);
+        assert_eq!(run.stdout, "", "{harness}");
+        stopped(entry, TEST_ASK, state.path(), &config);
+    }
+}
+
+/// A Copilot CLI prompt in its PascalCase dialect reaches the Claude Code
+/// entry point (a trusted folder's `.claude/settings.json`). The grant is
+/// taken, but nothing is printed: no Copilot evidence says context on that
+/// event reaches the model.
+#[test]
+fn a_copilot_prompt_at_the_claude_code_entry_point_prints_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    let state = tempfile::tempdir().unwrap();
+    let copilot = ENTRIES.iter().find(|e| e.harness == "copilot-cli").unwrap();
+    let claude = ENTRIES.iter().find(|e| e.harness == "claude-code").unwrap();
+    stopped(copilot, TEST_ASK, state.path(), &config);
+    let mut payload = copilot_prompt("telltale allow", false);
+    payload["hook_event_name"] = "UserPromptSubmit".into();
+    let run = send(claude, &payload, state.path(), &[&config]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "");
+    covered(copilot, TEST_ASK, "ask", "once", state.path(), &config);
 }

@@ -238,6 +238,9 @@ hooks:
     enabled: false       # true: lock those rules against overrides and policies
   test_signatures:
     enabled: false       # true: load the two harmless enforcement test rules (tth.test.*)
+  grants:
+    enabled: false       # true: the user can allow a stopped call by typing `telltale allow`
+    covers: ask_and_deny # ask_and_deny, or ask: a grant then never covers a deny
   thresholds:            # Telltale promotion scores (host policy)
     action_ask: 50
     action_deny: 90
@@ -344,6 +347,7 @@ user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-conf
 | Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
 | Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
 | Have the model ask the user, not the harness's approval prompt | `hooks.ask: model` ([how an ask reaches the user](#how-an-ask-reaches-the-user)) |
+| Let the user allow a stopped call from the harness | `hooks.grants.enabled: true` ([allowing a stopped call](#allowing-a-stopped-call)) |
 | Configure a fleet | The same folders in `/etc/telltale`; the user's root is read after it |
 
 How tuning behaves:
@@ -470,6 +474,81 @@ lock says the rules are fixed.
   settings out of its reach as well
   ([threat model](../security/hooks-threat-model.md)).
 
+## Allowing a stopped call
+
+With `hooks.grants.enabled: true`, the person using the harness can allow a
+call that a hook stopped, without leaving the harness and without editing
+configuration. The reason of the stopped call says how; it ends:
+
+```text
+To allow it, the user can type `telltale allow` (this call, once) or `telltale allow
+session` (these detections, for the rest of this session) as a prompt of its own.
+```
+
+| The user types | What is allowed | Until |
+| --- | --- | --- |
+| `telltale allow` | The call that was just stopped, repeated unchanged (same tool, same input) | It has run once |
+| `telltale allow session` | Calls of that tool whose detections are all among those of the stopped call | The session ends |
+
+How it works:
+
+- **The line is a prompt of its own.** The hook reads it on the harness's
+  event for the user's prompt. It must be the whole prompt (case and spacing
+  do not matter); the same words inside a longer prompt are an ordinary
+  prompt. It applies to the most recent stopped call of the session.
+- **The prompt still goes to the model**, which then repeats the call. On
+  Claude Code the hook adds a line of context saying what was allowed, or
+  that there was no stopped call to allow.
+- **Telltale steps aside; it does not approve.** A covered call gets no
+  answer from the hook, so the harness's own permission rules and prompt
+  apply as for any other call. No `allow` is returned.
+- **With `hooks.ask: model`** the flow is the same on every harness that
+  takes the line: the model says what was stopped and why, the user types
+  the line, the model repeats the call.
+- **On a harness with an approval prompt** that prompt still decides a
+  single asked call. The line is for a deny, for a harness with no prompt,
+  and for "stop asking me about this in this session".
+
+What a grant does not cover:
+
+- a call with a detection that was not granted: that detection decides, so
+  the call is asked or denied as before and can be granted in turn;
+- the rules that protect Telltale itself (`tth.tamper.*`): those are changed
+  in configuration ([who may change the rules](#who-may-change-the-rules));
+- a call the hook could not evaluate in full, and an answer from
+  `on_error` or `on_unevaluable`;
+- a deny, with `hooks.grants.covers: ask`.
+
+Which harnesses take the line: Claude Code, Codex CLI and Copilot CLI (the
+main agent's prompt; a prompt written for a subagent is refused). The
+OpenCode pilot raises no event for the user's prompt, so no grant is offered
+there. `telltale hooks check` prints this (`grants:`).
+
+What is recorded:
+
+- The decision record of a covered call keeps the verdict the policy reached
+  and its detections, has `returned: false`, and names the grant:
+  `decision.grant` with `scope` (`once` or `session`) and `granted_by`, the
+  record ID of the lifecycle record `grant` that made it. That record has
+  the scope, the tool, the rule IDs and the stopped call's record ID.
+- A grant line that grants nothing is a lifecycle record `grant_refused`
+  with a `cause`: `no_offer` (no stopped call is waiting) or
+  `not_user_prompt` (a subagent's prompt, or a harness that takes no line).
+- A covered call stays in the session's history: a chain that a later call
+  completes still fires and is decided on its own. It adds nothing to the
+  session's score or to its count of asked and denied calls.
+
+A grant is a convenience for the person at the harness, not a boundary.
+The hook knows that a prompt was submitted to the session, not who typed
+it, which is the standing of a harness's own approval prompt too; see the
+[threat model](../security/hooks-threat-model.md#grants). Leave grants off
+for unattended agents. An exception an administrator wants to hold belongs
+in a configuration root the agent's user cannot write
+([tuning](#tuning-rules-and-policy)).
+
+To try it without anything that looks like an attack, turn on the
+[test signatures](#testing-enforcement) and allow `echo TELLTALE_TEST_DENY`.
+
 ## Testing enforcement
 
 To see what a hook does end to end, without anything that looks like an
@@ -548,7 +627,11 @@ On the `model` route:
   the user writes there lets the call run, and the same call asked again
   is not run either; the reason says so. What the user can do is give
   other instructions, run the command themselves, or have the rule tuned
-  ([tuning](#tuning-rules-and-policy)).
+  ([tuning](#tuning-rules-and-policy)). With grants on, the user can allow
+  the call with a line of their own
+  ([allowing a stopped call](#allowing-a-stopped-call)); that line is read
+  from the harness's event for the user's prompt, never from what the model
+  writes.
 - The user is told about the call by the model and does not see the call
   itself, as the harness's prompt would show it. Prefer `human` where that
   prompt is available and a person is there to answer it.

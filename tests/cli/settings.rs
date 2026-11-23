@@ -278,6 +278,61 @@ fn the_ask_route_is_a_setting_with_two_values() {
     assert!(stderr.contains("unknown variant `user`"), "{stderr}");
 }
 
+/// `hooks.grants`: off and covering asks and denies by default, both values
+/// of `covers`, and anything else under it is invalid configuration.
+#[test]
+fn grants_are_a_setting_off_by_default() {
+    let show = |text: Option<&str>| {
+        let temp = tempdir().expect("tempdir");
+        let config_root = temp.path().join("config");
+        fs::create_dir_all(&config_root).expect("config root");
+        if let Some(text) = text {
+            settings_file(&config_root, "hooks.yaml", text);
+        }
+        let output = telltale(temp.path())
+            .args(["config", "show", "--config-dir"])
+            .arg(&config_root)
+            .output()
+            .expect("run telltale config show");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let shown = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+        (output.status.success(), shown, stderr)
+    };
+
+    let (ok, shown, stderr) = show(None);
+    assert!(ok, "{stderr}");
+    let enabled = &shown["settings"]["hooks.grants.enabled"];
+    assert_eq!(enabled["value"], false);
+    assert_eq!(enabled["default"], false);
+    assert_eq!(enabled["origin"], "default");
+    let covers = &shown["settings"]["hooks.grants.covers"];
+    assert_eq!(covers["value"], "ask_and_deny");
+    assert_eq!(covers["default"], "ask_and_deny");
+    assert_eq!(covers["origin"], "default");
+
+    for value in ["ask", "ask_and_deny"] {
+        let (ok, shown, stderr) = show(Some(&format!(
+            "version: 1\nhooks: {{grants: {{enabled: true, covers: {value}}}}}\n"
+        )));
+        assert!(ok, "{stderr}");
+        let enabled = &shown["settings"]["hooks.grants.enabled"];
+        assert_eq!(enabled["value"], true);
+        assert_eq!(enabled["origin"], "settings_file");
+        let covers = &shown["settings"]["hooks.grants.covers"];
+        assert_eq!(covers["value"], value);
+        assert_eq!(covers["origin"], "settings_file");
+    }
+
+    let (ok, _, stderr) = show(Some(
+        "version: 1\nhooks: {grants: {enabled: true, scope: all}}\n",
+    ));
+    assert!(!ok);
+    assert!(stderr.contains("unknown field `scope`"), "{stderr}");
+    let (ok, _, stderr) = show(Some("version: 1\nhooks: {grants: {covers: deny}}\n"));
+    assert!(!ok);
+    assert!(stderr.contains("unknown variant `deny`"), "{stderr}");
+}
+
 #[test]
 fn config_show_explains_files_environment_and_defaults() {
     let temp = tempdir().expect("tempdir");

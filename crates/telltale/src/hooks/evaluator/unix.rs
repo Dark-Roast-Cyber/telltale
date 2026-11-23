@@ -701,7 +701,7 @@ fn handle(
         return Err("bad_request");
     };
     match runtime.handle_until(&ctx, event, answer_by as i64, SESSION_LOCK_WAIT) {
-        Ok(response) => Ok(harness.render(&ctx.hook_event, &response)),
+        Ok(response) => Ok(harness.render_event(&ctx, &response)),
         Err(crate::hooks::runtime::STATE_LOCK_TIMEOUT) => Err("busy"),
         Err(_) => Err("expired"),
     }
