@@ -249,6 +249,18 @@ pub fn render(hook_event: &str, response: &Response) -> Option<Value> {
             }))
         }
         Response::AdditionalContext(_) => None,
+        // The person sees `systemMessage` (Claude Code's common hook output
+        // field); the model gets the context.
+        Response::Notice { context, user } if hook_event == "UserPromptSubmit" => Some(json!({
+            "systemMessage": user,
+            "hookSpecificOutput": {
+                "hookEventName": hook_event,
+                "additionalContext": context,
+            }
+        })),
+        Response::Notice { context, .. } => {
+            render(hook_event, &Response::AdditionalContext(context.clone()))
+        }
     }
 }
 
@@ -431,6 +443,33 @@ mod tests {
         );
         assert_eq!(out["hookSpecificOutput"]["additionalContext"], "told");
         assert_eq!(render("SessionStart", &response), None);
+    }
+
+    /// A notice gives the model the context and the person the user line on
+    /// `UserPromptSubmit`; elsewhere it is rendered as its context.
+    #[test]
+    fn a_notice_shows_the_person_a_system_message() {
+        let notice = Response::Notice {
+            context: "for the model".into(),
+            user: "for the person".into(),
+        };
+        let out = render("UserPromptSubmit", &notice).unwrap();
+        assert_eq!(out["systemMessage"], "for the person");
+        assert_eq!(
+            out["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        assert_eq!(
+            out["hookSpecificOutput"]["additionalContext"],
+            "for the model"
+        );
+        assert_eq!(render("SessionStart", &notice), None);
+        let post = render("PostToolUse", &notice).unwrap();
+        assert_eq!(
+            post["hookSpecificOutput"]["additionalContext"],
+            "for the model"
+        );
+        assert!(post.get("systemMessage").is_none());
     }
 
     #[test]

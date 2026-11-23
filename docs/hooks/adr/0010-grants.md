@@ -40,8 +40,10 @@ harnesses show none.
 5. **What a grant never covers.** A rule under `tth.tamper.`: Telltale's own
    protection is changed in configuration. A call the hook could not evaluate
    in full: there is no complete set of detections to grant. A call with a
-   detection that was not granted: that detection decides. A deny, where the
-   operator sets `hooks.grants.covers: ask`.
+   detection that was not granted: that detection decides, and grants do
+   not add up (one grant must name all of a call's detections, so no
+   combination is covered that the user never saw stopped). A deny, where
+   the operator sets `hooks.grants.covers: ask`.
 6. **Accounting.** The decision record of a covered call keeps the verdict
    the policy reached, its basis, score and detections, says nothing was
    returned, and names the grant (`decision.grant`). The call stays in the

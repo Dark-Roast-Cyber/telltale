@@ -218,8 +218,9 @@ impl SessionState {
     /// that matched `rule_ids` (non-empty), as `(scope, granted_by)`. A
     /// `once` grant for the same tool and input whose detections include
     /// every one of the call's is preferred, and is used up. Otherwise the
-    /// call is covered when every one of its detections is in a `session`
-    /// grant for the same tool.
+    /// most recent `session` grant for the same tool whose detections
+    /// include every one of the call's covers it. Grants are never combined:
+    /// each allowed one stopped call's detections together.
     pub fn use_grant(
         &mut self,
         tool_name: &str,
@@ -239,24 +240,15 @@ impl SessionState {
             let grant = self.grants.remove(index);
             return Some((GrantScope::Once, grant.granted_by));
         }
-        let session: Vec<&Grant> = self
-            .grants
+        self.grants
             .iter()
-            .filter(|grant| grant.scope == GrantScope::Session && grant.tool_name == tool_name)
-            .collect();
-        let covered = rule_ids
-            .iter()
-            .all(|id| session.iter().any(|grant| grant.rule_ids.contains(id)));
-        // The record names the most recent session grant among those used.
-        covered
-            .then(|| {
-                session
-                    .iter()
-                    .rev()
-                    .find(|grant| rule_ids.iter().any(|id| grant.rule_ids.contains(id)))
-                    .map(|grant| (GrantScope::Session, grant.granted_by.clone()))
+            .rev()
+            .find(|grant| {
+                grant.scope == GrantScope::Session
+                    && grant.tool_name == tool_name
+                    && rule_ids.iter().all(|id| grant.rule_ids.contains(id))
             })
-            .flatten()
+            .map(|grant| (GrantScope::Session, grant.granted_by.clone()))
     }
 
     pub fn remember(&mut self, journal_id: &str, decision: PendingDecision) {
@@ -725,22 +717,28 @@ mod tests {
     }
 
     /// A matching `once` grant is preferred over a session grant and is used
-    /// up; the session grants cover only their tool and only calls all of
-    /// whose detections they name between them.
+    /// up; a session grant covers only its tool and only calls all of whose
+    /// detections it names itself: two grants are not combined.
     #[test]
     fn grants_cover_by_tool_input_and_every_detection() {
         let ids = |list: &[&str]| list.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
         let mut state = SessionState::default();
         state.add_grant(grant(GrantScope::Session, "s1", &["a"], None));
         state.add_grant(grant(GrantScope::Session, "s2", &["b"], None));
+        state.add_grant(grant(GrantScope::Session, "s3", &["a", "d"], None));
         state.add_grant(grant(GrantScope::Once, "o1", &["a", "c"], Some("h1")));
         assert_eq!(
             state.use_grant("Bash", "h1", &ids(&["a", "c"])),
             Some((GrantScope::Once, "o1".into()))
         );
         assert_eq!(state.use_grant("Bash", "h1", &ids(&["a", "c"])), None);
+        assert_eq!(state.use_grant("Bash", "h2", &ids(&["a", "b"])), None);
         assert_eq!(
-            state.use_grant("Bash", "h2", &ids(&["a", "b"])),
+            state.use_grant("Bash", "h2", &ids(&["a"])),
+            Some((GrantScope::Session, "s3".into()))
+        );
+        assert_eq!(
+            state.use_grant("Bash", "h2", &ids(&["b"])),
             Some((GrantScope::Session, "s2".into()))
         );
         assert_eq!(state.use_grant("Read", "h2", &ids(&["a"])), None);

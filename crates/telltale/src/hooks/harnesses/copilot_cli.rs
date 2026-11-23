@@ -325,6 +325,9 @@ pub fn render(hook_event: &str, response: &Response) -> Option<Value> {
         {
             Some(json!({"additionalContext": text}))
         }
+        Response::Notice { context, .. } => {
+            render(hook_event, &Response::AdditionalContext(context.clone()))
+        }
         Response::Decision(_) | Response::AdditionalContext(_) | Response::None => None,
     }
 }

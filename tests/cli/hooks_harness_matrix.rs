@@ -11,7 +11,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
-use telltale_core::hooks::runtime::{ASK_THROUGH_MODEL_NOTE, GRANT_OFFER_NOTE};
+use telltale_core::hooks::runtime::{
+    ASK_THROUGH_MODEL_INSTRUCTION, ASK_THROUGH_MODEL_NOTE, GRANT_OFFER_NOTE,
+};
 
 use super::hooks_cli::{write_override, write_policy};
 
@@ -1025,7 +1027,21 @@ fn a_grant_line_allows_a_stopped_call_once_on_every_harness_that_takes_it() {
         let harness = entry.harness;
         let state = tempfile::tempdir().unwrap();
         let reason = stopped(entry, TEST_ASK, state.path(), &config);
-        assert!(reason.contains(GRANT_OFFER_NOTE), "{harness}: {reason}");
+        // Where the ask goes through the model, the note's instruction comes
+        // before the offer and its closing is left out.
+        let tail = if entry.can_ask {
+            GRANT_OFFER_NOTE.to_owned()
+        } else {
+            format!("{ASK_THROUGH_MODEL_INSTRUCTION} {GRANT_OFFER_NOTE}")
+        };
+        assert!(
+            reason.ends_with(&format!(". {tail}")),
+            "{harness}: {reason}"
+        );
+        assert!(
+            !reason.contains(ASK_THROUGH_MODEL_NOTE),
+            "{harness}: {reason}"
+        );
         prompt(entry, "telltale allow", false, state.path(), &config);
         covered(entry, TEST_ASK, "ask", "once", state.path(), &config);
         stopped(entry, TEST_ASK, state.path(), &config);
@@ -1121,15 +1137,25 @@ fn the_prompt_hook_tells_the_model_only_where_the_harness_takes_context() {
         let refused = prompt(entry, "telltale allow", false, state.path(), &config);
         stopped(entry, TEST_ASK, state.path(), &config);
         let granted = prompt(entry, "telltale allow", false, state.path(), &config);
-        for (run, context) in [
+        for (run, context, shown) in [
             (
                 refused,
                 "Telltale Hooks: there is no stopped call to allow.",
+                "Telltale Hooks: no stopped call to allow.",
             ),
-            (granted, "Telltale Hooks: the user allowed the stopped "),
+            (
+                granted,
+                "Telltale Hooks: the user allowed the stopped ",
+                "Telltale Hooks: allowed once: the stopped ",
+            ),
         ] {
             if harness == "claude-code" {
                 let output: Value = serde_json::from_str(run.stdout.trim()).unwrap();
+                // The person sees a line of their own.
+                assert!(
+                    output["systemMessage"].as_str().unwrap().starts_with(shown),
+                    "{output}"
+                );
                 let specific = &output["hookSpecificOutput"];
                 assert_eq!(specific["hookEventName"], "UserPromptSubmit");
                 assert!(

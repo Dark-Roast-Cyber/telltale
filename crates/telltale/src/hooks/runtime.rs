@@ -76,6 +76,12 @@ pub fn returned_verdict(can_ask: bool, verdict: Verdict) -> Verdict {
 /// conversation, so the note also says what the user can do.
 pub const ASK_THROUGH_MODEL_NOTE: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed. Repeating the call will not run it; the user can run it themselves or have an exception configured.";
 
+/// The instruction of [`ASK_THROUGH_MODEL_NOTE`], its first sentence: what
+/// the model is to do. Alone it ends the reason of a substituted deny that
+/// offers a grant ([`Response::offered_decision`]), where the closing, that
+/// repeating the call will not run it, would contradict the offer.
+pub const ASK_THROUGH_MODEL_INSTRUCTION: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed.";
+
 /// Appended to the reason of a call the user can allow with a grant line
 /// (`Config::grants`), after the record ID and before
 /// [`ASK_THROUGH_MODEL_NOTE`].
@@ -93,7 +99,7 @@ pub fn grant_line(prompt: &str) -> Option<GrantScope> {
     if prompt.len() > GRANT_LINE_MAX_BYTES {
         return None;
     }
-    let line = prompt.trim();
+    let line = prompt.trim_ascii();
     if line.contains(['\n', '\r']) {
         return None;
     }
@@ -231,6 +237,12 @@ pub enum Response {
     Decision(Decision),
     /// Advisory context for the model after a tool result.
     AdditionalContext(String),
+    /// What a user prompt did: `context` for the model, as
+    /// [`Self::AdditionalContext`], and `user`, the same facts in a short
+    /// line for the person. An adapter whose harness shows the person a
+    /// hook message on that event prints both; any other renders it as it
+    /// renders `context`.
+    Notice { context: String, user: String },
 }
 
 /// A pre-execution verdict as returned to the harness. The fields are
@@ -266,6 +278,23 @@ impl Response {
             reason
         } else {
             format!("{reason} {ASK_THROUGH_MODEL_NOTE}")
+        };
+        Self::Decision(Decision {
+            verdict: returned,
+            reason,
+        })
+    }
+
+    /// [`Self::decision`] for a call the user can allow with a grant line:
+    /// the reason ends with [`GRANT_OFFER_NOTE`]. An ask substituted by a
+    /// deny keeps the instruction of [`ASK_THROUGH_MODEL_NOTE`] before it
+    /// and leaves out its closing, which the offer contradicts.
+    pub fn offered_decision(can_ask: bool, verdict: Verdict, reason: String) -> Self {
+        let returned = returned_verdict(can_ask, verdict);
+        let reason = if returned == verdict {
+            format!("{reason} {GRANT_OFFER_NOTE}")
+        } else {
+            format!("{reason} {ASK_THROUGH_MODEL_INSTRUCTION} {GRANT_OFFER_NOTE}")
         };
         Self::Decision(Decision {
             verdict: returned,
@@ -418,7 +447,7 @@ struct RequestDecision {
 
 impl RequestDecision {
     /// Whether a grant can be offered for this decision, or cover it, on a
-    /// harness that can take a grant line: grants on, enforcing, decided on
+    /// harness that can take a grant line: grants on, decided on
     /// the policy's scores by rules none of which protects the host, a
     /// verdict the grants cover, and an evaluation that saw the whole call
     /// (`whole`).
@@ -428,8 +457,10 @@ impl RequestDecision {
             Verdict::Deny => config.grants.covers == GrantCover::AskAndDeny,
             Verdict::Allow => false,
         };
+        // Both callers ask only of a returned decision, and only an
+        // enforcing hook returns one.
+        debug_assert!(self.returned && config.mode == Mode::Enforce);
         config.grants.enabled
-            && config.mode == Mode::Enforce
             && matches!(
                 self.outcome.basis,
                 Basis::ActionScore | Basis::SessionScore | Basis::RepeatedDenials
@@ -1132,7 +1163,10 @@ impl Runtime {
     /// so; it is refused where the prompt may not be the user's, or when no
     /// stopped call is offered.
     fn user_prompted(&self, ctx: &Context, prompt: &str) -> Result<Response, &'static str> {
-        let scope = grant_line(prompt).filter(|_| self.config.grants.enabled);
+        // In observe mode nothing is stopped, so a grant line is an
+        // ordinary prompt.
+        let scope = grant_line(prompt)
+            .filter(|_| self.config.grants.enabled && self.config.mode == Mode::Enforce);
         let mut session = self.open(ctx)?;
         let t = session.state.next_time_ms(now_ms());
         let uuid = format!("tth-prompt-{}", session.state.prompts);
@@ -1195,18 +1229,33 @@ impl Runtime {
         self.emit(&grant_record);
         // What the model is told: never a pattern, matched text or path.
         Ok(match granted {
-            Ok(grant) if grant.scope == GrantScope::Once => Response::AdditionalContext(format!(
-                "Telltale Hooks: the user allowed the stopped {} call once. Repeat it unchanged.",
-                grant.tool_name
-            )),
-            Ok(grant) => Response::AdditionalContext(format!(
-                "Telltale Hooks: the user allowed these detections on {} for the rest of this session: {}.",
-                grant.tool_name,
-                listed_rule_ids(&grant.rule_ids)
-            )),
-            Err("no_offer") => Response::AdditionalContext(
-                "Telltale Hooks: there is no stopped call to allow.".to_owned(),
-            ),
+            Ok(grant) if grant.scope == GrantScope::Once => Response::Notice {
+                context: format!(
+                    "Telltale Hooks: the user allowed the stopped {} call once. Repeat it unchanged.",
+                    grant.tool_name
+                ),
+                user: format!(
+                    "Telltale Hooks: allowed once: the stopped {} call.",
+                    grant.tool_name
+                ),
+            },
+            Ok(grant) => {
+                let rule_ids = listed_rule_ids(&grant.rule_ids);
+                Response::Notice {
+                    context: format!(
+                        "Telltale Hooks: the user allowed these detections on {} for the rest of this session: {rule_ids}.",
+                        grant.tool_name
+                    ),
+                    user: format!(
+                        "Telltale Hooks: allowed for this session on {}: {rule_ids}.",
+                        grant.tool_name
+                    ),
+                }
+            }
+            Err("no_offer") => Response::Notice {
+                context: "Telltale Hooks: there is no stopped call to allow.".to_owned(),
+                user: "Telltale Hooks: no stopped call to allow.".to_owned(),
+            },
             Err(_) => Response::None,
         })
     }
@@ -1434,10 +1483,13 @@ impl Runtime {
             && !name_malformed
             && !evaluated.separated
             && !evaluated.past_budget
-            && evaluated
-                .result
-                .as_ref()
-                .is_ok_and(|evaluation| evaluation.unevaluated_focus == 0);
+            && evaluated.result.as_ref().is_ok_and(|evaluation| {
+                // Complete is the only status of an evaluation that saw
+                // the whole call with its history: lost history, a
+                // projected input and reported limits are
+                // `VisibilityLimited`.
+                evaluation.status == EvalStatus::Complete && evaluation.unevaluated_focus == 0
+            });
         let mut decision = self.decide_request(
             ctx,
             &session,
@@ -1505,7 +1557,7 @@ impl Runtime {
         if !decision.returned {
             return Ok(Response::None);
         }
-        let mut reason = self.reason(
+        let reason = self.reason(
             decision.outcome.verdict,
             decision.substituted.unwrap_or(decision.outcome.verdict),
             decision.outcome.basis,
@@ -1524,11 +1576,12 @@ impl Runtime {
             name_malformed,
             stateless,
         );
-        if offered {
-            reason.push(' ');
-            reason.push_str(GRANT_OFFER_NOTE);
-        }
-        Ok(Response::decision(
+        let respond = if offered {
+            Response::offered_decision
+        } else {
+            Response::decision
+        };
+        Ok(respond(
             self.prompts_human(ctx),
             decision.outcome.verdict,
             reason,
@@ -2548,6 +2601,36 @@ mod tests {
     fn source_times_render_with_milliseconds() {
         assert_eq!(format_ms(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(format_ms(1_762_214_461_007), "2025-11-04T00:01:01.007Z");
+    }
+
+    /// An offered decision ends with the offer. A substituted ask keeps the
+    /// note's instruction before it and leaves out the note's closing, which
+    /// says repeating the call will not run it.
+    #[test]
+    fn an_offered_decision_ends_with_the_offer_and_drops_the_closing() {
+        assert!(ASK_THROUGH_MODEL_NOTE.starts_with(&format!("{ASK_THROUGH_MODEL_INSTRUCTION} ")));
+        let reason =
+            |can_ask, verdict| match Response::offered_decision(can_ask, verdict, "why.".into()) {
+                Response::Decision(decision) => (decision.verdict(), decision.reason().to_owned()),
+                other => panic!("{other:?}"),
+            };
+        assert_eq!(
+            reason(false, Verdict::Ask),
+            (
+                Verdict::Deny,
+                format!("why. {ASK_THROUGH_MODEL_INSTRUCTION} {GRANT_OFFER_NOTE}")
+            )
+        );
+        for (can_ask, verdict) in [
+            (true, Verdict::Ask),
+            (true, Verdict::Deny),
+            (false, Verdict::Deny),
+        ] {
+            assert_eq!(
+                reason(can_ask, verdict),
+                (verdict, format!("why. {GRANT_OFFER_NOTE}"))
+            );
+        }
     }
 
     #[test]

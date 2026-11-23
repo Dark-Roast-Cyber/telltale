@@ -493,18 +493,25 @@ session` (these detections, for the rest of this session) as a prompt of its own
 How it works:
 
 - **The line is a prompt of its own.** The hook reads it on the harness's
-  event for the user's prompt. It must be the whole prompt (case and spacing
-  do not matter); the same words inside a longer prompt are an ordinary
-  prompt. It applies to the most recent stopped call of the session.
+  event for the user's prompt. It must be the whole prompt (case and plain
+  spacing do not matter); the same words inside a longer prompt are an
+  ordinary prompt. In detect-only mode nothing is stopped, so the line is an
+  ordinary prompt there too. It applies to the most recent stopped call of the session, which
+  can be a subagent's call or the last of several calls stopped together;
+  allow the others when they are stopped again.
 - **The prompt still goes to the model**, which then repeats the call. On
-  Claude Code the hook adds a line of context saying what was allowed, or
-  that there was no stopped call to allow.
+  Claude Code the hook also shows the user what was allowed (tool and rule
+  IDs), or that there was no stopped call to allow, and gives the model the
+  same as context. Codex CLI and Copilot CLI print nothing for the event;
+  the `grant` record has it.
 - **Telltale steps aside; it does not approve.** A covered call gets no
   answer from the hook, so the harness's own permission rules and prompt
   apply as for any other call. No `allow` is returned.
 - **With `hooks.ask: model`** the flow is the same on every harness that
   takes the line: the model says what was stopped and why, the user types
-  the line, the model repeats the call.
+  the line, the model repeats the call. The reason then ends with the
+  instruction to stop and ask the user, followed by the sentence above, and
+  leaves out that repeating the call will not run it.
 - **On a harness with an approval prompt** that prompt still decides a
   single asked call. The line is for a deny, for a harness with no prompt,
   and for "stop asking me about this in this session".
@@ -512,11 +519,14 @@ How it works:
 What a grant does not cover:
 
 - a call with a detection that was not granted: that detection decides, so
-  the call is asked or denied as before and can be granted in turn;
+  the call is asked or denied as before and can be granted in turn. One
+  grant must name all of a call's detections: two session grants for
+  different detections do not add up;
 - the rules that protect Telltale itself (`tth.tamper.*`): those are changed
   in configuration ([who may change the rules](#who-may-change-the-rules));
-- a call the hook could not evaluate in full, and an answer from
-  `on_error` or `on_unevaluable`;
+- a call the hook could not evaluate in full (part of the input or of the
+  session's history was out of its view), and an answer from `on_error` or
+  `on_unevaluable`;
 - a deny, with `hooks.grants.covers: ask`.
 
 Which harnesses take the line: Claude Code, Codex CLI and Copilot CLI (the

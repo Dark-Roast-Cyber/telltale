@@ -91,9 +91,9 @@ harness can allow a stopped call for one use or for the session
 | Question | Answer |
 | --- | --- |
 | Can a tool call grant? | No. A grant line is read only from the harness's event for the user's prompt, as the whole prompt. A tool input, a tool result, a file and every other payload field grant nothing |
-| Can a subagent's prompt grant? | No. It is written by a model; it is refused and recorded (`grant_refused`, `not_user_prompt`) |
+| Can a subagent's prompt grant? | No. It is written by a model. Where it reaches the runtime as a prompt with the subagent's ID it is refused and recorded (`grant_refused`, `not_user_prompt`); where the adapter already reads it as something other than a user prompt (Copilot CLI) it is never considered |
 | Can a grant turn off Telltale's own protection? | No. Rules under `tth.tamper.` are never offered or covered |
-| Can a grant widen itself? | No. It names the detections of one stopped call; a call with any other detection is decided as before. A session grant is as broad as those detections on that tool |
+| Can a grant widen itself? | No. It names the detections of one stopped call, and grants do not add up: a call is covered only when one grant names all of its detections. A session grant is as broad as those detections on that tool |
 | Does Telltale approve the call? | No. A covered call gets no answer; the harness's own permissions decide |
 | Does the event prove a person typed the line? | No. It shows that a prompt was submitted to the session. An agent's process runs as the user, and automation can submit prompts; a harness's own approval prompt has the same standing. Grants are a recorded convenience, not a boundary |
 | What is the boundary? | A configuration root the agent's user cannot write. Exceptions that must hold are kept there, and grants are left off for unattended agents |

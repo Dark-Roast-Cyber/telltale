@@ -205,8 +205,10 @@ impl Harness {
     /// context on that event, since only that harness's documented output
     /// says the context reaches the model.
     pub fn render_event(self, ctx: &Context, response: &Response) -> Option<Value> {
-        if matches!(response, Response::AdditionalContext(_))
-            && ctx.harness != self.name()
+        if matches!(
+            response,
+            Response::AdditionalContext(_) | Response::Notice { .. }
+        ) && ctx.harness != self.name()
             && Self::from_name(ctx.harness)
                 .is_some_and(|own| own.render(&ctx.hook_event, response).is_none())
         {
@@ -361,6 +363,19 @@ mod tests {
         assert!(
             entry
                 .render_event(&ctx("claude-code", "UserPromptSubmit"), &context)
+                .is_some()
+        );
+        let notice = Response::Notice {
+            context: "told".into(),
+            user: "shown".into(),
+        };
+        assert_eq!(
+            entry.render_event(&ctx("copilot-cli", "UserPromptSubmit"), &notice),
+            None
+        );
+        assert!(
+            entry
+                .render_event(&ctx("claude-code", "UserPromptSubmit"), &notice)
                 .is_some()
         );
     }

@@ -302,6 +302,9 @@ pub fn render(hook_event: &str, response: &Response) -> Option<Value> {
             }
         })),
         Response::AdditionalContext(_) => None,
+        Response::Notice { context, .. } => {
+            render(hook_event, &Response::AdditionalContext(context.clone()))
+        }
     }
 }
 
