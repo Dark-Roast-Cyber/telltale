@@ -141,9 +141,11 @@ pub struct DecisionInfo {
 /// The grant that covered a call (`decision.grant`).
 #[derive(Debug, Clone, Serialize)]
 pub struct GrantInfo {
-    /// `once` or `session`.
+    /// `once` or `session`, or `project` or `user` for a grant in
+    /// `grants.d`.
     pub scope: &'static str,
-    /// The record ID of the `grant` lifecycle record that made the grant.
+    /// The record ID of the `grant` lifecycle record that made a `once` or
+    /// `session` grant; the grant ID of a `project` or `user` grant.
     pub granted_by: String,
 }
 

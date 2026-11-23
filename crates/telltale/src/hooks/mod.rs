@@ -12,7 +12,8 @@
 //! `identity` names the running build for telemetry and for evaluator
 //! compatibility; `evaluator` is the long-lived local evaluator. `gate` is the
 //! one place an answer is released to the harness: detect-only by default,
-//! enforcing only when the configuration says so.
+//! enforcing only when the configuration says so. `grants` reads and writes
+//! the project and user grants kept in a configuration root's `grants.d`.
 //!
 //! The runtime reaches Telltale only through the crate's public facade
 //! (`Pipeline`, `ActionRecordV1`, `ObservationStage`), the same surface an
@@ -22,6 +23,7 @@ pub mod config;
 pub mod engine;
 pub mod evaluator;
 pub mod gate;
+pub mod grants;
 pub mod harness;
 pub mod harnesses;
 pub mod identity;

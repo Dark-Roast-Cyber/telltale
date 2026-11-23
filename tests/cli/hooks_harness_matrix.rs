@@ -963,7 +963,8 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
     assert_eq!(
         line("enforce", GRANTS_ON),
         format!(
-            "{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}{}",
+            "{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}{}; \
+             0 always grants (grants.d)",
             clause("stopped")
         )
     );
@@ -971,7 +972,8 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
         line("observe", &format!("{GRANTS_ON}    covers: ask\n")),
         format!(
             "{on} a stopped ask (hooks.grants.covers: ask) {how}{}; \
-             nothing is stopped in observe mode, so nothing is offered",
+             nothing is stopped in observe mode, so nothing is offered; \
+             0 always grants (grants.d)",
             clause("detected")
         )
     );
@@ -987,6 +989,68 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
             .starts_with("grants: "),
         "{stdout}"
     );
+}
+
+/// A project grant in `grants.d` of the config root the hook is pinned to
+/// covers the test deny on Claude Code in the project directory and below:
+/// no answer, and the record names the grant. From another directory the
+/// call is denied. `check` counts the grant and lists a file it left out.
+#[test]
+fn a_project_grant_in_the_config_root_covers_a_call_in_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    let grants = config.join("grants.d");
+    std::fs::create_dir_all(&grants).unwrap();
+    let id = "g-0123456789ab";
+    std::fs::write(
+        grants.join(format!("{id}.yaml")),
+        "version: 1\nscope: project\nproject: /synthetic/project\nharness: claude-code\n\
+         tool: Bash\nrule_ids: [tth.test.deny]\ncreated_at: 2026-11-22T00:00:00Z\n\
+         from_record: tth:synthetic\n",
+    )
+    .unwrap();
+    let entry = ENTRIES
+        .iter()
+        .find(|entry| entry.harness == "claude-code")
+        .unwrap();
+    let in_dir = |cwd: &str| {
+        let mut payload = (entry.payload)(TEST_DENY);
+        payload["cwd"] = cwd.into();
+        let state = tempfile::tempdir().unwrap();
+        let run = send(entry, &payload, state.path(), &[&config]);
+        assert_eq!(run.code, Some(0), "{cwd}: {}", run.stderr);
+        run
+    };
+    let run = in_dir("/synthetic/project/src");
+    assert_eq!(run.answer(entry.harness), None, "{}", run.stdout);
+    assert_eq!(run.stdout, "");
+    let decision = &run.decision["decision"];
+    assert_eq!(decision["verdict"], "deny");
+    assert_eq!(decision["returned"], false);
+    assert_eq!(
+        decision["grant"],
+        json!({"scope": "project", "granted_by": id})
+    );
+    let run = in_dir("/synthetic/projects");
+    assert_eq!(
+        run.answer(entry.harness).map(|(verdict, _)| verdict),
+        Some("deny".to_owned())
+    );
+    assert!(run.decision["decision"].get("grant").is_none());
+
+    std::fs::write(grants.join("notes.txt"), "not a grant").unwrap();
+    let (code, stdout, stderr) = check(&config);
+    assert_eq!(code, Some(0), "{stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with("grants: on"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(line.ends_with("; 1 always grants (grants.d)"), "{line}");
+    let left_out = format!(
+        "grant left out: {}: the file name is not a grant ID followed by .yaml",
+        grants.join("notes.txt").display()
+    );
+    assert!(stdout.lines().any(|line| line == left_out), "{stdout}");
 }
 
 /// The user's prompt `text` on `entry` (a subagent's with `subagent`), in

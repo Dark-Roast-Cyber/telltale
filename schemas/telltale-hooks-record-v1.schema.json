@@ -115,10 +115,10 @@
           "additionalProperties": false,
           "required": ["scope", "granted_by"],
           "properties": {
-            "scope": { "enum": ["once", "session"] },
+            "scope": { "enum": ["once", "session", "project", "user"] },
             "granted_by": { "type": "string" }
           },
-          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's, `granted_by` the record ID of the `grant` lifecycle record that made it. Added 2026-11."
+          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's: `once` and `session` grants are given in the session, `project` and `user` grants are files in `grants.d` of the user's configuration root. `granted_by` is the record ID of the `grant` lifecycle record that made a `once` or `session` grant, and the grant ID of a `project` or `user` grant. Added 2026-11."
         }
       }
     },

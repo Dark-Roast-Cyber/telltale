@@ -248,12 +248,20 @@ impl AskRoute {
 /// the prompt of the person using it (`Adapter::can_grant`). Telltale still
 /// never returns `allow`: a covered call is given no opinion, and the
 /// harness's own permission rules still apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grants {
     /// Off by default: no grant is offered or taken.
     pub enabled: bool,
     /// Which stopped calls a grant can cover.
     pub covers: GrantCover,
+    /// The project and user grants in `grants.d` of the user's configuration
+    /// root ([`crate::hooks::grants::load_dir`]): read only while
+    /// [`Self::enabled`] is on, empty otherwise. Part of
+    /// [`Config::fingerprint`], so an evaluator rebuilds when one is added or
+    /// removed.
+    pub always: Vec<crate::hooks::grants::AlwaysGrant>,
+    /// The grant files that were left out, for `check`.
+    pub left_out: Vec<crate::hooks::grants::LeftOut>,
 }
 
 impl Default for Grants {
@@ -261,6 +269,8 @@ impl Default for Grants {
         Self {
             enabled: false,
             covers: GrantCover::AskAndDeny,
+            always: Vec::new(),
+            left_out: Vec::new(),
         }
     }
 }
@@ -806,6 +816,24 @@ mod tests {
         let fourth = config.fingerprint();
         config.grants.covers = GrantCover::Ask;
         assert_ne!(fourth, config.fingerprint(), "grant cover change");
+        let fifth = config.fingerprint();
+        config
+            .grants
+            .always
+            .push(crate::hooks::grants::AlwaysGrant {
+                id: "g-000000000001".into(),
+                version: 1,
+                scope: crate::hooks::grants::AlwaysScope::User,
+                project: None,
+                harness: "claude-code".into(),
+                tool: "Bash".into(),
+                rule_ids: vec!["r".into()],
+                created_at: "2026-11-22T00:00:00Z".into(),
+                from_record: "tth:1".into(),
+            });
+        assert_ne!(fifth, config.fingerprint(), "an always grant added");
+        config.grants.always.clear();
+        assert_eq!(fifth, config.fingerprint(), "the always grant removed");
     }
 
     #[test]

@@ -587,6 +587,7 @@ const HOOKS_CONFIG_FOLDERS: &[&str] = &[
     "rule-packages.d",
     "overrides.d",
     "policies.d",
+    telltale_core::hooks::grants::GRANTS_DIR,
 ];
 
 /// The hooks configuration in `config_dirs` (or the default config roots):
@@ -622,6 +623,18 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
         tamper_prevention: settings.hooks.tamper_prevention_enabled.value,
         test_signatures: settings.hooks.test_signatures_enabled.value,
     };
+    // Always grants are read only from the user's own root: the last
+    // `--config-dir` when the hook is pinned to roots, else the user root
+    // (pinned by `--user-config-dir`, or the one the environment names).
+    if config.grants.enabled
+        && let Some(root) = grants_root(config_dirs)
+    {
+        let (always, left_out) = telltale_core::hooks::grants::load_dir(
+            &root.join(telltale_core::hooks::grants::GRANTS_DIR),
+        );
+        config.grants.always = always;
+        config.grants.left_out = left_out;
+    }
     let roots = crate::config::config_roots(config_dirs);
     // Discovery follows symlinks (dotfile managers link a root, a folder or a
     // file), so a link's target is protected too, including files added to a
@@ -653,6 +666,19 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
     config.validate().map_err(|error| error.to_string())?;
     config.make_paths_absolute();
     Ok(config)
+}
+
+/// The configuration root whose `grants.d` holds the always grants: the
+/// last of `config_dirs` (the most specific, as roots are read in order),
+/// else the user root, pinned or from the environment. A system root's
+/// `grants.d` is never read.
+fn grants_root(config_dirs: &[PathBuf]) -> Option<PathBuf> {
+    match config_dirs.last() {
+        Some(root) => Some(root.clone()),
+        None => crate::config::pinned_user_config_root()
+            .map(std::path::Path::to_path_buf)
+            .or_else(crate::config::user_config_root),
+    }
 }
 
 /// The sources whose value a pin on this hook command replaced, by name,
@@ -816,9 +842,11 @@ fn grants_line(config: &Config) -> String {
         Gate::Enforce => ("stopped", ""),
     };
     format!(
-        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered; a tool call that runs the hook command or resumes a harness session is {stopped} (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume){observe}",
+        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered; a tool call that runs the hook command or resumes a harness session is {stopped} (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume){observe}; {} always grants ({})",
         named(true),
         telltale_core::hooks::config::HOST_RULE_ID_PREFIX,
+        grants.always.len(),
+        telltale_core::hooks::grants::GRANTS_DIR,
     )
 }
 
@@ -1027,6 +1055,16 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
             );
             println!("{}", ask_route_line(config.ask));
             println!("{}", grants_line(&config));
+            for left_out in &config.grants.left_out {
+                let path: String = left_out
+                    .path
+                    .display()
+                    .to_string()
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect();
+                println!("grant left out: {path}: {}", left_out.cause);
+            }
             let effective = match engine.effective_configuration() {
                 Ok(effective) => effective,
                 Err(error) => {

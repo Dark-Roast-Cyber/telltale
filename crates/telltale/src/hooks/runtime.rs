@@ -441,9 +441,10 @@ struct RequestDecision {
     /// Only enforcement test signatures matched: the call is decided on its
     /// own score and leaves the session's scores and attempts as they were.
     test_signature: bool,
-    /// A grant covered the call (`scope`, `granted_by`): nothing is returned,
-    /// and the session's scores and attempts stay as they were.
-    grant: Option<(GrantScope, String)>,
+    /// A grant covered the call (`scope` as `decision.grant.scope` names it,
+    /// `granted_by`): nothing is returned, and the session's scores and
+    /// attempts stay as they were.
+    grant: Option<(&'static str, String)>,
 }
 
 impl RequestDecision {
@@ -477,7 +478,7 @@ impl RequestDecision {
 
     /// The call is covered by `grant`: it is not returned, and it leaves
     /// the session's score as it was.
-    fn cover(&mut self, grant: (GrantScope, String)) {
+    fn cover(&mut self, grant: (&'static str, String)) {
         self.returned = false;
         self.substituted = None;
         self.outcome.session_score_after = self.session_before;
@@ -1506,13 +1507,25 @@ impl Runtime {
         );
         let digest = input_sha256(&call.input);
         // A call a grant covers is not returned and counts nowhere; it is
-        // still journaled below, so later chains build on it.
+        // still journaled below, so later chains build on it. The session's
+        // own grants (once, then session) come first, then the always grants
+        // of the configuration (project, then user).
         if decision.returned
             && decision.grantable(&self.config, whole)
-            && let Some(grant) =
-                session
-                    .state
-                    .use_grant(&call.tool_name, &digest, &decision.rule_ids)
+            && let Some(grant) = session
+                .state
+                .use_grant(&call.tool_name, &digest, &decision.rule_ids)
+                .map(|(scope, granted_by)| (scope.as_str(), granted_by))
+                .or_else(|| {
+                    crate::hooks::grants::covering(
+                        &self.config.grants.always,
+                        ctx.harness,
+                        &call.tool_name,
+                        ctx.cwd.as_deref(),
+                        &decision.rule_ids,
+                    )
+                    .map(|grant| (grant.scope.as_str(), grant.id.clone()))
+                })
         {
             decision.cover(grant);
         }
@@ -2017,7 +2030,7 @@ impl Runtime {
                 .grant
                 .as_ref()
                 .map(|(scope, granted_by)| GrantInfo {
-                    scope: scope.as_str(),
+                    scope,
                     granted_by: granted_by.clone(),
                 }),
         });
