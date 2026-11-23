@@ -83,8 +83,9 @@ pub const ASK_THROUGH_MODEL_NOTE: &str = "This call needs the user's approval, w
 pub const ASK_THROUGH_MODEL_INSTRUCTION: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed.";
 
 /// Appended to the reason of a call the user can allow with a grant line
-/// (`Config::grants`), after the record ID and before
-/// [`ASK_THROUGH_MODEL_NOTE`].
+/// (`Config::grants`), last: after the record ID, and after
+/// [`ASK_THROUGH_MODEL_INSTRUCTION`] where the ask is given as a deny
+/// ([`Response::offered_decision`]).
 pub const GRANT_OFFER_NOTE: &str = "To allow it, the user can type `telltale allow` (this call, once) or `telltale allow session` (these detections, for the rest of this session) as a prompt of its own.";
 
 /// The longest prompt that can be a grant line, in bytes.

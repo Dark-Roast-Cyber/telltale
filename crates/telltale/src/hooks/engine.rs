@@ -1204,8 +1204,10 @@ const DRY_RUN_OR_HELP: &str = r#"^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=
 const HARNESS_LAUNCHER: &str = r#"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["']?(?:[\s;&|)`]|$)"#;
 // A launcher that takes a grant line, after an optional quote or directory, with an
 // option or subcommand that resumes or continues an existing session (spellings from
-// each harness's own help). It follows `COMMAND_START`.
-const SESSION_RESUME: &str = r##"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:claude(?:\.exe|\.cmd)?["']?(?:[ \t]+attach|(?:[ \t]+(?:'[^']*'|"[^"]*"|[^\s;&|'"])+)*[ \t]+["']?(?:--continue|--resume|--from-pr|--teleport|(?-i:-[cr])))|copilot(?:\.exe|\.cmd)?["']?(?:[ \t]+(?:'[^']*'|"[^"]*"|[^\s;&|'"])+)*[ \t]+["']?(?:--continue|--resume|--session-id|(?-i:-r))|codex(?:\.exe|\.cmd)?["']?(?:[ \t]+-\S*(?:[ \t]+[^-\s;&|]\S*)?)*(?:[ \t]+e(?:xec)?(?:[ \t]+-\S*(?:[ \t]+[^-\s;&|]\S*)?)*)?[ \t]+(?:resume|fork|queue))(?:[\s=;&|)`"']|$)"##;
+// each harness's own help; the two launchers with options share one list). The words
+// before the option are walked up to a standalone `--`, after which nothing is an
+// option. It follows `COMMAND_START`.
+const SESSION_RESUME: &str = r##"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:(?:claude|copilot)(?:\.exe|\.cmd)?["']?(?:[ \t]+attach|(?:[ \t]+(?:-?(?:'[^']*'|"[^"]*"|[^\s;&|'"-])(?:'[^']*'|"[^"]*"|[^\s;&|'"])*|--(?:'[^']*'|"[^"]*"|[^\s;&|'"])+|-))*[ \t]+["']?(?:--continue|--resume|--from-pr|--teleport|--session-id|(?-i:-[cr])))|codex(?:\.exe|\.cmd)?["']?(?:[ \t]+-\S*(?:[ \t]+[^-\s;&|]\S*)?)*(?:[ \t]+e(?:xec)?(?:[ \t]+-\S*(?:[ \t]+[^-\s;&|]\S*)?)*)?[ \t]+(?:resume|fork|queue))(?:[\s=;&|)`"']|$)"##;
 const LAUNCH_WRAPPERS: &str = r#"(?:env|exec|nohup|sudo|command|time|setsid|i?nice|stdbuf|timeout|-\S+|[0-9]\S*|(?:ba|z)?sh\s+-l?c)"#;
 const CONFIG_LOCATION_VARS: &str =
     r#"(?:XDG_(?:CONFIG|STATE)_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA)"#;

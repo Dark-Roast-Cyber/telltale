@@ -4370,6 +4370,18 @@ const HOOK_ENTRY_TWINS: &[(&str, &str)] = &[
         "grep-quote",
         "grep -r \"telltale hooks claude-code hook\" docs/",
     ),
+    (
+        "commit-substitution-body",
+        "git commit -m \"$(cat <<'EOF'\ndocs: hooks\n\ntelltale hooks claude-code hook is what the harness runs\nEOF\n)\"",
+    ),
+    (
+        "commit-heredoc-body",
+        "git commit -F - <<'EOF'\ntelltale hooks claude-code hook is what the harness runs\nEOF",
+    ),
+    (
+        "file-heredoc-body",
+        "cat > notes.md <<'EOF'\ntelltale hooks claude-code hook reads one event\nEOF",
+    ),
 ];
 
 const SESSION_RESUMES: &[(&str, &str)] = &[
@@ -4385,6 +4397,8 @@ const SESSION_RESUMES: &[(&str, &str)] = &[
     ("claude-from-pr", "claude --from-pr 12"),
     ("claude-teleport", "claude --teleport"),
     ("claude-attach", "claude attach abc"),
+    ("claude-session-id", "claude --session-id abc -p x"),
+    ("claude-option-then-continue", "claude --model x --continue"),
     ("claude-path", "~/.local/bin/claude -c -p 'telltale allow'"),
     ("codex-resume", "codex resume"),
     ("codex-resume-last", "codex resume --last"),
@@ -4428,6 +4442,23 @@ const SESSION_RESUME_TWINS: &[(&str, &str)] = &[
         "git commit -m \"claude --continue is stopped\"",
     ),
     ("grep-quote", "grep -rn \"codex resume\" docs/"),
+    (
+        "commit-substitution-body",
+        "git commit -m \"$(cat <<'EOF'\ndocs: grants\n\nclaude --continue is now stopped while grants are on\nEOF\n)\"",
+    ),
+    (
+        "commit-heredoc-body",
+        "git commit -F - <<'EOF'\nclaude --continue is stopped\nEOF",
+    ),
+    (
+        "file-heredoc-body",
+        "cat > notes.md <<'EOF'\nclaude -c resumes the last session\nEOF",
+    ),
+    ("claude-after-double-dash", "claude -p -- -c"),
+    (
+        "claude-server-arguments",
+        "claude mcp add srv -- npx -y some-server -c cfg.json",
+    ),
     ("longer-claude", "claudette -c"),
     ("longer-codex", "mycodex resume"),
 ];

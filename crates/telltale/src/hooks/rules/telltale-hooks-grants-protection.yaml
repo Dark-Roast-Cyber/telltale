@@ -49,11 +49,12 @@ detection:
     condition: selection_command and not filter_command
 falsepositives:
     - 'A user deliberately resuming another session of a harness from inside an agent session.'
+    - 'Quoted text that names such a launch right after an opening parenthesis.'
 level: high
 telltale:
     category: approval_bypass
     score: 90
-    explanation: 'A harness started at command position on an existing session: `claude --continue`, `claude -r <id> -p ...`, `claude --from-pr`, `claude --teleport`, `claude attach <id>`; `codex resume`, `codex fork`, `codex queue`, `codex exec resume --last ...`; `copilot --continue`, `copilot --resume <id>`, `copilot --session-id <id>`. A prompt the tool call hands that session is raised as the user''s prompt there, so it could allow a call the hook stopped. A fresh session (`claude -p "hello"`, `codex exec "task"`, `copilot -p "x"`), `--help` and `--version` alone, and a quoted mention of the words are not matched.'
+    explanation: 'A harness started at command position on an existing session: `claude --continue`, `claude -r <id> -p ...`, `claude --from-pr`, `claude --teleport`, `claude --session-id <id>`, `claude attach <id>`; `codex resume`, `codex fork`, `codex queue`, `codex exec resume --last ...`; `copilot --continue`, `copilot --resume <id>`, `copilot --session-id <id>`. A prompt the tool call hands that session is raised as the user''s prompt there, so it could allow a call the hook stopped. A fresh session (`claude -p "hello"`, `codex exec "task"`, `copilot -p "x"`), `--help` and `--version` alone, a launch whose option follows a standalone `--`, and a `git commit` or `grep` that quotes the words are not matched.'
     tags: [self-protection, hooks, defense-evasion, nested-agent, grants]
 ---
 title: Agent command may resume an existing harness session
