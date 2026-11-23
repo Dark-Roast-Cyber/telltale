@@ -76,12 +76,6 @@ def scenario(name):
             config,
         ]
     )
-    settings = json.loads(
-        subprocess.check_output([TTH, "hooks", "claude-code", "settings", hook])
-    )
-    settings["permissions"] = {"allow": ["Bash"]}
-    settings_file = pathlib.Path(run.dir) / "settings.json"
-    settings_file.write_text(json.dumps(settings))
     env = run.base_env(
         ANTHROPIC_BASE_URL=f"http://127.0.0.1:{run.port}",
         ANTHROPIC_API_KEY="synthetic-not-a-key",
@@ -99,6 +93,15 @@ def scenario(name):
         "all_proxy",
     ):
         env[key] = "http://127.0.0.1:9"
+    # The settings pin the state directory of the environment they are made in.
+    settings = json.loads(
+        subprocess.check_output(
+            [TTH, "hooks", "claude-code", "settings", hook], env=env
+        )
+    )
+    settings["permissions"] = {"allow": ["Bash"]}
+    settings_file = pathlib.Path(run.dir) / "settings.json"
+    settings_file.write_text(json.dumps(settings))
     try:
         run.run(
             [

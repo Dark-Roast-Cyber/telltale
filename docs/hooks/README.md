@@ -490,6 +490,9 @@ session` (these detections, for the rest of this session) as a prompt of its own
 | `telltale allow` | The call that was just stopped, repeated unchanged (same tool, same input) | It has run once |
 | `telltale allow session` | Calls of that tool whose detections are all among those of the stopped call | The session ends |
 
+A session ends when the harness exits: a session resumed later starts with
+no stopped call to allow and no grants.
+
 How it works:
 
 - **The line is a prompt of its own.** The hook reads it on the harness's
