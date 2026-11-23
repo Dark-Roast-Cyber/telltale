@@ -85,7 +85,8 @@ detections are recorded and the verdicts are not returned.
 ## Grants
 
 With `hooks.grants.enabled: true` (off by default) the person using the
-harness can allow a stopped call for one use or for the session
+harness can allow a stopped call for one use or for the session, and from
+a terminal for a project or for every directory
 ([README](../hooks/README.md#allowing-a-stopped-call), ADR 0010).
 
 | Question | Answer |
@@ -97,6 +98,8 @@ harness can allow a stopped call for one use or for the session
 | Can a grant widen itself? | No. It names the detections of one stopped call, and grants do not add up: a call is covered only when one grant names all of its detections. A session grant is as broad as those detections on that tool |
 | Does Telltale approve the call? | No. A covered call gets no answer; the harness's own permissions decide |
 | Does the event prove a person typed the line? | No. It shows that a prompt was submitted to the session. An agent's process runs as the user, and automation can submit prompts; a harness's own approval prompt has the same standing. Grants are a recorded convenience, not a boundary |
+| Can a model make an always grant? | Only through the terminal command, which refuses without a terminal and asks the person to type `allow`; a tool call that runs it is stopped (`tth.tamper.grant_command_run`, with a fail-safe that asks), and `grants.d` sits in the configuration root the self-protection rules protect. A process that drives a terminal can answer the question, so this is the same standing as the grant line, recorded every time (`grant` with `harness.hook_event: terminal`) |
+| Where are always grants read from? | Only `grants.d` of the user's own configuration root, or of the last `--config-dir` the hook is pinned to. A system root's `grants.d` is not read, and a file that is not a valid grant never grants |
 | What is the boundary? | A configuration root the agent's user cannot write. Exceptions that must hold are kept there, and grants are left off for unattended agents |
 
 ## Failure-induced bypasses

@@ -2517,10 +2517,12 @@ mod recovery_tests {
     /// on; with grants off the rule set is the one without them.
     #[test]
     fn grant_protection_rules_load_only_with_grants_on() {
-        const GRANT_RULES: [&str; 3] = [
+        const GRANT_RULES: [&str; 5] = [
             "tth.tamper.hook_entry_run",
+            "tth.tamper.grant_command_run",
             "tth.tamper.harness_session_resume",
             "tth.tamper.harness_session_resume_failsafe",
+            "tth.tamper.grant_channel_failsafe",
         ];
         let ids = |grants: bool| -> Vec<String> {
             super::self_protection_documents(&[], grants, &mut GeneratedCoverage::default())

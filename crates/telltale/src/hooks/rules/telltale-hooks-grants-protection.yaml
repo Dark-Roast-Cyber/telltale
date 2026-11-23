@@ -7,7 +7,9 @@
 # raises for its user's prompt; these rules stop the tool calls that would raise such
 # an event themselves: running the hook command with a payload of the call's own
 # making, and starting a harness on an existing session, which would take a prompt the
-# call supplies into that session. Command position follows the shared document
+# call supplies into that session. A third stops a tool call that runs the terminal
+# command that makes an always grant (telltale hooks allow), which asks the person at
+# a terminal to confirm. Command position follows the shared document
 # (COMMAND_START); crates/telltale/tests/hooks/self_protection_corpus.rs holds the
 # cases and the benign controls.
 title: Agent command runs the Telltale Hooks hook command
@@ -31,6 +33,29 @@ telltale:
     category: approval_bypass
     score: 90
     explanation: '`telltale hooks <harness> hook` (or the old standalone `telltale-hooks <harness> hook`) at command position, with any path, quoting, flags or input: `printf ''{...}'' | telltale hooks claude-code hook`, `/usr/local/bin/telltale hooks codex-cli hook --config-dir /etc/x <<< ''{...}''`. Only a harness runs the hook command; a tool call that runs it can hand the hook an event of its own making, such as a user prompt that allows a stopped call. `telltale hooks check`, `telltale hooks <harness> settings`, `--help` and `--version` alone, and a `git commit` that quotes the command are not matched.'
+    tags: [self-protection, hooks, defense-evasion, grants]
+---
+title: Agent command runs telltale hooks allow
+id: 0283fbbd-057a-464c-b0ed-95568261cc8c
+name: tth.tamper.grant_command_run
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:\.exe|\.cmd)?["'']?(?:[ \t]|\\\n)+["'']?hooks["'']?(?:[ \t]|\\\n)+["'']?allow["'']?(?:[\s;&|)`<>]|$)'
+    filter_command:
+        tool.command|re|i|recorded_exclusion: '{{VERSION_OR_HELP}}|{{TEXT_ONLY}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'A user who runs telltale hooks allow through the agent instead of in a terminal of their own.'
+level: high
+telltale:
+    category: approval_bypass
+    score: 90
+    explanation: '`telltale hooks allow` at command position, with any path, quoting, arguments or input: `telltale hooks allow tth:... --project`, `printf ''allow\n'' | /usr/local/bin/telltale hooks allow tth:... --user`, `cd /tmp && telltale hooks allow tth:... --user`. Only the person using the harness makes an always grant, by typing `allow` in a terminal of their own; a tool call that runs the command could give it the confirmation and allow its own stopped call in every session. `telltale hooks grants`, `telltale hooks revoke`, `--help` alone, and a `git commit` that quotes the command are not matched.'
     tags: [self-protection, hooks, defense-evasion, grants]
 ---
 title: Agent command resumes an existing harness session
@@ -79,3 +104,26 @@ telltale:
     score: 60
     explanation: 'The fail-safe for harness_session_resume, which reads each command segment as written. This rule reads the same launch with the quoting taken away, so a launch whose words are split by quoting asks: `cl""aude -c`, `claude --res''''ume <id>`. A fresh session whose quoted prompt names a resume option (`claude -p "what does --resume do"`) or begins with a resume word (`codex exec "resume the migration"`) asks too. A grant never covers it.'
     tags: [self-protection, hooks, defense-evasion, nested-agent, grants]
+---
+title: Agent command may run the hook command or telltale hooks allow
+id: 5b135642-fbe8-47bd-b904-574f4b99b835
+name: tth.tamper.grant_channel_failsafe
+taxonomy: telltale
+status: stable
+logsource:
+    product: ai_agent
+    category: tool_activity
+detection:
+    selection_command:
+        tool.command|re|i|recorded_exclusion: '(?:^|[^.0-9A-Z_a-z-])telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+["'']?(?:hooks["'']?\s+["'']?allow|(?:hooks["'']?\s+["'']?)?[A-Za-z0-9_.-]+["'']?\s+["'']?hook)(?:[\s;&|)`<>"'']|$)'
+    filter_command:
+        tool.command|re|i|recorded_exclusion: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{VERSION_OR_HELP}}'
+    condition: selection_command and not filter_command
+falsepositives:
+    - 'A command that writes text naming the hook command or telltale hooks allow, other than a read or a commit message.'
+level: medium
+telltale:
+    category: approval_bypass
+    score: 60
+    explanation: 'The fail-safe for hook_entry_run and grant_command_run: the hook command (`telltale hooks <harness> hook`) or `telltale hooks allow` anywhere in the command, whatever runs it, so a run the deny rules do not recognize asks: `script -qec "telltale hooks allow <record> --user" /dev/null`. A read that quotes them, a `git commit` message, and `--help` or `--version` alone stay silent. A grant never covers it.'
+    tags: [self-protection, hooks, defense-evasion, grants]

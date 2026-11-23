@@ -956,8 +956,9 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
                rules under tth.tamper. are never covered";
     let clause = |what: &str| {
         format!(
-            "; a tool call that runs the hook command or resumes a harness session is {what} \
-             (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume)"
+            "; a tool call that runs the hook command, runs `telltale hooks allow` or resumes \
+             a harness session is {what} (tth.tamper.hook_entry_run, \
+             tth.tamper.grant_command_run, tth.tamper.harness_session_resume)"
         )
     };
     assert_eq!(

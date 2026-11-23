@@ -150,6 +150,28 @@
   (`hooks::config::AskRoute`), and `Harness::render_verdict` and
   `render_event_verdict` take the route.
 
+- **Hooks: always grants, for a project or for the user.** With grants on,
+  `telltale hooks allow <record> --project [DIR] | --user`, run by the
+  person in a terminal, allows a stopped call's detections on that harness
+  and tool from then on: in the project directory and below, or everywhere.
+  It reads the stopped call's record, checks a grant could cover it, shows
+  what will be allowed and asks the person to type `allow`; it refuses
+  without a terminal and nothing skips the question. Grants are kept one
+  file each in `grants.d` of the user's own configuration root (never the
+  repository; a system root's `grants.d` is not read) and cover a call with
+  the same exclusions as the session's grants, after them.
+  `telltale hooks grants [--json]` lists them and the files left out;
+  `telltale hooks revoke <grant>` removes one. Making and revoking a grant
+  are lifecycle records (`grant`, `grant_revoked`, `harness.hook_event:
+  terminal`), and `decision.grant.scope` gains `project` and `user`. Two new
+  rules are loaded with grants: `tth.tamper.grant_command_run` stops a tool
+  call that runs `telltale hooks allow`, and
+  `tth.tamper.grant_channel_failsafe` asks where that command or the hook
+  command is named in a form the deny rules do not read. On Claude Code the notice after
+  `telltale allow session` names the command for the stopped call.
+  `telltale hooks check` counts the grants and lists files left out. See
+  [Always, for a project or for you](docs/hooks/README.md#always-for-a-project-or-for-you).
+
 - **Hooks: grants. The user can allow a stopped call.** With
   `hooks.grants.enabled: true` (default `false`) the reason of an asked or
   denied call says what the person using the harness can type as a prompt of

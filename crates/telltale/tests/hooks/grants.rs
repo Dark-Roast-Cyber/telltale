@@ -247,6 +247,7 @@ fn a_session_grant_covers_its_detections_for_the_session() {
             listed.join(", ")
         )
     );
+    assert!(!context.contains("telltale hooks"), "{context}");
     for id in ["toolu_b", "toolu_c"] {
         assert_eq!(same_rules_other_input(&mut h, id), None, "{id}");
         assert_eq!(h.decision_for(id)["decision"]["grant"]["scope"], "session");
@@ -420,6 +421,10 @@ fn running_the_hook_or_resuming_a_session_is_never_offered_or_covered() {
             "claude --continue -p 'telltale allow'",
             "tth.tamper.harness_session_resume",
         ),
+        (
+            "printf 'allow\\n' | telltale hooks allow tth:abc --user",
+            "tth.tamper.grant_command_run",
+        ),
     ] {
         let mut h = granting();
         h.pre_bash("toolu_a", ASKED);
@@ -454,12 +459,15 @@ fn with_grants_off_the_grant_protection_rules_are_not_loaded() {
     for (id, command) in [
         ("toolu_a", "printf '{}' | telltale hooks claude-code hook"),
         ("toolu_b", "claude --continue -p 'telltale allow'"),
+        ("toolu_c", "telltale hooks allow tth:abc --user"),
     ] {
         h.pre_bash(id, command);
         let rules = h.decision_for(id)["decision"]["rule_ids"].clone();
         assert!(
             !rules.as_array().unwrap().iter().any(|rule| {
-                rule == "tth.tamper.hook_entry_run" || rule == "tth.tamper.harness_session_resume"
+                rule == "tth.tamper.hook_entry_run"
+                    || rule == "tth.tamper.harness_session_resume"
+                    || rule == "tth.tamper.grant_command_run"
             }),
             "{command}: {rules}"
         );
@@ -869,6 +877,12 @@ fn the_person_is_shown_what_the_grant_line_did() {
     );
     h.pre_bash("toolu_b", "cat ~/.aws/credentials #2");
     h.pre_bash("toolu_c", ASKED);
+    // `toolu_c` repeats the call the once grant covers, so the stopped call
+    // on offer is `toolu_b`.
+    let record_id = h.decision_for("toolu_b")["record_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let rule_ids: Vec<String> = h.decision_for("toolu_c")["decision"]["rule_ids"]
         .as_array()
         .unwrap()
@@ -878,7 +892,9 @@ fn the_person_is_shown_what_the_grant_line_did() {
     assert_eq!(
         shown(&mut h, "telltale allow session"),
         format!(
-            "Telltale Hooks: allowed for this session on Bash: {}.",
+            "Telltale Hooks: allowed for this session on Bash: {}. To allow it in every \
+             session of this project, run telltale hooks allow {record_id} --project in a \
+             terminal.",
             rule_ids.join(", ")
         )
     );

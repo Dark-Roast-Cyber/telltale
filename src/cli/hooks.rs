@@ -872,7 +872,7 @@ fn grants_line(config: &Config) -> String {
         Gate::Enforce => ("stopped", ""),
     };
     format!(
-        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered; a tool call that runs the hook command or resumes a harness session is {stopped} (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume){observe}; {} always grants ({})",
+        "grants: on (hooks.grants.enabled: true): the user can allow {what} (hooks.grants.covers: {covers}) by typing `telltale allow` or `telltale allow session` as a prompt of its own on {}{not_on}; rules under {} are never covered; a tool call that runs the hook command, runs `telltale hooks allow` or resumes a harness session is {stopped} (tth.tamper.hook_entry_run, tth.tamper.grant_command_run, tth.tamper.harness_session_resume){observe}; {} always grants ({})",
         named(true),
         telltale_core::hooks::config::HOST_RULE_ID_PREFIX,
         grants.always.len(),

@@ -1274,9 +1274,11 @@ impl Runtime {
                         "Telltale Hooks: the user allowed these detections on {} for the rest of this session: {rule_ids}.",
                         grant.tool_name
                     ),
+                    // For the person only: the model is never told of the
+                    // terminal command that makes an always grant.
                     user: format!(
-                        "Telltale Hooks: allowed for this session on {}: {rule_ids}.",
-                        grant.tool_name
+                        "Telltale Hooks: allowed for this session on {}: {rule_ids}. To allow it in every session of this project, run telltale hooks allow {} --project in a terminal.",
+                        grant.tool_name, grant.offer_record_id
                     ),
                 }
             }
