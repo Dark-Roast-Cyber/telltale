@@ -39,6 +39,9 @@ pub const PRE_TOOL_USE: &str = "PreToolUse";
 /// the call (E2E, docs/harnesses/codex-cli.md). No run mode prompts, so the
 /// registry and every per-event `Context` read `false`.
 pub const CAN_ASK: bool = false;
+/// `UserPromptSubmit` is the prompt the person using Codex typed
+/// (docs/harnesses/codex-cli.md), so a grant line can be taken from it.
+pub const CAN_GRANT: bool = true;
 
 /// Used when a decision carries no reason: Codex ignores a deny whose
 /// `permissionDecisionReason` is empty or blank (fails open).
@@ -213,6 +216,7 @@ pub fn to_event(input: &HookInput) -> Result<(Context, Event), ParseError> {
         permission_mode: input.permission_mode.clone(),
         cwd: input.cwd.clone(),
         can_ask: CAN_ASK,
+        can_grant: CAN_GRANT,
     };
     let event = match input.hook_event_name.as_str() {
         // Evaluated by its tool input, so a call without the key is
@@ -455,6 +459,7 @@ pub const ADAPTER: Adapter = Adapter {
     pre_tool_use: &[PRE_TOOL_USE],
     event_keys: &[EVENT_KEY],
     can_ask: CAN_ASK,
+    can_grant: CAN_GRANT,
     parse: parse_payload,
     render,
     looks_like_pre_tool_use,

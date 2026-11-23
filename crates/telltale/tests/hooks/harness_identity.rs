@@ -201,6 +201,7 @@ fn an_unregistered_harness_name_is_not_evaluated() {
         permission_mode: None,
         cwd: None,
         can_ask: true,
+        can_grant: false,
     };
     let call = ToolCall {
         tool_use_id: Some("c1".into()),

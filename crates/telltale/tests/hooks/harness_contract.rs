@@ -53,6 +53,7 @@ fn codex(event: &str, turn: Option<&str>, agent: Option<&str>) -> Context {
         permission_mode: Some("bypassPermissions".into()),
         cwd: None,
         can_ask: false,
+        can_grant: false,
     }
 }
 
@@ -67,6 +68,7 @@ fn codex_from(payload: &Value) -> Context {
         permission_mode: payload["permission_mode"].as_str().map(str::to_owned),
         cwd: None,
         can_ask: false,
+        can_grant: false,
     }
 }
 
@@ -83,6 +85,7 @@ fn copilot_from(payload: &Value, event: &str) -> Context {
         permission_mode: None,
         cwd: None,
         can_ask: true,
+        can_grant: false,
     }
 }
 
@@ -422,6 +425,7 @@ fn a_repeated_key_pending_in_parallel_settles_first_in_first_out() {
         permission_mode: None,
         cwd: None,
         can_ask: false,
+        can_grant: false,
     };
     let mut h = Harness::new();
     let pre = ctx("tool.execute.before");
@@ -529,6 +533,7 @@ fn copilot(event: &str, agent: Option<&str>) -> Context {
         permission_mode: None,
         cwd: None,
         can_ask: true,
+        can_grant: false,
     }
 }
 
@@ -670,6 +675,7 @@ fn native_ctx(harness: &'static str) -> Context {
         permission_mode: None,
         cwd: None,
         can_ask: false,
+        can_grant: false,
     }
 }
 

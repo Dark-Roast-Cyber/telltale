@@ -109,7 +109,17 @@
         "session_score_after": { "type": "integer", "minimum": 0 },
         "denied_attempts_before": { "type": "integer", "minimum": 0 },
         "rule_ids": { "type": "array", "items": { "type": "string" } },
-        "categories": { "type": "array", "items": { "type": "string" } }
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "grant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "granted_by"],
+          "properties": {
+            "scope": { "enum": ["once", "session"] },
+            "granted_by": { "type": "string" }
+          },
+          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's, `granted_by` the record ID of the `grant` lifecycle record that made it. Added 2026-11."
+        }
       }
     },
     "outcome": {

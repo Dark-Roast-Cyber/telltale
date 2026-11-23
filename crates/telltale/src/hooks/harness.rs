@@ -69,6 +69,12 @@ pub struct Adapter {
     /// the same value and may only refine it to `true` for a run mode
     /// verified to prompt or refuse.
     pub can_ask: bool,
+    /// Whether the harness raises an event for the prompt of the person using
+    /// it, so a grant line typed there reaches the hook as
+    /// `Event::UserPrompt` (`Config::grants`). `false` where no such event
+    /// exists or a model-written prompt could arrive as one. The adapter sets
+    /// `Context::can_grant` per event from the same value.
+    pub can_grant: bool,
     /// Native hook stdin to a runtime event.
     pub parse: fn(&[u8]) -> Parsed,
     /// Native stdout JSON for a response to `hook_event`, or `None` to print

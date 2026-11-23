@@ -14,6 +14,8 @@ mod codex_journal_encoding;
 mod common;
 #[path = "hooks/deny_reason.rs"]
 mod deny_reason;
+#[path = "hooks/grants.rs"]
+mod grants;
 #[path = "hooks/harness_contract.rs"]
 mod harness_contract;
 #[path = "hooks/harness_identity.rs"]

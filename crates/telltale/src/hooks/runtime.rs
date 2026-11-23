@@ -13,16 +13,18 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
-use crate::hooks::config::{Config, Mode, OnError, ReasonDetail};
+use crate::hooks::config::{Config, GrantCover, HOST_RULE_ID_PREFIX, Mode, OnError, ReasonDetail};
 use crate::hooks::engine::{
     Engine, EvalStatus, Evaluation, Focus, Limits, PendingScan, RecoveryBudget, Request, ScanTrace,
 };
 use crate::hooks::journal::{Line, bound_history, cut_escaped, cut_utf8};
 use crate::hooks::policy::{self, Basis, Inputs};
-use crate::hooks::state::{PendingDecision, SessionHandle, Settled, StateError, Verdict};
+use crate::hooks::state::{
+    Grant, GrantOffer, GrantScope, PendingDecision, SessionHandle, Settled, StateError, Verdict,
+};
 use crate::hooks::telemetry::{
-    Action, DecisionInfo, EvaluationInfo, Harness, Kind, OutcomeInfo, Producer, Record, Session,
-    Sink, TelltaleAction, new_record_id, sha256_hex,
+    Action, DecisionInfo, EvaluationInfo, GrantInfo, Harness, Kind, OutcomeInfo, Producer, Record,
+    Session, Sink, TelltaleAction, new_record_id, sha256_hex,
 };
 
 /// Identity shared by every event of one hook invocation.
@@ -50,6 +52,12 @@ pub struct Context {
     /// auto-approves an ask; the adapter can only refine it per event in the
     /// safe direction (`true` for a run mode verified to prompt or refuse).
     pub can_ask: bool,
+    /// Whether a `UserPrompt` event on this harness is the prompt of the
+    /// person using it, so a grant line in it can allow a stopped call
+    /// (`Adapter::can_grant`). `false` where the harness has no such event
+    /// or cannot tell a person's prompt from a model-written one: a grant
+    /// line is then refused, and no grant is offered.
+    pub can_grant: bool,
 }
 
 /// The verdict to return for a policy verdict on a harness that can or
@@ -67,6 +75,50 @@ pub fn returned_verdict(can_ask: bool, verdict: Verdict) -> Verdict {
 /// is asked through the model. Telltale takes no approval from the
 /// conversation, so the note also says what the user can do.
 pub const ASK_THROUGH_MODEL_NOTE: &str = "This call needs the user's approval, which is asked through you: stop, tell the user what you were about to do and why it was stopped, and ask how to proceed. Repeating the call will not run it; the user can run it themselves or have an exception configured.";
+
+/// Appended to the reason of a call the user can allow with a grant line
+/// (`Config::grants`), after the record ID and before
+/// [`ASK_THROUGH_MODEL_NOTE`].
+pub const GRANT_OFFER_NOTE: &str = "To allow it, the user can type `telltale allow` (this call, once) or `telltale allow session` (these detections, for the rest of this session) as a prompt of its own.";
+
+/// The longest prompt that can be a grant line, in bytes.
+const GRANT_LINE_MAX_BYTES: usize = 64;
+
+/// The scope of a prompt that is a grant line as a whole, or `None` for any
+/// other prompt: at most [`GRANT_LINE_MAX_BYTES`], one line once trimmed,
+/// and exactly `telltale allow`, `telltale allow once` or `telltale allow
+/// session`, words separated by ASCII whitespace and compared without ASCII
+/// case. The line inside a longer prompt is not a grant line.
+pub fn grant_line(prompt: &str) -> Option<GrantScope> {
+    if prompt.len() > GRANT_LINE_MAX_BYTES {
+        return None;
+    }
+    let line = prompt.trim();
+    if line.contains(['\n', '\r']) {
+        return None;
+    }
+    let words: Vec<&str> = line.split_ascii_whitespace().collect();
+    let (first, rest) = words.split_first()?;
+    let (second, rest) = rest.split_first()?;
+    if !first.eq_ignore_ascii_case("telltale") || !second.eq_ignore_ascii_case("allow") {
+        return None;
+    }
+    match rest {
+        [] => Some(GrantScope::Once),
+        [scope] if scope.eq_ignore_ascii_case("once") => Some(GrantScope::Once),
+        [scope] if scope.eq_ignore_ascii_case("session") => Some(GrantScope::Session),
+        _ => None,
+    }
+}
+
+/// Rule IDs for text addressed to the model: at most [`REASON_RULE_IDS`],
+/// the rest counted.
+fn listed_rule_ids(rule_ids: &[String]) -> String {
+    match rule_ids.len().checked_sub(REASON_RULE_IDS) {
+        Some(more @ 1..) => format!("{} and {more} more", rule_ids[..REASON_RULE_IDS].join(", ")),
+        _ => rule_ids.join(", "),
+    }
+}
 
 /// Prefix of correlation keys an adapter synthesizes when the harness
 /// carries no call ID (Copilot CLI): telemetry consumers tell them from
@@ -359,13 +411,54 @@ struct RequestDecision {
     /// Only enforcement test signatures matched: the call is decided on its
     /// own score and leaves the session's scores and attempts as they were.
     test_signature: bool,
+    /// A grant covered the call (`scope`, `granted_by`): nothing is returned,
+    /// and the session's scores and attempts stay as they were.
+    grant: Option<(GrantScope, String)>,
+}
+
+impl RequestDecision {
+    /// Whether a grant can be offered for this decision, or cover it, on a
+    /// harness that can take a grant line: grants on, enforcing, decided on
+    /// the policy's scores by rules none of which protects the host, a
+    /// verdict the grants cover, and an evaluation that saw the whole call
+    /// (`whole`).
+    fn grantable(&self, config: &Config, whole: bool) -> bool {
+        let verdict_covered = match self.outcome.verdict {
+            Verdict::Ask => true,
+            Verdict::Deny => config.grants.covers == GrantCover::AskAndDeny,
+            Verdict::Allow => false,
+        };
+        config.grants.enabled
+            && config.mode == Mode::Enforce
+            && matches!(
+                self.outcome.basis,
+                Basis::ActionScore | Basis::SessionScore | Basis::RepeatedDenials
+            )
+            && !self.rule_ids.is_empty()
+            && !self
+                .rule_ids
+                .iter()
+                .any(|id| id.starts_with(HOST_RULE_ID_PREFIX))
+            && verdict_covered
+            && whole
+    }
+
+    /// The call is covered by `grant`: it is not returned, and it leaves
+    /// the session's score as it was.
+    fn cover(&mut self, grant: (GrantScope, String)) {
+        self.returned = false;
+        self.substituted = None;
+        self.outcome.session_score_after = self.session_before;
+        self.grant = Some(grant);
+    }
 }
 
 /// Count the decision in the session's scores and attempts. A call that only
 /// an enforcement test signature matched counts nowhere: a test must not make
-/// the session's later calls stricter.
+/// the session's later calls stricter. Nor does a call a grant covered: the
+/// user allowed it.
 fn apply_decision(session: &mut SessionHandle, decision: &RequestDecision) {
-    if decision.test_signature {
+    if decision.test_signature || decision.grant.is_some() {
         return;
     }
     session.state.cumulative_score = decision.outcome.session_score_after;
@@ -846,6 +939,7 @@ impl Runtime {
             permission_mode: None,
             cwd: None,
             can_ask: false,
+            can_grant: false,
         };
         let mut record = self.record(&ctx, Kind::Error);
         record.error_code = Some(code.to_owned());
@@ -1032,8 +1126,13 @@ impl Runtime {
         }
     }
 
-    /// Journal the prompt and record that one was given (not its text).
+    /// Journal the prompt and record that one was given (not its text). With
+    /// grants on, a prompt that is a grant line as a whole ([`grant_line`])
+    /// allows the offered call (`SessionState::offer`) and tells the model
+    /// so; it is refused where the prompt may not be the user's, or when no
+    /// stopped call is offered.
     fn user_prompted(&self, ctx: &Context, prompt: &str) -> Result<Response, &'static str> {
+        let scope = grant_line(prompt).filter(|_| self.config.grants.enabled);
         let mut session = self.open(ctx)?;
         let t = session.state.next_time_ms(now_ms());
         let uuid = format!("tth-prompt-{}", session.state.prompts);
@@ -1048,6 +1147,27 @@ impl Runtime {
                 bounded,
             ))
             .map_err(|_| "journal_append_failed")?;
+        // The grant names the record that reports it.
+        let grant_record_id = new_record_id();
+        let granted = match scope {
+            None => None,
+            Some(_) if ctx.agent_id.is_some() || !ctx.can_grant => Some(Err("not_user_prompt")),
+            Some(scope) => match session.state.offer.take() {
+                None => Some(Err("no_offer")),
+                Some(offer) => {
+                    let grant = Grant {
+                        scope,
+                        tool_name: offer.tool_name,
+                        rule_ids: offer.rule_ids,
+                        input_sha256: (scope == GrantScope::Once).then_some(offer.input_sha256),
+                        granted_by: grant_record_id.clone(),
+                        offer_record_id: offer.record_id,
+                    };
+                    session.state.add_grant(grant.clone());
+                    Some(Ok(grant))
+                }
+            },
+        };
         session.save().map_err(|error| error.code())?;
         drop(session);
         let mut record = self.record(ctx, Kind::Lifecycle);
@@ -1057,7 +1177,38 @@ impl Runtime {
             "prompt_bytes": prompt.len(),
         }));
         self.emit(&record);
-        Ok(Response::None)
+        let Some(granted) = granted else {
+            return Ok(Response::None);
+        };
+        let mut grant_record = self.record(ctx, Kind::Lifecycle);
+        grant_record.record_id = grant_record_id;
+        grant_record.lifecycle = Some(match &granted {
+            Ok(grant) => json!({
+                "event": "grant",
+                "scope": grant.scope.as_str(),
+                "tool": grant.tool_name,
+                "rule_ids": grant.rule_ids,
+                "offer_record_id": grant.offer_record_id,
+            }),
+            Err(cause) => json!({"event": "grant_refused", "cause": cause}),
+        });
+        self.emit(&grant_record);
+        // What the model is told: never a pattern, matched text or path.
+        Ok(match granted {
+            Ok(grant) if grant.scope == GrantScope::Once => Response::AdditionalContext(format!(
+                "Telltale Hooks: the user allowed the stopped {} call once. Repeat it unchanged.",
+                grant.tool_name
+            )),
+            Ok(grant) => Response::AdditionalContext(format!(
+                "Telltale Hooks: the user allowed these detections on {} for the rest of this session: {}.",
+                grant.tool_name,
+                listed_rule_ids(&grant.rule_ids)
+            )),
+            Err("no_offer") => Response::AdditionalContext(
+                "Telltale Hooks: there is no stopped call to allow.".to_owned(),
+            ),
+            Err(_) => Response::None,
+        })
     }
 
     /// Clear the session's pending and settled calls, then report each pending
@@ -1070,6 +1221,8 @@ impl Runtime {
         session.state.pending_order.clear();
         session.state.settled.clear();
         session.state.settled_order.clear();
+        session.state.offer = None;
+        session.state.grants.clear();
         let summary = json!({
             "event": "session_end",
             "reason": reason,
@@ -1276,6 +1429,15 @@ impl Runtime {
                 .push(STATE_DIR_UNRESOLVED.to_owned());
         }
         let strict_failure = self.report_evaluation_failure(ctx, call, &evaluated.result);
+        // Whether the evaluation saw the whole call, as a grant needs.
+        let whole = !stateless
+            && !name_malformed
+            && !evaluated.separated
+            && !evaluated.past_budget
+            && evaluated
+                .result
+                .as_ref()
+                .is_ok_and(|evaluation| evaluation.unevaluated_focus == 0);
         let mut decision = self.decide_request(
             ctx,
             &session,
@@ -1285,6 +1447,34 @@ impl Runtime {
             strict_failure,
             stateless,
         );
+        let digest = input_sha256(&call.input);
+        // A call a grant covers is not returned and counts nowhere; it is
+        // still journaled below, so later chains build on it.
+        if decision.returned
+            && decision.grantable(&self.config, whole)
+            && let Some(grant) =
+                session
+                    .state
+                    .use_grant(&call.tool_name, &digest, &decision.rule_ids)
+        {
+            decision.cover(grant);
+        }
+        // The latest stopped call is the only one a grant line can allow: a
+        // stopped call that cannot be granted withdraws the offer.
+        let offered = decision.returned && ctx.can_grant && decision.grantable(&self.config, whole);
+        if decision.returned {
+            session.state.offer = offered.then(|| {
+                let mut rule_ids = decision.rule_ids.clone();
+                rule_ids.sort();
+                rule_ids.dedup();
+                GrantOffer {
+                    record_id: id.record_id.clone(),
+                    tool_name: call.tool_name.clone(),
+                    input_sha256: digest.clone(),
+                    rule_ids,
+                }
+            });
+        }
         apply_decision(&mut session, &decision);
         // Journal the request as history for later scans.
         session
@@ -1315,7 +1505,7 @@ impl Runtime {
         if !decision.returned {
             return Ok(Response::None);
         }
-        let reason = self.reason(
+        let mut reason = self.reason(
             decision.outcome.verdict,
             decision.substituted.unwrap_or(decision.outcome.verdict),
             decision.outcome.basis,
@@ -1334,6 +1524,10 @@ impl Runtime {
             name_malformed,
             stateless,
         );
+        if offered {
+            reason.push(' ');
+            reason.push_str(GRANT_OFFER_NOTE);
+        }
         Ok(Response::decision(
             self.prompts_human(ctx),
             decision.outcome.verdict,
@@ -1654,6 +1848,7 @@ impl Runtime {
             returned,
             substituted,
             test_signature,
+            grant: None,
         }
     }
 
@@ -1760,6 +1955,13 @@ impl Runtime {
             denied_attempts_before: decision.denied_before,
             rule_ids: decision.rule_ids.clone(),
             categories: decision.categories.clone(),
+            grant: decision
+                .grant
+                .as_ref()
+                .map(|(scope, granted_by)| GrantInfo {
+                    scope: scope.as_str(),
+                    granted_by: granted_by.clone(),
+                }),
         });
         record.telltale = std::mem::take(&mut decision.telltale)
             .into_iter()
@@ -1995,6 +2197,7 @@ impl Runtime {
             denied_attempts_before: session.state.denied_attempts,
             rule_ids: evaluation.rule_ids(),
             categories: evaluation.categories(),
+            grant: None,
         });
         record.telltale = evaluation
             .focus_records
@@ -2422,6 +2625,7 @@ mod tests {
             permission_mode: None,
             cwd: None,
             can_ask,
+            can_grant: false,
         };
         let call = ToolCall {
             tool_use_id: Some("toolu_1".to_owned()),
@@ -2465,6 +2669,7 @@ mod tests {
                 permission_mode: None,
                 cwd: None,
                 can_ask: true,
+                can_grant: false,
             };
             let call = ToolCall {
                 tool_use_id: Some("toolu_1".to_owned()),
@@ -2528,6 +2733,7 @@ mod tests {
             permission_mode: None,
             cwd: None,
             can_ask: true,
+            can_grant: false,
         };
         let call = ToolCall {
             tool_use_id: Some("toolu_1".to_owned()),

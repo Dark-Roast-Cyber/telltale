@@ -72,6 +72,7 @@ fn evaluate(label: &'static str, calls: &[Call]) -> Outcome {
         permission_mode: None,
         // Compare policy verdicts, not a harness's ask -> deny substitution.
         can_ask: true,
+        can_grant: false,
         cwd: Some("/home/synthetic/run/work".into()),
     };
     let mut last = String::new();

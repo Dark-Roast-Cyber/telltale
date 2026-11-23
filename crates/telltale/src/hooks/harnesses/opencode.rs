@@ -23,6 +23,7 @@ pub const ADAPTER: Adapter = Adapter {
     pre_tool_use: &["execute.before"],
     event_keys: &["hook_event"],
     can_ask: false,
+    can_grant: false,
     parse,
     render,
     looks_like_pre_tool_use: |bytes| {
@@ -97,6 +98,7 @@ pub fn parse(bytes: &[u8]) -> Parsed {
             permission_mode: None,
             cwd: Some(request.cwd),
             can_ask: false,
+            can_grant: false,
         },
         Event::ToolRequested(ToolCall {
             tool_use_id: Some(request.occurrence),
