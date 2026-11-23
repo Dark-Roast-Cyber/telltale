@@ -1541,6 +1541,95 @@ fn grants_lists_and_revoke_removes_a_grant() {
     }
 }
 
+/// An always grant is read by the hook on every harness, the OpenCode pilot
+/// included, which has no grant line: a user grant made from a stopped call
+/// covers that call later in the same session and in one with no session
+/// state at all, and once it is revoked the call is stopped again.
+#[test]
+fn a_user_grant_covers_its_call_on_every_harness_until_it_is_revoked() {
+    use telltale_core::hooks::grants::{AlwaysGrant, AlwaysScope, write};
+    for entry in ENTRIES {
+        let harness = entry.harness;
+        let dir = tempfile::tempdir().unwrap();
+        let config = root(dir.path(), "enforce", true, GRANTS_ON);
+        let state = tempfile::tempdir().unwrap();
+        let stopped = call(entry, TEST_DENY, state.path(), &[&config]);
+        assert!(
+            stopped.answer(harness).is_some(),
+            "{harness}: {}",
+            stopped.stdout
+        );
+        let id = write(
+            &config.join("grants.d"),
+            &AlwaysGrant {
+                id: String::new(),
+                version: 1,
+                scope: AlwaysScope::User,
+                project: None,
+                harness: harness.into(),
+                tool: stopped.decision["action"]["tool_name"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                rule_ids: vec!["tth.test.deny".into()],
+                created_at: "2026-11-23T00:00:00Z".into(),
+                from_record: stopped.decision["record_id"].as_str().unwrap().into(),
+            },
+        )
+        .unwrap();
+        let granted = json!({"scope": "user", "granted_by": id});
+
+        let fresh = tempfile::tempdir().unwrap();
+        for session in [state.path(), fresh.path()] {
+            let run = call(entry, TEST_DENY, session, &[&config]);
+            assert_eq!(run.answer(harness), None, "{harness}: {}", run.stdout);
+            assert_eq!(run.decision["decision"]["grant"], granted, "{harness}");
+        }
+
+        let (code, _, stderr) = grant_command(&["revoke", &id], &config, state.path(), "");
+        assert_eq!(code, Some(0), "{harness}: {stderr}");
+        for session in [state.path(), fresh.path()] {
+            let run = call(entry, TEST_DENY, session, &[&config]);
+            assert!(run.answer(harness).is_some(), "{harness}: {}", run.stdout);
+            assert_eq!(run.decision["decision"]["grant"], Value::Null, "{harness}");
+        }
+    }
+}
+
+/// With grants on, a tool call that runs `telltale hooks allow` or (in a
+/// Unix shell's spelling) writes a file into the root's `grants.d` is denied
+/// on every harness by a self-protection rule, which no grant covers.
+#[test]
+fn a_tool_call_that_makes_an_always_grant_is_denied_on_every_harness() {
+    for entry in ENTRIES {
+        let harness = entry.harness;
+        let dir = tempfile::tempdir().unwrap();
+        let config = root(dir.path(), "enforce", true, GRANTS_ON);
+        let grant_file = config.join("grants.d").join("g-0123456789ab.yaml");
+        let mut commands = vec!["telltale hooks allow tth:abc --user".to_owned()];
+        if cfg!(unix) {
+            commands.push(format!(
+                "printf 'version: 1\\n' > '{}'",
+                grant_file.display()
+            ));
+        }
+        for command in commands {
+            let state = tempfile::tempdir().unwrap();
+            let run = call(entry, &command, state.path(), &[&config]);
+            let (verdict, _) = run
+                .answer(harness)
+                .unwrap_or_else(|| panic!("{harness}: {command}: {}", run.stdout));
+            assert_eq!(verdict, "deny", "{harness}: {command}");
+            let rules = run.decision["decision"]["rule_ids"].to_string();
+            assert!(
+                rules.contains("\"tth.tamper."),
+                "{harness}: {command}: {rules}"
+            );
+            assert_eq!(run.decision["decision"]["grant"], Value::Null);
+        }
+    }
+}
+
 /// End to end in a pseudo-terminal (util-linux `script`): the test deny
 /// stopped in a project is allowed for the project by typing `allow`, the
 /// `grant` record says so without the path, and the same call in the

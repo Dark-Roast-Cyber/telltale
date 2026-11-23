@@ -131,3 +131,15 @@ policy there.
 - A session grant is as broad as the detections it names: a later call of
   the same tool with only those detections is not stopped. The decision
   record of every such call says so.
+- Evidence per harness. The grant line is shown on the real Claude Code with
+  a scripted model
+  ([2026-11-22](../e2e/2026-11-22-claude-code-2.1.330-grants.md)). On Codex
+  CLI and Copilot CLI it is shown with the real `telltale` binary on each
+  harness's captured payload shapes, as the
+  [capability matrix](../capability-matrix.md) says, and that is the level a
+  release claims for them. A live run on those harnesses is needed only to
+  claim live-harness evidence, and belongs with their real-model
+  enforcement runs. Always grants need no prompt event: the hook applies them on every
+  harness, the OpenCode pilot included, and the CLI tests show it on each
+  entry point, with a running evaluator retired when a grant is made or
+  revoked.
