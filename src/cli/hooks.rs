@@ -37,6 +37,8 @@ use telltale_core::hooks::harnesses::codex_cli;
 use telltale_core::hooks::identity;
 use telltale_core::hooks::runtime::{Context, Event, Runtime};
 
+mod grants;
+
 /// Hook payloads larger than this are refused rather than buffered.
 const MAX_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -65,9 +67,16 @@ const COMMON_USAGE: &str = "  telltale hooks codex-cli execpolicy             pr
                                                   lists every rule and chain the hook evaluates as it takes
                                                   effect: enabled or what turned it off, score, tier, overrides;
                                                   --json prints only that, as telltale.effective_configuration.v1
+  telltale hooks allow RECORD (--project [DIR] | --user)
+                                                  allow, from now on, the detections of the call a hook
+                                                  stopped (its decision record ID) on its tool and harness,
+                                                  in DIR (default: the current directory) and below, or
+                                                  everywhere; asks you to type allow in a terminal
+  telltale hooks grants [--json]                  list the project and user grants and the files left out
+  telltale hooks revoke GRANT                     remove a project or user grant
   telltale hooks version                          print the version, Git hash and build revision
 
-hook, serve and check accept --config-dir DIR (repeatable): read these Telltale
+hook, serve, check, allow, grants and revoke accept --config-dir DIR (repeatable): read these Telltale
 config roots instead of the default ones (/etc/telltale, on Windows %ProgramData%\\telltale,
 then $XDG_CONFIG_HOME/telltale or ~/.config/telltale). Settings are the hooks: section of settings.d/*.yaml; rule
 content is the same rules.d, rule-packages.d, overrides.d and policies.d as scan.
@@ -132,6 +141,27 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
         ["check", flags @ ..] => match pinned(flags, check_flags) {
             Some((dirs, CheckOutput::Text { list_rules })) => check(&dirs, list_rules),
             Some((dirs, CheckOutput::RulesJson)) => check_rules_json(&dirs),
+            None => {
+                eprintln!("{}", usage());
+                64
+            }
+        },
+        ["allow", flags @ ..] => match pinned(flags, grants::allow_flags) {
+            Some((dirs, record_id, scope)) => grants::run_allow(&dirs, &record_id, scope),
+            None => {
+                eprintln!("{}", usage());
+                64
+            }
+        },
+        ["grants", flags @ ..] => match pinned(flags, grants::list_flags) {
+            Some((dirs, json)) => grants::run_list(&dirs, json),
+            None => {
+                eprintln!("{}", usage());
+                64
+            }
+        },
+        ["revoke", flags @ ..] => match pinned(flags, grants::revoke_flags) {
+            Some((dirs, id)) => grants::run_revoke(&dirs, &id),
             None => {
                 eprintln!("{}", usage());
                 64

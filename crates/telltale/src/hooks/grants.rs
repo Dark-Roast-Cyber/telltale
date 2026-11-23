@@ -161,7 +161,8 @@ pub fn covering<'a>(
 
 /// Whether `path` is `dir` or below it, by path components after lexical
 /// normalization (`.` dropped, `..` taken back). No filesystem access: a
-/// symlink is not resolved. Relative paths are never within.
+/// symlink is not resolved. Relative paths are never within. Case matters,
+/// except on Windows.
 pub fn within(dir: &Path, path: &Path) -> bool {
     match (normalized(dir), normalized(path)) {
         (Some(dir), Some(path)) => path.starts_with(dir),
@@ -188,6 +189,11 @@ fn normalized(path: &Path) -> Option<PathBuf> {
             }
         }
     }
+    // Windows paths are case-insensitive, and a terminal's current directory
+    // and a harness's cwd can spell a drive or folder in another case. A path
+    // that is not UTF-8 matches nothing there.
+    #[cfg(windows)]
+    let out = PathBuf::from(out.to_str()?.to_lowercase());
     Some(out)
 }
 
@@ -235,7 +241,8 @@ pub fn load_dir(dir: &Path) -> (Vec<AlwaysGrant>, Vec<LeftOut>) {
     (grants, left_out)
 }
 
-fn load_file(path: &Path) -> Result<AlwaysGrant, &'static str> {
+/// The grant in the file at `path`, or why it is left out.
+pub fn load_file(path: &Path) -> Result<AlwaysGrant, &'static str> {
     let id = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -309,7 +316,23 @@ pub fn remove(dir: &Path, id: &str) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    const PROJECT: &str = "version: 1\nscope: project\nproject: /work/app\nharness: claude-code\ntool: Bash\nrule_ids: [a, b]\ncreated_at: 2026-11-22T00:00:00Z\nfrom_record: tth:1\n";
+    /// `unix` as an absolute path on this platform: on Windows, on drive
+    /// `C:`. A relative path stays relative.
+    fn abs(unix: &str) -> String {
+        if cfg!(windows) && unix.starts_with('/') {
+            format!("C:{}", unix.replace('/', "\\"))
+        } else {
+            unix.to_owned()
+        }
+    }
+
+    fn project_yaml() -> String {
+        format!(
+            "version: 1\nscope: project\nproject: {}\nharness: claude-code\ntool: Bash\nrule_ids: [a, b]\ncreated_at: 2026-11-22T00:00:00Z\nfrom_record: tth:1\n",
+            abs("/work/app")
+        )
+    }
+
     const USER: &str = "version: 1\nscope: user\nharness: codex-cli\ntool: Bash\nrule_ids: [a]\ncreated_at: 2026-11-22T00:00:00Z\nfrom_record: tth:2\n";
 
     fn put(dir: &Path, name: &str, text: &str) -> PathBuf {
@@ -327,14 +350,17 @@ mod tests {
     #[test]
     fn valid_project_and_user_files_load() {
         let dir = tempfile::tempdir().unwrap();
-        put(dir.path(), "g-00000000000a.yaml", PROJECT);
+        put(dir.path(), "g-00000000000a.yaml", &project_yaml());
         put(dir.path(), "g-00000000000b.yaml", USER);
         let (grants, left_out) = load_dir(dir.path());
         assert_eq!(left_out, []);
         assert_eq!(grants.len(), 2);
         assert_eq!(grants[0].id, "g-00000000000a");
         assert_eq!(grants[0].scope, AlwaysScope::Project);
-        assert_eq!(grants[0].project.as_deref(), Some(Path::new("/work/app")));
+        assert_eq!(
+            grants[0].project.as_deref(),
+            Some(Path::new(&abs("/work/app")))
+        );
         assert_eq!(grants[0].rule_ids, ids(&["a", "b"]));
         assert_eq!(grants[1].id, "g-00000000000b");
         assert_eq!(grants[1].scope, AlwaysScope::User);
@@ -362,7 +388,7 @@ mod tests {
             ),
             (
                 "g-000000000004.yaml",
-                &PROJECT.replace("/work/app", "work/app"),
+                &project_yaml().replace(&abs("/work/app"), "work/app"),
                 "not absolute",
             ),
             (
@@ -372,17 +398,17 @@ mod tests {
             ),
             (
                 "g-000000000006.yaml",
-                &PROJECT.replace("[a, b]", "[b, a]"),
+                &project_yaml().replace("[a, b]", "[b, a]"),
                 "not sorted",
             ),
             (
                 "g-000000000007.yaml",
-                &PROJECT.replace("[a, b]", "[a, a]"),
+                &project_yaml().replace("[a, b]", "[a, a]"),
                 "repeat",
             ),
             (
                 "g-000000000008.yaml",
-                &PROJECT.replace("project: /work/app\n", ""),
+                &project_yaml().replace("project: /work/app\n", ""),
                 "names no project",
             ),
             (
@@ -451,7 +477,7 @@ mod tests {
     fn write_then_load_then_remove() {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join(GRANTS_DIR);
-        let mut grant: AlwaysGrant = serde_yaml::from_str(PROJECT).unwrap();
+        let mut grant: AlwaysGrant = serde_yaml::from_str(&project_yaml()).unwrap();
         let id = write(&folder, &grant).unwrap();
         assert!(is_grant_id(&id), "{id}");
         let (grants, left_out) = load_dir(&folder);
@@ -468,20 +494,46 @@ mod tests {
 
     #[test]
     fn a_project_covers_itself_and_below_by_components() {
-        let dir = Path::new("/a/b");
-        assert!(within(dir, Path::new("/a/b")));
-        assert!(within(dir, Path::new("/a/b/")));
-        assert!(within(Path::new("/a/b/"), Path::new("/a/b")));
-        assert!(within(dir, Path::new("/a/b/c/d")));
-        assert!(!within(dir, Path::new("/a/bc")));
-        assert!(!within(dir, Path::new("/a")));
-        assert!(within(dir, Path::new("/a/x/../b/./c")));
-        assert!(!within(dir, Path::new("/a/b/../c")));
-        assert!(!within(dir, Path::new("/a/b/..")));
-        assert!(within(Path::new("/a/./b/c/.."), Path::new("/a/b/c")));
+        let dir = &abs("/a/b");
+        let dir = Path::new(dir);
+        assert!(within(dir, Path::new(&abs("/a/b"))));
+        assert!(within(dir, Path::new(&abs("/a/b/"))));
+        assert!(within(Path::new(&abs("/a/b/")), Path::new(&abs("/a/b"))));
+        assert!(within(dir, Path::new(&abs("/a/b/c/d"))));
+        assert!(!within(dir, Path::new(&abs("/a/bc"))));
+        assert!(!within(dir, Path::new(&abs("/a"))));
+        assert!(within(dir, Path::new(&abs("/a/x/../b/./c"))));
+        assert!(!within(dir, Path::new(&abs("/a/b/../c"))));
+        assert!(!within(dir, Path::new(&abs("/a/b/.."))));
+        assert!(within(
+            Path::new(&abs("/a/./b/c/..")),
+            Path::new(&abs("/a/b/c"))
+        ));
         assert!(!within(dir, Path::new("a/b")));
         assert!(!within(Path::new("a/b"), Path::new("a/b")));
-        assert!(within(Path::new("/"), Path::new("/../x")));
+        assert!(within(Path::new(&abs("/")), Path::new(&abs("/../x"))));
+    }
+
+    /// Outside Windows, case matters: another spelling is another directory.
+    #[cfg(not(windows))]
+    #[test]
+    fn outside_windows_case_matters() {
+        assert!(!within(Path::new("/Work/App"), Path::new("/work/app/src")));
+        assert!(!within(Path::new("/work/app"), Path::new("/WORK/app")));
+    }
+
+    /// On Windows a drive or folder in another case is the same directory.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_case_does_not_matter() {
+        assert!(within(
+            Path::new(r"C:\Work\App"),
+            Path::new(r"c:\work\app\src")
+        ));
+        assert!(!within(
+            Path::new(r"C:\Work\App"),
+            Path::new(r"c:\work\apple")
+        ));
     }
 
     /// Harness, tool and every detection must match; a project grant needs
@@ -490,7 +542,7 @@ mod tests {
     fn coverage_needs_harness_tool_every_detection_and_the_project() {
         let project: AlwaysGrant = AlwaysGrant {
             id: "g-00000000000a".into(),
-            ..serde_yaml::from_str(PROJECT).unwrap()
+            ..serde_yaml::from_str(&project_yaml()).unwrap()
         };
         let user = AlwaysGrant {
             id: "g-00000000000b".into(),
@@ -503,23 +555,36 @@ mod tests {
             covering(&both, "claude-code", tool, cwd, &ids(rules)).map(|grant| grant.id.as_str())
         };
         assert_eq!(
-            found(Some("/work/app/src"), "Bash", &["a"]),
+            found(Some(abs("/work/app/src").as_str()), "Bash", &["a"]),
             Some("g-00000000000a")
         );
         assert_eq!(
-            found(Some("/elsewhere"), "Bash", &["a", "b"]),
+            found(Some(abs("/elsewhere").as_str()), "Bash", &["a", "b"]),
             Some("g-00000000000b")
         );
         assert_eq!(found(None, "Bash", &["b"]), Some("g-00000000000b"));
         assert_eq!(
-            found(Some("/work/app"), "Bash", &["a", "c"]),
+            found(Some(abs("/work/app").as_str()), "Bash", &["a", "c"]),
             Some("g-00000000000b")
         );
-        assert_eq!(found(Some("/work/app"), "Bash", &["a", "d"]), None);
-        assert_eq!(found(Some("/work/app"), "bash", &["a"]), None);
-        assert_eq!(found(Some("/work/app"), "Bash", &[]), None);
-        assert!(!project.covers("codex-cli", "Bash", Some("/work/app"), &ids(&["a"])));
+        assert_eq!(
+            found(Some(abs("/work/app").as_str()), "Bash", &["a", "d"]),
+            None
+        );
+        assert_eq!(found(Some(abs("/work/app").as_str()), "bash", &["a"]), None);
+        assert_eq!(found(Some(abs("/work/app").as_str()), "Bash", &[]), None);
+        assert!(!project.covers(
+            "codex-cli",
+            "Bash",
+            Some(abs("/work/app").as_str()),
+            &ids(&["a"])
+        ));
         assert!(!project.covers("claude-code", "Bash", None, &ids(&["a"])));
-        assert!(!project.covers("claude-code", "Bash", Some("/work/apple"), &ids(&["a"])));
+        assert!(!project.covers(
+            "claude-code",
+            "Bash",
+            Some(abs("/work/apple").as_str()),
+            &ids(&["a"])
+        ));
     }
 }

@@ -965,6 +965,28 @@ impl Runtime {
     /// what is known, so that an answer given outside [`Self::handle`], or a
     /// detect-only hook that saw nothing, is never silent. No session is
     /// opened: there is no trusted session to open.
+    /// Record a lifecycle event a terminal command made (`telltale hooks
+    /// allow`, `revoke`): it has no session (an empty `session_id`, as an
+    /// unhandled event's record), its `hook_event` is `terminal`, and its
+    /// harness is the one the event is about, empty when none is known.
+    pub fn record_terminal(&self, harness: &'static str, lifecycle: Value) {
+        let ctx = Context {
+            harness,
+            hook_event: "terminal".to_owned(),
+            session_id: String::new(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: false,
+            can_grant: false,
+        };
+        let mut record = self.record(&ctx, Kind::Lifecycle);
+        record.lifecycle = Some(lifecycle);
+        self.emit(&record);
+    }
+
     pub fn record_unhandled(&self, harness: &'static str, hook_event: &str, code: &str) {
         let ctx = Context {
             harness,

