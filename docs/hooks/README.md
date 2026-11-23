@@ -538,7 +538,8 @@ Five more rules are loaded while grants are on, and none can be granted.
 `tth.tamper.grant_command_run` stops a tool call that runs
 `telltale hooks allow` ([always](#always-for-a-project-or-for-you)), which
 only the person at a terminal runs. `tth.tamper.grant_channel_failsafe` asks
-where either command is named in a form those two do not read.
+when either command is named anywhere in a command, other than a read, a
+commit message or help.
 `tth.tamper.harness_session_resume` stops a tool call that starts Claude
 Code, Codex CLI or Copilot CLI resuming or continuing an existing session.
 Either would put an event before the hook that no person raised.
@@ -608,12 +609,14 @@ telltale hooks allow <record> --user           # every directory
 - **Where it is kept.** One file per grant in `grants.d` of your own
   configuration root (`~/.config/telltale/grants.d`; the last `--config-dir`
   when the hook is pinned to roots, so pass the same `--config-dir` to the
-  command). Never in the repository, and a system root's `grants.d` is not
-  read. The project is compared with the call's working directory by path
-  components, as written (case-insensitive on Windows); a symlinked path is
-  not resolved.
+  command). Never in the repository; no other root's `grants.d` is read,
+  so a system root's only when the hook is pinned to it last. A grant file
+  that is a link is not read. The project is compared with the working
+  directory the harness reports for the call, by path components, as written
+  (case-insensitive on Windows); a symlinked path is not resolved. A project
+  grant is about where the call runs, not about which files it touches.
 - **Listing and revoking.** `telltale hooks grants` lists them (`--json` for
-  a machine-readable list) with any file left out and why;
+  a list to read with tools) with any file left out and why;
   `telltale hooks revoke <grant>` removes one. A file that cannot be read or
   is not a valid grant never grants, and `telltale hooks check` reports it.
 - **Order.** A call is covered by the first of: a once grant, a session

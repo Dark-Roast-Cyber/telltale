@@ -66,8 +66,9 @@ will allow and makes the grant only when the person types `allow`; it
 refuses when its input and error output are not a terminal, and has no
 option that skips the question. The grant is a file in `grants.d` of the
 user's own configuration root, the one the hook reads (the last
-`--config-dir` when it is pinned to roots): never the repository, and never
-a system root, where an administrator keeps policy instead. A project grant
+`--config-dir` when it is pinned to roots): never the repository, and no
+other root, so a system root's only where the hook is pinned to it last, in
+which case its writer decides. A grant file that is a link is not read. A project grant
 names a directory and covers calls made in it or below it, compared by path
 components as written.
 

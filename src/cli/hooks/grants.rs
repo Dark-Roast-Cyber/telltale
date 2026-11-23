@@ -94,7 +94,13 @@ pub(super) fn revoke_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, String)> {
 /// Text with control characters replaced, for a line of output.
 fn printable(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            // Control characters, and the format characters that reorder
+            // or hide text, would make the confirmation show something else.
+            let hidden = c.is_control()
+                || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+            if hidden { ' ' } else { c }
+        })
         .collect()
 }
 
@@ -477,6 +483,17 @@ pub(super) fn run_revoke(config_dirs: &[PathBuf], id: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the confirmation prints cannot be reordered or hidden by the
+    /// text of a record.
+    #[test]
+    fn printable_text_has_no_control_or_reordering_characters() {
+        assert_eq!(
+            printable("a\u{202e}b\u{1b}[2Jc\u{2066}d\u{200b}e"),
+            "a b [2Jc d e"
+        );
+        assert_eq!(printable("tth.test.deny, Bash"), "tth.test.deny, Bash");
+    }
 
     const RECORD_ID: &str = "tth:0123456789abcdef0123456789abcdef";
 

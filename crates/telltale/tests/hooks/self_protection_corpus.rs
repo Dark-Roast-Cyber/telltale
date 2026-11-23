@@ -4583,33 +4583,29 @@ fn resuming_a_harness_session_is_denied_while_grants_are_on() {
     assert_denied_by(SESSION_RESUMES, HARNESS_SESSION_RESUME);
 }
 
-/// What a program that runs a command string hands to the hook command or
-/// to `telltale hooks allow`: the deny rules read command position, the
-/// fail-safe reads the words anywhere and asks.
-const GRANT_CHANNEL_ASKS: &[(&str, &str)] = &[
+/// The hook command or `telltale hooks allow` named inside a command string
+/// another program runs.
+const GRANT_CHANNEL_NAMED: &[(&str, &str)] = &[
     (
-        "allow-in-a-pseudo-terminal",
+        "allow-in-a-command-string",
         "script -qec \"telltale hooks allow tth:abc --user\" /dev/null",
     ),
     (
-        "hook-in-a-pseudo-terminal",
+        "hook-in-a-command-string",
         "script -qec \"telltale hooks claude-code hook\" /dev/null < event.json",
     ),
 ];
 
-/// The fail-safe asks for a run of the hook command or of `telltale hooks
-/// allow` that the deny rules do not read, and stays silent for the look-
-/// alikes; the deny rules' own cases are also in its reach.
+/// The fail-safe matches the hook command or `telltale hooks allow` named
+/// anywhere in a command: such a command is stopped, and every case of the
+/// deny rules is in its reach too.
 #[test]
-fn the_grant_channel_fail_safe_asks_where_the_deny_rules_do_not_match() {
-    let failures: Vec<String> = decide_in(granting(), GRANT_CHANNEL_ASKS)
+fn the_grant_channel_fail_safe_matches_the_commands_named_anywhere() {
+    let failures: Vec<String> = decide_in(granting(), GRANT_CHANNEL_NAMED)
         .into_iter()
         .filter(|(_, verdict, rules)| {
-            verdict.as_deref() != Some("ask")
+            !matches!(verdict.as_deref(), Some("ask" | "deny"))
                 || !rules.iter().any(|id| id == GRANT_CHANNEL_FAILSAFE)
-                || rules
-                    .iter()
-                    .any(|id| id == HOOK_ENTRY_RUN || id == GRANT_COMMAND_RUN)
         })
         .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
         .collect();
@@ -4624,7 +4620,7 @@ fn the_grant_channel_fail_safe_asks_where_the_deny_rules_do_not_match() {
     .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
     .collect();
     assert!(missed.is_empty(), "{}", missed.join("\n"));
-    assert_no_grant_rule(Harness::new(), GRANT_CHANNEL_ASKS);
+    assert_no_grant_rule(Harness::new(), GRANT_CHANNEL_NAMED);
 }
 
 /// The fail-safe asks where the deny rule, which reads the command as

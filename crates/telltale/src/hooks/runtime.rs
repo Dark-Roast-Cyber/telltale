@@ -960,11 +960,6 @@ impl Runtime {
         )))
     }
 
-    /// A hook invocation that never became an event: the payload could not be
-    /// read, or the configuration could not be loaded. An `error` record with
-    /// what is known, so that an answer given outside [`Self::handle`], or a
-    /// detect-only hook that saw nothing, is never silent. No session is
-    /// opened: there is no trusted session to open.
     /// Record a lifecycle event a terminal command made (`telltale hooks
     /// allow`, `revoke`): it has no session (an empty `session_id`, as an
     /// unhandled event's record), its `hook_event` is `terminal`, and its
@@ -987,6 +982,11 @@ impl Runtime {
         self.emit(&record);
     }
 
+    /// A hook invocation that never became an event: the payload could not be
+    /// read, or the configuration could not be loaded. An `error` record with
+    /// what is known, so that an answer given outside [`Self::handle`], or a
+    /// detect-only hook that saw nothing, is never silent. No session is
+    /// opened: there is no trusted session to open.
     pub fn record_unhandled(&self, harness: &'static str, hook_event: &str, code: &str) {
         let ctx = Context {
             harness,

@@ -249,6 +249,11 @@ pub fn load_file(path: &Path) -> Result<AlwaysGrant, &'static str> {
         .and_then(|name| name.strip_suffix(".yaml"))
         .filter(|id| is_grant_id(id))
         .ok_or("the file name is not a grant ID followed by .yaml")?;
+    // A grant is a file `write` made: a link to a file elsewhere could be
+    // changed without touching the configuration root.
+    if !std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file()) {
+        return Err("not a regular file (a link or a folder)");
+    }
     let file = crate::hooks::state::open_operator_input(path).map_err(|_| "cannot be read")?;
     let mut bytes = Vec::new();
     file.take(MAX_GRANT_FILE_BYTES + 1)
@@ -408,7 +413,7 @@ mod tests {
             ),
             (
                 "g-000000000008.yaml",
-                &project_yaml().replace("project: /work/app\n", ""),
+                &project_yaml().replace(&format!("project: {}\n", abs("/work/app")), ""),
                 "names no project",
             ),
             (
@@ -448,8 +453,25 @@ mod tests {
             .iter()
             .find(|entry| entry.path.ends_with("g-00000000000f.yaml"))
             .unwrap();
-        assert_eq!(folder.cause, "cannot be read");
+        assert_eq!(folder.cause, "not a regular file (a link or a folder)");
         assert_eq!(left_out.len(), cases.len() + 1);
+    }
+
+    /// A link named like a grant is left out even when its target is a
+    /// valid grant: the target could be changed outside the root.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_grant_file_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = put(elsewhere.path(), "grant.yaml", USER);
+        std::os::unix::fs::symlink(&target, dir.path().join("g-000000000001.yaml")).unwrap();
+        put(dir.path(), "g-000000000002.yaml", USER);
+        let (grants, left_out) = load_dir(dir.path());
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].id, "g-000000000002");
+        assert_eq!(left_out.len(), 1);
+        assert_eq!(left_out[0].cause, "not a regular file (a link or a folder)");
     }
 
     /// Past 256 files the rest are left out, in name order.

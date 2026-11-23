@@ -125,5 +125,5 @@ level: medium
 telltale:
     category: approval_bypass
     score: 60
-    explanation: 'The fail-safe for hook_entry_run and grant_command_run: the hook command (`telltale hooks <harness> hook`) or `telltale hooks allow` anywhere in the command, whatever runs it, so a run the deny rules do not recognize asks: `script -qec "telltale hooks allow <record> --user" /dev/null`. A read that quotes them, a `git commit` message, and `--help` or `--version` alone stay silent. A grant never covers it.'
+    explanation: 'The fail-safe for hook_entry_run and grant_command_run: the hook command (`telltale hooks <harness> hook`) or `telltale hooks allow` named anywhere in the command, whatever program runs it, for example inside a command string another program is given. A read that quotes them, a `git commit` message, and `--help` or `--version` alone stay silent. A grant never covers it.'
     tags: [self-protection, hooks, defense-evasion, grants]

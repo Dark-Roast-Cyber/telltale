@@ -700,8 +700,8 @@ fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
 
 /// The configuration root whose `grants.d` holds the always grants: the
 /// last of `config_dirs` (the most specific, as roots are read in order),
-/// else the user root, pinned or from the environment. A system root's
-/// `grants.d` is never read.
+/// else the user root, pinned or from the environment. No other root's
+/// `grants.d` is read.
 fn grants_root(config_dirs: &[PathBuf]) -> Option<PathBuf> {
     match config_dirs.last() {
         Some(root) => Some(root.clone()),
