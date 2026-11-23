@@ -280,6 +280,7 @@ fn the_ask_route_is_a_setting_with_two_values() {
 
 /// `hooks.grants`: off and covering asks and denies by default, both values
 /// of `covers`, and anything else under it is invalid configuration.
+#[cfg(feature = "hooks")]
 #[test]
 fn grants_are_a_setting_off_by_default() {
     let show = |text: Option<&str>| {
