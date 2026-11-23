@@ -55,6 +55,30 @@ harnesses show none.
    cover a deny as well as an ask (`hooks.grants.covers: ask_and_deny`):
    a deny the user cannot lift is the dead end this decision removes.
 
+## Always grants
+
+The third scope is made by `telltale hooks allow <record> --project [DIR] |
+--user`, which the person runs in a terminal. It starts from the stopped
+call's decision record, so the person allows what they saw stopped and the
+command takes the harness, tool and detections from it, not from its
+arguments. It checks that a grant could cover the record, shows what it
+will allow and makes the grant only when the person types `allow`; it
+refuses when its input and error output are not a terminal, and has no
+option that skips the question. The grant is a file in `grants.d` of the
+user's own configuration root, the one the hook reads (the last
+`--config-dir` when it is pinned to roots): never the repository, and no
+other root, so a system root's only where the hook is pinned to it last, in
+which case its writer decides. A grant file that is a link is not read. A project grant
+names a directory and covers calls made in it or below it, compared by path
+components as written.
+
+Always grants cover with the same exclusions as the session's, after them
+(once, session, project, user), and one grant must name all of a call's
+detections. A file that is not a valid grant is left out, never grants, and
+is reported by `check`. `telltale hooks grants` lists them and `telltale
+hooks revoke` removes one. Making and revoking a grant are lifecycle
+records; a project's path is recorded only as its SHA-256.
+
 ## Trust boundary
 
 A model must not be able to approve its own exception. Nothing a tool call
@@ -62,9 +86,10 @@ carries can grant: not a tool input, a tool result, a file, or a payload
 field. A prompt written for a subagent is written by a model and is refused.
 A harness with no event for the user's own prompt takes no grant line.
 A tool call that would put a prompt event before the hook itself, by running
-the hook command or by starting a harness that resumes a session, is stopped
-by `tth.tamper.` rules loaded only while grants are on; grants require
-the self-protection rules, which cover the session state.
+the hook command or by starting a harness that resumes a session, or that
+runs the command for an always grant, is stopped by `tth.tamper.` rules
+loaded only while grants are on; grants require the self-protection rules,
+which cover the session state and the configuration root.
 
 The user-prompt event shows that a prompt was submitted to the session, not
 who typed it. An agent's process runs as the user, so a user-level install
@@ -94,7 +119,10 @@ policy there.
 - `Adapter` and `Context` gain `can_grant`; `SessionState` gains the offered
   call and the session's grants (bounded, cleared at session end);
   `decision.grant` is added to the record schema.
-- With grants on, three more self-protection rules are loaded
+- `decision.grant.scope` gains `project` and `user`; `hooks::grants` holds
+  the always grants (`AlwaysGrant`, `load_dir`, `write`, `remove`,
+  `covering`).
+- With grants on, five more self-protection rules are loaded
   (`rules/telltale-hooks-grants-protection.yaml`), so a session that resumes
   another from a tool call is stopped. With grants off the rule set is
   unchanged.

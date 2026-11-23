@@ -347,7 +347,7 @@ user's own root ([install.md](../install.md#local-rule-policy-and-allowlist-conf
 | Turn off a category, a rule or a chain | `policies.d`: `disabled_categories`, `disabled_rules` |
 | Say less in the reason the harness shows | `hooks.reason_detail: minimal` |
 | Have the model ask the user, not the harness's approval prompt | `hooks.ask: model` ([how an ask reaches the user](#how-an-ask-reaches-the-user)) |
-| Let the user allow a stopped call from the harness | `hooks.grants.enabled: true` ([allowing a stopped call](#allowing-a-stopped-call)) |
+| Let the user allow a stopped call from the harness, or always for a project or everywhere | `hooks.grants.enabled: true` ([allowing a stopped call](#allowing-a-stopped-call)), then `telltale hooks allow` ([always](#always-for-a-project-or-for-you)) |
 | Configure a fleet | The same folders in `/etc/telltale`; the user's root is read after it |
 
 How tuning behaves:
@@ -532,9 +532,14 @@ What a grant does not cover:
   `on_unevaluable`;
 - a deny, with `hooks.grants.covers: ask`.
 
-Three more rules are loaded while grants are on, and none can be granted.
+Five more rules are loaded while grants are on, and none can be granted.
 `tth.tamper.hook_entry_run` stops a tool call that runs the hook command
 (`telltale hooks <harness> hook`), which only a harness runs.
+`tth.tamper.grant_command_run` stops a tool call that runs
+`telltale hooks allow` ([always](#always-for-a-project-or-for-you)), which
+only the person at a terminal runs. `tth.tamper.grant_channel_failsafe` asks
+when either command is named anywhere in a command, other than a read, a
+commit message or help.
 `tth.tamper.harness_session_resume` stops a tool call that starts Claude
 Code, Codex CLI or Copilot CLI resuming or continuing an existing session.
 Either would put an event before the hook that no person raised.
@@ -553,9 +558,11 @@ What is recorded:
 
 - The decision record of a covered call keeps the verdict the policy reached
   and its detections, has `returned: false`, and names the grant:
-  `decision.grant` with `scope` (`once` or `session`) and `granted_by`, the
-  record ID of the lifecycle record `grant` that made it. That record has
-  the scope, the tool, the rule IDs and the stopped call's record ID.
+  `decision.grant` with `scope` (`once`, `session`, `project` or `user`)
+  and `granted_by`. For `once` and `session` that is the record ID of the
+  lifecycle record `grant` that made it, which has the scope, the tool, the
+  rule IDs and the stopped call's record ID; for `project` and `user` it is
+  the grant ID.
 - A grant line that grants nothing is a lifecycle record `grant_refused`
   with a `cause`: `no_offer` (no stopped call is waiting) or
   `not_user_prompt` (a subagent's prompt, or a harness that takes no line).
@@ -573,6 +580,53 @@ in a configuration root the agent's user cannot write
 
 To try it without anything that looks like an attack, turn on the
 [test signatures](#testing-enforcement) and allow `echo TELLTALE_TEST_DENY`.
+
+### Always, for a project or for you
+
+A grant that outlives the session is made in a terminal, by the person, from
+the record of a stopped call. The record ID is at the end of the stopped
+call's reason (`Record tth:...`); on Claude Code, after `telltale allow
+session`, the notice repeats the command with it.
+
+```bash
+telltale hooks allow <record> --project        # this directory and below
+telltale hooks allow <record> --project <dir>  # another project directory
+telltale hooks allow <record> --user           # every directory
+```
+
+| Scope | What is allowed | Until |
+| --- | --- | --- |
+| `--project` | Calls of that harness and tool whose detections are all among those of the stopped call, made in the project directory or below it | You revoke it |
+| `--user` | The same, in every directory | You revoke it |
+
+- **It asks you to confirm.** The command shows the harness, the tool, the
+  detections, the scope and the record, and makes the grant only when you
+  type `allow`. It refuses to run without a terminal on its input and error
+  output, and no option skips the question.
+- **It checks the record.** Only a call a grant could cover can be allowed:
+  one the hook stopped, decided by the policy's scores, seen in full, with
+  no `tth.tamper.*` rule, and not a deny under `hooks.grants.covers: ask`.
+- **Where it is kept.** One file per grant in `grants.d` of your own
+  configuration root (`~/.config/telltale/grants.d`; the last `--config-dir`
+  when the hook is pinned to roots, so pass the same `--config-dir` to the
+  command). Never in the repository; no other root's `grants.d` is read,
+  so a system root's only when the hook is pinned to it last. A grant file
+  that is a link is not read. The project is compared with the working
+  directory the harness reports for the call, by path components, as written
+  (case-insensitive on Windows); a symlinked path is not resolved. A project
+  grant is about where the call runs, not about which files it touches.
+- **Listing and revoking.** `telltale hooks grants` lists them (`--json` for
+  a list to read with tools) with any file left out and why;
+  `telltale hooks revoke <grant>` removes one. A file that cannot be read or
+  is not a valid grant never grants, and `telltale hooks check` reports it.
+- **Order.** A call is covered by the first of: a once grant, a session
+  grant, a project grant, a user grant. One grant must name all of the
+  call's detections, as for the session.
+- **Recorded.** Making a grant writes a lifecycle record `grant` with the
+  scope, the tool, the rule IDs, the stopped call's record ID, the grant ID
+  and, for a project, the SHA-256 of its path (the path itself is not in the
+  records). Revoking writes `grant_revoked`. Both carry `harness.hook_event:
+  terminal` and an empty session ID.
 
 ## Testing enforcement
 

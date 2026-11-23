@@ -4302,8 +4302,10 @@ fn denials_by_addition_harden_the_rest_of_the_session() {
 
 /// The grant-protection rules, loaded only while grants are on.
 const HOOK_ENTRY_RUN: &str = "tth.tamper.hook_entry_run";
+const GRANT_COMMAND_RUN: &str = "tth.tamper.grant_command_run";
 const HARNESS_SESSION_RESUME: &str = "tth.tamper.harness_session_resume";
 const HARNESS_SESSION_RESUME_FAILSAFE: &str = "tth.tamper.harness_session_resume_failsafe";
+const GRANT_CHANNEL_FAILSAFE: &str = "tth.tamper.grant_channel_failsafe";
 
 fn granting() -> Harness {
     Harness::with(|c| c.grants.enabled = true)
@@ -4354,6 +4356,38 @@ fn hook_entry_runs() -> Vec<(String, String)> {
     }
     cases
 }
+
+/// Commands that run `telltale hooks allow`, which makes an always grant.
+const GRANT_COMMAND_RUNS: &[(&str, &str)] = &[
+    ("allow-project", "telltale hooks allow tth:abc --project"),
+    ("allow-user", "telltale hooks allow tth:abc --user"),
+    (
+        "allow-path",
+        "/usr/local/bin/telltale hooks allow tth:abc --project /work/app",
+    ),
+    (
+        "allow-after-and",
+        "cd /work/app && telltale hooks allow tth:abc --project",
+    ),
+    (
+        "allow-piped-answer",
+        "printf 'allow\\n' | telltale hooks allow tth:abc --user",
+    ),
+];
+
+/// Commands that name `telltale hooks allow` or another grant command
+/// without making a grant.
+const GRANT_COMMAND_TWINS: &[(&str, &str)] = &[
+    ("grants", "telltale hooks grants"),
+    ("grants-json", "telltale hooks grants --json"),
+    ("revoke", "telltale hooks revoke g-0123456789ab"),
+    ("allow-help", "telltale hooks allow --help"),
+    (
+        "commit-quote",
+        "git commit -m \"docs: telltale hooks allow tth:abc --project\"",
+    ),
+    ("grep-quote", "grep -rn \"telltale hooks allow\" docs/"),
+];
 
 const HOOK_ENTRY_TWINS: &[(&str, &str)] = &[
     ("check", "telltale hooks check"),
@@ -4501,8 +4535,10 @@ fn assert_no_grant_rule(h: Harness, cases: &[(&str, &str)]) {
             rules.iter().any(|id| {
                 [
                     HOOK_ENTRY_RUN,
+                    GRANT_COMMAND_RUN,
                     HARNESS_SESSION_RESUME,
                     HARNESS_SESSION_RESUME_FAILSAFE,
+                    GRANT_CHANNEL_FAILSAFE,
                 ]
                 .contains(&id.as_str())
             })
@@ -4518,8 +4554,73 @@ fn running_the_hook_command_is_denied_while_grants_are_on() {
 }
 
 #[test]
+fn running_telltale_hooks_allow_is_denied_while_grants_are_on() {
+    assert_denied_by(GRANT_COMMAND_RUNS, GRANT_COMMAND_RUN);
+}
+
+/// A tool call that writes a grant file is denied by the self-protection
+/// rules that cover the config root, with grants on.
+#[test]
+fn writing_a_grant_file_is_denied_while_grants_are_on() {
+    let failures: Vec<String> = decide_in(
+        granting(),
+        &[(
+            "write-grant-file",
+            "printf 'version: 1\\nscope: user\\n' > ~/.config/telltale/grants.d/g-0123456789ab.yaml",
+        )],
+    )
+    .into_iter()
+    .filter(|(_, verdict, rules)| {
+        verdict.as_deref() != Some("deny") || !rules.iter().any(|id| id.starts_with("tth.tamper."))
+    })
+    .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
+    .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn resuming_a_harness_session_is_denied_while_grants_are_on() {
     assert_denied_by(SESSION_RESUMES, HARNESS_SESSION_RESUME);
+}
+
+/// The hook command or `telltale hooks allow` named inside a command string
+/// another program runs.
+const GRANT_CHANNEL_NAMED: &[(&str, &str)] = &[
+    (
+        "allow-in-a-command-string",
+        "script -qec \"telltale hooks allow tth:abc --user\" /dev/null",
+    ),
+    (
+        "hook-in-a-command-string",
+        "script -qec \"telltale hooks claude-code hook\" /dev/null < event.json",
+    ),
+];
+
+/// The fail-safe matches the hook command or `telltale hooks allow` named
+/// anywhere in a command: such a command is stopped, and every case of the
+/// deny rules is in its reach too.
+#[test]
+fn the_grant_channel_fail_safe_matches_the_commands_named_anywhere() {
+    let failures: Vec<String> = decide_in(granting(), GRANT_CHANNEL_NAMED)
+        .into_iter()
+        .filter(|(_, verdict, rules)| {
+            !matches!(verdict.as_deref(), Some("ask" | "deny"))
+                || !rules.iter().any(|id| id == GRANT_CHANNEL_FAILSAFE)
+        })
+        .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let entries = hook_entry_runs();
+    let missed: Vec<String> = decide_in(
+        granting(),
+        &[as_refs(&entries), GRANT_COMMAND_RUNS.to_vec()].concat(),
+    )
+    .into_iter()
+    .filter(|(_, _, rules)| !rules.iter().any(|id| id == GRANT_CHANNEL_FAILSAFE))
+    .map(|(label, verdict, rules)| format!("{label}: {verdict:?} {rules:?}"))
+    .collect();
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
+    assert_no_grant_rule(Harness::new(), GRANT_CHANNEL_NAMED);
 }
 
 /// The fail-safe asks where the deny rule, which reads the command as
@@ -4541,6 +4642,7 @@ fn a_resume_only_the_quote_free_reading_shows_asks() {
 #[test]
 fn look_alikes_of_the_grant_protection_rules_are_not_matched() {
     assert_no_grant_rule(granting(), HOOK_ENTRY_TWINS);
+    assert_no_grant_rule(granting(), GRANT_COMMAND_TWINS);
     assert_no_grant_rule(granting(), SESSION_RESUME_TWINS);
 }
 
@@ -4550,6 +4652,7 @@ fn look_alikes_of_the_grant_protection_rules_are_not_matched() {
 fn with_grants_off_the_grant_protection_rules_match_nothing() {
     let entries = hook_entry_runs();
     assert_no_grant_rule(Harness::new(), &as_refs(&entries));
+    assert_no_grant_rule(Harness::new(), GRANT_COMMAND_RUNS);
     assert_no_grant_rule(Harness::new(), SESSION_RESUMES);
     assert_no_grant_rule(Harness::new(), SESSION_RESUME_ASKS);
 }

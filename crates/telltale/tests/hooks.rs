@@ -4,6 +4,8 @@
 //! `tests/cli/hooks_*.rs`.
 #![cfg(feature = "hooks")]
 
+#[path = "hooks/always_grants.rs"]
+mod always_grants;
 #[path = "hooks/ask_route.rs"]
 mod ask_route;
 #[path = "hooks/claude_code_contract.rs"]

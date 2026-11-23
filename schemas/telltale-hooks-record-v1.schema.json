@@ -115,10 +115,10 @@
           "additionalProperties": false,
           "required": ["scope", "granted_by"],
           "properties": {
-            "scope": { "enum": ["once", "session"] },
+            "scope": { "enum": ["once", "session", "project", "user"] },
             "granted_by": { "type": "string" }
           },
-          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's, `granted_by` the record ID of the `grant` lifecycle record that made it. Added 2026-11."
+          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's: `once` and `session` grants are given in the session, `project` and `user` grants are files in `grants.d` of the user's configuration root. `granted_by` is the record ID of the `grant` lifecycle record that made a `once` or `session` grant, and the grant ID of a `project` or `user` grant. Added 2026-11."
         }
       }
     },
@@ -143,7 +143,7 @@
     },
     "lifecycle": {
       "type": "object",
-      "description": "Event-specific, content-free lifecycle details, named by `event`. A `grant` record (the user's grant line allowed a stopped call) has `scope` (`once` or `session`), `tool` (the stopped call's tool name), `rule_ids` (its detections, sorted) and `offer_record_id` (its decision record); a decision record a grant covers names this record in `decision.grant.granted_by`. A `grant_refused` record has `cause`: `not_user_prompt` (the prompt event may not be the user's own: a subagent's, or on a harness that cannot take a grant line) or `no_offer` (no stopped call can be allowed). Neither carries the prompt, a pattern, matched text or a path. Added 2026-11.",
+      "description": "Event-specific, content-free lifecycle details, named by `event`. A `grant` record (the user's grant line allowed a stopped call) has `scope` (`once` or `session`), `tool` (the stopped call's tool name), `rule_ids` (its detections, sorted) and `offer_record_id` (its decision record); a decision record a grant covers names this record in `decision.grant.granted_by`. A `grant` record written by `telltale hooks allow` (a project or user grant in `grants.d`) has `scope` (`project` or `user`), `tool`, `rule_ids`, `offer_record_id` (the decision record it was made from), `grant_id` (the file's grant ID, which a covered call's `decision.grant.granted_by` names) and, for `project`, `project_sha256` (SHA-256 of the project directory as written in the grant; never the path); `telltale hooks revoke` writes a `grant_revoked` record with `grant_id`. Both have `hook_event` `terminal`, an empty `session_id` and the grant's harness (empty when a revoked file names none). A `grant_refused` record has `cause`: `not_user_prompt` (the prompt event may not be the user's own: a subagent's, or on a harness that cannot take a grant line) or `no_offer` (no stopped call can be allowed). Neither carries the prompt, a pattern, matched text or a path. Added 2026-11.",
       "properties": {
         "pinned_over": {
           "type": "array",

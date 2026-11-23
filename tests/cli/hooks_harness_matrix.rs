@@ -956,14 +956,16 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
                rules under tth.tamper. are never covered";
     let clause = |what: &str| {
         format!(
-            "; a tool call that runs the hook command or resumes a harness session is {what} \
-             (tth.tamper.hook_entry_run, tth.tamper.harness_session_resume)"
+            "; a tool call that runs the hook command, runs `telltale hooks allow` or resumes \
+             a harness session is {what} (tth.tamper.hook_entry_run, \
+             tth.tamper.grant_command_run, tth.tamper.harness_session_resume)"
         )
     };
     assert_eq!(
         line("enforce", GRANTS_ON),
         format!(
-            "{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}{}",
+            "{on} a stopped ask or deny (hooks.grants.covers: ask_and_deny) {how}{}; \
+             0 always grants (grants.d)",
             clause("stopped")
         )
     );
@@ -971,7 +973,8 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
         line("observe", &format!("{GRANTS_ON}    covers: ask\n")),
         format!(
             "{on} a stopped ask (hooks.grants.covers: ask) {how}{}; \
-             nothing is stopped in observe mode, so nothing is offered",
+             nothing is stopped in observe mode, so nothing is offered; \
+             0 always grants (grants.d)",
             clause("detected")
         )
     );
@@ -987,6 +990,80 @@ fn check_says_whether_a_stopped_call_can_be_allowed() {
             .starts_with("grants: "),
         "{stdout}"
     );
+}
+
+/// A project grant in `grants.d` of the config root the hook is pinned to
+/// covers the test deny on Claude Code in the project directory and below:
+/// no answer, and the record names the grant. From another directory the
+/// call is denied. `check` counts the grant and lists a file it left out.
+#[test]
+fn a_project_grant_in_the_config_root_covers_a_call_in_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    let grants = config.join("grants.d");
+    std::fs::create_dir_all(&grants).unwrap();
+    let id = "g-0123456789ab";
+    std::fs::write(
+        grants.join(format!("{id}.yaml")),
+        format!(
+            "version: 1\nscope: project\nproject: {}\nharness: claude-code\n\
+             tool: Bash\nrule_ids: [tth.test.deny]\ncreated_at: 2026-11-22T00:00:00Z\n\
+             from_record: tth:synthetic\n",
+            abs("/synthetic/project")
+        ),
+    )
+    .unwrap();
+    let entry = ENTRIES
+        .iter()
+        .find(|entry| entry.harness == "claude-code")
+        .unwrap();
+    let in_dir = |cwd: &str| {
+        let mut payload = (entry.payload)(TEST_DENY);
+        payload["cwd"] = abs(cwd).into();
+        let state = tempfile::tempdir().unwrap();
+        let run = send(entry, &payload, state.path(), &[&config]);
+        assert_eq!(run.code, Some(0), "{cwd}: {}", run.stderr);
+        run
+    };
+    let run = in_dir("/synthetic/project/src");
+    assert_eq!(run.answer(entry.harness), None, "{}", run.stdout);
+    assert_eq!(run.stdout, "");
+    let decision = &run.decision["decision"];
+    assert_eq!(decision["verdict"], "deny");
+    assert_eq!(decision["returned"], false);
+    assert_eq!(
+        decision["grant"],
+        json!({"scope": "project", "granted_by": id})
+    );
+    let run = in_dir("/synthetic/projects");
+    assert_eq!(
+        run.answer(entry.harness).map(|(verdict, _)| verdict),
+        Some("deny".to_owned())
+    );
+    assert!(run.decision["decision"].get("grant").is_none());
+
+    std::fs::write(grants.join("notes.txt"), "not a grant").unwrap();
+    let (code, stdout, stderr) = check(&config);
+    assert_eq!(code, Some(0), "{stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with("grants: on"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(line.ends_with("; 1 always grants (grants.d)"), "{line}");
+    let left_out = format!(
+        "grant left out: {}: the file name is not a grant ID followed by .yaml",
+        grants.join("notes.txt").display()
+    );
+    assert!(stdout.lines().any(|line| line == left_out), "{stdout}");
+}
+
+/// `unix` as an absolute path on this platform: on Windows, on drive `C:`.
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
 }
 
 /// The user's prompt `text` on `entry` (a subagent's with `subagent`), in
@@ -1250,4 +1327,291 @@ fn running_the_hook_command_is_denied_on_every_harness_while_grants_are_on() {
         let run = once(entry, HOOK_ENTRY_RUN, &off);
         assert!(!grant_rule(&run), "{harness}: {}", run.decision);
     }
+}
+
+/// `telltale hooks <args>` over the config root `config`, with its state in
+/// `state` and `stdin` piped in: exit status, stdout, stderr.
+fn grant_command(
+    args: &[&str],
+    config: &Path,
+    state: &Path,
+    stdin: &str,
+) -> (Option<i32>, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .arg("hooks")
+        .args(args)
+        .arg("--config-dir")
+        .arg(config);
+    for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
+        command.env(var, "/nonexistent-home-for-test");
+    }
+    let mut child = command
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("TELLTALE_HOOKS_EVALUATOR", "0")
+        .env("TELLTALE_HOOKS_STATE_DIR", state)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(stdin.as_bytes());
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The lifecycle records of `event` in the records file of `state`, each
+/// checked against the record schema.
+fn lifecycle_records(state: &Path, event: &str) -> Vec<Value> {
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../schemas/telltale-hooks-record-v1.schema.json"
+    ))
+    .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    std::fs::read_to_string(state.join("telemetry.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["kind"] == "lifecycle" && record["lifecycle"]["event"] == event)
+        .inspect(|record| {
+            let errors: Vec<String> = validator
+                .iter_errors(record)
+                .map(|e| e.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{errors:#?}\n{record:#}");
+        })
+        .collect()
+}
+
+/// The test deny stopped on Claude Code in `cwd` (spelled by [`abs`]), in
+/// the session in `state`: its decision record ID.
+fn stopped_record(config: &Path, state: &Path, cwd: &str) -> String {
+    let entry = ENTRIES
+        .iter()
+        .find(|entry| entry.harness == "claude-code")
+        .unwrap();
+    let mut payload = (entry.payload)(TEST_DENY);
+    payload["cwd"] = abs(cwd).into();
+    let run = send(entry, &payload, state, &[config]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(run.answer(entry.harness).is_some(), "{}", run.stdout);
+    run.decision["record_id"].as_str().unwrap().to_owned()
+}
+
+/// `allow` with piped stdin asks nothing and writes nothing; with grants
+/// off, or for a record that is not in the records file, it is refused.
+#[test]
+fn allow_is_refused_without_a_terminal_with_grants_off_or_for_an_unknown_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    let state = tempfile::tempdir().unwrap();
+    let id = stopped_record(&config, state.path(), "/synthetic/project");
+    let project = abs("/synthetic/project");
+    let (code, stdout, stderr) = grant_command(
+        &["allow", &id, "--project", &project],
+        &config,
+        state.path(),
+        "allow\n",
+    );
+    assert_eq!(code, Some(1), "{stdout}");
+    assert_eq!(
+        stderr,
+        "telltale hooks allow: run this in a terminal yourself; it asks you to confirm\n"
+    );
+    assert_eq!(stdout, "");
+    assert!(!config.join("grants.d").exists());
+
+    let (code, _, stderr) = grant_command(
+        &["allow", "tth:unknown", "--user"],
+        &config,
+        state.path(),
+        "allow\n",
+    );
+    assert_eq!(code, Some(1));
+    assert!(
+        stderr.starts_with("telltale hooks allow: no record tth:unknown in "),
+        "{stderr}"
+    );
+
+    let off_dir = tempfile::tempdir().unwrap();
+    let off = root(off_dir.path(), "enforce", true, "");
+    let (code, _, stderr) = grant_command(&["allow", &id, "--user"], &off, state.path(), "allow\n");
+    assert_eq!(code, Some(1));
+    assert_eq!(
+        stderr,
+        "telltale hooks allow: grants are off (hooks.grants.enabled: false)\n"
+    );
+    assert!(!config.join("grants.d").exists());
+    assert!(!off.join("grants.d").exists());
+    assert!(lifecycle_records(state.path(), "grant").is_empty());
+}
+
+/// `grants` lists a grant and a file left out, in plain text and JSON, with
+/// grants on or off; `revoke` removes the grant, records it, and a second
+/// revoke of the same ID fails.
+#[test]
+fn grants_lists_and_revoke_removes_a_grant() {
+    use telltale_core::hooks::grants::{AlwaysGrant, AlwaysScope, write};
+    let grant = AlwaysGrant {
+        id: String::new(),
+        version: 1,
+        scope: AlwaysScope::User,
+        project: None,
+        harness: "claude-code".into(),
+        tool: "Bash".into(),
+        rule_ids: vec!["tth.test.deny".into()],
+        created_at: "2026-11-22T00:00:00Z".into(),
+        from_record: "tth:synthetic".into(),
+    };
+    for (more, state_line) in [
+        (GRANTS_ON, "grants: on (hooks.grants.enabled: true)"),
+        (
+            "",
+            "grants: off (hooks.grants.enabled: false): the grants below cover nothing",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = root(dir.path(), "enforce", true, more);
+        let state = tempfile::tempdir().unwrap();
+        let grants = config.join("grants.d");
+        let id = write(&grants, &grant).unwrap();
+        std::fs::write(grants.join("notes.txt"), "not a grant").unwrap();
+
+        let (code, stdout, stderr) = grant_command(&["grants"], &config, state.path(), "");
+        assert_eq!(code, Some(0), "{stderr}");
+        let expected = format!(
+            "{state_line} (1 always grants in {grants})\n\
+             grant {id}\n  scope: user\n  harness: claude-code\n  tool: Bash\n  \
+             detections: tth.test.deny\n  created_at: 2026-11-22T00:00:00Z\n  \
+             from_record: tth:synthetic\n\
+             grant left out: {left}: the file name is not a grant ID followed by .yaml\n",
+            grants = grants.display(),
+            left = grants.join("notes.txt").display(),
+        );
+        assert_eq!(stdout, expected);
+
+        let (code, stdout, stderr) =
+            grant_command(&["grants", "--json"], &config, state.path(), "");
+        assert_eq!(code, Some(0), "{stderr}");
+        let document: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(document["grants_enabled"], more == GRANTS_ON);
+        assert_eq!(document["root"], config.to_string_lossy().as_ref());
+        assert_eq!(
+            document["grants"],
+            json!([{
+                "id": id, "scope": "user", "project": null, "harness": "claude-code",
+                "tool": "Bash", "rule_ids": ["tth.test.deny"],
+                "created_at": "2026-11-22T00:00:00Z", "from_record": "tth:synthetic",
+            }])
+        );
+        assert_eq!(
+            document["left_out"],
+            json!([{
+                "path": grants.join("notes.txt"),
+                "cause": "the file name is not a grant ID followed by .yaml",
+            }])
+        );
+
+        let (code, stdout, stderr) = grant_command(&["revoke", &id], &config, state.path(), "");
+        assert_eq!(code, Some(0), "{stderr}");
+        assert_eq!(stdout, format!("revoked: {id}\n"));
+        assert!(!grants.join(format!("{id}.yaml")).exists());
+        let revoked = lifecycle_records(state.path(), "grant_revoked");
+        assert_eq!(revoked.len(), 1);
+        assert_eq!(revoked[0]["lifecycle"]["grant_id"], id.as_str());
+        assert_eq!(revoked[0]["harness"]["name"], "claude-code");
+        assert_eq!(revoked[0]["harness"]["hook_event"], "terminal");
+        assert_eq!(revoked[0]["session"]["session_id"], "");
+
+        let (code, _, stderr) = grant_command(&["revoke", &id], &config, state.path(), "");
+        assert_eq!(code, Some(1));
+        assert!(
+            stderr.starts_with(&format!("telltale hooks revoke: no grant {id} in ")),
+            "{stderr}"
+        );
+        let (code, _, stderr) = grant_command(&["revoke", "../x"], &config, state.path(), "");
+        assert_eq!(code, Some(1));
+        assert_eq!(stderr, "telltale hooks revoke: ../x is not a grant ID\n");
+        assert_eq!(lifecycle_records(state.path(), "grant_revoked").len(), 1);
+    }
+}
+
+/// End to end in a pseudo-terminal (util-linux `script`): the test deny
+/// stopped in a project is allowed for the project by typing `allow`, the
+/// `grant` record says so without the path, and the same call in the
+/// project is then covered by the new grant while one outside is denied.
+#[cfg(target_os = "linux")]
+#[test]
+fn allow_in_a_terminal_makes_a_project_grant_that_covers_the_call() {
+    if Command::new("script").arg("--version").output().is_err() {
+        eprintln!("skipped: no `script` to run a pseudo-terminal");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = root(dir.path(), "enforce", true, GRANTS_ON);
+    let state = tempfile::tempdir().unwrap();
+    let id = stopped_record(&config, state.path(), "/synthetic/project/src");
+    let quoted = |path: &Path| format!("'{}'", path.display());
+    let line = format!(
+        "{} hooks allow {id} --project /synthetic/project --config-dir {}",
+        quoted(Path::new(env!("CARGO_BIN_EXE_telltale"))),
+        quoted(&config),
+    );
+    let mut child = Command::new("script")
+        .args(["-qec", &line, "/dev/null"])
+        .env("HOME", "/nonexistent-home-for-test")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("TELLTALE_HOOKS_EVALUATOR", "0")
+        .env("TELLTALE_HOOKS_STATE_DIR", state.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(b"allow\n");
+    let out = child.wait_with_output().unwrap();
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{shown}");
+    assert!(
+        shown.contains("scope: project /synthetic/project and below"),
+        "{shown}"
+    );
+    assert!(shown.contains("Type allow to confirm: "), "{shown}");
+    let grant_id = shown
+        .split("allowed: ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("{shown}"))
+        .to_owned();
+
+    let made = lifecycle_records(state.path(), "grant");
+    assert_eq!(made.len(), 1);
+    let lifecycle = &made[0]["lifecycle"];
+    assert_eq!(lifecycle["scope"], "project");
+    assert_eq!(lifecycle["grant_id"], grant_id.as_str());
+    assert_eq!(lifecycle["offer_record_id"], id.as_str());
+    assert_eq!(lifecycle["rule_ids"], json!(["tth.test.deny"]));
+    assert_eq!(lifecycle["tool"], "Bash");
+    assert_eq!(lifecycle["project_sha256"].as_str().unwrap().len(), 64);
+    assert!(!made[0].to_string().contains("/synthetic/project"));
+
+    let entry = ENTRIES
+        .iter()
+        .find(|entry| entry.harness == "claude-code")
+        .unwrap();
+    let mut payload = (entry.payload)(TEST_DENY);
+    payload["cwd"] = "/synthetic/project/src".into();
+    let run = send(entry, &payload, state.path(), &[&config]);
+    assert_eq!(run.answer(entry.harness), None, "{}", run.stdout);
+    assert_eq!(
+        run.decision["decision"]["grant"],
+        json!({"scope": "project", "granted_by": grant_id})
+    );
+    assert!(stopped_record(&config, state.path(), "/synthetic/elsewhere").starts_with("tth:"));
 }

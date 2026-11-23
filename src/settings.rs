@@ -1030,6 +1030,7 @@ mod hooks_section {
                 grants: Grants {
                     enabled: self.grants_enabled.value,
                     covers: self.grants_covers.value,
+                    ..Grants::default()
                 },
                 state_dir: self.state_dir.value.clone(),
                 telemetry_path: self.telemetry_path.value.clone(),
