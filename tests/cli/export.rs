@@ -1211,15 +1211,23 @@ fn export_of_a_fixture_scan_stays_schema_valid_and_keeps_rule_identifiers() {
         assert!(validator.is_valid(event), "invalid native fixture event");
     }
     for format in ["jsonl", "elastic-bulk"] {
+        // Export spools through the temporary directory. With no TEMP/TMP,
+        // Windows falls back to its own directory, which is not writable.
         let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .env_clear()
+            .env("TEMP", temp.path())
+            .env("TMP", temp.path())
             .arg("export")
             .arg("--log-path")
             .arg(&log_path)
             .args(["--format", format])
             .output()
             .expect("export");
-        assert!(output.status.success(), "{format} export failed");
+        assert!(
+            output.status.success(),
+            "{format} export failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let exported = String::from_utf8_lossy(&output.stdout)
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).expect("exported line"))
