@@ -217,6 +217,12 @@ impl RiskContribution {
         self
     }
 
+    pub(crate) fn for_historical_emission(mut self) -> Self {
+        self.id = crate::event::terminal_historical_rule_identifier(&self.id);
+        self.rationale = Self::emitted_rationale(&self.rationale);
+        self
+    }
+
     pub(crate) fn emitted_rationale(rationale: &str) -> String {
         let sanitized = crate::event::PrivacySanitizer::sanitize(
             crate::event::SanitizationContext::Summary,
@@ -251,12 +257,18 @@ impl RiskContribution {
     }
 
     pub fn validate(&self) -> Result<(), RiskAccountingError> {
+        self.validate_with_rule_id(crate::event::is_native_rule_identifier)
+    }
+
+    pub(crate) fn validate_terminal(&self) -> Result<(), RiskAccountingError> {
+        self.validate_with_rule_id(crate::event::is_terminal_rule_identifier)
+    }
+
+    fn validate_with_rule_id(&self, valid_id: fn(&str) -> bool) -> Result<(), RiskAccountingError> {
         if self.id.trim().is_empty() {
             return Err(RiskAccountingError::EmptyContributionId);
         }
-        if !is_canonical_contribution_id(&self.id)
-            || crate::event::contains_credential_material(&self.id)
-        {
+        if !valid_id(&self.id) {
             return Err(RiskAccountingError::InvalidContributionId(self.id.clone()));
         }
         if self.points == 0 {
@@ -347,14 +359,27 @@ impl TryFrom<RiskContributionWire> for RiskContribution {
             points: wire.points,
             rationale: wire.rationale,
         };
-        contribution.validate()?;
+        contribution.validate_terminal()?;
         Ok(contribution)
     }
 }
 
 pub fn checked_risk_sum(contributions: &[RiskContribution]) -> Result<u64, RiskAccountingError> {
+    checked_risk_sum_with(contributions, RiskContribution::validate)
+}
+
+pub(crate) fn checked_terminal_risk_sum(
+    contributions: &[RiskContribution],
+) -> Result<u64, RiskAccountingError> {
+    checked_risk_sum_with(contributions, RiskContribution::validate_terminal)
+}
+
+fn checked_risk_sum_with(
+    contributions: &[RiskContribution],
+    validate: fn(&RiskContribution) -> Result<(), RiskAccountingError>,
+) -> Result<u64, RiskAccountingError> {
     contributions.iter().try_fold(0_u64, |total, contribution| {
-        contribution.validate()?;
+        validate(contribution)?;
         total
             .checked_add(contribution.points())
             .ok_or(RiskAccountingError::Overflow)
@@ -364,9 +389,22 @@ pub fn checked_risk_sum(contributions: &[RiskContribution]) -> Result<u64, RiskA
 pub fn canonicalize_contributions(
     contributions: Vec<RiskContribution>,
 ) -> Result<Vec<RiskContribution>, RiskAccountingError> {
+    canonicalize_contributions_with(contributions, RiskContribution::validate)
+}
+
+pub(crate) fn canonicalize_terminal_contributions(
+    contributions: Vec<RiskContribution>,
+) -> Result<Vec<RiskContribution>, RiskAccountingError> {
+    canonicalize_contributions_with(contributions, RiskContribution::validate_terminal)
+}
+
+fn canonicalize_contributions_with(
+    contributions: Vec<RiskContribution>,
+    validate: fn(&RiskContribution) -> Result<(), RiskAccountingError>,
+) -> Result<Vec<RiskContribution>, RiskAccountingError> {
     let mut canonical = BTreeMap::new();
     for contribution in contributions {
-        contribution.validate()?;
+        validate(&contribution)?;
         let key = (
             contribution.contribution_type(),
             contribution.id().to_string(),
@@ -382,7 +420,7 @@ pub fn canonicalize_contributions(
         }
     }
     let canonical = canonical.into_values().collect::<Vec<_>>();
-    checked_risk_sum(&canonical)?;
+    checked_risk_sum_with(&canonical, validate)?;
     Ok(canonical)
 }
 

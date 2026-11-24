@@ -189,17 +189,34 @@ pub fn terminal_historical_identifier(kind: &str, value: &str) -> String {
     }
 }
 
-/// Preserve canonical rule identifiers and replace every other value with a
-/// deterministic schema-compatible identifier. A replacement is itself kept,
-/// so a value that has been through here once does not change again.
-pub fn terminal_rule_identifier(value: &str) -> String {
-    let replaced = value
+pub(crate) fn is_native_rule_identifier(value: &str) -> bool {
+    is_canonical_contribution_id(value) && !contains_credential_material(value)
+}
+
+pub(crate) fn is_terminal_rule_identifier(value: &str) -> bool {
+    value
         .strip_prefix("redacted.")
-        .is_some_and(super::is_canonical_sha256_hex);
-    if replaced || is_canonical_contribution_id(value) && !contains_credential_material(value) {
+        .is_some_and(super::is_canonical_sha256_hex)
+        || is_native_rule_identifier(value)
+}
+
+/// Preserve safe native rule identifiers and hash every other value, including
+/// source text shaped like a historical replacement.
+pub fn terminal_rule_identifier(value: &str) -> String {
+    if is_native_rule_identifier(value) {
         value.to_string()
     } else {
         format!("redacted.{}", evidence_hash(value))
+    }
+}
+
+/// Recognize terminal rule-ID syntax only at historical Event 3 readback.
+/// A matching replacement is not authenticated provenance.
+pub fn terminal_historical_rule_identifier(value: &str) -> String {
+    if is_terminal_rule_identifier(value) {
+        value.to_string()
+    } else {
+        terminal_rule_identifier(value)
     }
 }
 

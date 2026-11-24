@@ -16,10 +16,12 @@ use uuid::Uuid;
 
 use super::{
     NATIVE_SCHEMA_VERSION, VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SIGNAL_TYPES,
-    is_canonical_opaque_identifier_for_kind, parse_event_timestamp, validate_risk_accounting_scope,
-    validate_rule_ids,
+    is_canonical_opaque_identifier_for_kind, parse_event_timestamp, validate_historical_rule_ids,
+    validate_risk_accounting_scope,
 };
-use crate::scoring::{RiskContribution, canonicalize_contributions, checked_risk_sum};
+use crate::scoring::{
+    RiskContribution, canonicalize_terminal_contributions, checked_terminal_risk_sum,
+};
 
 #[cfg(test)]
 #[path = "inventory_tests.rs"]
@@ -942,10 +944,14 @@ fn validate_wire(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
         ));
     }
     validate_non_empty_strings(&wire.tags)?;
-    validate_rule_ids(&wire.rule_ids).map_err(|_| semantic("invalid_rule_id"))?;
+    validate_historical_rule_ids(&wire.rule_ids).map_err(|_| semantic("invalid_rule_id"))?;
     validate_dimensions(wire)?;
     validate_evidence(wire)?;
     validate_anchors(wire)?;
+    if let Some(process) = &wire.process {
+        validate_historical_rule_ids(&process.secondary_rule_ids)
+            .map_err(|_| semantic("invalid_process_rule_id"))?;
+    }
     validate_risk(wire)?;
 
     match wire.event_type.as_str() {
@@ -1046,7 +1052,7 @@ fn validate_evidence(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
     }
     for item in &wire.evidence {
         if let Some(rule_id) = item.rule_id.as_ref() {
-            validate_rule_ids(std::slice::from_ref(rule_id))
+            validate_historical_rule_ids(std::slice::from_ref(rule_id))
                 .map_err(|_| semantic("invalid_evidence_rule_id"))?;
         }
     }
@@ -1060,7 +1066,7 @@ fn validate_anchors(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
             || anchor.rule_ids.is_empty()
             || anchor.categories.is_empty()
             || anchor.evidence_fields.is_empty()
-            || anchor.rule_ids.iter().any(|rule_id| !is_rule_id(rule_id))
+            || validate_historical_rule_ids(&anchor.rule_ids).is_err()
             || anchor
                 .categories
                 .iter()
@@ -1074,12 +1080,12 @@ fn validate_anchors(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
 }
 
 fn validate_risk(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
-    let canonical = canonicalize_contributions(wire.risk_contributions.clone())
+    let canonical = canonicalize_terminal_contributions(wire.risk_contributions.clone())
         .map_err(|_| semantic("invalid_risk_contributions"))?;
     if canonical != wire.risk_contributions {
         return Err(semantic("noncanonical_risk_contributions"));
     }
-    checked_risk_sum(&wire.risk_contributions)
+    checked_terminal_risk_sum(&wire.risk_contributions)
         .map_err(|_| semantic("invalid_risk_contributions"))?;
     let accounting_event_type = if wire.event_type == "process_chain" {
         "detection"
@@ -1128,7 +1134,7 @@ fn validate_activity(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
     {
         return Err(family("invalid_standard_activity"));
     }
-    if wire.risk_score != checked_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX) {
+    if wire.risk_score != checked_terminal_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX) {
         return Err(semantic("risk_score_mismatch"));
     }
     Ok(())
@@ -1169,7 +1175,9 @@ fn validate_detection(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
         if wire.response.is_none() {
             return Err(semantic("missing_response_guidance"));
         }
-        if wire.risk_score != checked_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX) {
+        if wire.risk_score
+            != checked_terminal_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX)
+        {
             return Err(semantic("risk_score_mismatch"));
         }
     }
@@ -1184,7 +1192,8 @@ fn validate_summary(wire: &Event3Wire) -> Result<(), Event3ConsumerError> {
         || !no_process_fields(wire)
         || wire.response.is_some()
         || wire.source_counts.is_some()
-        || wire.risk_score != checked_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX)
+        || wire.risk_score
+            != checked_terminal_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX)
     {
         return Err(family("invalid_session_summary"));
     }
@@ -1280,7 +1289,8 @@ fn validate_process_chain(wire: &Event3Wire) -> Result<(), Event3ConsumerError> 
         || wire.process.is_none()
         || wire.response.is_none()
         || wire.source_counts.is_some()
-        || wire.risk_score != checked_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX)
+        || wire.risk_score
+            != checked_terminal_risk_sum(&wire.risk_contributions).unwrap_or(u64::MAX)
         || wire.informational != Some(wire.risk_score == 0)
         || wire
             .confidence
@@ -1348,20 +1358,6 @@ fn is_event_id(value: &str) -> bool {
                 && matches!(uuid_text.as_bytes()[19], b'8' | b'9' | b'a' | b'b')
                 && uuid.to_string().as_str() == uuid_text
         })
-}
-
-fn is_rule_id(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 96
-        && bytes[0].is_ascii_lowercase()
-        && value.split('.').skip(1).all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-        })
-        && value.contains('.')
 }
 
 fn is_valid_event_time(value: &str) -> bool {
@@ -1911,6 +1907,179 @@ mod tests {
         assert_eq!(record.event_type(), "health");
         assert!(matches!(record.family(), Event3Family::Health(_)));
         assert_eq!(record.common().session_id, "scanner");
+    }
+
+    #[test]
+    fn historical_rule_replacements_round_trip_with_accounting_and_references() {
+        let (_, event) = positive_constructor_corpus()
+            .into_iter()
+            .find(|(family, _)| *family == "detection")
+            .expect("detection fixture");
+        let replacement =
+            "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut wire = serde_json::to_value(&event).expect("event");
+        wire["rule_ids"][0] = replacement.into();
+        wire["risk_contributions"][0]["id"] = replacement.into();
+        wire["evidence"][0]["rule_id"] = replacement.into();
+        wire["timeline_anchors"][0]["rule_ids"][0] = replacement.into();
+
+        crate::event::sanitize_serialized_event(&mut wire);
+        assert!(wire["rule_ids"][0] == replacement, "historical.rule_ids");
+        assert!(
+            wire["risk_contributions"][0]["id"] == replacement,
+            "historical.contribution.id"
+        );
+        assert!(
+            wire["evidence"][0]["rule_id"] == replacement,
+            "historical.evidence.rule_id"
+        );
+        assert!(
+            wire["timeline_anchors"][0]["rule_ids"][0] == replacement,
+            "historical.anchor.rule_ids"
+        );
+        let once = wire.clone();
+        crate::event::sanitize_serialized_event(&mut wire);
+        assert!(
+            wire == once,
+            "historical rule references are not idempotent"
+        );
+
+        let record = Event3Record::from_json(&serde_json::to_vec(&wire).expect("wire"))
+            .expect("terminal replacements remain consumable");
+        assert_eq!(record.common().risk_score, 5);
+        assert!(
+            record.common().risk_contributions[0].id() == replacement,
+            "consumer.contribution.id"
+        );
+        assert_eq!(record.common().risk_contributions[0].points(), 2);
+    }
+
+    #[test]
+    fn historical_derived_rule_replacements_keep_every_process_reference() {
+        let (_, mut event) = positive_constructor_corpus()
+            .into_iter()
+            .find(|(family, _)| *family == "process_chain")
+            .expect("process fixture");
+        let replacement =
+            "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        event.rule_ids = vec![replacement.to_string()];
+        event.evidence[0].rule_id = Some(replacement.to_string());
+        let contribution: Result<RiskContribution, _> = serde_json::from_value(serde_json::json!({
+            "id": replacement,
+            "type": "deterministic_rule",
+            "points": 2,
+            "rationale": "synthetic process"
+        }));
+        assert!(contribution.is_ok(), "historical contribution was rejected");
+        assert!(
+            contribution
+                .as_ref()
+                .expect("checked contribution")
+                .validate()
+                .is_err(),
+            "native validation must not admit a terminal replacement"
+        );
+        event.risk_contributions = vec![contribution.expect("checked contribution")];
+        event.process.as_mut().expect("process").secondary_rule_ids = vec![replacement.to_string()];
+
+        let wire = serde_json::to_value(event.historical_derived()).expect("historical event");
+        assert!(wire["rule_ids"][0] == replacement, "derived.rule_ids");
+        assert!(
+            wire["risk_contributions"][0]["id"] == replacement,
+            "derived.contribution.id"
+        );
+        assert!(
+            wire["evidence"][0]["rule_id"] == replacement,
+            "derived.evidence.rule_id"
+        );
+        assert!(
+            wire["process"]["secondary_rule_ids"][0] == replacement,
+            "derived.process.secondary_rule_ids"
+        );
+        let record = Event3Record::from_json(&serde_json::to_vec(&wire).expect("wire"))
+            .expect("historical process remains consumable");
+        assert_eq!(record.common().risk_score, 2);
+    }
+
+    #[test]
+    fn native_emission_does_not_trust_marker_shaped_rule_identifiers() {
+        let (_, mut event) = positive_constructor_corpus()
+            .into_iter()
+            .find(|(family, _)| *family == "process_chain")
+            .expect("process fixture");
+        let replacement =
+            "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        event.rule_ids = vec![replacement.to_string()];
+        event.evidence[0].rule_id = Some(replacement.to_string());
+        event.timeline_anchors = vec![crate::event::TimelineAnchor {
+            entry_index: 0,
+            rule_ids: vec![replacement.to_string()],
+            categories: vec!["execution".to_string()],
+            evidence_fields: vec!["command".to_string()],
+        }];
+        event.process.as_mut().expect("process").secondary_rule_ids = vec![replacement.to_string()];
+
+        let wire = serde_json::to_value(&event).expect("native event");
+        assert!(wire["rule_ids"][0] != replacement, "native.rule_ids");
+        assert!(
+            wire["evidence"][0]["rule_id"] == wire["rule_ids"][0],
+            "native.evidence.rule_id"
+        );
+        assert!(
+            wire["timeline_anchors"][0]["rule_ids"][0] == wire["rule_ids"][0],
+            "native.anchor.rule_ids"
+        );
+        assert!(
+            wire["process"]["secondary_rule_ids"][0] == wire["rule_ids"][0],
+            "native.process.secondary_rule_ids"
+        );
+        assert!(
+            !wire.to_string().contains(replacement),
+            "native marker escaped"
+        );
+        assert!(
+            crate::event::validate_rule_ids(&[replacement.to_string()]).is_err(),
+            "native rule admission must remain strict"
+        );
+        assert!(
+            RiskContribution::new(
+                replacement,
+                RiskContributionType::DeterministicRule,
+                2,
+                "synthetic process",
+            )
+            .is_err(),
+            "native contribution admission must remain strict"
+        );
+    }
+
+    #[test]
+    fn terminal_consumer_rejects_credential_shaped_anchor_rule_identifiers() {
+        let (_, event) = positive_constructor_corpus()
+            .into_iter()
+            .find(|(family, _)| *family == "detection")
+            .expect("detection fixture");
+        let mut wire = serde_json::to_value(&event).expect("event");
+        wire["timeline_anchors"][0]["rule_ids"][0] = "rule.ghp_abcdefghijklmnopqrstuvwx".into();
+        let result = Event3Record::from_json(&serde_json::to_vec(&wire).expect("wire"))
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(result, Err("invalid_timeline_anchor"));
+    }
+
+    #[test]
+    fn terminal_consumer_rejects_credential_shaped_secondary_rule_identifiers() {
+        let (_, event) = positive_constructor_corpus()
+            .into_iter()
+            .find(|(family, _)| *family == "process_chain")
+            .expect("process fixture");
+        let mut wire = serde_json::to_value(&event).expect("event");
+        wire["process"]["secondary_rule_ids"] =
+            serde_json::json!(["rule.ghp_abcdefghijklmnopqrstuvwx"]);
+        let result = Event3Record::from_json(&serde_json::to_vec(&wire).expect("wire"))
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(result, Err("invalid_process_rule_id"));
     }
 
     fn positive_constructor_corpus() -> Vec<(&'static str, crate::event::Event)> {
