@@ -48,12 +48,50 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:\b[a-z][a-z0-9+.-]*:)?//[^\s<>\"']+"#).expect("URL regex")
 });
 
-static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?i)(?:\b[A-Z]:\\(?:[^\s\\<>\"'`,;()\[\]{}:&|]+(?:\s+[^\s\\<>\"'`,;()\[\]{}:&|]+)*\\)*[^\s\\<>\"'`,;()\[\]{}:&|]+|\\\\[^\s\\<>\"'`,;()\[\]{}:&|]+\\(?:[^\s\\<>\"'`,;()\[\]{}:&|]+(?:\s+[^\s\\<>\"'`,;()\[\]{}:&|]+)*\\)*[^\s\\<>\"'`,;()\[\]{}:&|]+)"#,
-    )
+/// Device-namespace (`\\?\`, `\\.\`), drive and UNC paths in plain text.
+static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[1]));
+
+/// The same paths in text escaped once or twice (JSON strings), whose
+/// separators are 2 or 4 backslashes. Only text holding a doubled backslash
+/// can contain one, so this pass runs only then.
+static ESCAPED_WINDOWS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| windows_path_regex(&[2, 4]));
+
+/// Windows paths whose start is written with `widths` backslashes: the UNC
+/// or device prefix, the separator after a UNC server and the separator after
+/// a drive. That start keeps one width, so a single escaped backslash
+/// (`HKCU\\Software`, `\\n`) is not read as a UNC start. Separators after the
+/// start may be any width, so a path whose escaping changes part way is
+/// matched whole.
+///
+/// Device branches come first so they win at a shared start: their first
+/// component may be a drive (`C:`) or a volume name with braces, which the UNC
+/// branch stops at. A drive letter must not follow a letter, so provider
+/// drives such as `HKLM:\` stay readable; it may follow an escaped newline,
+/// tab or carriage return. That leading character is captured as `lead` and
+/// kept by the replacement.
+fn windows_path_regex(widths: &[usize]) -> Regex {
+    const PART_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]{}:&|]"#;
+    const DEVICE_NAME_CHAR: &str = r#"[^\s\\<>"'`,;()\[\]:&|]"#;
+    // Directories may hold spaces; the last component may not.
+    let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*\\+)*{PART_CHAR}+");
+    let (mut devices, mut uncs, mut drives) = (Vec::new(), Vec::new(), Vec::new());
+    for width in widths {
+        let sep = format!(r"\\{{{width}}}");
+        let start = format!(r"\\{{{}}}", width * 2);
+        devices.push(format!(
+            r"{start}[?.]{sep}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:\\+{tail})?"
+        ));
+        uncs.push(format!(r"{start}{PART_CHAR}+{sep}{tail}"));
+        drives.push(format!(r"[A-Z]:{sep}{tail}"));
+    }
+    Regex::new(&format!(
+        r"(?i){}|{}|(?P<lead>^|[^A-Z]|\\[nrt])(?:{})",
+        devices.join("|"),
+        uncs.join("|"),
+        drives.join("|")
+    ))
     .expect("Windows path regex")
-});
+}
 
 static POSIX_PRIVATE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -2448,9 +2486,7 @@ fn split_url_before_absolute_path(url: &str) -> (&str, &str) {
 }
 
 fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
-    let redacted = WINDOWS_OR_UNC_PATH_RE
-        .replace_all(text, marker)
-        .into_owned();
+    let redacted = redact_windows_paths(text, marker);
     let redacted = POSIX_PRIVATE_PATH_RE
         .replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let whole = &captures[0];
@@ -2469,6 +2505,39 @@ fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
     CREDENTIAL_PATH_RE
         .replace_all(&redacted, marker)
         .into_owned()
+}
+
+/// Both Windows path patterns run over the original text, and overlapping or
+/// adjacent matches are redacted as one span, so a path that mixes escaped
+/// and plain separators is replaced whole. A drive match's `lead` character
+/// is not part of its span.
+fn redact_windows_paths(text: &str, marker: &str) -> String {
+    let span = |captures: regex::Captures<'_>| {
+        let whole = captures.get(0).expect("whole match");
+        let lead = captures.name("lead").map_or(0, |lead| lead.len());
+        whole.start() + lead..whole.end()
+    };
+    let mut spans = WINDOWS_OR_UNC_PATH_RE
+        .captures_iter(text)
+        .map(span)
+        .collect::<Vec<_>>();
+    if text.contains(r"\\") {
+        spans.extend(ESCAPED_WINDOWS_PATH_RE.captures_iter(text).map(span));
+        spans.sort_by_key(|span| span.start);
+    }
+    let mut redacted = String::with_capacity(text.len());
+    let mut offset = 0;
+    let mut spans = spans.into_iter().peekable();
+    while let Some(mut merged) = spans.next() {
+        while let Some(next) = spans.next_if(|next| next.start <= merged.end) {
+            merged.end = merged.end.max(next.end);
+        }
+        redacted.push_str(&text[offset..merged.start]);
+        redacted.push_str(marker);
+        offset = merged.end;
+    }
+    redacted.push_str(&text[offset..]);
+    redacted
 }
 
 fn path_marker(context: SanitizationContext) -> &'static str {
@@ -3464,6 +3533,128 @@ safe=value"#,
             assert!(!redacted.contains("TT_PRIVACY_"));
             assert_eq!(redacted, "<path>");
         }
+    }
+
+    #[test]
+    fn windows_device_namespace_paths_are_redacted_in_every_context() {
+        let path = r"\\?\C:\Users\SyntheticBoundary\notes.txt";
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Evidence, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, path),
+            "<path>"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Url, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Path, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::CommandResult, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Summary, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Metadata, path),
+            "[sensitive-path]"
+        );
+    }
+
+    #[test]
+    fn escaped_windows_paths_are_redacted_whole() {
+        assert_eq!(
+            redact_sensitive_text(r#"{"path":"C:\\Users\\SyntheticBoundary\\notes.txt"}"#),
+            r#"{"path":"[sensitive-path]"}"#,
+        );
+        assert_eq!(
+            redact_sensitive_text(r#"{"path":"\\\\server\\share\\SyntheticBoundary\\notes.txt"}"#),
+            r#"{"path":"[sensitive-path]"}"#,
+        );
+        assert_eq!(
+            redact_sensitive_text(r#"{"path":"\\\\?\\C:\\Users\\SyntheticBoundary\\notes.txt"}"#),
+            r#"{"path":"[sensitive-path]"}"#,
+        );
+        assert_eq!(
+            redact_sensitive_text(
+                r#"{\"path\":\"C:\\\\Users\\\\SyntheticBoundary\\\\notes.txt\"}"#
+            ),
+            r#"{\"path\":\"[sensitive-path]\"}"#,
+        );
+    }
+
+    #[test]
+    fn mixed_width_windows_paths_are_redacted_in_both_orders() {
+        assert_eq!(
+            redact_sensitive_text(r"C:\Users\\SyntheticBoundary\\\\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"C:\\Users\SyntheticBoundary\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\server\share\\SyntheticBoundary\\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\\\server\\share\SyntheticBoundary\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\?\C:\Users\\SyntheticBoundary\\\\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\\\?\\UNC\\server\\share\SyntheticBoundary\notes.txt"),
+            "[sensitive-path]"
+        );
+    }
+
+    #[test]
+    fn drive_path_boundaries_keep_the_surrounding_text() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+        assert_eq!(
+            sanitize(r"out_C:\Users\SyntheticBoundary\notes.txt"),
+            "out_<path>"
+        );
+        assert_eq!(
+            sanitize(r"2C:\Users\SyntheticBoundary\notes.txt"),
+            "2<path>"
+        );
+        assert_eq!(
+            sanitize(r#""exit\r\nC:\\Users\\SyntheticBoundary>dir""#),
+            r#""exit\r\n<path>>dir""#
+        );
+    }
+
+    #[test]
+    fn windows_path_heuristic_keeps_documented_ambiguous_forms() {
+        assert_eq!(
+            redact_sensitive_text("bazel build //app/server:binary"),
+            "bazel build //app/server:binary"
+        );
+        assert_eq!(
+            redact_sensitive_text("open //server/share/example/notes.txt now"),
+            "open //server/share/example/notes.txt now"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"dir \\fileserver\\share\notes.txt"),
+            r"dir \\fileserver[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(
+                r"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater"
+            ),
+            r"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater"
+        );
     }
 
     #[test]

@@ -8,6 +8,16 @@
 
 ### Compatibility and operator impact
 
+- Carry the maintained Windows path privacy and historical-export repairs
+  without changing detection predicates, declared tool operations or the native
+  action profile. Device-namespace, escaped and mixed-width Windows paths are
+  redacted whole within the documented heuristic limits. Historical exports
+  preserve valid nested rule identifiers and existing identifier replacements.
+  Stricter redaction can change evidence bytes and cause a changed-evidence
+  emission on upgrade; subsequent unchanged scans still deduplicate. Producer
+  and consumer privacy pins must be qualified together. Sanitized exports are
+  views, not canonical replay or permission to replace indexed history.
+
 - Stop repeated process-chain correlation alerts caused only by fresh supporting
   Event 3 IDs on each scan. Scanner state uses canonical supporting evidence,
   while new occurrences and evidence changes remain eligible. No state migration

@@ -1167,6 +1167,92 @@ fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
 }
 
 #[test]
+fn export_of_a_fixture_scan_stays_schema_valid_and_keeps_rule_identifiers() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--emit-activity",
+            "--emit-session-risk-summary",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session_stores"))
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .expect("scan fixtures");
+    assert!(scan.status.success(), "fixture scan failed");
+    let native = fs::read_to_string(&log_path)
+        .expect("events")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("native event"))
+        .collect::<Vec<_>>();
+    for rule_id in ["credential.api_key.pattern", "credential.cloud_harvest"] {
+        assert!(
+            native.iter().any(|event| {
+                event["event_type"] == "detection"
+                    && event["risk_contributions"]
+                        .as_array()
+                        .is_some_and(|items| items.iter().any(|item| item["id"] == rule_id))
+            }),
+            "missing synthetic rule fixture"
+        );
+    }
+    let validator = event_schema_validator();
+    for event in &native {
+        assert!(validator.is_valid(event), "invalid native fixture event");
+    }
+    for format in ["jsonl", "elastic-bulk"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .env_clear()
+            .arg("export")
+            .arg("--log-path")
+            .arg(&log_path)
+            .args(["--format", format])
+            .output()
+            .expect("export");
+        assert!(output.status.success(), "{format} export failed");
+        let exported = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("exported line"))
+            .filter(|line| line.get("index").is_none())
+            .collect::<Vec<_>>();
+        assert_eq!(exported.len(), native.len(), "{format}");
+        for (exported, native) in exported.iter().zip(&native) {
+            assert_eq!(exported["event_id"], native["event_id"], "{format}");
+            assert!(
+                validator.is_valid(exported),
+                "{format} invalid exported fixture event"
+            );
+            assert_eq!(exported["rule_ids"], native["rule_ids"], "{format}");
+            assert_eq!(
+                exported["risk_contributions"], native["risk_contributions"],
+                "{format}"
+            );
+            assert_eq!(
+                exported["evidence"].as_array().map(|items| items
+                    .iter()
+                    .map(|item| item["rule_id"].clone())
+                    .collect::<Vec<_>>()),
+                native["evidence"].as_array().map(|items| items
+                    .iter()
+                    .map(|item| item["rule_id"].clone())
+                    .collect::<Vec<_>>()),
+                "{format}",
+            );
+        }
+    }
+}
+
+#[test]
 fn export_correlate_emits_cross_session_event() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
