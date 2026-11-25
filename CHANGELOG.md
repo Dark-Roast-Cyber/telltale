@@ -16,7 +16,9 @@
   redacted whole within the documented heuristic limits while preserving
   escaped registry keys, COM CLSID paths, and doubled-backslash escape
   sequences. Historical exports preserve valid nested rule identifiers and
-  existing identifier replacements. Stricter redaction can change evidence
+  existing replacement markers in the five Event 3 rule-ID fields only;
+  correlation derivation from replacement rule IDs remains unsupported.
+  Stricter redaction can change evidence
   bytes and cause a changed-evidence emission on upgrade; subsequent unchanged
   ordinary (non-backfill) scans still deduplicate. Producer and consumer
   privacy pins (including `ActionRecordV1` consumers) must be qualified

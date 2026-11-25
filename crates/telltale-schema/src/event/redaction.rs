@@ -2525,13 +2525,121 @@ fn redact_windows_paths(text: &str, marker: &str) -> String {
             .or_else(|| captures.name("home_lead"))
             .map_or(0, |lead| lead.len());
         let span_start = whole.start() + lead;
+        let span_end = extend_spaced_filename(text, span_start, whole.end());
         redacted.push_str(&text[copied..span_start]);
         redacted.push_str(marker);
-        copied = whole.end();
-        search = whole.end();
+        copied = span_end;
+        search = span_end;
     }
     redacted.push_str(&text[copied..]);
     redacted
+}
+
+/// Extend a Windows path match across spaces in its final component when the
+/// continuation clearly belongs to the filename rather than following command
+/// arguments:
+/// - When the matched final segment already carries a file extension, stop so
+///   following arguments (`file.txt now`, `"a.exe arg2"`) are not swallowed.
+/// - Otherwise, inside matching quotes opened immediately before the path,
+///   extend across plain words up to the closing quote (or the first
+///   extension-bearing word if a flag follows).
+/// - Outside quotes, extend across plain words through the first
+///   extension-bearing word (e.g. `C:\Users\Alice\Private Notes.txt`),
+///   stopping before flags (`-...`), assignments (`=`), newlines, or
+///   delimiters.
+fn extend_spaced_filename(text: &str, span_start: usize, match_end: usize) -> usize {
+    let last_segment = text[span_start..match_end]
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("");
+    if has_filename_extension(last_segment) {
+        return match_end;
+    }
+    let opening_quote = opening_path_quote(text, span_start);
+    let mut cursor = match_end;
+    let mut best_end = match_end;
+    while let Some(rest) = text[cursor..].strip_prefix(' ') {
+        let word_start = cursor + 1;
+        let word_end = word_start
+            + rest
+                .find(|c: char| {
+                    c.is_whitespace()
+                        || matches!(
+                            c,
+                            '\\' | '/'
+                                | '<'
+                                | '>'
+                                | '"'
+                                | '\''
+                                | '`'
+                                | ','
+                                | ';'
+                                | '('
+                                | ')'
+                                | '['
+                                | ']'
+                                | '{'
+                                | '}'
+                                | ':'
+                                | '&'
+                                | '|'
+                                | '='
+                        )
+                })
+                .unwrap_or(rest.len());
+        let word = &text[word_start..word_end];
+        if word.is_empty() || word.starts_with('-') {
+            break;
+        }
+        let (candidate, candidate_end) = match word.strip_suffix('.') {
+            Some(trimmed) if has_filename_extension(trimmed) => (trimmed, word_end - 1),
+            _ => (word, word_end),
+        };
+        if let Some((quote, escaped)) = opening_quote {
+            let after = &text[word_end..];
+            let closes_quote = if escaped {
+                after.starts_with(&format!("\\{quote}"))
+            } else {
+                after.starts_with(quote)
+            };
+            if closes_quote {
+                return word_end;
+            }
+            if has_filename_extension(candidate) {
+                return candidate_end;
+            }
+            if after.starts_with(' ') {
+                cursor = word_end;
+                continue;
+            }
+            break;
+        }
+        if has_filename_extension(candidate) {
+            best_end = candidate_end;
+            break;
+        }
+        cursor = word_end;
+    }
+    best_end
+}
+
+fn opening_path_quote(text: &str, span_start: usize) -> Option<(char, bool)> {
+    let prefix = &text[..span_start];
+    let quote = prefix.chars().next_back()?;
+    if !matches!(quote, '"' | '\'' | '`') {
+        return None;
+    }
+    let escaped = prefix[..prefix.len() - quote.len_utf8()].ends_with('\\');
+    Some((quote, escaped))
+}
+
+fn has_filename_extension(segment: &str) -> bool {
+    let Some((stem, ext)) = segment.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && (1..=8).contains(&ext.len())
+        && ext.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 /// Distinguish doubled-backslash escape sequences (`\\r\\n`, `\\n\\t`,
@@ -3960,6 +4068,82 @@ safe=value"#,
             redact_sensitive_text(r#""\\r\\nC:\\Users\\SyntheticUser\\notes.txt""#),
             r#""\\r\\n[sensitive-path]""#
         );
+    }
+
+    #[test]
+    fn windows_final_filename_spaces_are_redacted_without_swallowing_arguments() {
+        let cases = [
+            (
+                r"C:\Users\SyntheticUser\Private Notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"dir C:\Users\SyntheticUser\My Private Notes.txt && echo ok",
+                "dir [sensitive-path] && echo ok",
+            ),
+            (
+                r"cat C:\Users\SyntheticUser\Private Notes.txt now",
+                "cat [sensitive-path] now",
+            ),
+            (
+                r"Read C:\Users\SyntheticUser\Private Notes.txt.",
+                "Read [sensitive-path].",
+            ),
+            (
+                r"type \Device\HarddiskVolume3\Users\SyntheticUser\Private Notes.txt",
+                "type [sensitive-path]",
+            ),
+            (
+                r"dir \\fileserver\\share\Private Notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r#"{"path":"C:\\Users\\SyntheticUser\\Private Notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{\"path\":\"C:\\\\Users\\\\SyntheticUser\\\\Private Notes.txt\"}"#,
+                r#"{\"path\":\"[sensitive-path]\"}"#,
+            ),
+            (
+                r#"dir "C:\Users\SyntheticUser\My Secret Folder" /s"#,
+                r#"dir "[sensitive-path]" /s"#,
+            ),
+            (
+                r#"dir "C:\Users\SyntheticUser\Private Notes.txt" /s"#,
+                r#"dir "[sensitive-path]" /s"#,
+            ),
+            (
+                r#""C:\Users\SyntheticUser\Private Notes.txt --flag""#,
+                r#""[sensitive-path] --flag""#,
+            ),
+            // Arguments after an already-terminated path must stay readable.
+            (
+                r"open C:\Users\SyntheticUser\notes.txt now",
+                "open [sensitive-path] now",
+            ),
+            (
+                r"run C:\tools\a.exe --flag value",
+                "run [sensitive-path] --flag value",
+            ),
+            (r#""C:\tools\a.exe arg2""#, r#""[sensitive-path] arg2""#),
+            (
+                r"schtasks /create /tn Updater /tr C:\tools\a.exe /sc onlogon",
+                "schtasks /create /tn Updater /tr [sensitive-path] /sc onlogon",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let redacted = redact_sensitive_text(input);
+            assert_eq!(redacted, expected, "{input}");
+            assert!(!redacted.contains("Notes.txt"), "{input}: {redacted}");
+            assert!(!redacted.contains("Secret Folder"), "{input}: {redacted}");
+            assert_eq!(
+                redact_sensitive_text(&redacted),
+                redacted,
+                "idempotent: {input}"
+            );
+        }
     }
 
     #[test]
