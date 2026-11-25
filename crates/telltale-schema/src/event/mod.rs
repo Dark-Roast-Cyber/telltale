@@ -646,9 +646,11 @@ pub fn sanitize_serialized_event(event: &mut Value) {
 fn sort_serialized_contributions(values: &mut Vec<Value>) {
     // Keep the original objects, unknown structure and duplicates. Only a full
     // terminal DTO supplies an ordering key; validators still reject bad data.
+    // Validate every transformed row before any reorder. A malformed, extended,
+    // or otherwise rejected row leaves the original objects untouched.
     let Ok(parsed) = values
         .iter()
-        .map(|value| serde_json::from_value::<RiskContribution>(value.clone()))
+        .map(crate::scoring::historical_risk_contribution)
         .collect::<Result<Vec<_>, _>>()
     else {
         return;

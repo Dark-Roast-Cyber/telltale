@@ -504,6 +504,21 @@ impl FromStr for Event3Record {
     }
 }
 
+fn deserialize_historical_contributions<'de, D>(
+    deserializer: D,
+) -> Result<Vec<RiskContribution>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    values
+        .into_iter()
+        .map(|value| {
+            crate::scoring::historical_risk_contribution(&value).map_err(serde::de::Error::custom)
+        })
+        .collect()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Event3Wire {
@@ -522,6 +537,7 @@ struct Event3Wire {
     event_type: String,
     severity: String,
     risk_score: u64,
+    #[serde(deserialize_with = "deserialize_historical_contributions")]
     risk_contributions: Vec<RiskContribution>,
     client: String,
     #[serde(default)]
@@ -1951,13 +1967,23 @@ mod tests {
             "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         event.rule_ids = vec![replacement.to_string()];
         event.evidence[0].rule_id = Some(replacement.to_string());
-        let contribution: Result<RiskContribution, _> = serde_json::from_value(serde_json::json!({
+        let contribution = crate::scoring::historical_risk_contribution(&serde_json::json!({
             "id": replacement,
             "type": "deterministic_rule",
             "points": 2,
             "rationale": "synthetic process"
         }));
         assert!(contribution.is_ok(), "historical contribution was rejected");
+        assert!(
+            serde_json::from_value::<RiskContribution>(serde_json::json!({
+                "id": replacement,
+                "type": "deterministic_rule",
+                "points": 2,
+                "rationale": "synthetic process"
+            }))
+            .is_err(),
+            "generic deserialization admitted a historical replacement"
+        );
         assert!(
             contribution
                 .as_ref()
@@ -2130,13 +2156,26 @@ mod tests {
         event.rule_ids = vec![first.clone(), second.clone()];
         event.evidence[0].rule_id = Some(first.clone());
         event.timeline_anchors[0].rule_ids = vec![first.clone()];
-        let contributions: Result<Vec<RiskContribution>, _> = serde_json::from_value(
-            serde_json::json!([
-                { "id": first, "type": "deterministic_rule", "points": 2, "rationale": "synthetic alpha" },
-                { "id": second, "type": "deterministic_rule", "points": 3, "rationale": "synthetic beta" },
-            ]),
-        );
+        let contributions = serde_json::json!([
+            { "id": first, "type": "deterministic_rule", "points": 2, "rationale": "synthetic alpha" },
+            { "id": second, "type": "deterministic_rule", "points": 3, "rationale": "synthetic beta" },
+        ])
+        .as_array()
+        .expect("contribution array")
+        .iter()
+        .map(crate::scoring::historical_risk_contribution)
+        .collect::<Result<Vec<_>, _>>();
         assert!(contributions.is_ok(), "terminal contribution input");
+        assert!(
+            serde_json::from_value::<RiskContribution>(serde_json::json!({
+                "id": first,
+                "type": "deterministic_rule",
+                "points": 2,
+                "rationale": "synthetic alpha"
+            }))
+            .is_err(),
+            "generic deserialization admitted a historical replacement"
+        );
         event.risk_contributions = contributions.expect("checked contributions");
 
         let mut wire = serde_json::to_value(&event).expect("native event");

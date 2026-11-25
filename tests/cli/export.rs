@@ -1376,9 +1376,14 @@ fn export_correlate_does_not_admit_historical_replacements_as_native_rules() {
         output.stdout.is_empty(),
         "failed correlation emitted partial output"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !String::from_utf8_lossy(&output.stderr).contains(replacement),
+        !stderr.contains(replacement),
         "correlation error leaked a marker"
+    );
+    assert!(
+        stderr.contains("is not canonical"),
+        "correlation did not reject the replacement as a non-native rule id: {stderr}"
     );
 }
 

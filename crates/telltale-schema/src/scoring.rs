@@ -357,15 +357,38 @@ impl TryFrom<RiskContributionWire> for RiskContribution {
     type Error = RiskAccountingError;
 
     fn try_from(wire: RiskContributionWire) -> Result<Self, Self::Error> {
+        // Native callers deserialize through this path. Historical Event 3
+        // readback must use [`historical_risk_contribution`] instead.
+        Self::from_wire(wire, Self::validate)
+    }
+}
+
+impl RiskContribution {
+    fn from_wire(
+        wire: RiskContributionWire,
+        validate: fn(&Self) -> Result<(), RiskAccountingError>,
+    ) -> Result<Self, RiskAccountingError> {
         let contribution = Self {
             id: wire.id,
             contribution_type: wire.contribution_type,
             points: wire.points,
             rationale: wire.rationale,
         };
-        contribution.validate_terminal()?;
+        validate(&contribution)?;
         Ok(contribution)
     }
+}
+
+/// Read one contribution from terminal Event 3 JSON.
+///
+/// A `redacted.<64 lowercase hex>` ID is recognized as historical syntax only.
+/// It is not native admission; [`TryFrom`] for [`RiskContribution`] stays strict.
+pub fn historical_risk_contribution(
+    value: &serde_json::Value,
+) -> Result<RiskContribution, RiskAccountingError> {
+    let wire = serde_json::from_value::<RiskContributionWire>(value.clone())
+        .map_err(|_| RiskAccountingError::InvalidContributionId("historical-wire".to_string()))?;
+    RiskContribution::from_wire(wire, RiskContribution::validate_terminal)
 }
 
 pub fn checked_risk_sum(contributions: &[RiskContribution]) -> Result<u64, RiskAccountingError> {
@@ -640,6 +663,28 @@ mod tests {
             checked_risk_sum(&[contributions[0].clone(), overflow]),
             Err(super::RiskAccountingError::Overflow)
         ));
+    }
+
+    #[test]
+    fn generic_deserialization_rejects_historical_replacement_ids() {
+        let replacement = format!("redacted.{}", "a".repeat(64));
+        let result = serde_json::from_value::<RiskContribution>(serde_json::json!({
+            "id": replacement,
+            "type": "deterministic_rule",
+            "points": 1,
+            "rationale": "synthetic"
+        }));
+        assert!(result.is_err(), "native decoder admitted a replacement id");
+        let historical = super::historical_risk_contribution(&serde_json::json!({
+            "id": replacement,
+            "type": "deterministic_rule",
+            "points": 1,
+            "rationale": "synthetic"
+        }));
+        assert!(
+            historical.is_ok(),
+            "historical readback rejected exact syntax"
+        );
     }
 
     #[test]

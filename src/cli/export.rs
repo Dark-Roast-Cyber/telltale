@@ -275,8 +275,11 @@ fn validate_imported_event_accounting(
             .get("risk_contributions")
             .ok_or("risk-bearing event is missing risk_contributions")?
             .clone();
-        let contributions: Vec<telltale_schema::scoring::RiskContribution> =
-            serde_json::from_value(raw)?;
+        let contributions = if schema_version == "3.0" {
+            historical_contributions(&raw)?
+        } else {
+            serde_json::from_value(raw)?
+        };
         let declared = event
             .get("risk_score")
             .and_then(serde_json::Value::as_u64)
@@ -339,6 +342,18 @@ fn correlation_events_from_filtered(
         .into_iter()
         .map(|event| serde_json::to_value(event.historical_derived()).map_err(Into::into))
         .collect()
+}
+
+fn historical_contributions(
+    value: &serde_json::Value,
+) -> Result<Vec<telltale_schema::scoring::RiskContribution>, Box<dyn std::error::Error>> {
+    let rows = value
+        .as_array()
+        .ok_or("risk contributions must be an array")?;
+    rows.iter()
+        .map(telltale_schema::scoring::historical_risk_contribution)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 fn is_canonical_historical_event(event: &serde_json::Value) -> bool {
@@ -1103,12 +1118,15 @@ fn event_from_json_value(
     let Some(risk_score) = event.get("risk_score").and_then(|value| value.as_u64()) else {
         return Ok(None);
     };
-    let risk_contributions = serde_json::from_value(
-        event
-            .get("risk_contributions")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-    )?;
+    let raw_contributions = event
+        .get("risk_contributions")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let risk_contributions = if is_canonical_historical_event(event) {
+        historical_contributions(&raw_contributions)?
+    } else {
+        serde_json::from_value(raw_contributions)?
+    };
 
     Ok(Some(Event {
         timestamp: timestamp.to_string(),
