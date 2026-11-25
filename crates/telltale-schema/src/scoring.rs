@@ -209,6 +209,10 @@ impl RiskContribution {
         &self.rationale
     }
 
+    pub(crate) fn canonical_key(&self) -> (RiskContributionType, &str) {
+        (self.contribution_type, &self.id)
+    }
+
     /// Keep rule/config rationale useful while applying the terminal emitted-
     /// text privacy policy. Event serialization is the only caller.
     pub(crate) fn for_emission(mut self) -> Self {
@@ -405,10 +409,8 @@ fn canonicalize_contributions_with(
     let mut canonical = BTreeMap::new();
     for contribution in contributions {
         validate(&contribution)?;
-        let key = (
-            contribution.contribution_type(),
-            contribution.id().to_string(),
-        );
+        let (kind, id) = contribution.canonical_key();
+        let key = (kind, id.to_string());
         if let Some(existing) = canonical.get(&key) {
             if existing != &contribution {
                 return Err(RiskAccountingError::ConflictingContribution(

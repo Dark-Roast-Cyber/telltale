@@ -598,14 +598,24 @@ pub fn sanitize_serialized_event(event: &mut Value) {
             .get_mut("risk_contributions")
             .and_then(Value::as_array_mut)
         {
-            for contribution in contributions {
+            let mut rule_id_changed = false;
+            for contribution in contributions.iter_mut() {
                 let Some(contribution) = contribution.as_object_mut() else {
                     continue;
                 };
+                let original_id = contribution
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 transform_serialized_string(contribution, "id", rule_identifier);
+                rule_id_changed |=
+                    original_id.as_deref() != contribution.get("id").and_then(Value::as_str);
                 transform_serialized_string(contribution, "rationale", |value| {
                     RiskContribution::emitted_rationale(value)
                 });
+            }
+            if rule_id_changed {
+                sort_serialized_contributions(contributions);
             }
         }
 
@@ -631,6 +641,24 @@ pub fn sanitize_serialized_event(event: &mut Value) {
         false,
         SerializedValueScope::Root,
     );
+}
+
+fn sort_serialized_contributions(values: &mut Vec<Value>) {
+    // Keep the original objects, unknown structure and duplicates. Only a full
+    // terminal DTO supplies an ordering key; validators still reject bad data.
+    let Ok(parsed) = values
+        .iter()
+        .map(|value| serde_json::from_value::<RiskContribution>(value.clone()))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return;
+    };
+    let mut keyed = std::mem::take(values)
+        .into_iter()
+        .zip(parsed)
+        .collect::<Vec<_>>();
+    keyed.sort_by(|(_, left), (_, right)| left.canonical_key().cmp(&right.canonical_key()));
+    *values = keyed.into_iter().map(|(value, _)| value).collect();
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1556,6 +1584,7 @@ fn terminal_emittable_event(event: &Event) -> Event {
         .into_iter()
         .map(RiskContribution::for_emission)
         .collect();
+    restore_mapped_contribution_order(&event.risk_contributions, &mut emitted.risk_contributions);
     emitted.timeline_anchors = emitted
         .timeline_anchors
         .iter()
@@ -1927,6 +1956,7 @@ fn terminal_historical_derived_event(event: &Event) -> Event {
         .cloned()
         .map(RiskContribution::for_historical_emission)
         .collect();
+    restore_mapped_contribution_order(&event.risk_contributions, &mut emitted.risk_contributions);
     emitted.categories = event
         .categories
         .iter()
@@ -1949,6 +1979,16 @@ fn terminal_historical_derived_event(event: &Event) -> Event {
         .as_ref()
         .map(|process| terminal_process_context(process, terminal_historical_rule_identifier));
     emitted
+}
+
+fn restore_mapped_contribution_order(before: &[RiskContribution], after: &mut [RiskContribution]) {
+    if before
+        .iter()
+        .zip(after.iter())
+        .any(|(before, after)| before.id() != after.id())
+    {
+        after.sort_by(|left, right| left.canonical_key().cmp(&right.canonical_key()));
+    }
 }
 
 fn terminal_historical_telltale_version(value: &str) -> String {
