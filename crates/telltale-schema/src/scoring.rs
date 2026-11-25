@@ -209,10 +209,20 @@ impl RiskContribution {
         &self.rationale
     }
 
+    pub(crate) fn canonical_key(&self) -> (RiskContributionType, &str) {
+        (self.contribution_type, &self.id)
+    }
+
     /// Keep rule/config rationale useful while applying the terminal emitted-
     /// text privacy policy. Event serialization is the only caller.
     pub(crate) fn for_emission(mut self) -> Self {
         self.id = crate::event::terminal_rule_identifier(&self.id);
+        self.rationale = Self::emitted_rationale(&self.rationale);
+        self
+    }
+
+    pub(crate) fn for_historical_emission(mut self) -> Self {
+        self.id = crate::event::terminal_historical_rule_identifier(&self.id);
         self.rationale = Self::emitted_rationale(&self.rationale);
         self
     }
@@ -251,12 +261,18 @@ impl RiskContribution {
     }
 
     pub fn validate(&self) -> Result<(), RiskAccountingError> {
+        self.validate_with_rule_id(crate::event::is_native_rule_identifier)
+    }
+
+    pub(crate) fn validate_terminal(&self) -> Result<(), RiskAccountingError> {
+        self.validate_with_rule_id(crate::event::is_terminal_rule_identifier)
+    }
+
+    fn validate_with_rule_id(&self, valid_id: fn(&str) -> bool) -> Result<(), RiskAccountingError> {
         if self.id.trim().is_empty() {
             return Err(RiskAccountingError::EmptyContributionId);
         }
-        if !is_canonical_contribution_id(&self.id)
-            || crate::event::contains_credential_material(&self.id)
-        {
+        if !valid_id(&self.id) {
             return Err(RiskAccountingError::InvalidContributionId(self.id.clone()));
         }
         if self.points == 0 {
@@ -341,20 +357,56 @@ impl TryFrom<RiskContributionWire> for RiskContribution {
     type Error = RiskAccountingError;
 
     fn try_from(wire: RiskContributionWire) -> Result<Self, Self::Error> {
+        // Native callers deserialize through this path. Historical Event 3
+        // readback must use [`historical_risk_contribution`] instead.
+        Self::from_wire(wire, Self::validate)
+    }
+}
+
+impl RiskContribution {
+    fn from_wire(
+        wire: RiskContributionWire,
+        validate: fn(&Self) -> Result<(), RiskAccountingError>,
+    ) -> Result<Self, RiskAccountingError> {
         let contribution = Self {
             id: wire.id,
             contribution_type: wire.contribution_type,
             points: wire.points,
             rationale: wire.rationale,
         };
-        contribution.validate()?;
+        validate(&contribution)?;
         Ok(contribution)
     }
 }
 
+/// Read one contribution from terminal Event 3 JSON.
+///
+/// A `redacted.<64 lowercase hex>` ID is recognized as historical syntax only.
+/// It is not native admission; [`TryFrom`] for [`RiskContribution`] stays strict.
+pub fn historical_risk_contribution(
+    value: &serde_json::Value,
+) -> Result<RiskContribution, RiskAccountingError> {
+    let wire = serde_json::from_value::<RiskContributionWire>(value.clone())
+        .map_err(|_| RiskAccountingError::InvalidContributionId("historical-wire".to_string()))?;
+    RiskContribution::from_wire(wire, RiskContribution::validate_terminal)
+}
+
 pub fn checked_risk_sum(contributions: &[RiskContribution]) -> Result<u64, RiskAccountingError> {
+    checked_risk_sum_with(contributions, RiskContribution::validate)
+}
+
+pub(crate) fn checked_terminal_risk_sum(
+    contributions: &[RiskContribution],
+) -> Result<u64, RiskAccountingError> {
+    checked_risk_sum_with(contributions, RiskContribution::validate_terminal)
+}
+
+fn checked_risk_sum_with(
+    contributions: &[RiskContribution],
+    validate: fn(&RiskContribution) -> Result<(), RiskAccountingError>,
+) -> Result<u64, RiskAccountingError> {
     contributions.iter().try_fold(0_u64, |total, contribution| {
-        contribution.validate()?;
+        validate(contribution)?;
         total
             .checked_add(contribution.points())
             .ok_or(RiskAccountingError::Overflow)
@@ -364,13 +416,24 @@ pub fn checked_risk_sum(contributions: &[RiskContribution]) -> Result<u64, RiskA
 pub fn canonicalize_contributions(
     contributions: Vec<RiskContribution>,
 ) -> Result<Vec<RiskContribution>, RiskAccountingError> {
+    canonicalize_contributions_with(contributions, RiskContribution::validate)
+}
+
+pub(crate) fn canonicalize_terminal_contributions(
+    contributions: Vec<RiskContribution>,
+) -> Result<Vec<RiskContribution>, RiskAccountingError> {
+    canonicalize_contributions_with(contributions, RiskContribution::validate_terminal)
+}
+
+fn canonicalize_contributions_with(
+    contributions: Vec<RiskContribution>,
+    validate: fn(&RiskContribution) -> Result<(), RiskAccountingError>,
+) -> Result<Vec<RiskContribution>, RiskAccountingError> {
     let mut canonical = BTreeMap::new();
     for contribution in contributions {
-        contribution.validate()?;
-        let key = (
-            contribution.contribution_type(),
-            contribution.id().to_string(),
-        );
+        validate(&contribution)?;
+        let (kind, id) = contribution.canonical_key();
+        let key = (kind, id.to_string());
         if let Some(existing) = canonical.get(&key) {
             if existing != &contribution {
                 return Err(RiskAccountingError::ConflictingContribution(
@@ -382,7 +445,7 @@ pub fn canonicalize_contributions(
         }
     }
     let canonical = canonical.into_values().collect::<Vec<_>>();
-    checked_risk_sum(&canonical)?;
+    checked_risk_sum_with(&canonical, validate)?;
     Ok(canonical)
 }
 
@@ -600,6 +663,28 @@ mod tests {
             checked_risk_sum(&[contributions[0].clone(), overflow]),
             Err(super::RiskAccountingError::Overflow)
         ));
+    }
+
+    #[test]
+    fn generic_deserialization_rejects_historical_replacement_ids() {
+        let replacement = format!("redacted.{}", "a".repeat(64));
+        let result = serde_json::from_value::<RiskContribution>(serde_json::json!({
+            "id": replacement,
+            "type": "deterministic_rule",
+            "points": 1,
+            "rationale": "synthetic"
+        }));
+        assert!(result.is_err(), "native decoder admitted a replacement id");
+        let historical = super::historical_risk_contribution(&serde_json::json!({
+            "id": replacement,
+            "type": "deterministic_rule",
+            "points": 1,
+            "rationale": "synthetic"
+        }));
+        assert!(
+            historical.is_ok(),
+            "historical readback rejected exact syntax"
+        );
     }
 
     #[test]

@@ -6,6 +6,21 @@
 
 ## Unreleased
 
+### Privacy and historical export
+
+- Redact NT object-namespace, mixed-width UNC, slash-variant drive and backslash
+  home paths, including supported spaced final filenames. Preserve registry keys,
+  URLs, command flags and ordinary escape sequences; lexical limits remain
+  explicit in the [privacy model](docs/privacy-model.md).
+- Keep native rule-ID admission and emission credential-strict. Historical Event
+  3 readback preserves exact `redacted.<64 lowercase hex digits>` replacements
+  only in the five rule-ID fields, without granting provenance. Contribution
+  ordering is restored after ID replacement without merging rows or relaxing
+  validation. Correlation derived from replacement grouping IDs stays unsupported.
+- Privacy changes do not rewrite canonical journals or queued bytes. Sanitized
+  exports are views, not replay input; qualify producer/consumer privacy pins
+  together before upgrading.
+
 ### Compatibility and operator impact
 
 - **The native action profile is 18.** Several changes below change what the

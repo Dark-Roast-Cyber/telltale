@@ -1264,6 +1264,130 @@ fn export_of_a_fixture_scan_stays_schema_valid_and_keeps_rule_identifiers() {
 }
 
 #[test]
+fn export_preserves_terminal_rule_replacements_on_repeated_readback() {
+    let temp = tempdir().expect("tempdir");
+    let original = temp.path().join("original.jsonl");
+    let exported_path = temp.path().join("exported.jsonl");
+    let replacement = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let mut event = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000009",
+        "2026-05-01T00:00:00.000Z",
+        "low",
+        "codex",
+        "synthetic-session",
+        &["rule.test"],
+    );
+    event["rule_ids"][0] = replacement.into();
+    event["risk_contributions"][0]["id"] = replacement.into();
+    let original_bytes = format!("{event}\n");
+    fs::write(&original, &original_bytes).expect("original");
+
+    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("TEMP", temp.path())
+        .env("TMP", temp.path())
+        .args(["export", "--format", "jsonl", "--log-path"])
+        .arg(&original)
+        .output()
+        .expect("first export");
+    assert!(
+        first.status.success(),
+        "first export rejected historical replacements"
+    );
+    fs::write(&exported_path, &first.stdout).expect("first export journal");
+    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("TEMP", temp.path())
+        .env("TMP", temp.path())
+        .args(["export", "--format", "jsonl", "--log-path"])
+        .arg(&exported_path)
+        .output()
+        .expect("second export");
+    assert!(
+        second.status.success(),
+        "second export rejected historical replacements"
+    );
+    assert!(
+        second.stdout == first.stdout,
+        "export changed on repeated readback"
+    );
+    let record =
+        telltale_schema::event::Event3Record::from_json(&first.stdout).expect("typed export");
+    assert_eq!(record.common().risk_score, 20);
+    assert!(
+        record.common().risk_contributions[0].id() == replacement,
+        "export.contribution.id"
+    );
+    assert!(
+        fs::read_to_string(&original).expect("original") == original_bytes,
+        "original journal changed"
+    );
+    let summary = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .args(["export", "--format", "summary", "--log-path"])
+        .arg(&original)
+        .output()
+        .expect("summary export");
+    assert!(
+        summary.status.success(),
+        "summary rejected historical replacements"
+    );
+    assert!(
+        String::from_utf8_lossy(&summary.stdout).contains(replacement),
+        "summary changed the historical rule label"
+    );
+}
+
+#[test]
+fn export_correlate_does_not_admit_historical_replacements_as_native_rules() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let replacement = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let mut first = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000041",
+        "2026-05-01T00:00:00.000Z",
+        "high",
+        "codex",
+        "synthetic-a",
+        &["rule.test"],
+    );
+    first["rule_ids"][0] = replacement.into();
+    first["risk_contributions"][0]["id"] = replacement.into();
+    let mut second = first.clone();
+    second["event_id"] = "telltale-00000000-0000-4000-8000-000000000042".into();
+    second["session_id"] = "synthetic-b".into();
+    second["timestamp"] = "2026-05-01T00:20:00.000Z".into();
+    second["event_time"] = "2026-05-01T00:20:00Z".into();
+    fs::write(&log_path, format!("{first}\n{second}\n")).expect("journal");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .args(["export", "--correlate", "--format", "jsonl", "--log-path"])
+        .arg(&log_path)
+        .output()
+        .expect("correlation export");
+    assert!(
+        !output.status.success(),
+        "replacement admitted as a native correlation rule"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "failed correlation emitted partial output"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(replacement),
+        "correlation error leaked a marker"
+    );
+    assert!(
+        stderr.contains("is not canonical"),
+        "correlation did not reject the replacement as a non-native rule id: {stderr}"
+    );
+}
+
+#[test]
 fn export_correlate_emits_cross_session_event() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
