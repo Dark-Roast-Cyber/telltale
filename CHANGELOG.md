@@ -17,8 +17,12 @@
   escaped registry keys, COM CLSID paths, and doubled-backslash escape
   sequences. Historical exports preserve valid nested rule identifiers and
   existing replacement markers in the five Event 3 rule-ID fields only;
-  correlation derivation from replacement rule IDs remains unsupported.
-  Stricter redaction can change evidence
+  correlation derivation from replacement rule IDs remains unsupported. Event
+  3.0 contribution validation on historical export and typed readback uses the
+  historical rule-ID policy, and contributions whose IDs are replaced have
+  their canonical `(type, id)` order restored on export, so exported bytes and
+  accepted historical rows can differ from the previous release. Stricter
+  redaction can change evidence
   bytes and cause a changed-evidence emission on upgrade; subsequent unchanged
   ordinary (non-backfill) scans still deduplicate. Producer and consumer
   privacy pins (including `ActionRecordV1` consumers) must be qualified
