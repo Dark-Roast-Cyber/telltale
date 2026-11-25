@@ -12,9 +12,10 @@ use crate::event::{
     Event, PrivacySanitizer, SanitizationContext, evidence_hash,
     is_canonical_opaque_identifier_for_kind, is_canonical_sha256_hex, opaque_identifier,
     parse_event_timestamp, sanitize_serialized_event, terminal_historical_identifier,
-    terminal_historical_product_metadata, terminal_historical_session_id, terminal_identifier,
-    terminal_product_metadata, terminal_rule_identifier, terminal_session_id,
-    validate_risk_accounting_scope, validate_rule_ids,
+    terminal_historical_product_metadata, terminal_historical_rule_identifier,
+    terminal_historical_session_id, terminal_identifier, terminal_product_metadata,
+    terminal_rule_identifier, terminal_session_id, validate_historical_risk_accounting,
+    validate_historical_rule_ids, validate_risk_accounting_scope, validate_rule_ids,
 };
 use crate::scoring::{RiskAccountingError, canonicalize_contributions};
 
@@ -256,36 +257,39 @@ fn validate_imported_event_accounting(
         {
             if schema_version == "2.0" || schema_version == "3.0" {
                 let rule_ids = imported_rule_ids(event)?;
-                validate_rule_ids(&rule_ids)?;
+                if schema_version == "3.0" {
+                    validate_historical_rule_ids(&rule_ids)?;
+                } else {
+                    validate_rule_ids(&rule_ids)?;
+                }
             }
             continue;
         }
         let rule_ids = imported_rule_ids(event)?;
-        validate_rule_ids(&rule_ids)?;
+        if schema_version == "3.0" {
+            validate_historical_rule_ids(&rule_ids)?;
+        } else {
+            validate_rule_ids(&rule_ids)?;
+        }
         let raw = event
             .get("risk_contributions")
             .ok_or("risk-bearing event is missing risk_contributions")?
             .clone();
         let contributions: Vec<telltale_schema::scoring::RiskContribution> =
             serde_json::from_value(raw)?;
-        let canonical = canonicalize_contributions(contributions.clone())?;
-        if contributions != canonical {
-            return Err(RiskAccountingError::NonCanonicalContributions.into());
-        }
-        let accounting_event_type = if schema_version == "3.0" && event_type == "process_chain" {
-            "detection"
-        } else {
-            event_type
-        };
-        validate_risk_accounting_scope(
-            accounting_event_type,
-            &string_array(event, "rule_ids"),
-            &canonical,
-        )?;
         let declared = event
             .get("risk_score")
             .and_then(serde_json::Value::as_u64)
             .ok_or("risk-bearing event has an invalid risk_score")?;
+        if schema_version == "3.0" {
+            validate_historical_risk_accounting(event_type, &rule_ids, &contributions, declared)?;
+            continue;
+        }
+        let canonical = canonicalize_contributions(contributions.clone())?;
+        if contributions != canonical {
+            return Err(RiskAccountingError::NonCanonicalContributions.into());
+        }
+        validate_risk_accounting_scope(event_type, &rule_ids, &canonical)?;
         let computed = crate::scoring::checked_risk_sum(&canonical)?;
         if declared != computed {
             return Err(RiskAccountingError::ScoreMismatch { declared, computed }.into());
@@ -1347,7 +1351,11 @@ fn export_summary_counts(events: &[&serde_json::Value]) -> ExportSummaryCounts {
         if let Some(values) = event.get("rule_ids").and_then(|value| value.as_array()) {
             for value in values.iter().filter_map(|value| value.as_str()) {
                 *rule_ids
-                    .entry(terminal_rule_identifier(value))
+                    .entry(if is_canonical_historical_event(event) {
+                        terminal_historical_rule_identifier(value)
+                    } else {
+                        terminal_rule_identifier(value)
+                    })
                     .or_insert(0_usize) += 1;
             }
         }

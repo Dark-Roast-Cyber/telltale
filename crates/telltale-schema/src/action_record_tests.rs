@@ -450,6 +450,63 @@ fn schema_vocabularies_match_the_rust_types() {
     );
 }
 
+#[test]
+fn consumer_rejects_older_unredacted_windows_paths_and_accepts_redacted_records() {
+    let base = record();
+    let expected_delivery_key = base.delivery_key();
+    let base_wire = serde_json::to_value(&base).unwrap();
+
+    for (case, legacy_text) in [
+        r"dir \Device\HarddiskVolume3\Users\SyntheticUser\notes.txt",
+        r"dir \\fileserver\\share\notes.txt",
+        "open C:/Users",
+        r"dir ~\My Docs\SyntheticUser\notes.txt",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut evidence_wire = base_wire.clone();
+        evidence_wire["evidence"][0]["redacted_value"] = json!(legacy_text);
+        evidence_wire["evidence"][0]["highlight"] = Value::Null;
+        assert_eq!(
+            ActionRecordV1::from_json(&bytes(&evidence_wire))
+                .map(|_| ())
+                .map_err(|error| error.code()),
+            Err("unredacted_text"),
+            "evidence case {case}"
+        );
+
+        let mut context_wire = base_wire.clone();
+        context_wire["context"][0]["redacted_text"] = json!(legacy_text);
+        assert_eq!(
+            ActionRecordV1::from_json(&bytes(&context_wire))
+                .map(|_| ())
+                .map_err(|error| error.code()),
+            Err("unredacted_text"),
+            "context case {case}"
+        );
+
+        let mut rationale_wire = base_wire.clone();
+        rationale_wire["contributions"][0]["rationale"] = json!(legacy_text);
+        assert_eq!(
+            ActionRecordV1::from_json(&bytes(&rationale_wire))
+                .map(|_| ())
+                .map_err(|error| error.code()),
+            Err("unredacted_text"),
+            "rationale case {case}"
+        );
+
+        let mut redacted_wire = base_wire.clone();
+        redacted_wire["evidence"][0]["redacted_value"] = json!(redact_sensitive_text(legacy_text));
+        redacted_wire["evidence"][0]["highlight"] = Value::Null;
+        redacted_wire["context"][0]["redacted_text"] = json!(redact_sensitive_text(legacy_text));
+        redacted_wire["contributions"][0]["rationale"] = json!(redact_sensitive_text(legacy_text));
+        let accepted = ActionRecordV1::from_json(&bytes(&redacted_wire))
+            .expect("redacted record must be accepted");
+        assert_eq!(accepted.delivery_key(), expected_delivery_key);
+    }
+}
+
 /// Every stage, in declaration order. The match fails to compile when a
 /// stage is added, so the schema enum cannot silently drift.
 fn all_stages() -> Vec<ObservationStage> {
