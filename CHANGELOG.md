@@ -8,6 +8,27 @@
 
 ### Compatibility and operator impact
 
+- Carry the maintained Windows path privacy and historical-export repairs
+  without changing detection predicates, declared tool operations or the native
+  action profile. Win32 device-namespace, NT object-namespace (`\Device\`,
+  `\??\`, `\GLOBAL??\`, `\DosDevices\`), escaped and mixed-width UNC (including
+  server names), slash-variant drive, and backslash home Windows paths are
+  redacted whole within the documented heuristic limits while preserving
+  escaped registry keys, COM CLSID paths, and doubled-backslash escape
+  sequences. Historical exports preserve valid nested rule identifiers and
+  existing replacement markers in the five Event 3 rule-ID fields only;
+  correlation derivation from replacement rule IDs remains unsupported. Event
+  3.0 contribution validation on historical export and typed readback uses the
+  historical rule-ID policy, and contributions whose IDs are replaced have
+  their canonical `(type, id)` order restored on export, so exported bytes and
+  accepted historical rows can differ from the previous release. Stricter
+  redaction can change evidence
+  bytes and cause a changed-evidence emission on upgrade; subsequent unchanged
+  ordinary (non-backfill) scans still deduplicate. Producer and consumer
+  privacy pins (including `ActionRecordV1` consumers) must be qualified
+  together. Sanitized exports are views, not canonical replay or permission to
+  replace indexed history.
+
 - Stop repeated process-chain correlation alerts caused only by fresh supporting
   Event 3 IDs on each scan. Scanner state uses canonical supporting evidence,
   while new occurrences and evidence changes remain eligible. No state migration

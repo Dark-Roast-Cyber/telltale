@@ -48,10 +48,40 @@ static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:\b[a-z][a-z0-9+.-]*:)?//[^\s<>\"']+"#).expect("URL regex")
 });
 
-static WINDOWS_OR_UNC_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?i)(?:\b[A-Z]:\\(?:[^\s\\<>\"'`,;()\[\]{}:&|]+(?:\s+[^\s\\<>\"'`,;()\[\]{}:&|]+)*\\)*[^\s\\<>\"'`,;()\[\]{}:&|]+|\\\\[^\s\\<>\"'`,;()\[\]{}:&|]+\\(?:[^\s\\<>\"'`,;()\[\]{}:&|]+(?:\s+[^\s\\<>\"'`,;()\[\]{}:&|]+)*\\)*[^\s\\<>\"'`,;()\[\]{}:&|]+)"#,
-    )
+/// Windows device-namespace (`\\?\`, `\\.\`), NT object-namespace (`\Device\`,
+/// `\??\`, `\GLOBAL??\`, `\DosDevices\`), UNC (`\\server\share`), drive
+/// (`C:\`, `C:/`), and backslash home (`~\`) paths in plain, JSON-escaped, and
+/// mixed-width separator forms.
+///
+/// Device and NT object branches precede UNC so shared starts with drive
+/// colons or `{guid}` volume names match whole. NT object and UNC starts
+/// require a token boundary (not a word character, closing bracket, or stray
+/// backslash) so escaped registry keys such as `HKCU\\Software\\...` or COM
+/// CLSID paths stay intact. Drive letters disallow a preceding letter so
+/// PowerShell provider drives such as `HKLM:\` stay readable, while allowing
+/// escaped `\n`, `\r`, or `\t` prefixes.
+static WINDOWS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    const PART_CHAR: &str = r#"[^\s\\/<>"'`,;()\[\]{}:&|]"#;
+    const DEVICE_NAME_CHAR: &str = r#"[^\s\\/<>"'`,;()\[\]:&|]"#;
+    const UNC_SERVER: &str = r"[A-Za-z0-9][A-Za-z0-9._-]*";
+    const SEP: &str = r"(?:\\+|/)";
+    const TOKEN_LEAD: &str = r"(?:^|[^A-Za-z0-9_.\-)}\]\\]|\\[nrt])";
+    // Directories may hold spaces; the last component may not.
+    let tail = format!(r"(?:{PART_CHAR}+(?:\s+{PART_CHAR}+)*{SEP})*{PART_CHAR}+");
+    let win32_device =
+        format!(r"\\{{2,}}[?.]{SEP}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:{SEP}{tail})?");
+    // NT redirector paths can carry logon-ID prefix segments (`\;Z:0001\server\share`).
+    let nt_object = format!(
+        r"(?P<nt_lead>{TOKEN_LEAD})\\+(?:Device|GLOBAL\?\?|\?\?|DosDevices){SEP}(?:[A-Z]:{PART_CHAR}*|{DEVICE_NAME_CHAR}+)(?:{SEP};[A-Za-z0-9._:-]+)*(?:{SEP}{tail})?"
+    );
+    let unc = format!(
+        r"(?P<unc_lead>{TOKEN_LEAD})(?P<unc_start>\\{{2,}})(?P<unc_server>{UNC_SERVER})(?P<unc_sep>\\+){tail}"
+    );
+    let drive = format!(r"(?P<drive_lead>^|[^A-Z]|\\[nrt])[A-Z]:{SEP}{tail}");
+    let home = format!(r"(?P<home_lead>^|[^A-Za-z0-9_~\\]|\\[nrt])~\\+{tail}");
+    Regex::new(&format!(
+        r"(?i){win32_device}|{nt_object}|{unc}|{drive}|{home}"
+    ))
     .expect("Windows path regex")
 });
 
@@ -2448,9 +2478,7 @@ fn split_url_before_absolute_path(url: &str) -> (&str, &str) {
 }
 
 fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
-    let redacted = WINDOWS_OR_UNC_PATH_RE
-        .replace_all(text, marker)
-        .into_owned();
+    let redacted = redact_windows_paths(text, marker);
     let redacted = POSIX_PRIVATE_PATH_RE
         .replace_all(&redacted, |captures: &regex::Captures<'_>| {
             let whole = &captures[0];
@@ -2469,6 +2497,169 @@ fn redact_paths_outside_urls(text: &str, marker: &str) -> String {
     CREDENTIAL_PATH_RE
         .replace_all(&redacted, marker)
         .into_owned()
+}
+
+/// Redact Windows device, NT object-namespace, UNC, drive, and backslash home
+/// paths in one pass. A leading boundary capture is preserved; doubled
+/// backslash escape runs such as `\\r\\n` or `\\u0061\\u0062` are skipped
+/// without skipping any path that follows them.
+fn redact_windows_paths(text: &str, marker: &str) -> String {
+    let mut redacted = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(captures) = WINDOWS_PATH_RE.captures_at(text, search) {
+        let whole = captures.get(0).expect("whole match");
+        if let (Some(start), Some(server), Some(sep)) = (
+            captures.name("unc_start"),
+            captures.name("unc_server"),
+            captures.name("unc_sep"),
+        ) && is_escaped_sequence_not_unc(start.as_str(), server.as_str(), sep.as_str())
+        {
+            search = start.end();
+            continue;
+        }
+        let lead = captures
+            .name("nt_lead")
+            .or_else(|| captures.name("unc_lead"))
+            .or_else(|| captures.name("drive_lead"))
+            .or_else(|| captures.name("home_lead"))
+            .map_or(0, |lead| lead.len());
+        let span_start = whole.start() + lead;
+        let span_end = extend_spaced_filename(text, span_start, whole.end());
+        redacted.push_str(&text[copied..span_start]);
+        redacted.push_str(marker);
+        copied = span_end;
+        search = span_end;
+    }
+    redacted.push_str(&text[copied..]);
+    redacted
+}
+
+/// Extend a Windows path match across spaces in its final component when the
+/// continuation clearly belongs to the filename rather than following command
+/// arguments:
+/// - When the matched final segment already carries a file extension, stop so
+///   following arguments (`file.txt now`, `"a.exe arg2"`) are not swallowed.
+/// - Otherwise, inside matching quotes opened immediately before the path,
+///   extend across plain words up to the closing quote (or the first
+///   extension-bearing word if a flag follows).
+/// - Outside quotes, extend across plain words through the first
+///   extension-bearing word (e.g. `C:\Users\Alice\Private Notes.txt`),
+///   stopping before flags (`-...`), assignments (`=`), newlines, or
+///   delimiters.
+fn extend_spaced_filename(text: &str, span_start: usize, match_end: usize) -> usize {
+    let last_segment = text[span_start..match_end]
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("");
+    if has_filename_extension(last_segment) {
+        return match_end;
+    }
+    let opening_quote = opening_path_quote(text, span_start);
+    let mut cursor = match_end;
+    let mut best_end = match_end;
+    while let Some(rest) = text[cursor..].strip_prefix(' ') {
+        let word_start = cursor + 1;
+        let word_end = word_start
+            + rest
+                .find(|c: char| {
+                    c.is_whitespace()
+                        || matches!(
+                            c,
+                            '\\' | '/'
+                                | '<'
+                                | '>'
+                                | '"'
+                                | '\''
+                                | '`'
+                                | ','
+                                | ';'
+                                | '('
+                                | ')'
+                                | '['
+                                | ']'
+                                | '{'
+                                | '}'
+                                | ':'
+                                | '&'
+                                | '|'
+                                | '='
+                        )
+                })
+                .unwrap_or(rest.len());
+        let word = &text[word_start..word_end];
+        if word.is_empty() || word.starts_with('-') {
+            break;
+        }
+        let (candidate, candidate_end) = match word.strip_suffix('.') {
+            Some(trimmed) if has_filename_extension(trimmed) => (trimmed, word_end - 1),
+            _ => (word, word_end),
+        };
+        if let Some((quote, escaped)) = opening_quote {
+            let after = &text[word_end..];
+            let closes_quote = if escaped {
+                after.starts_with(&format!("\\{quote}"))
+            } else {
+                after.starts_with(quote)
+            };
+            if closes_quote {
+                return word_end;
+            }
+            if has_filename_extension(candidate) {
+                return candidate_end;
+            }
+            if after.starts_with(' ') {
+                cursor = word_end;
+                continue;
+            }
+            break;
+        }
+        if has_filename_extension(candidate) {
+            best_end = candidate_end;
+            break;
+        }
+        cursor = word_end;
+    }
+    best_end
+}
+
+fn opening_path_quote(text: &str, span_start: usize) -> Option<(char, bool)> {
+    let prefix = &text[..span_start];
+    let quote = prefix.chars().next_back()?;
+    if !matches!(quote, '"' | '\'' | '`') {
+        return None;
+    }
+    let escaped = prefix[..prefix.len() - quote.len_utf8()].ends_with('\\');
+    Some((quote, escaped))
+}
+
+fn has_filename_extension(segment: &str) -> bool {
+    let Some((stem, ext)) = segment.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && (1..=8).contains(&ext.len())
+        && ext.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+/// Distinguish doubled-backslash escape sequences (`\\r\\n`, `\\n\\t`,
+/// `\\u0061\\u0062`, `\\x0d\\x0a`) from mixed-width UNC paths whose server
+/// separator is doubled (`\\fileserver\\share`).
+fn is_escaped_sequence_not_unc(start: &str, server: &str, sep: &str) -> bool {
+    if start.len() != 2 || sep.len() < 2 {
+        return false;
+    }
+    server.len() == 1 || is_unicode_or_hex_escape(server)
+}
+
+fn is_unicode_or_hex_escape(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    (bytes.len() == 5
+        && bytes[0].eq_ignore_ascii_case(&b'u')
+        && bytes[1..].iter().all(u8::is_ascii_hexdigit))
+        || (bytes.len() == 3
+            && bytes[0].eq_ignore_ascii_case(&b'x')
+            && bytes[1..].iter().all(u8::is_ascii_hexdigit))
 }
 
 fn path_marker(context: SanitizationContext) -> &'static str {
@@ -3463,6 +3654,495 @@ safe=value"#,
             let redacted = PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, path);
             assert!(!redacted.contains("TT_PRIVACY_"));
             assert_eq!(redacted, "<path>");
+        }
+    }
+
+    #[test]
+    fn windows_device_namespace_paths_are_redacted_in_every_context() {
+        let path = r"\\?\C:\Users\SyntheticBoundary\notes.txt";
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Evidence, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, path),
+            "<path>"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Url, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Path, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::CommandResult, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Summary, path),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Metadata, path),
+            "[sensitive-path]"
+        );
+    }
+
+    #[test]
+    fn escaped_windows_paths_are_redacted_whole() {
+        assert_eq!(
+            redact_sensitive_text(r#"{"path":"C:\\Users\\SyntheticBoundary\\notes.txt"}"#),
+            r#"{"path":"[sensitive-path]"}"#,
+        );
+        assert_eq!(
+            redact_sensitive_text(r#"{"path":"\\\\server\\share\\SyntheticBoundary\\notes.txt"}"#),
+            r#"{"path":"[sensitive-path]"}"#,
+        );
+        assert_eq!(
+            redact_sensitive_text(r#"{"path":"\\\\?\\C:\\Users\\SyntheticBoundary\\notes.txt"}"#),
+            r#"{"path":"[sensitive-path]"}"#,
+        );
+        assert_eq!(
+            redact_sensitive_text(
+                r#"{\"path\":\"C:\\\\Users\\\\SyntheticBoundary\\\\notes.txt\"}"#
+            ),
+            r#"{\"path\":\"[sensitive-path]\"}"#,
+        );
+    }
+
+    #[test]
+    fn mixed_width_windows_paths_are_redacted_in_both_orders() {
+        assert_eq!(
+            redact_sensitive_text(r"C:\Users\\SyntheticBoundary\\\\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"C:\\Users\SyntheticBoundary\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\server\share\\SyntheticBoundary\\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\\\server\\share\SyntheticBoundary\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\?\C:\Users\\SyntheticBoundary\\\\notes.txt"),
+            "[sensitive-path]"
+        );
+        assert_eq!(
+            redact_sensitive_text(r"\\\\?\\UNC\\server\\share\SyntheticBoundary\notes.txt"),
+            "[sensitive-path]"
+        );
+    }
+
+    #[test]
+    fn drive_path_boundaries_keep_the_surrounding_text() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+        assert_eq!(
+            sanitize(r"out_C:\Users\SyntheticBoundary\notes.txt"),
+            "out_<path>"
+        );
+        assert_eq!(
+            sanitize(r"2C:\Users\SyntheticBoundary\notes.txt"),
+            "2<path>"
+        );
+        assert_eq!(
+            sanitize(r#""exit\r\nC:\\Users\\SyntheticBoundary>dir""#),
+            r#""exit\r\n<path>>dir""#
+        );
+    }
+
+    #[test]
+    fn windows_path_heuristic_keeps_documented_ambiguous_forms() {
+        assert_eq!(
+            redact_sensitive_text("bazel build //app/server:binary"),
+            "bazel build //app/server:binary"
+        );
+        assert_eq!(
+            redact_sensitive_text("open //server/share/example/notes.txt now"),
+            "open //server/share/example/notes.txt now"
+        );
+        assert_eq!(
+            redact_sensitive_text(
+                r"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater"
+            ),
+            r"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater"
+        );
+    }
+
+    #[test]
+    fn nt_object_namespace_paths_are_redacted_whole_and_idempotently() {
+        let cases = [
+            (
+                r"\Device\HarddiskVolume3\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"dir \Device\HarddiskVolume3\Users\Synthetic User\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"\Device\HarddiskVolumeShadowCopy1\Users\SyntheticUser\secret.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\Device\Mup\fileserver\share\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\Device\LanmanRedirector\;Z:0000000000012345\fileserver\share\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\Device\Mup\;LanmanRedirector\;Z:0000000000012345\fileserver\share\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\Device\Volume{12345678-1234-1234-1234-1234567890ab}\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (r"\Device\NamedPipe\SyntheticPipe", "[sensitive-path]"),
+            (r"\??\C:\Users\SyntheticUser\notes.txt", "[sensitive-path]"),
+            (
+                r"\??\UNC\fileserver\share\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\??\Volume{12345678-1234-1234-1234-1234567890ab}\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\GLOBAL??\C:\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\GLOBAL??\UNC\fileserver\share\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\DosDevices\C:\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\DosDevices\UNC\fileserver\share\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r#"{"path":"\\Device\\HarddiskVolume3\\Users\\SyntheticUser\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{\"path\":\"\\\\Device\\\\HarddiskVolume3\\\\Users\\\\SyntheticUser\\\\notes.txt\"}"#,
+                r#"{\"path\":\"[sensitive-path]\"}"#,
+            ),
+            (
+                r"\Device\HarddiskVolume3\\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"\\Device\\HarddiskVolume3\Users\SyntheticUser\notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r#"{"path":"\\??\\C:\\Users\\SyntheticUser\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{"path":"\\??\\UNC\\fileserver\\share\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{"path":"\\GLOBAL??\\UNC\\fileserver\\share\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{"path":"\\DosDevices\\UNC\\fileserver\\share\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r"exit\r\n\Device\HarddiskVolume3\Users\SyntheticUser\notes.txt",
+                r"exit\r\n[sensitive-path]",
+            ),
+            (
+                r"dir \Device\HarddiskVolume3\file.txt; echo ok",
+                "dir [sensitive-path]; echo ok",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let redacted = redact_sensitive_text(input);
+            assert_eq!(redacted, expected, "{input}");
+            assert_eq!(
+                redact_sensitive_text(&redacted),
+                redacted,
+                "idempotent: {input}"
+            );
+        }
+
+        let nt_path = r"\Device\HarddiskVolume3\Users\SyntheticUser\notes.txt";
+        for context in [
+            SanitizationContext::Evidence,
+            SanitizationContext::Diagnostic,
+            SanitizationContext::Url,
+            SanitizationContext::Path,
+            SanitizationContext::CommandResult,
+            SanitizationContext::Summary,
+            SanitizationContext::Metadata,
+        ] {
+            let expected = if context == SanitizationContext::Diagnostic {
+                "<path>"
+            } else {
+                "[sensitive-path]"
+            };
+            let redacted = PrivacySanitizer::sanitize(context, nt_path);
+            assert_eq!(redacted, expected, "{context:?}");
+            assert_eq!(
+                PrivacySanitizer::sanitize(context, &redacted),
+                redacted,
+                "idempotent {context:?}"
+            );
+        }
+
+        let url = "https://example.invalid/open?p=%5CDevice%5CHarddiskVolume3%5CUsers%5CSyntheticUser%5Cnotes.txt&safe=ok";
+        let redacted_url = PrivacySanitizer::sanitize(SanitizationContext::Url, url);
+        assert_eq!(
+            redacted_url,
+            "https://example.invalid/open?p=[sensitive-path]&safe=ok"
+        );
+        assert_eq!(
+            PrivacySanitizer::sanitize(SanitizationContext::Url, &redacted_url),
+            redacted_url
+        );
+    }
+
+    #[test]
+    fn mixed_width_and_escaped_unc_paths_redact_server_names_whole() {
+        let cases = [
+            (r"dir \\fileserver\\share\notes.txt", "dir [sensitive-path]"),
+            (
+                r"dir \\fileserver\\share\\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\fileserver\\\share\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\fileserver\\\\share\\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\\\fileserver\share\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\\\fileserver\\\\share\\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (r"dir \\\fileserver\share\notes.txt", "dir [sensitive-path]"),
+            (
+                r"dir \\fileserver\\Shared Docs\\SyntheticUser\\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r#"{"path":"\\fileserver\\share\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{"path":"\\\\fileserver\\\\share\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r"dir \\10.0.0.5\\c$\\Users\\SyntheticUser\\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"exit\r\n\\fileserver\\share\notes.txt",
+                r"exit\r\n[sensitive-path]",
+            ),
+            (
+                r"dir \\?\\C:\Users\SyntheticUser\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\\\?\C:\Users\SyntheticUser\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\?\\UNC\\fileserver\\share\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r"dir \\?\\Volume{12345678-1234-1234-1234-1234567890ab}\Users\SyntheticUser\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (r"dir \\.\\pipe\\SyntheticPipe", "dir [sensitive-path]"),
+            (r"dir \\\\.\pipe\SyntheticPipe", "dir [sensitive-path]"),
+        ];
+
+        for (input, expected) in cases {
+            let redacted = redact_sensitive_text(input);
+            assert_eq!(redacted, expected, "{input}");
+            assert!(!redacted.contains("fileserver"), "{input}: {redacted}");
+            assert!(!redacted.contains("Synthetic"), "{input}: {redacted}");
+            assert_eq!(
+                redact_sensitive_text(&redacted),
+                redacted,
+                "idempotent: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_drive_slash_variants_and_backslash_home_paths_are_redacted_whole() {
+        let cases = [
+            ("C:/Users/SyntheticUser/notes.txt", "[sensitive-path]"),
+            ("C:/Users", "[sensitive-path]"),
+            ("C:/Program Files/My App/notes.txt", "[sensitive-path]"),
+            (r"C:\Program Files/My App/notes.txt", "[sensitive-path]"),
+            (r"C:/Users\SyntheticUser/notes.txt", "[sensitive-path]"),
+            (r"C:\\\Users\SyntheticUser\notes.txt", "[sensitive-path]"),
+            (
+                "schtasks /create /tn Updater /tr C:/tools/a.exe /sc onlogon",
+                "schtasks /create /tn Updater /tr [sensitive-path] /sc onlogon",
+            ),
+            (
+                r"dir ~\My Docs\SyntheticUser\notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r#"{"path":"~\\My Docs\\SyntheticUser\\notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let redacted = redact_sensitive_text(input);
+            assert_eq!(redacted, expected, "{input}");
+            assert!(!redacted.contains("SyntheticUser"), "{input}: {redacted}");
+            assert_eq!(
+                redact_sensitive_text(&redacted),
+                redacted,
+                "idempotent: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_path_redaction_preserves_registry_keys_urls_flags_and_escapes() {
+        let preserved = [
+            r"reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v Updater",
+            r"reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater",
+            r"reg add HKCU\\Software\Microsoft\Run /v Updater",
+            r#"reg add "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon""#,
+            r"reg add HKCU\\Software\\Classes\\CLSID\\{12345678-1234-1234-1234-1234567890ab}\\InprocServer32\\Default",
+            r"reg query HKLM\SYSTEM\CurrentControlSet\Enum\Device\Parameters",
+            r"reg query HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
+            r#"printf "hello\\n\\tworld""#,
+            r#"re.split("\\r\\n", text)"#,
+            r#"printf "\\n\\t""#,
+            r#"grep -E "\\d+\\s+\\w+""#,
+            r#"{"label":"\\u0061\\u0062"}"#,
+            r#"{"hex":"\\x0d\\x0a"}"#,
+            "https://example.invalid/api/v1/device/123",
+            "bazel build //app/server:binary",
+            "open //server/share/example/notes.txt now",
+        ];
+
+        for input in preserved {
+            let redacted = redact_sensitive_text(input);
+            assert_eq!(redacted, input, "{input}");
+            assert_eq!(
+                redact_sensitive_text(&redacted),
+                redacted,
+                "idempotent: {input}"
+            );
+        }
+
+        assert_eq!(
+            redact_sensitive_text(r#""\\r\\nC:\\Users\\SyntheticUser\\notes.txt""#),
+            r#""\\r\\n[sensitive-path]""#
+        );
+    }
+
+    #[test]
+    fn windows_final_filename_spaces_are_redacted_without_swallowing_arguments() {
+        let cases = [
+            (
+                r"C:\Users\SyntheticUser\Private Notes.txt",
+                "[sensitive-path]",
+            ),
+            (
+                r"dir C:\Users\SyntheticUser\My Private Notes.txt && echo ok",
+                "dir [sensitive-path] && echo ok",
+            ),
+            (
+                r"cat C:\Users\SyntheticUser\Private Notes.txt now",
+                "cat [sensitive-path] now",
+            ),
+            (
+                r"Read C:\Users\SyntheticUser\Private Notes.txt.",
+                "Read [sensitive-path].",
+            ),
+            (
+                r"type \Device\HarddiskVolume3\Users\SyntheticUser\Private Notes.txt",
+                "type [sensitive-path]",
+            ),
+            (
+                r"dir \\fileserver\\share\Private Notes.txt",
+                "dir [sensitive-path]",
+            ),
+            (
+                r#"{"path":"C:\\Users\\SyntheticUser\\Private Notes.txt"}"#,
+                r#"{"path":"[sensitive-path]"}"#,
+            ),
+            (
+                r#"{\"path\":\"C:\\\\Users\\\\SyntheticUser\\\\Private Notes.txt\"}"#,
+                r#"{\"path\":\"[sensitive-path]\"}"#,
+            ),
+            (
+                r#"dir "C:\Users\SyntheticUser\My Secret Folder" /s"#,
+                r#"dir "[sensitive-path]" /s"#,
+            ),
+            (
+                r#"dir "C:\Users\SyntheticUser\Private Notes.txt" /s"#,
+                r#"dir "[sensitive-path]" /s"#,
+            ),
+            (
+                r#""C:\Users\SyntheticUser\Private Notes.txt --flag""#,
+                r#""[sensitive-path] --flag""#,
+            ),
+            // Arguments after an already-terminated path must stay readable.
+            (
+                r"open C:\Users\SyntheticUser\notes.txt now",
+                "open [sensitive-path] now",
+            ),
+            (
+                r"run C:\tools\a.exe --flag value",
+                "run [sensitive-path] --flag value",
+            ),
+            (r#""C:\tools\a.exe arg2""#, r#""[sensitive-path] arg2""#),
+            (
+                r"schtasks /create /tn Updater /tr C:\tools\a.exe /sc onlogon",
+                "schtasks /create /tn Updater /tr [sensitive-path] /sc onlogon",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let redacted = redact_sensitive_text(input);
+            assert_eq!(redacted, expected, "{input}");
+            assert!(!redacted.contains("Notes.txt"), "{input}: {redacted}");
+            assert!(!redacted.contains("Secret Folder"), "{input}: {redacted}");
+            assert_eq!(
+                redact_sensitive_text(&redacted),
+                redacted,
+                "idempotent: {input}"
+            );
         }
     }
 

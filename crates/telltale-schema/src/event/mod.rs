@@ -16,8 +16,8 @@ use uuid::Uuid;
 use crate::clients::ClientId;
 use crate::scoring::{
     RiskAccountingError, RiskContribution, RiskContributionType, RiskThresholds,
-    assess_risk_with_thresholds, canonicalize_contributions, checked_risk_sum,
-    is_canonical_contribution_id, load_thresholds,
+    assess_risk_with_thresholds, canonicalize_contributions, canonicalize_terminal_contributions,
+    checked_risk_sum, checked_terminal_risk_sum, load_thresholds,
 };
 use crate::source::{Source, SourceInventoryChangeSummary};
 
@@ -41,10 +41,11 @@ pub use consumer::{
 pub use identifier::{
     CanonicalOpaqueIdentifier, is_canonical_opaque_identifier_for_kind, opaque_identifier,
     parse_canonical_opaque_identifier, terminal_historical_identifier,
-    terminal_historical_product_metadata, terminal_historical_session_id,
-    terminal_historical_tool_label, terminal_identifier, terminal_product_metadata,
-    terminal_rule_identifier, terminal_session_id, terminal_tool_label,
+    terminal_historical_product_metadata, terminal_historical_rule_identifier,
+    terminal_historical_session_id, terminal_historical_tool_label, terminal_identifier,
+    terminal_product_metadata, terminal_rule_identifier, terminal_session_id, terminal_tool_label,
 };
+pub(crate) use identifier::{is_native_rule_identifier, is_terminal_rule_identifier};
 use identifier::{
     is_safe_atlas_tag, is_safe_structured_identifier, is_supported_client_identifier,
     terminal_atlas_tag, terminal_client_id, terminal_historical_client_id,
@@ -443,6 +444,11 @@ pub fn sanitize_serialized_event(event: &mut Value) {
         let Some(event) = event.as_object_mut() else {
             return;
         };
+        let rule_identifier = if canonical_event {
+            terminal_historical_rule_identifier
+        } else {
+            terminal_rule_identifier
+        };
 
         transform_serialized_string(event, "event_time", |value| {
             terminal_imported_event_time(canonical_event, value)
@@ -506,9 +512,7 @@ pub fn sanitize_serialized_event(event: &mut Value) {
         transform_serialized_string(event, "tool_name", |value| {
             terminal_imported_identifier(canonical_event, "tool", value)
         });
-        transform_serialized_identifier_array(event, "rule_ids", |value| {
-            terminal_rule_identifier(value)
-        });
+        transform_serialized_identifier_array(event, "rule_ids", rule_identifier);
         transform_serialized_identifier_array(event, "categories", |value| {
             terminal_imported_identifier(canonical_event, "category", value)
         });
@@ -562,6 +566,8 @@ pub fn sanitize_serialized_event(event: &mut Value) {
                 let Some(item) = item.as_object_mut() else {
                     continue;
                 };
+                transform_serialized_string(item, "rule_id", rule_identifier);
+                transform_serialized_string(item, "hash", terminal_evidence_hash);
                 let Some(field) = item
                     .get("field")
                     .and_then(Value::as_str)
@@ -572,8 +578,6 @@ pub fn sanitize_serialized_event(event: &mut Value) {
                 transform_serialized_string(item, "field", |value| {
                     terminal_imported_identifier(canonical_event, "evidence-field", value)
                 });
-                transform_serialized_string(item, "rule_id", terminal_rule_identifier);
-                transform_serialized_string(item, "hash", terminal_evidence_hash);
                 let Some(Value::String(value)) = item.get_mut("redacted_value") else {
                     continue;
                 };
@@ -594,14 +598,24 @@ pub fn sanitize_serialized_event(event: &mut Value) {
             .get_mut("risk_contributions")
             .and_then(Value::as_array_mut)
         {
-            for contribution in contributions {
+            let mut rule_id_changed = false;
+            for contribution in contributions.iter_mut() {
                 let Some(contribution) = contribution.as_object_mut() else {
                     continue;
                 };
-                transform_serialized_string(contribution, "id", terminal_rule_identifier);
+                let original_id = contribution
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                transform_serialized_string(contribution, "id", rule_identifier);
+                rule_id_changed |=
+                    original_id.as_deref() != contribution.get("id").and_then(Value::as_str);
                 transform_serialized_string(contribution, "rationale", |value| {
                     RiskContribution::emitted_rationale(value)
                 });
+            }
+            if rule_id_changed {
+                sort_serialized_contributions(contributions);
             }
         }
 
@@ -629,10 +643,37 @@ pub fn sanitize_serialized_event(event: &mut Value) {
     );
 }
 
+fn sort_serialized_contributions(values: &mut Vec<Value>) {
+    // Keep the original objects, unknown structure and duplicates. Only a full
+    // terminal DTO supplies an ordering key; validators still reject bad data.
+    let Ok(parsed) = values
+        .iter()
+        .map(|value| serde_json::from_value::<RiskContribution>(value.clone()))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return;
+    };
+    let mut keyed = std::mem::take(values)
+        .into_iter()
+        .zip(parsed)
+        .collect::<Vec<_>>();
+    keyed.sort_by(|(_, left), (_, right)| left.canonical_key().cmp(&right.canonical_key()));
+    *values = keyed.into_iter().map(|(value, _)| value).collect();
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SerializedValueScope {
     Root,
     Known(Option<&'static str>),
+    RuleIdentifier,
+    RuleIdentifiers,
+    EvidenceList,
+    Evidence,
+    ContributionsList,
+    Contributions,
+    TimelineAnchorList,
+    TimelineAnchors,
+    Process,
     Extension,
 }
 
@@ -649,11 +690,17 @@ fn sanitize_serialized_value(
         Value::String(text) => {
             let expected_marker = match scope {
                 SerializedValueScope::Known(kind) => kind,
-                SerializedValueScope::Root | SerializedValueScope::Extension => None,
+                SerializedValueScope::RuleIdentifier => Some("rule"),
+                _ => None,
             };
             let preserve_canonical_mitre = expected_marker == Some("mitre-technique")
                 && (is_canonical_mitre_attack_technique(text) || is_canonical_mitre_hash(text));
             if preserve_canonical_mitre {
+                return;
+            }
+            // Only the five field-specific rule-ID slots have already crossed
+            // their terminal policy. A nested key named `id` is not enough.
+            if scope == SerializedValueScope::RuleIdentifier && is_terminal_rule_identifier(text) {
                 return;
             }
             if let Some(marker) = parse_canonical_opaque_identifier(text) {
@@ -681,6 +728,30 @@ fn sanitize_serialized_value(
         }
         Value::Array(values) => {
             for value in values {
+                let child_scope = match (scope, &*value) {
+                    (SerializedValueScope::RuleIdentifiers, Value::String(_)) => {
+                        SerializedValueScope::RuleIdentifier
+                    }
+                    (SerializedValueScope::EvidenceList, Value::Object(_)) => {
+                        SerializedValueScope::Evidence
+                    }
+                    (SerializedValueScope::ContributionsList, Value::Object(_)) => {
+                        SerializedValueScope::Contributions
+                    }
+                    (SerializedValueScope::TimelineAnchorList, Value::Object(_)) => {
+                        SerializedValueScope::TimelineAnchors
+                    }
+                    (
+                        SerializedValueScope::RuleIdentifier
+                        | SerializedValueScope::RuleIdentifiers
+                        | SerializedValueScope::EvidenceList
+                        | SerializedValueScope::ContributionsList
+                        | SerializedValueScope::TimelineAnchorList
+                        | SerializedValueScope::Process,
+                        _,
+                    ) => SerializedValueScope::Extension,
+                    _ => scope,
+                };
                 sanitize_serialized_value(
                     value,
                     context,
@@ -688,7 +759,7 @@ fn sanitize_serialized_value(
                     allow_evidence_hash,
                     preserve_historical_markers,
                     preserve_terminal_markers,
-                    scope,
+                    child_scope,
                 );
             }
         }
@@ -757,14 +828,35 @@ fn sanitize_serialized_value(
 fn serialized_value_scope(parent: SerializedValueScope, field: &str) -> SerializedValueScope {
     match parent {
         SerializedValueScope::Extension => SerializedValueScope::Extension,
+        SerializedValueScope::Root if field == "rule_ids" => SerializedValueScope::RuleIdentifiers,
+        SerializedValueScope::Root if field == "evidence" => SerializedValueScope::EvidenceList,
+        SerializedValueScope::Root if field == "risk_contributions" => {
+            SerializedValueScope::ContributionsList
+        }
+        SerializedValueScope::Root if field == "timeline_anchors" => {
+            SerializedValueScope::TimelineAnchorList
+        }
+        SerializedValueScope::Root if field == "process" => SerializedValueScope::Process,
+        SerializedValueScope::Evidence if field == "rule_id" => {
+            SerializedValueScope::RuleIdentifier
+        }
+        SerializedValueScope::Contributions if field == "id" => {
+            SerializedValueScope::RuleIdentifier
+        }
+        SerializedValueScope::TimelineAnchors if field == "rule_ids" => {
+            SerializedValueScope::RuleIdentifiers
+        }
+        SerializedValueScope::Process if field == "secondary_rule_ids" => {
+            SerializedValueScope::RuleIdentifiers
+        }
         SerializedValueScope::Root if is_known_serialized_event_field(field) => {
             SerializedValueScope::Known(serialized_field_marker_kind(field))
         }
         SerializedValueScope::Root => SerializedValueScope::Extension,
-        SerializedValueScope::Known(_) if is_known_serialized_nested_field(field) => {
+        _ if is_known_serialized_nested_field(field) => {
             SerializedValueScope::Known(serialized_field_marker_kind(field))
         }
-        SerializedValueScope::Known(_) => SerializedValueScope::Extension,
+        _ => SerializedValueScope::Extension,
     }
 }
 
@@ -885,7 +977,7 @@ fn serialized_field_marker_kind(field: &str) -> Option<&'static str> {
         "client" => Some("client"),
         "session_id" => Some("session"),
         "tool_name" => Some("tool"),
-        "rule_ids" | "rule_id" | "id" => Some("rule"),
+        "rule_ids" | "rule_id" | "id" | "secondary_rule_ids" => Some("rule"),
         "categories" => Some("category"),
         "field" | "evidence_fields" => Some("evidence-field"),
         "detection_classes" => Some("detection-class"),
@@ -1217,7 +1309,13 @@ fn sanitize_serialized_timeline_anchors(anchors: &mut Value, canonical_event: bo
         let Some(anchor) = anchor.as_object_mut() else {
             continue;
         };
-        transform_serialized_identifier_array(anchor, "rule_ids", terminal_rule_identifier);
+        transform_serialized_identifier_array(anchor, "rule_ids", |value| {
+            if canonical_event {
+                terminal_historical_rule_identifier(value)
+            } else {
+                terminal_rule_identifier(value)
+            }
+        });
         transform_serialized_identifier_array(anchor, "categories", |value| {
             terminal_imported_identifier(canonical_event, "category", value)
         });
@@ -1269,7 +1367,13 @@ fn sanitize_serialized_process_context(process: &mut Value, canonical_event: boo
     transform_serialized_string(process, "rule_name", |value| {
         terminal_imported_opaque_identifier(canonical_event, "process-rule", value)
     });
-    transform_serialized_identifier_array(process, "secondary_rule_ids", terminal_rule_identifier);
+    transform_serialized_identifier_array(process, "secondary_rule_ids", |value| {
+        if canonical_event {
+            terminal_historical_rule_identifier(value)
+        } else {
+            terminal_rule_identifier(value)
+        }
+    });
     for field in ["investigation_fields", "falsepositives"] {
         let Some(values) = process.get_mut(field).and_then(Value::as_array_mut) else {
             continue;
@@ -1480,11 +1584,12 @@ fn terminal_emittable_event(event: &Event) -> Event {
         .into_iter()
         .map(RiskContribution::for_emission)
         .collect();
+    restore_mapped_contribution_order(&event.risk_contributions, &mut emitted.risk_contributions);
     emitted.timeline_anchors = emitted
         .timeline_anchors
         .iter()
         .cloned()
-        .map(terminal_timeline_anchor)
+        .map(|anchor| terminal_timeline_anchor(anchor, terminal_rule_identifier))
         .collect();
     emitted.response = emitted.response.as_ref().map(terminal_response_metadata);
     emitted.risk_entity_value = emitted.risk_entity_value.as_deref().map(|value| {
@@ -1495,7 +1600,10 @@ fn terminal_emittable_event(event: &Event) -> Event {
             _ => PrivacySanitizer::sanitize(SanitizationContext::Summary, value),
         }
     });
-    emitted.process = emitted.process.as_ref().map(terminal_process_context);
+    emitted.process = emitted
+        .process
+        .as_ref()
+        .map(|process| terminal_process_context(process, terminal_rule_identifier));
     emitted
 }
 
@@ -1840,8 +1948,15 @@ fn terminal_historical_derived_event(event: &Event) -> Event {
     emitted.rule_ids = event
         .rule_ids
         .iter()
-        .map(|value| terminal_rule_identifier(value))
+        .map(|value| terminal_historical_rule_identifier(value))
         .collect();
+    emitted.risk_contributions = event
+        .risk_contributions
+        .iter()
+        .cloned()
+        .map(RiskContribution::for_historical_emission)
+        .collect();
+    restore_mapped_contribution_order(&event.risk_contributions, &mut emitted.risk_contributions);
     emitted.categories = event
         .categories
         .iter()
@@ -1853,7 +1968,27 @@ fn terminal_historical_derived_event(event: &Event) -> Event {
         .cloned()
         .map(|evidence| terminal_imported_evidence(true, evidence))
         .collect();
+    emitted.timeline_anchors = event
+        .timeline_anchors
+        .iter()
+        .cloned()
+        .map(|anchor| terminal_timeline_anchor(anchor, terminal_historical_rule_identifier))
+        .collect();
+    emitted.process = event
+        .process
+        .as_ref()
+        .map(|process| terminal_process_context(process, terminal_historical_rule_identifier));
     emitted
+}
+
+fn restore_mapped_contribution_order(before: &[RiskContribution], after: &mut [RiskContribution]) {
+    if before
+        .iter()
+        .zip(after.iter())
+        .any(|(before, after)| before.id() != after.id())
+    {
+        after.sort_by(|left, right| left.canonical_key().cmp(&right.canonical_key()));
+    }
 }
 
 fn terminal_historical_telltale_version(value: &str) -> String {
@@ -1898,7 +2033,14 @@ fn is_schema_valid_telltale_version(value: &str) -> bool {
 }
 
 fn terminal_imported_evidence(canonical_event: bool, evidence: Evidence) -> Evidence {
-    if canonical_event
+    let rule_id = evidence.rule_id.as_deref().map(|value| {
+        if canonical_event {
+            terminal_historical_rule_identifier(value)
+        } else {
+            terminal_rule_identifier(value)
+        }
+    });
+    let mut emitted = if canonical_event
         && evidence.field == "allowlist"
         && is_canonical_opaque_identifier_for_kind("suppression", &evidence.redacted_value)
     {
@@ -1910,7 +2052,9 @@ fn terminal_imported_evidence(canonical_event: bool, evidence: Evidence) -> Evid
         }
     } else {
         terminal_evidence(evidence)
-    }
+    };
+    emitted.rule_id = rule_id;
+    emitted
 }
 
 // Shared with detection projection, which fits a detection event's evidence
@@ -1951,11 +2095,14 @@ fn terminal_evidence(mut evidence: Evidence) -> Evidence {
     evidence
 }
 
-fn terminal_timeline_anchor(mut anchor: TimelineAnchor) -> TimelineAnchor {
+fn terminal_timeline_anchor(
+    mut anchor: TimelineAnchor,
+    rule_identifier: fn(&str) -> String,
+) -> TimelineAnchor {
     anchor.rule_ids = anchor
         .rule_ids
         .iter()
-        .map(|value| terminal_rule_identifier(value))
+        .map(|value| rule_identifier(value))
         .collect();
     anchor.categories = anchor
         .categories
@@ -2013,7 +2160,10 @@ fn terminal_related_detection(value: &str, canonical_event: bool) -> String {
     )
 }
 
-fn terminal_process_context(process: &ProcessContext) -> ProcessContext {
+fn terminal_process_context(
+    process: &ProcessContext,
+    rule_identifier: fn(&str) -> String,
+) -> ProcessContext {
     let mut emitted = process.clone();
     emitted.host = emitted
         .host
@@ -2032,7 +2182,7 @@ fn terminal_process_context(process: &ProcessContext) -> ProcessContext {
     emitted.secondary_rule_ids = emitted
         .secondary_rule_ids
         .iter()
-        .map(|value| terminal_rule_identifier(value))
+        .map(|value| rule_identifier(value))
         .collect();
     emitted.source_process_path = emitted
         .source_process_path
@@ -2748,9 +2898,48 @@ pub fn validate_risk_accounting_scope(
 
 pub fn validate_rule_ids(rule_ids: &[String]) -> Result<(), RiskAccountingError> {
     for rule_id in rule_ids {
-        if !is_canonical_contribution_id(rule_id) || contains_credential_material(rule_id) {
+        if !is_native_rule_identifier(rule_id) {
             return Err(RiskAccountingError::InvalidRuleId(rule_id.clone()));
         }
+    }
+    Ok(())
+}
+
+/// Validate identifiers read from terminal Event 3.0, including exact historical
+/// replacements. This recognizes syntax, not trusted provenance; native inputs
+/// must continue to use [`validate_rule_ids`].
+pub fn validate_historical_rule_ids(rule_ids: &[String]) -> Result<(), RiskAccountingError> {
+    for rule_id in rule_ids {
+        if !is_terminal_rule_identifier(rule_id) {
+            return Err(RiskAccountingError::InvalidRuleId(rule_id.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Check historical Event 3.0 accounting without treating replacement IDs as raw
+/// native identifiers. Ordering, membership, types, positive points and checked
+/// sums remain required. This does not validate the rest of the event.
+pub fn validate_historical_risk_accounting(
+    event_type: &str,
+    rule_ids: &[String],
+    contributions: &[RiskContribution],
+    declared: u64,
+) -> Result<(), RiskAccountingError> {
+    validate_historical_rule_ids(rule_ids)?;
+    let canonical = canonicalize_terminal_contributions(contributions.to_vec())?;
+    if contributions != canonical {
+        return Err(RiskAccountingError::NonCanonicalContributions);
+    }
+    let accounting_event_type = if event_type == "process_chain" {
+        "detection"
+    } else {
+        event_type
+    };
+    validate_risk_accounting_scope(accounting_event_type, rule_ids, &canonical)?;
+    let computed = checked_terminal_risk_sum(&canonical)?;
+    if declared != computed {
+        return Err(RiskAccountingError::ScoreMismatch { declared, computed });
     }
     Ok(())
 }
@@ -6442,6 +6631,157 @@ mod tests {
         assert_ne!(
             wrong["timeline_anchors"][0]["evidence_fields"][0],
             wrong_kind
+        );
+    }
+
+    #[test]
+    fn serialized_sanitization_keeps_rule_identifiers_wherever_one_is_expected() {
+        let nested = |event: &serde_json::Value| {
+            [
+                event["rule_ids"][0].clone(),
+                event["risk_contributions"][0]["id"].clone(),
+                event["evidence"][0]["rule_id"].clone(),
+                event["timeline_anchors"][0]["rule_ids"][0].clone(),
+                event["process"]["secondary_rule_ids"][0].clone(),
+            ]
+        };
+        let event_with = |rule_id: &str| {
+            serde_json::json!({
+                "schema_version": "3.0",
+                "event_type": "detection",
+                "rule_ids": [rule_id],
+                "risk_contributions": [{
+                    "id": rule_id,
+                    "type": "deterministic_rule",
+                    "points": 40,
+                    "rationale": "synthetic",
+                }],
+                "evidence": [{ "field": "command", "redacted_value": "safe", "rule_id": rule_id }],
+                "timeline_anchors": [{
+                    "rule_ids": [rule_id],
+                    "categories": [],
+                    "evidence_fields": [],
+                }],
+                "process": { "secondary_rule_ids": [rule_id] },
+            })
+        };
+        for rule_id in [
+            "credential.api_key.pattern",
+            "credential.cloud_harvest",
+            "rule.test",
+        ] {
+            let mut event = event_with(rule_id);
+            sanitize_serialized_event(&mut event);
+            for value in nested(&event) {
+                assert_eq!(value, rule_id);
+            }
+            let once = event.clone();
+            sanitize_serialized_event(&mut event);
+            assert_eq!(event, once);
+        }
+        let token = format!("rule.ghp_{}", "a1b2c3d4".repeat(4));
+        for unsafe_value in [token.as_str(), "Credential Access"] {
+            let mut event = event_with(unsafe_value);
+            sanitize_serialized_event(&mut event);
+            for value in nested(&event) {
+                let value = value.as_str().expect("identifier");
+                assert_ne!(value, unsafe_value);
+                assert!(crate::scoring::is_canonical_contribution_id(value));
+            }
+            assert!(!event.to_string().contains("ghp_"));
+            let once = event.clone();
+            sanitize_serialized_event(&mut event);
+            assert_eq!(event, once);
+        }
+    }
+
+    #[test]
+    fn historical_rule_replacements_are_not_preserved_in_unrelated_fields() {
+        let marker = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut event = serde_json::json!({
+            "schema_version": "3.0",
+            "response": { "id": marker },
+            "evidence": [{ "field": "command", "redacted_value": "safe", "id": marker }],
+            "extension": { "rule_ids": [marker] },
+        });
+        sanitize_serialized_event(&mut event);
+        assert!(
+            event["response"]["id"] == "redacted.[encoded-blob]",
+            "response.id"
+        );
+        assert!(
+            event["evidence"][0]["id"] == "redacted.[encoded-blob]",
+            "evidence.id"
+        );
+        assert!(
+            event["extension"]["rule_ids"][0] == "redacted.[encoded-blob]",
+            "extension.rule_ids"
+        );
+        assert!(
+            !event.to_string().contains(marker),
+            "misplaced marker escaped"
+        );
+    }
+
+    #[test]
+    fn historical_rule_replacement_near_misses_are_hashed() {
+        let uppercase = "redacted.0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        let short = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde";
+        let suffixed = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0";
+        let prefixed =
+            "rule.redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut event = serde_json::json!({
+            "schema_version": "3.0",
+            "rule_ids": [uppercase, short, suffixed, prefixed],
+        });
+        sanitize_serialized_event(&mut event);
+        assert!(event["rule_ids"][0] != uppercase, "uppercase replacement");
+        assert!(event["rule_ids"][1] != short, "short replacement");
+        assert!(event["rule_ids"][2] != suffixed, "suffixed replacement");
+        assert!(event["rule_ids"][3] != prefixed, "prefixed replacement");
+        let once = event.clone();
+        sanitize_serialized_event(&mut event);
+        assert!(
+            event == once,
+            "historical replacement near misses are not idempotent"
+        );
+        let mut ordinary = serde_json::json!({
+            "schema_version": "3.0",
+            "rule_ids": ["redacted.abc"],
+        });
+        sanitize_serialized_event(&mut ordinary);
+        assert_eq!(ordinary["rule_ids"][0], "redacted.abc");
+    }
+
+    #[test]
+    fn historical_rule_replacements_require_the_actual_slot_shape() {
+        let marker = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut event = serde_json::json!({
+            "schema_version": "3.0",
+            "rule_ids": marker,
+            "evidence": { "rule_id": marker },
+            "risk_contributions": [{ "id": [marker] }],
+            "timeline_anchors": [{ "rule_ids": [[marker]] }],
+            "process": [{ "secondary_rule_ids": [marker] }],
+        });
+        sanitize_serialized_event(&mut event);
+        assert!(
+            !event.to_string().contains(marker),
+            "malformed rule slot preserved a marker"
+        );
+    }
+
+    #[test]
+    fn noncanonical_evidence_without_a_field_still_hashes_source_rule_ids() {
+        let marker = "redacted.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut event = serde_json::json!({
+            "schema_version": "2.0",
+            "evidence": [{ "rule_id": marker, "redacted_value": "safe" }],
+        });
+        sanitize_serialized_event(&mut event);
+        assert!(
+            !event.to_string().contains(marker),
+            "untransformed native marker escaped"
         );
     }
 
