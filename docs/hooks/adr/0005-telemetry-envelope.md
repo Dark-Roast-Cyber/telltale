@@ -15,7 +15,8 @@ One JSONL record per hook observation, schema `telltale_hooks.record.v1`
 (`schemas/telltale-hooks-record-v1.schema.json`), kinds `decision`,
 `outcome`, `result_finding`, `lifecycle`, `error`. Detection content travels
 only as `telltale: [{delivery_key, record: ActionRecordV1}]`, unmodified and
-strictly re-validatable with `ActionRecordV1::from_json`. Host fields cover
+strictly re-validatable with `ActionRecordV1::from_json` (since 0.8.0 an upload
+action's entry may also carry its `destinations` facts beside the record). Host fields cover
 what Telltale does not: harness and hook identity, permission mode, session,
 subagent and prompt IDs, verdict, basis, scores, enforcement outcome, and
 evaluation status (coverage, visibility limits, failure codes, timings).

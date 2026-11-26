@@ -172,7 +172,28 @@
         "required": ["delivery_key", "record"],
         "properties": {
           "delivery_key": { "type": "string" },
-          "record": { "type": "object", "properties": { "schema": { "const": "telltale.action.v1" } }, "required": ["schema"] }
+          "record": { "type": "object", "properties": { "schema": { "const": "telltale.action.v1" } }, "required": ["schema"] },
+          "destinations": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["destinations", "complete", "local_only"],
+            "description": "Where an exfil.outbound_upload action sends, as its command text says (DestinationFacts). Present only on such actions; it never changes the record, scores or verdicts.",
+            "properties": {
+              "destinations": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[a-z0-9._~:/\\[\\]-]+$"
+                }
+              },
+              "complete": { "type": "boolean" },
+              "local_only": { "type": "boolean" }
+            }
+          }
         }
       }
     }

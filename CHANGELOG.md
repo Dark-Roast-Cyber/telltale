@@ -23,9 +23,35 @@
 
 ### Compatibility and operator impact
 
-- **The native action profile is 18.** Several changes below change what the
+- **The native action profile is 19.** Several changes below change what the
   native action reader records, so every `semantic_identity` changes (replay
   identities do not); rebaseline as after a rule change.
+
+- **PowerShell web cmdlets and `PATCH` requests are read as uploads.** In
+  action findings, `exfil.outbound_upload` now matches an
+  `Invoke-RestMethod`/`irm` or `Invoke-WebRequest`/`iwr` call that sends a body
+  (`-Body` with any method but GET, HEAD or OPTIONS, `-InFile`, `-Form`) or
+  uses `-Method POST`, `PUT` or `PATCH`, and a curl or wget `PATCH`. Before,
+  such a call with its URL as a separate word and a non-loopback host was read
+  as a download; one written with attached `-Name:value` parameters, or sent
+  only to loopback, was not read at all. A cmdlet call with no body and no
+  upload method stays a download, as does `-Method Get`, `Head` or `Options`
+  with a body. Parameters resolve by unambiguous prefix and take `-Name:value`;
+  an unknown or ambiguous name never turns an upload into a download.
+  `exfil.encoded_http` reads these cmdlets too, through a
+  `[Convert]::ToBase64String(` call or a `$(` subexpression with `base64` in
+  the URL or body a request sends, not in a header, where Basic authentication
+  encodes. For `Invoke-WebRequest` that pairing counted anywhere in the
+  command before, so one in an `-OutFile` value no longer matches; for curl,
+  wget and fetch it still counts anywhere. Session events and the bundled rule
+  patterns are unchanged. See the
+  [0.8.0 migration guide](docs/migrations/0.8.0.md).
+- **curl and wget options are read with their values.** In action findings, a
+  URL that is only an option's value (`curl -e <url>`, `wget -U <url>`) is no
+  longer a download; wget's `--input-file`, `--base`, `-i` and `-B` with a URL
+  now are; and an option takes its value whatever it looks like, so
+  `wget -O --post-data=x <url>` is a download, not an upload. An option the
+  reader does not know keeps the next word an operand.
 
 - **Session events read uploads to object storage as actions do.** For the
   bundled `exfil.outbound_upload`, a session event now also matches when
@@ -733,6 +759,21 @@
   version and the build's Git hash (see [Telltale Hooks](docs/hooks/README.md)).
 
 ### Changes
+
+- **Upload actions report where they send.** `ActionFinding::destination_facts()`
+  returns `DestinationFacts` for an action with an `exfil.outbound_upload`
+  finding: up to 16 destination entries (`host`, `host/seg/seg`, or
+  `scheme://bucket/prefix` for object storage; never a port, userinfo, query
+  or loopback host), `complete` and `local_only`. Both flags fail closed: any
+  variable, substitution, schemeless destination, proxy, resolve, config or
+  socket override, unknown option or quoting another shell reads differently
+  makes `complete` false, and `local_only` needs one simple curl, wget or
+  PowerShell request to `localhost`, 127.0.0.0/8, `[::1]` or `0.0.0.0` that
+  follows no redirect (curl without `-L`, wget with `--max-redirect=0`, a
+  cmdlet with `-MaximumRedirection 0`), by bare program names. Hooks
+  `telltale[]` entries carry the same facts as an optional `destinations`
+  field. Facts never change matching, scores, verdicts, semantic identities or
+  `ActionRecordV1`. See [embedding](docs/embedding.md#action-findings).
 
 - **Repeated scans prepare faster.** The process-chain rules' patterns are
   compiled once per process, through the cache the other bundled patterns

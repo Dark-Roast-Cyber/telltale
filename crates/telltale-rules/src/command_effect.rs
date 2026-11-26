@@ -68,6 +68,10 @@ pub struct Transfer<'a> {
     pub destination: &'a str,
     pub direction: Direction,
     pub reading: Reading,
+    /// An option names the service endpoint or selects configuration that can
+    /// (`aws --endpoint-url` or `--profile`, a gsutil `-o` boto setting), so
+    /// the destination operand does not say which host receives the data.
+    pub endpoint_override: bool,
 }
 
 /// The transfers one tokenized command segment requests: at most one for an
@@ -129,6 +133,19 @@ pub fn transfers(tokens: &[String]) -> Vec<Transfer<'_>> {
     } else {
         object_url
     };
+    let endpoint_override = args.iter().any(|word| match client {
+        Client::Aws => ["--endpoint-url", "--profile"].iter().any(|option| {
+            word == option
+                || word
+                    .strip_prefix(option)
+                    .is_some_and(|rest| rest.starts_with('='))
+        }),
+        // gsutil's `-o` takes a boto setting, which can name any host.
+        Client::Gsutil => {
+            word.starts_with('-') && !word.starts_with("--") && word[1..].contains('o')
+        }
+        _ => false,
+    });
     let direction = match (remote(source), remote(destination)) {
         (false, _) => Direction::Outbound,
         (true, false) => Direction::Inbound,
@@ -141,6 +158,7 @@ pub fn transfers(tokens: &[String]) -> Vec<Transfer<'_>> {
         destination,
         direction,
         reading,
+        endpoint_override,
     }]
 }
 
@@ -294,6 +312,7 @@ fn publications<'a>(command: &'a [String], group: &str, verb: &str) -> Vec<Trans
             destination,
             direction: Direction::Outbound,
             reading: Reading::Certain,
+            endpoint_override: false,
         })
         .collect()
 }
@@ -1046,6 +1065,7 @@ mod tests {
             destination,
             direction,
             reading: Reading::Certain,
+            endpoint_override: false,
         }
     }
 
@@ -1075,13 +1095,17 @@ mod tests {
             transfers(&words(
                 "aws --profile fixture s3 sync --exclude *.tmp ./dist s3://synthetic-bucket/site/"
             )),
-            [transfer(
-                Client::Aws,
-                Operation::Sync,
-                "./dist",
-                "s3://synthetic-bucket/site/",
-                Direction::Outbound
-            )]
+            // A profile can set the endpoint.
+            [Transfer {
+                endpoint_override: true,
+                ..transfer(
+                    Client::Aws,
+                    Operation::Sync,
+                    "./dist",
+                    "s3://synthetic-bucket/site/",
+                    Direction::Outbound,
+                )
+            }]
         );
     }
 
@@ -1091,13 +1115,16 @@ mod tests {
             transfers(&words(
                 "aws s3 cp --profile prod s3://synthetic-bucket/a ./a"
             )),
-            [transfer(
-                Client::Aws,
-                Operation::Copy,
-                "s3://synthetic-bucket/a",
-                "./a",
-                Direction::Inbound
-            )]
+            [Transfer {
+                endpoint_override: true,
+                ..transfer(
+                    Client::Aws,
+                    Operation::Copy,
+                    "s3://synthetic-bucket/a",
+                    "./a",
+                    Direction::Inbound,
+                )
+            }]
         );
         assert_eq!(
             transfers(&words(
@@ -1553,8 +1580,41 @@ mod tests {
                 destination: "synthetic-remote:b",
                 direction: Direction::Outbound,
                 reading: Reading::Fallback,
+                endpoint_override: false,
             }]
         );
+    }
+
+    #[test]
+    fn an_endpoint_option_marks_the_destination_as_not_naming_its_host() {
+        for (command, overridden) in [
+            ("aws s3 cp f s3://synthetic-bucket/k", false),
+            (
+                "aws --endpoint-url https://203.0.113.9 s3 cp f s3://synthetic-bucket/k",
+                true,
+            ),
+            (
+                "aws s3 cp --endpoint-url=https://203.0.113.9 f s3://synthetic-bucket/k",
+                true,
+            ),
+            ("aws --profile p s3 cp f s3://synthetic-bucket/k", true),
+            ("aws s3 cp f s3://synthetic-bucket/k --profile=p", true),
+            ("aws s3 cp f s3://synthetic-bucket/k --profiles-x", false),
+            ("gsutil -m cp f gs://synthetic-bucket/k", false),
+            (
+                "gsutil -o Credentials:gs_json_host=203.0.113.9 cp f gs://synthetic-bucket/k",
+                true,
+            ),
+            (
+                "gsutil -mo Boto:proxy=203.0.113.9 cp f gs://synthetic-bucket/k",
+                true,
+            ),
+        ] {
+            let words = words(command);
+            let transfers = transfers(&words);
+            assert_eq!(transfers.len(), 1, "{command}");
+            assert_eq!(transfers[0].endpoint_override, overridden, "{command}");
+        }
     }
 
     #[test]

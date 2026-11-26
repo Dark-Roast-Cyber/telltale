@@ -29,6 +29,7 @@ mod declared_operation_tests;
 pub(crate) mod declared_role_selector_tests;
 #[cfg(test)]
 mod declared_role_tests;
+pub(crate) mod destinations;
 #[cfg(test)]
 mod download_link_tests;
 pub mod event3;
