@@ -227,6 +227,15 @@
   name after Rule v1 was removed. Its variants and their text are unchanged.
   See the [0.8.0 migration guide](docs/migrations/0.8.0.md#rust-api).
 
+- **A Codex code-mode script's patch names the files it writes.** The
+  literal calls a script tool's script names (`tools.exec_command`,
+  `tools.apply_patch`) are now read by the Codex source, not by detection.
+  Commands and patch content are read as before; the files a patch adds,
+  updates or deletes are now also written paths, so rules that select a
+  written path match them as they match the `apply_patch` tool. A script
+  that takes more reading than its bound allows is read as command text
+  instead of failing its source.
+
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
   `rule_id` names no loaded rule or chain is left out and the other entries
