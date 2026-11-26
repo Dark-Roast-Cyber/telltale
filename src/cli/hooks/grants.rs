@@ -6,7 +6,7 @@
 //! ([`super::grants_root`]); the hook only reads it. `allow` and `revoke`
 //! leave a lifecycle record in the hook's records file.
 
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -14,7 +14,11 @@ use telltale_core::hooks::config::{Config, GrantCover, HOST_RULE_ID_PREFIX};
 use telltale_core::hooks::grants::{self, AlwaysGrant, AlwaysScope, GRANTS_DIR};
 use telltale_core::hooks::harness::Harness;
 use telltale_core::hooks::runtime::Runtime;
-use telltale_core::hooks::telemetry::sha256_hex;
+use telltale_core::hooks::telemetry::{Sink, is_record_too_large, label, sha256_hex};
+use telltale_schema::event::SanitizationContext::Metadata;
+use telltale_schema::hooks_record::{
+    HOOK_LABEL_MAX_BYTES, HOOKS_RECORD_MAX_INPUT_BYTES, escaped_hook_label, readable_hook_text,
+};
 
 /// Where an `allow` grant reaches.
 #[derive(Debug, PartialEq, Eq)]
@@ -121,13 +125,28 @@ pub(super) fn project_dir(dir: Option<&Path>) -> std::io::Result<PathBuf> {
 }
 
 /// The decision record `record_id` in the records file at `path`: the first
-/// line with that ID. Lines that do not parse are passed over.
+/// bounded line with that ID. Oversized and malformed lines are passed over.
 fn find_record(path: &Path, record_id: &str) -> Result<Value, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("cannot read the records file {}: {error}", path.display()))?;
-    for line in std::io::BufReader::new(file).lines() {
-        let Ok(line) = line else { continue };
-        let Ok(record) = serde_json::from_str::<Value>(&line) else {
+    let read_error = |error| format!("cannot read the records file {}: {error}", path.display());
+    let file = std::fs::File::open(path).map_err(read_error)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader
+            .by_ref()
+            .take(HOOKS_RECORD_MAX_INPUT_BYTES as u64)
+            .read_until(b'\n', &mut line)
+            .map_err(read_error)?
+            == 0
+        {
+            break;
+        }
+        if line.len() == HOOKS_RECORD_MAX_INPUT_BYTES && !line.ends_with(b"\n") {
+            reader.skip_until(b'\n').map_err(read_error)?;
+            continue;
+        }
+        let Ok(record) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
         if record["record_id"] == record_id {
@@ -218,7 +237,6 @@ fn grantable(
 pub(super) struct Allowed {
     pub(super) id: String,
     pub(super) path: PathBuf,
-    pub(super) grant: AlwaysGrant,
 }
 
 /// The decision of `allow`: the grant for the decision record `record_id` in
@@ -242,12 +260,63 @@ pub(super) fn allow(
         return Err("grants are off (hooks.grants.enabled: false)".to_owned());
     }
     let record = find_record(records, record_id)?;
-    let (harness, tool, rule_ids) = grantable(&record, config.grants.covers)
+    let (harness, tool_label, rule_ids) = grantable(&record, config.grants.covers)
         .map_err(|cause| format!("record {} cannot be allowed: {cause}", printable(record_id)))?;
     if !terminal {
         return Err("run this in a terminal yourself; it asks you to confirm".to_owned());
     }
-    let reach = match &project {
+    // A terminal grant stores the original tool name for exact matching.
+    // Recover that name from the operator, without displaying it, when the
+    // record contains only a stand-in.
+    let tool = if escaped_hook_label(&tool_label) {
+        let _ =
+            out.write_all(b"The record hides the tool name. Enter the exact native tool name: ");
+        let _ = out.flush();
+        let mut entered = String::new();
+        if input.read_line(&mut entered).is_err() {
+            return Err("nothing allowed".to_owned());
+        }
+        let entered = entered.strip_suffix('\n').map_or(entered.as_str(), |line| {
+            line.strip_suffix('\r').unwrap_or(line)
+        });
+        if !readable_hook_text(entered, HOOK_LABEL_MAX_BYTES)
+            || entered != entered.trim()
+            || label(entered, Metadata) != tool_label
+        {
+            return Err("tool name does not match the record; nothing allowed".to_owned());
+        }
+        entered.to_owned()
+    } else {
+        tool_label.clone()
+    };
+    let mut grant = AlwaysGrant {
+        id: String::new(),
+        version: grants::GRANT_FILE_VERSION,
+        scope: if project.is_some() {
+            AlwaysScope::Project
+        } else {
+            AlwaysScope::User
+        },
+        project,
+        harness: harness.to_owned(),
+        tool,
+        rule_ids,
+        created_at: String::new(),
+        from_record: record_id.to_owned(),
+    };
+    let sink = Sink::new(records.to_owned());
+    // The assigned ID replaces a same-width ASCII ID in this exact record,
+    // so the size cannot change after the grant has been stored.
+    let mut telemetry = Runtime::new(config.clone())
+        .terminal_record(harness, grant_lifecycle(&grant, "g-000000000000"));
+    Sink::check_record_size(&telemetry).map_err(|error| {
+        if is_record_too_large(&error) {
+            "grant record exceeds the Hooks telemetry line limit; nothing allowed".to_owned()
+        } else {
+            format!("cannot encode the grant record: {error}; nothing allowed")
+        }
+    })?;
+    let reach = match &grant.project {
         Some(project) => format!(
             "project {} and below",
             printable(&project.display().to_string())
@@ -260,8 +329,8 @@ pub(super) fn allow(
          stopped call: {}\n\
          Telltale will no longer stop such a call; the harness's own permission rules still apply.\n\
          Type allow to confirm: ",
-        printable(&tool),
-        printable(&rule_ids.join(", ")),
+        printable(&tool_label),
+        printable(&grant.rule_ids.join(", ")),
         printable(record_id),
     );
     let _ = out.write_all(shown.as_bytes());
@@ -270,7 +339,7 @@ pub(super) fn allow(
     if input.read_line(&mut answer).is_err() || answer.trim() != "allow" {
         return Err("nothing allowed".to_owned());
     }
-    let created_at = time::OffsetDateTime::now_utc()
+    grant.created_at = time::OffsetDateTime::now_utc()
         .replace_nanosecond(0)
         .ok()
         .and_then(|now| {
@@ -278,43 +347,29 @@ pub(super) fn allow(
                 .ok()
         })
         .unwrap_or_default();
-    let grant = AlwaysGrant {
-        id: String::new(),
-        version: grants::GRANT_FILE_VERSION,
-        scope: if project.is_some() {
-            AlwaysScope::Project
-        } else {
-            AlwaysScope::User
-        },
-        project,
-        harness: harness.to_owned(),
-        tool,
-        rule_ids,
-        created_at,
-        from_record: record_id.to_owned(),
-    };
     let id = grants::write(dir, &grant)
         .map_err(|error| format!("cannot write the grant in {}: {error}", dir.display()))?;
+    if let Some(lifecycle) = &mut telemetry.lifecycle {
+        lifecycle["grant_id"] = json!(id);
+    }
+    if let Err(error) = sink.write(&telemetry) {
+        eprintln!("telltale hooks: telemetry write failed: {error}");
+    }
     Ok(Allowed {
         path: dir.join(format!("{id}.yaml")),
-        grant: AlwaysGrant {
-            id: id.clone(),
-            ..grant
-        },
         id,
     })
 }
 
-/// The lifecycle details of the `grant` record for `allowed`.
-pub(super) fn grant_lifecycle(allowed: &Allowed) -> Value {
-    let grant = &allowed.grant;
+/// The lifecycle details of a terminal grant record.
+fn grant_lifecycle(grant: &AlwaysGrant, id: &str) -> Value {
     let mut lifecycle = json!({
         "event": "grant",
         "scope": grant.scope.as_str(),
         "tool": grant.tool,
         "rule_ids": grant.rule_ids,
         "offer_record_id": grant.from_record,
-        "grant_id": allowed.id,
+        "grant_id": id,
     });
     if let Some(project) = &grant.project {
         lifecycle["project_sha256"] = sha256_hex(project.to_string_lossy().as_bytes()).into();
@@ -361,8 +416,6 @@ pub(super) fn run_allow(config_dirs: &[PathBuf], record_id: &str, scope: AllowSc
     match allowed {
         Ok(allowed) => {
             println!("allowed: {} ({})", allowed.id, allowed.path.display());
-            let harness = Harness::from_name(&allowed.grant.harness).map_or("", Harness::name);
-            Runtime::new(config).record_terminal(harness, grant_lifecycle(&allowed));
             0
         }
         Err(error) => fail(&error),
@@ -484,6 +537,58 @@ pub(super) fn run_revoke(config_dirs: &[PathBuf], id: &str) -> i32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn find_record_skips_oversized_lines_and_resumes_at_the_next_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("records.jsonl");
+        let mut oversized =
+            serde_json::to_vec(&json!({"record_id": "synthetic-oversized"})).unwrap();
+        oversized.resize(16 * 1024 * 1024, b' ');
+        oversized.extend_from_slice(b"\n{\"record_id\":\"synthetic-next\"}\n");
+        std::fs::write(&path, oversized).unwrap();
+        assert!(find_record(&path, "synthetic-oversized").is_err());
+        assert_eq!(
+            find_record(&path, "synthetic-next").unwrap()["record_id"],
+            "synthetic-next"
+        );
+        let mut at_limit = serde_json::to_vec(&json!({"record_id": "synthetic-exact"})).unwrap();
+        at_limit.resize(HOOKS_RECORD_MAX_INPUT_BYTES - 1, b' ');
+        at_limit.push(b'\n');
+        std::fs::write(&path, at_limit).unwrap();
+        assert_eq!(
+            find_record(&path, "synthetic-exact").unwrap()["record_id"],
+            "synthetic-exact"
+        );
+    }
+
+    #[test]
+    fn an_oversized_grant_lifecycle_is_refused_before_storing_the_grant() {
+        let mut record = decision(|_| {});
+        record["decision"]["rule_ids"] = json!([""]);
+        let overhead = serde_json::to_vec(&record).unwrap().len() + 1;
+        record["decision"]["rule_ids"][0] = json!("a".repeat(16 * 1024 * 1024 - overhead));
+        let dir = tempfile::tempdir().unwrap();
+        let records = dir.path().join("records.jsonl");
+        std::fs::write(&records, format!("{record}\n")).unwrap();
+        let mut config = Config::default();
+        config.grants.enabled = true;
+        let grants = dir.path().join("grants.d");
+        let original_len = std::fs::metadata(&records).unwrap().len();
+        let result = allow(
+            &config,
+            &records,
+            &grants,
+            RECORD_ID,
+            None,
+            true,
+            &mut "allow\n".as_bytes(),
+            &mut std::io::sink(),
+        );
+        assert!(matches!(result, Err(error) if error.contains("grant record exceeds")));
+        assert!(!grants.exists());
+        assert_eq!(std::fs::metadata(&records).unwrap().len(), original_len);
+    }
+
     /// What the confirmation prints cannot be reordered or hidden by the
     /// text of a record.
     #[test]
@@ -506,7 +611,7 @@ mod tests {
             "evaluation": {"status": "complete", "visibility_limits": []},
             "decision": {
                 "verdict": "ask", "returned": true, "basis": "action_score",
-                "rule_ids": ["b", "a", "b"],
+                "rule_ids": ["synthetic.b", "synthetic.a", "synthetic.b"],
             },
         });
         edit(&mut record);
@@ -558,6 +663,14 @@ mod tests {
             let (grants, left_out) = grants::load_dir(&self.grants());
             assert_eq!(left_out, []);
             grants
+        }
+
+        fn last_lifecycle(&self) -> Value {
+            let wire = std::fs::read_to_string(self.dir.path().join("records.jsonl")).unwrap();
+            let record =
+                telltale_core::HooksRecordV1::from_json(wire.lines().last().unwrap().as_bytes())
+                    .unwrap();
+            serde_json::to_value(record.lifecycle.unwrap()).unwrap()
         }
     }
 
@@ -612,7 +725,10 @@ mod tests {
             shown.contains(&format!("scope: project {} and below", project())),
             "{shown}"
         );
-        assert!(shown.contains("detections: a, b"), "{shown}");
+        assert!(
+            shown.contains("detections: synthetic.a, synthetic.b"),
+            "{shown}"
+        );
         assert!(shown.ends_with("Type allow to confirm: "), "{shown}");
         let written = f.written();
         assert_eq!(written.len(), 1);
@@ -626,9 +742,9 @@ mod tests {
         assert_eq!(grant.project, Some(PathBuf::from(project())));
         assert_eq!(grant.harness, "claude-code");
         assert_eq!(grant.tool, "Bash");
-        assert_eq!(grant.rule_ids, ["a", "b"]);
+        assert_eq!(grant.rule_ids, ["synthetic.a", "synthetic.b"]);
         assert_eq!(grant.from_record, RECORD_ID);
-        let lifecycle = grant_lifecycle(&allowed);
+        let lifecycle = f.last_lifecycle();
         assert_eq!(lifecycle["event"], "grant");
         assert_eq!(lifecycle["scope"], "project");
         assert_eq!(lifecycle["grant_id"], allowed.id.as_str());
@@ -639,10 +755,50 @@ mod tests {
         );
 
         let user = f.allow(true, "allow\n", None).unwrap();
-        assert_eq!(user.grant.scope, AlwaysScope::User);
-        assert_eq!(user.grant.project, None);
-        assert!(grant_lifecycle(&user).get("project_sha256").is_none());
-        assert_eq!(f.written().len(), 2);
+        let written = f.written();
+        let grant = written.iter().find(|grant| grant.id == user.id).unwrap();
+        assert_eq!(grant.scope, AlwaysScope::User);
+        assert_eq!(grant.project, None);
+        let lifecycle = f.last_lifecycle();
+        assert_eq!(lifecycle["grant_id"], user.id);
+        assert!(lifecycle.get("project_sha256").is_none());
+        assert_eq!(written.len(), 2);
+    }
+
+    #[test]
+    fn an_escaped_tool_label_requires_its_native_name_before_confirmation() {
+        const NATIVE: &str = "AKIASYNTHETIC0000000";
+        let f = Fixture::new(&decision(|record| {
+            record["action"]["tool_name"] = json!("tth-esc-5faaaacc6cfeecf6f7080b39f21abf8f");
+        }));
+        let error = f.allow(true, "synthetic-other\nallow\n", None).unwrap_err();
+        assert_eq!(
+            error,
+            "tool name does not match the record; nothing allowed"
+        );
+        assert!(!f.grants().exists());
+
+        let mut out = Vec::new();
+        allow(
+            &f.config,
+            &f.dir.path().join("records.jsonl"),
+            &f.grants(),
+            RECORD_ID,
+            None,
+            true,
+            &mut format!("{NATIVE}\nallow\n").as_bytes(),
+            &mut out,
+        )
+        .unwrap();
+        assert!(!String::from_utf8(out).unwrap().contains(NATIVE));
+        let grant = f.written().remove(0);
+        assert!(grant.covers("claude-code", NATIVE, None, &["synthetic.a".into()]));
+        assert!(!grant.covers(
+            "claude-code",
+            "tth-esc-5faaaacc6cfeecf6f7080b39f21abf8f",
+            None,
+            &["synthetic.a".into()],
+        ));
     }
 
     /// A record a grant could not cover is refused before anything is

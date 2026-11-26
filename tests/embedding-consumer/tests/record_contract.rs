@@ -38,6 +38,34 @@ fn envelope(record: &ActionRecordV1) -> Value {
 }
 
 #[test]
+fn embedding_host_reads_hooks_records_without_enabling_the_runtime() {
+    let wire = json!({
+        "schema": "telltale_hooks.record.v1",
+        "record_id": "tth:0123456789abcdef0123456789abcdef",
+        "recorded_at": "2026-11-26T12:00:00Z",
+        "kind": "lifecycle",
+        "producer": {"name": "telltale-hooks", "version": "0.8.0",
+            "telltale_rev": "0".repeat(40), "semantic_identity": null},
+        "harness": {"name": "claude-code", "hook_event": "SessionStart", "permission_mode": null},
+        "session": {"session_id": "synthetic-session", "agent_id": null,
+            "agent_type": null, "prompt_id": null, "cwd_sha256": null},
+        "lifecycle": {"event": "session_start", "source": null},
+        "telltale": []
+    });
+    let record = HooksRecordV1::from_json(&serde_json::to_vec(&wire).unwrap()).unwrap();
+    assert_eq!(record.kind, HooksRecordKind::Lifecycle);
+    assert!(matches!(
+        record.lifecycle,
+        Some(hooks_record::HooksLifecycle::SessionStart {
+            source: None,
+            pinned_over: None
+        })
+    ));
+    record.validate().unwrap();
+    assert_eq!(serde_json::to_value(&record).unwrap(), wire);
+}
+
+#[test]
 fn records_cross_a_process_boundary_and_link_strict_event3() {
     let root = tempfile::tempdir().unwrap();
     let source = source(

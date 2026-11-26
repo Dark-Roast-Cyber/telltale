@@ -3,7 +3,7 @@
 //! rejects a whole source whose IDs are not path-safe. A call ID is
 //! harness- or model-supplied (Codex `tool_use_id`, OpenCode `callID`), so a
 //! crafted key must neither be left unevaluated nor poison later calls.
-//! Correlation and telemetry keep the raw key throughout. Prompt and result
+//! Correlation keeps the raw key; telemetry carries its bounded label. Prompt and result
 //! text is bounded by its size as the journal line encodes it.
 
 use crate::common;
@@ -135,10 +135,10 @@ fn a_crafted_call_id_neither_escapes_evaluation_nor_blinds_later_calls() {
 }
 
 /// The crafted key is the harness's correlation key: the result links to its
-/// decision and telemetry reports the raw key, while the journal carries a
+/// decision and telemetry reports the same label, while the journal carries a
 /// safe, unique identity for the pair.
 #[test]
-fn a_crafted_key_still_correlates_and_telemetry_keeps_the_raw_key() {
+fn a_crafted_key_still_correlates_and_telemetry_reuses_the_label() {
     for (name, key) in shapes() {
         let mut h = Harness::new();
         h.runtime
@@ -154,8 +154,9 @@ fn a_crafted_key_still_correlates_and_telemetry_keeps_the_raw_key() {
         );
         let decision = h.records("decision").remove(0);
         let outcome = h.records("outcome").remove(0);
-        assert_eq!(decision["action"]["tool_use_id"], key.as_str(), "{name}");
-        assert_eq!(outcome["action"]["tool_use_id"], key.as_str(), "{name}");
+        let expected = common::telemetry_label(&key);
+        assert_eq!(decision["action"]["tool_use_id"], expected, "{name}");
+        assert_eq!(outcome["action"]["tool_use_id"], expected, "{name}");
         assert_eq!(
             outcome["outcome"]["decision_record_id"], decision["record_id"],
             "{name}"
@@ -430,10 +431,9 @@ fn orphan_results_and_legacy_state_never_journal_a_raw_key() {
                 let label = format!("{policy}/{path_name}/{key_name}");
                 audit(&h, &label, &later, &mut failures);
                 if path_name == "post-without-pre" {
-                    // Telemetry keeps the raw key.
                     assert_eq!(
                         h.records("outcome")[0]["action"]["tool_use_id"],
-                        key.as_str(),
+                        common::telemetry_label(&key),
                         "{label}"
                     );
                 }
@@ -506,7 +506,7 @@ fn named(name: &str, id: &str, command: &str) -> ToolCall {
 }
 
 /// The session ID is on every journal line: a bad one failed the source for
-/// the rest of the session. Telemetry keeps the raw value.
+/// the rest of the session. Telemetry carries a bounded session label.
 #[test]
 fn a_hostile_session_id_does_not_blind_the_session() {
     let mut failures = Vec::new();
@@ -526,8 +526,9 @@ fn a_hostile_session_id_does_not_blind_the_session() {
             audit(&h, &label, &later, &mut failures);
             // Messages name the case by number: the values are hostile IDs.
             assert!(
-                h.records("decision")[0]["session"]["session_id"] == session.as_str(),
-                "{policy}/session case {case}: telemetry changed the session ID"
+                h.records("decision")[0]["session"]["session_id"]
+                    == common::telemetry_label(&session),
+                "{policy}/session case {case}: wrong telemetry label"
             );
             // The result still links to its decision.
             assert!(
@@ -545,8 +546,7 @@ fn a_hostile_session_id_does_not_blind_the_session() {
 }
 
 /// A hostile tool name carrying an exfil command still gets its rule verdict:
-/// rules route by argument key, and the name is encoded only for the journal.
-/// Telemetry keeps the raw name.
+/// rules route by argument key. The journal and telemetry each encode the name.
 #[test]
 fn a_hostile_tool_name_is_encoded_and_detection_survives() {
     let mut failures = Vec::new();
@@ -569,7 +569,11 @@ fn a_hostile_tool_name_is_encoded_and_detection_survives() {
                     first["decision"]["verdict"]
                 ));
             }
-            assert_eq!(first["action"]["tool_name"], tool.as_str(), "{label}");
+            assert_eq!(
+                first["action"]["tool_name"],
+                common::telemetry_label(&tool),
+                "{label}"
+            );
             audit(&h, &label, &later, &mut failures);
         }
     }
@@ -699,8 +703,11 @@ fn an_encoded_tool_name_is_floored_at_on_unevaluable() {
                         record["decision"]["basis"], record["evaluation"]["visibility_limits"]
                     ));
                 }
-                // Telemetry keeps the raw name.
-                assert_eq!(record["action"]["tool_name"], name.as_str(), "{label}");
+                assert_eq!(
+                    record["action"]["tool_name"],
+                    common::telemetry_label(&name),
+                    "{label}"
+                );
             }
         }
     }

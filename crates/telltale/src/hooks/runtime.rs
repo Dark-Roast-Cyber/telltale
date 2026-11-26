@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::ObservationStage;
 use serde_json::{Value, json};
+use telltale_schema::event::SanitizationContext::{Metadata, Summary};
+use telltale_schema::hooks_record::TELEMETRY_RECORD_TOO_LARGE;
 use telltale_schema::observation::LOCAL_MAX_VALUE_BYTES;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -24,7 +26,7 @@ use crate::hooks::state::{
 };
 use crate::hooks::telemetry::{
     Action, DecisionInfo, EvaluationInfo, GrantInfo, Harness, Kind, OutcomeInfo, Producer, Record,
-    Session, Sink, TelltaleAction, new_record_id, sha256_hex,
+    Session, Sink, TelltaleAction, is_record_too_large, label, new_record_id, sha256_hex,
 };
 
 /// Identity shared by every event of one hook invocation.
@@ -337,6 +339,8 @@ pub struct Runtime {
     /// every time it took it, in nanoseconds; [`NO_LOCK_WAIT`] before it
     /// first tries. Atomic so that the runtime stays `Sync`.
     lock_wait: AtomicU64,
+    #[cfg(test)]
+    telemetry_line_limit: usize,
 }
 
 /// [`Runtime::lock_wait`] of a call that has not tried to take the lock.
@@ -665,6 +669,8 @@ impl Runtime {
             deadline: None,
             answer_by: None,
             lock_wait: AtomicU64::new(NO_LOCK_WAIT),
+            #[cfg(test)]
+            telemetry_line_limit: crate::HOOKS_RECORD_MAX_INPUT_BYTES,
         }
     }
 
@@ -735,6 +741,8 @@ impl Runtime {
             deadline: None,
             answer_by: None,
             lock_wait: AtomicU64::new(NO_LOCK_WAIT),
+            #[cfg(test)]
+            telemetry_line_limit: crate::HOOKS_RECORD_MAX_INPUT_BYTES,
         }
     }
 
@@ -782,14 +790,20 @@ impl Runtime {
             producer: self.producer(),
             harness: Harness {
                 name: ctx.harness,
-                hook_event: ctx.hook_event.clone(),
-                permission_mode: ctx.permission_mode.clone(),
+                hook_event: label(&ctx.hook_event, Metadata),
+                permission_mode: ctx
+                    .permission_mode
+                    .as_deref()
+                    .map(|value| label(value, Metadata)),
             },
             session: Session {
-                session_id: ctx.session_id.clone(),
-                agent_id: ctx.agent_id.clone(),
-                agent_type: ctx.agent_type.clone(),
-                prompt_id: ctx.prompt_id.clone(),
+                session_id: label(&ctx.session_id, Metadata),
+                agent_id: ctx.agent_id.as_deref().map(|value| label(value, Metadata)),
+                agent_type: ctx
+                    .agent_type
+                    .as_deref()
+                    .map(|value| label(value, Metadata)),
+                prompt_id: ctx.prompt_id.as_deref().map(|value| label(value, Metadata)),
                 cwd_sha256: ctx.cwd.as_deref().map(|cwd| sha256_hex(cwd.as_bytes())),
             },
             action: None,
@@ -822,9 +836,34 @@ impl Runtime {
                 return;
             }
         };
-        if let Err(error) = Sink::new(path).write(record) {
+        let sink = Sink::new(path);
+        #[cfg(test)]
+        let sink = sink.with_line_limit(self.telemetry_line_limit);
+        if let Err(error) = sink.write(record) {
             // Never silent; never changes the verdict already decided.
             eprintln!("telltale hooks: telemetry write failed: {error}");
+            if is_record_too_large(&error) {
+                let replacement = Record {
+                    schema: record.schema,
+                    record_id: record.record_id.clone(),
+                    recorded_at: record.recorded_at.clone(),
+                    kind: Kind::Error,
+                    producer: record.producer.clone(),
+                    harness: record.harness.clone(),
+                    session: record.session.clone(),
+                    action: record.action.clone(),
+                    error_code: Some(TELEMETRY_RECORD_TOO_LARGE.to_owned()),
+                    evaluation: None,
+                    decision: None,
+                    outcome: None,
+                    lifecycle: None,
+                    lock_wait_ms: None,
+                    telltale: Vec::new(),
+                };
+                if let Err(error) = sink.write(&replacement) {
+                    eprintln!("telltale hooks: telemetry write failed: {error}");
+                }
+            }
         }
     }
 
@@ -965,6 +1004,13 @@ impl Runtime {
     /// unhandled event's record), its `hook_event` is `terminal`, and its
     /// harness is the one the event is about, empty when none is known.
     pub fn record_terminal(&self, harness: &'static str, lifecycle: Value) {
+        self.emit(&self.terminal_record(harness, lifecycle));
+    }
+
+    /// Build the terminal record so the CLI can check its size before storing
+    /// a grant.
+    #[doc(hidden)]
+    pub fn terminal_record(&self, harness: &'static str, mut lifecycle: Value) -> Record {
         let ctx = Context {
             harness,
             hook_event: "terminal".to_owned(),
@@ -978,8 +1024,14 @@ impl Runtime {
             can_grant: false,
         };
         let mut record = self.record(&ctx, Kind::Lifecycle);
+        record.session.session_id.clear();
+        if let Some(tool) = lifecycle.get_mut("tool")
+            && let Some(raw) = tool.as_str()
+        {
+            *tool = Value::String(label(raw, Metadata));
+        }
         record.lifecycle = Some(lifecycle);
-        self.emit(&record);
+        record
     }
 
     /// A hook invocation that never became an event: the payload could not be
@@ -1001,6 +1053,10 @@ impl Runtime {
             can_grant: false,
         };
         let mut record = self.record(&ctx, Kind::Error);
+        record.session.session_id.clear();
+        if hook_event.is_empty() {
+            record.harness.hook_event.clear();
+        }
         record.error_code = Some(code.to_owned());
         self.emit(&record);
     }
@@ -1160,7 +1216,14 @@ impl Runtime {
                 agent_id,
                 agent_type,
             } => {
-                self.lifecycle(ctx, json!({"event": "subagent_stop", "agent_id": agent_id, "agent_type": agent_type}));
+                self.lifecycle(
+                    ctx,
+                    json!({
+                        "event": "subagent_stop",
+                        "agent_id": label(agent_id, Metadata),
+                        "agent_type": agent_type.as_deref().map(|value| label(value, Metadata)),
+                    }),
+                );
                 Ok(Response::None)
             }
             Event::PermissionPrompt(call) => {
@@ -1171,7 +1234,10 @@ impl Runtime {
                 Ok(Response::None)
             }
             Event::SessionStart { source } => {
-                let mut details = json!({"event": "session_start", "source": source});
+                let mut details = json!({
+                    "event": "session_start",
+                    "source": source.as_deref().map(|value| label(value, Metadata)),
+                });
                 if !self.config.pinned_over.is_empty() {
                     details["pinned_over"] = json!(self.config.pinned_over);
                 }
@@ -1248,7 +1314,7 @@ impl Runtime {
             Ok(grant) => json!({
                 "event": "grant",
                 "scope": grant.scope.as_str(),
-                "tool": grant.tool_name,
+                "tool": label(&grant.tool_name, Metadata),
                 "rule_ids": grant.rule_ids,
                 "offer_record_id": grant.offer_record_id,
             }),
@@ -1304,7 +1370,7 @@ impl Runtime {
         session.state.grants.clear();
         let summary = json!({
             "event": "session_end",
-            "reason": reason,
+            "reason": reason.map(|value| label(value, Summary)),
             "cumulative_score": session.state.cumulative_score,
             "scored_actions": session.state.scored_actions,
             "denied_attempts": session.state.denied_attempts,
@@ -1348,7 +1414,11 @@ impl Runtime {
         drop(session);
         self.lifecycle(
             ctx,
-            json!({"event": "subagent_start", "agent_id": agent_id, "agent_type": agent_type}),
+            json!({
+                "event": "subagent_start",
+                "agent_id": label(agent_id, Metadata),
+                "agent_type": agent_type.map(|value| label(value, Metadata)),
+            }),
         );
         Ok(Response::None)
     }
@@ -2544,16 +2614,19 @@ impl Runtime {
         record.error_code = error_code.map(str::to_owned);
         if let Some(decision) = decision {
             // Report the agent that made the call, even when settled elsewhere.
-            record.session.agent_id = decision.agent_id.clone();
+            record.session.agent_id = decision
+                .agent_id
+                .as_deref()
+                .map(|value| label(value, Metadata));
         }
         record.action = Some(Action {
-            tool_use_id: Some(tool_use_id.to_owned()),
-            tool_name: Some(tool_name.to_owned()),
+            tool_use_id: Some(label(tool_use_id, Metadata)),
+            tool_name: Some(label(tool_name, Metadata)),
             input_sha256: None,
         });
         record.outcome = Some(OutcomeInfo {
             result,
-            established_by: ctx.hook_event.clone(),
+            established_by: record.harness.hook_event.clone(),
             decision_record_id: decision.map(|d| d.record_id.clone()),
             prior_verdict: decision.map(|d| d.verdict.as_str()),
             prior_returned: decision.map(|d| d.returned),
@@ -2589,8 +2662,11 @@ fn is_session_file_failure(code: &str) -> bool {
 
 fn action_of(call: &ToolCall) -> Action {
     Action {
-        tool_use_id: call.tool_use_id.clone(),
-        tool_name: Some(call.tool_name.clone()),
+        tool_use_id: call
+            .tool_use_id
+            .as_deref()
+            .map(|value| label(value, Metadata)),
+        tool_name: Some(label(&call.tool_name, Metadata)),
         input_sha256: Some(input_sha256(&call.input)),
     }
 }
@@ -2598,6 +2674,116 @@ fn action_of(call: &ToolCall) -> Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telemetry_sink_refuses_a_line_one_byte_over_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("telemetry.jsonl");
+        let runtime = Runtime::new(Config::default());
+        let ctx = Context {
+            harness: "claude-code",
+            hook_event: "SessionStart".into(),
+            session_id: "synthetic-session".into(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: false,
+            can_grant: false,
+        };
+        let mut record = runtime.record(&ctx, Kind::Lifecycle);
+        record.lifecycle = Some(json!({"event": "session_start", "source": "synthetic"}));
+        let line_bytes = serde_json::to_vec(&record).unwrap().len() + 1;
+        let sink = Sink::new(path.clone()).with_line_limit(line_bytes - 1);
+        assert!(is_record_too_large(&sink.write(&record).unwrap_err()));
+        assert!(!path.exists());
+        Sink::new(path.clone())
+            .with_line_limit(line_bytes)
+            .write(&record)
+            .unwrap();
+        let accepted = std::fs::read(path).unwrap();
+        assert_eq!(accepted.len(), line_bytes);
+        assert_eq!(accepted.last(), Some(&b'\n'));
+    }
+
+    #[test]
+    fn telemetry_runtime_replaces_an_oversized_record_in_the_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("telemetry.jsonl");
+        let mut runtime = Runtime::new(Config {
+            mode: Mode::Enforce,
+            state_dir: Some(dir.path().join("state")),
+            telemetry_path: Some(path.clone()),
+            ..Config::default()
+        });
+        runtime.telemetry_line_limit = 1200;
+        let mut ctx = Context {
+            harness: "claude-code",
+            hook_event: "PreToolUse".into(),
+            session_id: "synthetic-session".into(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: true,
+            can_grant: false,
+        };
+        let call = ToolCall {
+            tool_name: "Bash".into(),
+            tool_use_id: Some("synthetic-call".into()),
+            input: json!({"command": "cat ~/.aws/credentials"}),
+        };
+        let response = runtime.handle(&ctx, Event::ToolRequested(call.clone()));
+        assert!(
+            matches!(response, Response::Decision(decision) if decision.verdict() == Verdict::Ask)
+        );
+        ctx.hook_event = "PostToolUse".into();
+        runtime.handle(
+            &ctx,
+            Event::ToolFinished {
+                call,
+                completion: Completion::Completed,
+                result_text: String::new(),
+                duration_ms: None,
+            },
+        );
+        let wire = std::fs::read_to_string(path).unwrap();
+        let mut lines = wire.split_inclusive('\n');
+        let error = crate::HooksRecordV1::from_json(lines.next().unwrap().as_bytes()).unwrap();
+        assert_eq!(
+            error.error_code.as_deref(),
+            Some("telemetry_record_too_large")
+        );
+        assert_eq!(error.kind, crate::HooksRecordKind::Error);
+        assert_eq!(error.harness.hook_event, "PreToolUse");
+        assert_eq!(error.session.session_id, "synthetic-session");
+        let action = error.action.unwrap();
+        assert_eq!(action.tool_use_id.as_deref(), Some("synthetic-call"));
+        assert_eq!(action.tool_name.as_deref(), Some("Bash"));
+        assert!(action.input_sha256.is_some());
+        assert!(error.evaluation.is_none());
+        assert!(error.decision.is_none());
+        assert!(error.outcome.is_none());
+        assert!(error.lifecycle.is_none());
+        assert!(error.lock_wait_ms.is_none());
+        assert!(error.telltale.is_empty());
+
+        let outcome = crate::HooksRecordV1::from_json(lines.next().unwrap().as_bytes()).unwrap();
+        assert_eq!(outcome.producer, error.producer);
+        let outcome = outcome.outcome.unwrap();
+        assert_eq!(
+            outcome.decision_record_id.as_deref(),
+            Some(error.record_id.as_str())
+        );
+        assert_eq!(outcome.prior_returned, Some(true));
+        assert_eq!(
+            outcome.prior_verdict,
+            Some(crate::hooks_record::HooksVerdict::Ask)
+        );
+        assert!(lines.next().is_none());
+    }
 
     /// A pipeline that cannot build evaluates nothing, whatever caused it, so it never
     /// reaches an allow by default. Operator files need not be involved: an environment

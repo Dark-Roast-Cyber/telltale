@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Dark-Roast-Cyber/telltale/schemas/telltale-hooks-record-v1.schema.json",
+  "title": "Telltale Hooks record v1",
+  "description": "Host envelope written once per hook observation, at most 16 MiB including the line feed. Detection content is carried as unmodified Telltale ActionRecordV1 values. Native labels are at most 256 UTF-8 bytes, readable and sanitizer-stable, or a tth-esc- stand-in. See docs/hooks/adr/0005-telemetry-envelope.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "record_id", "recorded_at", "kind", "producer", "harness", "session", "telltale"],
+  "properties": {
+    "schema": { "const": "telltale_hooks.record.v1" },
+    "record_id": { "type": "string", "pattern": "^tth:[0-9a-f]{32}$" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "kind": { "enum": ["decision", "outcome", "result_finding", "lifecycle", "error"] },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "telltale_rev", "semantic_identity"],
+      "properties": {
+        "name": { "const": "telltale-hooks" },
+        "version": { "type": "string" },
+        "telltale_rev": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Digest of the Telltale package version and the build Git hash that wrote the record; not a Git object name." },
+        "semantic_identity": { "type": ["string", "null"], "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "hook_event", "permission_mode"],
+      "properties": {
+        "name": { "type": "string" },
+        "hook_event": { "type": "string", "maxLength": 256, "description": "Telemetry label for the native event. Empty when the hook could not identify an event." },
+        "permission_mode": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported permission mode." }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "agent_id", "agent_type", "prompt_id", "cwd_sha256"],
+      "properties": {
+        "session_id": { "type": "string", "maxLength": 256, "description": "Telemetry label for the reported session ID. Empty when there is no session to report." },
+        "agent_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported agent ID." },
+        "agent_type": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported agent type." },
+        "prompt_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported prompt ID." },
+        "cwd_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_use_id", "tool_name", "input_sha256"],
+      "properties": {
+        "tool_use_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the hook's call correlation key." },
+        "tool_name": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the harness-reported tool name, without evaluation normalization." },
+        "input_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the canonical JSON of the tool input as the harness reported it, before any normalization of the evaluation encoding." }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "coverage", "visibility_limits", "failure_code", "window_records", "window_truncated", "build_ms", "scan_ms", "evaluator", "evaluator_fallback"],
+      "properties": {
+        "status": { "enum": ["complete", "visibility_limited", "not_evaluated"] },
+        "coverage": { "enum": ["whole_source", "partial", "unknown", null] },
+        "visibility_limits": { "type": "array", "items": { "type": "string" } },
+        "failure_code": { "type": ["string", "null"] },
+        "window_records": { "type": "integer", "minimum": 0 },
+        "window_truncated": { "type": "boolean" },
+        "build_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "scan_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "lock_wait_ms": { "type": ["integer", "null"], "minimum": 0, "description": "How long the call waited for its session's lock, over every time it took it, in milliseconds: time spent behind the session's other calls, apart from `build_ms` and `scan_ms`. Absent from records written before 2026-11." },
+        "evaluator": { "enum": ["daemon", "in_process"] },
+        "evaluator_fallback": { "type": ["string", "null"] },
+        "scans": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["variants", "whole", "together", "pieces_scanned", "pieces_total", "pieces_refused", "first_refusal", "whole_ms", "together_ms", "pieces_ms", "history_ms"],
+          "properties": {
+            "variants": { "type": "integer", "minimum": 0 },
+            "whole": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
+            "together": { "enum": ["passed", "refused", "skipped_pieces_only", "skipped_budget", "skipped_late", "same_as_whole", null] },
+            "history": { "enum": ["passed", "refused", "skipped_budget", "skipped_late", null], "description": "The scan of the session history with the line a call past the projection budget is journaled as, after its pieces; `refused` when Telltale failed that source or quarantined the call's line; null when the call was not past the budget or had no history. Absent from records written before 2026-11." },
+            "pieces_scanned": { "type": "integer", "minimum": 0 },
+            "pieces_total": { "type": "integer", "minimum": 0 },
+            "pieces_refused": { "type": "integer", "minimum": 0 },
+            "first_refusal": { "type": ["string", "null"] },
+            "whole_ms": { "type": "integer", "minimum": 0 },
+            "together_ms": { "type": "integer", "minimum": 0 },
+            "pieces_ms": { "type": "integer", "minimum": 0 },
+            "history_ms": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "verdict", "returned", "basis", "action_score", "session_score_before", "session_score_after", "denied_attempts_before", "rule_ids", "categories"],
+      "properties": {
+        "mode": { "enum": ["enforce", "observe"] },
+        "verdict": { "enum": ["allow", "ask", "deny"] },
+        "returned": { "type": "boolean" },
+        "returned_verdict": {
+          "enum": ["deny"],
+          "description": "Present only when the verdict returned to the harness differs from `verdict`: an `ask` returned as `deny` because the harness cannot put an ask to a human (Codex CLI, OpenCode v1, OpenCode v2 --auto). Never `allow`. Added 2026-11 (ADR 0004 addendum)."
+        },
+        "basis": { "enum": ["no_finding", "below_threshold", "action_score", "session_score", "repeated_denials", "evaluation_gap", "unevaluable_input"] },
+        "action_score": { "type": "integer", "minimum": 0 },
+        "session_score_before": { "type": "integer", "minimum": 0 },
+        "session_score_after": { "type": "integer", "minimum": 0 },
+        "denied_attempts_before": { "type": "integer", "minimum": 0 },
+        "rule_ids": { "type": "array", "items": { "type": "string" } },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "grant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "granted_by"],
+          "properties": {
+            "scope": { "enum": ["once", "session", "project", "user"] },
+            "granted_by": { "type": "string" }
+          },
+          "description": "Present only when a grant the user gave in the session covered the call: nothing was returned (`returned` is false), `verdict`, `basis` and the scores are the policy's, and the session's score and attempts were left as they were (`session_score_after` equals `session_score_before`). `scope` is the grant's: `once` and `session` grants are given in the session, `project` and `user` grants are files in `grants.d` of the user's configuration root. `granted_by` is the record ID of the `grant` lifecycle record that made a `once` or `session` grant, and the grant ID of a `project` or `user` grant. Added 2026-11."
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "established_by", "decision_record_id", "prior_verdict", "prior_returned", "enforcement", "duration_ms", "supersedes"],
+      "properties": {
+        "result": { "enum": ["completed", "failed", "interrupted", "not_executed", "unknown"] },
+        "established_by": { "type": "string", "minLength": 1, "maxLength": 256, "description": "The same telemetry label as harness.hook_event." },
+        "decision_record_id": { "type": ["string", "null"] },
+        "prior_verdict": { "enum": ["allow", "ask", "deny", null] },
+        "prior_returned": { "type": ["boolean", "null"] },
+        "prior_returned_verdict": {
+          "enum": ["deny"],
+          "description": "Present only when the decision returned a different verdict than `prior_verdict` (an `ask` returned as `deny`); `enforcement` is accounted against it. Added 2026-11 (ADR 0004 addendum)."
+        },
+        "enforcement": { "enum": ["honored", "violated", "declined", "proceeded_after_ask", "not_returned", "no_decision", "unknown"] },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "supersedes": { "type": ["string", "null"] }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "description": "Event-specific lifecycle details, named by `event`. A grant made in the session is named by this lifecycle record's ID in a covered decision; a project or user grant is named by `grant_id`. Terminal grants and revocations have `hook_event: terminal` and an empty session ID.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["event", "source"],
+          "properties": {
+            "event": { "const": "session_start" },
+            "source": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported session-start source." },
+            "pinned_over": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Sorted names of sources replaced by a hook command pin; never the replaced values. Absent when no pin replaced anything."
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "reason", "cumulative_score", "scored_actions", "denied_attempts", "asked_attempts", "subagents", "unsettled_calls"],
+          "properties": {
+            "event": { "const": "session_end" },
+            "reason": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported session-end reason, checked in the Summary context." },
+            "cumulative_score": { "type": "integer", "minimum": 0 },
+            "scored_actions": { "type": "integer", "minimum": 0 },
+            "denied_attempts": { "type": "integer", "minimum": 0 },
+            "asked_attempts": { "type": "integer", "minimum": 0 },
+            "subagents": { "type": "integer", "minimum": 0 },
+            "unsettled_calls": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "agent_id", "agent_type"],
+          "properties": {
+            "event": { "enum": ["subagent_start", "subagent_stop"] },
+            "agent_id": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported subagent ID." },
+            "agent_type": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported subagent type." }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event"],
+          "properties": { "event": { "enum": ["permission_prompt", "other"] } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "prompt_sha256", "prompt_bytes"],
+          "properties": {
+            "event": { "const": "user_prompt" },
+            "prompt_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "prompt_bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "scope", "tool", "rule_ids", "offer_record_id"],
+          "properties": {
+            "event": { "const": "grant" },
+            "scope": { "$ref": "#/properties/decision/properties/grant/properties/scope" },
+            "tool": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Telemetry label for the granted tool name." },
+            "rule_ids": { "type": "array", "items": { "type": "string" } },
+            "offer_record_id": { "$ref": "#/properties/record_id" },
+            "grant_id": { "$ref": "#/$defs/grantId" },
+            "project_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "cause"],
+          "properties": {
+            "event": { "const": "grant_refused" },
+            "cause": { "enum": ["not_user_prompt", "no_offer"] }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "grant_id"],
+          "properties": {
+            "event": { "const": "grant_revoked" },
+            "grant_id": { "$ref": "#/$defs/grantId" }
+          }
+        }
+      ]
+    },
+    "error_code": {
+      "type": "string",
+      "description": "Content-free code. On `error` records: why the hook could not do its job. `telemetry_record_too_large` replaces an oversized record and keeps its record ID, time, producer, harness, session and optional action, including an outcome action without an input digest. On `outcome` records: `outcome_ambiguous`, a result reported under a synthetic correlation key that only matched an already settled call; it may belong to that call or to a later identical one, so `result` is `unknown` and the settlement it supersedes is neither confirmed nor contradicted. It is followed by a second outcome for the same tool_use_id carrying the reported result with `enforcement: no_decision`: the execution happened, no decision is known to apply. A consumer keeping the latest outcome per tool_use_id sees that `no_decision` record (ADR 0004 addendum, point 11)."
+    },
+    "lock_wait_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "On `error` records of a call that tried to take its session's lock: how long it waited for it, in milliseconds, up to giving up for `state_lock_timeout`. Added 2026-11."
+    },
+    "telltale": {
+      "type": "array",
+      "description": "Telltale ActionRecordV1 values anchored at this observation, unmodified. They describe the evaluation encoding, which for non-Claude harnesses is the normalized form of the call (ADR 0002 addendum), so their `tool_name` and facets may differ from `action` (for example `Read` for Copilot `view`, or `Write` with a path for a patch). Their `client` and `source_id` are those of the call's harness (`claude`/`claude.hooks`, `codex`/`codex.hooks`, `copilot`/`copilot.hooks`).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["delivery_key", "record"],
+        "properties": {
+          "delivery_key": { "type": "string" },
+          "record": { "type": "object", "properties": { "schema": { "const": "telltale.action.v1" } }, "required": ["schema"] },
+          "destinations": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["destinations", "complete", "local_only"],
+            "description": "Where an exfil.outbound_upload action sends, as its command text says (DestinationFacts). Present only on such actions; it never changes the record, scores or verdicts.",
+            "properties": {
+              "destinations": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[a-z0-9._~:/\\[\\]-]+$"
+                }
+              },
+              "complete": { "type": "boolean" },
+              "local_only": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "grantId": { "type": "string", "pattern": "^g-[0-9a-f]{12}$" }
+  }
+}

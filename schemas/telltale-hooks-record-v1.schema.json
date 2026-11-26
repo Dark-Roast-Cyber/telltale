@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Dark-Roast-Cyber/telltale/schemas/telltale-hooks-record-v1.schema.json",
   "title": "Telltale Hooks record v1",
-  "description": "Host envelope written once per hook observation. Detection content is carried only as unmodified Telltale ActionRecordV1 values (validate those with Telltale's action-record-v1 schema or ActionRecordV1::from_json). See docs/adr/0005-telemetry-envelope.md.",
+  "description": "Host envelope written once per hook observation, at most 16 MiB including the line feed. Detection content is carried as unmodified Telltale ActionRecordV1 values. Native labels are at most 256 UTF-8 bytes, readable and sanitizer-stable, or a tth-esc- stand-in. See docs/hooks/adr/0005-telemetry-envelope.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "record_id", "recorded_at", "kind", "producer", "harness", "session", "telltale"],
@@ -28,8 +28,8 @@
       "required": ["name", "hook_event", "permission_mode"],
       "properties": {
         "name": { "type": "string" },
-        "hook_event": { "type": "string" },
-        "permission_mode": { "type": ["string", "null"] }
+        "hook_event": { "type": "string", "maxLength": 256, "description": "Telemetry label for the native event. Empty when the hook could not identify an event." },
+        "permission_mode": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported permission mode." }
       }
     },
     "session": {
@@ -37,10 +37,10 @@
       "additionalProperties": false,
       "required": ["session_id", "agent_id", "agent_type", "prompt_id", "cwd_sha256"],
       "properties": {
-        "session_id": { "type": "string" },
-        "agent_id": { "type": ["string", "null"] },
-        "agent_type": { "type": ["string", "null"] },
-        "prompt_id": { "type": ["string", "null"] },
+        "session_id": { "type": "string", "maxLength": 256, "description": "Telemetry label for the reported session ID. Empty when there is no session to report." },
+        "agent_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported agent ID." },
+        "agent_type": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported agent type." },
+        "prompt_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported prompt ID." },
         "cwd_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
       }
     },
@@ -49,8 +49,8 @@
       "additionalProperties": false,
       "required": ["tool_use_id", "tool_name", "input_sha256"],
       "properties": {
-        "tool_use_id": { "type": ["string", "null"] },
-        "tool_name": { "type": ["string", "null"], "description": "The tool name as the harness reported it (for example Copilot `view`), never the normalized evaluation encoding." },
+        "tool_use_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the hook's call correlation key." },
+        "tool_name": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the harness-reported tool name, without evaluation normalization." },
         "input_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the canonical JSON of the tool input as the harness reported it, before any normalization of the evaluation encoding." }
       }
     },
@@ -128,7 +128,7 @@
       "required": ["result", "established_by", "decision_record_id", "prior_verdict", "prior_returned", "enforcement", "duration_ms", "supersedes"],
       "properties": {
         "result": { "enum": ["completed", "failed", "interrupted", "not_executed", "unknown"] },
-        "established_by": { "type": "string" },
+        "established_by": { "type": "string", "minLength": 1, "maxLength": 256, "description": "The same telemetry label as harness.hook_event." },
         "decision_record_id": { "type": ["string", "null"] },
         "prior_verdict": { "enum": ["allow", "ask", "deny", null] },
         "prior_returned": { "type": ["boolean", "null"] },
@@ -143,20 +143,94 @@
     },
     "lifecycle": {
       "type": "object",
-      "description": "Event-specific, content-free lifecycle details, named by `event`. A `grant` record (the user's grant line allowed a stopped call) has `scope` (`once` or `session`), `tool` (the stopped call's tool name), `rule_ids` (its detections, sorted) and `offer_record_id` (its decision record); a decision record a grant covers names this record in `decision.grant.granted_by`. A `grant` record written by `telltale hooks allow` (a project or user grant in `grants.d`) has `scope` (`project` or `user`), `tool`, `rule_ids`, `offer_record_id` (the decision record it was made from), `grant_id` (the file's grant ID, which a covered call's `decision.grant.granted_by` names) and, for `project`, `project_sha256` (SHA-256 of the project directory as written in the grant; never the path); `telltale hooks revoke` writes a `grant_revoked` record with `grant_id`. Both have `hook_event` `terminal`, an empty `session_id` and the grant's harness (empty when a revoked file names none). A `grant_refused` record has `cause`: `not_user_prompt` (the prompt event may not be the user's own: a subagent's, or on a harness that cannot take a grant line) or `no_offer` (no stopped call can be allowed). Neither carries the prompt, a pattern, matched text or a path. Added 2026-11.",
-      "properties": {
-        "pinned_over": {
-          "type": "array",
-          "items": { "type": "string" },
-          "minItems": 1,
-          "uniqueItems": true,
-          "description": "On `session_start` records: the sources whose different value a pin on the hook command (`--state-dir`, `--user-config-dir`) replaced in the launch of the hook invocation that received the event, by name only (an environment variable such as `TELLTALE_HOOKS_STATE_DIR`, or a settings key such as `hooks.state_dir`), sorted; never a value. Absent when no pin replaced anything. Added 2026-11."
+      "description": "Event-specific lifecycle details, named by `event`. A grant made in the session is named by this lifecycle record's ID in a covered decision; a project or user grant is named by `grant_id`. Terminal grants and revocations have `hook_event: terminal` and an empty session ID.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["event", "source"],
+          "properties": {
+            "event": { "const": "session_start" },
+            "source": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported session-start source." },
+            "pinned_over": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Sorted names of sources replaced by a hook command pin; never the replaced values. Absent when no pin replaced anything."
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "reason", "cumulative_score", "scored_actions", "denied_attempts", "asked_attempts", "subagents", "unsettled_calls"],
+          "properties": {
+            "event": { "const": "session_end" },
+            "reason": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported session-end reason, checked in the Summary context." },
+            "cumulative_score": { "type": "integer", "minimum": 0 },
+            "scored_actions": { "type": "integer", "minimum": 0 },
+            "denied_attempts": { "type": "integer", "minimum": 0 },
+            "asked_attempts": { "type": "integer", "minimum": 0 },
+            "subagents": { "type": "integer", "minimum": 0 },
+            "unsettled_calls": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "agent_id", "agent_type"],
+          "properties": {
+            "event": { "enum": ["subagent_start", "subagent_stop"] },
+            "agent_id": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported subagent ID." },
+            "agent_type": { "type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "Telemetry label for the reported subagent type." }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event"],
+          "properties": { "event": { "enum": ["permission_prompt", "other"] } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "prompt_sha256", "prompt_bytes"],
+          "properties": {
+            "event": { "const": "user_prompt" },
+            "prompt_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "prompt_bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "scope", "tool", "rule_ids", "offer_record_id"],
+          "properties": {
+            "event": { "const": "grant" },
+            "scope": { "$ref": "#/properties/decision/properties/grant/properties/scope" },
+            "tool": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Telemetry label for the granted tool name." },
+            "rule_ids": { "type": "array", "items": { "type": "string" } },
+            "offer_record_id": { "$ref": "#/properties/record_id" },
+            "grant_id": { "$ref": "#/$defs/grantId" },
+            "project_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "cause"],
+          "properties": {
+            "event": { "const": "grant_refused" },
+            "cause": { "enum": ["not_user_prompt", "no_offer"] }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["event", "grant_id"],
+          "properties": {
+            "event": { "const": "grant_revoked" },
+            "grant_id": { "$ref": "#/$defs/grantId" }
+          }
         }
-      }
+      ]
     },
     "error_code": {
       "type": "string",
-      "description": "Content-free code. On `error` records: why the hook could not do its job. On `outcome` records: `outcome_ambiguous`, a result reported under a synthetic correlation key (`tth-syn-`) that only matched an already settled call; it may belong to that call or to a later identical one, so `result` is `unknown` and the settlement it supersedes is neither confirmed nor contradicted. It is followed by a second outcome for the same tool_use_id carrying the reported result with `enforcement: no_decision`: the execution happened, no decision is known to apply. A consumer keeping the latest outcome per tool_use_id sees that `no_decision` record (ADR 0004 addendum, point 11)."
+      "description": "Content-free code. On `error` records: why the hook could not do its job. `telemetry_record_too_large` replaces an oversized record and keeps its record ID, time, producer, harness, session and optional action, including an outcome action without an input digest. On `outcome` records: `outcome_ambiguous`, a result reported under a synthetic correlation key that only matched an already settled call; it may belong to that call or to a later identical one, so `result` is `unknown` and the settlement it supersedes is neither confirmed nor contradicted. It is followed by a second outcome for the same tool_use_id carrying the reported result with `enforcement: no_decision`: the execution happened, no decision is known to apply. A consumer keeping the latest outcome per tool_use_id sees that `no_decision` record (ADR 0004 addendum, point 11)."
     },
     "lock_wait_ms": {
       "type": "integer",
@@ -197,5 +271,8 @@
         }
       }
     }
+  },
+  "$defs": {
+    "grantId": { "type": "string", "pattern": "^g-[0-9a-f]{12}$" }
   }
 }

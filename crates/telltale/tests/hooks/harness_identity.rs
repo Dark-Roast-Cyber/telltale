@@ -92,6 +92,9 @@ fn decide(entry: Harness, bytes: &[u8]) -> (&'static str, Vec<Value>) {
     };
     let mut h = common::Harness::new();
     h.runtime.handle(&ctx, event);
+    for line in std::fs::read_to_string(h.telemetry_path()).unwrap().lines() {
+        super::telemetry_schema::assert_record_contract(line.as_bytes());
+    }
     let decisions = h.records("decision");
     assert_eq!(decisions.len(), 1, "{}", entry.name());
     let records = decisions[0]["telltale"].as_array().unwrap().clone();
