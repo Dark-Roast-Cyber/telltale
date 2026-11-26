@@ -66,7 +66,14 @@ pub(crate) struct ToolSpec {
     whole_text: bool,
     /// A `text` key holding anything but a string makes the arguments invalid.
     strict_text: bool,
+    /// A tool whose argument is a script that calls other tools: the source's
+    /// own reading of the calls the script names. See [`ToolSpec::script`].
+    script: Option<ScriptReader>,
 }
+
+/// Reads the calls a script tool's arguments name, or `None` to leave the
+/// arguments to the row.
+pub(crate) type ScriptReader = fn(Option<&JsonValue>) -> Option<ToolOperation>;
 
 impl ToolSpec {
     pub(crate) const fn new(name: &'static str, kind: ToolKind) -> Self {
@@ -84,7 +91,17 @@ impl ToolSpec {
             text: &[],
             whole_text: false,
             strict_text: false,
+            script: None,
         }
+    }
+
+    /// The tool runs a script that calls other tools. `reader` returns the
+    /// operation those calls make, which stands in place of the row's own
+    /// reading and of the script as command text. It is an argument role: a
+    /// call the row may not be the tool of is not read with it.
+    pub(crate) const fn script(mut self, reader: ScriptReader) -> Self {
+        self.script = Some(reader);
+        self
     }
 
     pub(crate) const fn text(mut self, keys: &'static [&'static str]) -> Self {
@@ -183,6 +200,9 @@ impl ToolSpec {
     /// row may not be the tool of: it keeps the kind and operands, which only add
     /// readings, and gets no argument role, which replaces one.
     fn operation(&self, arguments: Option<&JsonValue>, roles: bool) -> ToolOperation {
+        if roles && let Some(operation) = self.script.and_then(|reader| reader(arguments)) {
+            return operation;
+        }
         let members = Members::of(arguments);
         let mut operation = ToolOperation::new(self.kind);
         for key in self.commands {

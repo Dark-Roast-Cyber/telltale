@@ -227,6 +227,47 @@ impl RuleContentErrorCode {
     }
 }
 
+/// One override entry that named no loaded rule or chain modifier and was left
+/// out because unknown overrides were configured to be skipped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SkippedOverride {
+    rule_id: String,
+    document: String,
+}
+
+impl SkippedOverride {
+    /// The override entry's `rule_id` in terminal form: safe native rule
+    /// identifiers stay readable, and any unsafe, control/invisible-character,
+    /// path-like, or oversized string is deterministically replaced with an
+    /// opaque `redacted.<sha256>` marker.
+    pub fn rule_id(&self) -> &str {
+        &self.rule_id
+    }
+
+    /// The input that supplied the entry (for example `override:<label>` or
+    /// `override:<n>` from [`crate::PipelineBuilder`]).
+    pub fn document(&self) -> &str {
+        &self.document
+    }
+}
+
+/// Keep the original ID for file-based callers, which apply their own notice
+/// filtering and formatting. The embedding facade exposes only the diagnostic.
+pub(crate) struct SkippedOverrideEntry {
+    rule_id: String,
+    document: String,
+}
+
+impl SkippedOverrideEntry {
+    pub(crate) fn into_diagnostic(self) -> SkippedOverride {
+        SkippedOverride {
+            rule_id: telltale_schema::event::terminal_rule_identifier(&self.rule_id),
+            document: self.document,
+        }
+    }
+}
+
 /// Rule content the builder rejected: a closed code and the input it
 /// concerns, never document text, rule IDs or paths. `Display` is the code.
 /// It is the `Error::source()` of [`crate::PipelineError::Compilation`].
@@ -492,16 +533,22 @@ pub(crate) fn resolve_rule_set_with_host(
             })
             .transpose()?,
     })
+    .map(|(resolution, skipped)| {
+        (
+            resolution,
+            skipped.into_iter().map(|entry| entry.rule_id).collect(),
+        )
+    })
 }
 
 /// Merge the tiers of `content`, apply its overrides in order, and compile
 /// with its policy: the one resolution the CLI, hooks and the embedding
-/// builder share. Beside the resolution it returns the `rule_id` of each
-/// override entry that was left out, in order: one that names no loaded
-/// rule or chain modifier, where the content's `skip_unknown_overrides` is set.
+/// builder share. Beside the resolution it returns each override entry that
+/// was left out, in order: one that names no loaded rule or chain modifier,
+/// where the content's `skip_unknown_overrides` is set.
 pub(crate) fn resolve_rule_content(
     content: RuleContent,
-) -> Result<(RuleResolution, Vec<String>), Box<dyn std::error::Error>> {
+) -> Result<(RuleResolution, Vec<SkippedOverrideEntry>), Box<dyn std::error::Error>> {
     let RuleContent {
         mode,
         community,
@@ -552,12 +599,11 @@ pub(crate) fn resolve_rule_content(
     diagnostics.packages = packages;
     let mut skipped_overrides = Vec::new();
     for (name, raw) in &overrides {
-        skipped_overrides.extend(apply_rule_override(
-            &mut content,
-            name,
-            raw,
-            skip_unknown_overrides,
-        )?);
+        let skipped = apply_rule_override(&mut content, name, raw, skip_unknown_overrides)?;
+        skipped_overrides.extend(skipped.into_iter().map(|rule_id| SkippedOverrideEntry {
+            rule_id,
+            document: name.source.clone(),
+        }));
     }
     Ok((
         RuleResolution {

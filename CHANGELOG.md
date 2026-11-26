@@ -12,6 +12,15 @@
   home paths, including supported spaced final filenames. Preserve registry keys,
   URLs, command flags and ordinary escape sequences; lexical limits remain
   explicit in the [privacy model](docs/privacy-model.md).
+- Redact a Windows path whose start is escaped more than twice, or whose UNC
+  start and server separator are escaped to different widths, whole instead
+  of leaving backslashes before the marker. Two paths joined by an escaped
+  line break or tab (`\n`, `\r`, `\t`) are each redacted whole; before, the
+  second path's tail could stay readable after the first marker. Such an
+  escape after a path stays outside the marker where it cannot be a path
+  component: after a file name with an extension, or in text whose separators
+  are doubled. This changes redacted text, so qualify producer and consumer
+  privacy pins together.
 - Keep native rule-ID admission and emission credential-strict. Historical Event
   3 readback preserves exact `redacted.<64 lowercase hex digits>` replacements
   only in the five rule-ID fields, without granting provenance. Contribution
@@ -233,6 +242,35 @@
   and `hooks::runtime::Context` a new `can_grant` field, `hooks::runtime::Response`
   a new `Notice` variant, `hooks::engine::Engine::new` takes the grants
   settings, and the record schema has an optional `decision.grant`.
+
+- **`RuleV1CompileError` is now `RuleCompileError`.** The error type
+  `telltale-core` re-exports for a rule that does not compile kept a Rule v1
+  name after Rule v1 was removed. Its variants and their text are unchanged.
+  See the [0.8.0 migration guide](docs/migrations/0.8.0.md#rust-api).
+
+- **A Codex code-mode script's patch names the files it writes.** The
+  literal calls a script tool's script names (`tools.exec_command`,
+  `tools.apply_patch`) are now read by the Codex source, not by detection.
+  Commands and patch content are read as before; the files a patch adds,
+  updates or deletes are now also written paths, so rules that select a
+  written path match them as they match the `apply_patch` tool. A script
+  that takes more reading than its bound allows is read as command text
+  instead of failing its source.
+
+- **MCP usage is attributed for tools named `mcp__<server>__<tool>`.** A
+  tool call under that name is attributed to the configured server it spells
+  out, when that server declares the tool. Before, only a call under the
+  bare declared tool name was attributed. A name that joins server and tool
+  with a single separator is not read: a built-in tool can have the same
+  name.
+
+- **Hooks: the nested-launch rules list every harness.** The self-protection
+  rules that match a harness launch or a harness package run now take their
+  names from one list. `tth.tamper` rules that matched `claude`, `codex`,
+  `copilot`, `opencode`, `cursor` and `gemini` launches now also match
+  `openclaw`, `qwen` and `pi`, and the package-run deny that named
+  `@openai/codex` and `@github/copilot` now also names
+  `@anthropic-ai/claude-code`.
 
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
@@ -820,6 +858,18 @@
   instead of naming the rule. See
   [replacing rule content](docs/embedding.md#replacing-rule-content).
 
+- **The embedding builder can leave out override entries for rules it does
+  not carry.** `PipelineBuilder::skip_unknown_override_rules(true)` skips an
+  override entry whose `rule_id` names no loaded rule or chain modifier
+  instead of failing `build`, so one override document can serve hosts on
+  different Telltale versions. `Pipeline::skipped_overrides()` lists each
+  skipped entry as a `SkippedOverride`: the input (`override:<label>` or
+  `override:<n>`) and the `rule_id`, which is replaced by a
+  `redacted.<sha256>` marker unless it is a safe rule identifier. The default
+  stays strict, and malformed documents and entries, bound violations and an
+  empty effective rule set still fail. See
+  [replacing rule content](docs/embedding.md#replacing-rule-content).
+
 - **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
   acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions
   (session format version 3) from `~/.pi/agent/sessions`. User and assistant
@@ -909,7 +959,9 @@
 - Add experimental `telltale-discover` and `telltale discover`: bounded,
   metadata-only data-location inventory for the pinned 61-entry Tokscale core
   catalog, independent of detection support. Installation assessment and usage
-  counting remain unimplemented; the new inventory backend is Unix-only. Its
+  counting remain unimplemented. The inventory backend runs on Unix and
+  Windows, walking open handles and refusing every link, junction and mount
+  point below its roots; other platforms report an unsupported platform. Its
   separate `telltale.inventory/v1` output does not change Event 3.0 or scanner
   state. Existing supported-source discovery imports keep their interfaces
   through adapters to the new shared crate. See the

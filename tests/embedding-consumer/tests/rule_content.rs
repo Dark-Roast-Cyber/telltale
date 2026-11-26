@@ -154,6 +154,44 @@ fn unknown_override_rule_id_fails_with_unknown_rule_id() {
 }
 
 #[test]
+fn skip_unknown_override_rules_reports_skipped_and_applies_known() {
+    let pipeline = builder()
+        .skip_unknown_override_rules(true)
+        .labeled_override_document(
+            "fleet",
+            tune(
+                "  - rule_id: host.future\n    reason: Newer release.\n    enabled: false\n  \
+                 - rule_id: host.base\n    reason: Host tuning.\n    score: 50\n",
+            ),
+        )
+        .build()
+        .expect("pipeline builds with skipped unknown override");
+    let skipped = pipeline.skipped_overrides();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].rule_id(), "host.future");
+    assert_eq!(skipped[0].document(), "override:fleet");
+    assert_eq!(
+        findings(&pipeline, &["echo host-alpha"]),
+        [(vec!["host.base".to_string()], 50)]
+    );
+}
+
+#[test]
+fn skip_unknown_override_rules_still_fails_as_empty_when_all_known_disabled() {
+    let error = builder()
+        .skip_unknown_override_rules(true)
+        .override_document(tune(
+            "  - rule_id: host.future\n    reason: Newer release.\n    enabled: false\n  \
+             - rule_id: host.base\n    reason: Host tuning.\n    enabled: false\n  \
+             - rule_id: host.other\n    reason: Host tuning.\n    enabled: false\n",
+        ))
+        .build()
+        .err()
+        .expect("no effective rule");
+    assert!(matches!(error, PipelineError::EmptyRuleSet));
+}
+
+#[test]
 fn overrides_that_leave_no_effective_rule_fail_as_empty() {
     let error = builder()
         .override_document(tune(

@@ -38,10 +38,61 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
-pub(super) struct Directory(File);
+pub(crate) struct Directory(File);
 
 /// `IsReparseTagNameSurrogate`: the tag names another object.
 const NAME_SURROGATE: u32 = 0x2000_0000;
+
+/// Convert a Win32, verbatim (`\\?\`), or UNC (`\\`) root prefix into an NT
+/// object-namespace path (`\??\...`).
+pub(super) fn nt_root_path(path: &Path) -> OsString {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut nt: Vec<u16> = r"\??\".encode_utf16().collect();
+    if wide.starts_with(&[92, 92, 63, 92]) {
+        nt.extend_from_slice(&wide[4..]);
+    } else if wide.starts_with(&[92, 92]) {
+        nt.extend("UNC\\".encode_utf16());
+        nt.extend_from_slice(&wide[2..]);
+    } else {
+        nt.extend_from_slice(&wide);
+    }
+    OsString::from_wide(&nt)
+}
+
+/// Why a charged open stopped: the caller's budget refused the next
+/// `NtCreateFile`, or the system refused the open.
+enum OpenError<E> {
+    Charge(E),
+    Io(io::Error),
+}
+
+impl<E> From<io::Error> for OpenError<E> {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// Attribute-only [`open_handle`] for a caller that counts its opens: `charge`
+/// runs before every `NtCreateFile` and its refusal stops the open there. A
+/// plain object, a name surrogate and a non-surrogate file take one open; a
+/// non-surrogate directory below a parent takes a second, the reopen through
+/// its filter. Queries on the opened handle are not opens and are not
+/// charged. The outer error is the refused charge. A file is never reopened
+/// through a filter here, so a placeholder is not hydrated.
+pub(super) fn open_metadata_budgeted<E>(
+    parent: Option<&Directory>,
+    name: &OsStr,
+    charge: &mut impl FnMut() -> Result<(), E>,
+) -> Result<io::Result<(Kind, Option<Directory>)>, E> {
+    match open_handle_charged(parent, name, 0, charge) {
+        Ok((kind, file)) => Ok(Ok((
+            kind,
+            (kind == Kind::Directory).then_some(Directory(file)),
+        ))),
+        Err(OpenError::Io(error)) => Ok(Err(error)),
+        Err(OpenError::Charge(refused)) => Err(refused),
+    }
+}
 
 fn nt_error(status: i32) -> io::Error {
     // SAFETY: pure NT status translation, no pointer arguments.
@@ -62,6 +113,21 @@ fn open_at(parent: Option<&Directory>, name: &OsStr, listing: bool) -> io::Resul
 }
 
 fn open_handle(parent: Option<&Directory>, name: &OsStr, access: u32) -> io::Result<(Kind, File)> {
+    let mut uncounted = || Ok::<(), std::convert::Infallible>(());
+    open_handle_charged(parent, name, access, &mut uncounted).map_err(|error| match error {
+        OpenError::Io(error) => error,
+        OpenError::Charge(never) => match never {},
+    })
+}
+
+/// The one implementation of a no-follow open; see the module docs.
+fn open_handle_charged<E>(
+    parent: Option<&Directory>,
+    name: &OsStr,
+    access: u32,
+    charge: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(Kind, File), OpenError<E>> {
+    charge().map_err(OpenError::Charge)?;
     // OPEN_REPARSE_POINT opens the redirect itself, never its target.
     let file = nt_open(
         parent,
@@ -84,6 +150,7 @@ fn open_handle(parent: Option<&Directory>, name: &OsStr, access: u32) -> io::Res
     else {
         return Ok((kind, file));
     };
+    charge().map_err(OpenError::Charge)?;
     // Without OPEN_REPARSE_POINT the tag's filter interprets the object;
     // DONT_REPARSE refuses a name surrogate swapped in since the first open.
     let filtered = match nt_open(
@@ -97,13 +164,11 @@ fn open_handle(parent: Option<&Directory>, name: &OsStr, access: u32) -> io::Res
         Err(STATUS_REPARSE_POINT_ENCOUNTERED | STATUS_IO_REPARSE_TAG_NOT_HANDLED) => {
             return Ok((Kind::Link, file));
         }
-        Err(status) => return Err(nt_error(status)),
+        Err(status) => return Err(nt_error(status).into()),
     };
     let again = file_information(&filtered)?;
     if identity(&again) != identity(&information) || kind_of(&again) != kind {
-        return Err(io::Error::other(
-            "reparse point replaced while it was reopened",
-        ));
+        return Err(io::Error::other("reparse point replaced while it was reopened").into());
     }
     Ok((kind, filtered))
 }
@@ -206,17 +271,7 @@ fn identity(information: &BY_HANDLE_FILE_INFORMATION) -> (u32, u32, u32) {
 }
 
 pub(super) fn root(path: &Path) -> Result<Node, Error> {
-    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    let mut nt: Vec<u16> = r"\??\".encode_utf16().collect();
-    if wide.starts_with(&[92, 92, 63, 92]) {
-        nt.extend_from_slice(&wide[4..]);
-    } else if wide.starts_with(&[92, 92]) {
-        nt.extend("UNC\\".encode_utf16());
-        nt.extend_from_slice(&wide[2..]);
-    } else {
-        nt.extend_from_slice(&wide);
-    }
-    let node = open_at(None, &OsString::from_wide(&nt), false).map_err(io_error)?;
+    let node = open_at(None, &nt_root_path(path), false).map_err(io_error)?;
     if node.kind != Kind::Directory {
         return Err(Error::SymlinkRoot);
     }
@@ -424,6 +479,104 @@ mod tests {
         assert_eq!(child("opaque-dir"), Ok(Some(Kind::Link)));
         assert_eq!(kind(&surrogate), Err(Error::SymlinkRoot));
         assert_eq!(read(&surrogate), Err(Error::SymlinkRoot));
+    }
+
+    /// What an attribute-only open with `allowed` opens reports, and how many
+    /// opens it made.
+    fn counted(
+        parent: &Directory,
+        name: &str,
+        allowed: u32,
+    ) -> (Result<Result<Kind, io::ErrorKind>, ()>, u32) {
+        let mut opens = 0;
+        let result = open_metadata_budgeted(Some(parent), OsStr::new(name), &mut || {
+            if opens == allowed {
+                return Err(());
+            }
+            opens += 1;
+            Ok(())
+        });
+        let result =
+            result.map(|opened| opened.map(|(kind, _)| kind).map_err(|error| error.kind()));
+        (result, opens)
+    }
+
+    #[test]
+    fn a_counted_open_charges_each_nt_open_and_stops_at_a_refused_charge() {
+        let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        for name in ["plain.jsonl", "opaque.jsonl", "surrogate.jsonl"] {
+            fs::write(temp.path().join(name), b"synthetic").unwrap();
+        }
+        for name in ["plain-dir", "opaque-dir"] {
+            fs::create_dir(temp.path().join(name)).unwrap();
+        }
+        set_reparse_point(&temp.path().join("opaque.jsonl"), OPAQUE);
+        set_reparse_point(&temp.path().join("surrogate.jsonl"), SURROGATE);
+        set_reparse_point(&temp.path().join("opaque-dir"), OPAQUE);
+        let parent = root(&PathBuf::from(temp.path())).unwrap();
+        let parent = parent.directory.as_ref().unwrap();
+
+        for (name, kind, opens) in [
+            ("plain.jsonl", Ok(Kind::File), 1),
+            ("plain-dir", Ok(Kind::Directory), 1),
+            ("surrogate.jsonl", Ok(Kind::Link), 1),
+            // Attributes only: a file is not reopened through its filter.
+            ("opaque.jsonl", Ok(Kind::File), 1),
+            // A directory is, and no filter owns this tag.
+            ("opaque-dir", Ok(Kind::Link), 2),
+            ("missing", Err(io::ErrorKind::NotFound), 1),
+        ] {
+            assert_eq!(counted(parent, name, u32::MAX), (Ok(kind), opens), "{name}");
+            // The uncounted open is the same open.
+            let uncounted = open_handle(Some(parent), OsStr::new(name), 0)
+                .map(|(kind, _)| kind)
+                .map_err(|error| error.kind());
+            assert_eq!(uncounted, kind, "{name}");
+        }
+        // A refused charge stops before the open it would have paid for.
+        assert_eq!(counted(parent, "plain.jsonl", 0), (Err(()), 0));
+        assert_eq!(counted(parent, "opaque-dir", 1), (Err(()), 1));
+
+        // A name that is not one plain component is refused before any open.
+        fs::write(temp.path().join("plain-dir").join("inside"), b"synthetic").unwrap();
+        for name in ["", ".", "..", r"plain-dir\inside", "plain-dir/inside"] {
+            let mut opens = 0;
+            let result = super::super::windows::open_child(parent, OsStr::new(name), &mut || {
+                opens += 1;
+                Ok::<(), ()>(())
+            });
+            let refused = matches!(
+                &result,
+                Ok(Err(error)) if error.kind() == io::ErrorKind::InvalidInput
+            );
+            assert!(refused && opens == 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_counted_directory_handle_stays_on_its_object_when_its_name_is_replaced() {
+        let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let held = temp.path().join("held");
+        fs::create_dir(&held).unwrap();
+        fs::write(held.join("inside.jsonl"), b"synthetic").unwrap();
+        let parent = root(&PathBuf::from(temp.path())).unwrap();
+        let parent = parent.directory.as_ref().unwrap();
+        let open = |parent: &Directory, name: &str| {
+            open_metadata_budgeted(Some(parent), OsStr::new(name), &mut || Ok::<(), ()>(()))
+                .unwrap()
+                .map_err(|error| error.kind())
+        };
+        let (_, original) = open(parent, "held").unwrap();
+        let original = original.unwrap();
+
+        // The name now leads to another directory.
+        fs::rename(&held, temp.path().join("moved")).unwrap();
+        fs::create_dir(&held).unwrap();
+
+        let inside = |directory: &Directory| open(directory, "inside.jsonl").map(|(kind, _)| kind);
+        assert_eq!(inside(&original), Ok(Kind::File));
+        let (_, replacement) = open(parent, "held").unwrap();
+        assert_eq!(inside(&replacement.unwrap()), Err(io::ErrorKind::NotFound));
     }
 
     #[test]

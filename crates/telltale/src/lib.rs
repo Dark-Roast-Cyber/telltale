@@ -34,7 +34,7 @@
 use rule_resolution::{
     ContentFailure, InputName, NoRuleDocuments, RuleContent, RuleTier, resolve_rule_content,
 };
-pub use rule_resolution::{RuleContentError, RuleContentErrorCode};
+pub use rule_resolution::{RuleContentError, RuleContentErrorCode, SkippedOverride};
 use telltale_rules::package::CommunityRules;
 pub use telltale_rules::package::{COMMUNITY_PACKAGE_ID, RulePackageSummary};
 use telltale_rules::{CompiledRuleSet, LoadedRules, RuleLoadMode};
@@ -72,7 +72,7 @@ pub use provenance::{
     DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS, ProducerProvenanceOptions,
     assemble_producer_provenance_manifest,
 };
-pub use telltale_detect::v2::RuleV1CompileError;
+pub use telltale_detect::v2::RuleCompileError;
 pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;
 pub use telltale_schema::event::Event3Record;
@@ -221,8 +221,8 @@ impl From<time::error::Format> for PipelineError {
     }
 }
 
-impl From<RuleV1CompileError> for PipelineError {
-    fn from(source: RuleV1CompileError) -> Self {
+impl From<RuleCompileError> for PipelineError {
+    fn from(source: RuleCompileError) -> Self {
         Self::Compilation(Box::new(source))
     }
 }
@@ -686,6 +686,9 @@ pub struct Pipeline {
     /// The builder's text inputs, for the effective configuration; empty for
     /// a pipeline over rule files.
     documents: Vec<EffectiveDocumentV1>,
+    /// Override entries skipped because `skip_unknown_override_rules(true)`
+    /// was set and no loaded rule or chain modifier matched their `rule_id`.
+    skipped_overrides: Vec<SkippedOverride>,
 }
 
 /// Builder for [`Pipeline`]. It includes bundled core rules and the embedded
@@ -704,6 +707,7 @@ pub struct PipelineBuilder {
     policy_document: Option<String>,
     custom_only: bool,
     without_community: bool,
+    skip_unknown_overrides: bool,
 }
 
 impl Pipeline {
@@ -720,6 +724,13 @@ impl Pipeline {
     /// community content first, for provenance and inventory reporting.
     pub fn rule_packages(&self) -> &[RulePackageSummary] {
         &self.rule_packages
+    }
+
+    /// Override entries skipped during [`PipelineBuilder::build`] when
+    /// [`PipelineBuilder::skip_unknown_override_rules`] was enabled, in input
+    /// order. Always empty when unknown overrides are rejected (the default).
+    pub fn skipped_overrides(&self) -> &[SkippedOverride] {
+        &self.skipped_overrides
     }
 
     /// Resolve the exact detailed-scan semantic identity before acquisition.
@@ -1068,9 +1079,10 @@ impl PipelineBuilder {
 
     /// Add an override v1 document, like a file in `overrides.d`. Documents
     /// apply in call order after all rule content is merged and before the
-    /// policy. An entry's `rule_id` names a rule or a chain modifier; one
-    /// that names neither fails `build` with
-    /// [`RuleContentErrorCode::UnknownRuleId`].
+    /// policy. An entry's `rule_id` names a rule or a chain modifier; by
+    /// default one that names neither fails `build` with
+    /// [`RuleContentErrorCode::UnknownRuleId`] unless
+    /// [`Self::skip_unknown_override_rules`] is enabled.
     pub fn override_document(mut self, yaml: impl Into<String>) -> Self {
         self.override_documents.push((None, yaml.into()));
         self
@@ -1100,6 +1112,18 @@ impl PipelineBuilder {
     /// (mirrors `--no-community-rules`).
     pub fn without_community_rules(mut self) -> Self {
         self.without_community = true;
+        self
+    }
+
+    /// When `true`, an override entry whose `rule_id` matches no loaded rule
+    /// or chain modifier is skipped instead of failing [`Self::build`] with
+    /// [`RuleContentErrorCode::UnknownRuleId`], and is recorded on
+    /// [`Pipeline::skipped_overrides`]. Defaults to `false` (strict).
+    ///
+    /// Invalid override documents, unsupported versions, invalid entries,
+    /// bound violations, and empty effective rule sets still fail `build()`.
+    pub fn skip_unknown_override_rules(mut self, skip: bool) -> Self {
+        self.skip_unknown_overrides = skip;
         self
     }
 
@@ -1198,26 +1222,27 @@ impl PipelineBuilder {
                 .collect(),
             documents: Vec::new(),
             host_documents: Vec::new(),
-            skip_unknown_overrides: false,
+            skip_unknown_overrides: self.skip_unknown_overrides,
             overrides,
             policy,
         };
-        resolve_rule_content(content)
-            .map(|(resolution, _)| resolution)
-            .map_err(|error| {
-                if error.is::<NoRuleDocuments>() {
-                    PipelineError::InvalidConfiguration
-                } else if let Some(failure) = error.downcast_ref::<ContentFailure>() {
-                    PipelineError::Compilation(Box::new(failure.without_message()))
-                } else {
-                    PipelineError::Compilation(error)
-                }
-            })?
-            .into_pipeline()
-            .map(|pipeline| Pipeline {
-                documents: supplied_documents,
-                ..pipeline
-            })
+        let (resolution, skipped_overrides) = resolve_rule_content(content).map_err(|error| {
+            if error.is::<NoRuleDocuments>() {
+                PipelineError::InvalidConfiguration
+            } else if let Some(failure) = error.downcast_ref::<ContentFailure>() {
+                PipelineError::Compilation(Box::new(failure.without_message()))
+            } else {
+                PipelineError::Compilation(error)
+            }
+        })?;
+        resolution.into_pipeline().map(|pipeline| Pipeline {
+            documents: supplied_documents,
+            skipped_overrides: skipped_overrides
+                .into_iter()
+                .map(|entry| entry.into_diagnostic())
+                .collect(),
+            ..pipeline
+        })
     }
 }
 
@@ -1299,6 +1324,7 @@ impl Pipeline {
             rule_packages: diagnostics.packages,
             provenance: diagnostics.provenance,
             documents: Vec::new(),
+            skipped_overrides: Vec::new(),
         })
     }
 }
@@ -1365,8 +1391,8 @@ telltale:
         assert!(matches!(
             error
                 .source()
-                .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-            Some(RuleV1CompileError::UnmappableDetectionClass)
+                .and_then(|cause| cause.downcast_ref::<RuleCompileError>()),
+            Some(RuleCompileError::UnmappableDetectionClass)
         ));
         let valid = Pipeline::builder().build().unwrap();
         let sources = [synthetic_source()];

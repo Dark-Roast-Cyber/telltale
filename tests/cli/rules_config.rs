@@ -3871,7 +3871,7 @@ fn rules_validate_and_test_leave_out_an_override_for_a_rule_that_is_not_loaded()
     fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
     fs::write(
         &override_path,
-        "version: 1\noverrides:\n  - rule_id: synthetic.missing\n    enabled: false\n    reason: synthetic\n  - rule_id: tth.tamper.synthetic_missing\n    enabled: false\n    reason: synthetic\n  - rule_id: network.download\n    score: 5\n    reason: synthetic\n",
+        "version: 1\noverrides:\n  - rule_id: synthetic.missing\n    enabled: false\n    reason: synthetic\n  - rule_id: tth.tamper.synthetic_missing\n    enabled: false\n    reason: synthetic\n  - rule_id: tth.tamper.synthetic/missing\n    enabled: false\n    reason: synthetic\n  - rule_id: /synthetic/override-name\n    enabled: false\n    reason: synthetic\n  - rule_id: network.download\n    score: 5\n    reason: synthetic\n",
     )
     .expect("write override");
     let run = |args: &[&str]| {
@@ -3892,9 +3892,14 @@ fn rules_validate_and_test_leave_out_an_override_for_a_rule_that_is_not_loaded()
     let validate = run(&["rules", "validate"]);
     assert_eq!(validate["status"], "ok");
     let notices = validate["notices"].as_array().expect("notices");
-    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices.len(), 2, "{notices:?}");
     assert_eq!(notices[0]["rule_id"], "synthetic.missing");
     assert_eq!(notices[0]["kind"], "override_left_out");
+    assert_eq!(
+        notices[1]["rule_id"],
+        "redacted.50f2ed152b0a87aacc00fb435be1eddf25e54e9ef30f5ad7c6bc597f6afa78a5"
+    );
+    assert_eq!(notices[1]["kind"], "override_left_out");
 
     let fixture = temp.path().join("download-only.jsonl");
     fs::write(
