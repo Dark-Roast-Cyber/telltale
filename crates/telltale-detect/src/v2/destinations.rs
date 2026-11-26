@@ -20,19 +20,14 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Range;
 
 use telltale_rules::command_effect::Reading;
-use telltale_schema::destination_facts::{DestinationFacts, MAX_DESTINATION_LEN, MAX_DESTINATIONS};
+use telltale_schema::destination_facts::{
+    DNS_SCHEMES, DestinationFacts, MAX_DESTINATION_LEN, MAX_DESTINATION_SEGMENTS, MAX_DESTINATIONS,
+};
 
 use super::actions::{Upload, consumes_stdin_code, redact, upload};
 use super::http::{assignment, client_name};
 use super::session::{ProcessingError, RetentionBudget};
 
-/// Schemes whose authority is a DNS host: their entries drop the scheme, and
-/// only they can name a loopback destination.
-const DNS_SCHEMES: [&str; 9] = [
-    "http", "https", "ws", "wss", "ftp", "ftps", "sftp", "scp", "tftp",
-];
-/// Path segments an entry keeps after its authority.
-const MAX_SEGMENTS: usize = 2;
 /// Distinct URLs formatted per field. Past this the facts are incomplete, which
 /// bounds the sanitizer work a field of many URLs can ask for.
 const MAX_FORMATTED_URLS: usize = 4 * MAX_DESTINATIONS;
@@ -43,8 +38,9 @@ const REROUTE_NAMES: [&str; 5] = ["proxy", "curlrc", "curl_home", "wgetrc", "hos
 /// Assignments that move where a client finds its config file.
 const CONFIG_HOMES: [&str; 4] = ["home=", "xdg_config_home=", "userprofile=", "appdata="];
 /// Variable prefixes the cloud clients read their profile, config file or
-/// endpoint from.
-const CLOUD_CONFIG_PREFIXES: [&str; 3] = ["AWS_", "BOTO_", "CLOUDSDK_"];
+/// endpoint from, and those the dynamic loader reads, which can put other
+/// code in any client.
+const REROUTE_VARIABLE_PREFIXES: [&str; 5] = ["AWS_", "BOTO_", "CLOUDSDK_", "LD_", "DYLD_"];
 /// Shells whose `-c` script `local_only` may unwrap once.
 const UNWRAP_SHELLS: [&str; 4] = ["bash", "sh", "zsh", "dash"];
 /// Commands that only print what a request returns.
@@ -295,13 +291,17 @@ fn written_urls<'a>(
 /// config home.
 fn names_reroute(tokens: &[String]) -> bool {
     tokens.iter().any(|token| {
-        // A cloud client's profile, config file or endpoint, set anywhere.
-        if let Some((name, _)) = token.split_once('=')
-            && CLOUD_CONFIG_PREFIXES
-                .iter()
-                .any(|prefix| name.to_ascii_uppercase().starts_with(prefix))
-        {
-            return true;
+        // A cloud client's profile, config file or endpoint, a loader
+        // variable or the search path that finds the client, set anywhere.
+        if let Some((name, _)) = token.split_once('=') {
+            let name = name.to_ascii_uppercase();
+            if name == "PATH"
+                || REROUTE_VARIABLE_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+            {
+                return true;
+            }
         }
         if token.contains("://") {
             return false;
@@ -341,7 +341,7 @@ fn destination(text: &str, budget: &mut RetentionBudget) -> Result<Target, Proce
     let segments: Vec<&str> = path
         .split('/')
         .take_while(|segment| plain_name(segment))
-        .take(MAX_SEGMENTS)
+        .take(MAX_DESTINATION_SEGMENTS)
         .collect();
     let prefix = |host: &str| {
         if dns {
@@ -866,6 +866,25 @@ mod tests {
         (
             "HTTPS_PRO\\XY=203.0.113.9:3128 curl -d x http://127.0.0.1/a",
             &[],
+            false,
+            false,
+        ),
+        // A loader or search-path variable can put other code in the client.
+        (
+            "export LD_PRELOAD=/tmp/x.so; curl -d x https://a.example.invalid/x",
+            &["a.example.invalid/x"],
+            false,
+            false,
+        ),
+        (
+            "export DYLD_INSERT_LIBRARIES=/tmp/x.dylib; curl -d x https://a.example.invalid/x",
+            &["a.example.invalid/x"],
+            false,
+            false,
+        ),
+        (
+            "export PATH=/tmp/bin; curl -d x https://a.example.invalid/x",
+            &["a.example.invalid/x"],
             false,
             false,
         ),
