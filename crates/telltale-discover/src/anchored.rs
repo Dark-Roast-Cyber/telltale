@@ -37,7 +37,48 @@ mod platform {
 }
 #[cfg(windows)]
 #[path = "anchored/windows.rs"]
-pub(crate) mod platform;
+mod platform;
+
+/// What the metadata inventory walks with on Windows: an open directory, the
+/// open of a volume root, and one counted open of a child. `charge` runs
+/// before every system open and its refusal, the outer error, stops there.
+#[cfg(windows)]
+pub(crate) mod windows {
+    use super::{Kind, OsStr, Path, platform, single_name};
+    use std::io;
+
+    pub(crate) use super::platform::Directory;
+
+    pub(crate) type Opened = io::Result<(Kind, Option<Directory>)>;
+
+    /// The volume root `prefix` names (`C:\`, a verbatim or UNC root).
+    pub(crate) fn open_root<E>(
+        prefix: &Path,
+        charge: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<Opened, E> {
+        platform::open_metadata_budgeted(None, &platform::nt_root_path(prefix), charge)
+    }
+
+    /// The child `name` of `parent`. A name that is not one plain component
+    /// is refused before any open: the system would resolve a longer name
+    /// itself, links included.
+    pub(crate) fn open_child<E>(
+        parent: &Directory,
+        name: &OsStr,
+        charge: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<Opened, E> {
+        if !single_name(name) {
+            return Ok(Err(io::ErrorKind::InvalidInput.into()));
+        }
+        platform::open_metadata_budgeted(Some(parent), name, charge)
+    }
+}
+
+/// Whether `name` is one plain component: no separator, `.`, `..` or prefix.
+fn single_name(name: &OsStr) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -173,12 +214,7 @@ impl Node {
         name: &OsStr,
         descend: bool,
     ) -> Result<Option<Self>, Error> {
-        if Path::new(name).components().count() != 1
-            || !matches!(
-                Path::new(name).components().next(),
-                Some(Component::Normal(_))
-            )
-        {
+        if !single_name(name) {
             return Err(Error::Traversal);
         }
         platform::child(

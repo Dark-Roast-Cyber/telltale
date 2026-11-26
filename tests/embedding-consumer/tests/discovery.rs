@@ -16,6 +16,8 @@ fn inventory_works_without_tokens_or_supported_detection_sources() {
     // The candidate is home-relative on every platform; name the one running.
     let platform = if cfg!(windows) {
         Platform::Windows
+    } else if cfg!(target_os = "macos") {
+        Platform::MacOs
     } else {
         Platform::Linux
     };

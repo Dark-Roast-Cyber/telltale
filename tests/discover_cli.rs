@@ -48,6 +48,8 @@ fn inventory_is_one_content_free_record_without_token_collection() {
     let record: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(record["schema"], "telltale.inventory/v1");
     assert!(!stdout.contains("PRIVATE_SESSION"));
+    // The canonical root is a verbatim path on Windows, which no output spells.
+    assert!(!stdout.contains("PRIVATE_ROOT_"));
     assert!(!stdout.contains(root.path().to_string_lossy().as_ref()));
     assert!(!stdout.contains("input_tokens"));
     assert!(!stdout.contains("output_tokens"));
@@ -139,7 +141,7 @@ fn root_junctions_are_resolved_once_but_candidate_junctions_stay_refused() {
         );
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(stdout.contains("\"symlink_refused\""), "{stdout}");
-        assert!(!stdout.contains(parent.path().to_string_lossy().as_ref()));
+        assert!(!stdout.contains("PRIVATE_ROOT_"), "{stdout}");
     }
 }
 

@@ -45,7 +45,7 @@ const NAME_SURROGATE: u32 = 0x2000_0000;
 
 /// Convert a Win32, verbatim (`\\?\`), or UNC (`\\`) root prefix into an NT
 /// object-namespace path (`\??\...`).
-pub(crate) fn nt_root_path(path: &Path) -> OsString {
+pub(super) fn nt_root_path(path: &Path) -> OsString {
     let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     let mut nt: Vec<u16> = r"\??\".encode_utf16().collect();
     if wide.starts_with(&[92, 92, 63, 92]) {
@@ -79,7 +79,7 @@ impl<E> From<io::Error> for OpenError<E> {
 /// its filter. Queries on the opened handle are not opens and are not
 /// charged. The outer error is the refused charge. A file is never reopened
 /// through a filter here, so a placeholder is not hydrated.
-pub(crate) fn open_metadata_budgeted<E>(
+pub(super) fn open_metadata_budgeted<E>(
     parent: Option<&Directory>,
     name: &OsStr,
     charge: &mut impl FnMut() -> Result<(), E>,
@@ -536,6 +536,21 @@ mod tests {
         // A refused charge stops before the open it would have paid for.
         assert_eq!(counted(parent, "plain.jsonl", 0), (Err(()), 0));
         assert_eq!(counted(parent, "opaque-dir", 1), (Err(()), 1));
+
+        // A name that is not one plain component is refused before any open.
+        fs::write(temp.path().join("plain-dir").join("inside"), b"synthetic").unwrap();
+        for name in ["", ".", "..", r"plain-dir\inside", "plain-dir/inside"] {
+            let mut opens = 0;
+            let result = super::super::windows::open_child(parent, OsStr::new(name), &mut || {
+                opens += 1;
+                Ok::<(), ()>(())
+            });
+            let refused = matches!(
+                &result,
+                Ok(Err(error)) if error.kind() == io::ErrorKind::InvalidInput
+            );
+            assert!(refused && opens == 0, "{name}");
+        }
     }
 
     #[test]

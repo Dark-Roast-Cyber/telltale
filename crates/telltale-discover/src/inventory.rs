@@ -582,7 +582,7 @@ mod backend {
 mod backend {
     use super::*;
     use crate::anchored::Kind;
-    use crate::anchored::platform as windows_anchored;
+    use crate::anchored::windows as windows_anchored;
     use std::ffi::OsStr;
 
     pub(super) type Directory = windows_anchored::Directory;
@@ -597,17 +597,24 @@ mod backend {
         io_outcome(error)
     }
 
+    fn opened(
+        result: Result<windows_anchored::Opened, CandidateOutcome>,
+    ) -> Result<(Kind, Option<Directory>), CandidateOutcome> {
+        match result? {
+            Err(error) => Err(win_io_outcome(error)),
+            Ok((Kind::Link, _)) => Err(CandidateOutcome::SymlinkRefused),
+            Ok(opened) => Ok(opened),
+        }
+    }
+
     fn open_step(
-        parent: Option<&Directory>,
+        parent: &Directory,
         name: &OsStr,
         budget: &mut Budget,
     ) -> Result<(Kind, Option<Directory>), CandidateOutcome> {
-        match windows_anchored::open_metadata_budgeted(parent, name, &mut || budget.charge()) {
-            Err(exhausted) => Err(exhausted),
-            Ok(Err(error)) => Err(win_io_outcome(error)),
-            Ok(Ok((Kind::Link, _))) => Err(CandidateOutcome::SymlinkRefused),
-            Ok(Ok(opened)) => Ok(opened),
-        }
+        opened(windows_anchored::open_child(parent, name, &mut || {
+            budget.charge()
+        }))
     }
 
     fn descend(
@@ -615,7 +622,7 @@ mod backend {
         child: &OsStr,
         budget: &mut Budget,
     ) -> Result<Directory, CandidateOutcome> {
-        match open_step(Some(parent), child, budget)? {
+        match open_step(parent, child, budget)? {
             (Kind::Directory, Some(dir)) => Ok(dir),
             _ => Err(CandidateOutcome::WrongType),
         }
@@ -637,8 +644,10 @@ mod backend {
         if prefix.as_os_str().is_empty() {
             return Err(CandidateOutcome::MetadataUnavailable);
         }
-        let nt_root = windows_anchored::nt_root_path(&prefix);
-        let mut directory = match open_step(None, &nt_root, budget)? {
+        let root = opened(windows_anchored::open_root(&prefix, &mut || {
+            budget.charge()
+        }))?;
+        let mut directory = match root {
             (Kind::Directory, Some(dir)) => dir,
             _ => return Err(CandidateOutcome::WrongType),
         };
@@ -664,7 +673,7 @@ mod backend {
                     Err(outcome) => return outcome,
                 }
             } else {
-                return match open_step(Some(parent), component.as_os_str(), budget) {
+                return match open_step(parent, component.as_os_str(), budget) {
                     Ok((Kind::Directory, _)) if expected == CandidateType::Directory => {
                         CandidateOutcome::IndicatorPresent
                     }
