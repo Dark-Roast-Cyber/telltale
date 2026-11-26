@@ -215,9 +215,21 @@ pub(crate) fn call(entry: &Entry, command: &str, state: &Path, roots: &[&Path]) 
 /// One hook run of `entry` on `payload`, reading the config roots `roots`,
 /// with its session's files in `state`.
 fn send(entry: &Entry, payload: &Value, state: &Path, roots: &[&Path]) -> Run {
+    send_flags(entry, payload, state, roots, &[])
+}
+
+/// [`send`] with extra flags after `hook` (a `--detect-only`, for example).
+fn send_flags(
+    entry: &Entry,
+    payload: &Value,
+    state: &Path,
+    roots: &[&Path],
+    flags: &[&str],
+) -> Run {
     let mut hook = Command::new(env!("CARGO_BIN_EXE_telltale"));
     hook.args(["hooks", entry.harness, "hook"])
-        .args(entry.flags);
+        .args(entry.flags)
+        .args(flags);
     for root in roots {
         hook.arg("--config-dir").arg(root);
     }
@@ -309,6 +321,33 @@ fn an_enforcing_install_denies_the_same_calls_on_every_harness() {
             );
             assert_eq!(run.decision["decision"]["returned"], true, "{harness}");
         }
+    }
+}
+
+/// `--detect-only` on the hook command closes the gate over a configuration
+/// that says enforce. A call the enforcing install denies is recorded and not
+/// returned: empty stdout, exit 0. Native command hooks only; OpenCode's
+/// framed reply is covered with its own contract.
+#[test]
+fn detect_only_on_the_hook_command_overrides_an_enforcing_configuration() {
+    let config = common::enforce_config();
+    for entry in ENTRIES.iter().filter(|entry| entry.flags.is_empty()) {
+        let dir = tempfile::tempdir().unwrap();
+        let run = send_flags(
+            entry,
+            &(entry.payload)(TAMPER),
+            dir.path(),
+            &[&config],
+            &["--detect-only"],
+        );
+        let harness = entry.harness;
+        assert_eq!(run.code, Some(0), "{harness}: {}", run.stderr);
+        assert_eq!(run.stdout, "", "{harness}: {}", run.stderr);
+        assert_eq!(run.answer(harness), None, "{harness}");
+        assert_eq!(run.decision["kind"], "decision", "{harness}");
+        assert_eq!(run.decision["decision"]["verdict"], "deny", "{harness}");
+        assert_eq!(run.decision["decision"]["returned"], false, "{harness}");
+        assert_eq!(run.decision["decision"]["mode"], "observe", "{harness}");
     }
 }
 

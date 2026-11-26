@@ -227,7 +227,7 @@ fn cached_rule_plan(
     export: &telltale_rules::RuleV1CompatibilityExport,
 ) -> Result<
     std::sync::Arc<telltale_detect::v2::RuleV1CompatibilityPlan>,
-    telltale_detect::v2::RuleV1CompileError,
+    telltale_detect::v2::RuleCompileError,
 > {
     type Entry = (
         String,

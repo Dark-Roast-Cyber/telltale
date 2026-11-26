@@ -388,6 +388,71 @@ fn a_build_failure_names_check_and_no_environment_value() {
     assert!(stderr.contains("pipeline_build_failed"), "{stderr}");
 }
 
+/// The same unparsable rule file in observe mode, under the strictest failure
+/// policies. The pipeline still cannot build; the verdict is recorded and not
+/// returned.
+#[test]
+fn in_observe_mode_a_pipeline_that_cannot_build_is_recorded_and_not_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("config");
+    let settings = root.join("settings.d");
+    std::fs::create_dir_all(&settings).unwrap();
+    std::fs::write(
+        settings.join("hooks.yaml"),
+        "version: 1\nhooks:\n  mode: observe\n  on_error: deny\n  on_unevaluable: deny\n",
+    )
+    .unwrap();
+    let rules = root.join("rules.d");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("broken.yaml"),
+        "version: 1\nrules: [ { id: x, regex: '(' } ]\n",
+    )
+    .unwrap();
+    let state = dir.path().join("state");
+    let source = Source {
+        env: vec![("TELLTALE_HOOKS_STATE_DIR", state.clone())],
+        roots: vec![root],
+    };
+    let mut payload = common::template("PreToolUse", Some("Bash"));
+    payload["tool_use_id"] = "toolu_generated".into();
+    payload["tool_input"] = json!({"command": "ls"});
+    let mut child = binary(dir.path(), &source, &["claude-code", "hook"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert_eq!(stdout, "");
+    let telemetry = std::fs::read_to_string(state.join("telemetry.jsonl")).unwrap_or_default();
+    let records: Vec<Value> = telemetry
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let decision = records
+        .iter()
+        .find(|record| record["kind"] == "decision")
+        .unwrap_or_else(|| panic!("{telemetry}"));
+    assert_eq!(decision["decision"]["verdict"], "deny");
+    assert_eq!(decision["decision"]["returned"], false);
+    assert_eq!(decision["decision"]["mode"], "observe");
+    let error = records
+        .iter()
+        .find(|record| record["kind"] == "error")
+        .unwrap_or_else(|| panic!("{telemetry}"));
+    assert_eq!(error["error_code"], "pipeline_build_failed");
+}
+
 // ---- No state directory
 
 /// A config root that enforces with more of the `hooks:` section in `hooks`, and an

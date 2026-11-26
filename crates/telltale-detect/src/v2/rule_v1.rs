@@ -28,7 +28,7 @@ use super::types::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleV1CompileError {
+pub enum RuleCompileError {
     InvalidRule,
     UnknownTarget,
     UnmappableDetectionClass,
@@ -37,7 +37,7 @@ pub enum RuleV1CompileError {
     InvalidMetadata,
 }
 
-impl RuleV1CompileError {
+impl RuleCompileError {
     pub fn code(self) -> &'static str {
         match self {
             Self::InvalidRule => "invalid_rule",
@@ -50,13 +50,13 @@ impl RuleV1CompileError {
     }
 }
 
-impl fmt::Display for RuleV1CompileError {
+impl fmt::Display for RuleCompileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code())
     }
 }
 
-impl std::error::Error for RuleV1CompileError {}
+impl std::error::Error for RuleCompileError {}
 
 #[derive(Debug, Clone)]
 pub struct RuleV1CompatibilityPlan {
@@ -303,7 +303,7 @@ impl RuleV1SessionEvaluation {
 /// bounded compatibility aggregation.
 pub fn compile_rule_v1(
     rules: &RuleV1CompatibilityExport,
-) -> Result<RuleV1CompatibilityPlan, RuleV1CompileError> {
+) -> Result<RuleV1CompatibilityPlan, RuleCompileError> {
     let detectors = rules
         .rules()
         .iter()
@@ -653,15 +653,15 @@ fn retain_text(
 
 pub(crate) fn rule_metadata(
     rule: &RuleV1CompatibilityRule,
-) -> Result<FindingMetadata, RuleV1CompileError> {
+) -> Result<FindingMetadata, RuleCompileError> {
     if rule.signal_type != "atomic" {
-        return Err(RuleV1CompileError::InvalidMetadata);
+        return Err(RuleCompileError::InvalidMetadata);
     }
     let finding_kind = finding_kind_for_detection_class(&rule.detection_class)
-        .map_err(|_| RuleV1CompileError::UnmappableDetectionClass)?;
+        .map_err(|_| RuleCompileError::UnmappableDetectionClass)?;
     let severity = severity(&rule.severity)?;
     if rule.score > 100 {
-        return Err(RuleV1CompileError::ScoreOutOfRange);
+        return Err(RuleCompileError::ScoreOutOfRange);
     }
     let tags = rule.tags.iter().map(String::as_str).collect::<Vec<_>>();
     let techniques = rule
@@ -670,23 +670,23 @@ pub(crate) fn rule_metadata(
         .map(String::as_str)
         .collect::<Vec<_>>();
     let metadata = FindingMetadata::new(finding_kind, &rule.category, severity)
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?
+        .map_err(|_| RuleCompileError::InvalidMetadata)?
         .with_risk_points(rule.score)
-        .map_err(|_| RuleV1CompileError::ScoreOutOfRange)?
+        .map_err(|_| RuleCompileError::ScoreOutOfRange)?
         .with_tags(tags)
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?
+        .map_err(|_| RuleCompileError::InvalidMetadata)?
         .with_techniques(techniques)
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?;
+        .map_err(|_| RuleCompileError::InvalidMetadata)?;
     Ok(metadata)
 }
 
 fn compile_rule(
     rule: &RuleV1CompatibilityRule,
-) -> Result<CompiledObservationMatchDetector, RuleV1CompileError> {
+) -> Result<CompiledObservationMatchDetector, RuleCompileError> {
     let metadata = rule_metadata(rule)?;
 
     if rule.matchers.is_empty() {
-        return Err(RuleV1CompileError::InvalidRule);
+        return Err(RuleCompileError::InvalidRule);
     }
     for matcher in &rule.matchers {
         if matcher.regex.len() > MAX_PATTERN_BYTES
@@ -695,12 +695,12 @@ fn compile_rule(
                 .as_ref()
                 .is_some_and(|regex| regex.len() > MAX_PATTERN_BYTES)
         {
-            return Err(RuleV1CompileError::InvalidMetadata);
+            return Err(RuleCompileError::InvalidMetadata);
         }
     }
     let content = rule
         .compile_content_matcher()
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?;
+        .map_err(|_| RuleCompileError::InvalidMetadata)?;
     let mut clauses = Vec::new();
     let mut targets = Vec::new();
     let mut families = Vec::new();
@@ -716,11 +716,11 @@ fn compile_rule(
     }
     let matcher = MatcherSpec::any(clauses);
     let identity = DetectorIdentity::new(DetectorKind::ObservationMatch, &rule.id)
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?
+        .map_err(|_| RuleCompileError::InvalidMetadata)?
         .with_version("1")
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?
+        .map_err(|_| RuleCompileError::InvalidMetadata)?
         .with_rule_version(1)
-        .map_err(|_| RuleV1CompileError::InvalidMetadata)?;
+        .map_err(|_| RuleCompileError::InvalidMetadata)?;
     let stages = families
         .iter()
         .flat_map(|family| family_stages(*family).iter().copied())
@@ -729,9 +729,9 @@ fn compile_rule(
         .with_required_capabilities(required_capabilities(rule))
         .compile()
         .map_err(|error| match error {
-            DetectionError::InvalidSelector => RuleV1CompileError::UnknownTarget,
-            DetectionError::ScoreOutOfRange => RuleV1CompileError::ScoreOutOfRange,
-            _ => RuleV1CompileError::InvalidMetadata,
+            DetectionError::InvalidSelector => RuleCompileError::UnknownTarget,
+            DetectionError::ScoreOutOfRange => RuleCompileError::ScoreOutOfRange,
+            _ => RuleCompileError::InvalidMetadata,
         })
         .map(|detector| {
             let reading = super::actions::session_reading(rule);
@@ -842,13 +842,13 @@ pub(super) fn evaluate_content_matcher(
     }
 }
 
-fn compat_selector(target: &str) -> Result<String, RuleV1CompileError> {
+fn compat_selector(target: &str) -> Result<String, RuleCompileError> {
     match target {
         "arguments" | "assistant_context" | "command" | "file_path" | "tool_kind" | "tool_name"
         | "tool_result" | "url" | "user_context" | "written_path" => {
             Ok(format!("compat.v1.{target}"))
         }
-        _ => Err(RuleV1CompileError::UnknownTarget),
+        _ => Err(RuleCompileError::UnknownTarget),
     }
 }
 
@@ -890,14 +890,14 @@ fn required_capabilities(rule: &RuleV1CompatibilityRule) -> Vec<CapabilityId> {
     capabilities.into_iter().collect()
 }
 
-fn severity(value: &str) -> Result<Severity, RuleV1CompileError> {
+fn severity(value: &str) -> Result<Severity, RuleCompileError> {
     match value {
         "informational" => Ok(Severity::Informational),
         "low" => Ok(Severity::Low),
         "medium" => Ok(Severity::Medium),
         "high" => Ok(Severity::High),
         "critical" => Ok(Severity::Critical),
-        _ => Err(RuleV1CompileError::InvalidSeverity),
+        _ => Err(RuleCompileError::InvalidSeverity),
     }
 }
 
