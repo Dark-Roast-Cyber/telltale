@@ -1,9 +1,9 @@
 //! The new crate is independently callable without acquisition or detection.
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use telltale_discover::inventory::InventoryErrorKind;
 use telltale_discover::inventory::{InventoryContext, InventoryLimits, Platform, discover};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use telltale_discover::record::{
     CandidateOutcome, InstallationAssessment, LocatorQualification, NotImplemented,
 };
@@ -12,10 +12,16 @@ use telltale_discover::record::{
 fn inventory_works_without_tokens_or_supported_detection_sources() {
     let parent = std::env::temp_dir().canonicalize().unwrap();
     let root = tempfile::tempdir_in(parent).unwrap();
-    std::fs::create_dir_all(root.path().join(".pi/agent/sessions")).unwrap();
-    let context = InventoryContext::from_home(root.path().to_owned(), Platform::Linux);
+    std::fs::create_dir_all(root.path().join(".pi").join("agent").join("sessions")).unwrap();
+    // The candidate is home-relative on every platform; name the one running.
+    let platform = if cfg!(windows) {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    };
+    let context = InventoryContext::from_home(root.path().to_owned(), platform);
     let result = discover(&context, 1234, InventoryLimits::default());
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let snapshot = result.unwrap();
         assert_eq!(snapshot.entries().len(), 61);
@@ -46,7 +52,7 @@ fn inventory_works_without_tokens_or_supported_detection_sources() {
         assert_eq!(wire["schema"], "telltale.inventory/v1");
         assert_eq!(wire["entries"][0]["usage"], "not_implemented");
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     assert_eq!(
         result.unwrap_err().kind,
         InventoryErrorKind::UnsupportedExecutionPlatform

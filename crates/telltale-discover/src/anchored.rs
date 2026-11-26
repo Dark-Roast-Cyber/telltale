@@ -37,7 +37,7 @@ mod platform {
 }
 #[cfg(windows)]
 #[path = "anchored/windows.rs"]
-mod platform;
+pub(crate) mod platform;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {

@@ -50,7 +50,7 @@ pub(super) fn run(args: DiscoverArgs) -> Result<(), Box<dyn std::error::Error>> 
         );
         return Ok(());
     }
-    if !cfg!(unix) {
+    if !(cfg!(unix) || cfg!(windows)) {
         return Err(telltale_discover::inventory::InventoryError {
             root: None,
             kind: telltale_discover::inventory::InventoryErrorKind::UnsupportedExecutionPlatform,

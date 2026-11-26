@@ -27,10 +27,10 @@ fn discover(args: &[&std::ffi::OsStr]) -> Output {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn inventory_is_one_content_free_record_without_token_collection() {
     let root = synthetic_root();
-    let sessions = root.path().join(".gemini/tmp");
+    let sessions = root.path().join(".gemini").join("tmp");
     std::fs::create_dir_all(&sessions).unwrap();
     std::fs::write(
         sessions.join("PRIVATE_SESSION_NAME.json"),
@@ -92,6 +92,58 @@ fn root_aliases_are_resolved_once_but_candidate_links_stay_refused() {
 }
 
 #[test]
+#[cfg(windows)]
+fn root_junctions_are_resolved_once_but_candidate_junctions_stay_refused() {
+    let junction = |link: &std::path::Path, target: &std::path::Path| {
+        let status = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+    };
+    let parent = synthetic_root();
+    let real = parent.path().join("real");
+    let alias = parent.path().join("alias");
+    let home = real.join("home");
+    std::fs::create_dir_all(home.join("retained").join("agent").join("sessions")).unwrap();
+    junction(&alias, &real);
+    junction(&home.join(".pi"), &home.join("retained"));
+    // The profile variable and --root both name the home through a junction.
+    for args in [
+        vec![
+            std::ffi::OsString::from("--root"),
+            alias.join("home").into_os_string(),
+        ],
+        vec![],
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("USERPROFILE", alias.join("home"))
+            .arg("discover");
+        for name in ["SystemRoot", "windir"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        for arg in &args {
+            command.arg(arg);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("\"symlink_refused\""), "{stdout}");
+        assert!(!stdout.contains(parent.path().to_string_lossy().as_ref()));
+    }
+}
+
+#[test]
 fn license_notice_needs_no_host_roots_and_includes_upstream_mit_terms() {
     let output = discover(&["--licenses".as_ref()]);
     assert!(output.status.success());
@@ -128,7 +180,7 @@ fn zero_budget_is_rejected_before_inventory_output() {
 }
 
 #[test]
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn unsupported_platform_precedes_home_and_root_resolution() {
     for args in [
         vec![],
