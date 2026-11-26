@@ -485,6 +485,7 @@ pub const ADAPTER: Adapter = Adapter {
         include_str!("../rules/codex-cli-self-protection.yaml"),
     ),
     launchers: &["codex"],
+    packages: &["@openai/codex"],
     harness_protections: &[
         "`telltale hooks codex-cli execpolicy` prints exec-policy rules with which Codex refuses plain nested Codex launches, hook or no hook. They exist only where an operator saved them into the Codex rules folder",
     ],

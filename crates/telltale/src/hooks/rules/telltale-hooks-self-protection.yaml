@@ -633,7 +633,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+(?:hooks\s+)?(?:claude-code|copilot-cli|codex-cli|opencode)\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
+        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}(?:["''](?:[^"''\n]*[\\/])?|[^\s;&|"'']*[\\/])?telltale(?:-hooks)?(?:\.exe|\.cmd)?["'']?\s+(?:hooks\s+)?{{HARNESS_NAMES}}\s+(?:uninstall\b|install\b[^;&|\n]*\s--allow-user-hooks\b)'
     filter_command:
         tool.command|re|i|recorded_exclusion: '{{DRY_RUN_OR_HELP}}'
     condition: selection_command and not filter_command
@@ -774,7 +774,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:^|[^.0-9A-Z_a-z])(?:claude\b.*--bare\b|opencode\b.*--pure\b|(?:claude|codex|copilot|opencode|cursor|gemini)\b.*\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_[A-Z_]+)\s*=|codex\b.*(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)))|--bare\b.*[^.0-9A-Z_a-z]claude\b|--pure\b.*[^.0-9A-Z_a-z]opencode\b|\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_[A-Z_]+)\s*=.*[^.0-9A-Z_a-z](?:claude|codex|copilot|opencode|cursor|gemini)\b|(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)).*[^.0-9A-Z_a-z]codex\b)'
+        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:^|[^.0-9A-Z_a-z])(?:claude\b.*--bare\b|opencode\b.*--pure\b|{{HARNESS_LAUNCHER_NAMES}}\b.*\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_[A-Z_]+)\s*=|codex\b.*(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)))|--bare\b.*[^.0-9A-Z_a-z]claude\b|--pure\b.*[^.0-9A-Z_a-z]opencode\b|\b(?:XDG_[A-Z]+_HOME|HOME|USERPROFILE|(?:LOCAL)?APPDATA|CO(?:DEX|PILOT)_HOME|CLAUDE_CODE_SIMPLE|TELLTALE_[A-Z_]+)\s*=.*[^.0-9A-Z_a-z]{{HARNESS_LAUNCHER_NAMES}}\b|(?:--ignore-(?:user-config|rules)\b|--dangerously-bypass-hook-trust\b|--disable[\s=]+["'']?(?:codex_)?hooks\b|features(?:\.(?:codex_)?hooks\s*=\s*["'']?false|\s*=\s*\{[^}]*hooks\s*=\s*false|\s+disable\s+["'']?(?:codex_)?hooks\b)).*[^.0-9A-Z_a-z]codex\b)'
     filter_command:
         tool.command|re|i|recorded_exclusion: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{VERSION_OR_HELP}}|^\s*git +(?:clone|init)(?: +[-A-Za-z0-9_./:=@~+]+)* *$'
     condition: selection_command and not filter_command
@@ -797,7 +797,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*@(?:openai/codex|github/copilot|anthropic-ai/claude-code)\b|\btelltale(?:-hooks(?:\.exe)?|(?:\.exe)?\s+hooks)\s.*(?:\buninstall\b|--allow-user-hooks\b))'
+        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:^|[^-A-Za-z0-9_.])(?:npx|pnpx|bunx|dlx|npm\s+(?:exec|x))\s.*{{HARNESS_PACKAGES}}\b|\btelltale(?:-hooks(?:\.exe)?|(?:\.exe)?\s+hooks)\s.*(?:\buninstall\b|--allow-user-hooks\b))'
     filter_command:
         tool.command|re|i|recorded_exclusion: '^\s*(?:cd +[!*-:=?-\[\]-_a-{}~]+ *(?:&&|;)\s*)*{{READERS}}$|{{DRY_RUN_OR_HELP}}'
     condition: selection_command and not filter_command
@@ -820,7 +820,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}(?:npx|pnpx|bunx|(?:pnpm|yarn)\s+dlx|npm\s+(?:exec|x))\s{{SEGMENT}}@(?:openai/codex|github/copilot)\b'
+        tool.command|re|i|recorded_exclusion: '{{COMMAND_START}}(?:npx|pnpx|bunx|(?:pnpm|yarn)\s+dlx|npm\s+(?:exec|x))\s{{SEGMENT}}{{HARNESS_PACKAGES}}\b'
     filter_command:
         tool.command|re|i|recorded_exclusion: '{{VERSION_OR_HELP}}'
     condition: selection_command and not filter_command
@@ -830,7 +830,7 @@ level: high
 telltale:
     category: approval_bypass
     score: 90
-    explanation: '`npx`, `pnpx`, `bunx`, `pnpm dlx`, `yarn dlx` and `npm exec` of `@openai/codex` or `@github/copilot` can start any version, including one without hook support or with another configuration default, so the installed harness''s guarantees do not carry over. `npm view`, `npm install`, `--help` and `--version` alone do not match.'
+    explanation: '`npx`, `pnpx`, `bunx`, `pnpm dlx`, `yarn dlx` and `npm exec` of a harness package (`@openai/codex`, `@github/copilot`, `@anthropic-ai/claude-code`, etc.) can start any version, including one without hook support or with another configuration default, so the installed harness''s guarantees do not carry over. `npm view`, `npm install`, `--help` and `--version` alone do not match.'
     tags: [self-protection, hooks, defense-evasion, nested-agent]
 ---
 title: Agent launches Codex with hook trust bypassed
@@ -866,7 +866,7 @@ logsource:
     category: tool_activity
 detection:
     selection_command:
-        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:\bTELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=\S*[^;&|]*|\bexport\s+TELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=.*)(?:^|[\s;&|(`])(?:claude|codex|copilot|opencode|cursor|gemini)\b|\b{{CONFIG_LOCATION_VARS}}=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|{{LAUNCH_WRAPPERS}}\s+)*{{HARNESS_LAUNCHER}})'
+        tool.command|re|i|recorded_exclusion: '(?s)(?:(?:\bTELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=\S*[^;&|]*|\bexport\s+TELLTALE_(?:HOOKS_(?:STATE_DIR|TELEMETRY)|COMMUNITY_RULES|PROCESS_CHAIN_DETECTIONS)=.*)(?:^|[\s;&|(`]){{HARNESS_LAUNCHER_NAMES}}\b|\b{{CONFIG_LOCATION_VARS}}=(?:"[^"]*"|''[^'']*''|\S*)\s+(?:[^\s=]+=\S*\s+|{{LAUNCH_WRAPPERS}}\s+)*{{HARNESS_LAUNCHER}})'
     filter_command:
         tool.command|re|i|recorded_exclusion: '{{TEXT_ONLY}}'
     condition: selection_command and not filter_command
