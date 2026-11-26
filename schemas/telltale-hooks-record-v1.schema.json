@@ -251,7 +251,9 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["destinations", "complete", "local_only"],
-            "description": "Where an exfil.outbound_upload action sends, as its command text says (DestinationFacts). Present only on such actions; it never changes the record, scores or verdicts.",
+            "description": "Where an exfil.outbound_upload action sends, as its command text says (DestinationFacts). Present only on such actions; it never changes the record, scores or verdicts. Entries are sorted in ascending byte order, which this schema cannot express; `DestinationFacts::is_valid` checks it with the entry structure.",
+            "if": { "properties": { "local_only": { "const": true } }, "required": ["local_only"] },
+            "then": { "properties": { "complete": { "const": true }, "destinations": { "maxItems": 0 } } },
             "properties": {
               "destinations": {
                 "type": "array",

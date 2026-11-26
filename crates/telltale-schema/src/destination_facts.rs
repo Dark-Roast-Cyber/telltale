@@ -15,6 +15,13 @@ use crate::event::redact_sensitive_text;
 pub const MAX_DESTINATIONS: usize = 16;
 /// The longest destination entry, in bytes.
 pub const MAX_DESTINATION_LEN: usize = 256;
+/// Path segments an entry keeps after its host or authority.
+pub const MAX_DESTINATION_SEGMENTS: usize = 2;
+/// Schemes whose authority is a DNS host: an entry drops them and starts at
+/// the host. Any other scheme stays in its entry.
+pub const DNS_SCHEMES: [&str; 9] = [
+    "http", "https", "ws", "wss", "ftp", "ftps", "sftp", "scp", "tftp",
+];
 
 /// Where an `exfil.outbound_upload` action sends, as far as its command text
 /// says. Both flags fail closed.
@@ -29,7 +36,9 @@ pub struct DestinationFacts {
     /// name.
     pub destinations: Vec<String>,
     /// Every URL in the command field was read, every upload stage named a
-    /// destination URL, and nothing could send the upload elsewhere: no
+    /// destination URL, and nothing could send the upload to another first
+    /// hop (what a listed host does with it, a redirect included, is that
+    /// host's): no
     /// variable, schemeless destination, proxy, resolve, connect-to, config or
     /// socket override, host header, cloud-client profile, unknown option,
     /// command or process substitution, quoting another shell reads
@@ -37,15 +46,20 @@ pub struct DestinationFacts {
     pub complete: bool,
     /// The whole field is one simple curl, wget or PowerShell web cmdlet
     /// upload, by bare program names, that follows no redirect and whose
-    /// every destination is loopback (`localhost`, 127.0.0.0/8, `[::1]`,
-    /// `0.0.0.0`). Implies `complete` and no `destinations`.
+    /// every destination is loopback (`localhost` by name, 127.0.0.0/8,
+    /// `[::1]`, `0.0.0.0`). Implies `complete` and no `destinations`; without
+    /// it, no `destinations` does not mean the upload stayed local.
     pub local_only: bool,
 }
 
 impl DestinationFacts {
     /// Whether the facts keep their invariants: bounded, sorted, distinct
-    /// entries in the closed alphabet that the evidence sanitizer leaves
-    /// unchanged, and `local_only` only with `complete` and no entries.
+    /// entries of the documented structure (no DNS scheme, a host or
+    /// bracketed lowercase IPv6 address, at most
+    /// [`MAX_DESTINATION_SEGMENTS`] segments, all in the closed alphabet)
+    /// that the evidence sanitizer leaves unchanged, and `local_only` only
+    /// with `complete` and no entries. Which segments count as plain names is
+    /// the producer's reading and is not checked again here.
     pub fn is_valid(&self) -> bool {
         self.destinations.len() <= MAX_DESTINATIONS
             && (!self.local_only || self.complete && self.destinations.is_empty())
@@ -58,8 +72,9 @@ impl DestinationFacts {
     }
 }
 
-/// An entry's shape: an optional `scheme://`, a host (a bracketed IPv6
-/// address may hold colons, nothing else may), then plain path segments.
+/// An entry's shape: `scheme://` unless the scheme is one of [`DNS_SCHEMES`],
+/// a host (a bracketed lowercase IPv6 address may hold colons, nothing else
+/// may), then at most [`MAX_DESTINATION_SEGMENTS`] path segments.
 fn well_formed(entry: &str) -> bool {
     let name = |text: &str| {
         !text.is_empty()
@@ -72,7 +87,9 @@ fn well_formed(entry: &str) -> bool {
     };
     let rest = match entry.split_once("://") {
         Some((scheme, rest))
-            if scheme.starts_with(|c: char| c.is_ascii_lowercase()) && name(scheme) =>
+            if scheme.starts_with(|c: char| c.is_ascii_lowercase())
+                && name(scheme)
+                && !DNS_SCHEMES.contains(&scheme) =>
         {
             rest
         }
@@ -85,10 +102,20 @@ fn well_formed(entry: &str) -> bool {
         .strip_prefix('[')
         .and_then(|inner| inner.strip_suffix(']'))
     {
-        Some(address) => address.parse::<std::net::Ipv6Addr>().is_ok(),
+        Some(address) => {
+            address
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f' | b':' | b'.'))
+                && address.parse::<std::net::Ipv6Addr>().is_ok()
+        }
         None => name(host),
     };
-    host_ok && parts.all(name)
+    let mut segments = 0;
+    host_ok
+        && parts.all(|segment| {
+            segments += 1;
+            segments <= MAX_DESTINATION_SEGMENTS && name(segment)
+        })
 }
 
 #[cfg(test)]
@@ -140,6 +167,12 @@ mod tests {
             "example.invalid/a/../b",
             "example.invalid/%2e",
             "example.invalid:8443",
+            // Not the entry shape: an uppercase address, a DNS scheme kept, a
+            // third path segment.
+            "[2001:DB8::1]",
+            "https://example.invalid",
+            "example.invalid/a/b/c",
+            "s3://synthetic-bucket/a/b/c",
             // In the alphabet, but the sanitizer would rewrite it.
             "example.invalid/v1/0123456789abcdef0123456789abcdef01234567",
             "example.invalid/akiaiosfodnn7example",
