@@ -2538,51 +2538,60 @@ fn redact_windows_paths(text: &str, marker: &str) -> String {
     redacted
 }
 
-/// How far back from a match's end a chained path can start: an escape, the
-/// longest device prefix in its widest escaped form, and the drive letter.
-const CHAINED_PATH_LOOKBACK: usize = 16;
-/// Enough text to tell that a path starts: its prefix and first separator.
-const PATH_START_BYTES: usize = 32;
+/// What a path start needs beyond its prefix: the colon, a first separator
+/// and one component character, with room for an escaped separator.
+const PATH_START_TAIL_BYTES: usize = 32;
 
 /// A match that stops right before `:` may have run from one path through an
 /// escaped line break into the drive letter of the next
 /// (`C:\Temp\a.txt\nC:\Users\secret.txt`, or the same with a `\\?\` or
-/// `\??\` prefix). The end of the first path, so that the second is matched
-/// whole on the next pass instead of leaving its tail after the marker.
+/// `\??\` prefix, however often escaped). The end of the first path, so that
+/// the second is matched whole on the next pass instead of leaving its tail
+/// after the marker.
 ///
-/// Only the last [`CHAINED_PATH_LOOKBACK`] bytes can hold that escape, and
-/// each candidate is tested against at most [`PATH_START_BYTES`], so the
-/// work does not grow with the match.
+/// The second path's start is read back from the match's end: its drive
+/// letter, then the backslashes, `?` and `.` of a device prefix, then the
+/// escape. One path-start test follows, over text no longer than twice that
+/// prefix, so the work is bounded by the match.
 fn split_before_chained_path_after_escape(text: &str, span_start: usize, span_end: usize) -> usize {
     if !text[span_end..].starts_with(':') {
         return span_end;
     }
     let bytes = text.as_bytes();
-    let floor = span_end
-        .saturating_sub(CHAINED_PATH_LOOKBACK)
-        .max(span_start + 1);
-    // `at` is the escape's letter; its one backslash sits before it.
-    for at in (floor..span_end).rev() {
-        if !matches!(bytes[at], b'n' | b'r' | b't') || bytes[at - 1] != b'\\' {
-            continue;
-        }
-        if at >= span_start + 2 && bytes[at - 2] == b'\\' {
-            continue;
-        }
-        let after_escape = at + 1;
-        let mut window_end = (after_escape + PATH_START_BYTES).min(text.len());
-        while !text.is_char_boundary(window_end) {
-            window_end -= 1;
-        }
-        if !starts_windows_path(&text[after_escape..window_end]) {
-            continue;
-        }
-        let first_end = trim_trailing_escaped_whitespace(text, span_start, at - 1);
-        if is_complete_windows_path(&text[span_start..first_end]) {
-            return first_end;
-        }
+    let mut after_escape = span_end - 1;
+    if after_escape <= span_start || !bytes[after_escape].is_ascii_alphabetic() {
+        return span_end;
     }
-    span_end
+    while after_escape > span_start && matches!(bytes[after_escape - 1], b'\\' | b'?' | b'.') {
+        after_escape -= 1;
+    }
+    // A device prefix's backslashes follow the escape's letter directly, so
+    // the walk stops on that letter with the escape's one backslash before it.
+    let Some(escape_start) = after_escape.checked_sub(2).filter(|at| *at > span_start) else {
+        return span_end;
+    };
+    if !matches!(bytes[after_escape - 1], b'n' | b'r' | b't')
+        || bytes[escape_start] != b'\\'
+        || bytes[escape_start - 1] == b'\\'
+    {
+        return span_end;
+    }
+    let mut window_end =
+        (span_end + (span_end - after_escape) + PATH_START_TAIL_BYTES).min(text.len());
+    while !text.is_char_boundary(window_end) {
+        window_end -= 1;
+    }
+    if !starts_windows_path(&text[after_escape..window_end]) {
+        return span_end;
+    }
+    // A drive letter cannot follow a component, so this escape is one
+    // whatever precedes it; earlier ones are trimmed by the usual rule.
+    let first_end = trim_trailing_escaped_whitespace(text, span_start, escape_start);
+    if is_complete_windows_path(&text[span_start..first_end]) {
+        first_end
+    } else {
+        span_end
+    }
 }
 
 /// The length of the boundary a Windows path match captured before the path.
@@ -2607,11 +2616,19 @@ fn starts_windows_path(candidate: &str) -> bool {
     })
 }
 
-/// Keeps trailing single-backslash escaped whitespace (`\n`, `\r`, `\t`) outside
-/// a complete Windows path span so JSON-escaped newlines at the end of a path
-/// are not absorbed into the path marker. Peels the maximal trailing run in
-/// O(N) byte checks and validates at most twice with `is_complete_windows_path`
-/// so worst-case work stays linear within the sanitizer work budget.
+/// Keeps a trailing single-backslash escape (`\n`, `\r`, `\t`) outside a
+/// complete Windows path, so an escaped line break after a path is not taken
+/// into the marker.
+///
+/// In text such as `C:\Users\Alice\n Notes.txt` the same bytes can be a
+/// component named `n Notes.txt`, and trimming would leave that name
+/// readable. The escape is trimmed only where it cannot be a component: the
+/// path's separators are doubled, so a single backslash separates nothing, or
+/// the component before it is a file name with an extension, which has no
+/// children. Anything else stays in the marker.
+///
+/// The trailing run is peeled in one pass and the result validated at most
+/// twice, so the work is linear in the match.
 fn trim_trailing_escaped_whitespace(text: &str, span_start: usize, span_end: usize) -> usize {
     let mut trimmed = span_end;
     while trimmed >= span_start + 2 {
@@ -2633,13 +2650,24 @@ fn trim_trailing_escaped_whitespace(text: &str, span_start: usize, span_end: usi
     if trimmed == span_end {
         return span_end;
     }
-    if is_complete_windows_path(&text[span_start..trimmed]) {
-        return trimmed;
-    }
-    if trimmed + 2 < span_end && is_complete_windows_path(&text[span_start..trimmed + 2]) {
-        return trimmed + 2;
-    }
-    span_end
+    [trimmed, trimmed + 2]
+        .into_iter()
+        .filter(|end| *end < span_end)
+        .find(|end| {
+            let path = &text[span_start..*end];
+            escape_cannot_be_component(path) && is_complete_windows_path(path)
+        })
+        .unwrap_or(span_end)
+}
+
+/// Whether a single-backslash escape after `path` cannot be read as a
+/// separator and the start of another component.
+fn escape_cannot_be_component(path: &str) -> bool {
+    let (before, last) = match path.rfind(['\\', '/']) {
+        Some(separator) => (&path[..separator], &path[separator + 1..]),
+        None => return false,
+    };
+    before.ends_with('\\') || has_filename_extension(last)
 }
 
 fn is_complete_windows_path(candidate: &str) -> bool {
@@ -4398,6 +4426,20 @@ safe=value"#,
             redact_sensitive_text(r#"{"log":"C:\\Temp\\a.txt\r\n\\\\?\\C:\\SyntheticSecret.txt"}"#),
             r#"{"log":"[sensitive-path]\r\n[sensitive-path]"}"#
         );
+        // A device prefix escaped to any width is read back from the match's
+        // end, so the second path is still matched whole.
+        for width in [1, 2, 4, 8] {
+            let sep = r"\".repeat(width);
+            let prefix = format!("{}?{sep}", sep.repeat(2));
+            let chained = format!(
+                r"C:{sep}Temp{sep}a.txt\n{prefix}C:{sep}Users{sep}SyntheticUser{sep}secret.txt"
+            );
+            assert_eq!(
+                PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &chained),
+                r"<path>\n<path>",
+                "width {width}"
+            );
+        }
         // Non-drive Windows path branches preserve trailing escaped whitespace.
         assert_eq!(sanitize(r"\\?\C:\Temp\b.txt\n"), "<path>\\n");
         assert_eq!(
@@ -4406,7 +4448,20 @@ safe=value"#,
         );
         assert_eq!(sanitize(r"C:/Temp/b.txt\n"), "<path>\\n");
         assert_eq!(sanitize(r"~\Temp\b.txt\n"), "<path>\\n");
-        assert_eq!(sanitize(r"C:\n\r\n"), r"<path>\r\n");
+        // After a component that is no file name, the same bytes can name a
+        // child, so they stay in the marker: the name is not left readable.
+        assert_eq!(sanitize(r"C:\n\r\n"), "<path>");
+        assert_eq!(sanitize(r"C:\Users\example\n"), "<path>");
+        assert_every_context(
+            r"C:\Users\SyntheticUser\n Notes.txt",
+            "[sensitive-path]",
+            "<path>",
+        );
+        // With doubled separators a single backslash separates nothing.
+        assert_eq!(
+            sanitize(r#"{"cmd":"dir C:\\Users\\SyntheticUser\n Notes.txt"}"#),
+            r#"{"cmd":"dir <path>\n Notes.txt"}"#
+        );
         // Real filenames starting with n/r/t and escaped-separator `\\n` stay redacted.
         assert_eq!(sanitize(r"C:\Users\example\notes.txt"), "<path>");
         assert_eq!(sanitize(r"C:\\Users\\example\\n"), "<path>");
@@ -4416,7 +4471,7 @@ safe=value"#,
         assert_eq!(sanitize(r"\\server\n"), "<path>");
 
         // Long trailing `\n` runs stay within linear sanitizer work budget.
-        let long_escapes = format!(r"C:\a{}", r"\n".repeat(2046));
+        let long_escapes = format!(r"C:\a.txt{}", r"\n".repeat(2044));
         let mut charged = 0usize;
         let out = PrivacySanitizer::try_sanitize(
             SanitizationContext::Diagnostic,

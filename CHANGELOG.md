@@ -14,11 +14,13 @@
   explicit in the [privacy model](docs/privacy-model.md).
 - Redact a Windows path whose start is escaped more than twice, or whose UNC
   start and server separator are escaped to different widths, whole instead
-  of leaving backslashes before the marker. An escaped line break or tab
-  (`\n`, `\r`, `\t`) after a complete path stays outside the marker, and two
-  paths joined by one are each redacted whole; before, the second path's tail
-  could stay readable after the first marker. This changes redacted text, so
-  qualify producer and consumer privacy pins together.
+  of leaving backslashes before the marker. Two paths joined by an escaped
+  line break or tab (`\n`, `\r`, `\t`) are each redacted whole; before, the
+  second path's tail could stay readable after the first marker. Such an
+  escape after a path stays outside the marker where it cannot be a path
+  component: after a file name with an extension, or in text whose separators
+  are doubled. This changes redacted text, so qualify producer and consumer
+  privacy pins together.
 - Keep native rule-ID admission and emission credential-strict. Historical Event
   3 readback preserves exact `redacted.<64 lowercase hex digits>` replacements
   only in the five rule-ID fields, without granting provenance. Contribution
