@@ -46,12 +46,17 @@ pub mod assignment;
 pub mod canonical_runtime;
 #[cfg(feature = "hooks")]
 pub mod hooks;
+pub mod hooks_record_feed;
 pub mod inventory;
 pub mod investigation;
 pub mod local_event_feed;
 pub mod provenance;
 pub mod rule_resolution;
 
+pub use hooks_record_feed::{
+    HooksRecordBatch, HooksRecordCursor, HooksRecordFeed, HooksRecordFeedConfig,
+    HooksRecordFeedError, HooksRecordRejection,
+};
 pub use local_event_feed::{
     FeedBatch, FeedLimits, FeedNotice, FeedNoticeCode, LocalEventFeed, LocalEventFeedConfig,
     LocalEventFeedError, LocalEventFeedErrorCode, StartupMode,

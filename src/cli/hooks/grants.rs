@@ -127,30 +127,44 @@ pub(super) fn project_dir(dir: Option<&Path>) -> std::io::Result<PathBuf> {
 /// The decision record `record_id` in the records file at `path`: the first
 /// bounded line with that ID. Oversized and malformed lines are passed over.
 fn find_record(path: &Path, record_id: &str) -> Result<Value, String> {
+    use telltale_sources::journal::{self, JournalFile};
     let read_error = |error| format!("cannot read the records file {}: {error}", path.display());
-    let file = std::fs::File::open(path).map_err(read_error)?;
-    let mut reader = std::io::BufReader::new(file);
+    let discovery = journal::discover_generations(path, usize::MAX).map_err(read_error)?;
+    if discovery.generations.is_empty() {
+        return Err(read_error(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
+    }
     let mut line = Vec::new();
-    loop {
-        line.clear();
-        if reader
-            .by_ref()
-            .take(HOOKS_RECORD_MAX_INPUT_BYTES as u64)
-            .read_until(b'\n', &mut line)
-            .map_err(read_error)?
-            == 0
-        {
-            break;
+    for generation in discovery.generations.into_iter().rev() {
+        let file = JournalFile::open(&generation.path).map_err(read_error)?;
+        if file.identity() != generation.identity {
+            return Err(read_error(std::io::Error::other(
+                "records rotated during lookup; retry",
+            )));
         }
-        if line.len() == HOOKS_RECORD_MAX_INPUT_BYTES && !line.ends_with(b"\n") {
-            reader.skip_until(b'\n').map_err(read_error)?;
-            continue;
-        }
-        let Ok(record) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
-        if record["record_id"] == record_id {
-            return Ok(record);
+        let mut reader = std::io::BufReader::new(file.into_file());
+        loop {
+            line.clear();
+            if reader
+                .by_ref()
+                .take(HOOKS_RECORD_MAX_INPUT_BYTES as u64)
+                .read_until(b'\n', &mut line)
+                .map_err(read_error)?
+                == 0
+            {
+                break;
+            }
+            if line.len() == HOOKS_RECORD_MAX_INPUT_BYTES && !line.ends_with(b"\n") {
+                reader.skip_until(b'\n').map_err(read_error)?;
+                continue;
+            }
+            let Ok(record) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            if record["record_id"] == record_id {
+                return Ok(record);
+            }
         }
     }
     Err(format!(
@@ -304,7 +318,7 @@ pub(super) fn allow(
         created_at: String::new(),
         from_record: record_id.to_owned(),
     };
-    let sink = Sink::new(records.to_owned());
+    let sink = Sink::with_rotation(records.to_owned(), config.telemetry_rotation.clone());
     // The assigned ID replaces a same-width ASCII ID in this exact record,
     // so the size cannot change after the grant has been stored.
     let mut telemetry = Runtime::new(config.clone())
@@ -537,6 +551,15 @@ pub(super) fn run_revoke(config_dirs: &[PathBuf], id: &str) -> i32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hooks_allow_finds_a_rotated_decision() {
+        let fixture = Fixture::new(&decision(|_| {}));
+        let active = fixture.dir.path().join("records.jsonl");
+        std::fs::rename(&active, active.with_file_name("records-2026-11-26.1.jsonl")).unwrap();
+        std::fs::write(active, b"{}\n").unwrap();
+        assert!(fixture.allow(true, "allow\n", None).is_ok());
+        assert_eq!(fixture.written()[0].from_record, RECORD_ID);
+    }
     #[test]
     fn find_record_skips_oversized_lines_and_resumes_at_the_next_line() {
         let dir = tempfile::tempdir().unwrap();

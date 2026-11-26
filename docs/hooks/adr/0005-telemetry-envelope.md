@@ -121,3 +121,35 @@ It verifies the name against the stand-in and stores the native name for
 the existing exact grant match. The confirmation displays the stand-in.
 `allow` skips oversized input lines and checks that the grant lifecycle
 record fits the shared 16 MiB bound before storing the grant.
+## Addendum (2026-11-26): size rotation and incremental readback
+
+`hooks.telemetry.max_size_bytes` defaults to 100 MiB; zero disables
+rotation. Before an append would exceed the threshold, the writer archives
+the nonempty active file as `<stem>-YYYY-MM-DD[.<counter>].<extension>` and
+appends to a fresh file. A single record larger than the rotation threshold
+is written whole to an empty file. The 16 MiB per-line limit still applies.
+`hooks.telemetry.keep` defaults to five archived files; zero keeps only the
+active file. Cleanup removes the oldest archives after the append.
+
+Writers try for up to 200 ms to take an exclusive lock on a stable sidecar
+named by appending `.lock` to the active file name, even when their own
+rotation is disabled. If the sidecar cannot be opened or locked, the writer
+appends to the active path without rotating or pruning. That append can
+race another writer's rename and land in the file that was just archived.
+`telltale hooks allow` still searches that file while it is retained.
+If rotation fails or directory discovery reaches its entry bound, the writer
+reports the rotation failure and attempts to append through its already-open
+handle. Cleanup reports failed removals and continues with the other archives.
+These failures do not turn a successful append into a write error or change
+the verdict.
+
+Embedding hosts can poll `HooksRecordFeed` without enabling the Hooks runtime.
+It returns strictly validated records and closed-code rejections, each
+rejection identifying an opaque generation and byte offset. An incomplete
+line in the active file is deferred until its line feed arrives. Persist the
+cursor only after handling the batch. If its generation was deleted or
+replaced, or was truncated below the cursor, a gap notice means records may
+have been lost. The feed resumes at the oldest available position and may
+return records the caller has handled before.
+A fallback append that lands in a just-archived file can be missed by a feed
+that has already moved past that generation.
