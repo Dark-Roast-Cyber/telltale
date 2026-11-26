@@ -909,7 +909,9 @@
 - Add experimental `telltale-discover` and `telltale discover`: bounded,
   metadata-only data-location inventory for the pinned 61-entry Tokscale core
   catalog, independent of detection support. Installation assessment and usage
-  counting remain unimplemented; the new inventory backend is Unix-only. Its
+  counting remain unimplemented. The inventory backend runs on Unix and
+  Windows, walking open handles and refusing every link, junction and mount
+  point below its roots; other platforms report an unsupported platform. Its
   separate `telltale.inventory/v1` output does not change Event 3.0 or scanner
   state. Existing supported-source discovery imports keep their interfaces
   through adapters to the new shared crate. See the
