@@ -28,7 +28,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `PipelineBuilder::skip_unknown_override_rules` and `Pipeline::skipped_overrides` with `SkippedOverride`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -504,10 +504,18 @@ An ID repeated within one tier, or reused by a tier that only adds, fails. The
 builder has no `rules.d` or `ui-rules.d` input: those CLI tiers replace
 definitions the same way the organization tier does.
 
-An override entry's `rule_id` names a rule or a chain modifier. One that
-names neither fails `build` as an unknown `rule_id`; the CLI, whose config
-roots serve pipelines that carry different rules, leaves such an entry out
-and reports it. A replacing rule whose matchers differ from the bundled rule's uses
+An override entry's `rule_id` names a rule or a chain modifier. By default,
+one that names neither fails `build` as an unknown `rule_id`; a host that
+distributes one override document across mixed Telltale versions can opt in to
+leaving unknown entries out with
+`PipelineBuilder::skip_unknown_override_rules(true)` and inspect what was
+skipped through `Pipeline::skipped_overrides()`. Each `SkippedOverride` names
+the input as `override:<label>` or `override:<n>` and reports the skipped
+`rule_id`. Safe IDs stay readable; other IDs become `redacted.<sha256>` markers.
+The CLI, whose config roots serve pipelines that carry different rules, leaves
+such entries out and reports them.
+
+A replacing rule whose matchers differ from the bundled rule's uses
 its own matchers, not the bundled rule's native precision profile; one that
 keeps the bundled matchers and changes only metadata or score keeps the
 profile. Start a replacement from `telltale rules export-default` and keep its
@@ -534,7 +542,7 @@ IDs, or paths. `Display` is the code's text.
 | `UnsupportedVersion` | an override document whose `version` is not 1 |
 | `DuplicateId` | a repeated or reused definition ID, or a replacement that changes the Rule v2 `id` |
 | `InvalidOverride` | an override entry with an empty `rule_id` or `reason`, a `reason` over 256 characters or with control or invisible formatting characters other than tab and newline, or that sets nothing |
-| `UnknownRuleId` | an override `rule_id` that no rule or chain modifier has |
+| `UnknownRuleId` | an override `rule_id` that no rule or chain modifier has (when `skip_unknown_override_rules` is `false`, the default) |
 | `ExceedsBounds` | more than 1024 text inputs in all, more than 256 rule packages, more than 3725 rules and chain modifiers (with the 371 bundled process-chain rules, a 4096-entry catalog), or more than 256 override entries applied to one rule |
 
 ```rust,no_run
