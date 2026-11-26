@@ -64,7 +64,7 @@ use crate::sources::{
 
 mod accounting;
 mod contributions;
-mod transcript;
+pub(crate) mod transcript;
 use accounting::AccountingBuilder;
 pub(crate) use accounting::session_identity;
 pub use accounting::{

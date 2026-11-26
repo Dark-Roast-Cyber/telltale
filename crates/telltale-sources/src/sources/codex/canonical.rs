@@ -401,6 +401,21 @@ fn has_tool_context_role(record: &CodexNativeRecord) -> bool {
             .is_some_and(|kind| matches!(kind, "tool_call" | "tool_result"))
 }
 
+/// The element Codex wraps a command the user ran from the prompt in, with
+/// its output, when it stores the pair as a user message.
+const HARNESS_OUTPUT_ELEMENTS: [&str; 1] = ["user_shell_command"];
+
+/// Whether a projected Codex user message holds harness output rather than
+/// only a prompt: one of [`HARNESS_OUTPUT_ELEMENTS`], by the transcript's
+/// shared element rule. `text` is the message text a transcript shows.
+pub(crate) fn is_harness_output_message(observation: &CanonicalObservationV2, text: &str) -> bool {
+    crate::acquisition::transcript::user_message_holds_element(
+        observation,
+        text,
+        &HARNESS_OUTPUT_ELEMENTS,
+    )
+}
+
 fn canonical_role(record: &CodexNativeRecord) -> Result<MessageRole, CodexCanonicalError> {
     let role = record.role.as_deref().or_else(|| {
         record.discriminator.as_deref().and_then(|kind| match kind {

@@ -325,6 +325,53 @@ fn imported_turns_are_read_in_order() {
     );
 }
 
+/// Codex stores a command the user ran from the prompt, with its output, as
+/// a user message; that record is a tool result. A prompt that only names
+/// the tag stays a user message.
+#[test]
+fn codex_user_shell_records_are_tool_results() {
+    let shell = format!(
+        "<user_shell_command>\n<command>\necho synthetic\n</command>\n<result>\nExit code: 0\nOutput:\n{RESULT_MARKER}\n</result>\n</user_shell_command>"
+    );
+    let message = |text: &str| json!({"type":"response_item","timestamp":"2026-11-20T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}});
+    let root = tempfile::tempdir().unwrap();
+    let path = write(
+        root.path(),
+        "codex/rollout.jsonl",
+        &jsonl(&[
+            json!({"type":"session_meta","timestamp":"2026-11-20T10:00:00Z","payload":{"id":"synthetic-codex","session_id":"synthetic-codex"}}),
+            message("what does <user_shell_command> hold"),
+            message(&shell),
+        ]),
+    );
+    for (source_id, kind) in [
+        ("codex.sessions", SourceKind::Jsonl),
+        ("codex.archived_sessions", SourceKind::ArchivedJsonl),
+        ("codex.headless_sessions", SourceKind::HeadlessJsonl),
+    ] {
+        let source = source(ClientId::Codex, source_id, kind, path.clone());
+        let page = read(&source, &transcript(None)).unwrap();
+        assert_eq!(
+            kinds(&page),
+            vec![SessionRecordKind::UserMessage],
+            "{source_id}"
+        );
+        assert!(
+            !page.records()[0].text().contains(RESULT_MARKER),
+            "{source_id}: output in prompt"
+        );
+        let all = read(&source, &with_results(None)).unwrap();
+        assert_eq!(
+            kinds(&all),
+            vec![
+                SessionRecordKind::UserMessage,
+                SessionRecordKind::ToolResult
+            ],
+            "{source_id}"
+        );
+    }
+}
+
 #[test]
 fn hook_journals_are_not_transcripts() {
     let root = tempfile::tempdir().unwrap();

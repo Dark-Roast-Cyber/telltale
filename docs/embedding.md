@@ -786,12 +786,15 @@ parts never enter a message record. Tool calls carry the call's arguments,
 which for a write or patch tool include the file body or patch text; a caller
 that must not receive file content leaves tool calls off. Tool results are a
 separate opt-in class
-that also holds command output a Claude harness stores as a user record
-(`<bash-stdout>`, `<bash-stderr>`, `<local-command-stdout>`,
-`<local-command-stderr>`, `<task-notification>`). The rule recognizes what
-the harness writes: a line that opens with one of those tags, or a tag with
-its closing tag later. Text shaped to pass as a prompt is a user message,
-redacted like any other. `record_key` is a SHA-256
+that also holds command output a harness stores as a user record: for Claude
+`<bash-stdout>`, `<bash-stderr>`, `<local-command-stdout>`,
+`<local-command-stderr>` and `<task-notification>`, for Codex
+`<user_shell_command>`. The rule recognizes what the harness writes: a line
+that opens with one of those tags, or a tag with its closing tag later.
+Kinds follow the record shapes each harness writes. Text shaped to pass as a
+prompt, a record shape no harness writes, and, in `copilot.process_log`, a
+logged line that repeats the log's own record framing are read as the kind
+they claim, as a scan reads them, and redacted like any other text. `record_key` is a SHA-256
 over kind, tool name, the text redacted at 4,096 bytes, `occurred_at`, and
 `imported`: it reveals nothing redaction hides and does not change with
 `max_record_bytes`.

@@ -7,7 +7,8 @@ use std::path::Path;
 
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
-    CanonicalObservationV2, ContentPartKind, JsonValue, MessageObservation, ObservationBody,
+    CanonicalObservationV2, ContentPartKind, JsonValue, MessageObservation, MessageRole,
+    ObservationBody,
 };
 use telltale_schema::source::Source;
 
@@ -92,6 +93,65 @@ pub fn message_text(message: &MessageObservation) -> String {
         .join("\n")
 }
 
+/// Whether a projected user message holds harness output in one of
+/// `elements` (tag names a harness wraps stored output in) rather than only a
+/// prompt. `text` is the message text a transcript shows (text parts joined
+/// by newlines). The rule is applied to it and to the text parts joined with
+/// nothing between them, so a tag split across parts still counts. Without
+/// case, the text is output when a line opens (after leading whitespace,
+/// marks and punctuation: anything before its first letter, digit or `<`)
+/// with an opening tag of one of `elements`, or when an opening tag anywhere
+/// has that element's closing tag after it. A record mixing a prompt with
+/// output is output, shown only when results are asked for; a prompt that
+/// names a tag inside a sentence stays a prompt.
+///
+/// This recognizes what a harness writes. Text shaped to pass as a prompt (a
+/// tag name broken by other characters, an unclosed tag after words on its
+/// line) is a user message, redacted like any other. Which elements a harness
+/// writes is its source module's knowledge.
+pub(crate) fn user_message_holds_element(
+    observation: &CanonicalObservationV2,
+    text: &str,
+    elements: &[&str],
+) -> bool {
+    let ObservationBody::Message(message) = observation.body() else {
+        return false;
+    };
+    if message.role() != Some(MessageRole::User) {
+        return false;
+    }
+    let unseparated: String = message
+        .content_parts()
+        .iter()
+        .filter(|part| part.kind() == ContentPartKind::Text)
+        .filter_map(|part| match part.value() {
+            JsonValue::String(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    holds_element(text, elements) || holds_element(&unseparated, elements)
+}
+
+fn holds_element(text: &str, elements: &[&str]) -> bool {
+    let text = text.to_ascii_lowercase();
+    elements.iter().any(|element| {
+        let open = format!("<{element}");
+        let close = format!("</{element}>");
+        let is_open_tag = |after: &str| {
+            after.is_empty()
+                || after.starts_with(|next: char| matches!(next, '>' | '/') || next.is_whitespace())
+        };
+        text.split(['\n', '\r']).any(|line| {
+            line.trim_start_matches(|lead: char| !lead.is_alphanumeric() && lead != '<')
+                .strip_prefix(&open)
+                .is_some_and(is_open_tag)
+        }) || text.match_indices(&open).any(|(at, _)| {
+            let after = &text[at + open.len()..];
+            is_open_tag(after) && after.contains(&close)
+        })
+    })
+}
+
 /// Rows of one OpenCode window and the stored bytes it may load.
 #[cfg(feature = "opencode-sqlite")]
 const OPENCODE_WINDOW_ROWS: usize = 256;
@@ -134,16 +194,27 @@ pub fn acquire_transcript(
         .enumerate()
         .map(|(index, observation)| TranscriptEntry {
             position: index as u64,
-            harness_output: source.client == ClientId::Claude
-                && match observation.body() {
-                    ObservationBody::Message(message) => {
-                        crate::sources::claude::canonical::is_harness_output_message(
-                            &observation,
-                            &message_text(message),
-                        )
+            harness_output: match observation.body() {
+                ObservationBody::Message(message) => {
+                    let text = message_text(message);
+                    match source.client {
+                        ClientId::Claude => {
+                            crate::sources::claude::canonical::is_harness_output_message(
+                                &observation,
+                                &text,
+                            )
+                        }
+                        ClientId::Codex => {
+                            crate::sources::codex::canonical::is_harness_output_message(
+                                &observation,
+                                &text,
+                            )
+                        }
+                        _ => false,
                     }
-                    _ => false,
-                },
+                }
+                _ => false,
+            },
             observation,
         })
         .collect();
