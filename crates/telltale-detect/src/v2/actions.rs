@@ -522,7 +522,7 @@ pub fn native_profile_notices(export: &RuleV1CompatibilityExport) -> Vec<NativeP
 
 pub(crate) fn compile(
     export: &RuleV1CompatibilityExport,
-) -> Result<Vec<ActionRule>, super::RuleV1CompileError> {
+) -> Result<Vec<ActionRule>, super::RuleCompileError> {
     export
         .rules()
         .iter()
@@ -552,7 +552,7 @@ pub(crate) fn compile(
             Ok(ActionRule {
                 matcher: content
                     .compile_content_matcher()
-                    .map_err(|_| super::RuleV1CompileError::InvalidMetadata)?,
+                    .map_err(|_| super::RuleCompileError::InvalidMetadata)?,
                 native,
             })
         })

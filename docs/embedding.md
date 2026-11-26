@@ -808,7 +808,7 @@ Display and Debug render closed codes (`pipeline_discovery_failed`,
 `pipeline_empty_rule_set`, `pipeline_invalid_options`,
 `pipeline_invalid_resume_token`) without paths, configuration, or source text.
 `Error::source()` keeps the original cause except for `InvalidConfiguration`,
-`EmptyRuleSet`, `InvalidOptions`, and `InvalidResumeToken`. `DiscoveryError`, `RuleV1CompileError`, and `ObservationError`
+`EmptyRuleSet`, `InvalidOptions`, and `InvalidResumeToken`. `DiscoveryError`, `RuleCompileError`, and `ObservationError`
 are re-exported from core. `Compilation`'s boxed cause is not a supported subtype
 taxonomy; do not parse strings to classify failures.
 

@@ -310,7 +310,7 @@ fn compile_time_rule_validation_keeps_the_untyped_cause() {
     assert!(matches!(error, PipelineError::Compilation(_)));
     let cause = std::error::Error::source(&error).unwrap();
     assert!(cause.downcast_ref::<RuleContentError>().is_none());
-    assert!(cause.downcast_ref::<RuleV1CompileError>().is_some());
+    assert!(cause.downcast_ref::<RuleCompileError>().is_some());
 }
 
 #[test]

@@ -222,6 +222,11 @@
   a new `Notice` variant, `hooks::engine::Engine::new` takes the grants
   settings, and the record schema has an optional `decision.grant`.
 
+- **`RuleV1CompileError` is now `RuleCompileError`.** The error type
+  `telltale-core` re-exports for a rule that does not compile kept a Rule v1
+  name after Rule v1 was removed. Its variants and their text are unchanged.
+  See the [0.8.0 migration guide](docs/migrations/0.8.0.md#rust-api).
+
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
   `rule_id` names no loaded rule or chain is left out and the other entries
