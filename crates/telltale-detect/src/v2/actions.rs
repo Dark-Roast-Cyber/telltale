@@ -522,7 +522,7 @@ pub fn native_profile_notices(export: &RuleV1CompatibilityExport) -> Vec<NativeP
 
 pub(crate) fn compile(
     export: &RuleV1CompatibilityExport,
-) -> Result<Vec<ActionRule>, super::RuleV1CompileError> {
+) -> Result<Vec<ActionRule>, super::RuleCompileError> {
     export
         .rules()
         .iter()
@@ -552,7 +552,7 @@ pub(crate) fn compile(
             Ok(ActionRule {
                 matcher: content
                     .compile_content_matcher()
-                    .map_err(|_| super::RuleV1CompileError::InvalidMetadata)?,
+                    .map_err(|_| super::RuleCompileError::InvalidMetadata)?,
                 native,
             })
         })
@@ -792,6 +792,10 @@ fn declaration_adds(
     if operation.has_roles() {
         return true;
     }
+    // Replacing the command changes the view even with nothing to put there.
+    if operation.replaces_command() || !operation.authored_contents().is_empty() {
+        return true;
+    }
     if operation.commands().is_empty()
         && operation.read_paths().is_empty()
         && operation.written_paths().is_empty()
@@ -940,7 +944,7 @@ fn read_view(
                 reading.declare(operation);
             }
             let ArgumentReading {
-                mut command,
+                command,
                 argv,
                 facts,
                 ..
@@ -948,16 +952,6 @@ fn read_view(
             out.argv = argv;
             for (field, text) in facts {
                 out.put(field, text);
-            }
-            budget.charge(command.len())?;
-            if tool
-                .name()
-                .is_some_and(|name| matches!(name, "exec" | "multi_tool_use.parallel"))
-                && let Some((commands, written, paths)) = script_actions(&command, budget)?
-            {
-                command = commands;
-                out.put("authored_content", written);
-                out.put("file_path", paths);
             }
             budget.charge(command.len())?;
             out.lone_return = command
@@ -1232,97 +1226,6 @@ pub(super) fn replay_identity(observation: &CanonicalObservationV2) -> Option<St
     let mut budget = RetentionBudget::new();
     let view = view(observation, &mut budget).expect("within budget");
     replay(observation, &view, &mut budget).expect("within budget")
-}
-
-/// Read only literal arguments of the supported script-tool API. Arbitrary
-/// JavaScript is not executed, flattened, or treated as shell input.
-fn script_actions(
-    script: &str,
-    budget: &mut RetentionBudget,
-) -> Result<Option<(String, String, String)>, ProcessingError> {
-    budget.charge(script.len())?;
-    if !script.contains("tools.") {
-        return Ok(None);
-    }
-    let mut commands = Vec::new();
-    let mut written = Vec::new();
-    let mut paths = Vec::new();
-    budget.charge(script.len())?;
-    for (offset, _) in script.match_indices("tools.exec_command(") {
-        let rest = &script[offset + "tools.exec_command(".len()..];
-        budget.charge(rest.len())?;
-        let Some((object, _)) = rest.split_once('}') else {
-            return Ok(None);
-        };
-        budget.charge(object.len())?;
-        if let Some((_, value)) = object
-            .split_once("cmd:")
-            .or_else(|| object.split_once("\"cmd\":"))
-            && let Some(value) = script_literal(value, budget)?
-        {
-            commands.push(value);
-        }
-    }
-    budget.charge(script.len())?;
-    for (offset, _) in script.match_indices("tools.apply_patch(") {
-        if let Some(patch) = script_literal(&script[offset + "tools.apply_patch(".len()..], budget)?
-        {
-            budget.charge(patch.len())?;
-            written.extend(
-                patch
-                    .lines()
-                    .filter(|line| !line.starts_with("+++"))
-                    .filter_map(|line| line.strip_prefix('+'))
-                    .map(str::to_owned),
-            );
-            budget.charge(patch.len())?;
-            paths.extend(
-                patch
-                    .lines()
-                    .filter_map(|line| {
-                        ["*** Add File: ", "*** Update File: ", "*** Delete File: "]
-                            .iter()
-                            .find_map(|prefix| line.strip_prefix(prefix))
-                    })
-                    .map(str::to_owned),
-            );
-        }
-    }
-    Ok(Some((
-        commands.join("\n"),
-        written.join("\n"),
-        paths.join("\n"),
-    )))
-}
-fn script_literal(
-    text: &str,
-    budget: &mut RetentionBudget,
-) -> Result<Option<String>, ProcessingError> {
-    budget.charge(text.len())?;
-    let mut chars = text.trim_start().chars();
-    let Some(quote) = chars.next().filter(|c| matches!(c, '\'' | '"' | '`')) else {
-        return Ok(None);
-    };
-    let mut value = String::new();
-    while let Some(c) = chars.next() {
-        if c == quote {
-            return Ok(Some(value));
-        }
-        if c == '\\' {
-            let Some(next) = chars.next() else {
-                return Ok(None);
-            };
-            value.push(match next {
-                'n' => '\n',
-                'r' => '\r',
-                't' => '\t',
-                c => c,
-            });
-        } else {
-            value.push(c);
-        }
-    }
-    Ok(None)
 }
 
 /// A stage's parameters that can be paths.

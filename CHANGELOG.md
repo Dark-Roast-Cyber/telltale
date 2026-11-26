@@ -222,6 +222,35 @@
   a new `Notice` variant, `hooks::engine::Engine::new` takes the grants
   settings, and the record schema has an optional `decision.grant`.
 
+- **`RuleV1CompileError` is now `RuleCompileError`.** The error type
+  `telltale-core` re-exports for a rule that does not compile kept a Rule v1
+  name after Rule v1 was removed. Its variants and their text are unchanged.
+  See the [0.8.0 migration guide](docs/migrations/0.8.0.md#rust-api).
+
+- **A Codex code-mode script's patch names the files it writes.** The
+  literal calls a script tool's script names (`tools.exec_command`,
+  `tools.apply_patch`) are now read by the Codex source, not by detection.
+  Commands and patch content are read as before; the files a patch adds,
+  updates or deletes are now also written paths, so rules that select a
+  written path match them as they match the `apply_patch` tool. A script
+  that takes more reading than its bound allows is read as command text
+  instead of failing its source.
+
+- **MCP usage is attributed for tools named `mcp__<server>__<tool>`.** A
+  tool call under that name is attributed to the configured server it spells
+  out, when that server declares the tool. Before, only a call under the
+  bare declared tool name was attributed. A name that joins server and tool
+  with a single separator is not read: a built-in tool can have the same
+  name.
+
+- **Hooks: the nested-launch rules list every harness.** The self-protection
+  rules that match a harness launch or a harness package run now take their
+  names from one list. `tth.tamper` rules that matched `claude`, `codex`,
+  `copilot`, `opencode`, `cursor` and `gemini` launches now also match
+  `openclaw`, `qwen` and `pi`, and the package-run deny that named
+  `@openai/codex` and `@github/copilot` now also names
+  `@anthropic-ai/claude-code`.
+
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
   `rule_id` names no loaded rule or chain is left out and the other entries

@@ -62,7 +62,7 @@ pub use provenance::{
     DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS, ProducerProvenanceOptions,
     assemble_producer_provenance_manifest,
 };
-pub use telltale_detect::v2::RuleV1CompileError;
+pub use telltale_detect::v2::RuleCompileError;
 pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;
 pub use telltale_schema::event::Event3Record;
@@ -206,8 +206,8 @@ impl From<time::error::Format> for PipelineError {
     }
 }
 
-impl From<RuleV1CompileError> for PipelineError {
-    fn from(source: RuleV1CompileError) -> Self {
+impl From<RuleCompileError> for PipelineError {
+    fn from(source: RuleCompileError) -> Self {
         Self::Compilation(Box::new(source))
     }
 }
@@ -1376,8 +1376,8 @@ telltale:
         assert!(matches!(
             error
                 .source()
-                .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-            Some(RuleV1CompileError::UnmappableDetectionClass)
+                .and_then(|cause| cause.downcast_ref::<RuleCompileError>()),
+            Some(RuleCompileError::UnmappableDetectionClass)
         ));
         let valid = Pipeline::builder().build().unwrap();
         let sources = [synthetic_source()];
