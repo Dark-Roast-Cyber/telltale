@@ -2524,15 +2524,11 @@ fn redact_windows_paths(text: &str, marker: &str) -> String {
             search = start.end();
             continue;
         }
-        let lead = captures
-            .name("win32_lead")
-            .or_else(|| captures.name("nt_lead"))
-            .or_else(|| captures.name("unc_lead"))
-            .or_else(|| captures.name("drive_lead"))
-            .or_else(|| captures.name("home_lead"))
-            .map_or(0, |lead| lead.len());
+        let lead = path_lead(&captures);
         let span_start = whole.start() + lead;
-        let span_end = extend_spaced_filename(text, span_start, whole.end());
+        let split_end = split_before_chained_path_after_escape(text, span_start, whole.end());
+        let trimmed_end = trim_trailing_escaped_whitespace(text, span_start, split_end);
+        let span_end = extend_spaced_filename(text, span_start, trimmed_end);
         redacted.push_str(&text[copied..span_start]);
         redacted.push_str(marker);
         copied = span_end;
@@ -2540,6 +2536,131 @@ fn redact_windows_paths(text: &str, marker: &str) -> String {
     }
     redacted.push_str(&text[copied..]);
     redacted
+}
+
+/// How far back from a match's end a chained path can start: an escape, the
+/// longest device prefix in its widest escaped form, and the drive letter.
+const CHAINED_PATH_LOOKBACK: usize = 16;
+/// Enough text to tell that a path starts: its prefix and first separator.
+const PATH_START_BYTES: usize = 32;
+
+/// A match that stops right before `:` may have run from one path through an
+/// escaped line break into the drive letter of the next
+/// (`C:\Temp\a.txt\nC:\Users\secret.txt`, or the same with a `\\?\` or
+/// `\??\` prefix). The end of the first path, so that the second is matched
+/// whole on the next pass instead of leaving its tail after the marker.
+///
+/// Only the last [`CHAINED_PATH_LOOKBACK`] bytes can hold that escape, and
+/// each candidate is tested against at most [`PATH_START_BYTES`], so the
+/// work does not grow with the match.
+fn split_before_chained_path_after_escape(text: &str, span_start: usize, span_end: usize) -> usize {
+    if !text[span_end..].starts_with(':') {
+        return span_end;
+    }
+    let bytes = text.as_bytes();
+    let floor = span_end
+        .saturating_sub(CHAINED_PATH_LOOKBACK)
+        .max(span_start + 1);
+    // `at` is the escape's letter; its one backslash sits before it.
+    for at in (floor..span_end).rev() {
+        if !matches!(bytes[at], b'n' | b'r' | b't') || bytes[at - 1] != b'\\' {
+            continue;
+        }
+        if at >= span_start + 2 && bytes[at - 2] == b'\\' {
+            continue;
+        }
+        let after_escape = at + 1;
+        let mut window_end = (after_escape + PATH_START_BYTES).min(text.len());
+        while !text.is_char_boundary(window_end) {
+            window_end -= 1;
+        }
+        if !starts_windows_path(&text[after_escape..window_end]) {
+            continue;
+        }
+        let first_end = trim_trailing_escaped_whitespace(text, span_start, at - 1);
+        if is_complete_windows_path(&text[span_start..first_end]) {
+            return first_end;
+        }
+    }
+    span_end
+}
+
+/// The length of the boundary a Windows path match captured before the path.
+fn path_lead(captures: &regex::Captures<'_>) -> usize {
+    [
+        "win32_lead",
+        "nt_lead",
+        "unc_lead",
+        "drive_lead",
+        "home_lead",
+    ]
+    .iter()
+    .find_map(|name| captures.name(name))
+    .map_or(0, |lead| lead.len())
+}
+
+/// Whether a Windows path match begins at the first byte of `candidate`.
+fn starts_windows_path(candidate: &str) -> bool {
+    WINDOWS_PATH_RE.captures(candidate).is_some_and(|captures| {
+        let lead = path_lead(&captures);
+        captures.get(0).expect("whole match").start() + lead == 0
+    })
+}
+
+/// Keeps trailing single-backslash escaped whitespace (`\n`, `\r`, `\t`) outside
+/// a complete Windows path span so JSON-escaped newlines at the end of a path
+/// are not absorbed into the path marker. Peels the maximal trailing run in
+/// O(N) byte checks and validates at most twice with `is_complete_windows_path`
+/// so worst-case work stays linear within the sanitizer work budget.
+fn trim_trailing_escaped_whitespace(text: &str, span_start: usize, span_end: usize) -> usize {
+    let mut trimmed = span_end;
+    while trimmed >= span_start + 2 {
+        let bytes = &text.as_bytes()[span_start..trimmed];
+        let last = bytes[bytes.len() - 1];
+        if !matches!(last, b'n' | b'r' | b't') {
+            break;
+        }
+        let backslashes = bytes[..bytes.len() - 1]
+            .iter()
+            .rev()
+            .take_while(|&&byte| byte == b'\\')
+            .count();
+        if backslashes != 1 {
+            break;
+        }
+        trimmed -= 2;
+    }
+    if trimmed == span_end {
+        return span_end;
+    }
+    if is_complete_windows_path(&text[span_start..trimmed]) {
+        return trimmed;
+    }
+    if trimmed + 2 < span_end && is_complete_windows_path(&text[span_start..trimmed + 2]) {
+        return trimmed + 2;
+    }
+    span_end
+}
+
+fn is_complete_windows_path(candidate: &str) -> bool {
+    WINDOWS_PATH_RE.captures(candidate).is_some_and(|captures| {
+        let whole = captures.get(0).expect("whole match");
+        if let (Some(start), Some(server), Some(sep)) = (
+            captures.name("unc_start"),
+            captures.name("unc_server"),
+            captures.name("unc_sep"),
+        ) && is_escaped_sequence_not_unc(
+            start.as_str(),
+            server.as_str(),
+            sep.as_str(),
+            &candidate[sep.end()..whole.end()],
+        ) {
+            return false;
+        }
+        let lead = path_lead(&captures);
+        whole.start() + lead == 0
+            && extend_spaced_filename(candidate, 0, whole.end()) == candidate.len()
+    })
 }
 
 /// Extend a Windows path match across spaces in its final component when the
@@ -3849,7 +3970,7 @@ safe=value"#,
         );
         assert_eq!(
             sanitize(r#"{"cmd":"copy \\\\server\\share\\a.txt C:\\Temp\\b.txt\n"}"#),
-            r#"{"cmd":"copy <path> <path>"}"#
+            r#"{"cmd":"copy <path> <path>\n"}"#
         );
     }
 
@@ -4196,6 +4317,132 @@ safe=value"#,
     fn double_slash_names_keep_url_redaction_of_home_directories() {
         let redacted = redact_sensitive_text("open //server/Users/example/notes.txt now");
         assert!(!redacted.contains("example"), "{redacted}");
+    }
+
+    /// Starts of eight or more backslashes and trailing single-backslash
+    /// escaped whitespace (`\n`, `\r`, `\t`) behave deterministically and
+    /// idempotently while keeping real filenames and escaped registry keys.
+    #[test]
+    fn long_backslash_starts_and_trailing_escaped_whitespace_are_pinned() {
+        let sanitize = |text| PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, text);
+
+        for masked in [
+            r"open \\\\\\\\server\\share\\notes.txt now",
+            r"open \\\\\\\\server\share\notes.txt now",
+            r"open \\\\\\\\\\\\server\\\\share\\\\notes.txt now",
+            r"open \\\\\\\\\\\\\\\\server\\\\\\\\share\\\\\\\\notes.txt now",
+            r"open C:\\\\\\\\Users\\\\\\\\example\\\\\\\\notes.txt now",
+        ] {
+            assert_every_context(masked, "open [sensitive-path] now", "open <path> now");
+        }
+
+        for kept in [
+            r"reg add HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run",
+            r"reg add HKCU\\\\\\\\Software\\\\\\\\Microsoft\\\\\\\\Windows",
+        ] {
+            assert_eq!(redact_sensitive_text(kept), kept);
+            assert_eq!(sanitize(kept), kept);
+        }
+
+        assert_eq!(
+            sanitize(r#"{"cmd":"type C:\\Temp\\b.txt\r\n"}"#),
+            r#"{"cmd":"type <path>\r\n"}"#
+        );
+        assert_eq!(
+            sanitize(r#"{"cmd":"dir \\\\server\\share\\a.txt\t"}"#),
+            r#"{"cmd":"dir <path>\t"}"#
+        );
+        assert_eq!(
+            sanitize(r#"{"cmd":"type C:\\Temp\\Private Notes.txt\n"}"#),
+            r#"{"cmd":"type <path>\n"}"#
+        );
+        // Trailing escaped whitespace must not cause spaced-filename extension
+        // to swallow following commands or quoted arguments.
+        assert_eq!(
+            sanitize(r#"{"cmd":"type C:\\Temp\\b.txt\n cmd.exe /c whoami"}"#),
+            r#"{"cmd":"type <path>\n cmd.exe /c whoami"}"#
+        );
+        assert_eq!(
+            sanitize(r#""C:\tools\a.exe\n arg1 arg2""#),
+            r#""<path>\n arg1 arg2""#
+        );
+        // Chained Windows paths separated directly by `\n` or `\r\n` must both
+        // redact whole without leaking the second path's drive tail.
+        assert_every_context(
+            r"C:\Temp\a.txt\nC:\Users\SyntheticUser\secret.txt",
+            r"[sensitive-path]\n[sensitive-path]",
+            r"<path>\n<path>",
+        );
+        assert_every_context(
+            r"C:\Temp\a.txt\r\n\\?\C:\Users\SyntheticUser\secret.txt",
+            r"[sensitive-path]\r\n[sensitive-path]",
+            r"<path>\r\n<path>",
+        );
+        assert_every_context(
+            r"C:\Temp\a.txt\n\??\C:\Users\SyntheticUser\secret.txt",
+            r"[sensitive-path]\n[sensitive-path]",
+            r"<path>\n<path>",
+        );
+        assert_eq!(
+            redact_sensitive_text(r#"{"log":"C:\\Temp\\a.txt\nC:\\SyntheticSecret.txt"}"#),
+            r#"{"log":"[sensitive-path]\n[sensitive-path]"}"#
+        );
+        // The escape before the second path is found from the match's end,
+        // however long the first path and its own escapes are.
+        let chained = format!(
+            r"C:\Temp{}\a.txt\n\nC:\Users\SyntheticUser\secret.txt",
+            r"\nested".repeat(400)
+        );
+        assert_eq!(sanitize(&chained), r"<path>\n\n<path>");
+        assert_eq!(
+            redact_sensitive_text(r#"{"log":"C:\\Temp\\a.txt\r\n\\\\?\\C:\\SyntheticSecret.txt"}"#),
+            r#"{"log":"[sensitive-path]\r\n[sensitive-path]"}"#
+        );
+        // Non-drive Windows path branches preserve trailing escaped whitespace.
+        assert_eq!(sanitize(r"\\?\C:\Temp\b.txt\n"), "<path>\\n");
+        assert_eq!(
+            sanitize(r"\Device\HarddiskVolume3\Users\example\b.txt\n"),
+            "<path>\\n"
+        );
+        assert_eq!(sanitize(r"C:/Temp/b.txt\n"), "<path>\\n");
+        assert_eq!(sanitize(r"~\Temp\b.txt\n"), "<path>\\n");
+        assert_eq!(sanitize(r"C:\n\r\n"), r"<path>\r\n");
+        // Real filenames starting with n/r/t and escaped-separator `\\n` stay redacted.
+        assert_eq!(sanitize(r"C:\Users\example\notes.txt"), "<path>");
+        assert_eq!(sanitize(r"C:\\Users\\example\\n"), "<path>");
+        assert_eq!(sanitize(r"C:\Users\example\readme.md"), "<path>");
+        assert_eq!(sanitize(r"C:\Users\example\token.pem"), "<path>");
+        assert_eq!(sanitize(r"C:\n"), "<path>");
+        assert_eq!(sanitize(r"\\server\n"), "<path>");
+
+        // Long trailing `\n` runs stay within linear sanitizer work budget.
+        let long_escapes = format!(r"C:\a{}", r"\n".repeat(2046));
+        let mut charged = 0usize;
+        let out = PrivacySanitizer::try_sanitize(
+            SanitizationContext::Diagnostic,
+            &long_escapes,
+            &mut |bytes| {
+                charged = charged.saturating_add(bytes);
+                Ok::<_, std::convert::Infallible>(())
+            },
+        )
+        .expect("linear sanitize");
+        assert!(out.starts_with(r"<path>\n"), "{out}");
+
+        // Idempotent across every sanitization context.
+        for context in [
+            SanitizationContext::Evidence,
+            SanitizationContext::Diagnostic,
+            SanitizationContext::Url,
+            SanitizationContext::Path,
+            SanitizationContext::CommandResult,
+            SanitizationContext::Summary,
+            SanitizationContext::Metadata,
+        ] {
+            let redacted =
+                PrivacySanitizer::sanitize(context, r#"{"cmd":"type C:\\Temp\\b.txt\r\n"}"#);
+            assert_eq!(PrivacySanitizer::sanitize(context, &redacted), redacted);
+        }
     }
 
     /// Scheme-relative URLs, URLs with doubled slashes and ordinary `//` text
