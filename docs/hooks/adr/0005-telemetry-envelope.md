@@ -49,7 +49,7 @@ built from parsed URL parts in a closed alphabet, never a port, userinfo,
 query or fragment, and kept only when the evidence sanitizer leaves them
 unchanged. A strict reader checks them with `DestinationFacts::is_valid`.
 
-## Addendum (2026-11-26): strict readback and the line bound
+## Addendum (2026-11-26): strict readback
 
 Status: Accepted. Adds a supported reader; the record version is unchanged.
 

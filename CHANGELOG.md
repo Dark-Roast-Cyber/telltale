@@ -9,7 +9,7 @@
 - Downstream consumers can read `telltale_hooks.record.v1` with
   `HooksRecordV1::from_json`, including schema, redaction and embedded
   action-record validation. The consumer is available without the `hooks`
-  feature; see [strict readback](docs/hooks/adr/0005-telemetry-envelope.md#strict-readback).
+  feature; see [strict readback](docs/hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback).
 - Hooks telemetry keeps readable, sanitizer-stable native labels up to 256
   bytes and writes deterministic stand-ins for the rest. See
   [bounded telemetry labels](docs/hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-bounded-telemetry-labels).
