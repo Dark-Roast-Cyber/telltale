@@ -808,6 +808,18 @@
   instead of naming the rule. See
   [replacing rule content](docs/embedding.md#replacing-rule-content).
 
+- **The embedding builder can leave out override entries for rules it does
+  not carry.** `PipelineBuilder::skip_unknown_override_rules(true)` skips an
+  override entry whose `rule_id` names no loaded rule or chain modifier
+  instead of failing `build`, so one override document can serve hosts on
+  different Telltale versions. `Pipeline::skipped_overrides()` lists each
+  skipped entry as a `SkippedOverride`: the input (`override:<label>` or
+  `override:<n>`) and the `rule_id`, which is replaced by a
+  `redacted.<sha256>` marker unless it is a safe rule identifier. The default
+  stays strict, and malformed documents and entries, bound violations and an
+  empty effective rule set still fail. See
+  [replacing rule content](docs/embedding.md#replacing-rule-content).
+
 - **Pi sessions are a new source, `pi.sessions`.** The ninth source identity
   acquires [Pi](https://github.com/earendil-works/pi) coding-agent sessions
   (session format version 3) from `~/.pi/agent/sessions`. User and assistant

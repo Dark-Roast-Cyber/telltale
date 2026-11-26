@@ -195,6 +195,147 @@ fn unknown_override_rule_id_fails_without_echoing_it() {
 }
 
 #[test]
+fn opt_in_skip_unknown_override_rules_loads_known_and_reports_skipped() {
+    let pipeline = base_builder()
+        .skip_unknown_override_rules(true)
+        .labeled_override_document(
+            "fleet-tuning",
+            overrides(
+                "  - rule_id: syn.future.rule\n    reason: Newer release.\n    enabled: false\n  \
+                 - rule_id: syn.base\n    reason: Raise score.\n    score: 45\n",
+            ),
+        )
+        .override_document(overrides(
+            "  - rule_id: tth.tamper.hook_settings_write\n    reason: Hooks only.\n    enabled: false\n",
+        ))
+        .build()
+        .expect("pipeline builds with unknown overrides skipped");
+
+    assert_eq!(pipeline.skipped_overrides().len(), 2);
+    assert_eq!(pipeline.skipped_overrides()[0].rule_id(), "syn.future.rule");
+    assert_eq!(
+        pipeline.skipped_overrides()[0].document(),
+        "override:fleet-tuning"
+    );
+    assert_eq!(
+        pipeline.skipped_overrides()[1].rule_id(),
+        "tth.tamper.hook_settings_write"
+    );
+    assert_eq!(pipeline.skipped_overrides()[1].document(), "override:2");
+
+    assert_eq!(
+        scan_commands(&pipeline, &["echo syn-alpha"]),
+        [(vec![BASE.to_string()], 45)]
+    );
+
+    // Frozen EffectiveConfigurationV1 still builds and validates cleanly.
+    let effective = pipeline
+        .effective_configuration(&DetailedEvaluationOptions::default())
+        .expect("effective configuration");
+    let json = effective.to_json().expect("serialize effective config");
+    EffectiveConfigurationV1::from_json(&json).expect("validate effective config");
+}
+
+#[test]
+fn opt_in_skip_unknown_override_rules_sanitizes_unsafe_ids_and_keeps_validation() {
+    // Default mode (and matching overrides) report no skipped overrides.
+    let matched = base_builder()
+        .override_document(overrides(
+            "  - rule_id: syn.base\n    reason: Known.\n    score: 30\n",
+        ))
+        .build()
+        .expect("known override");
+    assert!(matched.skipped_overrides().is_empty());
+
+    // Unsafe rule IDs (BiDi override, path, oversized) are hashed to terminal
+    // opaque markers rather than echoed raw.
+    let pipeline = base_builder()
+        .skip_unknown_override_rules(true)
+        .labeled_override_document(
+            "unsafe",
+            overrides(&format!(
+                "  - rule_id: \"syn.bidi\u{202E}rule\"\n    reason: Synthetic.\n    enabled: false\n  \
+                 - rule_id: \"/etc/secret/path\"\n    reason: Synthetic.\n    enabled: false\n  \
+                 - rule_id: \"{}\"\n    reason: Synthetic.\n    enabled: false\n",
+                "a".repeat(200),
+            )),
+        )
+        .build()
+        .expect("unsafe unknown ids skipped safely");
+    let skipped = pipeline.skipped_overrides();
+    assert_eq!(skipped.len(), 3);
+    assert!(
+        skipped[0].rule_id().starts_with("redacted.")
+            && skipped[1].rule_id()
+                == "redacted.8486a5960faab415322a88aefd7d080dfb2b1bc006435f85f1ef6f1bb8990c66"
+            && skipped[2].rule_id().starts_with("redacted."),
+        "unsafe rule IDs were not redacted"
+    );
+    assert_eq!(
+        skipped
+            .iter()
+            .map(SkippedOverride::document)
+            .collect::<Vec<_>>(),
+        ["override:unsafe"; 3]
+    );
+
+    // Invalid entries, bad versions, and unparsable documents still fail even
+    // when unknown overrides are skipped.
+    let invalid = rejected(
+        base_builder()
+            .skip_unknown_override_rules(true)
+            .override_document(overrides(
+                "  - rule_id: syn.unknown\n    reason: ' '\n    enabled: false\n",
+            )),
+    );
+    assert_eq!(invalid.code(), RuleContentErrorCode::InvalidOverride);
+
+    let version = rejected(
+        base_builder()
+            .skip_unknown_override_rules(true)
+            .override_document("version: 2\noverrides: []\n"),
+    );
+    assert_eq!(version.code(), RuleContentErrorCode::UnsupportedVersion);
+
+    let unparsable = rejected(
+        base_builder()
+            .skip_unknown_override_rules(true)
+            .override_document("version: 1\noverrides: [broken\n"),
+    );
+    assert_eq!(unparsable.code(), RuleContentErrorCode::InvalidDocument);
+}
+
+#[test]
+fn opt_in_skip_unknown_override_rules_preserves_empty_rule_set_and_strict_toggle() {
+    // Explicit false restores strict default.
+    let error = rejected(
+        base_builder()
+            .skip_unknown_override_rules(true)
+            .skip_unknown_override_rules(false)
+            .labeled_override_document(
+                "fleet",
+                overrides(
+                    "  - rule_id: syn.future.rule\n    reason: Synthetic.\n    enabled: false\n",
+                ),
+            ),
+    );
+    assert_eq!(error.code(), RuleContentErrorCode::UnknownRuleId);
+
+    // Skipping unknown overrides still fails with EmptyRuleSet when no rule remains enabled.
+    let error = base_builder()
+        .skip_unknown_override_rules(true)
+        .override_document(overrides(
+            "  - rule_id: syn.future.rule\n    reason: Synthetic.\n    enabled: false\n  \
+             - rule_id: syn.base\n    reason: Disable only rule.\n    enabled: false\n  \
+             - rule_id: syn.other\n    reason: Disable other rule.\n    enabled: false\n",
+        ))
+        .build()
+        .err()
+        .expect("empty rule set");
+    assert!(matches!(error, PipelineError::EmptyRuleSet));
+}
+
+#[test]
 fn override_document_failures_have_closed_codes() {
     let invalid =
         rejected(base_builder().override_document("version: 1\noverrides: [secret-text\n"));
