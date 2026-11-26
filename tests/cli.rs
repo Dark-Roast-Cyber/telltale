@@ -751,6 +751,8 @@ mod codex_current_format;
 mod declared_role_scan;
 #[path = "cli/export.rs"]
 mod export;
+#[path = "cli/investigate_transcript.rs"]
+mod investigate_transcript;
 #[path = "cli/migration.rs"]
 mod migration;
 

@@ -207,6 +207,69 @@ fn quarantine_code(error: &ClaudeCanonicalError) -> Option<&'static str> {
     }
 }
 
+/// Elements Claude Code writes when it stores the output of a shell escape, a
+/// local command or a background task as a user record.
+const HARNESS_OUTPUT_ELEMENTS: [&str; 5] = [
+    "bash-stdout",
+    "bash-stderr",
+    "local-command-stdout",
+    "local-command-stderr",
+    "task-notification",
+];
+
+/// Whether a projected Claude user message holds harness output rather than
+/// only a prompt. `text` is the message text a transcript shows (text parts
+/// joined by newlines). The rule is applied to it and to the text parts
+/// joined with nothing between them, so a tag split across parts still
+/// counts. Without case, the text is output when a line opens (after leading
+/// whitespace, marks and punctuation: anything before its first letter,
+/// digit or `<`) with an opening tag of one of [`HARNESS_OUTPUT_ELEMENTS`], or
+/// when an opening tag anywhere has that element's closing tag after it. A
+/// record mixing a prompt with output is output, shown only when results are
+/// asked for; a prompt that names a tag inside a sentence stays a prompt.
+///
+/// This recognizes what the harness writes. Text shaped to pass as a prompt
+/// (a tag name broken by other characters, an unclosed tag after words on its
+/// line) is a user message, redacted like any other.
+pub(crate) fn is_harness_output_message(observation: &CanonicalObservationV2, text: &str) -> bool {
+    let ObservationBody::Message(message) = observation.body() else {
+        return false;
+    };
+    if message.role() != Some(MessageRole::User) {
+        return false;
+    }
+    let unseparated: String = message
+        .content_parts()
+        .iter()
+        .filter(|part| part.kind() == ContentPartKind::Text)
+        .filter_map(|part| match part.value() {
+            JsonValue::String(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    holds_harness_output(text) || holds_harness_output(&unseparated)
+}
+
+fn holds_harness_output(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    HARNESS_OUTPUT_ELEMENTS.iter().any(|element| {
+        let open = format!("<{element}");
+        let close = format!("</{element}>");
+        let is_open_tag = |after: &str| {
+            after.is_empty()
+                || after.starts_with(|next: char| matches!(next, '>' | '/') || next.is_whitespace())
+        };
+        text.split(['\n', '\r']).any(|line| {
+            line.trim_start_matches(|lead: char| !lead.is_alphanumeric() && lead != '<')
+                .strip_prefix(&open)
+                .is_some_and(is_open_tag)
+        }) || text.match_indices(&open).any(|(at, _)| {
+            let after = &text[at + open.len()..];
+            is_open_tag(after) && after.contains(&close)
+        })
+    })
+}
+
 fn project_record(
     record: &ClaudeNativeRecord,
     options: &ClaudeCanonicalOptions,

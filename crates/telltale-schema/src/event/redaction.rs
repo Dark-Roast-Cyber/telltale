@@ -350,6 +350,471 @@ pub fn redact_sensitive_text(text: &str) -> String {
     PrivacySanitizer::sanitize(SanitizationContext::Evidence, text)
 }
 
+/// Input processed by [`redact_multiline_bounded`]; longer text is cut with
+/// the fail-closed rule and reported as truncated.
+const MAX_MULTILINE_INPUT_BYTES: usize = 256 * 1024;
+/// Newline cuts tried per chunk before the chunk fails closed.
+const MAX_CUT_PROBES: usize = 64;
+/// Bytes the path guard may scan past a cut before treating it as unsafe.
+const MAX_CUT_PATH_SCAN_BYTES: usize = 4096;
+/// Re-redaction rounds allowed to reach a fixed point.
+const MAX_MULTILINE_FIXED_POINT_ROUNDS: usize = 4;
+
+/// Words whose presence at the end of a line lets a later pass continue
+/// across the following newline: secret keys and flags (the assignment
+/// scanner skips newlines between key, separator and value), the label,
+/// bearer, private-key-phrase and decoder patterns (`\s+` between words), and
+/// package-manager names (`\s+` before the subcommand).
+const CUT_GUARD_WORDS: [&str; 22] = [
+    "basic", "private", "rsa", "openssh", "ec", "dsa", "api", "base64", "npm", "pnpm", "yarn",
+    "bun", "pip", "pipx", "uv", "cargo", "go", "brew", "apt", "aptget", "dnf", "yum",
+];
+const PACKAGE_MANAGER_WORDS: [&str; 14] = [
+    "npm", "pnpm", "yarn", "bun", "pip", "pipx", "uv", "cargo", "go", "brew", "apt", "aptget",
+    "dnf", "yum",
+];
+const PACKAGE_MANAGER_SUBCOMMANDS: [&str; 7] = ["install", "add", "i", "get", "run", "create", "x"];
+
+/// Multi-line redaction for transcript records, which may exceed the
+/// single-call input bound. Line breaks are kept, other whitespace runs in a
+/// line collapse to one space, and the result is cut to `max_output_bytes`
+/// (at most [`MAX_INPUT_BYTES`]). Returns the text and whether anything was
+/// withheld.
+///
+/// Text longer than one sanitizer call is redacted in chunks. Soundness
+/// argument for the chunking:
+///
+/// 1. Private key blocks are removed from the whole bounded input first, so
+///    no armor or body is left to straddle a cut.
+/// 2. Chunks end only at a newline, which is dropped and re-joined. The
+///    URL passes never cross a newline, so the text every later pass reads
+///    (`U`) is the line-wise join of each line's URL-pass output, and a chunk
+///    redacts to its part of the whole when no later pattern match spans the
+///    newline. Every anchor (`^`, `$`, `\b`, the path lead and boundary
+///    classes, the encoded-candidate boundary) treats start or end of text
+///    like a newline.
+/// 3. A newline is cut only when, read on `U`, nothing can span it. Every
+///    construct that can is listed here with the condition that rules it
+///    out:
+///    - Assignment keys, separators and values joined by whitespace
+///      (`skip_assignment_whitespace` crosses newlines), flags, quoted and
+///      escape-decoded keys: the text before the newline must not end in a
+///      possible secret key (a key-character run ending in a secret word, a
+///      quote, or a token holding `\`), nor in `=`/`:` after one.
+///    - Block scalar continuation (indented or empty lines, including
+///      escape-decoded indentation): the next line must start with a
+///      character that is neither whitespace nor `\`.
+///    - The label, bearer, private-key-phrase, decoder and package-manager
+///      patterns (`\s+` between fixed words, and `(\s+\S+)?` after a
+///      subcommand): the line must not end in one of [`CUT_GUARD_WORDS`] or
+///      in a package-manager subcommand after a package-manager word.
+///    - Private key blocks decoded from encoded URLs (`\s` in the armor,
+///      `.*?` to the end): no block may be open at the cut and no partial
+///      armor may end the line.
+///    - Windows and POSIX directory components joined by whitespace: one
+///      side of the newline is a character no component holds, or no `/`
+///      or `\` lies between the chunk start and the cut without such a
+///      character in between, or none follows the cut before one.
+///
+///    Token, URL, path-file and blob patterns hold no whitespace.
+/// 4. Later passes cannot create a join: replacements end in `]` or keep
+///    their last character, and markers hold no path separator.
+/// 5. With no safe newline within the chunk bound, and at the input bound,
+///    the text fails closed: the cut fragment (quote aware) is dropped, then
+///    everything from the first `/`, `\` or `%` in the trailing run without
+///    a path-stopping character, so no visible text depends on what was cut.
+///
+/// The output is then re-redacted until it is a fixed point.
+#[doc(hidden)]
+pub fn redact_multiline_bounded(text: &str, max_output_bytes: usize) -> (String, bool) {
+    redact_multiline_with_limits(
+        text,
+        max_output_bytes,
+        MAX_INPUT_BYTES,
+        MAX_MULTILINE_INPUT_BYTES,
+    )
+}
+
+fn redact_multiline_with_limits(
+    text: &str,
+    max_output_bytes: usize,
+    chunk_limit: usize,
+    input_limit: usize,
+) -> (String, bool) {
+    let max_output_bytes = max_output_bytes.min(MAX_INPUT_BYTES);
+    if max_output_bytes == 0 {
+        return (String::new(), !text.is_empty());
+    }
+    let normalized = normalize_newlines(text);
+    let mut truncated = false;
+    let bounded = if normalized.len() > input_limit {
+        truncated = true;
+        fail_closed_prefix(&normalized[..floor_char_boundary(&normalized, input_limit)])
+    } else {
+        normalized.as_str()
+    };
+    let source = PRIVATE_KEY_BLOCK_RE.replace_all(bounded, REDACTED_SECRET);
+    let mut lines = MultilineSource::new(&source, chunk_limit);
+
+    let mut body = String::new();
+    let mut first = 0;
+    while first < lines.len() {
+        if first > 0 {
+            body.push('\n');
+        }
+        match lines.next_chunk(first) {
+            MultilineChunk::Rest => {
+                body.push_str(&redact_multiline_chunk(lines.raw(first, lines.len() - 1)));
+                break;
+            }
+            MultilineChunk::Cut(last) => {
+                body.push_str(&redact_multiline_chunk(lines.raw(first, last)));
+                first = last + 1;
+                if body.len() > max_output_bytes {
+                    truncated = true;
+                    break;
+                }
+            }
+            MultilineChunk::FailClosed(window) => {
+                body.push_str(&redact_multiline_chunk(fail_closed_prefix(window)));
+                truncated = true;
+                break;
+            }
+        }
+    }
+
+    let mut text = body;
+    for _ in 0..MAX_MULTILINE_FIXED_POINT_ROUNDS {
+        let (fitted, cut) = fit_multiline(&text, truncated, max_output_bytes);
+        truncated |= cut;
+        let again = redact_multiline_chunk(&fitted);
+        if again == fitted {
+            return (fitted, truncated);
+        }
+        text = again;
+    }
+    // No fixed point within the bound: withhold the text.
+    (fit_multiline("", true, max_output_bytes).0, true)
+}
+
+fn normalize_newlines(text: &str) -> String {
+    if !text.contains('\r') {
+        return text.to_owned();
+    }
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// One sanitizer call over a chunk within the input bound, then the
+/// transcript whitespace rule.
+fn redact_multiline_chunk(chunk: &str) -> String {
+    let redacted = redact_bounded(SanitizationContext::Evidence, chunk.to_owned(), &mut |_| {
+        Ok::<_, std::convert::Infallible>(())
+    })
+    .unwrap_or_else(|never| match never {});
+    collapse_intraline_whitespace(&redacted)
+}
+
+/// The URL passes of [`redact_bounded`], which every later pass reads.
+fn url_pass_line(line: &str) -> String {
+    let mut charge = |_: usize| Ok::<_, std::convert::Infallible>(());
+    let decoded =
+        redact_encoded_url_candidates(line, &mut charge).unwrap_or_else(|never| match never {});
+    redact_urls_at_depth(&decoded, 0, &mut charge).unwrap_or_else(|never| match never {})
+}
+
+fn collapse_intraline_whitespace(text: &str) -> String {
+    text.split('\n')
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Cut redacted text to `maximum`, never through a marker, and mark a cut or
+/// earlier truncation with the truncation suffix.
+fn fit_multiline(text: &str, truncated: bool, maximum: usize) -> (String, bool) {
+    let marked = !truncated || text.ends_with(TRUNCATED_SUFFIX);
+    if marked && text.len() <= maximum {
+        return (text.to_owned(), false);
+    }
+    if maximum <= TRUNCATED_SUFFIX.len() {
+        return (String::new(), true);
+    }
+    let room = maximum - TRUNCATED_SUFFIX.len() - 1;
+    let mut end = floor_char_boundary(text, room);
+    if end < text.len() {
+        let prefix = &text[..end];
+        if let Some(open) = prefix.rfind('[')
+            && !prefix[open..].contains(']')
+            && text[open..].contains(']')
+        {
+            end = open;
+        }
+    }
+    let kept = text[..end].trim_end();
+    let fitted = if kept.is_empty() {
+        TRUNCATED_SUFFIX.to_owned()
+    } else {
+        format!("{kept} {TRUNCATED_SUFFIX}")
+    };
+    (fitted, true)
+}
+
+/// Keep only text whose redaction cannot depend on what follows `window`:
+/// drop the fragment the cut falls in (quote aware), then everything from
+/// the first `/`, `\` or `%` in the trailing run that holds no character a
+/// path component excludes. A path or encoded URL that could continue past
+/// the cut therefore never shows a component.
+fn fail_closed_prefix(window: &str) -> &str {
+    let mut end = truncated_fragment_start(window).unwrap_or(window.len());
+    let run_start = window[..end]
+        .char_indices()
+        .rev()
+        .find(|(_, character)| is_path_stop(*character))
+        .map_or(0, |(offset, character)| offset + character.len_utf8());
+    if let Some(offset) = window[run_start..end].find(['/', '\\', '%']) {
+        end = run_start + offset;
+    }
+    &window[..end]
+}
+
+/// A character excluded from every Windows and POSIX path component, other
+/// than whitespace and separators.
+fn is_path_stop(character: char) -> bool {
+    matches!(
+        character,
+        '<' | '>'
+            | '"'
+            | '\''
+            | '`'
+            | ','
+            | ';'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | ':'
+            | '&'
+            | '|'
+    )
+}
+
+enum MultilineChunk<'a> {
+    /// The rest of the text fits one chunk.
+    Rest,
+    /// Cut after this line.
+    Cut(usize),
+    /// No safe cut within the bound: fail closed on this window.
+    FailClosed(&'a str),
+}
+
+struct MultilineSource<'a> {
+    text: &'a str,
+    /// Byte ranges of the lines, without their newlines.
+    lines: Vec<(usize, usize)>,
+    /// URL-pass output per line, computed on demand; `None` for a line
+    /// longer than a chunk, which is never read.
+    url_passed: Vec<Option<Option<String>>>,
+    chunk_limit: usize,
+}
+
+impl<'a> MultilineSource<'a> {
+    fn new(text: &'a str, chunk_limit: usize) -> Self {
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for (offset, _) in text.match_indices('\n') {
+            lines.push((start, offset));
+            start = offset + 1;
+        }
+        lines.push((start, text.len()));
+        let url_passed = vec![None; lines.len()];
+        Self {
+            text,
+            lines,
+            url_passed,
+            chunk_limit: chunk_limit.max(1),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn raw(&self, first: usize, last: usize) -> &'a str {
+        &self.text[self.lines[first].0..self.lines[last].1]
+    }
+
+    fn url_passed(&mut self, line: usize) -> Option<&str> {
+        if self.url_passed[line].is_none() {
+            let (start, end) = self.lines[line];
+            let passed =
+                (end - start <= self.chunk_limit).then(|| url_pass_line(&self.text[start..end]));
+            self.url_passed[line] = Some(passed);
+        }
+        self.url_passed[line]
+            .as_ref()
+            .and_then(|passed| passed.as_deref())
+    }
+
+    fn next_chunk(&mut self, first: usize) -> MultilineChunk<'a> {
+        let base = self.lines[first].0;
+        if self.text.len() - base <= self.chunk_limit {
+            return MultilineChunk::Rest;
+        }
+        let window = &self.text[base..floor_char_boundary(self.text, base + self.chunk_limit)];
+        let last_fitting = (first..self.lines.len() - 1)
+            .take_while(|line| self.lines[*line].1 - base <= self.chunk_limit)
+            .last();
+        let Some(last_fitting) = last_fitting else {
+            return MultilineChunk::FailClosed(window);
+        };
+        let mut left = String::new();
+        let mut left_ends = Vec::with_capacity(last_fitting + 1 - first);
+        for line in first..=last_fitting {
+            if line > first {
+                left.push('\n');
+            }
+            let passed = self
+                .url_passed(line)
+                .expect("a line inside a chunk is URL-passed");
+            left.push_str(passed);
+            left_ends.push(left.len());
+        }
+        for line in (first..=last_fitting).rev().take(MAX_CUT_PROBES) {
+            if self.cut_is_safe(&left[..left_ends[line - first]], line + 1) {
+                return MultilineChunk::Cut(line);
+            }
+        }
+        MultilineChunk::FailClosed(window)
+    }
+
+    /// Whether no later pass can match across the newline before `next`,
+    /// given `left`, the URL-pass output from the chunk start to it.
+    fn cut_is_safe(&mut self, left: &str, next: usize) -> bool {
+        let Some(first_next) = self.url_passed(next).and_then(|line| line.chars().next()) else {
+            return false;
+        };
+        // Block scalars continue over indented and empty lines; `\` may
+        // decode to indentation.
+        if first_next.is_whitespace() || first_next == '\\' {
+            return false;
+        }
+        let trimmed = left.trim_end();
+        let Some(last) = trimmed.chars().next_back() else {
+            return true;
+        };
+        if may_end_secret_key(trimmed) {
+            return false;
+        }
+        if matches!(last, '=' | ':') && may_end_secret_key(&trimmed[..trimmed.len() - 1]) {
+            return false;
+        }
+        let mut tokens = trimmed.split_whitespace().rev();
+        if let (Some(subcommand), Some(manager)) = (tokens.next(), tokens.next())
+            && PACKAGE_MANAGER_SUBCOMMANDS
+                .iter()
+                .any(|word| subcommand.eq_ignore_ascii_case(word))
+            && ends_with_guard_word(manager, &PACKAGE_MANAGER_WORDS)
+        {
+            return false;
+        }
+        if left.contains("-----") {
+            if PRIVATE_KEY_BLOCK_RE
+                .find_iter(left)
+                .any(|block| block.end() == left.len())
+            {
+                return false;
+            }
+            let before_armor_words = trimmed.trim_end_matches(|character: char| {
+                character.is_ascii_alphanumeric() || character.is_whitespace()
+            });
+            if before_armor_words.ends_with("-----") {
+                return false;
+            }
+        }
+        self.path_cannot_span(left, last, first_next, next)
+    }
+
+    /// A directory component joined over whitespace needs component
+    /// characters on both sides of the newline, a separator between the
+    /// chunk start and the newline, and one after it, with no character in
+    /// between that a component excludes.
+    fn path_cannot_span(&mut self, left: &str, last: char, first_next: char, next: usize) -> bool {
+        if is_path_stop(last) || last == '/' || is_path_stop(first_next) || first_next == '/' {
+            return true;
+        }
+        let separator_before = left
+            .chars()
+            .rev()
+            .find(|character| is_path_stop(*character) || matches!(character, '/' | '\\'))
+            .is_some_and(|character| matches!(character, '/' | '\\'));
+        if !separator_before {
+            return true;
+        }
+        let mut scanned = 0;
+        for line in next..self.lines.len() {
+            let Some(passed) = self.url_passed(line) else {
+                return false;
+            };
+            for character in passed.chars() {
+                if matches!(character, '/' | '\\') {
+                    return false;
+                }
+                if is_path_stop(character) {
+                    return true;
+                }
+            }
+            scanned += passed.len() + 1;
+            if scanned > MAX_CUT_PATH_SCAN_BYTES {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Whether `text` may end in a key the assignment scanner treats as secret,
+/// or a word the cross-line patterns continue from: a quote (a quoted key),
+/// a final token holding `\` (escape-decoded syntax), or a key-character run
+/// whose letters and digits end in a secret or guard word. Keys may start
+/// anywhere in the run, so a suffix match is enough.
+fn may_end_secret_key(text: &str) -> bool {
+    let text = text.trim_end();
+    let Some(last) = text.chars().next_back() else {
+        return false;
+    };
+    if matches!(last, '"' | '\'') {
+        return true;
+    }
+    let token_start = text
+        .char_indices()
+        .rev()
+        .find(|(_, character)| character.is_whitespace())
+        .map_or(0, |(offset, character)| offset + character.len_utf8());
+    if text[token_start..].contains('\\') {
+        return true;
+    }
+    ends_with_guard_word(text, &SECRET_KEY_WORDS) || ends_with_guard_word(text, &CUT_GUARD_WORDS)
+}
+
+/// Whether the letters and digits of the trailing key-character run of
+/// `text`, lowercased, end in one of `words`.
+fn ends_with_guard_word(text: &str, words: &[&str]) -> bool {
+    let mut run = text
+        .chars()
+        .rev()
+        .take_while(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+        })
+        .filter(char::is_ascii_alphanumeric)
+        .map(|character| character.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    run.reverse();
+    let run = run.into_iter().collect::<String>();
+    words.iter().any(|word| run.ends_with(word))
+}
+
 /// Evidence bytes shown before and after a hit when a field does not fit.
 const EXCERPT_BEFORE_BYTES: usize = 160;
 const EXCERPT_AFTER_BYTES: usize = 240;
@@ -5748,5 +6213,322 @@ safe=value"#,
             .is_err(),
             "quadratic key attempts still fail before unbounded work"
         );
+    }
+
+    #[test]
+    fn multiline_redaction_keeps_line_breaks_and_collapses_other_whitespace() {
+        use super::redact_multiline_bounded;
+
+        let (out, truncated) = redact_multiline_bounded("line   one\t\there\r\nline   two\n", 4096);
+        assert_eq!(out, "line one here\nline two\n");
+        assert!(!truncated);
+        let (again, _) = redact_multiline_bounded(&out, 4096);
+        assert!(again == out, "output is a fixed point");
+    }
+
+    #[test]
+    fn multiline_redaction_hides_a_token_across_an_internal_chunk_boundary() {
+        use super::{MAX_INPUT_BYTES, redact_multiline_bounded};
+
+        // Indented filler collapses, so a token that straddles the first
+        // chunk's input bound lands well inside the output cap.
+        let filler = format!("x{}\n", " ".repeat(60)).repeat(65);
+        let token = synthetic_token("ghp_", 40, 7);
+        let padding = " ".repeat(MAX_INPUT_BYTES - 16 - filler.len() - "alpha".len());
+        let input = format!("{filler}alpha{padding}{token} omega\n");
+        let token_start = filler.len() + "alpha".len() + padding.len();
+        assert!(token_start < MAX_INPUT_BYTES && token_start + token.len() > MAX_INPUT_BYTES);
+
+        let (out, truncated) = redact_multiline_bounded(&input, 4096);
+        assert!(!truncated, "the whole record fits the output cap");
+        assert!(out.ends_with("alpha [redacted-secret] omega\n"));
+        assert!(!shows_marker_window(&out, &token), "token window visible");
+    }
+
+    #[test]
+    fn multiline_redaction_fails_closed_on_an_unbroken_secret_line() {
+        use super::redact_multiline_bounded;
+
+        let secret = synthetic_letters(5000, 11);
+        let (out, truncated) = redact_multiline_bounded(&format!("api_key={secret}"), 4096);
+        assert!(truncated);
+        assert!(!shows_marker_window(&out, &secret), "secret window visible");
+        assert!(out.len() <= 4096);
+    }
+
+    /// A construct that can span a line, with the markers a single sanitizer
+    /// call hides.
+    struct SpanCase {
+        template: &'static str,
+        /// Whether one call is expected to hide every marker.
+        hidden: bool,
+    }
+
+    const SPAN_CASES: &[SpanCase] = &[
+        SpanCase {
+            template: "password\n= {M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "password =\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "api_key:\n\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "\"client_secret\"\n: \"{M}\"\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "--token\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "secret: |\n  {M}\n  {N}\nnext: plain\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "token: >\n\n  {M}\nafter\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "pass\\x77ord\\x3d\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "api_key: |\n\\x20{M}\nafter\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "npm install\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "pnpm\nadd {M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "Bearer\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "Basic\n\n{M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "-----BEGIN RSA PRIVATE KEY-----\n{M}\n{N}\n-----END RSA PRIVATE KEY-----\nafter\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "-----BEGIN\nPRIVATE KEY-----\n{M}\n{N}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "C:\\Users\\{M}\n{N}\\file.txt\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "/home/{M}\n{N}/notes.txt\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "~/{M}\n\n{N}/x\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "\\\\fileserver\\{M}\n{N}\\doc\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "see https://example.invalid/a?token={M}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "https%3A%2F%2Fexample.invalid%2F%20password%3D\n{M}\n",
+            hidden: false,
+        },
+        SpanCase {
+            template: "ghp_{M}{N}\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "x x x x x x x x x x x x x x x x x x x x /srv/{M} {N}/d y y y y y y y y y y y y y y y y y y\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "x x x x x x x x x x /srv/{M} {N} tail/d y y y y y y y y y y y y y y y y y y\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "/srv/{M}\n{N} tail/d y y y y y y y y y y y y y y y y y y y y y y y y y y y y y\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "C:\\Data\\{M} {N} tail\\d y y y y y y y y y y y y y y y y y y y y y y y y\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "y y y y y y y y y y y y y y y y y y y y password=\"{M} {N}\" z z z z z z z z z z z z z z\n",
+            hidden: true,
+        },
+        SpanCase {
+            template: "w w w w w w w w w w w w w w w w w w w w w w w w Bearer {M} v v v v v v v v v v v\n",
+            hidden: true,
+        },
+    ];
+
+    const MARKER_FIELDS: [&str; 2] = ["{M}", "{N}"];
+    const MARKER_WINDOW: usize = 6;
+
+    /// Deterministic mixed-case letters: never an encoded blob or token on
+    /// their own, so only the construct around them hides them.
+    fn synthetic_letters(length: usize, seed: u64) -> String {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        (0..length)
+            .map(|index| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let letter = b'a' + u8::try_from(state % 26).expect("letter offset");
+                char::from(if index == 0 || (index % 3 == 1 && index != 1) {
+                    letter.to_ascii_uppercase()
+                } else {
+                    letter
+                })
+            })
+            .collect()
+    }
+
+    fn synthetic_token(prefix: &str, length: usize, seed: u64) -> String {
+        format!("{prefix}{}", synthetic_letters(length, seed))
+    }
+
+    fn shows_marker_window(output: &str, marker: &str) -> bool {
+        marker
+            .as_bytes()
+            .windows(MARKER_WINDOW)
+            .any(|window| output.contains(std::str::from_utf8(window).expect("ASCII marker")))
+    }
+
+    fn span_case_input(case: &SpanCase, case_index: usize, lead: usize) -> (String, Vec<String>) {
+        let markers = (0..MARKER_FIELDS.len())
+            .map(|field| synthetic_letters(16, (case_index * 7 + field + 1) as u64))
+            .collect::<Vec<_>>();
+        let mut construct = case.template.to_owned();
+        for (field, marker) in MARKER_FIELDS.iter().zip(&markers) {
+            construct = construct.replace(field, marker);
+        }
+        // The lead shifts the construct, and every cut inside it, against
+        // the chunk bounds.
+        let input = format!(
+            "fill line\nfill line\n{} {construct}fill line\nfill end\n",
+            "p".repeat(lead)
+        );
+        (input, markers)
+    }
+
+    #[test]
+    fn multiline_chunk_cuts_never_show_what_one_call_hides() {
+        use super::{MAX_INPUT_BYTES, MAX_MULTILINE_INPUT_BYTES, redact_multiline_with_limits};
+
+        const CHUNKS: [usize; 4] = [24, 41, 64, 97];
+        for (case_index, case) in SPAN_CASES.iter().enumerate() {
+            for lead in 0..CHUNKS[CHUNKS.len() - 1] {
+                let (input, markers) = span_case_input(case, case_index, lead);
+                assert!(input.len() <= MAX_INPUT_BYTES);
+                let (single, _) = redact_multiline_with_limits(
+                    &input,
+                    MAX_INPUT_BYTES,
+                    MAX_INPUT_BYTES,
+                    MAX_MULTILINE_INPUT_BYTES,
+                );
+                for chunk in CHUNKS.into_iter().filter(|chunk| lead < *chunk) {
+                    let (chunked, _) = redact_multiline_with_limits(
+                        &input,
+                        MAX_INPUT_BYTES,
+                        chunk,
+                        MAX_MULTILINE_INPUT_BYTES,
+                    );
+                    for (field, marker) in MARKER_FIELDS.iter().zip(&markers) {
+                        if !case.template.contains(field) {
+                            continue;
+                        }
+                        let hidden = !shows_marker_window(&single, marker);
+                        assert!(
+                            hidden || !case.hidden,
+                            "case {case_index} field {field}: one call does not hide it"
+                        );
+                        assert!(
+                            !hidden || !shows_marker_window(&chunked, marker),
+                            "case {case_index}/{chunk}/{lead} field {field}: chunked output shows it"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multiline_input_cut_never_shows_what_one_call_hides() {
+        use super::{MAX_INPUT_BYTES, MAX_MULTILINE_INPUT_BYTES, redact_multiline_with_limits};
+
+        for (case_index, case) in SPAN_CASES.iter().enumerate() {
+            let (input, markers) = span_case_input(case, case_index, 3);
+            let (single, _) = redact_multiline_with_limits(
+                &input,
+                MAX_INPUT_BYTES,
+                MAX_INPUT_BYTES,
+                MAX_MULTILINE_INPUT_BYTES,
+            );
+            for input_limit in 1..input.len() {
+                let (cut, truncated) =
+                    redact_multiline_with_limits(&input, MAX_INPUT_BYTES, 41, input_limit);
+                assert!(
+                    truncated,
+                    "case {case_index}/{input_limit}: cut not reported"
+                );
+                for (field, marker) in MARKER_FIELDS.iter().zip(&markers) {
+                    if case.template.contains(field) && !shows_marker_window(&single, marker) {
+                        assert!(
+                            !shows_marker_window(&cut, marker),
+                            "case {case_index}/{input_limit} field {field}: input cut shows it"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multiline_output_is_a_fixed_point_and_within_the_cap() {
+        use super::{
+            MAX_MULTILINE_INPUT_BYTES, redact_multiline_bounded, redact_multiline_with_limits,
+        };
+
+        for (case_index, case) in SPAN_CASES.iter().enumerate() {
+            let (input, _) = span_case_input(case, case_index, 5);
+            for maximum in [64, 100, 4096] {
+                let (out, truncated) =
+                    redact_multiline_with_limits(&input, maximum, 41, MAX_MULTILINE_INPUT_BYTES);
+                assert!(
+                    out.len() <= maximum,
+                    "case {case_index}/{maximum}: over the cap"
+                );
+                let (again, _) = redact_multiline_bounded(&out, maximum);
+                // Compared without printing either side: both can hold markers.
+                assert!(
+                    again == out,
+                    "case {case_index}/{maximum}: not a fixed point"
+                );
+                if truncated {
+                    assert!(
+                        out.ends_with("[truncated]"),
+                        "case {case_index}/{maximum}: unmarked cut"
+                    );
+                }
+            }
+        }
     }
 }

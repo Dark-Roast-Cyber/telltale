@@ -9,7 +9,7 @@ use telltale_schema::record::RecordKind;
 
 use crate::source_read::{
     BoundedReadError, PRODUCTION_NATIVE_UNITS, PRODUCTION_RECORD_BYTES, PRODUCTION_SOURCE_BYTES,
-    SourceReadError, bounded_file_bytes, resolved_file_bytes,
+    SourceReadError, anchored_file_bytes, bounded_file_bytes, resolved_file_bytes,
 };
 use telltale_schema::clients::ClientId;
 use telltale_schema::source::Source;
@@ -78,6 +78,9 @@ pub(crate) fn extract_copilot_native_events_with(
 ) -> Result<Vec<CopilotNativeEvent>, SourceReadError> {
     let bytes = match access {
         SourceAccess::Resolved => resolved_file_bytes(&source.path, PRODUCTION_SOURCE_BYTES),
+        SourceAccess::Anchored(anchored) => {
+            anchored_file_bytes(anchored.root, &source.path, anchored.max_bytes)
+        }
         _ => bounded_file_bytes(&source.path, PRODUCTION_SOURCE_BYTES),
     }
     .map_err(SourceReadError::Bounded)?;

@@ -931,6 +931,29 @@ pub fn opencode_database_override(
     Ok(path)
 }
 
+/// Check an SQLite store and its journal sidecars (`-wal`, `-shm`,
+/// `-journal`) under the trust anchors bounded discovery of `root` uses: the
+/// store must be a regular file and each present sidecar too, every one
+/// reached without following a link (a link is `SymlinkRoot`, another kind of
+/// node `Traversal`). `false` when the store is absent. SQLite opens these
+/// files by name afterwards, so a replacement made between this check and
+/// that open is not refused.
+#[doc(hidden)]
+pub fn check_sqlite_store(root: &Path, path: &Path) -> Result<bool, BoundedDiscoveryError> {
+    let anchors = trust_anchors(root);
+    let mut remaining = usize::MAX;
+    if !inspect_opencode_path(path, &anchors, &mut remaining, false)? {
+        return Ok(false);
+    }
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(suffix);
+        let mut remaining = usize::MAX;
+        inspect_opencode_path(Path::new(&sidecar), &anchors, &mut remaining, false)?;
+    }
+    Ok(true)
+}
+
 /// Caller-approved starting directory for no-follow traversal: an explicit
 /// root, or in environment mode the home directory. It is resolved to its real
 /// location once, so administrator aliases at or above it (a linked `/home`,

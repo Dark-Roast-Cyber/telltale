@@ -265,7 +265,9 @@ fn production_jsonl_reads_growth_after_opened_file_metadata() {
     assert_eq!(reader.metadata().unwrap().len(), 3);
     let mut writer = fs::OpenOptions::new().append(true).open(&path).unwrap();
     writer.write_all(&vec![b' '; RECORD_BYTES + 1]).unwrap();
-    assert!(read_production_jsonl(reader).is_err());
+    assert!(
+        read_production_jsonl(reader, PRODUCTION_SOURCE_BYTES, production_limit_error).is_err()
+    );
 }
 
 #[test]
@@ -288,7 +290,7 @@ fn production_jsonl_short_reads_interruption_and_utf8_boundary() {
         interrupted: false,
     };
     assert_eq!(
-        read_production_jsonl(reader).unwrap(),
+        read_production_jsonl(reader, PRODUCTION_SOURCE_BYTES, production_limit_error).unwrap(),
         (vec![serde_json::json!("é中"), serde_json::json!({})], 16)
     );
 }
