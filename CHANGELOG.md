@@ -236,6 +236,13 @@
   that takes more reading than its bound allows is read as command text
   instead of failing its source.
 
+- **MCP usage is attributed for tools named `mcp__<server>__<tool>`.** A
+  tool call under that name is attributed to the configured server it spells
+  out, when that server declares the tool. Before, only a call under the
+  bare declared tool name was attributed. A name that joins server and tool
+  with a single separator is not read: a built-in tool can have the same
+  name.
+
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
   `rule_id` names no loaded rule or chain is left out and the other entries

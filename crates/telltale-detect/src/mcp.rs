@@ -96,6 +96,8 @@ pub fn project_mcp_usage(
 #[derive(Debug, Default)]
 struct McpToolIndex<'a> {
     tools: BTreeMap<(ClientId, String), Vec<&'a McpServerInventory>>,
+    /// The same tools under the server that declares each one.
+    server_tools: BTreeMap<(ClientId, String, String), Vec<&'a McpServerInventory>>,
 }
 
 impl<'a> McpToolIndex<'a> {
@@ -107,7 +109,13 @@ impl<'a> McpToolIndex<'a> {
                 .iter()
                 .map(|name| normalize_tool_name(name))
                 .collect::<BTreeSet<_>>();
+            let server_name = normalize_tool_name(&server.server_name);
             for tool_name in tools {
+                index
+                    .server_tools
+                    .entry((server.client, server_name.clone(), tool_name.clone()))
+                    .or_default()
+                    .push(server);
                 index
                     .tools
                     .entry((server.client, tool_name))
@@ -122,10 +130,27 @@ impl<'a> McpToolIndex<'a> {
         self.tools.is_empty()
     }
 
+    /// The servers a tool name belongs to: every server declaring the name as
+    /// it stands, or the one server a `mcp__<server>__<tool>` name spells out.
+    /// That wrapping is the only one read. A harness that joins the two names
+    /// with a single separator gives a name a built-in tool can also have, so
+    /// such a name is attributed to no server.
     fn lookup(&self, client: ClientId, tool_name: &str) -> Option<&[&'a McpServerInventory]> {
-        self.tools
-            .get(&(client, normalize_tool_name(tool_name)))
-            .map(Vec::as_slice)
+        let name = normalize_tool_name(tool_name);
+        let wrapped = name.strip_prefix("mcp__").map(str::to_owned);
+        if let Some(servers) = self.tools.get(&(client, name)) {
+            return Some(servers);
+        }
+        let wrapped = wrapped?;
+        // Either name may itself hold the separator.
+        wrapped.match_indices("__").find_map(|(at, separator)| {
+            let key = (
+                client,
+                wrapped[..at].to_owned(),
+                wrapped[at + separator.len()..].to_owned(),
+            );
+            self.server_tools.get(&key).map(Vec::as_slice)
+        })
     }
 }
 
@@ -418,6 +443,61 @@ mod tests {
                 check_serialized_event_markers(&bytes, "mcp", &markers).is_ok(),
                 "MCP event retained a controlled marker"
             );
+        }
+    }
+
+    #[test]
+    fn a_wrapped_tool_name_belongs_to_the_server_it_spells_out() {
+        let server = |name: &str, tools: &[&str]| McpServerInventory {
+            client: ClientId::Claude,
+            source_id: "claude.mcp_config".to_string(),
+            path: PathBuf::from("/synthetic/mcp.json"),
+            server_name: name.to_string(),
+            transport: Some("stdio".to_string()),
+            command: None,
+            package: None,
+            url_host: None,
+            arg_count: 0,
+            env_keys: Vec::new(),
+            declared_tools: tools.iter().map(|tool| tool.to_string()).collect(),
+            supported: true,
+            unsupported_reason: None,
+        };
+        let servers = [
+            server("synthetic-docs", &["search_pages"]),
+            server("synthetic-wiki", &["search_pages", "edit__page"]),
+            server("web", &["search"]),
+        ];
+        let index = McpToolIndex::from_servers(&servers);
+        let names = |tool: &str| {
+            index
+                .lookup(ClientId::Claude, tool)
+                .unwrap_or_default()
+                .iter()
+                .map(|server| server.server_name.as_str())
+                .collect::<Vec<_>>()
+        };
+
+        // A bare name belongs to every server that declares it, as before.
+        assert_eq!(names("search_pages"), ["synthetic-docs", "synthetic-wiki"]);
+        // A wrapped name belongs to its server alone.
+        assert_eq!(
+            names("mcp__synthetic-docs__search_pages"),
+            ["synthetic-docs"]
+        );
+        assert_eq!(
+            names("MCP__Synthetic-Wiki__Search_Pages"),
+            ["synthetic-wiki"]
+        );
+        assert_eq!(names("mcp__synthetic-wiki__edit__page"), ["synthetic-wiki"]);
+        // A server that does not declare the tool, or is not configured.
+        assert!(names("mcp__web__search_pages").is_empty());
+        assert!(names("mcp__absent__search_pages").is_empty());
+        // Another client's configuration is not this client's.
+        assert!(index.lookup(ClientId::Codex, "mcp__web__search").is_none());
+        // A single separator is not read: `web_search` is a built-in's name.
+        for unread in ["web_search", "web-search", "web/search", "web:search"] {
+            assert!(names(unread).is_empty(), "{unread}");
         }
     }
 
