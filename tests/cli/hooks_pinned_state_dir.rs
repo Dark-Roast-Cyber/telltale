@@ -113,14 +113,13 @@ impl Install {
     }
 
     /// Send `payload` to the hook `command` through `sh -c`, after `launch`
-    /// changed the environment: the verdict (none means the call runs) and
-    /// the hook's stderr.
-    fn send(
+    /// changed the environment: exit status, stdout and stderr.
+    fn output(
         &self,
         command: &str,
         payload: &Value,
         launch: impl Fn(&mut Command),
-    ) -> (Option<String>, String) {
+    ) -> (i32, String, String) {
         let mut hook = Command::new("sh");
         hook.arg("-c").arg(command);
         self.environment(&mut hook);
@@ -138,8 +137,23 @@ impl Install {
             .write_all(&serde_json::to_vec(payload).unwrap())
             .unwrap();
         let out = child.wait_with_output().unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        let stdout = String::from_utf8_lossy(&out.stdout);
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    /// Send `payload` to the hook `command` through `sh -c`, after `launch`
+    /// changed the environment: the verdict (none means the call runs) and
+    /// the hook's stderr.
+    fn send(
+        &self,
+        command: &str,
+        payload: &Value,
+        launch: impl Fn(&mut Command),
+    ) -> (Option<String>, String) {
+        let (_code, stdout, stderr) = self.output(command, payload, launch);
         let verdict = (!stdout.trim().is_empty()).then(|| {
             let output: Value = serde_json::from_str(stdout.trim()).unwrap();
             output["hookSpecificOutput"]["permissionDecision"]
@@ -283,6 +297,45 @@ fn an_unusable_pinned_state_dir_is_answered_strictly_and_writes_nowhere_else() {
     ] {
         let (verdict, stderr) = install.pre(&command, "toolu_ls", "ls", launch);
         assert_eq!(verdict.as_deref(), Some("deny"), "{command}\n{stderr}");
+    }
+    assert_eq!(files(&install.elsewhere()), Vec::<PathBuf>::new());
+    assert!(!install.home().join(".local").exists());
+}
+
+/// The same unusable state directory in observe mode is no answer: empty
+/// stdout, exit 0, and the error record written to the records file the
+/// settings name (the state directory cannot hold it) has no verdict. Nothing
+/// is written where a moved launch points.
+#[test]
+fn an_unusable_pinned_state_dir_in_observe_mode_answers_nothing() {
+    let install = Install::new("a file/state");
+    std::fs::write(install.state.parent().unwrap(), "not a directory").unwrap();
+    let records = install.base.path().join("records.jsonl");
+    install.configure(&format!(
+        "  mode: observe\n  on_error: deny\n  on_unevaluable: deny\n  telemetry_path: '{}'\n",
+        records.display()
+    ));
+    let command = install.generated_command();
+    let mut payload = common::template("PreToolUse", Some("Bash"));
+    payload["tool_use_id"] = "toolu_ls".into();
+    payload["tool_input"] = json!({"command": "ls", "description": "test"});
+    for launch in [
+        Box::new(|_: &mut Command| {}) as Box<dyn Fn(&mut Command)>,
+        Box::new(install.moved()),
+    ] {
+        let (code, stdout, stderr) = install.output(&command, &payload, launch);
+        assert_eq!((code, stdout.as_str()), (0, ""), "{command}\n{stderr}");
+    }
+    let telemetry = std::fs::read_to_string(&records).unwrap_or_default();
+    let parsed: Vec<Value> = telemetry
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(parsed.len(), 2, "{telemetry}");
+    for record in &parsed {
+        assert_eq!(record["kind"], "error", "{record}");
+        assert_eq!(record["error_code"], "state_dir_create_failed", "{record}");
+        assert!(record.get("decision").is_none(), "{record}");
     }
     assert_eq!(files(&install.elsewhere()), Vec::<PathBuf>::new());
     assert!(!install.home().join(".local").exists());
