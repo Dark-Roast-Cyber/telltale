@@ -12,7 +12,7 @@ use crate::common;
 
 use common::Harness;
 use serde_json::{Map, Value, json};
-use telltale_core::hooks::config::{Config, OnError};
+use telltale_core::hooks::config::{Config, Mode, OnError};
 use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::runtime::{Completion, Context, Event, Response, ToolCall};
 use telltale_core::hooks::state::Verdict;
@@ -1158,6 +1158,34 @@ fn a_session_locked_past_the_wait_gets_the_strict_policy() {
     }
 }
 
+/// The same lock, not acquired before its wait, in observe mode. The wait is
+/// zero and the lock is already held, so this is the `open_within` timeout
+/// the enforcing test waits out, without sleeping. Nothing is returned; the
+/// error record has no verdict.
+#[test]
+fn a_session_lock_timeout_in_observe_mode_returns_nothing() {
+    let limits = Limits {
+        session_lock_wait: std::time::Duration::ZERO,
+        ..common::no_deadline()
+    };
+    let mut h = Harness::with_limits(limits, |config| {
+        config.mode = Mode::Observe;
+        config.on_error = OnError::Deny;
+        config.on_unevaluable = OnError::Deny;
+    });
+    let holder = session_handle(&h);
+    let response = pre(&mut h, true, "late", command(EXFIL));
+    drop(holder);
+    assert_eq!(response, Response::None);
+    let errors = h.records("error");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0]["kind"], "error");
+    assert_eq!(errors[0]["error_code"], "state_lock_timeout");
+    assert_eq!(errors[0]["action"]["tool_use_id"], "late");
+    assert!(errors[0].get("decision").is_none(), "{errors:#?}");
+    assert!(h.records("decision").is_empty());
+}
+
 /// The wait for a session's lock is cut to what remains of the hook's
 /// deadline: past it, the call gets the strict policy without waiting out the
 /// lock wait (here a minute).
@@ -1208,6 +1236,31 @@ fn a_call_past_the_hook_deadline_records_no_decision() {
         assert_eq!(errors[0]["action"]["tool_use_id"], "late");
         assert!(h.records("decision").is_empty());
     }
+}
+
+/// The same deadline, already past, in observe mode: the strictest failure
+/// policies are recorded and not returned.
+#[test]
+fn a_call_past_the_hook_deadline_in_observe_mode_returns_nothing() {
+    let past = Limits {
+        hook_deadline: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    let mut h = Harness::with_limits(past, |config| {
+        config.mode = Mode::Observe;
+        config.on_error = OnError::Deny;
+        config.on_unevaluable = OnError::Deny;
+    });
+    let response = pre(&mut h, true, "late", command(EXFIL));
+    assert_eq!(response, Response::None);
+    assert_eq!(journal_len(&h), 0);
+    let errors = h.records("error");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0]["kind"], "error");
+    assert_eq!(errors[0]["error_code"], "hook_deadline");
+    assert_eq!(errors[0]["action"]["tool_use_id"], "late");
+    assert!(errors[0].get("decision").is_none(), "{errors:#?}");
+    assert!(h.records("decision").is_empty());
 }
 
 #[test]

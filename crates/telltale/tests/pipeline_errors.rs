@@ -1,7 +1,5 @@
 use std::error::Error;
-use telltale_core::{
-    DiscoveryError, ObservationError, Pipeline, PipelineError, RuleV1CompileError,
-};
+use telltale_core::{DiscoveryError, ObservationError, Pipeline, PipelineError, RuleCompileError};
 
 const RULE: &str = r#"
 title: synthetic
@@ -201,8 +199,8 @@ fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
     assert!(matches!(
         error
             .source()
-            .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-        Some(RuleV1CompileError::UnmappableDetectionClass)
+            .and_then(|cause| cause.downcast_ref::<RuleCompileError>()),
+        Some(RuleCompileError::UnmappableDetectionClass)
     ));
     assert!(pipeline.scan_sources(&[])?.is_empty());
     assert!(pipeline.scan_sources_with_occurrences(&[])?.is_empty());
@@ -224,7 +222,7 @@ fn pipeline_error_typed_conversions_preserve_sources_and_display() {
         .unwrap_err();
     let errors: [PipelineError; 5] = [
         discovery.into(),
-        RuleV1CompileError::ScoreOutOfRange.into(),
+        RuleCompileError::ScoreOutOfRange.into(),
         observation.into(),
         clock.into(),
         PipelineError::Compilation(Box::new(std::io::Error::other(

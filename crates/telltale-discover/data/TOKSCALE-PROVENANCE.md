@@ -88,7 +88,8 @@ Linux-specific VS Code storage candidates and the macOS Devin Desktop path are
 not applied to other platform contexts. Fx is Unix-only. Unknown platform
 contexts produce unverified candidates. Other candidate paths remain explicitly
 `upstream_candidate_only`; these are not native platform qualification claims.
-The no-follow execution backend currently supports Unix only; native Windows
-execution returns a typed unsupported-platform error without filesystem work.
+Inventory uses descriptor-relative metadata probes on Unix and handle-relative
+probes on Windows. Other execution platforms return a typed unsupported-platform
+error without filesystem work.
 Synthetic non-Linux platform contexts on Unix exercise path resolution only,
 not native macOS/Windows qualification.

@@ -2782,7 +2782,7 @@ overrides:
         .compatibility_export();
     assert_eq!(
         compile_rule_v1(&export).unwrap_err(),
-        RuleV1CompileError::UnmappableDetectionClass
+        RuleCompileError::UnmappableDetectionClass
     );
 }
 

@@ -1,11 +1,12 @@
 //! Bounded, exact-candidate metadata inventory with explicit caller-owned roots.
 //!
 //! No environment lookup, traversal, source-file reads, execution, or network.
-//! Each metadata/access operation is charged before it runs, including every
-//! checked root and ancestor. Static candidate lists have at most two entries
-//! per product. Unix probes are descriptor-relative, refusing symlinks at every
-//! step even when ancestors are replaced during collection. Other execution
-//! platforms return `UnsupportedExecutionPlatform` without filesystem access.
+//! Each system call that resolves a name is charged before it runs, including
+//! every checked root and ancestor. Static candidate lists have at most two
+//! entries per product. Unix and Windows probes are handle-relative, refusing
+//! symlinks and name-surrogate reparse points at every step even when
+//! ancestors are replaced during collection. Other execution platforms return
+//! `UnsupportedExecutionPlatform` without filesystem access.
 
 use crate::catalog::{
     ArtifactKind, CandidatePlatform, CandidateType, CatalogEntry, CatalogRoot, TOKSCALE_REVISION,
@@ -18,7 +19,7 @@ use crate::record::{
 };
 use serde::Serialize;
 use std::fmt;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -116,13 +117,13 @@ impl fmt::Display for InventoryError {
 impl std::error::Error for InventoryError {}
 
 struct Budget {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     max: u32,
     used: u32,
     exhausted: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Budget {
     fn charge(&mut self) -> Result<(), CandidateOutcome> {
         if self.used == self.max {
@@ -134,7 +135,7 @@ impl Budget {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn io_outcome(error: io::Error) -> CandidateOutcome {
     match error.kind() {
         io::ErrorKind::NotFound => CandidateOutcome::NotFoundInCheckedCandidate,
@@ -162,9 +163,13 @@ fn valid_root(path: &Path) -> bool {
     path.is_absolute()
         && !path.as_os_str().as_encoded_bytes().contains(&0)
         && path.components().count() <= MAX_ROOT_COMPONENTS
-        && !path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        && !path.components().any(|component| match component {
+            Component::ParentDir | Component::CurDir => true,
+            // Rust treats `.` and `..` inside Windows `\\?\` verbatim paths as
+            // `Component::Normal`, so reject them explicitly as well.
+            Component::Normal(name) => name == "." || name == "..",
+            _ => false,
+        })
 }
 
 fn validate_root(
@@ -334,7 +339,7 @@ pub fn discover(
     observed_at_unix_ms: u64,
     limits: InventoryLimits,
 ) -> Result<InventorySnapshot, InventoryError> {
-    if !cfg!(unix) {
+    if !(cfg!(unix) || cfg!(windows)) {
         return Err(InventoryError {
             root: None,
             kind: InventoryErrorKind::UnsupportedExecutionPlatform,
@@ -347,7 +352,7 @@ pub fn discover(
         });
     }
     let mut budget = Budget {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         max: limits.max_checks,
         used: 0,
         exhausted: false,
@@ -573,7 +578,253 @@ mod backend {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+mod backend {
+    use super::*;
+    use crate::anchored::Kind;
+    use crate::anchored::windows as windows_anchored;
+    use std::ffi::OsStr;
+
+    pub(super) type Directory = windows_anchored::Directory;
+
+    /// Win32 `ERROR_DIRECTORY`: a non-directory was used as an ancestor.
+    const ERROR_DIRECTORY: i32 = 267;
+
+    fn win_io_outcome(error: io::Error) -> CandidateOutcome {
+        if error.raw_os_error() == Some(ERROR_DIRECTORY) {
+            return CandidateOutcome::WrongType;
+        }
+        io_outcome(error)
+    }
+
+    fn opened(
+        result: Result<windows_anchored::Opened, CandidateOutcome>,
+    ) -> Result<(Kind, Option<Directory>), CandidateOutcome> {
+        match result? {
+            Err(error) => Err(win_io_outcome(error)),
+            Ok((Kind::Link, _)) => Err(CandidateOutcome::SymlinkRefused),
+            Ok(opened) => Ok(opened),
+        }
+    }
+
+    fn open_step(
+        parent: &Directory,
+        name: &OsStr,
+        budget: &mut Budget,
+    ) -> Result<(Kind, Option<Directory>), CandidateOutcome> {
+        opened(windows_anchored::open_child(parent, name, &mut || {
+            budget.charge()
+        }))
+    }
+
+    fn descend(
+        parent: &Directory,
+        child: &OsStr,
+        budget: &mut Budget,
+    ) -> Result<Directory, CandidateOutcome> {
+        match open_step(parent, child, budget)? {
+            (Kind::Directory, Some(dir)) => Ok(dir),
+            _ => Err(CandidateOutcome::WrongType),
+        }
+    }
+
+    pub(super) fn open_root(
+        path: &Path,
+        budget: &mut Budget,
+    ) -> Result<Directory, CandidateOutcome> {
+        let mut prefix = PathBuf::new();
+        let mut names = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => prefix.push(component.as_os_str()),
+                Component::Normal(name) => names.push(name),
+                _ => return Err(CandidateOutcome::MetadataUnavailable),
+            }
+        }
+        if prefix.as_os_str().is_empty() {
+            return Err(CandidateOutcome::MetadataUnavailable);
+        }
+        let root = opened(windows_anchored::open_root(&prefix, &mut || {
+            budget.charge()
+        }))?;
+        let mut directory = match root {
+            (Kind::Directory, Some(dir)) => dir,
+            _ => return Err(CandidateOutcome::WrongType),
+        };
+        for name in names {
+            directory = descend(&directory, name, budget)?;
+        }
+        Ok(directory)
+    }
+
+    pub(super) fn probe(
+        base: &Directory,
+        relative: &Path,
+        expected: CandidateType,
+        budget: &mut Budget,
+    ) -> CandidateOutcome {
+        let mut current = None;
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let parent = current.as_ref().unwrap_or(base);
+            if components.peek().is_some() {
+                match descend(parent, component.as_os_str(), budget) {
+                    Ok(directory) => current = Some(directory),
+                    Err(outcome) => return outcome,
+                }
+            } else {
+                return match open_step(parent, component.as_os_str(), budget) {
+                    Ok((Kind::Directory, _)) if expected == CandidateType::Directory => {
+                        CandidateOutcome::IndicatorPresent
+                    }
+                    Ok((Kind::File, _)) if expected == CandidateType::File => {
+                        CandidateOutcome::IndicatorPresent
+                    }
+                    Ok(_) => CandidateOutcome::WrongType,
+                    Err(outcome) => outcome,
+                };
+            }
+        }
+        CandidateOutcome::WrongType
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::process::Command;
+
+        fn home() -> (tempfile::TempDir, PathBuf) {
+            let parent = std::env::temp_dir().canonicalize().unwrap();
+            let temp = tempfile::tempdir_in(parent).unwrap();
+            let home = temp.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            (temp, home)
+        }
+
+        fn junction(link: &Path, target: &Path) {
+            let status = Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .status()
+                .expect("mklink");
+            assert!(status.success(), "mklink /J failed");
+        }
+
+        fn pi_outcome(home: PathBuf) -> CandidateOutcome {
+            let context = InventoryContext::from_home(home, Platform::Windows);
+            let snapshot = discover(&context, 1234, InventoryLimits::default()).unwrap();
+            let pi = snapshot
+                .entries()
+                .iter()
+                .find(|entry| entry.id() == "pi")
+                .unwrap();
+            pi.candidates()[0].outcome()
+        }
+
+        #[test]
+        fn each_step_of_the_walk_is_one_charged_open() {
+            let (_temp, home) = home();
+            let sessions = Path::new(".pi").join("agent").join("sessions");
+            std::fs::create_dir_all(home.join(&sessions)).unwrap();
+            std::fs::write(home.join("file"), b"synthetic").unwrap();
+            let names = home
+                .components()
+                .filter(|component| matches!(component, Component::Normal(_)))
+                .count() as u32;
+            let mut budget = Budget {
+                max: u32::MAX,
+                used: 0,
+                exhausted: false,
+            };
+
+            // The volume root, then every component below it.
+            let root = open_root(&home, &mut budget).unwrap();
+            assert_eq!(budget.used, 1 + names);
+
+            let mut spent = |relative: &Path, expected| {
+                let before = budget.used;
+                let outcome = probe(&root, relative, expected, &mut budget);
+                (outcome, budget.used - before)
+            };
+            assert_eq!(
+                spent(&sessions, CandidateType::Directory),
+                (CandidateOutcome::IndicatorPresent, 3)
+            );
+            assert_eq!(
+                spent(&sessions, CandidateType::File),
+                (CandidateOutcome::WrongType, 3)
+            );
+            // A missing or non-directory ancestor ends the probe at its own open.
+            assert_eq!(
+                spent(&Path::new("absent").join("agent"), CandidateType::File),
+                (CandidateOutcome::NotFoundInCheckedCandidate, 1)
+            );
+            assert_eq!(
+                spent(&Path::new("file").join("inside"), CandidateType::File),
+                (CandidateOutcome::WrongType, 1)
+            );
+
+            // The open the budget cannot pay for is not made.
+            let mut tight = Budget {
+                max: 2,
+                used: 0,
+                exhausted: false,
+            };
+            assert_eq!(
+                probe(&root, &sessions, CandidateType::Directory, &mut tight),
+                CandidateOutcome::CheckLimitReached
+            );
+            assert_eq!((tight.used, tight.exhausted), (2, true));
+        }
+
+        #[test]
+        fn a_candidate_junction_is_refused() {
+            let (temp, home) = home();
+            let outside = temp.path().join("outside");
+            std::fs::create_dir_all(outside.join("agent").join("sessions")).unwrap();
+            junction(&home.join(".pi"), &outside);
+            assert_eq!(pi_outcome(home), CandidateOutcome::SymlinkRefused);
+        }
+
+        #[test]
+        fn a_root_reached_through_a_junction_is_refused() {
+            let (temp, home) = home();
+            let alias = temp.path().join("alias");
+            junction(&alias, &home);
+            let context = InventoryContext::from_home(alias, Platform::Windows);
+            let error = discover(&context, 1234, InventoryLimits::default()).unwrap_err();
+            assert_eq!(error.kind, InventoryErrorKind::SymlinkRefused);
+        }
+
+        #[test]
+        fn a_file_where_a_candidate_directory_belongs_is_the_wrong_type() {
+            let (_temp, home) = home();
+            std::fs::write(home.join(".pi"), b"synthetic").unwrap();
+            assert_eq!(pi_outcome(home), CandidateOutcome::WrongType);
+        }
+
+        #[test]
+        fn a_budget_spent_on_the_root_fails_without_a_snapshot() {
+            let (_temp, home) = home();
+            let context = InventoryContext::from_home(home, Platform::Windows);
+            let error = discover(&context, 1234, InventoryLimits { max_checks: 1 }).unwrap_err();
+            assert_eq!(error.kind, InventoryErrorKind::CheckLimitReached);
+        }
+
+        #[test]
+        fn dot_components_in_a_verbatim_root_are_malformed() {
+            // `Path::components` does not normalize a verbatim path.
+            for root in [r"\\?\C:\synthetic\..\home", r"\\?\C:\synthetic\.\home"] {
+                let context = InventoryContext::from_home(PathBuf::from(root), Platform::Windows);
+                let error = discover(&context, 1234, InventoryLimits::default()).unwrap_err();
+                assert_eq!(error.kind, InventoryErrorKind::MalformedRoot);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 mod backend {
     use super::*;
     pub(super) struct Directory;
