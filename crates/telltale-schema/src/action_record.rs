@@ -202,7 +202,7 @@ pub struct ActionRecordError {
 }
 
 impl ActionRecordError {
-    const fn new(category: ActionRecordErrorCategory, code: &'static str) -> Self {
+    pub(crate) const fn new(category: ActionRecordErrorCategory, code: &'static str) -> Self {
         Self { category, code }
     }
 
@@ -223,15 +223,15 @@ impl fmt::Display for ActionRecordError {
 
 impl std::error::Error for ActionRecordError {}
 
-fn structure(code: &'static str) -> ActionRecordError {
+pub(crate) fn structure(code: &'static str) -> ActionRecordError {
     ActionRecordError::new(ActionRecordErrorCategory::Structure, code)
 }
 
-fn identity(code: &'static str) -> ActionRecordError {
+pub(crate) fn identity(code: &'static str) -> ActionRecordError {
     ActionRecordError::new(ActionRecordErrorCategory::Identity, code)
 }
 
-fn semantic(code: &'static str) -> ActionRecordError {
+pub(crate) fn semantic(code: &'static str) -> ActionRecordError {
     ActionRecordError::new(ActionRecordErrorCategory::Semantic, code)
 }
 
@@ -362,7 +362,7 @@ impl ActionRecordV1 {
         Ok(())
     }
 
-    fn validate_semantics(&self) -> Result<(), ActionRecordError> {
+    pub(crate) fn validate_semantics(&self) -> Result<(), ActionRecordError> {
         if !valid_observation_id(&self.coordinate)
             || !self
                 .supporting_observation_ids

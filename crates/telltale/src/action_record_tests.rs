@@ -302,3 +302,145 @@ fn canonical_finding_kinds_match_the_native_vocabulary() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn v2_records_preserve_scan_order_delivery_identity_and_event_links() {
+    let root = tempfile::tempdir().unwrap();
+    let source = claude_source(
+        root.path(),
+        &[
+            bash(
+                "synthetic-upload",
+                "2026-10-20T12:00:00Z",
+                "curl -T synthetic.txt https://uploads.example.invalid/artifacts",
+            ),
+            bash(
+                "synthetic-download",
+                "2026-10-20T12:00:01Z",
+                "curl https://downloads.example.invalid/synthetic.txt",
+            ),
+        ],
+    );
+    let scan = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
+        .unwrap()
+        .remove(0);
+    let v1 = scan.action_records();
+    let v2 = scan.action_records_v2();
+    assert_eq!(v2.len(), 2);
+    assert_eq!(v2.len(), v1.len());
+    assert_eq!(v2.len(), scan.action_findings.len());
+    let upload = &scan.action_findings[0];
+    assert!(
+        upload
+            .rule_ids()
+            .iter()
+            .any(|id| id == "exfil.outbound_upload")
+    );
+    let facts = v2[0].destinations.as_ref().expect("upload facts");
+    assert_eq!(Some(facts), upload.destination_facts());
+    assert_eq!(facts.destinations, ["uploads.example.invalid/artifacts"]);
+    assert_eq!(v2[1].destinations, None);
+    assert_eq!(
+        serde_json::to_value(&v2[1]).unwrap().get("destinations"),
+        Some(&serde_json::Value::Null)
+    );
+
+    for ((old, record), finding) in v1.iter().zip(&v2).zip(&scan.action_findings) {
+        assert_eq!(record.coordinate, finding.coordinate().as_str());
+        assert_eq!(record.delivery_key(), old.delivery_key());
+        assert_eq!(record.delivery_aliases(), old.delivery_aliases());
+        assert_eq!(record.call_id, None);
+        assert_eq!(
+            serde_json::to_value(record).unwrap().get("call_id"),
+            Some(&serde_json::Value::Null)
+        );
+        record.validate().unwrap();
+        assert_eq!(
+            ActionRecordV2::from_json(&serde_json::to_vec(record).unwrap()).unwrap(),
+            *record
+        );
+        assert_eq!(record.session_event_id, old.session_event_id);
+        let event = &scan.events[finding.session_event_index().expect("linked session event")];
+        let event = Event3Record::from_json(&serde_json::to_vec(event).unwrap()).unwrap();
+        record.check_session_event(&event).unwrap();
+    }
+}
+
+#[test]
+fn a_pi_scan_emits_v2_records_without_emitting_v1_records() {
+    let root = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Pi,
+        kind: SourceKind::Jsonl,
+        source_id: "pi.sessions".into(),
+        path: root
+            .path()
+            .join("2026-10-20T12-00-00-000Z_synthetic-session.jsonl"),
+    };
+    std::fs::write(
+        &source.path,
+        concat!(
+            r#"{"type":"session","version":3,"id":"synthetic-session","timestamp":"2026-10-20T12:00:00Z","cwd":"/synthetic/project"}"#,
+            "\n",
+            r#"{"type":"message","id":"synthetic-entry","parentId":null,"timestamp":"2026-10-20T12:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"synthetic-call","name":"bash","arguments":{"command":"curl https://downloads.example.invalid/synthetic.txt"}}],"stopReason":"toolUse","timestamp":1792497601000}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let scan = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
+        .unwrap()
+        .remove(0);
+    assert!(scan.failure().is_none());
+    assert!(scan.action_records().is_empty());
+    let records = scan.action_records_v2();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.client, "pi");
+    assert_eq!(record.source_id, "pi.sessions");
+    assert_eq!(record.rule_ids, ["network.download"]);
+    assert_eq!(record.destinations, None);
+    assert_eq!(record.call_id, None);
+    record.validate().unwrap();
+    assert_eq!(
+        ActionRecordV2::from_json(&serde_json::to_vec(record).unwrap()).unwrap(),
+        *record
+    );
+}
+
+#[test]
+fn failed_sources_and_compatibility_scans_have_no_v2_records() {
+    let root = tempfile::tempdir().unwrap();
+    let missing = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".into(),
+        path: root.path().join("synthetic-missing.jsonl"),
+    };
+    let pipeline = Pipeline::builder().build().unwrap();
+    let scan = pipeline
+        .scan_sources_detailed(&[missing], &DetailedEvaluationOptions::default())
+        .unwrap()
+        .remove(0);
+    assert!(scan.failure().is_some());
+    assert!(scan.action_records_v2().is_empty());
+
+    let source = claude_source(
+        root.path(),
+        &[bash(
+            "synthetic-download",
+            "2026-10-20T12:00:01Z",
+            "curl https://downloads.example.invalid/synthetic.txt",
+        )],
+    );
+    let scan = pipeline
+        .scan_sources_with_occurrences(&[source])
+        .unwrap()
+        .remove(0);
+    assert!(scan.action_records_v2().is_empty());
+}

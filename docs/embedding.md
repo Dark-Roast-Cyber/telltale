@@ -16,7 +16,7 @@ persistence and delivery while using the same analytic and event semantics.
 **Telltale owns** acquisition, canonical observations, Detection v2, action
 findings, contributions, redacted evidence, same-pass context, conditional replay
 identity, semantic provenance, bundled rule metadata, and their versioned wire
-forms: Event 3, action record v1, and rule catalog v1.
+forms: Event 3, action records v1 and v2, and rule catalog v2.
 
 **The host owns** watchers, debounce, safety scans and backfill, enabled/disabled
 lifecycle and allowlists, seen/excluded/pending state, rebaseline, ACK and retry,
@@ -28,7 +28,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`, and `destination_facts()` with `DestinationFacts` since the [0.8.0 migration guide](migrations/0.8.0.md#native-action-profile-19-and-upload-destination-facts)), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`, `action_records_v2()`), `ActionFinding` accessors (including `session_event_index()`, and `destination_facts()` with `DestinationFacts` since the [0.8.0 migration guide](migrations/0.8.0.md#native-action-profile-19-and-upload-destination-facts)), `ActionRecordV1`, `ActionRecordV2`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -401,7 +401,8 @@ select on `tool_name` only when the rule is about the tool name as text.
   cmdlet with `-MaximumRedirection 0`. Check stored
   facts with `DestinationFacts::is_valid()`.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
-  `Serialize`. Its wire form is `SourceScan::action_records()`; see
+  `Serialize`. Its wire forms are `SourceScan::action_records()` and
+  `SourceScan::action_records_v2()`; see
   [host wire and durable handoff](#host-wire-and-durable-handoff).
 
 ### Scores, chains, and linked downloads
@@ -735,31 +736,49 @@ hashed paths; the two share only a name.
 
 `ActionFinding` is a Rust value and deliberately does not implement
 `Serialize`. Telltale's cross-process formats are explicit, versioned schemas:
-Event 3 for session events, action record v1 for actions, and rule catalog v2
+Event 3 for session events, action records v1 and v2 for actions, and rule catalog v2
 for presentation metadata. Hosts forward these; they do not design their own
 action format.
 
-`SourceScan::action_records()` returns one `ActionRecordV1`
-(`telltale.action.v1`) per action finding, in `action_findings` order, and none
-for a failed source. v1 is frozen with its client vocabulary
-(`ACTION_RECORD_V1_CLIENTS`), so a source of a later client (Pi) returns none;
-its action findings and session events are unaffected and await a record
-version that names it. A record carries every accessor value (`coordinate` is
-the anchor observation ID) plus the scan's `client`, `source_id`,
+`SourceScan::action_records_v2()` returns one `ActionRecordV2`
+(`telltale.action.v2`) per action finding in `action_findings` order. Both
+versions emit no records for a failed source or a compatibility scan.
+`SourceScan::action_records()` still returns `ActionRecordV1`
+(`telltale.action.v1`), whose frozen client vocabulary
+(`ACTION_RECORD_V1_CLIENTS`) excludes later clients such as Pi.
+
+Apart from the version marker, v2 differs from v1 in three places:
+
+- `client` is a pattern-constrained string in the JSON Schema and must name
+  a `ClientId` known to the consuming build. A consumer built before a new
+  client rejects its records with `unknown_client`. Move producer and
+  consumer pins together.
+- `destinations` carries optional `DestinationFacts` from
+  `ActionFinding::destination_facts()`. It is null unless the action carries
+  `exfil.outbound_upload`. The receiver rejects facts that fail
+  `DestinationFacts::is_valid()` or appear without that rule.
+- `call_id` is reserved and the producer always emits null. The consumer
+  also accepts `call:v1:hmac-sha256:` followed by 64 lowercase hexadecimal
+  digits. This checks syntax only; the field has no defined pairing behavior.
+
+A record carries the shared action fields (`coordinate` is the anchor
+observation ID) plus the scan's `client`, `source_id`,
 `source_path_hash` (as in Event 3) and `semantic_identity`, and
 `session_event_id`: the `event_id` of the session Event 3 object at
 `session_event_index()` in the same scan, or null. Event IDs
 are fresh per scan, so that link holds only for records and events delivered
-together. Every key is always serialized; absent values are null. Its JSON
-Schema is [`schemas/action-record-v1.schema.json`](../schemas/action-record-v1.schema.json).
+together. Every key is always serialized; absent values are null. See the
+JSON Schemas for [v1](../schemas/action-record-v1.schema.json) and
+[v2](../schemas/action-record-v2.schema.json).
 
 ```text
 host envelope { host delivery key, tenancy, transport version,
-                record: ActionRecordV1 }      -- one per action
+                record: ActionRecordV2 }      -- one per action
 Event 3 object                                -- session events, unchanged
 ```
 
-- The receiver validates with `ActionRecordV1::from_json` (in
+- The receiver validates with `ActionRecordV2::from_json` or
+  `ActionRecordV1::from_json` for the corresponding version (in
   `telltale-schema`, no SQLite), as it validates Event 3 with `Event3Record`.
   It rejects oversized input, another record version, unknown fields, values
   outside the schema, inconsistent values, and text that redaction would
@@ -781,6 +800,8 @@ Event 3 object                                -- session events, unchanged
   The source-bound alias survives both transitions; the replay alias matches a
   copy of the action in another source. Treat an action as handled when any of
   its aliases is known, and remember all of them.
+  The delivery key and aliases are byte-identical in v1 and v2 for the same
+  action and semantic identity. Switching record versions preserves deduplication.
 - Event link: `record.check_session_event(&event)` checks that a detection or
   process-chain `Event3Record` travelling with the record has the same client,
   source path hash and session and, when `session_event_id` is set, that it
@@ -789,9 +810,8 @@ Event 3 object                                -- session events, unchanged
   choice.
 - A record or catalog version is frozen from the first release tag that
   carries it. After that, adding, removing or redefining a field is a new
-  version and a new type; plan to accept both during a host upgrade. Before
-  that tag, a Git pin can see v1 amended in place; see the
-  [migration guide](migrations/0.7.0.md).
+  version and a new type; plan to accept both during a host upgrade. See the
+  [0.8.0 migration guide](migrations/0.8.0.md#action-record-v2).
 - Action record v1 is transitional. A later release plans Event 4.0 alert
   records that carry the same findings and evidence and keep the v1 delivery
   identity, with surrounding agent activity as separate records. v1 stays
