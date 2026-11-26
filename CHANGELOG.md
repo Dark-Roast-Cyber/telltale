@@ -243,6 +243,14 @@
   with a single separator is not read: a built-in tool can have the same
   name.
 
+- **Hooks: the nested-launch rules list every harness.** The self-protection
+  rules that match a harness launch or a harness package run now take their
+  names from one list. `tth.tamper` rules that matched `claude`, `codex`,
+  `copilot`, `opencode`, `cursor` and `gemini` launches now also match
+  `openclaw`, `qwen` and `pi`, and the package-run deny that named
+  `@openai/codex` and `@github/copilot` now also names
+  `@anthropic-ai/claude-code`.
+
 - **An override entry that names no loaded rule is left out.** In the CLI
   (`scan`, `watch`, `telltale rules`, hooks) an `overrides.d` entry whose
   `rule_id` names no loaded rule or chain is left out and the other entries

@@ -109,7 +109,7 @@ fn expand_fragments(template: &str) -> String {
         rest = &rest[start + 2..];
         let fragment = rest
             .split_once("}}")
-            .and_then(|(name, _)| RULE_FRAGMENTS.iter().find(|(known, _)| *known == name));
+            .and_then(|(name, _)| rule_fragments().iter().find(|(known, _)| *known == name));
         match fragment {
             Some((name, text)) => {
                 // YAML single-quoted values escape a quote by doubling it.
@@ -1200,8 +1200,9 @@ const DRY_RUN_OR_HELP: &str = r#"^(?:(?:-y|--yes|(?:--scope[ =])?[A-Za-z0-9_./:=
 // A harness launch: the program names an agent starts one by, after an optional quote
 // or directory, to the end of the word; the words that can stand before it in an
 // inline launch; and the variables that locate the Telltale config root, the hooks
-// state, or the home both derive from.
-const HARNESS_LAUNCHER: &str = r#"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:claude|codex|copilot|opencode|cursor|gemini)(?:\.exe|\.cmd)?["']?(?:[\s;&|)`]|$)"#;
+// state, or the home both derive from. The launcher, package and hooks
+// subcommand lists are generated from the hooks registry inside
+// `rule_fragments()`.
 // A launcher that takes a grant line, after an optional quote or directory, with an
 // option or subcommand that resumes or continues an existing session (spellings from
 // each harness's own help; the two launchers with options share one list). The words
@@ -1218,27 +1219,59 @@ const WRITER_ANYWHERE: &str = r#"(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|mv|cp|dd|ln
 const WRITER_AFTER: &str = r#"(?:(?:^|[^-A-Za-z0-9_.])(?:rm|rmdir|rimraf|mv|cp|ln|dd|tee|truncate|unlink|shred|trash|ch(?:mod|own)|xargs|del|move|ri|mi|Remove-Item|Move-Item)\b|(?:^|[^-2&=])>(?:[^&]|$)|\B-delete\b|\bsed\b[^;&|\n]*-(?:[a-z]*i|-in)|(?:python\S*|perl|node|ruby|php)\s+-[^mvVh\s-])"#;
 
 /// Every shared text a rule template can name, by the name it writes as `{{NAME}}`.
-const RULE_FRAGMENTS: &[(&str, &str)] = &[
-    ("COMMAND_START", COMMAND_START),
-    ("WRITERS", WRITERS),
-    ("POSIX_WRITERS", POSIX_WRITERS),
-    ("WINDOWS_WRITERS", WINDOWS_WRITERS),
-    ("INTERPRETERS", INTERPRETERS),
-    ("SEGMENT", SEGMENT),
-    ("REDIRECT_TO", REDIRECT_TO),
-    ("REDIRECT_SKIP", REDIRECT_SKIP),
-    ("HARMLESS", HARMLESS),
-    ("READERS", READERS),
-    ("TEXT_ONLY", TEXT_ONLY),
-    ("VERSION_OR_HELP", VERSION_OR_HELP),
-    ("DRY_RUN_OR_HELP", DRY_RUN_OR_HELP),
-    ("WRITER_ANYWHERE", WRITER_ANYWHERE),
-    ("WRITER_AFTER", WRITER_AFTER),
-    ("HARNESS_LAUNCHER", HARNESS_LAUNCHER),
-    ("LAUNCH_WRAPPERS", LAUNCH_WRAPPERS),
-    ("SESSION_RESUME", SESSION_RESUME),
-    ("CONFIG_LOCATION_VARS", CONFIG_LOCATION_VARS),
-];
+/// Harness launcher and package lists are built once from the hooks registry.
+fn rule_fragments() -> &'static [(&'static str, String)] {
+    static FRAGMENTS: std::sync::LazyLock<Vec<(&'static str, String)>> = std::sync::LazyLock::new(
+        || {
+            let launcher_names = crate::hooks::harness::all_harness_launchers()
+                .into_iter()
+                .map(regex::escape)
+                .collect::<Vec<_>>()
+                .join("|");
+            let harness_launcher_names = format!(r"(?:{launcher_names})");
+            let harness_launcher = format!(
+                r#"(?:["'](?:[^"'\n]*[\\/])?|[^\s;&|"']*[\\/])?(?:{launcher_names})(?:\.exe|\.cmd)?["']?(?:[\s;&|)`]|$)"#
+            );
+            let package_names = crate::hooks::harness::all_harness_packages()
+                .into_iter()
+                .map(regex::escape)
+                .collect::<Vec<_>>()
+                .join("|");
+            let harness_packages = format!(r"(?:{package_names})");
+            let harness_names = crate::hooks::harness::Harness::ALL
+                .iter()
+                .map(|harness| regex::escape(harness.name()))
+                .collect::<Vec<_>>()
+                .join("|");
+            let harness_names = format!(r"(?:{harness_names})");
+            vec![
+                ("COMMAND_START", COMMAND_START.to_owned()),
+                ("WRITERS", WRITERS.to_owned()),
+                ("POSIX_WRITERS", POSIX_WRITERS.to_owned()),
+                ("WINDOWS_WRITERS", WINDOWS_WRITERS.to_owned()),
+                ("INTERPRETERS", INTERPRETERS.to_owned()),
+                ("SEGMENT", SEGMENT.to_owned()),
+                ("REDIRECT_TO", REDIRECT_TO.to_owned()),
+                ("REDIRECT_SKIP", REDIRECT_SKIP.to_owned()),
+                ("HARMLESS", HARMLESS.to_owned()),
+                ("READERS", READERS.to_owned()),
+                ("TEXT_ONLY", TEXT_ONLY.to_owned()),
+                ("VERSION_OR_HELP", VERSION_OR_HELP.to_owned()),
+                ("DRY_RUN_OR_HELP", DRY_RUN_OR_HELP.to_owned()),
+                ("WRITER_ANYWHERE", WRITER_ANYWHERE.to_owned()),
+                ("WRITER_AFTER", WRITER_AFTER.to_owned()),
+                ("HARNESS_LAUNCHER_NAMES", harness_launcher_names),
+                ("HARNESS_LAUNCHER", harness_launcher),
+                ("HARNESS_PACKAGES", harness_packages),
+                ("HARNESS_NAMES", harness_names),
+                ("LAUNCH_WRAPPERS", LAUNCH_WRAPPERS.to_owned()),
+                ("SESSION_RESUME", SESSION_RESUME.to_owned()),
+                ("CONFIG_LOCATION_VARS", CONFIG_LOCATION_VARS.to_owned()),
+            ]
+        },
+    );
+    &FRAGMENTS
+}
 
 /// What can stand before a path whose rule must not match the tail of a longer
 /// one: `build/tmp` is not the home `/tmp`.
@@ -1949,7 +1982,7 @@ mod tests {
                 for found in placeholder.captures_iter(line) {
                     let fragment = found.get(1).unwrap().as_str();
                     assert!(
-                        super::RULE_FRAGMENTS
+                        super::rule_fragments()
                             .iter()
                             .any(|(known, _)| *known == fragment),
                         "{name}: {fragment}"
@@ -1968,12 +2001,55 @@ mod tests {
         {
             assert!(!placeholder.is_match(document), "{name}");
         }
-        let unnamed: Vec<&str> = super::RULE_FRAGMENTS
+        let unnamed: Vec<&str> = super::rule_fragments()
             .iter()
             .map(|(fragment, _)| *fragment)
             .filter(|fragment| !named.contains(fragment))
             .collect();
         assert!(unnamed.is_empty(), "{unnamed:?}");
+    }
+
+    #[test]
+    fn harness_launcher_and_package_fragments_cover_all_harnesses_and_clients() {
+        let launchers = crate::hooks::harness::all_harness_launchers();
+        for harness in crate::hooks::harness::Harness::ALL {
+            for launcher in harness.adapter().launchers {
+                assert!(
+                    launchers.contains(launcher),
+                    "missing launcher {launcher} for {}",
+                    harness.name()
+                );
+            }
+            let packages = crate::hooks::harness::all_harness_packages();
+            for package in harness.adapter().packages {
+                assert!(
+                    packages.contains(package),
+                    "missing package {package} for {}",
+                    harness.name()
+                );
+            }
+        }
+        for client in crate::ClientId::ALL {
+            assert!(
+                launchers.contains(&client.as_str()),
+                "ClientId::{} is missing from hooks self-protection launchers",
+                client.as_str()
+            );
+        }
+        for (name, template) in super::host_rule_templates() {
+            assert!(
+                !template.contains("claude|codex|copilot|opencode"),
+                "{name} still hardcodes a hand-written harness launcher alternation"
+            );
+            assert!(
+                !template.contains("openai/codex|github/copilot"),
+                "{name} still hardcodes a hand-written harness package alternation"
+            );
+            assert!(
+                !template.contains("claude-code|copilot-cli"),
+                "{name} still hardcodes a hand-written hooks subcommand alternation"
+            );
+        }
     }
 
     /// An exclusion lets commands through its rule, so none is written out by hand: each

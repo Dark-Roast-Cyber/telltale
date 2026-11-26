@@ -98,12 +98,55 @@ pub struct Adapter {
     pub rules: HostRules,
     /// The program names an agent launches this harness by.
     pub launchers: &'static [&'static str],
+    /// Package specs (`npx`/`pnpx`/`bunx`/`dlx`/`npm exec`) that launch this
+    /// harness without installing it locally.
+    pub packages: &'static [&'static str],
     /// What can block a tool call on this harness without a verdict from the
     /// hook, one line each: what it does and how it comes to be installed.
     /// Each acts inside the harness, so neither `hooks.mode` nor
     /// `hooks.tamper_prevention` turns it on or off (`telltale hooks check`
     /// lists them).
     pub harness_protections: &'static [&'static str],
+}
+
+/// Program names of harnesses that have no hooks adapter in this build but can
+/// still be launched from a monitored session: the remaining source clients
+/// and two harnesses Telltale does not read.
+pub(crate) const EXTRA_HARNESS_LAUNCHERS: &[&str] = &["openclaw", "qwen", "pi", "cursor", "gemini"];
+
+/// Every harness launcher program name covered by hooks self-protection rules:
+/// all [`Harness::ALL`] adapters' [`Adapter::launchers`] followed by
+/// [`EXTRA_HARNESS_LAUNCHERS`], deduplicated in stable order.
+pub(crate) fn all_harness_launchers() -> Vec<&'static str> {
+    let mut names = Vec::new();
+    for harness in Harness::ALL {
+        for launcher in harness.adapter().launchers {
+            if !names.contains(launcher) {
+                names.push(*launcher);
+            }
+        }
+    }
+    for launcher in EXTRA_HARNESS_LAUNCHERS {
+        if !names.contains(launcher) {
+            names.push(*launcher);
+        }
+    }
+    names
+}
+
+/// Every harness package runner specifier covered by hooks self-protection
+/// rules, collected from [`Harness::ALL`] adapters' [`Adapter::packages`] in
+/// stable order.
+pub(crate) fn all_harness_packages() -> Vec<&'static str> {
+    let mut packages = Vec::new();
+    for harness in Harness::ALL {
+        for package in harness.adapter().packages {
+            if !packages.contains(package) {
+                packages.push(*package);
+            }
+        }
+    }
+    packages
 }
 
 /// The install output of one harness.
