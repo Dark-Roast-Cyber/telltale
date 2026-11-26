@@ -386,7 +386,8 @@ select on `tool_name` only when the rule is about the tool name as text.
   substitution, schemeless destination, proxy, resolve, connect-to, config or
   socket override, proxy credential or tunnel, header file or `Host` or
   `:authority` header, cloud-client profile or `AWS_`, `BOTO_` or `CLOUDSDK_`
-  variable, unknown or abbreviated option, quoting another shell reads
+  variable, loader variable (`LD_`, `DYLD_`) or `PATH` assignment, unknown or
+  abbreviated option, quoting another shell reads
   differently, process substitution, network redirection or pipe into an
   interpreter makes it false, and so does a URL anywhere in the recorded
   command, here-document bodies included, that no upload stage sends to, as does an object-storage endpoint override or a
@@ -398,8 +399,17 @@ select on `tool_name` only when the rule is about the tool name as text.
   `[::1]` or `0.0.0.0` and whose client follows no redirect (a local
   responder can redirect a re-sent body elsewhere): curl without `-L`,
   `--location` or `--location-trusted`, wget with `--max-redirect=0`, a
-  cmdlet with `-MaximumRedirection 0`. Check stored
-  facts with `DestinationFacts::is_valid()`.
+  cmdlet with `-MaximumRedirection 0`. `localhost` is trusted by name: a
+  host whose resolver maps that name elsewhere is outside what the command
+  text can show. The facts describe the first hop, the hosts the command
+  itself names. A listed host that received the upload can forward it or
+  answer with a redirect, as any trusted receiver can, so a followed redirect
+  does not clear `complete`; it clears only `local_only`, where the first
+  hop is a local responder no trust list covers. Empty `destinations` with
+  `complete` therefore does not mean the upload stayed on the machine: only
+  `local_only` says that. Check stored facts with
+  `DestinationFacts::is_valid()`, which checks bounds, order, entry structure
+  and the sanitizer fixed point, not which segments the producer kept.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
   `Serialize`. Its wire form is `SourceScan::action_records()`; see
   [host wire and durable handoff](#host-wire-and-durable-handoff).

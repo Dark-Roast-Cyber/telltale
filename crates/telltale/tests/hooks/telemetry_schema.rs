@@ -139,3 +139,35 @@ fn upload_records_carry_destination_facts_beside_the_action_record() {
         assert!(errors.is_empty(), "{errors:#?}\n{record:#}");
     }
 }
+
+/// The schema keeps the one invariant of the facts it can express: a
+/// `local_only` upload is complete and lists nothing.
+#[test]
+fn the_schema_refuses_local_only_facts_that_list_or_are_incomplete() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../schemas/telltale-hooks-record-v1.schema.json"
+    ))
+    .unwrap();
+    let facts = &schema["properties"]["telltale"]["items"]["properties"]["destinations"];
+    let validator = jsonschema::validator_for(facts).unwrap();
+    for (value, valid) in [
+        (
+            serde_json::json!({"destinations": [], "complete": true, "local_only": true}),
+            true,
+        ),
+        (
+            serde_json::json!({"destinations": ["a.example.invalid"], "complete": false, "local_only": false}),
+            true,
+        ),
+        (
+            serde_json::json!({"destinations": [], "complete": false, "local_only": true}),
+            false,
+        ),
+        (
+            serde_json::json!({"destinations": ["a.example.invalid"], "complete": true, "local_only": true}),
+            false,
+        ),
+    ] {
+        assert_eq!(validator.is_valid(&value), valid, "{value}");
+    }
+}
