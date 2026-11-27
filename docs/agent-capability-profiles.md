@@ -150,8 +150,8 @@ Source: `pi.sessions` (JSONL, session format version 3).
 | Call ID, error state, content parts | Full | As reported. |
 
 The canonical adapter reports ToolCall and UserContext **Supported**
-and ToolExecution **Unknown**. Action records (`ActionRecordV1`) are not
-produced for Pi; that frozen schema predates the client.
+and ToolExecution **Unknown**. Detailed scans produce `ActionRecordV2`
+values for Pi. The frozen `ActionRecordV1` schema predates the client.
 
 ## Cross-source implications
 

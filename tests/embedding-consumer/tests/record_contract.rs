@@ -170,6 +170,80 @@ fn records_cross_a_process_boundary_and_link_strict_event3() {
     assert_eq!(error.category(), ActionRecordErrorCategory::Structure);
 }
 
+#[test]
+fn v2_records_cross_a_process_boundary_with_upload_facts_and_v1_delivery_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let source = source(
+        root.path(),
+        &[
+            json!({"type":"user","timestamp":"2026-10-20T12:00:00Z","message":{"role":"user","content":format!("password={SECRET} open {PRIVATE_PATH}/notes")}}),
+            bash(
+                "synthetic-upload",
+                "2026-10-20T12:00:01Z",
+                "curl -T synthetic.txt https://uploads.example.invalid/artifacts",
+            ),
+        ],
+    );
+    let mut options = DetailedEvaluationOptions::default();
+    options.context.before = 4;
+    options.context.user_text = true;
+    let scan = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_sources_detailed(&[source], &options)
+        .unwrap()
+        .remove(0);
+    let legacy_records = scan.action_records();
+    let records = scan.action_records_v2();
+    assert_eq!(records.len(), 1);
+    let sent = &records[0];
+    let wire = serde_json::to_vec(&json!({
+        "host_version": 1, "delivery_key": sent.delivery_key(), "record": sent
+    }))
+    .unwrap();
+    let text = std::str::from_utf8(&wire).unwrap();
+    assert!(!text.contains(SECRET) && !text.contains(PRIVATE_PATH));
+
+    let mut envelope: Value = serde_json::from_slice(&wire).unwrap();
+    let record =
+        ActionRecordV2::from_json(&serde_json::to_vec(&envelope["record"]).unwrap()).unwrap();
+    record.validate().unwrap();
+    assert_eq!(&record, sent);
+    assert_eq!(record.schema, ACTION_RECORD_V2_ID);
+    let schema: Value = serde_json::from_str(ACTION_RECORD_V2_SCHEMA).unwrap();
+    assert_eq!(schema["properties"]["schema"]["const"], record.schema);
+    assert_eq!(envelope["delivery_key"], legacy_records[0].delivery_key());
+    assert_eq!(
+        record.delivery_aliases(),
+        legacy_records[0].delivery_aliases()
+    );
+    assert_eq!(
+        record.destinations,
+        Some(DestinationFacts {
+            destinations: vec!["uploads.example.invalid/artifacts".into()],
+            complete: true,
+            local_only: false,
+        })
+    );
+    assert_eq!(record.call_id, None);
+
+    let event = scan
+        .events
+        .iter()
+        .find(|event| Some(&event.event_id) == record.session_event_id.as_ref())
+        .expect("linked session event");
+    let received_event = Event3Record::from_json(&serde_json::to_vec(event).unwrap()).unwrap();
+    record.check_session_event(&received_event).unwrap();
+
+    envelope["record"]["new_field"] = json!(true);
+    let error =
+        ActionRecordV2::from_json(&serde_json::to_vec(&envelope["record"]).unwrap()).unwrap_err();
+    assert_eq!(error.code(), "schema_mismatch");
+    let error =
+        ActionRecordV2::from_json(&serde_json::to_vec(&legacy_records[0]).unwrap()).unwrap_err();
+    assert_eq!(error.code(), "unsupported_record_version");
+}
+
 /// One record per command from a bundled scan, each read back by the strict
 /// consumer from its own bytes.
 fn scanned(commands: &[&str]) -> Vec<ActionRecordV1> {

@@ -5,6 +5,7 @@
 //! discovery, parsing, and delivery live in the downstream crates.
 
 pub mod action_record;
+pub mod action_record_v2;
 pub mod activity_facts;
 pub mod clients;
 pub mod destination_facts;
