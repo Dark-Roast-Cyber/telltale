@@ -352,11 +352,7 @@ fn v2_records_preserve_scan_order_delivery_identity_and_event_links() {
         assert_eq!(record.coordinate, finding.coordinate().as_str());
         assert_eq!(record.delivery_key(), old.delivery_key());
         assert_eq!(record.delivery_aliases(), old.delivery_aliases());
-        assert_eq!(record.call_id, None);
-        assert_eq!(
-            serde_json::to_value(record).unwrap().get("call_id"),
-            Some(&serde_json::Value::Null)
-        );
+        assert_eq!(serde_json::to_value(record).unwrap().get("call_id"), None);
         record.validate().unwrap();
         assert_eq!(
             ActionRecordV2::from_json(&serde_json::to_vec(record).unwrap()).unwrap(),
@@ -405,7 +401,6 @@ fn a_pi_scan_emits_v2_records_without_emitting_v1_records() {
     assert_eq!(record.source_id, "pi.sessions");
     assert_eq!(record.rule_ids, ["network.download"]);
     assert_eq!(record.destinations, None);
-    assert_eq!(record.call_id, None);
     record.validate().unwrap();
     assert_eq!(
         ActionRecordV2::from_json(&serde_json::to_vec(record).unwrap()).unwrap(),
