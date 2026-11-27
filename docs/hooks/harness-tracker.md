@@ -640,3 +640,4 @@ harness's entry.
 - 2026-11-26: added read-only Hooks status and the shared `check --json` configuration view. Synthetic CLI fixtures; no harness stages changed.
 - 2026-11-26: Hooks status reports existing TOML settings as `not_inspected` when readable and within the size limit. Synthetic CLI fixtures cover TOML with and without inline hooks.
 - 2026-11-27: tightened shared Hooks record recovery and admission: Recent startup snapshot checkpoints, torn-tail separation, nonblocking Unix opens and hard-link refusal. Synthetic Linux tests only; no harness stages changed.
+- 2026-11-27: Hooks record arrays are bounded at 1024 items in the schema and the strict reader; the writer replaces a record over the bound with `telemetry_record_too_large`. Synthetic tests only; no harness stages changed.

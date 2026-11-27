@@ -20,7 +20,9 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use telltale_schema::event::SanitizationContext;
-use telltale_schema::hooks_record::{HOOKS_RECORD_MAX_INPUT_BYTES, readable_hook_label};
+use telltale_schema::hooks_record::{
+    HOOKS_RECORD_MAX_ARRAY_ITEMS, HOOKS_RECORD_MAX_INPUT_BYTES, readable_hook_label,
+};
 pub use telltale_sources::journal::RotationConfig;
 use telltale_sources::journal::{self, JournalGeneration};
 
@@ -489,6 +491,9 @@ fn lock_path(active: &Path) -> PathBuf {
 }
 
 fn encode(record: &Record, max_line_bytes: usize, output: impl Write) -> io::Result<()> {
+    if !within_array_bounds(record) {
+        return Err(io::Error::other(RecordTooLarge));
+    }
     let mut line = BoundedLine {
         output,
         remaining: max_line_bytes,
@@ -504,12 +509,32 @@ fn encode(record: &Record, max_line_bytes: usize, output: impl Write) -> io::Res
     line.write_all(b"\n")
 }
 
+/// Whether the arrays a call can fill are within the reader's item bound: its
+/// actions, the rules and categories they name, and a grant's rules. Operator
+/// rules can take these past it. Visibility limits and `pinned_over` cannot
+/// reach it; that is checked where they are built.
+fn within_array_bounds(record: &Record) -> bool {
+    let fits = |items: usize| items <= HOOKS_RECORD_MAX_ARRAY_ITEMS;
+    let grant_rules = record
+        .lifecycle
+        .as_ref()
+        .and_then(|lifecycle| lifecycle.get("rule_ids"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    fits(record.telltale.len())
+        && fits(grant_rules)
+        && record
+            .decision
+            .as_ref()
+            .is_none_or(|decision| fits(decision.rule_ids.len()) && fits(decision.categories.len()))
+}
+
 #[derive(Debug)]
 struct RecordTooLarge;
 
 impl fmt::Display for RecordTooLarge {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("record exceeds the Hooks telemetry line limit")
+        formatter.write_str("record exceeds the Hooks telemetry line or array limits")
     }
 }
 

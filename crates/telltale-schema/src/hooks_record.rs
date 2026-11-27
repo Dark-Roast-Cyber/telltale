@@ -26,6 +26,23 @@ pub const HOOKS_RECORD_V1_SCHEMA: &str =
 /// consumer) and their rule/category lists. This allows about sixteen such
 /// actions; the actions, summaries and envelope together must fit.
 pub const HOOKS_RECORD_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
+/// Most items in each array of a hooks record: `evaluation.visibility_limits`,
+/// `decision.rule_ids` and `decision.categories`, the `session_start`
+/// `pinned_over` and `grant` `rule_ids` lifecycle lists, and `telltale`. An
+/// upload's `destinations` keep their own bound of 16. Without it, a reader's
+/// work for one line was bounded only by its bytes, and redaction of millions
+/// of one-byte items took seconds.
+///
+/// What the writer can reach: visibility limits are a closed, deduplicated
+/// vocabulary of about a dozen values and `pinned_over` names at most three
+/// sources, so neither comes near it. The decision's lists and a grant's
+/// rules are the distinct rules and categories of one call, a few hundred
+/// with the bundled content, and a call's actions come from at most 128
+/// projected pieces of its input and its history line; operator rules can
+/// take these past the bound, and the writer replaces such a record as it
+/// does an oversized one. 1024 is also the largest array bound of an action
+/// record.
+pub const HOOKS_RECORD_MAX_ARRAY_ITEMS: usize = 1024;
 
 #[doc(hidden)]
 pub const TELEMETRY_RECORD_TOO_LARGE: &str = "telemetry_record_too_large";
