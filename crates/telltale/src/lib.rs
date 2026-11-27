@@ -114,6 +114,10 @@ pub use telltale_schema::effective_configuration::{
     EFFECTIVE_CONFIGURATION_V1_SCHEMA, EffectiveConfigurationError, EffectiveConfigurationV1,
     EffectiveDefinitionV1, EffectiveDocumentV1, EffectivePackageV1, PackageOriginV1, RuleTierV1,
 };
+pub use telltale_schema::hooks_record::{
+    self, HOOKS_RECORD_MAX_INPUT_BYTES, HOOKS_RECORD_V1_ID, HOOKS_RECORD_V1_SCHEMA,
+    HooksRecordError, HooksRecordErrorCategory, HooksRecordKind, HooksRecordV1,
+};
 pub use telltale_schema::rule_catalog::{
     RULE_CATALOG_V2_ID, RULE_CATALOG_V2_SCHEMA, RuleCatalogEntryV2, RuleCatalogError,
     RuleCatalogLogSourceV2, RuleCatalogRelatedV2, RuleCatalogV2,

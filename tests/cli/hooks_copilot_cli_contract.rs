@@ -18,7 +18,7 @@ use telltale_core::hooks::config::{AskRoute, OnError};
 use telltale_core::hooks::harness::{Harness, Parsed};
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::harnesses::copilot_cli;
-use telltale_core::hooks::runtime::SYNTHETIC_ID_PREFIX;
+use telltale_schema::hooks_record::escaped_hook_label;
 
 fn fixtures() -> PathBuf {
     common::fixtures("copilot-cli/1.0.105")
@@ -175,8 +175,7 @@ fn replay(name: &str, only: &str, harness: Harness) -> Rig {
     assert!(decisions.iter().all(|d| {
         d["action"]["tool_use_id"]
             .as_str()
-            .unwrap()
-            .starts_with(SYNTHETIC_ID_PREFIX)
+            .is_some_and(escaped_hook_label)
     }));
     let outcomes = rig.records("outcome");
     let by_post: Vec<&Value> = outcomes

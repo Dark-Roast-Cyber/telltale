@@ -155,6 +155,9 @@ Work that serves several harnesses.
 | Item | Status | Notes |
 | --- | --- | --- |
 | E2E reports against `telltale hooks` | done | [Integrated report](e2e/2026-11-17-integrated-pilot.md); scripted models, narrow tool paths and versions only |
+| Strict Hooks record consumer | done | [Strict readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback); shared across harnesses |
+| Bounded Hooks telemetry labels | done | [Envelope addendum](adr/0005-telemetry-envelope.md#addendum-2026-11-26-bounded-telemetry-labels); shared across harnesses |
+| Bounded Hooks telemetry lines | done | [Strict readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback); writer and reader share the 16 MiB limit |
 | Real-model runs for Copilot CLI and Codex CLI | todo | Scripted-model evidence exists |
 | OpenCode v2 forwarding plugin | done | [Request-only pilot](harnesses/opencode.md#v2-pilot-design); no settlement, service qualification or Kilo compatibility claim |
 | Shared reader for Claude-shaped payloads | wip | `harnesses/payload.rs` holds what adapters share today |
@@ -169,6 +172,13 @@ check joins the harness receipt by tool-use ID and the outcome by decision
 record ID. Preserve both scenario summaries and the tested revisions.
 
 ## Reference
+
+- **Docs/Src, 2026-11-26:** the [Hooks envelope contract](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback)
+  defines strict record readback; synthetic runtime tests exercise all registered adapters.
+- **Docs/Src, 2026-11-26:** [Hooks telemetry label handling](adr/0005-telemetry-envelope.md#addendum-2026-11-26-bounded-telemetry-labels)
+  is shared by the writer and strict reader. Evidence is from synthetic runtime tests.
+- **Docs/Src, 2026-11-26:** [Hooks telemetry line limit](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback)
+  is shared by the writer and reader. Synthetic tests cover replacement and outcome linkage.
 
 Each entry was read from the linked primary sources on the date shown and is
 **Docs/Src** unless marked otherwise. Nothing below was confirmed by running
@@ -614,3 +624,6 @@ harness's entry.
 - 2026-11-22: README tuning: an override entry may name a chain (turns it off or rescores it; a chain turned off leaves its rules their points), and an entry that names no loaded rule is left out with `override left out` instead of failing the rule build. Contract tests only (Bin); no real-harness rerun; no harness facts changed.
 - 2026-11-22: `check --rules --json` prints the rules a hook evaluates as the effective configuration document (`telltale.effective_configuration.v1`); README tuning notes that policies do not merge across config roots and that overrides set only `enabled` and `score`. Contract tests only (Bin); no real-harness rerun; no harness facts changed.
 - 2026-11-22: grants (`hooks.grants.enabled`, default off; ADR 0010): the user allows a stopped call by typing `telltale allow` or `telltale allow session` as a prompt of its own; taken from the user-prompt event of Claude Code, Codex CLI and Copilot CLI (`can_grant`), not on the OpenCode pilot; a subagent's prompt is refused (Codex: by its `agent_id`, shape from the existing `subagent.jsonl` capture; Copilot: mapped to `other`). Contract tests only (Bin) on all four harnesses; no real-harness rerun, so the Claude Code `UserPromptSubmit` context output is not yet exercised with a live harness; no other harness facts changed.
+- 2026-11-26: added the shared strict Hooks JSONL record consumer and synthetic runtime parity coverage for registered adapters. No harness stages changed.
+- 2026-11-26: the shared Hooks writer bounds native telemetry labels and assigns deterministic stand-ins. Synthetic runtime tests only; no harness stages changed.
+- 2026-11-26: the shared Hooks writer caps each telemetry line at 16 MiB and replaces oversized runtime records with linked error records. No harness stages changed.

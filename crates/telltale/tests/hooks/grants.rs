@@ -105,6 +105,7 @@ fn validate_schema(records: &[Value]) {
     .unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     for record in records {
+        super::telemetry_schema::assert_record_contract(&serde_json::to_vec(record).unwrap());
         let errors: Vec<String> = validator
             .iter_errors(record)
             .map(|e| e.to_string())

@@ -11,6 +11,7 @@ pub mod destination_facts;
 pub mod effective_configuration;
 pub mod event;
 pub mod event4;
+pub mod hooks_record;
 pub mod observation;
 pub mod provenance;
 pub mod record;

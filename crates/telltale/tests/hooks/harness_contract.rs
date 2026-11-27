@@ -12,8 +12,7 @@ use serde_json::{Value, json};
 use telltale_core::hooks::config::OnError;
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::{
-    ASK_THROUGH_MODEL_NOTE, Completion, Context, Event, Response, SYNTHETIC_ID_PREFIX, ToolCall,
-    synthetic_call_id,
+    ASK_THROUGH_MODEL_NOTE, Completion, Context, Event, Response, ToolCall, synthetic_call_id,
 };
 use telltale_core::hooks::state::Verdict;
 
@@ -120,6 +119,7 @@ fn validate_schema(records: &[Value]) {
     .unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     for record in records {
+        super::telemetry_schema::assert_record_contract(&serde_json::to_vec(record).unwrap());
         let errors: Vec<String> = validator
             .iter_errors(record)
             .map(|e| e.to_string())
@@ -603,6 +603,7 @@ fn a_result_under_a_synthetic_key_after_settlement_is_ambiguous_not_a_violation(
         .handle(&copilot("agentStop", None), Event::TurnSettled);
     let settled = h.outcome_for(&key);
     assert_eq!(settled["outcome"]["enforcement"], "honored");
+    let key_label = common::telemetry_label(&key);
 
     // A result from another agent under the same key is not this call's.
     h.runtime.handle(
@@ -612,7 +613,7 @@ fn a_result_under_a_synthetic_key_after_settlement_is_ambiguous_not_a_violation(
     let for_key = |h: &Harness| -> Vec<Value> {
         h.records("outcome")
             .into_iter()
-            .filter(|o| o["action"]["tool_use_id"] == key)
+            .filter(|o| o["action"]["tool_use_id"] == key_label)
             .collect()
     };
     let outcomes = for_key(&h);
@@ -838,7 +839,7 @@ fn claude_code_encoding_is_the_native_call() {
 #[test]
 fn a_result_after_a_repeated_request_settles_the_pending_one_not_the_settled_one() {
     let mut h = Harness::new();
-    let key = copilot_bash(EXFIL).tool_use_id.unwrap();
+    let key = common::telemetry_label(&copilot_bash(EXFIL).tool_use_id.unwrap());
     h.runtime.handle(
         &copilot("preToolUse", None),
         Event::ToolRequested(copilot_bash(EXFIL)),
@@ -977,8 +978,7 @@ fn copilot_post_events_rebuild_the_synthetic_key_and_agent_stop_settles_the_rest
         assert!(decisions.iter().all(|d| {
             d["action"]["tool_use_id"]
                 .as_str()
-                .unwrap()
-                .starts_with(SYNTHETIC_ID_PREFIX)
+                .is_some_and(telltale_schema::hooks_record::escaped_hook_label)
         }));
         let outcomes = h.records("outcome");
         // Every post event found its decision; agentStop settled the rest.

@@ -8,8 +8,9 @@
 //! Detection content travels as unmodified `ActionRecordV1` values.
 //! Schema: schemas/telltale-hooks-record-v1.schema.json.
 
+use std::fmt;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,7 +18,10 @@ use crate::ActionRecordV1;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use telltale_schema::event::SanitizationContext;
+use telltale_schema::hooks_record::{HOOKS_RECORD_MAX_INPUT_BYTES, readable_hook_label};
 
+use crate::hooks::journal::escaped;
 use crate::hooks::state::{create_private_dir, open_regular};
 
 pub const RECORD_SCHEMA: &str = "telltale_hooks.record.v1";
@@ -25,6 +29,17 @@ pub const RECORD_SCHEMA: &str = "telltale_hooks.record.v1";
 /// `producer.name` in every record; the producer is the hooks runtime inside
 /// the Telltale executable, under the name existing consumers match on.
 pub const PRODUCER_NAME: &str = "telltale-hooks";
+
+/// Keep a readable telemetry label, or replace the whole raw value with a
+/// deterministic stand-in so its occurrences still link across records.
+#[doc(hidden)]
+pub fn label(value: &str, context: SanitizationContext) -> String {
+    if readable_hook_label(value, context) {
+        value.to_owned()
+    } else {
+        escaped(value)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -240,11 +255,25 @@ pub fn new_record_id() -> String {
 
 pub struct Sink {
     path: PathBuf,
+    #[cfg(test)]
+    max_line_bytes: usize,
 }
 
 impl Sink {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            #[cfg(test)]
+            max_line_bytes: HOOKS_RECORD_MAX_INPUT_BYTES,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_line_limit(self, max_line_bytes: usize) -> Self {
+        Self {
+            max_line_bytes,
+            ..self
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -253,15 +282,82 @@ impl Sink {
 
     /// Append one record as a single write. Errors are returned so the caller
     /// can apply its failure policy; telemetry loss is never silent.
-    pub fn write(&self, record: &Record) -> std::io::Result<()> {
+    pub fn write(&self, record: &Record) -> io::Result<()> {
+        #[cfg(not(test))]
+        let limit = HOOKS_RECORD_MAX_INPUT_BYTES;
+        #[cfg(test)]
+        let limit = self.max_line_bytes;
+        let mut line = Vec::new();
+        encode(record, limit, &mut line)?;
         if let Some(parent) = self.path.parent() {
             create_private_dir(parent)?;
         }
-        let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
-        line.push(b'\n');
         // Regular files only: a FIFO or symlink planted at the telemetry
         // path must neither stall the hook nor receive the records.
         let mut file = open_regular(OpenOptions::new().create(true).append(true), &self.path)?;
         file.write_all(&line)
+    }
+
+    /// Check the exact wire size before an operation that will emit the record.
+    #[doc(hidden)]
+    pub fn check_record_size(record: &Record) -> io::Result<()> {
+        encode(record, HOOKS_RECORD_MAX_INPUT_BYTES, io::sink())
+    }
+}
+
+fn encode(record: &Record, max_line_bytes: usize, output: impl Write) -> io::Result<()> {
+    let mut line = BoundedLine {
+        output,
+        remaining: max_line_bytes,
+        oversized: false,
+    };
+    serde_json::to_writer(&mut line, record).map_err(|error| {
+        if line.oversized {
+            io::Error::other(RecordTooLarge)
+        } else {
+            io::Error::other(error)
+        }
+    })?;
+    line.write_all(b"\n")
+}
+
+#[derive(Debug)]
+struct RecordTooLarge;
+
+impl fmt::Display for RecordTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("record exceeds the Hooks telemetry line limit")
+    }
+}
+
+impl std::error::Error for RecordTooLarge {}
+
+/// Whether the sink refused a record before opening or writing the file.
+#[doc(hidden)]
+pub fn is_record_too_large(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|cause| cause.is::<RecordTooLarge>())
+}
+
+struct BoundedLine<W> {
+    output: W,
+    remaining: usize,
+    oversized: bool,
+}
+
+impl<W: Write> Write for BoundedLine<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(remaining) = self.remaining.checked_sub(bytes.len()) else {
+            self.oversized = true;
+            return Err(io::Error::other(RecordTooLarge));
+        };
+        self.output.write_all(bytes)?;
+        self.remaining = remaining;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
     }
 }
