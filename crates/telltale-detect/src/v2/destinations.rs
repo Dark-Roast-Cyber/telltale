@@ -1178,12 +1178,20 @@ mod tests {
             false,
             false,
         ),
-        // Pins a stated limit: a segment is kept when it is a plain name the
-        // evidence sanitizer leaves unchanged, so a token family the sanitizer
-        // does not know is listed, at the same exposure as evidence text.
+        // A segment the evidence sanitizer masks ends the entry before it.
         (
-            "curl -T f https://api.example.invalid/v1/glpat-abcdefghij-klmnop",
-            &["api.example.invalid/v1/glpat-abcdefghij-klmnop"],
+            "curl -T f https://api.example.invalid/v1/glpat-abcdefghij-klmnopqrst",
+            &["api.example.invalid/v1"],
+            true,
+            false,
+        ),
+        // Pins a stated limit: a segment is kept when it is a plain name the
+        // evidence sanitizer leaves unchanged, so a token of a shape the
+        // sanitizer does not know is listed, at the same exposure as evidence
+        // text.
+        (
+            "curl -T f https://api.example.invalid/v1/zztok-abcdefghij-klmnop",
+            &["api.example.invalid/v1/zztok-abcdefghij-klmnop"],
             true,
             false,
         ),

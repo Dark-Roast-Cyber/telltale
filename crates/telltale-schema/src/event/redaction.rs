@@ -138,7 +138,26 @@ static CREDENTIAL_AKIA_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\bAKIA[0-9A-Z]{16}\b").expect("credential regex"));
 
 static CREDENTIAL_XOX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\bxox[baprs]-[A-Za-z0-9-]{20,}\b").expect("credential regex")
+    Regex::new(r"(?i)\bxox[abcdeprs]-[A-Za-z0-9-]{20,}\b").expect("credential regex")
+});
+
+/// Vendor tokens the encoded-blob rule cannot reach: a `_` before the body
+/// leaves no word boundary to start at, and a `-` or `_` inside the body ends
+/// the run early. Each alternative is a documented vendor prefix followed by
+/// a body too long to be an identifier that merely starts the same way
+/// (`npm_config_registry`, `hf_hub_download`, `github_pat_rotation_policy`).
+static CREDENTIAL_VENDOR_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)\b(?:",
+        // GitLab: every documented token prefix.
+        r"gl(?:pat|oas|dt|rtr?|cbt|ptt|ft|imt|agent|wt|soat|ffct)-[A-Za-z0-9_-]{20,}",
+        // GitHub fine-grained personal access token.
+        r"|github_pat_[A-Za-z0-9]{20,}[A-Za-z0-9_]*",
+        // Hugging Face and npm access tokens.
+        r"|(?:hf|npm)_[A-Za-z0-9]{30,}",
+        r")\b",
+    ))
+    .expect("credential regex")
 });
 
 static CREDENTIAL_JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -306,6 +325,10 @@ fn redact_bounded<E>(
         .into_owned();
     charge(redacted.len())?;
     redacted = CREDENTIAL_XOX_RE
+        .replace_all(&redacted, REDACTED_SECRET)
+        .into_owned();
+    charge(redacted.len())?;
+    redacted = CREDENTIAL_VENDOR_TOKEN_RE
         .replace_all(&redacted, REDACTED_SECRET)
         .into_owned();
     charge(redacted.len())?;
@@ -1814,6 +1837,7 @@ pub(crate) fn contains_credential_material(text: &str) -> bool {
         || CREDENTIAL_SK_KEY_RE.is_match(text)
         || CREDENTIAL_AKIA_RE.is_match(text)
         || CREDENTIAL_XOX_RE.is_match(text)
+        || CREDENTIAL_VENDOR_TOKEN_RE.is_match(text)
         || CREDENTIAL_JWT_RE.is_match(text)
         || CREDENTIAL_BEARER_RE.is_match(text)
         || ENCODED_BLOB_RE.is_match(text)
@@ -3558,7 +3582,7 @@ mod tests {
     use super::{
         ControlledMarker, EvidenceExcerpt, MAX_INPUT_BYTES, MAX_MARKER_DEPTH,
         MAX_SERIALIZED_EVENT_BYTES, PrivacySanitizer, SanitizationContext,
-        SerializedMarkerCheckError, check_serialized_event_markers,
+        SerializedMarkerCheckError, check_serialized_event_markers, contains_credential_material,
         contains_high_confidence_credential_marker, redact_error_message, redact_sensitive_text,
     };
 
@@ -4279,6 +4303,94 @@ safe=value"#,
                 redacted,
                 "assignment sanitization must be idempotent"
             );
+        }
+    }
+
+    const EVERY_CONTEXT: [SanitizationContext; 7] = [
+        SanitizationContext::Evidence,
+        SanitizationContext::Diagnostic,
+        SanitizationContext::Url,
+        SanitizationContext::Path,
+        SanitizationContext::CommandResult,
+        SanitizationContext::Summary,
+        SanitizationContext::Metadata,
+    ];
+
+    /// Synthetic tokens of each vendor family, assembled here so no literal
+    /// token-shaped string sits in the source.
+    fn vendor_tokens() -> Vec<String> {
+        let dashed = "aB3_dE6-gH9_jK2-mN5p";
+        let plain = "a1B2c3D4e5".repeat(4);
+        let mut tokens: Vec<String> = [
+            "glpat", "gloas", "gldt", "glrt", "glrtr", "glcbt", "glptt", "glft", "glimt",
+            "glagent", "glwt", "glsoat", "glffct",
+        ]
+        .iter()
+        .map(|prefix| format!("{prefix}-{dashed}"))
+        .collect();
+        tokens.push(format!("github_pat_{}_{}", &plain[..22], plain.repeat(2)));
+        tokens.push(format!("hf_{}", &plain[..34]));
+        tokens.push(format!("npm_{}", &plain[..36]));
+        for family in ["xoxc", "xoxd", "xoxe"] {
+            tokens.push(format!("{family}-1-{}", &plain[..24]));
+        }
+        tokens
+    }
+
+    #[test]
+    fn vendor_tokens_are_masked_in_every_context_and_position() {
+        for token in vendor_tokens() {
+            // The body, without the vendor prefix a reader may keep.
+            let body = &token[token.len() - 16..];
+            for input in [
+                token.clone(),
+                format!("pushed with {token} to the mirror"),
+                format!("curl -T f https://api.example.invalid/v1/{token}"),
+                format!("https://api.example.invalid/v1/{token}/upload"),
+                format!("glab auth login --hostname h --stdin <<< {token}"),
+                format!("{{\"value\":\"{token}\"}}"),
+                token.to_uppercase(),
+            ] {
+                for context in EVERY_CONTEXT {
+                    let once = PrivacySanitizer::sanitize(context, &input);
+                    assert!(
+                        !once.to_lowercase().contains(&body.to_lowercase()),
+                        "{context:?} kept a token body from {input:?}: {once:?}"
+                    );
+                    assert_eq!(
+                        PrivacySanitizer::sanitize(context, &once),
+                        once,
+                        "{context:?} is not idempotent for {input:?}"
+                    );
+                }
+            }
+            assert!(contains_credential_material(&token), "{token}");
+        }
+    }
+
+    #[test]
+    fn names_that_only_start_like_a_vendor_token_are_kept() {
+        for kept in [
+            "npm_config_registry",
+            "npm_package_version",
+            "npm_lifecycle_event",
+            "hf_hub_download",
+            "hf_transfer",
+            "github_pat_rotation_policy_document",
+            "glpat-short",
+            "glft-notes",
+            "global-configuration-settings",
+            "xoxo-hugs-and-kisses-forever",
+            "toolu_01A2b3C4d5E6f7G8h9J0k1L2",
+            "call_a1B2c3D4e5F6g7H8i9J0k1L2",
+        ] {
+            for context in EVERY_CONTEXT {
+                assert_eq!(
+                    PrivacySanitizer::sanitize(context, kept),
+                    kept,
+                    "{context:?}"
+                );
+            }
         }
     }
 

@@ -45,6 +45,14 @@
   component: after a file name with an extension, or in text whose separators
   are doubled. This changes redacted text, so qualify producer and consumer
   privacy pins together.
+- Redact GitLab tokens (every documented prefix, such as `glpat-`), GitHub
+  fine-grained tokens (`github_pat_`), Hugging Face (`hf_`) and npm (`npm_`)
+  tokens, and the Slack `xoxc-`, `xoxd-` and `xoxe-` families. Before, a
+  token whose body follows a `_` or contains `-` or `_` could stay readable
+  in evidence, and as an upload destination path segment. A session or other
+  structured identifier that contains one is now replaced by its hash. This
+  changes redacted text, so qualify producer and consumer privacy pins
+  together.
 - Keep native rule-ID admission and emission credential-strict. Historical Event
   3 readback preserves exact `redacted.<64 lowercase hex digits>` replacements
   only in the five rule-ID fields, without granting provenance. Contribution
