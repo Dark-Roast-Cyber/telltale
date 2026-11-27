@@ -175,7 +175,9 @@ fn held_sidecar_lock_does_not_delay_or_drop_the_append() {
         .write(true)
         .open(dir.path().join("records.jsonl.lock"))
         .unwrap();
-    held.try_lock().unwrap();
+    // Wait for the lock: another test in this binary may be between fork and
+    // exec, where its child still holds a copy of the first write's handle.
+    held.lock().unwrap();
     let started = std::time::Instant::now();
     let result = sink.write(&record(2));
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
