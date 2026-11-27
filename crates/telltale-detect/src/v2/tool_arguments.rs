@@ -464,19 +464,24 @@ impl ArgumentReading {
     /// not already facts. Facts are only ever added. Whether anything was.
     pub(crate) fn declare(&mut self, operation: &ToolOperation) -> bool {
         let mut added = false;
-        for command in operation.commands() {
-            let command = command.trim();
-            // Text already read stays as it is; a command it holds adds nothing.
-            if command.is_empty() || self.command.contains(command) {
-                continue;
-            }
-            // An argv array leaves its text with no line end.
-            if !self.command.is_empty() && !self.command.ends_with('\n') {
-                self.command.push('\n');
-            }
-            self.command.push_str(command);
-            self.command.push('\n');
+        if operation.replaces_command() {
+            self.command = operation.commands().join("\n");
             added = true;
+        } else {
+            for command in operation.commands() {
+                let command = command.trim();
+                // Text already read stays as it is; a command it holds adds nothing.
+                if command.is_empty() || self.command.contains(command) {
+                    continue;
+                }
+                // An argv array leaves its text with no line end.
+                if !self.command.is_empty() && !self.command.ends_with('\n') {
+                    self.command.push('\n');
+                }
+                self.command.push_str(command);
+                self.command.push('\n');
+                added = true;
+            }
         }
         let paths = operation
             .written_paths()
@@ -484,7 +489,11 @@ impl ArgumentReading {
             .chain(operation.read_paths())
             .map(|path| ("file_path", path));
         let urls = operation.urls().iter().map(|url| ("url", url));
-        for (field, text) in paths.chain(urls) {
+        let authored = operation
+            .authored_contents()
+            .iter()
+            .map(|text| ("authored_content", text));
+        for (field, text) in paths.chain(urls).chain(authored) {
             if !self
                 .facts
                 .iter()

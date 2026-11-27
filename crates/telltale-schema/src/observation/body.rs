@@ -768,9 +768,11 @@ pub struct ToolOperation {
     written_paths: Vec<String>,
     read_paths: Vec<String>,
     urls: Vec<String>,
+    authored_contents: Vec<String>,
     authored_keys: Vec<String>,
     replaced_keys: Vec<String>,
     authored_text: bool,
+    replaces_command: bool,
 }
 
 impl ToolOperation {
@@ -781,9 +783,11 @@ impl ToolOperation {
             written_paths: Vec::new(),
             read_paths: Vec::new(),
             urls: Vec::new(),
+            authored_contents: Vec::new(),
             authored_keys: Vec::new(),
             replaced_keys: Vec::new(),
             authored_text: false,
+            replaces_command: false,
         }
     }
 
@@ -804,6 +808,12 @@ impl ToolOperation {
         push_operand(&mut self.urls, value.into());
         self
     }
+    /// Pre-extracted authored text (for example patch content lines extracted
+    /// from a script-tool call).
+    pub fn with_authored_content(mut self, value: impl Into<String>) -> Self {
+        push_operand(&mut self.authored_contents, value.into());
+        self
+    }
     /// An argument key whose text is content the call authors.
     pub fn with_authored_key(mut self, value: impl Into<String>) -> Self {
         push_operand(&mut self.authored_keys, value.into());
@@ -817,6 +827,13 @@ impl ToolOperation {
     /// The argument text of a call with no argument object is authored content.
     pub fn with_authored_text(mut self) -> Self {
         self.authored_text = true;
+        self
+    }
+    /// Declared [`Self::commands`] replace the raw argument text as the shell
+    /// command surface (for example a script wrapper whose literal sub-calls
+    /// were extracted by the owning source).
+    pub fn with_replaces_command(mut self) -> Self {
+        self.replaces_command = true;
         self
     }
 
@@ -835,6 +852,9 @@ impl ToolOperation {
     pub fn urls(&self) -> &[String] {
         &self.urls
     }
+    pub fn authored_contents(&self) -> &[String] {
+        &self.authored_contents
+    }
     pub fn authored_keys(&self) -> &[String] {
         &self.authored_keys
     }
@@ -843,6 +863,9 @@ impl ToolOperation {
     }
     pub fn authored_text(&self) -> bool {
         self.authored_text
+    }
+    pub fn replaces_command(&self) -> bool {
+        self.replaces_command
     }
     /// Whether the declaration says how any argument is read.
     pub fn has_roles(&self) -> bool {
@@ -860,6 +883,7 @@ impl ToolOperation {
             &mut self.written_paths,
             &mut self.read_paths,
             &mut self.urls,
+            &mut self.authored_contents,
         ] {
             let mut normal = Vec::with_capacity(operands.len());
             for operand in operands.drain(..) {
@@ -872,6 +896,8 @@ impl ToolOperation {
             self.written_paths.clear();
             self.read_paths.clear();
             self.urls.clear();
+            self.authored_contents.clear();
+            self.replaces_command = false;
         }
         self
     }
@@ -882,6 +908,7 @@ impl ToolOperation {
             &self.written_paths,
             &self.read_paths,
             &self.urls,
+            &self.authored_contents,
         ]
         .into_iter()
         .flatten()

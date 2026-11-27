@@ -1107,3 +1107,48 @@ fn every_registered_source_declares_its_write_read_and_shell_operations() {
         }
     }
 }
+
+#[test]
+fn mcp_shaped_tool_calls_keep_their_names_and_are_never_declared_as_builtins() {
+    let mcp_tool = "mcp__fixture_docs__search_pages";
+    let (dir, path) = {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("mcp-conformance.jsonl");
+        let content = assistant_tools(&[(mcp_tool, serde_json::json!({"query": "synthetic"}))]);
+        fs::write(&path, content).expect("fixture");
+        (directory, path)
+    };
+    let batch = crate::acquisition::acquire_source(
+        &source(ClientId::Claude, "claude.projects", SourceKind::Jsonl, path),
+        crate::acquisition::AcquisitionOptions::new(
+            ObservedAt::new(OBSERVED_AT).expect("observed time"),
+        ),
+    )
+    .expect("Claude MCP conformance fixture");
+    drop(dir);
+    let requested = batch
+        .observations
+        .iter()
+        .find_map(|obs| match obs.body() {
+            ObservationBody::Tool(tool) if obs.stage() == ObservationStage::ToolRequested => {
+                Some(tool)
+            }
+            _ => None,
+        })
+        .expect("MCP tool request");
+    assert_eq!(requested.name(), Some(mcp_tool));
+    assert!(
+        requested.operation().is_none(),
+        "MCP tool call must never inherit a built-in ToolOperation declaration"
+    );
+    assert_eq!(
+        batch
+            .accounting
+            .sessions
+            .iter()
+            .flat_map(|s| s.counts.tool_usage.keys())
+            .filter(|name| name.as_str() == mcp_tool)
+            .count(),
+        1
+    );
+}
