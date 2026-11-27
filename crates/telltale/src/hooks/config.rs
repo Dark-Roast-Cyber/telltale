@@ -17,7 +17,7 @@ use crate::rule_resolution::RulePackPaths;
 /// What every ID of a host self-protection rule, bundled or generated, starts
 /// with. With [`RuleContent::tamper_prevention`] on, the namespace is the
 /// host's: no user rule content may name an ID in it.
-pub const HOST_RULE_ID_PREFIX: &str = "tth.tamper.";
+pub const HOST_RULE_ID_PREFIX: &str = telltale_schema::hooks_record::HOOKS_HOST_RULE_ID_PREFIX;
 
 /// What the ID of every enforcement test signature starts with
 /// ([`RuleContent::test_signatures`]).

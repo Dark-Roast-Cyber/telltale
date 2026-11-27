@@ -4,6 +4,25 @@ use serde_json::json;
 const MARKER: &str = "synthetic-private-marker";
 
 fn record() -> Value {
+    record_for("exfil.outbound_upload")
+}
+
+/// The decision of [`record`], covered by a session grant.
+fn granted(rule: &str) -> Value {
+    let mut value = record_for(rule);
+    let decision = value["decision"].as_object_mut().unwrap();
+    decision.remove("returned_verdict");
+    decision.insert("returned".into(), json!(false));
+    decision.insert("session_score_after".into(), json!(3));
+    decision.insert(
+        "grant".into(),
+        json!({"scope": "session", "granted_by": format!("tth:{}", "3".repeat(32))}),
+    );
+    value
+}
+
+fn record_for(rule: &str) -> Value {
+    let upload = rule == "exfil.outbound_upload";
     let observation = format!("obs:v2:sha256:{}", "a".repeat(64));
     let semantic = format!("semantic:v1:sha256:{}", "b".repeat(64));
     let action = json!({
@@ -26,10 +45,10 @@ fn record() -> Value {
         "timeline_index": 1,
         "severity": "medium",
         "promotion_score": 10,
-        "rule_ids": ["exfil.outbound_upload"],
+        "rule_ids": [rule],
         "categories": ["exfiltration"],
         "contributions": [
-            {"id": "exfil.outbound_upload", "type": "deterministic_rule", "points": 10,
+            {"id": rule, "type": "deterministic_rule", "points": 10,
              "rationale": "synthetic upload"}
         ],
         "evidence": [],
@@ -38,7 +57,7 @@ fn record() -> Value {
             "finding_id": format!("fnd:v2:sha256:{}", "c".repeat(64)),
             "signal_ids": [format!("sig:v2:sha256:{}", "e".repeat(64))],
             "observation_ids": [observation],
-            "detector_id": "exfil.outbound_upload",
+            "detector_id": rule,
             "finding_kind": "security_detection",
             "category": "exfiltration",
             "severity": "medium",
@@ -49,6 +68,11 @@ fn record() -> Value {
     let key = ActionRecordV1::from_json(&bytes(&action))
         .unwrap()
         .delivery_key();
+    let mut entry = json!({"delivery_key": key, "record": action});
+    if upload {
+        entry["destinations"] =
+            json!({"destinations": ["example.invalid"], "complete": true, "local_only": false});
+    }
     json!({
         "schema": HOOKS_RECORD_V1_ID,
         "record_id": format!("tth:{}", "1".repeat(32)),
@@ -71,9 +95,8 @@ fn record() -> Value {
         "decision": {"mode": "enforce", "verdict": "ask", "returned": true, "returned_verdict": "deny",
             "basis": "action_score", "action_score": 10, "session_score_before": 3,
             "session_score_after": 13, "denied_attempts_before": 0,
-            "rule_ids": ["exfil.outbound_upload"], "categories": ["exfiltration"]},
-        "telltale": [{"delivery_key": key, "record": action,
-            "destinations": {"destinations": ["example.invalid"], "complete": true, "local_only": false}}]
+            "rule_ids": [rule], "categories": ["exfiltration"]},
+        "telltale": [entry]
     })
 }
 
@@ -345,6 +368,25 @@ fn rejects_inconsistent_envelope_and_invalid_actions() {
     let mut typed = HooksRecordV1::from_json(&bytes(&base)).unwrap();
     typed.decision.as_mut().unwrap().session_score_after = 14;
     assert_eq!(typed.validate().unwrap_err().code(), "score_mismatch");
+}
+
+#[test]
+fn a_grant_never_covers_a_host_self_protection_rule() {
+    HooksRecordV1::from_json(&bytes(&granted("exfil.outbound_upload"))).unwrap();
+    // The same record is consistent in every other respect, so the rule ID
+    // alone decides.
+    let mut ungranted = granted("tth.tamper.synthetic");
+    let decision = ungranted["decision"].as_object_mut().unwrap();
+    decision.remove("grant");
+    decision.insert("returned".into(), json!(true));
+    decision.insert("returned_verdict".into(), json!("deny"));
+    decision.insert("session_score_after".into(), json!(13));
+    HooksRecordV1::from_json(&bytes(&ungranted)).unwrap();
+    check_rejection(
+        &bytes(&granted("tth.tamper.synthetic")),
+        "inconsistent_grant",
+        Semantic,
+    );
 }
 
 fn with_kind(value: &Value, kind: &str, block: &str, data: Value) -> Value {

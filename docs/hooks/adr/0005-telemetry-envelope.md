@@ -69,8 +69,12 @@ The consumer checks the published envelope schema, validates each embedded
 action with `ActionRecordV1`, and checks internal consistency. This includes
 the blocks allowed for each kind, delivery keys, destination facts, verdicts,
 grant and outcome accounting, and scores and summaries derived from the
-embedded findings. The consumer validates one record at a time; it cannot
+embedded findings. A grant never covers a finding of a host self-protection
+rule (`tth.tamper.*`). The consumer validates one record at a time; it cannot
 confirm that a record linked by ID exists or that a harness reported truthfully.
+It also does not check that an embedded action's client is the one the named
+harness is read as: harness names are an open vocabulary owned by the
+adapters, and the records file is not authenticated either way.
 
 Open-form text must already be a fixed point of the current sanitizer.
 Harness labels follow the encoding in the next addendum. Redaction

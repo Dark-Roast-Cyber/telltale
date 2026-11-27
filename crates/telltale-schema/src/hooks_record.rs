@@ -30,6 +30,10 @@ pub const HOOKS_RECORD_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 #[doc(hidden)]
 pub const TELEMETRY_RECORD_TOO_LARGE: &str = "telemetry_record_too_large";
 
+/// What every ID of a hooks host self-protection rule starts with. A grant
+/// never covers a finding of such a rule.
+pub const HOOKS_HOST_RULE_ID_PREFIX: &str = "tth.tamper.";
+
 #[doc(hidden)]
 pub const HOOK_LABEL_MAX_BYTES: usize = 256;
 #[doc(hidden)]
@@ -749,6 +753,10 @@ impl HooksDecision {
                 || !evaluation
                     .is_some_and(|evaluation| evaluation.status == HooksEvaluationStatus::Complete)
                 || self.rule_ids.is_empty()
+                || self
+                    .rule_ids
+                    .iter()
+                    .any(|id| id.starts_with(HOOKS_HOST_RULE_ID_PREFIX))
                 || !valid_grant_reference(grant))
         {
             return Err(INCONSISTENT_GRANT);
