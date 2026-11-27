@@ -509,9 +509,10 @@ fn hooks_status_probes_a_listener_without_sending_a_hook_request() {
     listener.set_nonblocking(true).unwrap();
     assert_eq!(fixture.status()["evaluator"], "running");
     let (mut stream, _) = listener.accept().unwrap();
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
-        .unwrap();
+    // The probe has exited, so the peer is closed and the read ends at once.
+    // macOS refuses a socket option on a stream whose peer has closed, so
+    // the timeout is only a bound where it can be set.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100)));
     assert_eq!(stream.read(&mut [0]).unwrap(), 0);
     drop(listener); // Leaves a stale socket node.
     assert_eq!(fixture.status()["evaluator"], "unreachable");
