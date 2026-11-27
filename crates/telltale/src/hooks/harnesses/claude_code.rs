@@ -379,6 +379,7 @@ pub const ADAPTER: Adapter = Adapter {
     home: None,
     rules: HostRules::Shared,
     launchers: &["claude"],
+    packages: &["@anthropic-ai/claude-code"],
     harness_protections: &[
         "`settings --fail-closed` adds onFailure: block to the pre-execution hook entry: Claude Code then blocks a tool call when the hook fails or does not answer in time. Only a settings fragment generated with the flag has it",
     ],

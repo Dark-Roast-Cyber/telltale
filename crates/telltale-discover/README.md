@@ -88,10 +88,25 @@ independent product installation.
   no snapshot. Exhaustion after root validation is visible in candidate outcomes
   and `check_limit_reached`; a snapshot does not promise complete coverage or an
   atomic filesystem view. Consumers must not turn incomplete checks into absence.
-- The new no-follow inventory backend currently supports **Unix execution
-  only**. Native Windows returns `UnsupportedExecutionPlatform`. Platform-context
-  tests do not qualify native macOS/Windows installations. Existing scanner
-  discovery remains portable and unchanged.
+- One check is one system call that resolves a name. On Unix a directory step
+  is two (`fstatat`, then `openat`) and the final candidate one. On Windows
+  every step is one `NtCreateFile`, and a directory that is a non-link reparse
+  point takes a second. Queries on an already open handle are not counted, so
+  `checks_performed` compares within one platform only.
+- The no-follow inventory backend runs on **Unix and Windows**; other
+  execution platforms return `UnsupportedExecutionPlatform`. Both walk from an
+  open parent handle and never follow a link: `O_NOFOLLOW` on Unix, and on
+  Windows `FILE_OPEN_REPARSE_POINT` with every name surrogate (symbolic link,
+  junction, mount point) refused. A Windows reparse point that is not a link is
+  the object itself. A file is probed by its attributes alone and is never
+  opened through its filter, so a cloud placeholder is not hydrated. A
+  directory is reopened through its filter with `OBJ_DONT_REPARSE` before the
+  walk continues below it, and is refused when no filter owns its tag. The
+  Windows backend is covered by the crate's tests on a Windows host
+  (`cargo test -p telltale-discover`, `cargo test --test discover_cli`) with
+  synthetic junctions and reparse points; cloud-provider placeholders and
+  network volumes have not been exercised. Existing scanner discovery remains
+  portable and unchanged.
 
 ```rust,no_run
 use telltale_discover::inventory::{discover, InventoryContext, InventoryLimits, Platform};

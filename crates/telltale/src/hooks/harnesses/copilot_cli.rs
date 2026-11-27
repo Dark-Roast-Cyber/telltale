@@ -453,6 +453,7 @@ pub const ADAPTER: Adapter = Adapter {
         include_str!("../rules/copilot-cli-self-protection.yaml"),
     ),
     launchers: &["copilot"],
+    packages: &["@github/copilot"],
     harness_protections: &[
         "Copilot CLI blocks a tool call when the hook command crashes, exits non-zero or cannot start, a missing binary included. Every installed hook file has this, and no option turns it off",
     ],

@@ -136,6 +136,95 @@ fn detect_only_answers_nothing_whatever_the_payload() {
     assert_eq!(decision(&stdout, true), "deny");
 }
 
+/// Stdin that is not valid UTF-8 is an unreadable payload. Observe mode
+/// records it and returns nothing: empty stdout, exit 0, an error record, and
+/// no decision. The same bytes while enforcing are a deny, so an empty
+/// observe answer is this path and not a payload the hook ignored.
+#[test]
+fn detect_only_answers_nothing_when_stdin_is_not_utf8() {
+    let payload =
+        b"{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_utf8\",\"tool_input\":{\"command\":\"ls\xff\"}}";
+    let (code, stdout) = hook("claude-code", ON_ERROR_DENY, payload);
+    assert_eq!(code, 0);
+    assert_eq!(decision(&stdout, true), "deny");
+    let settings = "  mode: observe\n  on_error: deny\n  on_unevaluable: deny\n";
+    for entry_point in ENTRY_POINTS {
+        let (code, stdout, telemetry) = hook_with(entry_point, settings, payload);
+        assert_eq!((code, stdout.as_str()), (0, ""), "{entry_point}");
+        let records: Vec<Value> = telemetry
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(
+            records.iter().any(|record| {
+                record["kind"] == "error" && record["error_code"] == "payload_invalid_json"
+            }),
+            "{entry_point}: {telemetry}"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.get("decision").is_none()),
+            "{entry_point}: {telemetry}"
+        );
+    }
+}
+
+/// Reading stdin fails (the descriptor is a directory, so the read returns an
+/// error). Observe mode releases that as no opinion: empty stdout, exit 0,
+/// and no record, because the payload never arrived. The same read while
+/// enforcing exits 1, which is what shows the read failed. Unix only: a
+/// directory descriptor is not a read-error seam on Windows.
+#[cfg(unix)]
+#[test]
+fn a_stdin_read_failure_in_observe_mode_exits_with_no_opinion() {
+    let run = |settings: &str| -> (i32, String, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::create_dir_all(config.join("settings.d")).unwrap();
+        std::fs::write(
+            config.join("settings.d").join("hooks.yaml"),
+            format!("version: 1\nhooks:\n{settings}"),
+        )
+        .unwrap();
+        let stdin_dir = dir.path().join("not-a-stream");
+        std::fs::create_dir(&stdin_dir).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command.arg("hooks");
+        for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
+            command.env(var, "/nonexistent-home-for-test");
+        }
+        let child = command
+            .args(["claude-code", "hook", "--config-dir"])
+            .arg(&config)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_STATE_HOME")
+            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+            .env("TELLTALE_HOOKS_EVALUATOR", "0")
+            .stdin(Stdio::from(std::fs::File::open(&stdin_dir).unwrap()))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code().unwrap(),
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap_or_default(),
+        )
+    };
+    let (code, stdout, stderr, _) = run("  mode: enforce\n  on_error: deny\n");
+    assert_eq!((code, stdout.as_str()), (1, ""), "{stderr}");
+    assert!(stderr.contains("cannot read hook payload"), "{stderr}");
+
+    let (code, stdout, stderr, telemetry) =
+        run("  mode: observe\n  on_error: deny\n  on_unevaluable: deny\n");
+    assert_eq!((code, stdout.as_str()), (0, ""), "{stderr}");
+    assert!(stderr.contains("cannot read hook payload"), "{stderr}");
+    assert!(telemetry.is_empty(), "{telemetry}");
+}
+
 fn oversized(prefix: &[u8]) -> Vec<u8> {
     let mut payload = prefix.to_vec();
     payload.resize(MAX_PAYLOAD_BYTES + 64, b'a');
