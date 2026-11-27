@@ -29,7 +29,7 @@ impl SourceScan {
     /// to this build. Delivery keys and aliases match v1 for the same action.
     pub fn action_records_v2(&self) -> Vec<ActionRecordV2> {
         self.project_records(|record, action| {
-            ActionRecordV2::from_v1(record, action.destination_facts().cloned(), None)
+            ActionRecordV2::from_v1(record, action.destination_facts().cloned())
         })
     }
 

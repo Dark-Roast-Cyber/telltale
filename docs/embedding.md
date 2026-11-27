@@ -914,7 +914,7 @@ versions emit no records for a failed source or a compatibility scan.
 (`telltale.action.v1`), whose frozen client vocabulary
 (`ACTION_RECORD_V1_CLIENTS`) excludes later clients such as Pi.
 
-Apart from the version marker, v2 differs from v1 in three places:
+Apart from the version marker, v2 differs from v1 in two places:
 
 - `client` is a pattern-constrained string in the JSON Schema and must name
   a `ClientId` known to the consuming build. A consumer built before a new
@@ -924,9 +924,9 @@ Apart from the version marker, v2 differs from v1 in three places:
   `ActionFinding::destination_facts()`. It is null unless the action carries
   `exfil.outbound_upload`. The receiver rejects facts that fail
   `DestinationFacts::is_valid()` or appear without that rule.
-- `call_id` is reserved and the producer always emits null. The consumer
-  also accepts `call:v1:hmac-sha256:` followed by 64 lowercase hexadecimal
-  digits. This checks syntax only; the field has no defined pairing behavior.
+
+v2 has no field that pairs a scan record with a hooks record of the same tool
+call. Pair by session until a later record version defines a call key.
 
 A record carries the shared action fields (`coordinate` is the anchor
 observation ID) plus the scan's `client`, `source_id`,

@@ -70,8 +70,8 @@
 
 - **Action record v2 supports every known client.** Embedders can use
   `SourceScan::action_records_v2()` to serialize actions for clients such as
-  Pi, with upload destination facts and a reserved, null `call_id`. v1 still
-  works. Delivery keys and aliases match v1 for the same action. See the
+  Pi, with upload destination facts. v1 still works. Delivery keys and
+  aliases match v1 for the same action. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md#action-record-v2).
 
 - **The native action profile is 19.** Several changes below change what the

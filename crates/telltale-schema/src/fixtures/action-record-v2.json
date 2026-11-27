@@ -62,6 +62,5 @@
     "destinations": ["uploads.example.invalid/artifacts"],
     "complete": true,
     "local_only": false
-  },
-  "call_id": null
+  }
 }

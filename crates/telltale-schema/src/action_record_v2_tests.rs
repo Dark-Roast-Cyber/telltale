@@ -27,7 +27,6 @@ fn v1_wire(mut value: Value) -> Value {
     value["schema"] = json!(ACTION_RECORD_V1_ID);
     let fields = value.as_object_mut().unwrap();
     fields.remove("destinations");
-    fields.remove("call_id");
     value
 }
 
@@ -71,7 +70,7 @@ fn consumer_requires_exact_fields_even_when_nullable() {
     let mut nested = golden();
     nested["destinations"]["raw"] = json!("synthetic-input");
     assert_rejected(&wire(&nested), Structure, "schema_mismatch");
-    for key in ["occurred_at", "destinations", "call_id"] {
+    for key in ["occurred_at", "destinations"] {
         let mut missing = golden();
         missing.as_object_mut().unwrap().remove(key);
         assert_rejected(&wire(&missing), Structure, "schema_mismatch");
@@ -169,24 +168,15 @@ fn consumer_allows_destination_facts_only_on_the_upload_rule() {
 }
 
 #[test]
-fn consumer_accepts_null_or_the_reserved_call_id_pattern() {
+fn consumer_rejects_a_call_identifier_field() {
+    // v2 defines no call pairing; a record that carries one is not v2.
     use ActionRecordErrorCategory::Structure;
-    assert_eq!(ActionRecordV2::from_json(GOLDEN).unwrap().call_id, None);
-    let mut value = golden();
-    let call_id = format!("call:v1:hmac-sha256:{}", "a".repeat(64));
-    value["call_id"] = json!(call_id);
-    let record = ActionRecordV2::from_json(&wire(&value)).unwrap();
-    record.validate().unwrap();
-    assert_eq!(record.call_id.as_deref(), Some(call_id.as_str()));
-
-    for invalid in [
-        json!(1),
-        json!("synthetic-native-call-id"),
-        json!(format!("call:v1:hmac-sha256:{}", "A".repeat(64))),
-        json!(format!("call:v1:hmac-sha256:{}", "a".repeat(63))),
-        json!(format!("{call_id}\n")),
+    for call_id in [
+        Value::Null,
+        json!(format!("call:v1:hmac-sha256:{}", "a".repeat(64))),
     ] {
-        value["call_id"] = invalid;
+        let mut value = golden();
+        value["call_id"] = call_id;
         assert_rejected(&wire(&value), Structure, "schema_mismatch");
     }
 }
@@ -286,7 +276,7 @@ fn consumer_rejects_text_redaction_would_change_without_echoing_it() {
 fn delivery_keys_and_aliases_match_v1_with_or_without_replay_identity() {
     let v1 = ActionRecordV1::from_json(&wire(&v1_wire(golden()))).unwrap();
     let v2 = ActionRecordV2::from_json(GOLDEN).unwrap();
-    let projected = ActionRecordV2::from_v1(v1.clone(), v2.destinations.clone(), None);
+    let projected = ActionRecordV2::from_v1(v1.clone(), v2.destinations.clone());
     assert_eq!(projected, v2);
     assert_eq!(v2.delivery_key(), v1.delivery_key());
     assert_eq!(v2.delivery_aliases(), v1.delivery_aliases());
@@ -325,13 +315,12 @@ fn schema_vocabularies_match_the_rust_types() {
         .remove("destinationFacts");
     let properties = v2["properties"].as_object_mut().unwrap();
     properties.remove("destinations");
-    properties.remove("call_id");
     properties.insert("client".into(), v1["properties"]["client"].clone());
     properties.insert("schema".into(), v1["properties"]["schema"].clone());
     assert_eq!(v2["$defs"], v1["$defs"]);
     assert_eq!(v2["properties"], v1["properties"]);
     let required = v2["required"].as_array_mut().unwrap();
-    required.retain(|field| field != "call_id" && field != "destinations");
+    required.retain(|field| field != "destinations");
     assert_eq!(v2["required"], v1["required"]);
 }
 
