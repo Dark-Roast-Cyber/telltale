@@ -325,11 +325,21 @@ pub(crate) fn load(
     no_local_config: bool,
     cli: &CliSettings,
 ) -> Result<Settings, Box<dyn std::error::Error>> {
+    load_observing_files(config_dirs, no_local_config, cli, |_, _| {})
+}
+
+pub(crate) fn load_observing_files(
+    config_dirs: &[PathBuf],
+    no_local_config: bool,
+    cli: &CliSettings,
+    observe: impl FnMut(&Path, &[u8]),
+) -> Result<Settings, Box<dyn std::error::Error>> {
     let files = crate::config::discover_settings_files(config_dirs, no_local_config)?;
-    let settings = resolve(
+    let settings = resolve_observing_files(
         &files,
         &|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()),
         cli,
+        observe,
     )?;
     telltale_schema::scoring::configure_thresholds(settings.risk_thresholds())?;
     Ok(settings)
@@ -357,10 +367,20 @@ fn open_settings_file(path: &Path) -> std::io::Result<fs::File> {
     Ok(file)
 }
 
+#[cfg(test)]
 fn resolve(
     files: &[PathBuf],
     env: &dyn Fn(&str) -> Option<String>,
     cli: &CliSettings,
+) -> Result<Settings, Box<dyn std::error::Error>> {
+    resolve_observing_files(files, env, cli, |_, _| {})
+}
+
+fn resolve_observing_files(
+    files: &[PathBuf],
+    env: &dyn Fn(&str) -> Option<String>,
+    cli: &CliSettings,
+    mut observe: impl FnMut(&Path, &[u8]),
 ) -> Result<Settings, Box<dyn std::error::Error>> {
     let mut settings = Settings {
         files: files.to_vec(),
@@ -391,6 +411,7 @@ fn resolve(
             )
             .into());
         }
+        observe(path, &bytes);
         settings.apply_document(document, path);
     }
     settings.apply_environment(env)?;

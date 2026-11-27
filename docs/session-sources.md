@@ -211,6 +211,38 @@ escaping rules.
   stdout-only `session_store_environment_ignored` diagnostic warning. It never
   includes the value.
 
+## Reading One Transcript
+
+`telltale investigate transcript` prints one page of redacted records from one
+session source. It is read-only.
+
+```sh
+telltale investigate transcript --source <session file> --client claude --source-id claude.projects
+telltale investigate transcript --root <approved root> --session <session id>
+```
+
+Records are JSON lines on stdout. A status line on stderr says whether the page
+is complete or names the continuation (`--after-ordinal N --after-key K`);
+`--json` prints one page document with `has_more`, `next_after_ordinal`, and
+`next_after_record_key` instead. A page can be empty and still name a
+continuation (`--after-ordinal N` alone) when the part of the store one read
+covers holds no matching record, for example before `--since`; follow it to
+reach later records. Records imported from another session are included in
+order with `"imported": true`. Tool results are left out unless
+`--include-tool-results` is given. Tool calls include the call's arguments,
+which for a write or patch tool hold the file body or patch text. A JSONL or
+log source is read whole for every page, so memory follows the source's size
+(at most `--max-source-bytes`, 128 MiB by default). A failed read exits 1 with its closed code,
+such as `non_regular_source`, `source_limit_exceeded`, or
+`session_record_cursor_changed`.
+
+With `--root`, the source is opened under the root's trust anchors and links
+are refused. Without `--source`, discovery under the root picks the one source
+that holds records of `--session` for the selected content; a source that
+cannot be read stops the search with its code. Options, limits, and the privacy
+boundary are those of the
+[embedding API](embedding.md#session-records).
+
 ## Linux Operational Notes
 
 Linux-specific live validation should use bounded, redacted excerpts and

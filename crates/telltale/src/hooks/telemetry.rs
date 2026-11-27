@@ -27,6 +27,17 @@ use telltale_sources::journal::{self, JournalGeneration};
 use crate::hooks::journal::escaped;
 use crate::hooks::state::{create_private_dir, lock_within, open_regular};
 
+/// Read-only bounded framing shared with the Hooks record feed, for local
+/// diagnostics. This does not open an archive or acquire the writer lock.
+#[doc(hidden)]
+pub fn visit_active_suffix(
+    file: &mut telltale_sources::journal::JournalFile,
+    max_bytes: u64,
+    visit: impl FnMut(Result<crate::HooksRecordV1, &'static str>),
+) -> io::Result<bool> {
+    crate::hooks_record_feed::visit_active_suffix(file, max_bytes, visit)
+}
+
 pub const RECORD_SCHEMA: &str = "telltale_hooks.record.v1";
 
 /// `producer.name` in every record; the producer is the hooks runtime inside

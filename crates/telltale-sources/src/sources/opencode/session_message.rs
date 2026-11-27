@@ -901,3 +901,193 @@ fn decode_shell(data: &Map<String, Value>) -> OpenCodeShell {
         malformed,
     }
 }
+
+/// One window of a session's rows for a transcript read.
+#[derive(Debug)]
+pub(crate) struct SessionTranscriptRows {
+    /// Ascending by `seq`.
+    pub(crate) records: Vec<OpenCodeSessionMessageRecord>,
+    /// Rows of the session follow the last record.
+    pub(crate) more: bool,
+    /// Stored `data` bytes the window loaded.
+    pub(crate) bytes: usize,
+}
+
+#[derive(Debug)]
+pub(crate) enum SessionTranscript {
+    Rows(SessionTranscriptRows),
+    /// The legacy schema keeps no per-session order.
+    Legacy,
+    /// A row of the session has no non-negative integer `seq`, or two share one.
+    Unordered,
+}
+
+/// Sessions scanned to match a terminal session id that is not the stored
+/// one (a stored id with credential material is shown hashed), and the bytes
+/// of one scanned id and of all of them. Past any bound the read fails.
+const TRANSCRIPT_SESSION_SCAN: i64 = 100_000;
+const TRANSCRIPT_SESSION_ID_BYTES: i64 = 4_096;
+const TRANSCRIPT_SESSION_SCAN_BYTES: i64 = 8 * 1024 * 1024;
+
+/// Up to `limit` rows of the session whose terminal id is `session`, from
+/// `seq >= from_seq` in `seq` order, in one read snapshot. Rows are read while
+/// their stored data fits `read_bytes`, and after the first row also
+/// `window_bytes`; a first row over `read_bytes` is not read (no records, and
+/// `more`). The store is opened read-only by name, refusing a link at the
+/// final component.
+pub(crate) fn read_session_transcript(
+    path: &std::path::Path,
+    session: &str,
+    from_seq: u64,
+    limit: usize,
+    read_bytes: usize,
+    window_bytes: usize,
+) -> Result<SessionTranscript, SourceReadError> {
+    use rusqlite::OpenFlags;
+    let mut conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+    let snapshot = conn.transaction()?;
+    let transcript = match select_native_schema(&snapshot)? {
+        NativeSchema::Legacy => SessionTranscript::Legacy,
+        NativeSchema::SessionMessages => session_transcript_rows(
+            &snapshot,
+            session,
+            from_seq,
+            limit,
+            read_bytes,
+            window_bytes,
+        )?,
+    };
+    snapshot.commit()?;
+    Ok(transcript)
+}
+
+fn session_transcript_rows(
+    conn: &Connection,
+    session: &str,
+    from_seq: u64,
+    limit: usize,
+    read_bytes: usize,
+    window_bytes: usize,
+) -> Result<SessionTranscript, SourceReadError> {
+    let empty = SessionTranscriptRows {
+        records: Vec::new(),
+        more: false,
+        bytes: 0,
+    };
+    let Some(stored) = stored_session_id(conn, session)? else {
+        return Ok(SessionTranscript::Rows(empty));
+    };
+    let unordered = conn
+        .query_row(
+            "select 1 from session_message where session_id = ?1 \
+             and (typeof(seq) != 'integer' or seq < 0) limit 1",
+            [&stored],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if unordered {
+        return Ok(SessionTranscript::Unordered);
+    }
+    let Ok(from_seq) = i64::try_from(from_seq) else {
+        return Ok(SessionTranscript::Rows(empty));
+    };
+    let lookahead = i64::try_from(limit.saturating_add(1))
+        .map_err(|_| part_read_error("transcript window overflow"))?;
+    let mut keys = conn.prepare(
+        "select rowid, seq from session_message where session_id = ?1 and seq >= ?2 \
+         order by seq, rowid limit ?3",
+    )?;
+    let keyed = keys
+        .query_map(rusqlite::params![stored, from_seq, lookahead], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if keyed.windows(2).any(|pair| pair[0].1 == pair[1].1) {
+        return Ok(SessionTranscript::Unordered);
+    }
+    let mut rows = SessionTranscriptRows {
+        more: keyed.len() > limit,
+        ..empty
+    };
+    let mut row = conn.prepare(&keyed_row())?;
+    let mut admission = SqliteAdmission::default();
+    for (key, _) in keyed.into_iter().take(limit) {
+        let mut over_budget = false;
+        let delivered = stream_sqlite_rows(&mut row, [key], &mut admission, None, |value| {
+            let bytes = value
+                .get("data")
+                .and_then(Value::as_str)
+                .map_or(0, str::len);
+            let cap = if rows.records.is_empty() {
+                read_bytes
+            } else {
+                read_bytes.min(window_bytes)
+            };
+            if rows.bytes.saturating_add(bytes) > cap {
+                over_budget = true;
+                return Ok(());
+            }
+            rows.bytes += bytes;
+            rows.records.push(decode_row(value)?);
+            Ok(())
+        })?;
+        if delivered != 1 {
+            return Err(part_read_error("missing keyed message row"));
+        }
+        if over_budget {
+            rows.more = true;
+            break;
+        }
+    }
+    Ok(SessionTranscript::Rows(rows))
+}
+
+/// The stored session id whose terminal form is `session`.
+fn stored_session_id(conn: &Connection, session: &str) -> Result<Option<String>, SourceReadError> {
+    use telltale_schema::event::terminal_session_id;
+    if terminal_session_id(session) == session
+        && conn
+            .query_row(
+                "select 1 from session_message where session_id = ?1 limit 1",
+                [session],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+    {
+        return Ok(Some(session.to_owned()));
+    }
+    // Session ids are the primary key of `session_v2`: scanning it needs no
+    // DISTINCT (which may sort through SQLite's temp store), and SQL leaves an
+    // oversized id out of the row, so the read fails before holding it.
+    let mut stmt = conn.prepare(
+        "select case when octet_length(id) > ?1 then null else id end, octet_length(id) \
+         from session_v2 where typeof(id) = 'text' limit ?2",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![
+        TRANSCRIPT_SESSION_ID_BYTES,
+        TRANSCRIPT_SESSION_SCAN + 1
+    ])?;
+    let limit = || SourceReadError::Bounded(crate::source_read::BoundedReadError::LimitExceeded);
+    let (mut scanned, mut bytes) = (0i64, 0i64);
+    while let Some(row) = rows.next()? {
+        scanned += 1;
+        bytes = bytes.saturating_add(row.get::<_, i64>(1)?);
+        let stored: Option<String> = row.get(0)?;
+        let Some(stored) = stored else {
+            return Err(limit());
+        };
+        if scanned > TRANSCRIPT_SESSION_SCAN || bytes > TRANSCRIPT_SESSION_SCAN_BYTES {
+            return Err(limit());
+        }
+        if terminal_session_id(&stored) == session {
+            return Ok(Some(stored));
+        }
+    }
+    Ok(None)
+}

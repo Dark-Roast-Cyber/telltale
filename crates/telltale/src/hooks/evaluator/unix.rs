@@ -54,6 +54,7 @@ const SERVER_READ_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 32;
 /// How long a hook waits to establish a connection (a full backlog blocks).
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+const PROBE_TIMEOUT: Duration = Duration::from_millis(100);
 /// Part of the client's wait reserved for evaluation after the deadline by
 /// which the daemon must have started. The pieces of a call past capacity stop
 /// inside it ([`crate::hooks::engine::PIECE_SCAN_LIMIT`]) and other optional scans are
@@ -249,10 +250,33 @@ pub fn peer_uid(_stream: &UnixStream) -> Option<u32> {
 fn connect_within(socket: &Path, timeout: Duration) -> Option<UnixStream> {
     let (tx, rx) = std::sync::mpsc::channel();
     let path = socket.to_owned();
-    std::thread::spawn(move || {
-        let _ = tx.send(UnixStream::connect(path));
-    });
+    std::thread::Builder::new()
+        .spawn(move || {
+            let _ = tx.send(UnixStream::connect(path));
+        })
+        .ok()?;
     rx.recv_timeout(timeout).ok()?.ok()
+}
+
+pub(super) fn probe(socket: &Path) -> super::Probe {
+    use super::Probe;
+    if let Err(error) = std::fs::symlink_metadata(socket) {
+        return if error.kind() == std::io::ErrorKind::NotFound {
+            Probe::NotRunning
+        } else {
+            Probe::Unreachable
+        };
+    }
+    if !trusted(socket) {
+        return Probe::Unreachable;
+    }
+    if connect_within(socket, PROBE_TIMEOUT)
+        .is_some_and(|stream| peer_uid(&stream) == Some(crate::hooks::config::current_uid()))
+    {
+        Probe::Running
+    } else {
+        Probe::Unreachable
+    }
 }
 
 pub fn request(
@@ -493,7 +517,6 @@ pub fn serve(config: Config) -> Result<(), ServeError> {
             reply(&mut stream, &Response::status("fingerprint_mismatch"));
             continue;
         }
-        shared.last_activity.store(now_secs(), Ordering::Relaxed);
         let Some(connection) = Connection::open(&shared) else {
             let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
             reply(&mut stream, &Response::status("busy"));
@@ -541,7 +564,6 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.0.last_activity.store(now_secs(), Ordering::Relaxed);
         self.0.active.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -595,6 +617,14 @@ fn serve_connection(shared: &Shared, stream: &mut UnixStream) {
         shared.retire();
         return;
     }
+    // A connection-only status probe does not keep an idle evaluator alive.
+    struct RequestActivity<'a>(&'a AtomicU64);
+    impl Drop for RequestActivity<'_> {
+        fn drop(&mut self) {
+            self.0.store(now_secs(), Ordering::Relaxed);
+        }
+    }
+    let _activity = RequestActivity(&shared.last_activity);
     // Evaluation is serial: one session-consistent Runtime. A client queued
     // behind slow evaluations is told so by its deadline, not left to give up:
     // it evaluates in-process, and another session's calls keep their verdicts.

@@ -751,6 +751,8 @@ mod codex_current_format;
 mod declared_role_scan;
 #[path = "cli/export.rs"]
 mod export;
+#[path = "cli/investigate_transcript.rs"]
+mod investigate_transcript;
 #[path = "cli/migration.rs"]
 mod migration;
 
@@ -866,6 +868,9 @@ mod hooks_pinned_config_root;
 #[cfg(all(feature = "hooks", unix))]
 #[path = "cli/hooks_pinned_state_dir.rs"]
 mod hooks_pinned_state_dir;
+#[cfg(feature = "hooks")]
+#[path = "cli/hooks_status.rs"]
+mod hooks_status;
 #[cfg(feature = "hooks")]
 #[path = "cli/hooks_unreadable_payloads.rs"]
 mod hooks_unreadable_payloads;

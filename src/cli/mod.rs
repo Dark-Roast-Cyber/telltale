@@ -31,6 +31,7 @@ mod export;
 pub mod historical;
 #[cfg(feature = "hooks")]
 mod hooks;
+mod investigate;
 mod scan;
 
 #[derive(Parser)]
@@ -48,6 +49,9 @@ struct Args {
 enum Command {
     /// Inspect AI-tool data-location metadata without reading sessions or token counts.
     Discover(discover::DiscoverArgs),
+
+    /// Read-only forensic transcript inspection over a supported session store.
+    Investigate(investigate::InvestigateArgs),
 
     /// Discover supported local session sources.
     Scan(ScanCommandArgs),
@@ -1926,6 +1930,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Discover(args) => discover::run(args)?,
+        Command::Investigate(args) => investigate::run(args)?,
         #[cfg(feature = "hooks")]
         Command::Hooks { args } => std::process::exit(hooks::exit_code(&args)),
         Command::Cursor { command } => cursor::run(command)?,

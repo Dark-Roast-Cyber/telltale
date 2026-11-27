@@ -157,11 +157,21 @@ fn refuse_legacy_system_root() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The system config root: `/etc/telltale`, or on Windows `telltale` in the
 /// `ProgramData` known folder (`None` only if Windows cannot resolve it).
-fn system_config_root() -> Option<PathBuf> {
+pub(crate) fn system_config_root() -> Option<PathBuf> {
     #[cfg(windows)]
     return windows::program_data().map(|root| root.join("telltale"));
     #[cfg(not(windows))]
     Some(PathBuf::from(SYSTEM_CONFIG_ROOT))
+}
+
+#[cfg(all(feature = "hooks", windows))]
+pub(crate) fn program_data() -> Option<PathBuf> {
+    windows::program_data()
+}
+
+#[cfg(all(feature = "hooks", windows))]
+pub(crate) fn program_files() -> Option<PathBuf> {
+    windows::program_files()
 }
 
 #[cfg(windows)]

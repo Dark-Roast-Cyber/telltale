@@ -6,6 +6,13 @@
 
 ## Unreleased
 
+- `telltale hooks status [--json]` reports installation, configuration,
+  evaluator reachability, and bounded active telemetry without exposing
+  raw paths or record text. `telltale hooks check --json` returns the same
+  configuration view and exits non-zero for invalid configuration. Status
+  reports TOML harness settings as `not_inspected` when present and readable
+  within the size limit.
+
 - Hooks records now rotate by size with configurable archive retention.
   `telltale hooks allow` searches kept generations, and the experimental
   `HooksRecordFeed` offers bounded strict readback with restart checkpoints
@@ -46,6 +53,18 @@
 - Privacy changes do not rewrite canonical journals or queued bytes. Sanitized
   exports are views, not replay input; qualify producer/consumer privacy pins
   together before upgrading.
+
+### Session records
+
+- Add `Pipeline::read_session_records` and the read-only
+  `telltale investigate transcript` command: one page of redacted records from
+  one session source, in store order, with opt-in content classes (tool
+  results off by default), record, page, and source byte bounds, and a cursor
+  that reports a changed store as `session_record_cursor_changed`. OpenCode
+  stores are read per session, oldest first; a page that found no match in
+  its budget still names where to continue. Imported history is included and
+  flagged. Failures are closed codes. See
+  [session records](docs/embedding.md#session-records).
 
 ### Compatibility and operator impact
 

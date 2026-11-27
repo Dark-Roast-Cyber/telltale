@@ -112,6 +112,7 @@ for asset in action-record-v1 action-record-v2 effective-configuration-v1 rule-c
 done
 for schema_path in \
     schemas/event.schema.json \
+    schemas/telltale-hooks-status-v1.schema.json \
     schemas/historical/README.md \
     schemas/historical/event-3.0.schema.json; do
     test -f "$(package_path telltale-cli)/$schema_path" || {

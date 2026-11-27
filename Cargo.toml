@@ -76,6 +76,7 @@ include = [
     "/benches/benchmarks.rs",
     "/src/**",
     "/schemas/event.schema.json",
+    "/schemas/telltale-hooks-status-v1.schema.json",
     "/schemas/historical/*.json",
     "/schemas/historical/README.md",
     "/config/rules/tool-call-regex.yaml",

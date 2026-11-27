@@ -99,6 +99,7 @@ package)
         mkdir -p "$package_root/schemas/historical"
         for schema in \
             schemas/event.schema.json \
+            schemas/telltale-hooks-status-v1.schema.json \
             schemas/historical/README.md \
             schemas/historical/event-3.0.schema.json; do
             : > "$package_root/$schema"

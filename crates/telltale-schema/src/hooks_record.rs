@@ -405,11 +405,37 @@ impl std::error::Error for HooksRecordError {}
 
 use HooksRecordErrorCategory::{Identity, Malformed, Semantic, Structure, Version};
 
-const SCHEMA_MISMATCH: HooksRecordError = HooksRecordError::new(Structure, "schema_mismatch");
-const INVALID_ACTION: HooksRecordError = HooksRecordError::new(Semantic, "invalid_action_record");
-const INVALID_DESTINATIONS: HooksRecordError =
-    HooksRecordError::new(Semantic, "invalid_destinations");
-const UNREDACTED_TEXT: HooksRecordError = HooksRecordError::new(Semantic, "unredacted_text");
+macro_rules! rejection_codes {
+    ($($name:ident: $category:ident => $code:literal),+ $(,)?) => {
+        $(const $name: HooksRecordError = HooksRecordError::new($category, $code);)+
+        impl HooksRecordError {
+            /// Closed vocabulary returned by the strict record reader.
+            pub const CODES: &'static [&'static str] = &[$($code),+];
+            /// The same diagnostic used when a reader rejects before buffering.
+            pub const INPUT_TOO_LARGE_CODE: &'static str = INPUT_TOO_LARGE.code();
+        }
+    };
+}
+
+rejection_codes! {
+    ACTION_SOURCE_MISMATCH: Identity => "action_source_mismatch",
+    DELIVERY_KEY_MISMATCH: Identity => "delivery_key_mismatch",
+    FINDING_SUMMARY_MISMATCH: Semantic => "finding_summary_mismatch",
+    INCONSISTENT_EVALUATION: Semantic => "inconsistent_evaluation",
+    INCONSISTENT_GRANT: Semantic => "inconsistent_grant",
+    INCONSISTENT_KIND: Semantic => "inconsistent_kind",
+    INCONSISTENT_LIFECYCLE: Semantic => "inconsistent_lifecycle",
+    INCONSISTENT_OUTCOME: Semantic => "inconsistent_outcome",
+    INCONSISTENT_VERDICT: Semantic => "inconsistent_verdict",
+    INPUT_TOO_LARGE: Structure => "input_too_large",
+    INVALID_ACTION: Semantic => "invalid_action_record",
+    INVALID_DESTINATIONS: Semantic => "invalid_destinations",
+    MALFORMED_JSON: Malformed => "malformed_json",
+    SCHEMA_MISMATCH: Structure => "schema_mismatch",
+    SCORE_MISMATCH: Semantic => "score_mismatch",
+    UNREDACTED_TEXT: Semantic => "unredacted_text",
+    UNSUPPORTED_RECORD_VERSION: Version => "unsupported_record_version",
+}
 
 impl HooksRecordV1 {
     /// Read one complete JSON object, optionally including its trailing JSONL
@@ -438,7 +464,7 @@ impl HooksRecordV1 {
         self.validate_kind()?;
         for action in &self.telltale {
             if action.delivery_key != action.record.delivery_key() {
-                return Err(HooksRecordError::new(Identity, "delivery_key_mismatch"));
+                return Err(DELIVERY_KEY_MISMATCH);
             }
             let record = &action.record;
             let hook_source = ClientId::from_name(&record.client)
@@ -457,7 +483,7 @@ impl HooksRecordV1 {
                 || self.producer.semantic_identity.as_deref() != Some(&record.semantic_identity)
                 || record.stage != stage
             {
-                return Err(HooksRecordError::new(Identity, "action_source_mismatch"));
+                return Err(ACTION_SOURCE_MISMATCH);
             }
             if let Some(facts) = &action.destinations
                 && (!record
@@ -511,7 +537,7 @@ impl HooksRecordV1 {
                     || (outcome && action.input_sha256.is_some())
             })
         {
-            return Err(HooksRecordError::new(Semantic, "inconsistent_kind"));
+            return Err(INCONSISTENT_KIND);
         }
         Ok(())
     }
@@ -610,14 +636,13 @@ fn checked_value(bytes: &[u8]) -> Result<Value, HooksRecordError> {
     if bytes.len() > HOOKS_RECORD_MAX_INPUT_BYTES
         || (bytes.len() == HOOKS_RECORD_MAX_INPUT_BYTES && !bytes.ends_with(b"\n"))
     {
-        return Err(HooksRecordError::new(Structure, "input_too_large"));
+        return Err(INPUT_TOO_LARGE);
     }
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| HooksRecordError::new(Malformed, "malformed_json"))?;
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| MALFORMED_JSON)?;
     if let Some(schema) = value.get("schema").and_then(Value::as_str)
         && schema != HOOKS_RECORD_V1_ID
     {
-        return Err(HooksRecordError::new(Version, "unsupported_record_version"));
+        return Err(UNSUPPORTED_RECORD_VERSION);
     }
     if !VALIDATOR.is_valid(&value) {
         // Keep the cross-field diagnostic when the wire schema also rejects
@@ -693,7 +718,7 @@ impl HooksEvaluation {
                 || scans.pieces_scanned > scans.pieces_total
                 || (scans.first_refusal.is_some() && scans.pieces_refused == 0)
         }) {
-            return Err(HooksRecordError::new(Semantic, "inconsistent_evaluation"));
+            return Err(INCONSISTENT_EVALUATION);
         }
         Ok(())
     }
@@ -715,7 +740,7 @@ impl HooksDecision {
             || (self.returned_verdict.is_some() && (!self.returned || self.verdict != Ask))
             || (result_finding && (self.verdict != Allow || self.basis != BelowThreshold))
         {
-            return Err(HooksRecordError::new(Semantic, "inconsistent_verdict"));
+            return Err(INCONSISTENT_VERDICT);
         }
         if let Some(grant) = &self.grant
             && (self.mode != HooksMode::Enforce
@@ -726,7 +751,7 @@ impl HooksDecision {
                 || self.rule_ids.is_empty()
                 || !valid_grant_reference(grant))
         {
-            return Err(HooksRecordError::new(Semantic, "inconsistent_grant"));
+            return Err(INCONSISTENT_GRANT);
         }
         let score = actions
             .iter()
@@ -755,7 +780,7 @@ impl HooksDecision {
                 || (after == before && test_score)
         };
         if !consistent_score {
-            return Err(HooksRecordError::new(Semantic, "score_mismatch"));
+            return Err(SCORE_MISMATCH);
         }
         let rules: BTreeSet<_> = actions
             .iter()
@@ -766,7 +791,7 @@ impl HooksDecision {
             .flat_map(|action| &action.record.categories)
             .collect();
         if !self.rule_ids.iter().eq(rules) || !self.categories.iter().eq(categories) {
-            return Err(HooksRecordError::new(Semantic, "finding_summary_mismatch"));
+            return Err(FINDING_SUMMARY_MISMATCH);
         }
         Ok(())
     }
@@ -807,7 +832,7 @@ impl HooksOutcome {
                     || !prior
             })
         {
-            return Err(HooksRecordError::new(Semantic, "inconsistent_outcome"));
+            return Err(INCONSISTENT_OUTCOME);
         }
         let verdict = if self.prior_returned_verdict.is_some() {
             Some(Deny)
@@ -824,7 +849,7 @@ impl HooksOutcome {
             _ => E::NotReturned,
         };
         if self.enforcement != expected {
-            return Err(HooksRecordError::new(Semantic, "inconsistent_outcome"));
+            return Err(INCONSISTENT_OUTCOME);
         }
         Ok(())
     }
@@ -848,7 +873,7 @@ impl HooksLifecycle {
         session: &HooksSession,
     ) -> Result<(), HooksRecordError> {
         use HooksGrantScope::{Project, User};
-        let invalid = HooksRecordError::new(Semantic, "inconsistent_lifecycle");
+        let invalid = INCONSISTENT_LIFECYCLE;
         match self {
             Self::Grant {
                 scope,

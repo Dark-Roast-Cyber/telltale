@@ -207,6 +207,27 @@ fn quarantine_code(error: &ClaudeCanonicalError) -> Option<&'static str> {
     }
 }
 
+/// Elements Claude Code writes when it stores the output of a shell escape, a
+/// local command or a background task as a user record.
+const HARNESS_OUTPUT_ELEMENTS: [&str; 5] = [
+    "bash-stdout",
+    "bash-stderr",
+    "local-command-stdout",
+    "local-command-stderr",
+    "task-notification",
+];
+
+/// Whether a projected Claude user message holds harness output rather than
+/// only a prompt: one of [`HARNESS_OUTPUT_ELEMENTS`], by the transcript's
+/// shared element rule. `text` is the message text a transcript shows.
+pub(crate) fn is_harness_output_message(observation: &CanonicalObservationV2, text: &str) -> bool {
+    crate::acquisition::transcript::user_message_holds_element(
+        observation,
+        text,
+        &HARNESS_OUTPUT_ELEMENTS,
+    )
+}
+
 fn project_record(
     record: &ClaudeNativeRecord,
     options: &ClaudeCanonicalOptions,

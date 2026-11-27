@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::source_read::{
-    PRODUCTION_SOURCE_BYTES, SourceReadError, bounded_file_bytes, collect_string_values,
-    confined_file_bytes, nested_string_field, resolved_file_bytes,
+    PRODUCTION_SOURCE_BYTES, SourceReadError, anchored_file_bytes, bounded_file_bytes,
+    collect_string_values, confined_file_bytes, nested_string_field, resolved_file_bytes,
 };
 use telltale_schema::observation::{
     LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_STRING_BYTES, TOOL_RESULT_MAX_TEXT_BYTES,
@@ -75,6 +75,7 @@ pub(crate) fn extract_claude_native_records_with_limits(
     // Spilled results share the source's byte budget with the transcript.
     let mut spill_budget = match access {
         SourceAccess::Direct(direct) => direct.limits.bytes,
+        SourceAccess::Anchored(anchored) => anchored.max_bytes,
         SourceAccess::ByName | SourceAccess::Resolved => PRODUCTION_SOURCE_BYTES,
     }
     .saturating_sub(bytes);
@@ -432,6 +433,7 @@ fn resolve_spilled_results(
         let cap = TOOL_RESULT_MAX_TEXT_BYTES.min(*budget);
         let bytes = match access {
             SourceAccess::Direct(DirectRead { root, .. }) => confined_file_bytes(root, &path, cap),
+            SourceAccess::Anchored(anchored) => anchored_file_bytes(anchored.root, &path, cap),
             SourceAccess::Resolved => resolved_file_bytes(&path, cap),
             SourceAccess::ByName => bounded_file_bytes(&path, cap),
         };
