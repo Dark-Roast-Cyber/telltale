@@ -91,6 +91,119 @@ fn startup_modes_and_serialized_batch_cursor() {
 }
 
 #[test]
+fn recent_initial_unterminated_record_is_delivered_when_completed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    append(&path, record(1).to_string().as_bytes());
+    let mut feed = HooksRecordFeed::new(HooksRecordFeedConfig::new(
+        &path,
+        StartupMode::Recent {
+            max_events: 2,
+            max_bytes: 4096,
+        },
+    ))
+    .unwrap();
+    assert!(feed.poll().records.is_empty());
+    append(&path, b"\n");
+    let batch = feed.poll();
+    assert_eq!(batch.records.len(), 1);
+    assert_eq!(batch.records[0].record_id, id(1));
+    assert!(batch.rejections.is_empty());
+    assert!(batch.notices.is_empty());
+    assert!(feed.poll().records.is_empty());
+}
+
+#[test]
+fn recent_initial_empty_file_delivers_the_next_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    append(&path, b"");
+    let mut feed = HooksRecordFeed::new(HooksRecordFeedConfig::new(
+        &path,
+        StartupMode::Recent {
+            max_events: 2,
+            max_bytes: 4096,
+        },
+    ))
+    .unwrap();
+    assert!(feed.poll().records.is_empty());
+    row(&path, 1);
+    assert_eq!(ids(&mut feed), [id(1)]);
+    assert!(ids(&mut feed).is_empty());
+}
+
+#[test]
+fn recent_initial_checkpoint_defers_an_unterminated_record_across_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    append(&path, record(1).to_string().as_bytes());
+    let config = HooksRecordFeedConfig::new(
+        &path,
+        StartupMode::Recent {
+            max_events: 2,
+            max_bytes: 4096,
+        },
+    );
+    let mut feed = HooksRecordFeed::new(config.clone()).unwrap();
+    assert!(feed.poll().records.is_empty());
+    let token = serde_json::to_vec(&feed.cursor().expect("initial snapshot checkpoint")).unwrap();
+    let cursor: HooksRecordCursor = serde_json::from_slice(&token).unwrap();
+    let mut resumed = HooksRecordFeed::resume(config, cursor).unwrap();
+    append(&path, b"\n");
+    assert_eq!(ids(&mut resumed), [id(1)]);
+    assert!(ids(&mut resumed).is_empty());
+}
+
+#[test]
+fn recent_initial_empty_checkpoint_survives_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    append(&path, b"");
+    let config = HooksRecordFeedConfig::new(
+        &path,
+        StartupMode::Recent {
+            max_events: 2,
+            max_bytes: 4096,
+        },
+    );
+    let mut feed = HooksRecordFeed::new(config.clone()).unwrap();
+    assert!(feed.poll().records.is_empty());
+    let token = serde_json::to_vec(&feed.cursor().expect("empty snapshot checkpoint")).unwrap();
+    let cursor: HooksRecordCursor = serde_json::from_slice(&token).unwrap();
+    let mut resumed = HooksRecordFeed::resume(config, cursor).unwrap();
+    row(&path, 1);
+    assert_eq!(ids(&mut resumed), [id(1)]);
+    assert!(ids(&mut resumed).is_empty());
+}
+
+#[test]
+fn recent_initial_fully_scanned_tail_is_checkpointed_without_a_second_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    let mut bytes = vec![b' '; HOOKS_RECORD_MAX_INPUT_BYTES / 2 + 1];
+    bytes.extend_from_slice(record(1).to_string().as_bytes());
+    append(&path, &bytes);
+    let mut config = HooksRecordFeedConfig::new(
+        &path,
+        StartupMode::Recent {
+            max_events: 2,
+            max_bytes: HOOKS_RECORD_MAX_INPUT_BYTES,
+        },
+    );
+    config.max_bytes_per_poll = HOOKS_RECORD_MAX_INPUT_BYTES;
+    let mut feed = HooksRecordFeed::new(config.clone()).unwrap();
+    let batch = feed.poll();
+    assert!(batch.records.is_empty());
+    assert!(batch.bytes_read <= HOOKS_RECORD_MAX_INPUT_BYTES);
+    let token = serde_json::to_vec(&feed.cursor().expect("fully scanned tail checkpoint")).unwrap();
+    let cursor: HooksRecordCursor = serde_json::from_slice(&token).unwrap();
+    let mut resumed = HooksRecordFeed::resume(config, cursor).unwrap();
+    append(&path, b"\n");
+    assert_eq!(ids(&mut resumed), [id(1)]);
+    assert!(ids(&mut resumed).is_empty());
+}
+
+#[test]
 fn recent_counts_valid_records_and_reports_rejected_lines_in_its_window() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("records.jsonl");
@@ -214,6 +327,42 @@ fn changed_head_detects_same_length_rewrite() {
             .iter()
             .any(|notice| notice.code == FeedNoticeCode::GenerationGap)
     );
+}
+
+#[test]
+fn empty_separators_advance_the_checkpoint_without_rejections() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    append(&path, b"\n");
+    let config = HooksRecordFeedConfig::new(&path, StartupMode::Beginning);
+    let mut feed = HooksRecordFeed::new(config.clone()).unwrap();
+    let batch = feed.poll();
+    assert!(batch.records.is_empty());
+    assert!(batch.rejections.is_empty());
+    assert!(batch.caught_up);
+    let mut resumed = HooksRecordFeed::resume(config, feed.cursor().unwrap()).unwrap();
+    let batch = resumed.poll();
+    assert!(batch.rejections.is_empty());
+    assert_eq!(batch.bytes_read, 0);
+    row(&path, 1);
+    assert_eq!(ids(&mut resumed), [id(1)]);
+}
+
+#[cfg(feature = "hooks")]
+#[test]
+fn active_suffix_ignores_empty_separators_but_reports_torn_fragments() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    append(&path, b"\n{\"schema\":\n");
+    row(&path, 1);
+    let mut file = telltale_sources::journal::JournalFile::open(&path).unwrap();
+    let mut results = Vec::new();
+    let complete = telltale_core::hooks::telemetry::visit_active_suffix(&mut file, 4096, |row| {
+        results.push(row.map(|record| record.record_id));
+    })
+    .unwrap();
+    assert!(complete);
+    assert_eq!(results, [Err("malformed_json"), Ok(id(1))]);
 }
 
 #[test]

@@ -20,7 +20,7 @@ const MAX_GENERATIONS: usize = 256;
 pub struct HooksRecordFeedConfig {
     pub path: PathBuf,
     pub startup: StartupMode,
-    /// Complete lines (including rejections) examined in one poll.
+    /// Nonempty complete lines (including rejections) examined in one poll.
     pub max_records_per_poll: usize,
     /// Journal data bytes read in one poll, at least one maximal Hooks line.
     /// Generation identity checks read at most 64 additional bytes per open.
@@ -106,6 +106,10 @@ struct Frame {
 }
 
 impl Frame {
+    fn is_empty_line(&self) -> bool {
+        self.bytes == b"\n"
+    }
+
     fn push(&mut self, piece: &[u8]) {
         self.read += piece.len() as u64;
         if self.read > HOOKS_RECORD_MAX_INPUT_BYTES as u64 && !self.oversized {
@@ -155,7 +159,10 @@ pub(crate) fn visit_active_suffix(
             }
             frame.push(piece);
             if complete {
-                visit(std::mem::take(&mut frame).parse().map(|(record, _)| record));
+                let line = std::mem::take(&mut frame);
+                if !line.is_empty_line() {
+                    visit(line.parse().map(|(record, _)| record));
+                }
             }
         }
     }
@@ -331,14 +338,19 @@ impl HooksRecordFeed {
                 max_events,
                 max_bytes,
             } => {
-                if let Some((index, cursor)) =
-                    recent_position(generations, max_events, max_bytes, batch)?
-                {
+                if let Some((index, cursor)) = recent_position(
+                    generations,
+                    max_events,
+                    max_bytes,
+                    batch,
+                    &mut self.end_search,
+                )? {
                     self.cursor = Some(cursor);
+                    self.end_search = None;
                     Ok(Some(index))
                 } else {
                     self.end_after_recent = true;
-                    Ok(None)
+                    self.find_end(generations, batch)
                 }
             }
         }
@@ -471,7 +483,11 @@ impl HooksRecordFeed {
         offset: u64,
         batch: &mut HooksRecordBatch,
     ) {
-        let code = match std::mem::take(&mut self.frame).parse() {
+        let line = std::mem::take(&mut self.frame);
+        if line.is_empty_line() {
+            return;
+        }
+        let code = match line.parse() {
             Ok((record, bytes)) => {
                 batch.records.push(record);
                 batch.record_bytes += bytes;
@@ -524,6 +540,7 @@ fn recent_position(
     max_events: usize,
     max_bytes: usize,
     batch: &mut HooksRecordBatch,
+    end_search: &mut Option<EndSearch>,
 ) -> io::Result<Option<(usize, HooksRecordCursor)>> {
     let mut remaining = max_bytes;
     let mut selected = 0;
@@ -531,6 +548,14 @@ fn recent_position(
     for (index, generation) in generations.iter().enumerate().rev() {
         let mut file = open(generation)?;
         let mut end = file.len();
+        if index == generations.len() - 1 {
+            // If no complete line is selected, End must use this snapshot,
+            // not one taken after an active tail has been completed.
+            *end_search = Some(EndSearch {
+                snapshot: position(&mut file, end)?,
+                scan_to: end,
+            });
+        }
         let mut oldest = None;
         let mut started_line = false;
         let mut reversed = Vec::new();
@@ -565,6 +590,11 @@ fn recent_position(
         if end == 0 && started_line && selected < max_events {
             oldest = Some(0);
             selected += usize::from(valid_recent_line(&mut reversed));
+        }
+        if index == generations.len() - 1 && end == 0 && !started_line {
+            // This snapshot has no LF. Its safe checkpoint is already known,
+            // even if the recent scan exhausted this poll's byte budget.
+            end_search.as_mut().expect("initial snapshot").scan_to = 0;
         }
         if let Some(offset) = oldest {
             floor = Some((index, position(&mut file, offset)?));

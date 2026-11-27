@@ -9,6 +9,7 @@ use telltale_core::HooksRecordV1;
 use telltale_core::hooks::telemetry::{
     Harness, Kind, Producer, Record, RotationConfig, Session, Sink,
 };
+use telltale_core::{HooksRecordFeed, HooksRecordFeedConfig, StartupMode};
 use telltale_sources::journal::discover_generations;
 
 fn record(id: usize) -> Record {
@@ -76,6 +77,81 @@ fn sink(path: &Path, max_size_bytes: u64, keep: usize) -> Sink {
             keep,
         },
     )
+}
+
+#[test]
+fn a_torn_append_is_rejected_without_poisoning_the_next_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    std::fs::write(&path, b"{\"schema\":").unwrap();
+    let mut feed =
+        HooksRecordFeed::new(HooksRecordFeedConfig::new(&path, StartupMode::Beginning)).unwrap();
+    assert!(feed.poll().records.is_empty());
+    sink(&path, 0, 0).write(&record(1)).unwrap();
+    let batch = feed.poll();
+    assert_eq!(batch.rejections.len(), 1);
+    assert_eq!(batch.rejections[0].code, "malformed_json");
+    assert_eq!(batch.rejections[0].byte_offset, 0);
+    assert_eq!(batch.records.len(), 1);
+    assert_eq!(batch.records[0].record_id, record(1).record_id);
+    assert!(batch.notices.is_empty());
+    let mut resumed = HooksRecordFeed::resume(
+        HooksRecordFeedConfig::new(&path, StartupMode::Beginning),
+        feed.cursor().unwrap(),
+    )
+    .unwrap();
+    assert!(resumed.poll().records.is_empty());
+}
+
+#[test]
+fn an_unlocked_append_also_separates_a_torn_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    std::fs::write(&path, b"{\"schema\":").unwrap();
+    std::fs::create_dir(dir.path().join("records.jsonl.lock")).unwrap();
+    sink(&path, 1, 0).write(&record(1)).unwrap();
+    let mut feed =
+        HooksRecordFeed::new(HooksRecordFeedConfig::new(&path, StartupMode::Beginning)).unwrap();
+    let batch = feed.poll();
+    assert_eq!(batch.rejections.len(), 1);
+    assert_eq!(batch.records.len(), 1);
+    assert_eq!(batch.records[0].record_id, record(1).record_id);
+}
+
+#[test]
+fn a_complete_append_has_no_extra_separator() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    let sink = sink(&path, 0, 0);
+    sink.write(&record(1)).unwrap();
+    sink.write(&record(2)).unwrap();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&record(1)).unwrap(),
+            serde_json::to_string(&record(2)).unwrap()
+        )
+        .as_bytes()
+    );
+}
+
+#[test]
+fn rotation_accounts_for_the_torn_tail_separator_but_does_not_prefix_a_fresh_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    let fragment = b"{\"schema\":";
+    std::fs::write(&path, fragment).unwrap();
+    sink(&path, limit() + fragment.len() as u64, 1)
+        .write(&record(1))
+        .unwrap();
+    let generations = discover_generations(&path, 4096).unwrap().generations;
+    assert_eq!(generations.len(), 2);
+    assert_eq!(std::fs::read(&generations[0].path).unwrap(), fragment);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        format!("{}\n", serde_json::to_string(&record(1)).unwrap()).as_bytes()
+    );
 }
 
 #[test]

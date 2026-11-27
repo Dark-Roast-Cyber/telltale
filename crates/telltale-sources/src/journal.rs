@@ -144,6 +144,12 @@ pub fn stable_file_identity(path: &Path) -> io::Result<String> {
     Ok(JournalFile::open(path)?.identity().to_owned())
 }
 
+/// Apply the journal reader's regular-file and single-link admission rule to
+/// an already opened writer handle, without reopening its path.
+pub fn validate_file(file: &File) -> io::Result<()> {
+    validate_regular(&file_metadata(file)?)
+}
+
 /// Discover the active file and exact built-in rotated generations in physical
 /// oldest-to-newest order. `max_entries` bounds directory work and is reported
 /// rather than silently presented as complete history.
@@ -486,7 +492,7 @@ fn other(message: &'static str) -> io::Error {
 #[cfg(unix)]
 fn configure_no_follow(options: &mut OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt;
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
 }
 
 #[cfg(windows)]
@@ -598,6 +604,31 @@ mod tests {
             .collect::<Vec<_>>();
         after_read.sort();
         assert_eq!(after_read, before_read);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_open_refuses_a_swapped_fifo_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let directory = tempdir().expect("tempdir");
+        let fifo = directory.path().join("events.jsonl");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (send, receive) = mpsc::channel();
+        // Exercise the open after the path precheck, where a replacement can
+        // occur. A pre-planted FIFO is already refused before that open.
+        std::thread::spawn(move || {
+            let result =
+                JournalFile::open_metadata(&fifo).and_then(|file| super::file_metadata(&file));
+            let _ = send.send(result);
+        });
+        let result = receive
+            .recv_timeout(Duration::from_secs(1))
+            .expect("journal open blocked on a FIFO");
+        assert_eq!(result.unwrap_err().to_string(), "unsafe journal file");
     }
 
     #[cfg(unix)]

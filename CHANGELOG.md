@@ -16,7 +16,11 @@
 - Hooks records now rotate by size with configurable archive retention.
   `telltale hooks allow` searches kept generations, and the experimental
   `HooksRecordFeed` offers bounded strict readback with restart checkpoints
-  and gap notices.
+  and gap notices. A feed started in recent mode does not skip a record
+  whose line was unfinished at its first poll. A record appended after a
+  failed partial append is read; only the fragment is rejected. The writer
+  refuses a records file with more than one hard link, as the feed does, and
+  a FIFO swapped in during rotation cannot stall a hook.
 
 - Downstream consumers can read `telltale_hooks.record.v1` with
   `HooksRecordV1::from_json`, including schema, redaction and embedded

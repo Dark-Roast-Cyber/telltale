@@ -158,7 +158,7 @@ Work that serves several harnesses.
 | Strict Hooks record consumer | done | [Strict readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback); shared across harnesses |
 | Bounded Hooks telemetry labels | done | [Envelope addendum](adr/0005-telemetry-envelope.md#addendum-2026-11-26-bounded-telemetry-labels); shared across harnesses |
 | Bounded Hooks telemetry lines | done | [Strict readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback); writer and reader share the 16 MiB limit |
-| Hooks record rotation and feed | done | [Incremental readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-size-rotation-and-incremental-readback); synthetic Linux coverage includes append fallback and failed cleanup |
+| Hooks record rotation and feed | done | [Incremental readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-size-rotation-and-incremental-readback); synthetic Linux coverage includes torn-tail recovery, Recent checkpoints, FIFO and hard-link refusal |
 | Hooks operator status | done | [Status commands and schema](README.md#hooks-status); read-only inventory, explicit `not_inspected` for TOML, and bounded telemetry summary |
 | Real-model runs for Copilot CLI and Codex CLI | todo | Scripted-model evidence exists |
 | OpenCode v2 forwarding plugin | done | [Request-only pilot](harnesses/opencode.md#v2-pilot-design); no settlement, service qualification or Kilo compatibility claim |
@@ -174,6 +174,8 @@ check joins the harness receipt by tool-use ID and the outcome by decision
 record ID. Preserve both scenario summaries and the tested revisions.
 
 ## Reference
+
+- **Docs/Src, 2026-11-27:** [Hooks journal recovery and admission](adr/0005-telemetry-envelope.md#addendum-2026-11-26-size-rotation-and-incremental-readback) cover torn tails, Recent startup snapshots, nonblocking Unix opens and hard-link refusal. Synthetic Linux filesystem tests only; no new native Windows or macOS evidence.
 
 - **Docs/Src, 2026-11-26:** [Hooks status](README.md#hooks-status) compares local installation files with adapter install output and reports TOML settings without inspecting their contents. [Claude Code's file-based managed locations](https://code.claude.com/docs/en/managed-settings#deploy-a-managed-settings-file) differ by OS. Synthetic tests exercise the local reports, not harness activation.
 
@@ -637,3 +639,4 @@ harness's entry.
 - 2026-11-26: Hooks telemetry falls back to append without rotation after a short lock wait; rotation and cleanup failures no longer report a successful append as failed. Synthetic Linux tests; no harness stages changed.
 - 2026-11-26: added read-only Hooks status and the shared `check --json` configuration view. Synthetic CLI fixtures; no harness stages changed.
 - 2026-11-26: Hooks status reports existing TOML settings as `not_inspected` when readable and within the size limit. Synthetic CLI fixtures cover TOML with and without inline hooks.
+- 2026-11-27: tightened shared Hooks record recovery and admission: Recent startup snapshot checkpoints, torn-tail separation, nonblocking Unix opens and hard-link refusal. Synthetic Linux tests only; no harness stages changed.
