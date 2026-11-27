@@ -305,6 +305,7 @@ pub struct Config {
     pub state_dir: Option<PathBuf>,
     /// Telemetry JSONL path. Defaults to `<state_dir>/telemetry.jsonl`.
     pub telemetry_path: Option<PathBuf>,
+    pub telemetry_rotation: super::telemetry::RotationConfig,
     pub thresholds: Thresholds,
     pub window: Window,
     pub rules: RuleContent,
@@ -362,6 +363,7 @@ impl Default for Config {
             grants: Grants::default(),
             state_dir: None,
             telemetry_path: None,
+            telemetry_rotation: super::telemetry::RotationConfig::default(),
             thresholds: Thresholds::default(),
             window: Window::default(),
             rules: RuleContent::default(),
@@ -490,7 +492,14 @@ impl Config {
     pub fn protected_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         paths.extend(self.resolved_state_dir().ok());
-        paths.extend(self.resolved_telemetry_path().ok());
+        if let Ok(telemetry) = self.resolved_telemetry_path() {
+            if let Ok((stem, _)) = telltale_sources::journal::rotation_components(&telemetry) {
+                // Generated rules already treat each path as a prefix. This
+                // names the namespace even before any generation exists.
+                paths.push(telemetry.with_file_name(format!("{stem}-")));
+            }
+            paths.push(telemetry);
+        }
         // Only Unix has an evaluator socket.
         #[cfg(unix)]
         paths.extend(self.resolved_socket_path().ok());

@@ -158,6 +158,7 @@ Work that serves several harnesses.
 | Strict Hooks record consumer | done | [Strict readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback); shared across harnesses |
 | Bounded Hooks telemetry labels | done | [Envelope addendum](adr/0005-telemetry-envelope.md#addendum-2026-11-26-bounded-telemetry-labels); shared across harnesses |
 | Bounded Hooks telemetry lines | done | [Strict readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback); writer and reader share the 16 MiB limit |
+| Hooks record rotation and feed | done | [Incremental readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-size-rotation-and-incremental-readback); synthetic Linux coverage includes append fallback and failed cleanup |
 | Real-model runs for Copilot CLI and Codex CLI | todo | Scripted-model evidence exists |
 | OpenCode v2 forwarding plugin | done | [Request-only pilot](harnesses/opencode.md#v2-pilot-design); no settlement, service qualification or Kilo compatibility claim |
 | Shared reader for Claude-shaped payloads | wip | `harnesses/payload.rs` holds what adapters share today |
@@ -172,6 +173,8 @@ check joins the harness receipt by tool-use ID and the outcome by decision
 record ID. Preserve both scenario summaries and the tested revisions.
 
 ## Reference
+
+- **Docs/Src, 2026-11-26:** [Hooks record rotation and incremental readback](adr/0005-telemetry-envelope.md#addendum-2026-11-26-size-rotation-and-incremental-readback) share the journal generation convention. Linux tests exercise the bounded lock wait and append fallback.
 
 - **Docs/Src, 2026-11-26:** the [Hooks envelope contract](adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback)
   defines strict record readback; synthetic runtime tests exercise all registered adapters.
@@ -627,3 +630,5 @@ harness's entry.
 - 2026-11-26: added the shared strict Hooks JSONL record consumer and synthetic runtime parity coverage for registered adapters. No harness stages changed.
 - 2026-11-26: the shared Hooks writer bounds native telemetry labels and assigns deterministic stand-ins. Synthetic runtime tests only; no harness stages changed.
 - 2026-11-26: the shared Hooks writer caps each telemetry line at 16 MiB and replaces oversized runtime records with linked error records. No harness stages changed.
+- 2026-11-26: Hooks records rotate by size and the read-only feed resumes across retained generations. Synthetic runtime and process tests; no harness stages changed.
+- 2026-11-26: Hooks telemetry falls back to append without rotation after a short lock wait; rotation and cleanup failures no longer report a successful append as failed. Synthetic Linux tests; no harness stages changed.

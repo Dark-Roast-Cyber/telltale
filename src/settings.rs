@@ -723,7 +723,9 @@ mod hooks_section {
         Thresholds, Window,
     };
 
-    use super::{InvalidEnvironment, Origin, Setting, entry, path_entry};
+    use super::{
+        InvalidEnvironment, LogRotationSection, Origin, RotationConfig, Setting, entry, path_entry,
+    };
 
     /// Paths in the environment, as hooks read them when settings do not load.
     pub(crate) const STATE_DIR_ENV: &str = "TELLTALE_HOOKS_STATE_DIR";
@@ -740,6 +742,8 @@ mod hooks_section {
         ask: Option<AskRoute>,
         state_dir: Option<PathBuf>,
         telemetry_path: Option<PathBuf>,
+        #[serde(default)]
+        telemetry: LogRotationSection,
         self_protection_rules: Option<bool>,
         #[serde(default)]
         tamper_prevention: TamperPreventionSection,
@@ -811,6 +815,8 @@ mod hooks_section {
         ask: Setting<AskRoute>,
         state_dir: Setting<Option<PathBuf>>,
         telemetry_path: Setting<Option<PathBuf>>,
+        telemetry_max_size_bytes: Setting<u64>,
+        telemetry_keep: Setting<usize>,
         pub(crate) self_protection_rules: Setting<bool>,
         pub(crate) tamper_prevention_enabled: Setting<bool>,
         pub(crate) test_signatures_enabled: Setting<bool>,
@@ -864,6 +870,8 @@ mod hooks_section {
                 ask: Setting::new(config.ask),
                 state_dir: Setting::new(config.state_dir),
                 telemetry_path: Setting::new(config.telemetry_path),
+                telemetry_max_size_bytes: Setting::new(config.telemetry_rotation.max_size_bytes),
+                telemetry_keep: Setting::new(config.telemetry_rotation.keep),
                 self_protection_rules: Setting::new(config.rules.self_protection),
                 tamper_prevention_enabled: Setting::new(config.rules.tamper_prevention),
                 test_signatures_enabled: Setting::new(config.rules.test_signatures),
@@ -898,6 +906,9 @@ mod hooks_section {
             self.state_dir.set(section.state_dir.map(Some), origin());
             self.telemetry_path
                 .set(section.telemetry_path.map(Some), origin());
+            self.telemetry_max_size_bytes
+                .set(section.telemetry.max_size_bytes, origin());
+            self.telemetry_keep.set(section.telemetry.keep, origin());
             self.self_protection_rules
                 .set(section.self_protection_rules, origin());
             self.tamper_prevention_enabled
@@ -946,6 +957,11 @@ mod hooks_section {
                 ("hooks.reason_detail", entry(&self.reason_detail)),
                 ("hooks.ask", entry(&self.ask)),
                 ("hooks.state_dir", path_entry(&self.state_dir)),
+                (
+                    "hooks.telemetry.max_size_bytes",
+                    entry(&self.telemetry_max_size_bytes),
+                ),
+                ("hooks.telemetry.keep", entry(&self.telemetry_keep)),
                 ("hooks.telemetry_path", path_entry(&self.telemetry_path)),
                 (
                     "hooks.self_protection_rules",
@@ -1034,6 +1050,10 @@ mod hooks_section {
                 },
                 state_dir: self.state_dir.value.clone(),
                 telemetry_path: self.telemetry_path.value.clone(),
+                telemetry_rotation: RotationConfig {
+                    max_size_bytes: self.telemetry_max_size_bytes.value,
+                    keep: self.telemetry_keep.value,
+                },
                 thresholds: Thresholds {
                     action_ask: self.action_ask.value,
                     action_deny: self.action_deny.value,
@@ -1056,6 +1076,33 @@ mod hooks_section {
                 ..Config::default()
             }
         }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn telemetry_rotation_settings_merge_by_field() {
+        let mut settings = HooksSettings::default();
+        assert_eq!(
+            settings.config().telemetry_rotation,
+            RotationConfig::default()
+        );
+        settings.apply_document(
+            serde_yaml::from_str("telemetry: {max_size_bytes: 1024, keep: 3}").unwrap(),
+            Path::new("synthetic-system.yaml"),
+        );
+        settings.apply_document(
+            serde_yaml::from_str("telemetry: {max_size_bytes: 0}").unwrap(),
+            Path::new("synthetic-managed.yaml"),
+        );
+        assert_eq!(
+            settings.config().telemetry_rotation,
+            RotationConfig {
+                max_size_bytes: 0,
+                keep: 3
+            }
+        );
+        assert!(serde_yaml::from_str::<HooksSection>("telemetry: {keep: -1}").is_err());
+        assert!(serde_yaml::from_str::<HooksSection>("telemetry: {unknown: true}").is_err());
     }
 }
 

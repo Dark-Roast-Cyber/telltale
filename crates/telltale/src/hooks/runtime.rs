@@ -836,7 +836,7 @@ impl Runtime {
                 return;
             }
         };
-        let sink = Sink::new(path);
+        let sink = Sink::with_rotation(path, self.config.telemetry_rotation.clone());
         #[cfg(test)]
         let sink = sink.with_line_limit(self.telemetry_line_limit);
         if let Err(error) = sink.write(record) {

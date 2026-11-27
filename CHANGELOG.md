@@ -6,6 +6,11 @@
 
 ## Unreleased
 
+- Hooks records now rotate by size with configurable archive retention.
+  `telltale hooks allow` searches kept generations, and the experimental
+  `HooksRecordFeed` offers bounded strict readback with restart checkpoints
+  and gap notices.
+
 - Downstream consumers can read `telltale_hooks.record.v1` with
   `HooksRecordV1::from_json`, including schema, redaction and embedded
   action-record validation. The consumer is available without the `hooks`
