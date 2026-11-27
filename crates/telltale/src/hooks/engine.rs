@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::{
-    AcquisitionError, ActionRecordV1, DetailedEvaluationOptions, EvaluationCompletion,
-    ObservationStage, Pipeline, PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
+    AcquisitionError, DetailedEvaluationOptions, EvaluationCompletion, ObservationStage, Pipeline,
+    PipelineError, Source, SourceCoverage, SourceKind, SourceScan,
 };
 
 use telltale_rules::{DefinitionKind, LoadedDefinition, LoadedRules};
@@ -23,6 +23,7 @@ use crate::ClientId;
 use crate::hooks::config::{Grants, HOST_RULE_CATEGORY, HOST_RULE_ID_PREFIX, RuleContent};
 use crate::hooks::harness::{Harness, HostRules};
 use crate::hooks::journal::Line;
+use crate::hooks::telemetry::TelltaleAction;
 
 /// The shared host-owned Rule v2 template (name, content): detections of an
 /// agent disabling hooks, for every harness. A template writes the pattern
@@ -224,8 +225,9 @@ pub struct Evaluation {
     pub visibility_limits: Vec<String>,
     /// Content-free Telltale failure or quarantine code.
     pub failure_code: Option<String>,
-    /// Action records anchored at the focus observation, in Telltale order.
-    pub focus_records: Vec<ActionRecordV1>,
+    /// Action records anchored at the focus observation, in Telltale order,
+    /// each with its upload destination facts.
+    pub focus_records: Vec<TelltaleAction>,
     /// Action records anchored elsewhere in the window (already reported earlier).
     pub other_record_count: usize,
     /// Focus lines Telltale excluded (quarantined), out of `focus_count`. All
@@ -266,7 +268,7 @@ impl Evaluation {
     pub fn action_score(&self) -> u64 {
         self.focus_records
             .iter()
-            .map(|record| record.promotion_score)
+            .map(|action| action.record.promotion_score)
             .max()
             .unwrap_or(0)
     }
@@ -275,7 +277,7 @@ impl Evaluation {
         let mut ids: Vec<String> = self
             .focus_records
             .iter()
-            .flat_map(|record| record.rule_ids.iter().cloned())
+            .flat_map(|action| action.record.rule_ids.iter().cloned())
             .collect();
         ids.sort();
         ids.dedup();
@@ -286,7 +288,7 @@ impl Evaluation {
         let mut categories: Vec<String> = self
             .focus_records
             .iter()
-            .flat_map(|record| record.categories.iter().cloned())
+            .flat_map(|action| action.record.categories.iter().cloned())
             .collect();
         categories.sort();
         categories.dedup();
@@ -854,11 +856,17 @@ fn evaluation_of(scan: &SourceScan, focus: &[Focus], scan_ms: u64) -> Evaluation
         .collect();
     let focus_quarantine = quarantined.first().map(|code| (*code).to_owned());
 
-    let records = scan.action_records();
-    let (focus_records, others): (Vec<_>, Vec<_>) = records.into_iter().partition(|record| {
+    // One record per action finding, in the same order.
+    let actions = scan
+        .action_records()
+        .into_iter()
+        .zip(&scan.action_findings)
+        .map(|(record, finding)| TelltaleAction::new(record, finding.destination_facts().cloned()));
+    let (focus_records, others): (Vec<_>, Vec<_>) = actions.partition(|action| {
         focus.iter().any(|f| {
-            record.stage == f.stage
-                && record
+            action.record.stage == f.stage
+                && action
+                    .record
                     .occurred_at
                     .as_deref()
                     .is_some_and(|at| same_instant(at, &f.occurred_at))

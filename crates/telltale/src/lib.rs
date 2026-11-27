@@ -117,6 +117,7 @@ pub use telltale_schema::action_record::{
     ActionRecordContext, ActionRecordContribution, ActionRecordError, ActionRecordErrorCategory,
     ActionRecordEvidence, ActionRecordFinding, ActionRecordHighlight, ActionRecordV1,
 };
+pub use telltale_schema::destination_facts::DestinationFacts;
 pub use telltale_schema::effective_configuration::{
     AppliedOverrideV1, DefinitionKindV1, DisabledByV1, DocumentKindV1,
     EFFECTIVE_CONFIGURATION_MAX_INPUT_BYTES, EFFECTIVE_CONFIGURATION_V1_ID,

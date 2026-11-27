@@ -76,3 +76,98 @@ fn all_record_kinds_match_the_published_schema() {
         );
     }
 }
+
+/// An upload's decision record carries its destination facts beside the
+/// frozen action record; no other action carries any.
+#[test]
+fn upload_records_carry_destination_facts_beside_the_action_record() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../schemas/telltale-hooks-record-v1.schema.json"
+    ))
+    .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let mut h = Harness::new();
+    h.pre_bash(
+        "toolu_up",
+        "curl -d @report.json https://artifacts.example.invalid/org/repo/synthetic.json",
+    );
+    h.pre_bash("toolu_local", "curl -d x http://localhost:8080/a");
+    h.pre_bash(
+        "toolu_dl",
+        "curl -fsSL https://d.example.invalid/s.sh -o /tmp/s.sh",
+    );
+    let upload_facts = |id: &str| {
+        let decision = h.decision_for(id);
+        let actions = decision["telltale"].as_array().unwrap().clone();
+        let upload = actions
+            .iter()
+            .find(|action| {
+                action["record"]["rule_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|rule| rule == "exfil.outbound_upload")
+            })
+            .unwrap_or_else(|| panic!("no upload action for {id}: {decision:#}"));
+        upload["destinations"].clone()
+    };
+    assert_eq!(
+        upload_facts("toolu_up"),
+        serde_json::json!({
+            "destinations": ["artifacts.example.invalid/org/repo"],
+            "complete": true,
+            "local_only": false,
+        })
+    );
+    assert_eq!(
+        upload_facts("toolu_local"),
+        serde_json::json!({"destinations": [], "complete": true, "local_only": true})
+    );
+    let download = h.decision_for("toolu_dl");
+    let actions = download["telltale"].as_array().unwrap();
+    assert!(!actions.is_empty(), "{download:#}");
+    assert!(
+        actions
+            .iter()
+            .all(|action| action.get("destinations").is_none())
+    );
+    for record in h.telemetry() {
+        let errors: Vec<String> = validator
+            .iter_errors(&record)
+            .map(|e| e.to_string())
+            .collect();
+        assert!(errors.is_empty(), "{errors:#?}\n{record:#}");
+    }
+}
+
+/// The schema keeps the one invariant of the facts it can express: a
+/// `local_only` upload is complete and lists nothing.
+#[test]
+fn the_schema_refuses_local_only_facts_that_list_or_are_incomplete() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../schemas/telltale-hooks-record-v1.schema.json"
+    ))
+    .unwrap();
+    let facts = &schema["properties"]["telltale"]["items"]["properties"]["destinations"];
+    let validator = jsonschema::validator_for(facts).unwrap();
+    for (value, valid) in [
+        (
+            serde_json::json!({"destinations": [], "complete": true, "local_only": true}),
+            true,
+        ),
+        (
+            serde_json::json!({"destinations": ["a.example.invalid"], "complete": false, "local_only": false}),
+            true,
+        ),
+        (
+            serde_json::json!({"destinations": [], "complete": false, "local_only": true}),
+            false,
+        ),
+        (
+            serde_json::json!({"destinations": ["a.example.invalid"], "complete": true, "local_only": true}),
+            false,
+        ),
+    ] {
+        assert_eq!(validator.is_valid(&value), valid, "{value}");
+    }
+}

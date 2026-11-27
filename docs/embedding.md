@@ -28,7 +28,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`), `ActionRecordV1`, `Pipeline::read_session_records` and `session_records` (`SessionRecord`, `SessionRecordKind`, `SessionRecordContent`, `SessionRecordOptions`, `SessionRecordPage`, `SessionRecordReadError`, the `*SESSION_RECORD*` limits and `SESSION_RECORD_CURSOR_CHANGED`; see [session records](#session-records)), `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `PipelineBuilder::skip_unknown_override_rules` and `Pipeline::skipped_overrides` with `SkippedOverride`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`, and `destination_facts()` with `DestinationFacts` since the [0.8.0 migration guide](migrations/0.8.0.md#native-action-profile-19-and-upload-destination-facts)), `ActionRecordV1`, `Pipeline::read_session_records` and `session_records` (`SessionRecord`, `SessionRecordKind`, `SessionRecordContent`, `SessionRecordOptions`, `SessionRecordPage`, `SessionRecordReadError`, the `*SESSION_RECORD*` limits and `SESSION_RECORD_CURSOR_CHANGED`; see [session records](#session-records)), `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `PipelineBuilder::skip_unknown_override_rules` and `Pipeline::skipped_overrides` with `SkippedOverride`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules, and the seams behind session records (`telltale_schema::event::redact_multiline_bounded`, `telltale_discover::discovery::check_sqlite_store`, and in `telltale_sources::acquisition` `acquire_transcript`, `transcript_message_text`, `TranscriptReadOptions`, `TranscriptEntry`, `TranscriptBatch`, `MAX_TRANSCRIPT_SOURCE_BYTES`), which are public for the other crates and hidden from the API docs | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -367,6 +367,49 @@ select on `tool_name` only when the rule is about the tool name as text.
   is `None` when no such event was projected (for example, a suppressed process
   result or an action-only rule match) or the link would be ambiguous. Use it
   instead of matching session identifiers.
+- `destination_facts()` is `Some` only for an action with an
+  `exfil.outbound_upload` finding. Evidence is redacted, so these facts are how
+  a host tells an upload to its own artifact host or a local service from one
+  to an unknown host; Telltale keeps no trust list and the facts never change
+  matching, scores or semantic identities. `destinations` lists up to 16
+  sorted, lowercase entries: `host`, `host/seg` or `host/seg/seg` for http,
+  https, ws, wss, ftp, ftps, sftp, scp and tftp URLs, and
+  `scheme://authority[/seg[/seg]]` for others (`s3://bucket/prefix`). An entry
+  never holds a port, userinfo, query or fragment, and is unchanged by the
+  evidence sanitizer; loopback destinations are not listed. A path segment is
+  kept only when it is a plain name (a short run of name characters with few
+  digits) and a fixed point of the sanitizer, so a token family the sanitizer
+  does not recognize is not recognized here either: such a segment is listed,
+  at the same exposure as evidence text. `complete` is true only when every URL
+  in the command was read as a destination of an upload stage, every upload
+  stage named one, and nothing could send it elsewhere: a variable, command
+  substitution, schemeless destination, proxy, resolve, connect-to, config or
+  socket override, proxy credential or tunnel, header file or `Host` or
+  `:authority` header, cloud-client profile or `AWS_`, `BOTO_` or `CLOUDSDK_`
+  variable, loader variable (`LD_`, `DYLD_`) or `PATH` assignment, unknown or
+  abbreviated option, quoting another shell reads
+  differently, process substitution, network redirection or pipe into an
+  interpreter makes it false, and so does a URL anywhere in the recorded
+  command, here-document bodies included, that no upload stage sends to, as does an object-storage endpoint override or a
+  client whose destination is configuration (rclone remotes, `az storage`, the
+  GitHub CLI). `local_only` is true only when the whole command is one simple
+  curl, wget or PowerShell web cmdlet upload, optionally unwrapped from one
+  `bash|sh|zsh|dash -c` or `-lc` script and piped into one formatter, each
+  named without a path, whose every destination is `localhost`, 127.0.0.0/8,
+  `[::1]` or `0.0.0.0` and whose client follows no redirect (a local
+  responder can redirect a re-sent body elsewhere): curl without `-L`,
+  `--location` or `--location-trusted`, wget with `--max-redirect=0`, a
+  cmdlet with `-MaximumRedirection 0`. `localhost` is trusted by name: a
+  host whose resolver maps that name elsewhere is outside what the command
+  text can show. The facts describe the first hop, the hosts the command
+  itself names. A listed host that received the upload can forward it or
+  answer with a redirect, as any trusted receiver can, so a followed redirect
+  does not clear `complete`; it clears only `local_only`, where the first
+  hop is a local responder no trust list covers. Empty `destinations` with
+  `complete` therefore does not mean the upload stayed on the machine: only
+  `local_only` says that. Check stored facts with
+  `DestinationFacts::is_valid()`, which checks bounds, order, entry structure
+  and the sanitizer fixed point, not which segments the producer kept.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
   `Serialize`. Its wire form is `SourceScan::action_records()`; see
   [host wire and durable handoff](#host-wire-and-durable-handoff).
