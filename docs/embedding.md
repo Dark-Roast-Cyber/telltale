@@ -28,12 +28,12 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`, and `destination_facts()` with `DestinationFacts` since the [0.8.0 migration guide](migrations/0.8.0.md#native-action-profile-19-and-upload-destination-facts)), `ActionRecordV1`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `PipelineBuilder::skip_unknown_override_rules` and `Pipeline::skipped_overrides` with `SkippedOverride`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
-| Supported | `HooksRecordV1`, `HooksRecordKind`, `HooksRecordError`, `HooksRecordErrorCategory`, and the `hooks_record` wire types, schema and bound | [Strict readback of one Hooks JSONL record](hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback), including its embedded action records. The writer caps lines at 16 MiB including the line feed and replaces oversized runtime records with `telemetry_record_too_large` errors. Available without the `hooks` feature. |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`), `ActionFinding` accessors (including `session_event_index()`, and `destination_facts()` with `DestinationFacts` since the [0.8.0 migration guide](migrations/0.8.0.md#native-action-profile-19-and-upload-destination-facts)), `ActionRecordV1`, `Pipeline::read_session_records` and `session_records` (`SessionRecord`, `SessionRecordKind`, `SessionRecordContent`, `SessionRecordOptions`, `SessionRecordPage`, `SessionRecordReadError`, the `*SESSION_RECORD*` limits and `SESSION_RECORD_CURSOR_CHANGED`; see [session records](#session-records)), `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `PipelineBuilder::skip_unknown_override_rules` and `Pipeline::skipped_overrides` with `SkippedOverride`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
+| Not an API | `canonical_runtime`, lower-level crate modules, and the seams behind session records (`telltale_schema::event::redact_multiline_bounded`, `telltale_discover::discovery::check_sqlite_store`, and in `telltale_sources::acquisition` `acquire_transcript`, `transcript_message_text`, `TranscriptReadOptions`, `TranscriptEntry`, `TranscriptBatch`, `MAX_TRANSCRIPT_SOURCE_BYTES`), which are public for the other crates and hidden from the API docs | Implementation seams, not a source-adapter, detector, or plugin ABI. |
+| Supported | `HooksRecordV1`, `HooksRecordKind`, `HooksRecordError`, `HooksRecordErrorCategory`, and the `hooks_record` wire types, schema and bound | [Strict readback of one Hooks JSONL record](hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback), including its embedded action records. The writer caps lines at 16 MiB including the line feed and replaces oversized runtime records with `telemetry_record_too_large` errors. Available without the `hooks` feature. |
 | Unstable | `HooksRecordFeed`, `HooksRecordFeedConfig`, `HooksRecordCursor`, `HooksRecordBatch`, `HooksRecordRejection`, `HooksRecordFeedError` | [Incremental Hooks JSONL polling](#hooks-record-feed) without the `hooks` feature. The persisted cursor and lockless rotation recovery are newly introduced; native Windows and macOS qualification is pending. |
-| Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
 
 Core re-exports such as `Source`, `Event`, and error types serve the facade; they do not make every public module of the originating
 crate a stable embedding API.
@@ -775,6 +775,129 @@ This document is not the `effective_configuration` object of the CLI's scan
 summary, which records a scan run's settings, outputs and rule sources with
 hashed paths; the two share only a name.
 
+## Session records
+
+`Pipeline::read_session_records(&source, &options)` (or the free function
+`read_session_records`) returns one page of redacted records from one session
+source, in store order. It is read-only: no scanner state, checkpoint, or event
+is written.
+
+A `SessionRecord` has `ordinal`, terminal `session_id`, `occurred_at` (source
+time only, never the read time), `kind` (`user_message`, `assistant_message`,
+`tool_call`, `tool_result`, `other`), terminal `tool_name`, redacted `text`,
+`truncated`, `imported`, and `record_key`.
+
+`SessionRecordOptions` and `SessionRecordContent` are `#[non_exhaustive]`:
+start from `SessionRecordOptions::default()` and
+`SessionRecordContent::default()`, `transcript_without_results()`, or `all()`,
+then set fields.
+
+| Option | Default | Accepted |
+| --- | --- | --- |
+| `content` | every class off | `transcript_without_results()` (user, assistant, tool calls) or `all()`; tool results are their own switch |
+| `max_records` | 256 | 1..=4,096 |
+| `max_record_bytes` | 4,096 | 64..=4,096 |
+| `max_total_bytes` | 256 KiB | `max_record_bytes`..=4 MiB |
+| `max_source_bytes` | 128 MiB | 1..=128 MiB; a JSONL or log source is read whole for every page, so memory follows the source's size, as for a scan |
+| `after_ordinal`, `after_record_key` | none | the key requires the ordinal |
+| `since`, `until` | none | RFC 3339, `since` inclusive, `until` exclusive; records without a source time are left out when either is set |
+| `session_id` | none | raw or terminal form; required for `opencode.sqlite` |
+| `root` | none | the approved discovery root of the source |
+
+Out-of-range options fail as `InvalidOptions` before any source I/O.
+
+**Paging.** When `has_more()` is false, the page holds every matching record
+after the cursor. When it is true, continue with `after_ordinal =
+next_after_ordinal()` and `after_record_key = next_after_record_key()`.
+Ordinals increase in store order, are not dense, and stay the same while the
+store only grows at its end. For a JSONL or log source an ordinal is the
+record's index among the source's readable records; for `opencode.sqlite` it
+is built from the row's `seq`. With `after_record_key`, the read fails as
+`session_record_cursor_changed` unless the record at that ordinal still has
+that key, which reports a store that was truncated, replaced, or rewritten at
+the cursor. The key covers that one record. A change before the cursor that
+leaves an equal record at the cursor's ordinal, and an `opencode.sqlite` row
+added with a lower `seq`, are not detected, and continuing does not return
+what they added. Without a key nothing is checked. A caller that reads a store
+something else may rewrite starts again from the beginning. One page of
+`opencode.sqlite` is read in windows, each in its own read transaction, so a
+page is not one snapshot of a store that changes during the read.
+
+A read stops when it has used `max_source_bytes`, or after 4,096 windows of a
+windowed store. If it found no matching record by then, it returns an empty
+page with `has_more()` true: `next_after_ordinal()` is the store position it
+reached and `next_after_record_key()` is `None`, so the next read continues
+there without a key. A filtered prefix of any length is reached this way, one
+budget per page. Only a single store row larger than `max_source_bytes`, or a
+JSONL or log source larger than it, fails as `source_limit_exceeded`.
+
+**Sources.** `claude.projects`, `codex.sessions`, `codex.archived_sessions`,
+`codex.headless_sessions`, `openclaw.agents`, `qwen.projects`, `pi.sessions`,
+and `copilot.process_log` are read whole under the bounds a scan applies
+(8 MiB per record), with `max_source_bytes` as the source bound. A source over
+it fails as `source_limit_exceeded`; it never returns a silent part. Each page
+reads the source again. With the `opencode-sqlite` feature, `opencode.sqlite`
+is read one session at a time, oldest first by the store's per-session `seq`,
+in windows of 256 rows or 32 MiB. Without `session_id` it fails as
+`transcript_session_required`; if the session's rows lack a distinct
+non-negative integer `seq`, or the store has the legacy schema, it fails as
+`transcript_order_unavailable`. Hook journals are not transcripts
+(`unsupported_source_identity`).
+
+**Opening.** With `root`, the source is opened under the root's trust anchors
+as bounded discovery does, and a link fails as `non_regular_source`. For
+`opencode.sqlite`, the store and its `-wal`, `-shm`, and `-journal` files are
+checked that way, then SQLite opens the store by name without following a
+link at the final component. A file that is not a link and replaces one of
+them between the check and the open is not refused, and a FIFO put there can
+block the read. SQLite reads a store in WAL mode through its `-wal` and `-shm`
+files and may create or refresh them in the store's directory, as a scan of
+the store does. A source outside `root` is opened without following a link
+anywhere in its path. Without `root`, the path is resolved once and then
+opened without following links.
+
+**Privacy boundary.** Text is redacted by the evidence sanitizer; line breaks
+are kept and other whitespace runs in a line become one space. Message text
+comes from text parts only: tool use, tool result, reasoning, image, and other
+parts never enter a message record. Tool calls carry the call's arguments,
+which for a write or patch tool include the file body or patch text; a caller
+that must not receive file content leaves tool calls off. Tool results are a
+separate opt-in class
+that also holds command output a harness stores as a user record: for Claude
+`<bash-stdout>`, `<bash-stderr>`, `<local-command-stdout>`,
+`<local-command-stderr>` and `<task-notification>`, for Codex
+`<user_shell_command>`. The rule recognizes what the harness writes: a line
+that opens with one of those tags, or a tag with its closing tag later.
+Kinds follow the record shapes each harness writes. Text shaped to pass as a
+prompt, a record shape no harness writes, and, in `copilot.process_log`, a
+logged line that repeats the log's own record framing are read as the kind
+they claim, as a scan reads them, and redacted like any other text. `record_key` is a SHA-256
+over kind, tool name, the text redacted at 4,096 bytes, `occurred_at`, and
+`imported`: it reveals nothing redaction hides and does not change with
+`max_record_bytes`.
+
+**Imported history.** Records a store holds as history imported from another
+session (for example a Codex turn imported into a rollout) are returned in
+store order like any other, with `imported()` true. The flag is part of
+`record_key`, so a record that changes between imported and native is a
+changed cursor record, and an imported copy does not share the original's
+key.
+
+`SessionRecordReadError` carries a closed code only, never a path or session
+content.
+
+**Accepted limits.**
+
+- The SQLite files are checked before SQLite opens them by name; a link
+  swapped in between those steps is only refused at the final component.
+- Long text is redacted in line-aligned chunks. Where a cut could split a
+  value, the text around the cut is withheld and the record is `truncated`.
+- `has_more()` can be true for a windowed store when the rest of the session
+  holds no matching record.
+- An OpenCode session named by its hashed terminal form is found by scanning
+  at most 100,000 stored session ids of up to 4 KiB each (8 MiB in all); past
+  those bounds the read fails as `source_limit_exceeded`.
+
 ## Host wire and durable handoff
 
 `ActionFinding` is a Rust value and deliberately does not implement
@@ -873,6 +996,7 @@ outbox guarantees do not transfer to an embedding host.
 | `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation` |
 | detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions`, and `Compilation` only if the bundled process pack fails to load when `process_chain` is set |
 | `scan_source_detailed_resuming` | `Clock`, `Observation`, `InvalidOptions`, `InvalidResumeToken`, and the detailed `Compilation` case |
+| `read_session_records` | `InvalidOptions`, `SessionRecords` |
 
 `Observation` is batch observation-time validation, not per-source canonical
 validation. Clock validation runs even for an empty batch. Source-processing
@@ -883,7 +1007,9 @@ Display and Debug render closed codes (`pipeline_discovery_failed`,
 `pipeline_clock_failed`, `pipeline_observation_failed`,
 `pipeline_compilation_failed`, `pipeline_no_rule_documents`,
 `pipeline_empty_rule_set`, `pipeline_invalid_options`,
-`pipeline_invalid_resume_token`) without paths, configuration, or source text.
+`pipeline_invalid_resume_token`, `pipeline_session_records_failed`) without
+paths, configuration, or source text. `SessionRecords` holds a
+`SessionRecordReadError` whose `code()` is the closed reason.
 `Error::source()` keeps the original cause except for `InvalidConfiguration`,
 `EmptyRuleSet`, `InvalidOptions`, and `InvalidResumeToken`. `DiscoveryError`, `RuleCompileError`, and `ObservationError`
 are re-exported from core. `Compilation`'s boxed cause is not a supported subtype
@@ -1184,7 +1310,9 @@ Analyzer extensions are a separate future protocol and are not implemented.
   `VisibilityLimit`, and the other action DTOs are `#[non_exhaustive]`: use
   wildcard arms, struct rest patterns, or accessors. `EvaluationCompletion` is a
   deliberately closed two-variant enum. Constructible inputs such as `Source` and
-  `InstallInventorySnapshot` stay exhaustive.
+  `InstallInventorySnapshot` stay exhaustive. `SessionRecordOptions` and
+  `SessionRecordContent` are `#[non_exhaustive]` inputs: start from `Default`
+  (or a `SessionRecordContent` constructor) and set fields.
 - Other public APIs in `telltale-schema`, `telltale-sources`, `telltale-detect`,
   and `telltale-rules` are usable foundations without a blanket compatibility
   promise. Canonical Observation v2 and Detection v2 are semantic contracts, not a

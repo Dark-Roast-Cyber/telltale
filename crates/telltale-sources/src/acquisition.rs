@@ -64,6 +64,7 @@ use crate::sources::{
 
 mod accounting;
 mod contributions;
+pub(crate) mod transcript;
 use accounting::AccountingBuilder;
 pub(crate) use accounting::session_identity;
 pub use accounting::{
@@ -71,6 +72,10 @@ pub use accounting::{
     SessionAccounting, SessionMetadata, SourceAccounting, ToolTableCounts, ToolUsage,
 };
 pub use contributions::{ActivityContributions, MAX_CONTRIBUTION_KEYS};
+pub use transcript::{
+    MAX_TRANSCRIPT_SOURCE_BYTES, TranscriptBatch, TranscriptEntry, TranscriptReadOptions,
+    acquire_transcript, message_text as transcript_message_text,
+};
 
 pub struct AcquisitionBatch {
     pub observations: Vec<CanonicalObservationV2>,
@@ -383,6 +388,13 @@ pub enum AcquisitionError {
     CanonicalBoundValidation {
         context: CanonicalBoundContext,
     },
+    /// A transcript of this store is read one session at a time, and no
+    /// session was named.
+    TranscriptSessionRequired,
+    /// This store shape gives transcript records no order that stays stable
+    /// while the store grows (the legacy OpenCode schema, or a session whose
+    /// `seq` is missing or repeated).
+    TranscriptOrderUnavailable,
 }
 
 impl AcquisitionError {
@@ -403,6 +415,8 @@ impl AcquisitionError {
             Self::AccountingOverflow => "native_accounting_overflow",
             Self::CanonicalMapping { code } | Self::CanonicalValidation { code } => code,
             Self::CanonicalBoundValidation { .. } => "unbounded_value",
+            Self::TranscriptSessionRequired => "transcript_session_required",
+            Self::TranscriptOrderUnavailable => "transcript_order_unavailable",
         }
     }
 
@@ -485,6 +499,16 @@ pub(crate) struct DirectRead<'a> {
     pub(crate) limits: DirectReadLimits,
 }
 
+/// A transcript read: production bounds, except that the caller may lower the
+/// source byte bound, and no link is followed.
+#[derive(Clone, Copy)]
+pub(crate) struct AnchoredRead<'a> {
+    /// Open under this discovery root's trust anchors; `None` walks an
+    /// already-resolved path from the filesystem root.
+    pub(crate) root: Option<&'a Path>,
+    pub(crate) max_bytes: usize,
+}
+
 /// How a JSONL or log source coordinate is opened.
 #[derive(Clone, Copy)]
 pub(crate) enum SourceAccess<'a> {
@@ -494,14 +518,21 @@ pub(crate) enum SourceAccess<'a> {
     Resolved,
     /// Bounded investigation read under a discovery root.
     Direct(DirectRead<'a>),
+    /// Transcript read (see `transcript::acquire_transcript`).
+    Anchored(AnchoredRead<'a>),
 }
 
 impl SourceAccess<'_> {
     pub(crate) fn limits(self) -> Option<DirectReadLimits> {
         match self {
             Self::Direct(direct) => Some(direct.limits),
-            Self::ByName | Self::Resolved => None,
+            Self::ByName | Self::Resolved | Self::Anchored(_) => None,
         }
+    }
+
+    /// Whether a read failure keeps its bounded reason code.
+    fn reports_bounded_reason(self) -> bool {
+        matches!(self, Self::Direct(_) | Self::Anchored(_))
     }
 }
 
@@ -546,7 +577,7 @@ fn acquire_source_impl(
     // only ever read a window by name, never bounded.
     let hook_journal = source.client.owns_hook_journal(&source.source_id);
     if hook_journal {
-        if limits.is_some() {
+        if limits.is_some() || matches!(access, SourceAccess::Anchored(_)) {
             return Err(AcquisitionError::UnsupportedSourceIdentity);
         }
         #[cfg(not(feature = "hook-journal"))]
@@ -570,7 +601,8 @@ fn acquire_source_impl(
             SourceKind::CopilotProcessLog
         }
         (ClientId::OpenCode, "opencode.sqlite") => {
-            if limits.is_some() {
+            // Bounded and transcript reads of the store have their own paths.
+            if limits.is_some() || matches!(access, SourceAccess::Anchored(_)) {
                 return Err(AcquisitionError::UnsupportedSourceIdentity);
             }
             return acquire_opencode_sqlite(source, options, OpenCodeSqliteReadOptions::default());
@@ -588,7 +620,7 @@ fn acquire_source_impl(
     let observations = match reader {
         ClientId::Claude => {
             let (records, bytes) = extract_claude_native_records_with_limits(source, access)
-                .map_err(|error| map_source_read(error, limits))?;
+                .map_err(|error| map_source_read(error, access))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
             // record is counted, and checked, before any is projected.
@@ -714,7 +746,7 @@ fn acquire_source_impl(
         }
         ClientId::Codex => {
             let (records, bytes) = extract_codex_native_records_with_limits(source, access)
-                .map_err(|error| map_source_read(error, limits))?;
+                .map_err(|error| map_source_read(error, access))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
             // record is counted, and checked, before any is projected.
@@ -826,7 +858,7 @@ fn acquire_source_impl(
         }
         ClientId::OpenClaw => {
             let (records, bytes) = extract_openclaw_native_records_with_limits(source, access)
-                .map_err(|error| map_source_read(error, limits))?;
+                .map_err(|error| map_source_read(error, access))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
                 accounting.record(
@@ -858,7 +890,7 @@ fn acquire_source_impl(
         }
         ClientId::Qwen => {
             let (records, bytes) = extract_qwen_native_records_with_limits(source, access)
-                .map_err(|error| map_source_read(error, limits))?;
+                .map_err(|error| map_source_read(error, access))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             for record in &records {
                 accounting.record(
@@ -890,7 +922,7 @@ fn acquire_source_impl(
         }
         ClientId::Pi => {
             let (records, bytes) = extract_pi_native_records_with_limits(source, access)
-                .map_err(|error| map_source_read(error, limits))?;
+                .map_err(|error| map_source_read(error, access))?;
             source_scale = SourceScale::for_source_bytes(bytes);
             // Ownership and attestation are whole-source integrity: every
             // record is counted, and checked, before any is projected.
@@ -1005,6 +1037,12 @@ fn acquire_source_impl(
                     |error| match error {
                         SourceReadError::Bounded(reason @ BoundedReadError::LimitExceeded) => {
                             AcquisitionError::BoundedSourceRead(reason)
+                        }
+                        // Scans keep the plain read failure; only a transcript
+                        // read reports its bounded reason. Bounded
+                        // investigation reads never reach here.
+                        error if matches!(access, SourceAccess::Anchored(_)) => {
+                            map_source_read(error, access)
                         }
                         _ => AcquisitionError::SourceRead,
                     },
@@ -1137,8 +1175,8 @@ fn replaced_by_sequence(
     replaced
 }
 
-fn map_source_read(error: SourceReadError, limits: Option<DirectReadLimits>) -> AcquisitionError {
-    if limits.is_none() {
+fn map_source_read(error: SourceReadError, access: SourceAccess<'_>) -> AcquisitionError {
+    if !access.reports_bounded_reason() {
         return AcquisitionError::SourceRead;
     }
     AcquisitionError::BoundedSourceRead(match error {
@@ -1640,17 +1678,28 @@ mod tests {
             BoundedReadError::LimitExceeded,
             BoundedReadError::MalformedSource,
         ] {
-            assert_eq!(
-                super::map_source_read(super::SourceReadError::Bounded(reason), None),
-                AcquisitionError::SourceRead
-            );
-            assert_eq!(
-                super::map_source_read(
-                    super::SourceReadError::Bounded(reason),
-                    Some(super::DirectReadLimits::default())
-                ),
-                AcquisitionError::BoundedSourceRead(reason)
-            );
+            for production in [super::SourceAccess::ByName, super::SourceAccess::Resolved] {
+                assert_eq!(
+                    super::map_source_read(super::SourceReadError::Bounded(reason), production),
+                    AcquisitionError::SourceRead
+                );
+            }
+            let root = std::path::Path::new("synthetic-root");
+            for bounded in [
+                super::SourceAccess::Direct(super::DirectRead {
+                    root,
+                    limits: super::DirectReadLimits::default(),
+                }),
+                super::SourceAccess::Anchored(super::AnchoredRead {
+                    root: Some(root),
+                    max_bytes: 1,
+                }),
+            ] {
+                assert_eq!(
+                    super::map_source_read(super::SourceReadError::Bounded(reason), bounded),
+                    AcquisitionError::BoundedSourceRead(reason)
+                );
+            }
         }
     }
 
@@ -2049,6 +2098,25 @@ mod tests {
             );
         }
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn copilot_scan_read_failures_stay_plain_source_read_failures() {
+        let directory = tempdir().unwrap();
+        let source = Source {
+            client: ClientId::Copilot,
+            source_id: "copilot.process_log".to_owned(),
+            kind: SourceKind::CopilotProcessLog,
+            path: directory.path().join("missing-process.log"),
+        };
+        assert_eq!(
+            acquisition_error(super::acquire_source(&source, options())),
+            AcquisitionError::SourceRead
+        );
+        assert_eq!(
+            acquisition_error(super::acquire_resolved_source(&source, options())),
+            AcquisitionError::SourceRead
+        );
     }
 
     #[test]

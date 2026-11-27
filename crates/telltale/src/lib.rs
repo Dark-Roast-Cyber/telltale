@@ -52,6 +52,16 @@ pub mod investigation;
 pub mod local_event_feed;
 pub mod provenance;
 pub mod rule_resolution;
+pub mod session_records;
+
+pub use session_records::{
+    DEFAULT_SESSION_RECORD_MAX_BYTES, DEFAULT_SESSION_RECORD_MAX_RECORDS,
+    DEFAULT_SESSION_RECORD_MAX_TOTAL_BYTES, MAX_SESSION_RECORD_BYTES,
+    MAX_SESSION_RECORD_MAX_RECORDS, MAX_SESSION_RECORD_MAX_TOTAL_BYTES,
+    MAX_SESSION_RECORD_SOURCE_BYTES, MIN_SESSION_RECORD_BYTES, SESSION_RECORD_CURSOR_CHANGED,
+    SessionRecord, SessionRecordContent, SessionRecordKind, SessionRecordOptions,
+    SessionRecordPage, SessionRecordReadError, read_session_records,
+};
 
 pub use hooks_record_feed::{
     HooksRecordBatch, HooksRecordCursor, HooksRecordFeed, HooksRecordFeedConfig,
@@ -161,6 +171,9 @@ pub enum PipelineError {
     /// A resume token does not belong to the supplied source, or the source is
     /// not resumable. Rejected before any source I/O.
     InvalidResumeToken,
+    /// [`Pipeline::read_session_records`] failed; the error is a closed code
+    /// that carries no session content or host path.
+    SessionRecords(session_records::SessionRecordReadError),
 }
 
 impl std::fmt::Display for PipelineError {
@@ -174,6 +187,7 @@ impl std::fmt::Display for PipelineError {
             Self::EmptyRuleSet => "pipeline_empty_rule_set",
             Self::InvalidOptions => "pipeline_invalid_options",
             Self::InvalidResumeToken => "pipeline_invalid_resume_token",
+            Self::SessionRecords(_) => "pipeline_session_records_failed",
         })
     }
 }
@@ -189,6 +203,7 @@ impl std::error::Error for PipelineError {
         match self {
             Self::Discovery(error) => Some(error),
             Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
+            Self::SessionRecords(error) => Some(error),
             Self::Observation(error) => Some(error),
             Self::InvalidConfiguration
             | Self::EmptyRuleSet

@@ -54,6 +54,18 @@
   exports are views, not replay input; qualify producer/consumer privacy pins
   together before upgrading.
 
+### Session records
+
+- Add `Pipeline::read_session_records` and the read-only
+  `telltale investigate transcript` command: one page of redacted records from
+  one session source, in store order, with opt-in content classes (tool
+  results off by default), record, page, and source byte bounds, and a cursor
+  that reports a changed store as `session_record_cursor_changed`. OpenCode
+  stores are read per session, oldest first; a page that found no match in
+  its budget still names where to continue. Imported history is included and
+  flagged. Failures are closed codes. See
+  [session records](docs/embedding.md#session-records).
+
 ### Compatibility and operator impact
 
 - **The native action profile is 19.** Several changes below change what the

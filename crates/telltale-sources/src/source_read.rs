@@ -135,7 +135,7 @@ pub(crate) fn read_jsonl_values_with_limits(
     source: &Source,
     access: crate::acquisition::SourceAccess<'_>,
 ) -> Result<(Vec<Value>, usize), SourceReadError> {
-    use crate::acquisition::{DirectRead, SourceAccess};
+    use crate::acquisition::{AnchoredRead, DirectRead, SourceAccess};
     match access {
         SourceAccess::Direct(DirectRead { root, limits }) => {
             let bytes = confined_file_bytes(root, &source.path, limits.bytes)
@@ -154,10 +154,21 @@ pub(crate) fn read_jsonl_values_with_limits(
             }
             Ok((values, bytes.len()))
         }
-        SourceAccess::Resolved => {
-            read_production_jsonl(open_resolved(&source.path).map_err(SourceReadError::Bounded)?)
-        }
-        SourceAccess::ByName => read_production_jsonl(fs::File::open(&source.path)?),
+        SourceAccess::Anchored(AnchoredRead { root, max_bytes }) => read_production_jsonl(
+            open_anchored(root, &source.path).map_err(SourceReadError::Bounded)?,
+            max_bytes,
+            || SourceReadError::Bounded(BoundedReadError::LimitExceeded),
+        ),
+        SourceAccess::Resolved => read_production_jsonl(
+            open_resolved(&source.path).map_err(SourceReadError::Bounded)?,
+            PRODUCTION_SOURCE_BYTES,
+            production_limit_error,
+        ),
+        SourceAccess::ByName => read_production_jsonl(
+            fs::File::open(&source.path)?,
+            PRODUCTION_SOURCE_BYTES,
+            production_limit_error,
+        ),
     }
 }
 
@@ -176,9 +187,14 @@ fn production_limit_error() -> SourceReadError {
 
 // Bound physical bytes before UTF-8/JSON decoding. Limits apply to actual reads,
 // including blank records and terminators, not a potentially stale file length.
-// The native unit limit scales with the bytes read so far.
+// The native unit limit scales with the bytes read so far. A transcript read
+// may lower the source byte bound; every other bound is the production one.
 // Parsed values remain retained; this is not an allocator or process RSS budget.
-fn read_production_jsonl(mut reader: impl Read) -> Result<(Vec<Value>, usize), SourceReadError> {
+fn read_production_jsonl(
+    mut reader: impl Read,
+    source_bytes: usize,
+    limit_error: fn() -> SourceReadError,
+) -> Result<(Vec<Value>, usize), SourceReadError> {
     let mut chunk = [0u8; 8192];
     let mut record = Vec::new();
     let mut total = 0usize;
@@ -191,24 +207,24 @@ fn read_production_jsonl(mut reader: impl Read) -> Result<(Vec<Value>, usize), S
         };
         if read == 0 {
             if !record.is_empty() {
-                decode_production_record(&record, &mut values, units)?;
+                decode_production_record(&record, &mut values, units, limit_error)?;
             }
             return Ok((values, total));
         }
         total = total
             .checked_add(read)
-            .filter(|bytes| *bytes <= PRODUCTION_SOURCE_BYTES)
-            .ok_or_else(production_limit_error)?;
+            .filter(|bytes| *bytes <= source_bytes)
+            .ok_or_else(limit_error)?;
         units = SourceScale::for_source_bytes(total).apply(PRODUCTION_NATIVE_UNITS);
         for part in chunk[..read].split_inclusive(|byte| *byte == b'\n') {
             record
                 .len()
                 .checked_add(part.len())
                 .filter(|bytes| *bytes <= PRODUCTION_RECORD_BYTES)
-                .ok_or_else(production_limit_error)?;
+                .ok_or_else(limit_error)?;
             record.extend_from_slice(part);
             if part.last() == Some(&b'\n') {
-                decode_production_record(&record, &mut values, units)?;
+                decode_production_record(&record, &mut values, units, limit_error)?;
                 record.clear();
             }
         }
@@ -219,6 +235,7 @@ fn decode_production_record(
     record: &[u8],
     values: &mut Vec<Value>,
     units: usize,
+    limit_error: fn() -> SourceReadError,
 ) -> Result<(), SourceReadError> {
     let line = std::str::from_utf8(record)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid JSONL UTF-8"))?;
@@ -227,7 +244,7 @@ fn decode_production_record(
             .len()
             .checked_add(1)
             .filter(|count| *count <= units)
-            .ok_or_else(production_limit_error)?;
+            .ok_or_else(limit_error)?;
         values.push(serde_json::from_str(line)?);
     }
     Ok(())
@@ -283,17 +300,51 @@ pub(crate) fn confined_file_bytes(
     path: &std::path::Path,
     cap: usize,
 ) -> Result<Vec<u8>, BoundedReadError> {
+    bounded_bytes(open_confined(root, path)?, cap)
+}
+
+fn open_confined(
+    root: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<fs::File, BoundedReadError> {
     use telltale_discover::discovery::{BoundedDiscoveryError, open_source_file};
-    let file = match open_source_file(root, path) {
-        Ok(Some(file)) => file,
-        Ok(None) => return Err(BoundedReadError::Missing),
-        Err(BoundedDiscoveryError::SymlinkRoot) => return Err(BoundedReadError::NonRegularSource),
-        Err(BoundedDiscoveryError::PermissionDenied) => {
-            return Err(BoundedReadError::PermissionDenied);
-        }
-        Err(_) => return Err(BoundedReadError::Unreadable),
+    match open_source_file(root, path) {
+        Ok(Some(file)) => Ok(file),
+        Ok(None) => Err(BoundedReadError::Missing),
+        Err(BoundedDiscoveryError::SymlinkRoot) => Err(BoundedReadError::NonRegularSource),
+        Err(BoundedDiscoveryError::PermissionDenied) => Err(BoundedReadError::PermissionDenied),
+        Err(_) => Err(BoundedReadError::Unreadable),
+    }
+}
+
+/// A transcript coordinate opened without following links: under the trust
+/// anchors of `root` when given, otherwise as an already-resolved path.
+/// The opened object must be a regular file.
+fn open_anchored(
+    root: Option<&std::path::Path>,
+    path: &std::path::Path,
+) -> Result<fs::File, BoundedReadError> {
+    let Some(root) = root else {
+        return open_resolved(path);
     };
-    bounded_bytes(file, cap)
+    let file = open_confined(root, path)?;
+    if !file
+        .metadata()
+        .map_err(BoundedReadError::from_io)?
+        .is_file()
+    {
+        return Err(BoundedReadError::NonRegularSource);
+    }
+    Ok(file)
+}
+
+/// `bounded_file_bytes` for a transcript coordinate (see `open_anchored`).
+pub(crate) fn anchored_file_bytes(
+    root: Option<&std::path::Path>,
+    path: &std::path::Path,
+    cap: usize,
+) -> Result<Vec<u8>, BoundedReadError> {
+    bounded_bytes(open_anchored(root, path)?, cap)
 }
 
 /// An already-resolved (canonical) path opened without following any link or
