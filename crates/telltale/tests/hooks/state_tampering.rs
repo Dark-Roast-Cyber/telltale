@@ -28,6 +28,25 @@ fn error_codes(h: &Harness) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn a_hard_link_at_the_records_path_is_not_written_and_cannot_change_the_deny() {
+    let mut h = Harness::new();
+    let target = h.dir.path().join("unrelated.txt");
+    std::fs::write(&target, b"unrelated synthetic content\n").unwrap();
+    std::fs::hard_link(&target, h.telemetry_path()).unwrap();
+
+    assert_eq!(verdict(&h.pre_bash("toolu_1", EXFIL)), Some("deny"));
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"unrelated synthetic content\n"
+    );
+    assert_eq!(h.pre_bash("toolu_2", "ls"), None);
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"unrelated synthetic content\n"
+    );
+}
+
 /// Before this fix a corrupt `state.json` made every later call in the session
 /// fail with `state_corrupt`, which `on_error = allow` turned into a silent
 /// allow: one stray write disabled enforcement for the rest of the session.

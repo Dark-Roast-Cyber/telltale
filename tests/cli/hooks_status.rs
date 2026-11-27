@@ -216,6 +216,8 @@ fn hooks_status_reports_active_telemetry_without_echoing_records_or_writing_stat
     row["session"]["session_id"] = json!("");
     fixture.write(&path, format!("{row}\n{row}\n{rejected}not json {TOKEN}\n"));
     let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    row["error_code"] = json!("payload_read_failed");
+    writeln!(file, "{row}").unwrap();
     row["error_code"] = json!("synthetic_alice_private");
     writeln!(file, "{row}").unwrap();
     row.as_object_mut().unwrap().remove("error_code");
@@ -250,6 +252,10 @@ fn hooks_status_reports_active_telemetry_without_echoing_records_or_writing_stat
         2
     );
     assert_eq!(status["telemetry"]["error_counts"]["other"], 1);
+    assert_eq!(
+        status["telemetry"]["error_counts"]["payload_read_failed"],
+        1
+    );
     assert_eq!(
         status["telemetry"]["last_decision_at"],
         "2026-11-26T12:35:00Z"

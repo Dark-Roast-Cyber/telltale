@@ -29,6 +29,7 @@ const ERROR_CODES: &[&str] = &[
     "payload_invalid_protocol",
     "payload_missing_field",
     "payload_oversized",
+    "payload_read_failed",
     "pipeline_build_failed",
     "rule_content_unreadable",
     "scan_failed",

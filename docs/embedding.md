@@ -45,9 +45,11 @@ with the active records path and `StartupMode::Beginning`, `End`, or
 `Recent { max_events, max_bytes }`. Beginning includes kept generations.
 End starts after the last complete line. Recent searches a bounded suffix
 for the last requested valid records and reports rejected lines it encounters
-in the selected window.
+in the selected window. If Recent selects nothing, it anchors End to that
+initial snapshot, not a later poll. An incomplete active line is deferred
+until its LF arrives, including across a persisted checkpoint.
 
-Poll on the embedding host's cadence. Each batch bounds complete lines
+Poll on the embedding host's cadence. Each batch bounds nonempty complete lines
 examined and wire bytes read or returned; generation discovery has separate
 bounds. Persist `feed.cursor()` with serde after you handle the batch, and
 pass it back to `HooksRecordFeed::resume`. The token stores no record text
@@ -61,6 +63,13 @@ A writer that cannot take the rotation lock appends anyway. If that append
 races with rotation, a feed that has already moved past the just-archived file
 can miss the record. `telltale hooks allow` can still find the record while the
 archive is retained.
+Before appending, the writer separates an unterminated fragment from the next
+record with an LF on the same open file (best effort without the lock). A
+malformed fragment completed this way is rejected separately; the new record
+keeps its 16 MiB limit. Incomplete archived tails remain skipped.
+Empty separator lines advance the cursor without a rejection. Records files
+must be regular files with at most one hard link; both writer and feed refuse
+multiply linked files.
 
 ### Qualification status
 
@@ -914,7 +923,7 @@ versions emit no records for a failed source or a compatibility scan.
 (`telltale.action.v1`), whose frozen client vocabulary
 (`ACTION_RECORD_V1_CLIENTS`) excludes later clients such as Pi.
 
-Apart from the version marker, v2 differs from v1 in three places:
+Apart from the version marker, v2 differs from v1 in two places:
 
 - `client` is a pattern-constrained string in the JSON Schema and must name
   a `ClientId` known to the consuming build. A consumer built before a new
@@ -924,9 +933,9 @@ Apart from the version marker, v2 differs from v1 in three places:
   `ActionFinding::destination_facts()`. It is null unless the action carries
   `exfil.outbound_upload`. The receiver rejects facts that fail
   `DestinationFacts::is_valid()` or appear without that rule.
-- `call_id` is reserved and the producer always emits null. The consumer
-  also accepts `call:v1:hmac-sha256:` followed by 64 lowercase hexadecimal
-  digits. This checks syntax only; the field has no defined pairing behavior.
+
+v2 has no field that pairs a scan record with a hooks record of the same tool
+call. Pair by session until a later record version defines a call key.
 
 A record carries the shared action fields (`coordinate` is the anchor
 observation ID) plus the scan's `client`, `source_id`,

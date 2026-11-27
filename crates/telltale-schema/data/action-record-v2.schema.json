@@ -352,8 +352,7 @@
     "supporting_observation_ids",
     "canonical_findings",
     "context",
-    "destinations",
-    "call_id"
+    "destinations"
   ],
   "properties": {
     "schema": {
@@ -505,17 +504,6 @@
       "anyOf": [
         {
           "$ref": "#/$defs/destinationFacts"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "call_id": {
-      "anyOf": [
-        {
-          "type": "string",
-          "pattern": "^call:v1:hmac-sha256:[0-9a-f]{64}$"
         },
         {
           "type": "null"

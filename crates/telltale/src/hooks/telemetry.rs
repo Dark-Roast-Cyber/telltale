@@ -10,7 +10,7 @@
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -327,16 +327,18 @@ impl Sink {
         // Regular files only: a FIFO or symlink planted at the telemetry
         // path must neither stall the hook nor receive the records.
         let mut active = self.open_active()?;
+        let torn = ends_mid_line(&mut active);
         if lock.is_some() && self.rotation.is_enabled() {
-            match self.prepare_rotation(&active, line.len()) {
+            match self.prepare_rotation(&active, line.len() + usize::from(torn)) {
                 Ok(Some((mut fresh, archives))) => {
-                    return append_and_prune(&mut fresh, &line, archives);
+                    let torn = ends_mid_line(&mut fresh);
+                    return append_and_prune(&mut fresh, &frame(line, torn), archives);
                 }
                 Ok(None) => {}
                 Err(error) => eprintln!("telltale hooks: telemetry rotation failed: {error}"),
             }
         }
-        active.write_all(&line)
+        active.write_all(&frame(line, torn))
     }
 
     fn prepare_rotation(
@@ -353,7 +355,12 @@ impl Sink {
     }
 
     fn open_active(&self) -> io::Result<File> {
-        open_regular(OpenOptions::new().create(true).append(true), &self.path)
+        let file = open_regular(
+            OpenOptions::new().create(true).read(true).append(true),
+            &self.path,
+        )?;
+        journal::validate_file(&file)?;
+        Ok(file)
     }
 
     /// Return archives to prune after the record is appended. A failed
@@ -388,6 +395,33 @@ impl Sink {
     pub fn check_record_size(record: &Record) -> io::Result<()> {
         encode(record, HOOKS_RECORD_MAX_INPUT_BYTES, io::sink())
     }
+}
+
+/// Whether the file ends in an unterminated line: an earlier append that
+/// failed part way. Read through the handle the record will be appended to.
+/// A file whose end cannot be read is appended to as it is; the check must
+/// not cost a record.
+fn ends_mid_line(active: &mut File) -> bool {
+    let mut last = [0];
+    let read = active.metadata().and_then(|metadata| {
+        let Some(offset) = metadata.len().checked_sub(1) else {
+            return Ok(false);
+        };
+        active.seek(SeekFrom::Start(offset))?;
+        active.read_exact(&mut last)?;
+        Ok(last != *b"\n")
+    });
+    read.unwrap_or(false)
+}
+
+/// The bytes of one append. After a torn line, a leading LF ends that line so
+/// it is rejected alone and this record is read. The LF belongs to the torn
+/// line: the record keeps its own size bound.
+fn frame(mut line: Vec<u8>, torn: bool) -> Vec<u8> {
+    if torn {
+        line.insert(0, b'\n');
+    }
+    line
 }
 
 fn append_and_prune(active: &mut File, line: &[u8], archives: Vec<PathBuf>) -> io::Result<()> {

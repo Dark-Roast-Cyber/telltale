@@ -170,59 +170,78 @@ fn detect_only_answers_nothing_when_stdin_is_not_utf8() {
     }
 }
 
-/// Reading stdin fails (the descriptor is a directory, so the read returns an
-/// error). Observe mode releases that as no opinion: empty stdout, exit 0,
-/// and no record, because the payload never arrived. The same read while
-/// enforcing exits 1, which is what shows the read failed. Unix only: a
-/// directory descriptor is not a read-error seam on Windows.
+/// A directory descriptor makes the real binary's stdin read fail on Unix.
+#[cfg(unix)]
+fn stdin_read_failure(entry_point: &str, settings: &str) -> (i32, String, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    std::fs::create_dir_all(config.join("settings.d")).unwrap();
+    std::fs::write(
+        config.join("settings.d").join("hooks.yaml"),
+        format!("version: 1\nhooks:\n{settings}"),
+    )
+    .unwrap();
+    let stdin_dir = dir.path().join("not-a-stream");
+    std::fs::create_dir(&stdin_dir).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command.arg("hooks");
+    for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
+        command.env(var, "/nonexistent-home-for-test");
+    }
+    let child = command
+        .args([entry_point, "hook", "--config-dir"])
+        .arg(&config)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
+        .env("TELLTALE_HOOKS_EVALUATOR", "0")
+        .stdin(Stdio::from(std::fs::File::open(&stdin_dir).unwrap()))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap(),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap_or_default(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stdin_read_failure_in_enforce_mode_blocks_and_records_the_failure() {
+    for entry_point in ALL_ENTRY_POINTS {
+        let (code, stdout, stderr, telemetry) =
+            stdin_read_failure(entry_point, "  mode: enforce\n  on_error: deny\n");
+        assert_nameless_block(entry_point, (code, &stdout), &stderr);
+        assert!(stderr.contains("cannot read hook payload"), "{stderr}");
+        assert_eq!(telemetry.lines().count(), 1, "{telemetry}");
+        let record = telltale_core::HooksRecordV1::from_json(telemetry.as_bytes()).unwrap();
+        assert_eq!(record.kind, telltale_core::HooksRecordKind::Error);
+        assert_eq!(record.error_code.as_deref(), Some("payload_read_failed"));
+        assert!(record.decision.is_none());
+    }
+}
+
+/// Observe mode still records the read error, but returns no opinion.
 #[cfg(unix)]
 #[test]
 fn a_stdin_read_failure_in_observe_mode_exits_with_no_opinion() {
-    let run = |settings: &str| -> (i32, String, String, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config");
-        std::fs::create_dir_all(config.join("settings.d")).unwrap();
-        std::fs::write(
-            config.join("settings.d").join("hooks.yaml"),
-            format!("version: 1\nhooks:\n{settings}"),
-        )
-        .unwrap();
-        let stdin_dir = dir.path().join("not-a-stream");
-        std::fs::create_dir(&stdin_dir).unwrap();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
-        command.arg("hooks");
-        for var in ["HOME", "APPDATA", "LOCALAPPDATA"] {
-            command.env(var, "/nonexistent-home-for-test");
-        }
-        let child = command
-            .args(["claude-code", "hook", "--config-dir"])
-            .arg(&config)
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_STATE_HOME")
-            .env("TELLTALE_HOOKS_STATE_DIR", dir.path())
-            .env("TELLTALE_HOOKS_EVALUATOR", "0")
-            .stdin(Stdio::from(std::fs::File::open(&stdin_dir).unwrap()))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        (
-            out.status.code().unwrap(),
-            String::from_utf8(out.stdout).unwrap(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-            std::fs::read_to_string(dir.path().join("telemetry.jsonl")).unwrap_or_default(),
-        )
-    };
-    let (code, stdout, stderr, _) = run("  mode: enforce\n  on_error: deny\n");
-    assert_eq!((code, stdout.as_str()), (1, ""), "{stderr}");
-    assert!(stderr.contains("cannot read hook payload"), "{stderr}");
-
-    let (code, stdout, stderr, telemetry) =
-        run("  mode: observe\n  on_error: deny\n  on_unevaluable: deny\n");
-    assert_eq!((code, stdout.as_str()), (0, ""), "{stderr}");
-    assert!(stderr.contains("cannot read hook payload"), "{stderr}");
-    assert!(telemetry.is_empty(), "{telemetry}");
+    for entry_point in ALL_ENTRY_POINTS {
+        let (code, stdout, stderr, telemetry) = stdin_read_failure(
+            entry_point,
+            "  mode: observe\n  on_error: deny\n  on_unevaluable: deny\n",
+        );
+        assert_eq!((code, stdout.as_str()), (0, ""), "{stderr}");
+        assert!(stderr.contains("cannot read hook payload"), "{stderr}");
+        assert_eq!(telemetry.lines().count(), 1, "{telemetry}");
+        let record = telltale_core::HooksRecordV1::from_json(telemetry.as_bytes()).unwrap();
+        assert_eq!(record.kind, telltale_core::HooksRecordKind::Error);
+        assert_eq!(record.error_code.as_deref(), Some("payload_read_failed"));
+        assert!(record.decision.is_none());
+    }
 }
 
 fn oversized(prefix: &[u8]) -> Vec<u8> {

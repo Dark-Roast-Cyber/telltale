@@ -1353,7 +1353,7 @@ fn hook(
     }
     let config = caught(|| resolve_config(harness, loaded, gate)).unwrap_or(Err(()));
     let answer = match caught(read_payload) {
-        Some(None) => Answer::exit(1),
+        Some(None) => unreadable_answer(harness, &config, "payload_read_failed", &[]),
         Some(Some(bytes)) => caught(|| evaluate(harness, &config, &bytes, config_dirs, started))
             .unwrap_or_else(|| unreadable_answer(harness, &config, HOOK_PANICKED, &bytes)),
         // The payload is lost with the panic: it names no event.
@@ -1517,7 +1517,8 @@ fn fallback_config() -> Config {
 }
 
 /// The answer for a payload that could not be parsed at all (oversized or
-/// malformed), or for one whose handling panicked (`hook_panicked`), under
+/// malformed), could not be read from stdin (`payload_read_failed`), or whose
+/// handling panicked (`hook_panicked`), under
 /// `config` (`Err` when it did not load and the gate is enforcing). Either is
 /// agent-influenced (a huge or damaged tool input, or one that makes the hook
 /// panic), so it gets the policy for a call the hook could not read rather

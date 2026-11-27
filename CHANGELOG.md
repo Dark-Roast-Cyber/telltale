@@ -16,7 +16,11 @@
 - Hooks records now rotate by size with configurable archive retention.
   `telltale hooks allow` searches kept generations, and the experimental
   `HooksRecordFeed` offers bounded strict readback with restart checkpoints
-  and gap notices.
+  and gap notices. A feed started in recent mode does not skip a record
+  whose line was unfinished at its first poll. A record appended after a
+  failed partial append is read; only the fragment is rejected. The writer
+  refuses a records file with more than one hard link, as the feed does, and
+  a FIFO swapped in during rotation cannot stall a hook.
 
 - Downstream consumers can read `telltale_hooks.record.v1` with
   `HooksRecordV1::from_json`, including schema, redaction and embedded
@@ -29,6 +33,8 @@
   An oversized runtime record is replaced by a `telemetry_record_too_large`
   error with the original record ID. `telltale hooks allow` skips oversized
   lines and refuses a grant whose lifecycle record would exceed the cap.
+- A hook stdin read failure applies the unreadable-payload policy and writes
+  a `payload_read_failed` error record; observe mode still returns no opinion.
 
 ### Privacy and historical export
 
@@ -45,6 +51,14 @@
   component: after a file name with an extension, or in text whose separators
   are doubled. This changes redacted text, so qualify producer and consumer
   privacy pins together.
+- Redact GitLab tokens (every documented prefix, such as `glpat-`), GitHub
+  fine-grained tokens (`github_pat_`), Hugging Face (`hf_`) and npm (`npm_`)
+  tokens, and the Slack `xoxc-`, `xoxd-` and `xoxe-` families. Before, a
+  token whose body follows a `_` or contains `-` or `_` could stay readable
+  in evidence, and as an upload destination path segment. A session or other
+  structured identifier that contains one is now replaced by its hash. This
+  changes redacted text, so qualify producer and consumer privacy pins
+  together.
 - Keep native rule-ID admission and emission credential-strict. Historical Event
   3 readback preserves exact `redacted.<64 lowercase hex digits>` replacements
   only in the five rule-ID fields, without granting provenance. Contribution
@@ -70,8 +84,8 @@
 
 - **Action record v2 supports every known client.** Embedders can use
   `SourceScan::action_records_v2()` to serialize actions for clients such as
-  Pi, with upload destination facts and a reserved, null `call_id`. v1 still
-  works. Delivery keys and aliases match v1 for the same action. See the
+  Pi, with upload destination facts. v1 still works. Delivery keys and
+  aliases match v1 for the same action. See the
   [0.8.0 migration guide](docs/migrations/0.8.0.md#action-record-v2).
 
 - **The native action profile is 19.** Several changes below change what the

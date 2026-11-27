@@ -69,8 +69,12 @@ The consumer checks the published envelope schema, validates each embedded
 action with `ActionRecordV1`, and checks internal consistency. This includes
 the blocks allowed for each kind, delivery keys, destination facts, verdicts,
 grant and outcome accounting, and scores and summaries derived from the
-embedded findings. The consumer validates one record at a time; it cannot
+embedded findings. A grant never covers a finding of a host self-protection
+rule (`tth.tamper.*`). The consumer validates one record at a time; it cannot
 confirm that a record linked by ID exists or that a harness reported truthfully.
+It also does not check that an embedded action's client is the one the named
+harness is read as: harness names are an open vocabulary owned by the
+adapters, and the records file is not authenticated either way.
 
 Open-form text must already be a fixed point of the current sanitizer.
 Harness labels follow the encoding in the next addendum. Redaction
@@ -143,10 +147,24 @@ handle. Cleanup reports failed removals and continues with the other archives.
 These failures do not turn a successful append into a write error or change
 the verdict.
 
+Before an append, the writer checks the last byte on the same open file. An
+unterminated tail gets an LF before the new record so a torn append does not
+poison that record. This is best effort on the unlocked fallback path. The
+separator counts toward rotation size, but terminates the old fragment:
+the new serialized record, including its own LF, still fits the 16 MiB bound.
+Both writer and reader refuse multiply linked records files using the same
+opened-handle admission check. Refusal leaves the hook's verdict unchanged.
+Unix journal opens are nonblocking before regular-file validation, so a FIFO
+substituted during discovery cannot stall the hook.
+
 Embedding hosts can poll `HooksRecordFeed` without enabling the Hooks runtime.
 It returns strictly validated records and closed-code rejections, each
 rejection identifying an opaque generation and byte offset. An incomplete
-line in the active file is deferred until its line feed arrives. Persist the
+line in the active file is deferred until its line feed arrives. Recent mode
+that selects nothing anchors its checkpoint search to the initial snapshot.
+Malformed fragments completed by the separator are rejected separately from
+the next successful append; incomplete archived tails remain skipped. Empty
+separator lines advance the cursor without a rejection. Persist the
 cursor only after handling the batch. If its generation was deleted or
 replaced, or was truncated below the cursor, a gap notice means records may
 have been lost. The feed resumes at the oldest available position and may

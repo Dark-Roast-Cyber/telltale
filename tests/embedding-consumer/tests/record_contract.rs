@@ -225,7 +225,6 @@ fn v2_records_cross_a_process_boundary_with_upload_facts_and_v1_delivery_keys() 
             local_only: false,
         })
     );
-    assert_eq!(record.call_id, None);
 
     let event = scan
         .events

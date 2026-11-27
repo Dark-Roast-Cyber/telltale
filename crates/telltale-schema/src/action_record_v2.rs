@@ -12,8 +12,6 @@
 //! - `destinations`: optional fail-closed upload destination facts
 //!   ([`DestinationFacts`]), present only on actions carrying
 //!   `exfil.outbound_upload`. Facts never change scores or verdicts.
-//! - `call_id`: reserved for a keyed hash of the harness call identifier.
-//!   Producers emit `null`; consumers check the shape only.
 //!
 //! Delivery keys and aliases are byte-identical to v1 for the same action, so
 //! a host moving from v1 to v2 does not redeliver anything it already handled.
@@ -83,19 +81,12 @@ pub struct ActionRecordV2 {
     pub context: Vec<ActionRecordContext>,
     /// Upload destination facts; only with `exfil.outbound_upload`.
     pub destinations: Option<DestinationFacts>,
-    /// Reserved keyed call identifier (`call:v1:hmac-sha256:…`); producers
-    /// emit `null` until the pairing key is specified.
-    pub call_id: Option<String>,
 }
 
 impl ActionRecordV2 {
-    /// The v2 form of a v1 record with the v2-only fields. The v1 record's
+    /// The v2 form of a v1 record with the v2-only field. The v1 record's
     /// client is not checked here; [`Self::validate`] checks the result.
-    pub fn from_v1(
-        record: ActionRecordV1,
-        destinations: Option<DestinationFacts>,
-        call_id: Option<String>,
-    ) -> Self {
+    pub fn from_v1(record: ActionRecordV1, destinations: Option<DestinationFacts>) -> Self {
         let ActionRecordV1 {
             schema: _,
             telltale_version,
@@ -152,7 +143,6 @@ impl ActionRecordV2 {
             canonical_findings,
             context,
             destinations,
-            call_id,
         }
     }
 
