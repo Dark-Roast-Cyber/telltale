@@ -32,9 +32,35 @@ refresh. Returning a finding is not durable delivery.
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules, and the seams behind session records (`telltale_schema::event::redact_multiline_bounded`, `telltale_discover::discovery::check_sqlite_store`, and in `telltale_sources::acquisition` `acquire_transcript`, `transcript_message_text`, `TranscriptReadOptions`, `TranscriptEntry`, `TranscriptBatch`, `MAX_TRANSCRIPT_SOURCE_BYTES`), which are public for the other crates and hidden from the API docs | Implementation seams, not a source-adapter, detector, or plugin ABI. |
+| Supported | `HooksRecordV1`, `HooksRecordKind`, `HooksRecordError`, `HooksRecordErrorCategory`, and the `hooks_record` wire types, schema and bound | [Strict readback of one Hooks JSONL record](hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback), including its embedded action records. The writer caps lines at 16 MiB including the line feed and replaces oversized runtime records with `telemetry_record_too_large` errors. Available without the `hooks` feature. |
+| Unstable | `HooksRecordFeed`, `HooksRecordFeedConfig`, `HooksRecordCursor`, `HooksRecordBatch`, `HooksRecordRejection`, `HooksRecordFeedError` | [Incremental Hooks JSONL polling](#hooks-record-feed) without the `hooks` feature. The persisted cursor and lockless rotation recovery are newly introduced; native Windows and macOS qualification is pending. |
 
 Core re-exports such as `Source`, `Event`, and error types serve the facade; they do not make every public module of the originating
 crate a stable embedding API.
+
+### Hooks record feed
+
+Construct `HooksRecordFeed::new(HooksRecordFeedConfig::new(path, startup))`
+with the active records path and `StartupMode::Beginning`, `End`, or
+`Recent { max_events, max_bytes }`. Beginning includes kept generations.
+End starts after the last complete line. Recent searches a bounded suffix
+for the last requested valid records and reports rejected lines it encounters
+in the selected window.
+
+Poll on the embedding host's cadence. Each batch bounds complete lines
+examined and wire bytes read or returned; generation discovery has separate
+bounds. Persist `feed.cursor()` with serde after you handle the batch, and
+pass it back to `HooksRecordFeed::resume`. The token stores no record text
+or filesystem path. A `generation_gap` notice means records may have been
+lost; the feed restarts from the oldest available position and can replay
+records the host already handled. Physical identity and head verification
+detect replacement and ordinary truncation, but cannot distinguish an
+in-place rewrite with an identical head and boundary that restores the
+file to at least the checkpoint length before polling.
+A writer that cannot take the rotation lock appends anyway. If that append
+races with rotation, a feed that has already moved past the just-archived file
+can miss the record. `telltale hooks allow` can still find the record while the
+archive is retained.
 
 ### Qualification status
 

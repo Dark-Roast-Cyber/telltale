@@ -479,7 +479,7 @@ pub fn create_fresh(path: &Path) -> std::io::Result<File> {
 /// Take a session's lock, or give up after `wait`, and say how long it took. A
 /// blocking lock cannot time out, and polling behaves the same on every
 /// platform.
-fn lock_within(lock: &File, wait: Duration) -> Result<Duration, StateError> {
+pub(super) fn lock_within(lock: &File, wait: Duration) -> Result<Duration, StateError> {
     let started = Instant::now();
     let mut pause = Duration::from_millis(1);
     loop {

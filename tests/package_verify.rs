@@ -125,6 +125,7 @@ package)
         : > "$package_root/data/action-record-v1.schema.json"
         : > "$package_root/data/effective-configuration-v1.schema.json"
         : > "$package_root/data/rule-catalog-v2.schema.json"
+        : > "$package_root/data/telltale-hooks-record-v1.schema.json"
     fi
     ;;
 test|check)

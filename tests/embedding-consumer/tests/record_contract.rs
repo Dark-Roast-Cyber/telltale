@@ -4,6 +4,39 @@ use serde_json::{Value, json};
 use std::path::Path;
 use telltale_core::*;
 
+#[test]
+fn hooks_feed_resumes_through_the_public_facade_without_the_runtime() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.jsonl");
+    let mut wire = json!({
+        "schema": HOOKS_RECORD_V1_ID, "record_id": "tth:0123456789abcdef0123456789abcdef",
+        "recorded_at": "2026-11-26T00:00:00Z", "kind": "error",
+        "producer": {"name": "telltale-hooks", "version": "0.8.0",
+            "telltale_rev": "0123456789012345678901234567890123456789", "semantic_identity": null},
+        "harness": {"name": "claude-code", "hook_event": "", "permission_mode": null},
+        "session": {"session_id": "", "agent_id": null, "agent_type": null, "prompt_id": null, "cwd_sha256": null},
+        "error_code": "payload_invalid_json", "telltale": []
+    });
+    std::fs::write(&path, format!("{wire}\n")).unwrap();
+    let config = HooksRecordFeedConfig::new(&path, StartupMode::Beginning);
+    let mut feed = HooksRecordFeed::new(config.clone()).unwrap();
+    assert_eq!(feed.poll().records[0].record_id, wire["record_id"]);
+    let token = serde_json::to_vec(&feed.cursor().unwrap()).unwrap();
+    let cursor: HooksRecordCursor = serde_json::from_slice(&token).unwrap();
+    let mut resumed = HooksRecordFeed::resume(config, cursor).unwrap();
+    wire["record_id"] = json!("tth:1123456789abcdef0123456789abcdef");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{wire}").unwrap();
+    let batch = resumed.poll();
+    assert_eq!(batch.records.len(), 1);
+    assert_eq!(batch.records[0].record_id, wire["record_id"]);
+}
+
 const PRIVATE_PATH: &str = "/home/synthetic/TT_PRIVATE_PATH";
 const SECRET: &str = "TT_CONTROLLED_SECRET_93847";
 
@@ -35,6 +68,34 @@ fn bash(id: &str, time: &str, command: &str) -> Value {
 /// live here.
 fn envelope(record: &ActionRecordV1) -> Value {
     json!({"host_version": 1, "delivery_key": record.delivery_key(), "record": record})
+}
+
+#[test]
+fn embedding_host_reads_hooks_records_without_enabling_the_runtime() {
+    let wire = json!({
+        "schema": "telltale_hooks.record.v1",
+        "record_id": "tth:0123456789abcdef0123456789abcdef",
+        "recorded_at": "2026-11-26T12:00:00Z",
+        "kind": "lifecycle",
+        "producer": {"name": "telltale-hooks", "version": "0.8.0",
+            "telltale_rev": "0".repeat(40), "semantic_identity": null},
+        "harness": {"name": "claude-code", "hook_event": "SessionStart", "permission_mode": null},
+        "session": {"session_id": "synthetic-session", "agent_id": null,
+            "agent_type": null, "prompt_id": null, "cwd_sha256": null},
+        "lifecycle": {"event": "session_start", "source": null},
+        "telltale": []
+    });
+    let record = HooksRecordV1::from_json(&serde_json::to_vec(&wire).unwrap()).unwrap();
+    assert_eq!(record.kind, HooksRecordKind::Lifecycle);
+    assert!(matches!(
+        record.lifecycle,
+        Some(hooks_record::HooksLifecycle::SessionStart {
+            source: None,
+            pinned_over: None
+        })
+    ));
+    record.validate().unwrap();
+    assert_eq!(serde_json::to_value(&record).unwrap(), wire);
 }
 
 #[test]

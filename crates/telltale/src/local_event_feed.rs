@@ -15,11 +15,9 @@ use telltale_sources::paths::{PathProfile, resolve_log_path};
 const DEFAULT_MAX_EVENTS: usize = 256;
 const DEFAULT_MAX_BYTES: usize = 1024 * 1024;
 const DEFAULT_MAX_GENERATIONS: usize = 256;
-const DEFAULT_MAX_DIRECTORY_ENTRIES: usize = 4096;
 const DEFAULT_MAX_RECONCILIATIONS: usize = 16;
 const DEFAULT_MAX_DEDUP_ENTRIES: usize = 256;
 const DEFAULT_MAX_NOTICES: usize = 64;
-const GENERATION_HEAD_BYTES: usize = 64;
 
 /// Startup position for a feed.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -49,7 +47,7 @@ impl Default for FeedLimits {
             max_bytes_per_poll: DEFAULT_MAX_BYTES,
             max_frame_bytes: EVENT3_MAX_INPUT_BYTES,
             max_generations: DEFAULT_MAX_GENERATIONS,
-            max_directory_entries: DEFAULT_MAX_DIRECTORY_ENTRIES,
+            max_directory_entries: journal::DEFAULT_MAX_DIRECTORY_ENTRIES,
             max_reconciliations_per_poll: DEFAULT_MAX_RECONCILIATIONS,
             max_dedup_entries: DEFAULT_MAX_DEDUP_ENTRIES,
             max_notices: DEFAULT_MAX_NOTICES,
@@ -1554,7 +1552,7 @@ fn process_generation(
 }
 
 fn read_generation_head(file: &mut JournalFile, length: u64) -> std::io::Result<Vec<u8>> {
-    file.read_at(0, length.min(GENERATION_HEAD_BYTES as u64) as usize)
+    file.read_head(length)
 }
 
 fn set_minimum_boundary(
