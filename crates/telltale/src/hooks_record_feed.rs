@@ -105,6 +105,63 @@ struct Frame {
     oversized: bool,
 }
 
+impl Frame {
+    fn push(&mut self, piece: &[u8]) {
+        self.read += piece.len() as u64;
+        if self.read > HOOKS_RECORD_MAX_INPUT_BYTES as u64 && !self.oversized {
+            self.oversized = true;
+            self.bytes = Vec::new();
+        }
+        if !self.oversized {
+            self.bytes.extend_from_slice(piece);
+        }
+    }
+
+    fn parse(self) -> Result<(HooksRecordV1, usize), &'static str> {
+        if self.oversized {
+            return Err(telltale_schema::hooks_record::HooksRecordError::INPUT_TOO_LARGE_CODE);
+        }
+        HooksRecordV1::from_json(&self.bytes)
+            .map(|record| (record, self.bytes.len()))
+            .map_err(|error| error.code())
+    }
+}
+
+/// Visit complete records in a bounded snapshot of one active file. A
+/// possibly clipped first line and an incomplete tail are not counted.
+#[cfg(feature = "hooks")]
+pub(crate) fn visit_active_suffix(
+    file: &mut JournalFile,
+    max_bytes: u64,
+    mut visit: impl FnMut(Result<HooksRecordV1, &'static str>),
+) -> io::Result<bool> {
+    let length = file.len();
+    let start = length.saturating_sub(max_bytes);
+    let mut clipped = start != 0;
+    let mut offset = start;
+    let mut frame = Frame::default();
+    while offset < length {
+        let requested = (length - offset).min(READ_CHUNK_BYTES as u64) as usize;
+        let chunk = file.read_at(offset, requested)?;
+        if chunk.len() != requested {
+            return Err(io::Error::other("journal changed during read"));
+        }
+        offset += chunk.len() as u64;
+        for piece in chunk.split_inclusive(|byte| *byte == b'\n') {
+            let complete = piece.ends_with(b"\n");
+            if clipped {
+                clipped = !complete;
+                continue;
+            }
+            frame.push(piece);
+            if complete {
+                visit(std::mem::take(&mut frame).parse().map(|(record, _)| record));
+            }
+        }
+    }
+    Ok(start == 0 && frame.read == 0)
+}
+
 struct EndSearch {
     snapshot: HooksRecordCursor,
     scan_to: u64,
@@ -389,15 +446,8 @@ impl HooksRecordFeed {
                 {
                     return Ok(false);
                 }
-                self.frame.read = frame_len;
+                self.frame.push(piece);
                 next += piece.len() as u64;
-                if self.frame.read > HOOKS_RECORD_MAX_INPUT_BYTES as u64 && !self.frame.oversized {
-                    self.frame.oversized = true;
-                    self.frame.bytes = Vec::new();
-                }
-                if !self.frame.oversized {
-                    self.frame.bytes.extend_from_slice(piece);
-                }
                 if !complete {
                     continue;
                 }
@@ -421,18 +471,13 @@ impl HooksRecordFeed {
         offset: u64,
         batch: &mut HooksRecordBatch,
     ) {
-        let frame = std::mem::take(&mut self.frame);
-        let code = if frame.oversized {
-            "input_too_large"
-        } else {
-            match HooksRecordV1::from_json(&frame.bytes) {
-                Ok(record) => {
-                    batch.records.push(record);
-                    batch.record_bytes += frame.bytes.len();
-                    return;
-                }
-                Err(error) => error.code(),
+        let code = match std::mem::take(&mut self.frame).parse() {
+            Ok((record, bytes)) => {
+                batch.records.push(record);
+                batch.record_bytes += bytes;
+                return;
             }
+            Err(code) => code,
         };
         batch.rejections.push(HooksRecordRejection {
             generation: generation.identity.clone(),

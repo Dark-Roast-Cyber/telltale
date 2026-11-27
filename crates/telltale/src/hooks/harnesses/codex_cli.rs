@@ -471,6 +471,23 @@ pub const ADAPTER: Adapter = Adapter {
                                                   on stderr); Codex has no fail-closed option, so
                                                   --fail-closed is refused",
         output: install_output,
+        user_home: ".codex",
+        user_config_override: None,
+        user_files: &["hooks.json", "config.toml"],
+        project_files: &[".codex/hooks.json", ".codex/config.toml"],
+        system_files: &[if cfg!(windows) {
+            super::super::harness::MachineInstallFile::Standard("OpenAI/Codex/config.toml")
+        } else {
+            super::super::harness::MachineInstallFile::Standard("/etc/codex/config.toml")
+        }],
+        managed_files: if cfg!(unix) {
+            &[super::super::harness::MachineInstallFile::Standard(
+                "/etc/codex/managed_config.toml",
+            )]
+        } else {
+            &[]
+        },
+        plugin_wrapper: None,
     },
     // A deny on stdout is honored on a PreToolUse and rejected as invalid
     // output on every other event (E2E `damaged-*-nameless`).

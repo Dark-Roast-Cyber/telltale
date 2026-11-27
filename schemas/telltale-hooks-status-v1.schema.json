@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Dark-Roast-Cyber/telltale/schemas/telltale-hooks-status-v1.schema.json",
+  "title": "Telltale Hooks status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "telltale_rev", "configuration", "harnesses", "evaluator", "telemetry"],
+  "properties": {
+    "schema": { "const": "telltale_hooks.status.v1" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$" },
+    "telltale_rev": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "configuration": { "$ref": "#/$defs/configuration" },
+    "harnesses": { "type": "array", "items": { "$ref": "#/$defs/harness" } },
+    "evaluator": { "enum": ["not_configured", "not_running", "running", "unreachable", "unsupported_platform", "config_invalid"] },
+    "telemetry": { "$ref": "#/$defs/telemetry" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "location": { "enum": ["user", "system", "managed", "project"] },
+    "failurePolicy": { "enum": ["allow", "ask", "deny", null] },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "sources", "content_sha256", "valid", "error_code", "semantic_identity", "mode", "on_error", "on_unevaluable", "reason_detail", "ask", "telemetry_rotation", "tamper_prevention", "self_protection_rules"],
+      "properties": {
+        "origin": { "enum": ["user", "system", "managed", null], "description": "Highest-precedence settings file loaded; null when none was loaded." },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["origin", "path_sha256"],
+            "properties": {
+              "origin": { "enum": ["user", "system", "managed"] },
+              "path_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
+        "content_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "valid": { "type": "boolean" },
+        "error_code": { "enum": ["config_invalid", "rule_content_unreadable", "pipeline_build_failed", "semantic_provenance_failed", "state_dir_unresolved", null] },
+        "semantic_identity": { "type": ["string", "null"], "pattern": "^semantic:v1:sha256:[0-9a-f]{64}$" },
+        "mode": { "enum": ["enforce", "observe", null] },
+        "on_error": { "$ref": "#/$defs/failurePolicy" },
+        "on_unevaluable": { "$ref": "#/$defs/failurePolicy" },
+        "reason_detail": { "enum": ["full", "minimal", null] },
+        "ask": { "enum": ["human", "model", null] },
+        "telemetry_rotation": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["max_size_bytes", "keep"],
+          "properties": {
+            "max_size_bytes": { "type": "integer", "minimum": 0 },
+            "keep": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "tamper_prevention": { "type": ["boolean", "null"] },
+        "self_protection_rules": { "type": ["boolean", "null"] }
+      },
+      "if": { "properties": { "valid": { "const": true } } },
+      "then": { "properties": { "error_code": { "type": "null" }, "semantic_identity": { "type": "string" } } },
+      "else": { "properties": { "error_code": { "type": "string" } } }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "installed_scopes", "settings"],
+      "properties": {
+        "name": { "enum": ["claude-code", "copilot-cli", "codex-cli", "opencode"] },
+        "installed_scopes": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/location" } },
+        "settings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scope", "path_sha256", "state"],
+            "properties": {
+              "scope": { "$ref": "#/$defs/location" },
+              "path_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+              "state": {
+                "enum": ["present", "missing", "altered", "unavailable", "not_inspected"],
+                "description": "not_inspected means the settings file exists, but status does not inspect hook tables in its format."
+              }
+            }
+          }
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "complete", "last_decision_at", "error_counts", "rejected_counts"],
+      "properties": {
+        "state": { "enum": ["active", "missing", "unavailable"] },
+        "complete": { "type": "boolean" },
+        "last_decision_at": { "type": ["string", "null"], "format": "date-time" },
+        "error_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "config_invalid": { "$ref": "#/$defs/count" },
+            "evaluator_answer_too_late": { "$ref": "#/$defs/count" },
+            "evaluator_no_answer": { "$ref": "#/$defs/count" },
+            "evaluator_protocol_error": { "$ref": "#/$defs/count" },
+            "hook_deadline": { "$ref": "#/$defs/count" },
+            "hook_panicked": { "$ref": "#/$defs/count" },
+            "journal_append_failed": { "$ref": "#/$defs/count" },
+            "journal_missing_state_present": { "$ref": "#/$defs/count" },
+            "journal_read_failed": { "$ref": "#/$defs/count" },
+            "other": { "$ref": "#/$defs/count" },
+            "outcome_ambiguous": { "$ref": "#/$defs/count" },
+            "payload_invalid_json": { "$ref": "#/$defs/count" },
+            "payload_invalid_protocol": { "$ref": "#/$defs/count" },
+            "payload_missing_field": { "$ref": "#/$defs/count" },
+            "payload_oversized": { "$ref": "#/$defs/count" },
+            "pipeline_build_failed": { "$ref": "#/$defs/count" },
+            "rule_content_unreadable": { "$ref": "#/$defs/count" },
+            "scan_failed": { "$ref": "#/$defs/count" },
+            "scan_returned_no_result": { "$ref": "#/$defs/count" },
+            "semantic_provenance_failed": { "$ref": "#/$defs/count" },
+            "state_corrupt": { "$ref": "#/$defs/count" },
+            "state_corrupt_reset": { "$ref": "#/$defs/count" },
+            "state_dir_create_failed": { "$ref": "#/$defs/count" },
+            "state_dir_unresolved": { "$ref": "#/$defs/count" },
+            "state_lock_failed": { "$ref": "#/$defs/count" },
+            "state_lock_open_failed": { "$ref": "#/$defs/count" },
+            "state_lock_timeout": { "$ref": "#/$defs/count" },
+            "state_missing_journal_present": { "$ref": "#/$defs/count" },
+            "state_read_failed": { "$ref": "#/$defs/count" },
+            "state_write_failed": { "$ref": "#/$defs/count" },
+            "telemetry_record_too_large": { "$ref": "#/$defs/count" },
+            "window_write_failed": { "$ref": "#/$defs/count" }
+          }
+        },
+        "rejected_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action_source_mismatch": { "$ref": "#/$defs/count" },
+            "delivery_key_mismatch": { "$ref": "#/$defs/count" },
+            "finding_summary_mismatch": { "$ref": "#/$defs/count" },
+            "inconsistent_evaluation": { "$ref": "#/$defs/count" },
+            "inconsistent_grant": { "$ref": "#/$defs/count" },
+            "inconsistent_kind": { "$ref": "#/$defs/count" },
+            "inconsistent_lifecycle": { "$ref": "#/$defs/count" },
+            "inconsistent_outcome": { "$ref": "#/$defs/count" },
+            "inconsistent_verdict": { "$ref": "#/$defs/count" },
+            "input_too_large": { "$ref": "#/$defs/count" },
+            "invalid_action_record": { "$ref": "#/$defs/count" },
+            "invalid_destinations": { "$ref": "#/$defs/count" },
+            "malformed_json": { "$ref": "#/$defs/count" },
+            "schema_mismatch": { "$ref": "#/$defs/count" },
+            "score_mismatch": { "$ref": "#/$defs/count" },
+            "unredacted_text": { "$ref": "#/$defs/count" },
+            "unsupported_record_version": { "$ref": "#/$defs/count" }
+          }
+        }
+      }
+    },
+    "count": { "type": "integer", "minimum": 1 }
+  }
+}
