@@ -208,13 +208,18 @@ pub struct Record {
 pub struct TelltaleAction {
     pub delivery_key: String,
     pub record: ActionRecordV1,
+    /// Where an `exfil.outbound_upload` action sends, beside the frozen
+    /// action record; absent for any other action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destinations: Option<crate::DestinationFacts>,
 }
 
 impl TelltaleAction {
-    pub fn from_record(record: ActionRecordV1) -> Self {
+    pub fn new(record: ActionRecordV1, destinations: Option<crate::DestinationFacts>) -> Self {
         Self {
             delivery_key: record.delivery_key(),
             record,
+            destinations,
         }
     }
 }

@@ -30,3 +30,21 @@ the only content.
   per Telltale guidance; a later issue covers shipping.
 - When Telltale ships Event 4.0, re-evaluate whether decision/outcome
   records should move into it; keep `delivery_key` stable across that move.
+
+## Addendum (2026-11-26): upload destination facts
+
+Status: Accepted. Amends "Decision" for 0.8.0; the record version stays
+`telltale_hooks.record.v1` because the field is optional and additive.
+
+An entry of `telltale` whose action carries `exfil.outbound_upload` may also
+hold `destinations`: the upload's destination facts
+(`DestinationFacts`: `destinations`, `complete`, `local_only`), beside the
+unmodified record. Evidence is redacted, so without them a host cannot tell
+an upload to its own artifact host from one to an unknown host.
+
+This adds one content source to the privacy statement above. Besides
+Telltale's redacted evidence, a record may now carry destination entries:
+hosts and at most two path segments or an object-storage bucket and prefix,
+built from parsed URL parts in a closed alphabet, never a port, userinfo,
+query or fragment, and kept only when the evidence sanitizer leaves them
+unchanged. A strict reader checks them with `DestinationFacts::is_valid`.

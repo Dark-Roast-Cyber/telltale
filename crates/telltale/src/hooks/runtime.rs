@@ -429,7 +429,7 @@ struct RequestDecision {
     outcome: policy::Outcome,
     rule_ids: Vec<String>,
     categories: Vec<String>,
-    telltale: Vec<crate::ActionRecordV1>,
+    telltale: Vec<TelltaleAction>,
     session_before: u64,
     denied_before: u32,
     action_score: u64,
@@ -586,10 +586,10 @@ const REASON_RULE_IDS: usize = 8;
 /// category is rule content, so only its letters and digits are kept
 /// (`credential_harvesting` reads `credential harvesting`), cut to
 /// [`REASON_CONCERN_CHARS`]. Never a pattern, an explanation or matched text.
-fn concerns(records: &[crate::ActionRecordV1]) -> Vec<String> {
-    let mut findings: Vec<_> = records
+fn concerns(actions: &[TelltaleAction]) -> Vec<String> {
+    let mut findings: Vec<_> = actions
         .iter()
-        .flat_map(|record| record.canonical_findings.iter())
+        .flat_map(|action| action.record.canonical_findings.iter())
         .collect();
     if findings
         .iter()
@@ -2058,10 +2058,7 @@ impl Runtime {
                     granted_by: granted_by.clone(),
                 }),
         });
-        record.telltale = std::mem::take(&mut decision.telltale)
-            .into_iter()
-            .map(TelltaleAction::from_record)
-            .collect();
+        record.telltale = std::mem::take(&mut decision.telltale);
         self.emit(&record);
     }
 
@@ -2294,12 +2291,7 @@ impl Runtime {
             categories: evaluation.categories(),
             grant: None,
         });
-        record.telltale = evaluation
-            .focus_records
-            .iter()
-            .cloned()
-            .map(TelltaleAction::from_record)
-            .collect();
+        record.telltale = evaluation.focus_records.clone();
         let response = self.flagged_result_context(call, evaluation, score, &record.record_id);
         Some((record, response))
     }

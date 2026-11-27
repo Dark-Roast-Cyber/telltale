@@ -14,6 +14,7 @@ use telltale_rules::{
     ModifierLinkOrder, RuleV1CompatibilityExport, RuleV1CompatibilityModifier,
     RuleV1CompatibilityRule, RuleV1ContentMatcher,
 };
+use telltale_schema::destination_facts::DestinationFacts;
 use telltale_schema::event::{
     PrivacySanitizer, SanitizationContext, terminal_identifier, terminal_session_id,
     terminal_tool_label,
@@ -24,7 +25,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const ACTION_SEMANTICS_VERSION: u32 = 3;
 /// Versions what the action view reads, the shared transfer reading included.
-const NATIVE_ACTION_PROFILE_VERSION: u32 = 18;
+const NATIVE_ACTION_PROFILE_VERSION: u32 = 19;
 pub const REPLAY_ALGORITHM_VERSION: u32 = 1;
 /// Canonical action-only content; the frozen Event3 modifier remains unchanged.
 pub const DEFAULT_ACTION_DOWNLOAD_LINK_SCORE: u64 = 50;
@@ -383,6 +384,7 @@ pub struct ActionFinding {
     evidence: Vec<ActionEvidence>,
     context: Vec<ActionContextEntry>,
     session_event_index: Option<usize>,
+    destination_facts: Option<DestinationFacts>,
 }
 impl ActionFinding {
     pub fn canonical_findings(&self) -> &[CanonicalActionFinding] {
@@ -451,6 +453,11 @@ impl ActionFinding {
     }
     pub fn context(&self) -> &[ActionContextEntry] {
         &self.context
+    }
+    /// Bounded, fail-closed upload destination facts when this action carries
+    /// an `exfil.outbound_upload` finding. Never alters scores or verdicts.
+    pub fn destination_facts(&self) -> Option<&DestinationFacts> {
+        self.destination_facts.as_ref()
     }
     /// Index into the containing scan's `events` of the Event 3 detection
     /// projected for this action: the session's Rule v1 detection when it
@@ -626,6 +633,10 @@ struct ActionView {
     /// has any. Rules over the whole field also match this, so a comment cannot
     /// veto one through its exclusion.
     uncommented_command: String,
+    /// The `command` field as recorded, when the shell reader took
+    /// here-document bodies out of it, for the upload destination facts:
+    /// every URL in the recorded field counts there. Empty otherwise.
+    recorded_command: String,
     reads_paths: bool,
     /// What the call does, for the `tool_kind` target. It is no field: replay
     /// identities, bounds and evidence of other targets never see it.
@@ -960,6 +971,10 @@ fn read_view(
             let shell = super::shell_text::read(&command);
             budget.charge(shell.work)?;
             out.put("authored_content", shell.authored);
+            if shell.command != command {
+                budget.charge(command.len())?;
+                out.recorded_command.clone_from(&command);
+            }
             let command = shell.command;
             budget.charge(command.len())?;
             // The reader's stages are one shell's. A plain split of its code finds
@@ -1596,37 +1611,69 @@ fn is_download(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, 
     Ok(download_command(tokens, budget)?.is_some())
 }
 fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+    Ok(upload(tokens, budget)?.is_some())
+}
+
+/// What an upload stage sends to, as the upload rule reads it.
+pub(super) enum Upload<'a> {
+    /// A curl, wget or PowerShell web cmdlet request.
+    Http(super::http::Request<'a>),
+    /// Object-storage copies and GitHub CLI publications from a local source.
+    Transfers(Vec<command_effect::Transfer<'a>>),
+    /// An `az storage` upload, which names its account in options or settings.
+    Azure,
+}
+
+/// The upload a command stage requests, if any, with the index of its client
+/// word. The upload rule and the destination facts beside it both read a stage
+/// through this.
+pub(super) fn upload<'a>(
+    tokens: &'a [String],
+    budget: &mut RetentionBudget,
+) -> Result<Option<(usize, Upload<'a>)>, ProcessingError> {
     charge_tokens(tokens, budget)?;
-    if super::http::is_upload(tokens) {
-        return Ok(true);
+    if let Some((at, request)) = super::http::upload_request(tokens) {
+        return Ok(Some((at, Upload::Http(request))));
     }
     let Some(command) = super::http::invocation(tokens, &["aws", "gsutil", "rclone", "az", "gh"])
     else {
-        return Ok(false);
+        return Ok(None);
     };
     charge_tokens(command, budget)?;
+    let at = tokens.len() - command.len();
     if super::http::client_name(&command[0]) == "az" {
         return Ok(command
             .iter()
             .position(|s| s == "storage")
-            .is_some_and(|position| azure_upload(&command[position + 1..])));
+            .is_some_and(|position| azure_upload(&command[position + 1..]))
+            .then_some((at, Upload::Azure)));
     }
-    Ok(requests_outbound_transfer(command))
+    let transfers = outbound_transfers(command);
+    Ok((!transfers.is_empty()).then_some((at, Upload::Transfers(transfers))))
 }
 
-/// Whether a command stage requests a transfer from a local source: an
-/// object-storage copy, move or sync, or a GitHub CLI publication. Publishing
-/// an ordinary file is routine and counts only when the file is a cloud
-/// credential. The action view reads uploads by these clients through this
-/// alone; session events take it beside the upload rule's own patterns.
-fn requests_outbound_transfer(tokens: &[String]) -> bool {
+/// The transfers a command stage requests from a local source: object-storage
+/// copies, moves or syncs, and GitHub CLI publications. Publishing an ordinary
+/// file is routine and counts only when the file is a cloud credential. The
+/// action view reads uploads by these clients through this alone; session
+/// events take it beside the upload rule's own patterns.
+fn outbound_transfers(tokens: &[String]) -> Vec<command_effect::Transfer<'_>> {
     static CREDENTIAL: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(CLOUD_CREDENTIAL_PATH).unwrap());
-    command_effect::transfers(tokens).iter().any(|transfer| {
-        transfer.direction == command_effect::Direction::Outbound
-            && (transfer.client != command_effect::Client::Gh
-                || CREDENTIAL.is_match(transfer.source))
-    })
+    command_effect::transfers(tokens)
+        .into_iter()
+        .filter(|transfer| {
+            transfer.direction == command_effect::Direction::Outbound
+                && (transfer.client != command_effect::Client::Gh
+                    || CREDENTIAL.is_match(transfer.source))
+        })
+        .collect()
+}
+
+/// Whether a command stage requests a transfer from a local source (see
+/// [`outbound_transfers`]).
+fn requests_outbound_transfer(tokens: &[String]) -> bool {
+    !outbound_transfers(tokens).is_empty()
 }
 
 /// Whether some command stage of an observation, read as the action view
@@ -1819,6 +1866,60 @@ fn azure_upload(words: &[String]) -> bool {
     }
 }
 
+/// Whether a command stage's HTTP client sends encoded material: a base64-like
+/// query value, a `base64` command substitution, an encoded-looking hostname,
+/// or a PowerShell `ToBase64String` call or `base64` subexpression in what the
+/// request sends (its URL or its body, never a header: Basic authentication
+/// encodes there).
+fn encoded_http(
+    tokens: &[String],
+    stage: &str,
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    budget.charge(tokens.first().map_or(0, String::len))?;
+    let Some(command) = super::http::invocation(
+        tokens,
+        &[
+            "curl",
+            "wget",
+            "fetch",
+            "invoke-webrequest",
+            "iwr",
+            "invoke-restmethod",
+            "irm",
+        ],
+    ) else {
+        return Ok(false);
+    };
+    // `$(` with `base64` anywhere in the stage is a POSIX substitution. In
+    // PowerShell `$(` is a subexpression that any parameter can hold, so
+    // there it counts only in what the cmdlet sends, read below.
+    let posix = matches!(
+        super::http::client_name(&command[0]).as_str(),
+        "curl" | "wget" | "fetch"
+    );
+    if regex(r"[?=&][A-Za-z0-9+/]{20,}[+=][A-Za-z0-9+/=]*", stage, budget)?
+        || (posix && contains(stage, "$(", budget)? && contains(stage, "base64", budget)?)
+        || regex(
+            r"https?://[A-Za-z0-9-]*[0-9][A-Za-z0-9-]{15,}\.",
+            stage,
+            budget,
+        )?
+    {
+        return Ok(true);
+    }
+    charge_tokens(command, budget)?;
+    let request = super::http::request(command);
+    for sent in request.targets.iter().chain(&request.payload) {
+        if regex(r"(?i)\bToBase64String\s*\(", sent, budget)?
+            || (contains(sent, "$(", budget)? && contains(sent, "base64", budget)?)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// A field a native predicate selects: the field name, the selected text, its
 /// byte offset in the field, and the occurrence in that text the predicate
 /// counted, if it counts one.
@@ -1857,19 +1958,7 @@ fn native_fields<'a>(
                     is_download(tokens, budget)? || fetches_code(tokens, budget)?.is_some()
                 }
                 "exfil.outbound_upload" => is_upload(tokens, budget)?,
-                _ => {
-                    budget.charge(tokens.first().map_or(0, String::len))?;
-                    matches!(
-                        command_word(tokens),
-                        "curl" | "wget" | "fetch" | "Invoke-WebRequest"
-                    ) && (regex(r"[?=&][A-Za-z0-9+/]{20,}[+=][A-Za-z0-9+/=]*", stage, budget)?
-                        || (contains(stage, "$(", budget)? && contains(stage, "base64", budget)?)
-                        || regex(
-                            r"https?://[A-Za-z0-9-]*[0-9][A-Za-z0-9-]{15,}\.",
-                            stage,
-                            budget,
-                        )?)
-                }
+                _ => encoded_http(tokens, stage, budget)?,
             };
             if matches {
                 // The upload exclusion judges a whole command, never part of one.
@@ -2830,6 +2919,24 @@ pub(crate) fn evaluate(
                     .sum::<usize>()
                 + severity.as_str().len(),
         )?;
+        let destination_facts = if ids.contains("exfil.outbound_upload") {
+            let recorded = if view.recorded_command.is_empty() {
+                view.text("command")
+            } else {
+                &view.recorded_command
+            };
+            let facts = super::destinations::upload_destinations(
+                view.text("command"),
+                recorded,
+                &view.commands,
+                &view.stage_spans,
+                budget,
+            )?;
+            budget.consume(0, encoded_len(&facts)?)?;
+            Some(facts)
+        } else {
+            None
+        };
         findings.push(ActionFinding {
             canonical_findings,
             coordinate,
@@ -2870,6 +2977,7 @@ pub(crate) fn evaluate(
                 .collect::<Result<Vec<_>, ProcessingError>>()?,
             context,
             session_event_index: None,
+            destination_facts,
         });
     }
     Ok((findings, counts))
@@ -2947,6 +3055,7 @@ pub(crate) fn process_findings(
             evidence: Vec::new(),
             context,
             session_event_index: None,
+            destination_facts: None,
         };
         let bytes = encoded_len(&EncodedActionFinding::from(&action))?;
         budget.consume(1 + action.context.len(), bytes)?;
@@ -2996,7 +3105,7 @@ fn credential_token(
     Ok(None)
 }
 
-fn redact(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
+pub(super) fn redact(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
     PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, text, &mut |bytes| {
         budget.charge(bytes)
     })
@@ -3369,7 +3478,7 @@ fn download_stdout(
                     && token[1..].contains(['o', 'O', 'I']))
         }))
 }
-fn consumes_stdin_code(tokens: &[String]) -> bool {
+pub(super) fn consumes_stdin_code(tokens: &[String]) -> bool {
     let name = |token: &String| command_word(std::slice::from_ref(token)).to_ascii_lowercase();
     let Some(first) = tokens.first() else {
         return false;
