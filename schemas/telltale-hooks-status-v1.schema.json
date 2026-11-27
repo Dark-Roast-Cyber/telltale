@@ -113,6 +113,7 @@
             "payload_invalid_protocol": { "$ref": "#/$defs/count" },
             "payload_missing_field": { "$ref": "#/$defs/count" },
             "payload_oversized": { "$ref": "#/$defs/count" },
+            "payload_read_failed": { "$ref": "#/$defs/count" },
             "pipeline_build_failed": { "$ref": "#/$defs/count" },
             "rule_content_unreadable": { "$ref": "#/$defs/count" },
             "scan_failed": { "$ref": "#/$defs/count" },

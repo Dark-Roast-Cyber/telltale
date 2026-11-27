@@ -33,6 +33,8 @@
   An oversized runtime record is replaced by a `telemetry_record_too_large`
   error with the original record ID. `telltale hooks allow` skips oversized
   lines and refuses a grant whose lifecycle record would exceed the cap.
+- A hook stdin read failure applies the unreadable-payload policy and writes
+  a `payload_read_failed` error record; observe mode still returns no opinion.
 
 ### Privacy and historical export
 
