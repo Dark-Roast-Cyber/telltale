@@ -708,6 +708,9 @@ hooks:                               # telltale hooks; see docs/hooks/README.md
   ask: human                         # human: the harness's approval prompt; model: a deny that tells the model to ask the user
   # state_dir: <path>                # TELLTALE_HOOKS_STATE_DIR; default under XDG_STATE_HOME or LOCALAPPDATA
   # telemetry_path: <path>           # TELLTALE_HOOKS_TELEMETRY; default telemetry.jsonl in the state dir
+  telemetry:                         # rotation of the hooks records file
+    max_size_bytes: 104857600        # 0 disables
+    keep: 5                          # archives kept; 0 keeps only the active file
   self_protection_rules: true
   tamper_prevention:
     enabled: false                   # true locks the self-protection rules against overrides and policies
