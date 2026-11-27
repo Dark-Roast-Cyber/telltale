@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crate::ObservationStage;
 use serde_json::{Value, json};
 use telltale_schema::event::SanitizationContext::{Metadata, Summary};
-use telltale_schema::hooks_record::TELEMETRY_RECORD_TOO_LARGE;
+use telltale_schema::hooks_record::{HOOKS_RECORD_MAX_ARRAY_ITEMS, TELEMETRY_RECORD_TOO_LARGE};
 use telltale_schema::observation::LOCAL_MAX_VALUE_BYTES;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -118,6 +118,22 @@ pub fn grant_line(prompt: &str) -> Option<GrantScope> {
         [scope] if scope.eq_ignore_ascii_case("session") => Some(GrantScope::Session),
         _ => None,
     }
+}
+
+/// Visibility limits come from a closed vocabulary and each is named once, so
+/// they stay far below the record reader's array bound; the writer does not
+/// check them.
+fn bounded_limits(info: EvaluationInfo) -> EvaluationInfo {
+    let limits = &info.visibility_limits;
+    debug_assert!(
+        limits.len() <= HOOKS_RECORD_MAX_ARRAY_ITEMS
+            && limits
+                .iter()
+                .enumerate()
+                .all(|(index, limit)| !limits[..index].contains(limit)),
+        "visibility limits repeat or exceed the record bound: {limits:?}"
+    );
+    info
 }
 
 /// Rule IDs for text addressed to the model: at most [`REASON_RULE_IDS`],
@@ -2107,7 +2123,7 @@ impl Runtime {
         let mut record = self.record(ctx, Kind::Decision);
         record.record_id = record_id.to_owned();
         record.action = Some(action_of(call));
-        record.evaluation = Some(evaluation_info);
+        record.evaluation = Some(bounded_limits(evaluation_info));
         record.decision = Some(DecisionInfo {
             mode,
             verdict: decision.outcome.verdict.as_str(),
@@ -2342,7 +2358,11 @@ impl Runtime {
         session.state.scored_actions += 1;
         let mut record = self.record(ctx, Kind::ResultFinding);
         record.action = Some(action_of(call));
-        record.evaluation = Some(self.evaluation_info(result, window_records, window_truncated));
+        record.evaluation = Some(bounded_limits(self.evaluation_info(
+            result,
+            window_records,
+            window_truncated,
+        )));
         record.decision = Some(DecisionInfo {
             mode: if self.config.mode == Mode::Enforce {
                 "enforce"
@@ -2783,6 +2803,119 @@ mod tests {
             Some(crate::hooks_record::HooksVerdict::Ask)
         );
         assert!(lines.next().is_none());
+    }
+
+    #[test]
+    fn telemetry_replaces_a_record_over_the_array_bound_in_the_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("telemetry.jsonl");
+        let mut runtime = Runtime::new(Config {
+            mode: Mode::Enforce,
+            state_dir: Some(dir.path().join("state")),
+            telemetry_path: Some(path.clone()),
+            ..Config::default()
+        });
+        let ctx = Context {
+            harness: "claude-code",
+            hook_event: "PreToolUse".into(),
+            session_id: "synthetic-session".into(),
+            agent_id: None,
+            agent_type: None,
+            prompt_id: None,
+            permission_mode: None,
+            cwd: None,
+            can_ask: true,
+            can_grant: false,
+        };
+        let call = ToolCall {
+            tool_name: "Bash".into(),
+            tool_use_id: Some("synthetic-call".into()),
+            input: json!({"command": "cat ~/.aws/credentials"}),
+        };
+        runtime.handle(&ctx, Event::ToolRequested(call.clone()));
+        let wire = std::fs::read_to_string(&path).unwrap();
+        let decision = crate::HooksRecordV1::from_json(wire.as_bytes()).unwrap();
+        let action = TelltaleAction::new(decision.telltale[0].record.clone(), None);
+
+        let max = HOOKS_RECORD_MAX_ARRAY_ITEMS;
+        let names = |count: usize| -> Vec<String> {
+            (0..count)
+                .map(|index| format!("synthetic.rule_{index:04}"))
+                .collect()
+        };
+        let filled = |array: &str, count: usize| {
+            if array == "grant" {
+                let mut record = runtime.record(&ctx, Kind::Lifecycle);
+                record.lifecycle = Some(json!({
+                    "event": "grant", "scope": "session", "tool": "Bash",
+                    "rule_ids": names(count), "offer_record_id": decision.record_id,
+                }));
+                return record;
+            }
+            let mut record = runtime.record(&ctx, Kind::Decision);
+            record.action = Some(action_of(&call));
+            record.decision = Some(DecisionInfo {
+                mode: "enforce",
+                verdict: "ask",
+                returned: true,
+                returned_verdict: None,
+                basis: "action_score",
+                action_score: 0,
+                session_score_before: 0,
+                session_score_after: 0,
+                denied_attempts_before: 0,
+                rule_ids: if array == "rule_ids" {
+                    names(count)
+                } else {
+                    Vec::new()
+                },
+                categories: if array == "categories" {
+                    names(count)
+                } else {
+                    Vec::new()
+                },
+                grant: None,
+            });
+            if array == "telltale" {
+                record.telltale = vec![action.clone(); count];
+            }
+            record
+        };
+        for array in ["telltale", "rule_ids", "categories", "grant"] {
+            let at_bound = dir.path().join(format!("{array}-at-bound.jsonl"));
+            Sink::new(at_bound.clone())
+                .write(&filled(array, max))
+                .unwrap();
+            if array == "grant" {
+                let written = std::fs::read(&at_bound).unwrap();
+                crate::HooksRecordV1::from_json(&written).unwrap();
+            }
+            let over = dir.path().join(format!("{array}-over.jsonl"));
+            let error = Sink::new(over.clone())
+                .write(&filled(array, max + 1))
+                .unwrap_err();
+            assert!(is_record_too_large(&error), "{array}");
+            assert!(!over.exists(), "{array}");
+        }
+
+        // Through the runtime, the record is replaced and keeps its ID.
+        let over = filled("telltale", max + 1);
+        runtime.emit(&over);
+        let wire = std::fs::read_to_string(&path).unwrap();
+        let last = wire.split_inclusive('\n').next_back().unwrap();
+        let error = crate::HooksRecordV1::from_json(last.as_bytes()).unwrap();
+        assert_eq!(error.record_id, over.record_id);
+        assert_eq!(error.kind, crate::HooksRecordKind::Error);
+        assert_eq!(
+            error.error_code.as_deref(),
+            Some("telemetry_record_too_large")
+        );
+        assert_eq!(
+            error.action.unwrap().tool_use_id.as_deref(),
+            Some("synthetic-call")
+        );
+        assert!(error.decision.is_none());
+        assert!(error.telltale.is_empty());
     }
 
     /// A pipeline that cannot build evaluates nothing, whatever caused it, so it never

@@ -65,6 +65,18 @@ keeping the original ID, time, producer, harness, session and optional action.
 The verdict is unaffected. An outcome can still link to the original ID
 even when the corresponding decision was replaced.
 
+`HOOKS_RECORD_MAX_ARRAY_ITEMS` is 1024 items in each envelope array:
+`evaluation.visibility_limits`, `decision.rule_ids`, `decision.categories`,
+`pinned_over` and a grant's `rule_ids` in `lifecycle`, and `telltale`. An
+upload's `destinations` keep their bound of 16. The schema states the bound,
+so the reader rejects a longer array (`schema_mismatch`) before it checks
+the array's items. Without it, the work for one line was bounded only by
+its bytes, and a line of a few million one-byte items took seconds. The
+writer replaces a record whose actions, rule or category lists, or grant
+rules exceed the bound with the same `telemetry_record_too_large` record.
+Visibility limits (a closed vocabulary, each named once) and `pinned_over`
+(at most three names) cannot reach it.
+
 The consumer checks the published envelope schema, validates each embedded
 action with `ActionRecordV1`, and checks internal consistency. This includes
 the blocks allowed for each kind, delivery keys, destination facts, verdicts,

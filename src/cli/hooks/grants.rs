@@ -325,7 +325,8 @@ pub(super) fn allow(
         .terminal_record(harness, grant_lifecycle(&grant, "g-000000000000"));
     Sink::check_record_size(&telemetry).map_err(|error| {
         if is_record_too_large(&error) {
-            "grant record exceeds the Hooks telemetry line limit; nothing allowed".to_owned()
+            "grant record exceeds the Hooks telemetry line or array limits; nothing allowed"
+                .to_owned()
         } else {
             format!("cannot encode the grant record: {error}; nothing allowed")
         }

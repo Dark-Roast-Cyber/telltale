@@ -29,10 +29,11 @@
 - Hooks telemetry keeps readable, sanitizer-stable native labels up to 256
   bytes and writes deterministic stand-ins for the rest. See
   [bounded telemetry labels](docs/hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-bounded-telemetry-labels).
-- Hooks telemetry lines are capped at 16 MiB, including the line feed.
-  An oversized runtime record is replaced by a `telemetry_record_too_large`
-  error with the original record ID. `telltale hooks allow` skips oversized
-  lines and refuses a grant whose lifecycle record would exceed the cap.
+- Hooks telemetry lines are capped at 16 MiB, including the line feed,
+  and each envelope array at 1024 items. A runtime record over either bound
+  is replaced by a `telemetry_record_too_large` error with the original
+  record ID. `telltale hooks allow` skips oversized lines and refuses a
+  grant whose lifecycle record would exceed the cap.
 - A hook stdin read failure applies the unreadable-payload policy and writes
   a `payload_read_failed` error record; observe mode still returns no opinion.
 

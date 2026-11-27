@@ -774,6 +774,9 @@ fn pinned_over(hooks: &crate::settings::HooksSettings) -> Vec<String> {
     {
         names.insert(name);
     }
+    // Three sources at most: far below the record reader's array bound, so
+    // the writer does not check `pinned_over`.
+    debug_assert!(names.len() <= 3);
     names.into_iter().map(str::to_owned).collect()
 }
 
