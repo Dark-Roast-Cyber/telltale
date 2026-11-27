@@ -8,23 +8,41 @@
 //! Detection content travels as unmodified `ActionRecordV1` values.
 //! Schema: schemas/telltale-hooks-record-v1.schema.json.
 
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::ActionRecordV1;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use telltale_schema::event::SanitizationContext;
+use telltale_schema::hooks_record::{HOOKS_RECORD_MAX_INPUT_BYTES, readable_hook_label};
+pub use telltale_sources::journal::RotationConfig;
+use telltale_sources::journal::{self, JournalGeneration};
 
-use crate::hooks::state::{create_private_dir, open_regular};
+use crate::hooks::journal::escaped;
+use crate::hooks::state::{create_private_dir, lock_within, open_regular};
 
 pub const RECORD_SCHEMA: &str = "telltale_hooks.record.v1";
 
 /// `producer.name` in every record; the producer is the hooks runtime inside
 /// the Telltale executable, under the name existing consumers match on.
 pub const PRODUCER_NAME: &str = "telltale-hooks";
+
+/// Keep a readable telemetry label, or replace the whole raw value with a
+/// deterministic stand-in so its occurrences still link across records.
+#[doc(hidden)]
+pub fn label(value: &str, context: SanitizationContext) -> String {
+    if readable_hook_label(value, context) {
+        value.to_owned()
+    } else {
+        escaped(value)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -240,28 +258,244 @@ pub fn new_record_id() -> String {
 
 pub struct Sink {
     path: PathBuf,
+    rotation: RotationConfig,
+    #[cfg(test)]
+    max_line_bytes: usize,
 }
+
+/// A holder appends only one line. A hook must not wait on telemetry, so a
+/// stalled writer cannot hold up other hook invocations.
+const TELEMETRY_LOCK_WAIT: Duration = Duration::from_millis(200);
 
 impl Sink {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self::with_rotation(path, RotationConfig::default())
+    }
+
+    pub fn with_rotation(path: PathBuf, rotation: RotationConfig) -> Self {
+        Self {
+            path,
+            rotation,
+            #[cfg(test)]
+            max_line_bytes: HOOKS_RECORD_MAX_INPUT_BYTES,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_line_limit(self, max_line_bytes: usize) -> Self {
+        Self {
+            max_line_bytes,
+            ..self
+        }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Append one record as a single write. Errors are returned so the caller
-    /// can apply its failure policy; telemetry loss is never silent.
-    pub fn write(&self, record: &Record) -> std::io::Result<()> {
+    /// Append one complete record. Rotation and cleanup failures are reported
+    /// separately from the result of the append.
+    pub fn write(&self, record: &Record) -> io::Result<()> {
+        #[cfg(not(test))]
+        let limit = HOOKS_RECORD_MAX_INPUT_BYTES;
+        #[cfg(test)]
+        let limit = self.max_line_bytes;
+        let mut line = Vec::new();
+        encode(record, limit, &mut line)?;
         if let Some(parent) = self.path.parent() {
             create_private_dir(parent)?;
         }
-        let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
-        line.push(b'\n');
+        // Even a disabled writer must coordinate with a writer still using
+        // enabled settings. The sidecar's name never changes during rotation.
+        let lock = open_regular(
+            OpenOptions::new().create(true).truncate(false).write(true),
+            &lock_path(&self.path),
+        )
+        .ok()
+        .filter(|file| lock_within(file, TELEMETRY_LOCK_WAIT).is_ok());
         // Regular files only: a FIFO or symlink planted at the telemetry
         // path must neither stall the hook nor receive the records.
-        let mut file = open_regular(OpenOptions::new().create(true).append(true), &self.path)?;
-        file.write_all(&line)
+        let mut active = self.open_active()?;
+        if lock.is_some() && self.rotation.is_enabled() {
+            match self.prepare_rotation(&active, line.len()) {
+                Ok(Some((mut fresh, archives))) => {
+                    return append_and_prune(&mut fresh, &line, archives);
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("telltale hooks: telemetry rotation failed: {error}"),
+            }
+        }
+        active.write_all(&line)
+    }
+
+    fn prepare_rotation(
+        &self,
+        active: &File,
+        line_bytes: usize,
+    ) -> io::Result<Option<(File, Vec<PathBuf>)>> {
+        let size = active.metadata()?.len();
+        if size == 0 || size.saturating_add(line_bytes as u64) <= self.rotation.max_size_bytes {
+            return Ok(None);
+        }
+        let archives = self.rotate()?;
+        Ok(Some((self.open_active()?, archives)))
+    }
+
+    fn open_active(&self) -> io::Result<File> {
+        open_regular(OpenOptions::new().create(true).append(true), &self.path)
+    }
+
+    /// Return archives to prune after the record is appended. A failed
+    /// rotation before rename leaves the open active file available.
+    fn rotate(&self) -> io::Result<Vec<PathBuf>> {
+        let (stem, extension) = journal::rotation_components(&self.path)?;
+        let discovery =
+            journal::discover_generations(&self.path, journal::DEFAULT_MAX_DIRECTORY_ENTRIES)?;
+        if discovery.directory_bound_reached {
+            return Err(io::Error::other("journal directory entry limit reached"));
+        }
+        let archived: Vec<_> = discovery
+            .generations
+            .into_iter()
+            .filter(|file| !file.is_active)
+            .collect();
+        let today = time::OffsetDateTime::now_utc().date().to_string();
+        let (date, counter) = next_rotation(&archived, &stem, &extension, &today)?;
+        let rotated = journal::rotated_path(&self.path, &date, counter)?;
+        journal::rename_no_replace(&self.path, &rotated)?;
+        let remove = (archived.len() + 1).saturating_sub(self.rotation.keep);
+        Ok(archived
+            .into_iter()
+            .map(|file| file.path)
+            .chain([rotated])
+            .take(remove)
+            .collect())
+    }
+
+    /// Check the exact wire size before an operation that will emit the record.
+    #[doc(hidden)]
+    pub fn check_record_size(record: &Record) -> io::Result<()> {
+        encode(record, HOOKS_RECORD_MAX_INPUT_BYTES, io::sink())
+    }
+}
+
+fn append_and_prune(active: &mut File, line: &[u8], archives: Vec<PathBuf>) -> io::Result<()> {
+    active.write_all(line)?;
+    for path in archives {
+        if let Err(error) = fs::remove_file(path) {
+            eprintln!("telltale hooks: telemetry cleanup failed: {error}");
+        }
+    }
+    Ok(())
+}
+
+fn next_rotation(
+    archived: &[JournalGeneration],
+    stem: &str,
+    extension: &str,
+    today: &str,
+) -> io::Result<(String, usize)> {
+    if let Some((date, counter)) = archived.last().and_then(|file| {
+        journal::parse_rotated_name(file.path.file_name()?.to_str()?, stem, extension)
+    }) && date.as_str() >= today
+    {
+        return Ok((
+            date,
+            counter
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("rotation counter exhausted"))?,
+        ));
+    }
+    Ok((today.to_owned(), 0))
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::*;
+
+    #[test]
+    fn failed_cleanup_reports_successful_append_and_keeps_pruning() {
+        let directory = tempfile::tempdir().unwrap();
+        let active = directory.path().join("records.jsonl");
+        let unremovable = directory.path().join("records-2026-11-25.jsonl");
+        let removable = directory.path().join("records-2026-11-26.jsonl");
+        // Discovery had already planned cleanup. An archive can change
+        // before removal; the reader's safe discovery must still reject it.
+        fs::create_dir(&unremovable).unwrap();
+        fs::write(&removable, b"synthetic archive\n").unwrap();
+        let mut file = Sink::new(active.clone()).open_active().unwrap();
+        let line = b"{\"synthetic\":true}\n";
+        let result = append_and_prune(
+            &mut file,
+            line,
+            vec![unremovable.clone(), removable.clone()],
+        );
+        assert_eq!(fs::read(active).unwrap(), line);
+        assert!(unremovable.is_dir());
+        assert!(!removable.exists());
+        result.unwrap();
+    }
+}
+
+fn lock_path(active: &Path) -> PathBuf {
+    let mut name = active.as_os_str().to_owned();
+    name.push(".lock");
+    name.into()
+}
+
+fn encode(record: &Record, max_line_bytes: usize, output: impl Write) -> io::Result<()> {
+    let mut line = BoundedLine {
+        output,
+        remaining: max_line_bytes,
+        oversized: false,
+    };
+    serde_json::to_writer(&mut line, record).map_err(|error| {
+        if line.oversized {
+            io::Error::other(RecordTooLarge)
+        } else {
+            io::Error::other(error)
+        }
+    })?;
+    line.write_all(b"\n")
+}
+
+#[derive(Debug)]
+struct RecordTooLarge;
+
+impl fmt::Display for RecordTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("record exceeds the Hooks telemetry line limit")
+    }
+}
+
+impl std::error::Error for RecordTooLarge {}
+
+/// Whether the sink refused a record before opening or writing the file.
+#[doc(hidden)]
+pub fn is_record_too_large(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|cause| cause.is::<RecordTooLarge>())
+}
+
+struct BoundedLine<W> {
+    output: W,
+    remaining: usize,
+    oversized: bool,
+}
+
+impl<W: Write> Write for BoundedLine<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(remaining) = self.remaining.checked_sub(bytes.len()) else {
+            self.oversized = true;
+            return Err(io::Error::other(RecordTooLarge));
+        };
+        self.output.write_all(bytes)?;
+        self.remaining = remaining;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
     }
 }

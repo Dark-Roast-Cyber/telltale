@@ -1,8 +1,7 @@
-//! Read-only primitives for the canonical local Event 3.0 JSONL journal.
+//! Filesystem primitives for the local Event 3.0 and Hooks JSONL journals.
 //!
-//! This module deliberately contains no writer, lock, cursor, or delivery
-//! behavior. It owns the narrow filename, identity, and safe-open contract
-//! shared by the CLI's generation discovery and lower-level consumers.
+//! This module owns the shared filename, identity and safe-open contract.
+//! Each writer owns its own append, locking and retention policy.
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
@@ -12,6 +11,38 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 const IDENTITY_DOMAIN: &[u8] = b"telltale-file-identity-v1\0";
+pub const GENERATION_HEAD_BYTES: usize = 64;
+pub const DEFAULT_MAX_DIRECTORY_ENTRIES: usize = 4096;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RotationConfig {
+    /// Size threshold in bytes. Zero disables rotation.
+    pub max_size_bytes: u64,
+    /// Archived generations to retain. Zero retains only the active file.
+    pub keep: usize,
+}
+
+impl Default for RotationConfig {
+    fn default() -> Self {
+        Self {
+            max_size_bytes: 100 * 1024 * 1024,
+            keep: 5,
+        }
+    }
+}
+
+impl RotationConfig {
+    pub fn disabled() -> Self {
+        Self {
+            max_size_bytes: 0,
+            keep: 0,
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.max_size_bytes > 0
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct JournalGeneration {
@@ -97,6 +128,15 @@ impl JournalFile {
         }
         self.length = info.length;
         Ok(self.length)
+    }
+
+    pub fn read_head(&mut self, length: u64) -> io::Result<Vec<u8>> {
+        self.read_at(0, length.min(GENERATION_HEAD_BYTES as u64) as usize)
+    }
+
+    /// Read the already identity-checked file with a buffered stream reader.
+    pub fn into_file(self) -> File {
+        self.file
     }
 }
 
@@ -223,6 +263,79 @@ pub fn parse_rotated_name(name: &str, stem: &str, extension: &str) -> Option<(St
         return None;
     }
     valid_date(value).then(|| (value.to_owned(), 0))
+}
+
+pub fn rotated_path(active: &Path, date: &str, counter: usize) -> io::Result<PathBuf> {
+    let (stem, extension) = rotation_components(active)?;
+    let suffix = if counter == 0 {
+        String::new()
+    } else {
+        format!(".{counter}")
+    };
+    Ok(active.with_file_name(format!("{stem}-{date}{suffix}.{extension}")))
+}
+
+/// Atomically rename a rotation without overwriting an existing generation.
+pub fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let result = {
+        use std::os::unix::ffi::OsStrExt;
+        let source = std::ffi::CString::new(source.as_os_str().as_bytes())?;
+        let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())?;
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            ) == 0
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            libc::renameatx_np(
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                libc::RENAME_EXCL,
+            ) == 0
+        }
+    };
+    #[cfg(windows)]
+    let result = {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+        let wide = |path: &Path| -> io::Result<Vec<u16>> {
+            let mut value: Vec<_> = path.as_os_str().encode_wide().collect();
+            if value.contains(&0) {
+                return Err(io::Error::from(io::ErrorKind::InvalidInput));
+            }
+            value.push(0);
+            Ok(value)
+        };
+        let source = wide(source)?;
+        let destination = wide(destination)?;
+        unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            ) != 0
+        }
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    let result = {
+        let _ = (source, destination);
+        return Err(io::Error::from(io::ErrorKind::Unsupported));
+    };
+    if result {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]

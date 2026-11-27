@@ -233,6 +233,9 @@ hooks:
                          # (a human approving an `ask` then sees little; use minimal for unattended agents)
   # state_dir: <path>    # TELLTALE_HOOKS_STATE_DIR
   # telemetry_path: <path>  # TELLTALE_HOOKS_TELEMETRY
+  telemetry:
+    max_size_bytes: 104857600  # 100 MiB; 0 disables rotation
+    keep: 5                  # archived files, not counting the active file
   self_protection_rules: true   # detect tampering with hooks (the tth.tamper.* rules)
   tamper_prevention:
     enabled: false       # true: lock those rules against overrides and policies

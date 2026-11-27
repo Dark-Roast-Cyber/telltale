@@ -16,27 +16,21 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use telltale_schema::hooks_record::{
+    HOOK_LABEL_ESCAPE_PREFIX, HOOK_LABEL_MAX_BYTES as MAX_ID_BYTES, readable_hook_text as readable,
+};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::hooks::projection::is_command_key;
 use crate::hooks::state::open_regular;
 
-/// Longest identity value kept readable in a journal line. Telltale bounds a
-/// string at 4,096 bytes (`LOCAL_MAX_STRING_BYTES`); real harness values are
-/// far shorter.
-const MAX_ID_BYTES: usize = 256;
 /// A journal `uuid` is a prefix plus an ID plus a suffix.
 const MAX_UUID_BYTES: usize = 512;
-const ESCAPED_PREFIX: &str = "tth-esc-";
 
 /// `tth-esc-<32 hex of SHA-256 over the raw value>`: a stable, safe stand-in.
-fn escaped(value: &str) -> String {
+pub(super) fn escaped(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
-    format!("{ESCAPED_PREFIX}{}", hex::encode(&digest[..16]))
-}
-
-fn readable(value: &str, max: usize) -> bool {
-    !value.trim().is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+    format!("{HOOK_LABEL_ESCAPE_PREFIX}{}", hex::encode(&digest[..16]))
 }
 
 /// An identifier as it appears in a journal line: a call key (`tool_use_id`),
@@ -54,8 +48,8 @@ fn readable(value: &str, max: usize) -> bool {
 /// `~<ms>` suffix on call keys and the per-session directories keep identities
 /// apart. A call key of about 243 bytes or more does not stay readable once `journal_id`
 /// adds `~<ms>`: the `tool_use_id` is then past 256 bytes and is hashed
-/// (the link and the line stay consistent). Telemetry, correlation and the session
-/// state path keep the raw value.
+/// (the link and the line stay consistent). Correlation and the session state
+/// path use the raw value; telemetry has its own output check.
 pub fn safe_id(value: &str) -> std::borrow::Cow<'_, str> {
     safe_id_within(value, MAX_ID_BYTES)
 }

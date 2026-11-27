@@ -80,42 +80,7 @@ pub(crate) fn append_jsonl_events(
     Ok(())
 }
 
-/// Built-in size-based log rotation configuration.
-///
-/// When the active JSONL file exceeds `max_size_bytes`, it is renamed to a
-/// date-stamped rotated file and a fresh active file is started. Rotated files
-/// beyond `keep` are deleted oldest-first. This provides cross-platform
-/// rotation without OS-specific tooling (logrotate, newsyslog, Scheduled Tasks).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RotationConfig {
-    /// Maximum size in bytes before the active file is rotated. 0 disables rotation.
-    pub max_size_bytes: u64,
-    /// Number of rotated files to keep. 0 keeps none (rotated files are deleted immediately).
-    pub keep: usize,
-}
-
-impl Default for RotationConfig {
-    fn default() -> Self {
-        Self {
-            max_size_bytes: 100 * 1024 * 1024, // 100 MB
-            keep: 5,
-        }
-    }
-}
-
-impl RotationConfig {
-    #[cfg(test)]
-    pub fn disabled() -> Self {
-        Self {
-            max_size_bytes: 0,
-            keep: 0,
-        }
-    }
-
-    pub fn is_enabled(&self) -> bool {
-        self.max_size_bytes > 0
-    }
-}
+pub use journal::RotationConfig;
 
 pub struct LocalJsonlSink {
     name: String,
@@ -281,9 +246,7 @@ fn rotate_file(
 
 /// Generate the rotated file path: `telltale-events-2026-06-21.jsonl`
 fn rotated_path(active: &Path, date: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let (stem, ext) = rotation_components(active)?;
-    let parent = active.parent().unwrap_or_else(|| Path::new("."));
-    Ok(parent.join(format!("{stem}-{date}.{ext}")))
+    Ok(journal::rotated_path(active, date, 0)?)
 }
 
 /// Generate a counter-suffixed rotated path: `telltale-events-2026-06-21.1.jsonl`
@@ -292,9 +255,7 @@ fn rotated_with_counter(
     date: &str,
     counter: usize,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let (stem, ext) = rotation_components(active)?;
-    let parent = active.parent().unwrap_or_else(|| Path::new("."));
-    Ok(parent.join(format!("{stem}-{date}.{counter}.{ext}")))
+    Ok(journal::rotated_path(active, date, counter)?)
 }
 
 fn rotation_components(active: &Path) -> Result<(String, String), Box<dyn std::error::Error>> {

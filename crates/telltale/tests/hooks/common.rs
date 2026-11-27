@@ -9,10 +9,16 @@ use telltale_core::hooks::config::{Config, Mode};
 use telltale_core::hooks::engine::Limits;
 use telltale_core::hooks::harnesses::claude_code;
 use telltale_core::hooks::runtime::Runtime;
+use telltale_core::hooks::telemetry::label;
+use telltale_schema::event::SanitizationContext::Metadata;
 
 #[path = "telemetry_reader.rs"]
 mod telemetry_reader;
 use telemetry_reader::TelemetryReader;
+
+pub fn telemetry_label(raw: &str) -> String {
+    label(raw, Metadata)
+}
 
 /// Test data (fixtures, marker rules) of the hooks suites. This module is
 /// included by `telltale-core`'s own tests and by the CLI's binary-level tests,
@@ -207,15 +213,23 @@ impl Harness {
     pub fn decision_for(&self, tool_use_id: &str) -> Value {
         self.telemetry_reader
             .borrow_mut()
-            .record_for(&self.telemetry_path(), "decision", tool_use_id)
-            .unwrap_or_else(|| panic!("no decision for {tool_use_id}"))
+            .record_for(
+                &self.telemetry_path(),
+                "decision",
+                &telemetry_label(tool_use_id),
+            )
+            .expect("no decision for the call")
     }
 
     pub fn outcome_for(&self, tool_use_id: &str) -> Value {
         self.telemetry_reader
             .borrow_mut()
-            .record_for(&self.telemetry_path(), "outcome", tool_use_id)
-            .unwrap_or_else(|| panic!("no outcome for {tool_use_id}"))
+            .record_for(
+                &self.telemetry_path(),
+                "outcome",
+                &telemetry_label(tool_use_id),
+            )
+            .expect("no outcome for the call")
     }
 }
 

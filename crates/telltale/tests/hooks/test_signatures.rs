@@ -151,6 +151,9 @@ fn a_test_command_is_decided_on_its_own_score_in_a_hot_session() {
     let before = decision["session_score_before"].as_u64().unwrap();
     assert!(before > 0);
     assert_eq!(decision["session_score_after"], before);
+    super::telemetry_schema::assert_record_contract(
+        &serde_json::to_vec(&h.decision_for("toolu_a")).unwrap(),
+    );
     // Production calls keep being judged on that account.
     assert_eq!(verdict(&h.pre_bash("toolu_h", HARVEST)), Some("deny"));
     assert_eq!(

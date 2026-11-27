@@ -29,12 +29,38 @@ refresh. Returning a finding is not durable delivery.
 | Class | Surface | Meaning |
 | --- | --- | --- |
 | Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `bounded_units()`, `resume_token()`, `action_records()`, `action_records_v2()`), `ActionFinding` accessors (including `session_event_index()`, and `destination_facts()` with `DestinationFacts` since the [0.8.0 migration guide](migrations/0.8.0.md#native-action-profile-19-and-upload-destination-facts)), `ActionRecordV1`, `ActionRecordV2`, `semantic_provenance`, `bundled_rule_catalog`, `rule_catalog_document` with `RuleCatalogV2`, `Pipeline::rule_catalog`, `Pipeline::rule_catalog_document`, `Pipeline::effective_configuration` with `EffectiveConfigurationV1`, `PipelineBuilder::skip_unknown_override_rules` and `Pipeline::skipped_overrides` with `SkippedOverride`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory` (MCP configuration through `collect_mcp_inventory`), `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `HooksRecordV1`, `HooksRecordKind`, `HooksRecordError`, `HooksRecordErrorCategory`, and the `hooks_record` wire types, schema and bound | [Strict readback of one Hooks JSONL record](hooks/adr/0005-telemetry-envelope.md#addendum-2026-11-26-strict-readback), including its embedded action records. The writer caps lines at 16 MiB including the line feed and replaces oversized runtime records with `telemetry_record_too_large` errors. Available without the `hooks` feature. |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences`, `inventory::discover_mcp_inventory_servers` | Session Event 3 and observation linkage, and raw MCP server discovery, for existing callers. Kept for 0.7; new integrations use detailed scans and `collect_mcp_inventory`. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`), `rule_resolution` (the CLI's tiered rule content resolution, which `telltale hooks` shares) | Usable, but may change or be removed with notice. |
+| Unstable | `HooksRecordFeed`, `HooksRecordFeedConfig`, `HooksRecordCursor`, `HooksRecordBatch`, `HooksRecordRejection`, `HooksRecordFeedError` | [Incremental Hooks JSONL polling](#hooks-record-feed) without the `hooks` feature. The persisted cursor and lockless rotation recovery are newly introduced; native Windows and macOS qualification is pending. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
 
 Core re-exports such as `Source`, `Event`, and error types serve the facade; they do not make every public module of the originating
 crate a stable embedding API.
+
+### Hooks record feed
+
+Construct `HooksRecordFeed::new(HooksRecordFeedConfig::new(path, startup))`
+with the active records path and `StartupMode::Beginning`, `End`, or
+`Recent { max_events, max_bytes }`. Beginning includes kept generations.
+End starts after the last complete line. Recent searches a bounded suffix
+for the last requested valid records and reports rejected lines it encounters
+in the selected window.
+
+Poll on the embedding host's cadence. Each batch bounds complete lines
+examined and wire bytes read or returned; generation discovery has separate
+bounds. Persist `feed.cursor()` with serde after you handle the batch, and
+pass it back to `HooksRecordFeed::resume`. The token stores no record text
+or filesystem path. A `generation_gap` notice means records may have been
+lost; the feed restarts from the oldest available position and can replay
+records the host already handled. Physical identity and head verification
+detect replacement and ordinary truncation, but cannot distinguish an
+in-place rewrite with an identical head and boundary that restores the
+file to at least the checkpoint length before polling.
+A writer that cannot take the rotation lock appends anyway. If that append
+races with rotation, a feed that has already moved past the just-archived file
+can miss the record. `telltale hooks allow` can still find the record while the
+archive is retained.
 
 ### Qualification status
 

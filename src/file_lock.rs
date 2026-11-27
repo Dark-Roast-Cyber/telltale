@@ -680,7 +680,7 @@ pub(crate) fn atomic_rename_no_replace(
     if safe_path_info(destination)?.is_some() {
         return Err("rename destination already exists".into());
     }
-    atomic_no_replace_native(source, destination)?;
+    telltale_sources::journal::rename_no_replace(source, destination)?;
     sync_parent(destination)?;
     Ok(())
 }
@@ -1187,71 +1187,12 @@ fn atomic_replace_native(
     }
 }
 
-#[cfg(unix)]
-fn atomic_no_replace_native(
-    temp: &Path,
-    destination: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let temp = c_path(temp)?;
-    let destination = c_path(destination)?;
-    #[cfg(target_os = "linux")]
-    {
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_renameat2,
-                libc::AT_FDCWD,
-                temp.as_ptr(),
-                libc::AT_FDCWD,
-                destination.as_ptr(),
-                libc::RENAME_NOREPLACE,
-            )
-        };
-        if result != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if unsafe {
-            libc::renameatx_np(
-                libc::AT_FDCWD,
-                temp.as_ptr(),
-                libc::AT_FDCWD,
-                destination.as_ptr(),
-                libc::RENAME_EXCL,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (temp, destination);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "atomic no-replace is unsupported",
-        )
-        .into())
-    }
-}
-
 #[cfg(windows)]
 fn atomic_replace_native(
     temp: &Path,
     destination: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     move_file_native(temp, destination, true)
-}
-
-#[cfg(windows)]
-fn atomic_no_replace_native(
-    temp: &Path,
-    destination: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    move_file_native(temp, destination, false)
 }
 
 #[cfg(windows)]

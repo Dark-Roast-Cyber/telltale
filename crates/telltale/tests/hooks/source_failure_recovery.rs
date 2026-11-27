@@ -1363,6 +1363,7 @@ fn a_lock_timeout_record_says_how_long_the_call_waited() {
         .as_u64()
         .expect("lock_wait_ms is a number");
     assert!(waited >= 100, "gave up after {waited} ms of a 100 ms wait");
+    super::telemetry_schema::assert_record_contract(&serde_json::to_vec(&errors[0]).unwrap());
 }
 
 fn journal_len(h: &Harness) -> u64 {
@@ -1461,6 +1462,7 @@ fn a_call_the_evaluator_did_not_record_keeps_its_rule_verdict() {
             "{policy}"
         );
         assert_eq!(h.records("decision").len(), 1, "{policy}");
+        super::telemetry_schema::assert_record_contract(&serde_json::to_vec(&record).unwrap());
     }
 }
 

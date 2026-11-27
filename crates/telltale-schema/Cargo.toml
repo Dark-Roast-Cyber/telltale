@@ -24,6 +24,7 @@ include = [
     "/data/event-3.0.schema.json",
     "/data/event-4.0.schema.json",
     "/data/rule-catalog-v2.schema.json",
+    "/data/telltale-hooks-record-v1.schema.json",
 ]
 
 [dependencies]
