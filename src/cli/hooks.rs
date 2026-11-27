@@ -38,6 +38,7 @@ use telltale_core::hooks::identity;
 use telltale_core::hooks::runtime::{Context, Event, Runtime};
 
 mod grants;
+mod status;
 
 /// Hook payloads larger than this are refused rather than buffered.
 const MAX_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
@@ -63,10 +64,11 @@ const COMMON_USAGE: &str = "  telltale hooks codex-cli execpolicy             pr
   telltale hooks harnesses                        list the harnesses this build has an adapter for
   telltale hooks serve                            run the long-lived evaluator (normally autostarted;
                                                   Linux and macOS only, elsewhere hooks evaluate in-process)
-  telltale hooks check [--rules [--json]]         validate config and build the Telltale pipeline; --rules
-                                                  lists every rule and chain the hook evaluates as it takes
-                                                  effect: enabled or what turned it off, score, tier, overrides;
-                                                  --json prints only that, as telltale.effective_configuration.v1
+  telltale hooks status [--json]                 report configuration, installation, evaluator and recent telemetry
+                                                  as text or telltale_hooks.status.v1
+  telltale hooks check [--rules] [--json]         validate config and build the Telltale pipeline; --json alone
+                                                  prints the status configuration view; with --rules it prints
+                                                  telltale.effective_configuration.v1
   telltale hooks allow RECORD (--project [DIR] | --user)
                                                   allow, from now on, the detections of the call a hook
                                                   stopped (its decision record ID) on its tool and harness,
@@ -140,8 +142,17 @@ pub(crate) fn exit_code(args: &[String]) -> i32 {
         },
         ["check", flags @ ..] => match pinned(flags, check_flags) {
             Some((dirs, CheckOutput::Text { list_rules })) => check(&dirs, list_rules),
+            Some((dirs, CheckOutput::Json)) => status::check_json(&dirs),
             Some((dirs, CheckOutput::RulesJson)) => check_rules_json(&dirs),
             None => {
+                eprintln!("{}", usage());
+                64
+            }
+        },
+        ["status", flags @ ..] => match pinned(flags, check_flags) {
+            Some((dirs, CheckOutput::Text { list_rules: false })) => status::run(&dirs, false),
+            Some((dirs, CheckOutput::Json)) => status::run(&dirs, true),
+            _ => {
                 eprintln!("{}", usage());
                 64
             }
@@ -409,6 +420,15 @@ fn split_pin<'a>(flags: &[&'a str], switch: &str) -> Option<(Vec<&'a str>, Optio
     Some((rest, pin))
 }
 
+fn hook_flags_for_installation(flags: &[&str]) -> bool {
+    let Some((flags, user)) = split_pin(flags, USER_CONFIG_DIR) else {
+        return false;
+    };
+    split_pin(&flags, STATE_DIR)
+        .and_then(|(flags, _)| hook_flags(&flags))
+        .is_some_and(|(dirs, _, _, _)| user.is_none() || dirs.is_empty())
+}
+
 /// The state directory the hook uses now, to pin in a generated hook
 /// command: the configured one, else the one the environment names. One
 /// that does not exist yet is pinned too; the hook creates it owner-only.
@@ -548,13 +568,14 @@ fn config_dirs(flags: &[&str]) -> Option<Vec<PathBuf>> {
 enum CheckOutput {
     /// The report, with every rule as it takes effect if `list_rules`.
     Text { list_rules: bool },
+    /// The privacy-safe status configuration view.
+    Json,
     /// Only the effective configuration document (`--rules --json`).
     RulesJson,
 }
 
 /// `check` switches: the config roots, `--rules` and `--json`. A switch given
-/// twice means what it means once, as for the hook's switches; `--json`
-/// needs `--rules`.
+/// twice means what it means once, as for the hook's switches.
 fn check_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, CheckOutput)> {
     let mut roots = Vec::new();
     let (mut list_rules, mut json) = (false, false);
@@ -572,7 +593,7 @@ fn check_flags(flags: &[&str]) -> Option<(Vec<PathBuf>, CheckOutput)> {
     }
     let output = match (list_rules, json) {
         (true, true) => CheckOutput::RulesJson,
-        (false, true) => return None,
+        (false, true) => CheckOutput::Json,
         (list_rules, false) => CheckOutput::Text { list_rules },
     };
     Some((config_dirs(&roots)?, output))
@@ -625,10 +646,21 @@ const HOOKS_CONFIG_FOLDERS: &[&str] = &[
 /// rule content and rule settings as `scan`. An error is described for stderr
 /// only, because it can name a path.
 fn load_config(config_dirs: &[PathBuf]) -> Result<Config, String> {
+    load_config_observing_files(config_dirs, |_, _| {})
+}
+
+fn load_config_observing_files(
+    config_dirs: &[PathBuf],
+    observe: impl FnMut(&std::path::Path, &[u8]),
+) -> Result<Config, String> {
     evaluator::panic_if_forced("config");
-    let settings =
-        crate::settings::load(config_dirs, false, &crate::settings::CliSettings::default())
-            .map_err(|error| error.to_string())?;
+    let settings = crate::settings::load_observing_files(
+        config_dirs,
+        false,
+        &crate::settings::CliSettings::default(),
+        observe,
+    )
+    .map_err(|error| error.to_string())?;
     let discovered = crate::config::discover_local_config_files(
         config_dirs,
         false,
@@ -1050,15 +1082,15 @@ fn check_rules_json(config_dirs: &[PathBuf]) -> i32 {
 }
 
 fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
-    let config = match load_config(config_dirs) {
-        Ok(config) => config,
+    let (config, checked) = match status::checked(config_dirs, |_, _| {}) {
         Err(error) => {
             eprintln!("config: {error}");
             return 1;
         }
+        Ok(checked) => checked,
     };
-    match Engine::new(&config.rules, &config.grants, &config.protected_paths()) {
-        Ok(engine) => {
+    match checked {
+        Ok(status::CheckedEngine { engine, effective }) => {
             print_config_roots(config_dirs);
             println!("build revision: {}", identity::revision());
             println!("semantic identity: {}", engine.semantic_identity());
@@ -1095,7 +1127,7 @@ fn check(config_dirs: &[PathBuf], list_rules: bool) -> i32 {
                     .collect();
                 println!("grant left out: {path}: {}", left_out.cause);
             }
-            let effective = match engine.effective_configuration() {
+            let effective = match effective {
                 Ok(effective) => effective,
                 Err(error) => {
                     eprintln!("telltale: {error}");

@@ -946,11 +946,6 @@ fn check_rules_shows_chain_overrides_as_text_and_json() {
     assert_eq!(rescored["overrides"][0]["score"], 3);
     assert_eq!(rescored["overrides"][0]["reason"], "synthetic chain tuning");
     assert!(!stdout.contains("chains.yaml"), "{stdout}");
-
-    // `--json` alone is refused, like any other unknown use of `check`.
-    let (code, stdout, _) = check(&["--json"]);
-    assert_eq!(code, Some(64));
-    assert!(stdout.is_empty(), "{stdout}");
 }
 
 /// `overrides.d` is read by the scanner and by hooks, and only hooks carry the

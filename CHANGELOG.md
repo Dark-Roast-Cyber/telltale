@@ -6,6 +6,13 @@
 
 ## Unreleased
 
+- `telltale hooks status [--json]` reports installation, configuration,
+  evaluator reachability, and bounded active telemetry without exposing
+  raw paths or record text. `telltale hooks check --json` returns the same
+  configuration view and exits non-zero for invalid configuration. Status
+  reports TOML harness settings as `not_inspected` when present and readable
+  within the size limit.
+
 - Hooks records now rotate by size with configurable archive retention.
   `telltale hooks allow` searches kept generations, and the experimental
   `HooksRecordFeed` offers bounded strict readback with restart checkpoints

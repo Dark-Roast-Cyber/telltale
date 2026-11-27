@@ -386,6 +386,7 @@ What is in effect:
 | Question | Command |
 | --- | --- |
 | Is the hook observing or enforcing, and on which thresholds? | `telltale hooks check` |
+| Which installations and recent records can a script see? | `telltale hooks status --json` |
 | Which rules are on, with what score, and what changed them? | `telltale hooks check --rules`: one line per rule and chain with `enabled` or what turned it off (its definition, an override, the policy), its score, the tier that defines it, and each override applied to it with the operator's reason |
 | The same for one rule of the scanner | `telltale rules show <name>` (`disabled by`, `overrides`) |
 | Which file or variable set a setting? | `telltale config show` |
@@ -396,6 +397,104 @@ What is in effect:
 differs, the score hooks decide on (`action`). When the rules do not build,
 `check` prints the cause on stderr: the file, the rule ID and the parser's
 message, which can quote the line it could not read.
+
+### Hooks status
+
+`telltale hooks status` reports the build, effective configuration, on-disk
+hook entries, evaluator reachability, and recent telemetry. Add `--json` for
+one [telltale_hooks.status.v1 document](../../schemas/telltale-hooks-status-v1.schema.json).
+Both forms accept the same `--config-dir`, `--user-config-dir`, and
+`--state-dir` options as `check`. Run from the project you want to inspect.
+
+`status` exits **0** when it can report, including when hooks are missing or
+configuration is invalid. `telltale hooks check --json` prints just the
+`configuration` object and exits **1** when it is invalid. Plain `check`
+keeps its diagnostic output, and `check --rules --json` still emits the
+effective rule configuration. Invalid command syntax exits **64**.
+
+- `configuration` describes the configuration resolved for this CLI invocation.
+  `sources` lists loaded settings files in precedence order. `origin` names
+  the last one (`system`, `user`, or `managed` for another explicitly selected
+  root), or is null for defaults. `content_sha256` hashes the length-prefixed
+  bytes of those settings files in load order. `semantic_identity` identifies
+  the effective engine, including rule content; it is null if no engine was
+  built. The two digests answer different questions. `error_code` is a
+  fixed code; use plain `check` locally for the detailed diagnostic.
+- `harnesses` lists every adapter. `present` means a file contains the
+  installer-generated hook entries, or the documented OpenCode pilot
+  wrapper. `missing`, `altered`, and `unavailable` distinguish absent entries,
+  changed or malformed settings, and files that could not be read safely.
+  `installed_scopes` lists the scopes with a `present` file. This is a local
+  inventory of documented installation files; it does not establish harness
+  trust, activation, executable availability, or dynamically injected
+  settings.
+  The command hook files Telltale installs are JSON. Status checks Claude
+  Code settings JSON, Codex `hooks.json`, Copilot's `telltale-hooks.json`
+  and inline JSON settings, and OpenCode's `telltale.js` pilot wrapper
+  in `plugin` or `plugins`. Inline hook tables in TOML settings are not
+  inspected: an existing readable TOML file within the size limit is
+  `not_inspected`, whether or not it contains hooks. It does not query
+  remote policy, registry or MDM settings, arbitrary plugin wrappers, or
+  alternate hook-file names. The OpenCode check recognizes wrapper shape;
+  it does not validate JavaScript or load the wrapper.
+- `evaluator` reports `not_configured`, `not_running`, `running`,
+  `unreachable`, `config_invalid`, or `unsupported_platform`. On Unix,
+  `running` means the configured private socket accepted a same-user
+  connection within 100 ms. No hook request is sent and no evaluator is
+  started. Windows has no evaluator transport.
+- `telemetry` reports the last complete decision and counts by built-in
+  `error_code` and strict-reader rejection code. Unknown record error codes
+  are counted as `other`. The scan reads only the active file, up to 64 MiB
+  from its end, without the writer lock. `complete: false` means the counts
+  are partial or unavailable; it also covers an incomplete line at the end.
+  A missing file is normal and has empty counts. The record timestamp is a
+  time reported by the writer, not a liveness test. If configuration could
+  not be loaded, status checks the runtime fallback records location.
+
+The new reports include path digests and fixed codes, never raw paths,
+settings, or record text. Status writes no files.
+
+Synthetic example:
+
+```json
+{
+  "schema": "telltale_hooks.status.v1",
+  "version": "0.8.0",
+  "telltale_rev": "0123456789abcdef0123456789abcdef01234567",
+  "configuration": {
+    "origin": null,
+    "sources": [],
+    "content_sha256": null,
+    "valid": true,
+    "error_code": null,
+    "semantic_identity": "semantic:v1:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "mode": "observe",
+    "on_error": "allow",
+    "on_unevaluable": "deny",
+    "reason_detail": "full",
+    "ask": "human",
+    "telemetry_rotation": {"max_size_bytes": 104857600, "keep": 5},
+    "tamper_prevention": true,
+    "self_protection_rules": true
+  },
+  "harnesses": [
+    {"name": "claude-code", "installed_scopes": ["user"], "settings": [
+      {"scope": "user", "state": "present", "path_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+    ]},
+    {"name": "copilot-cli", "installed_scopes": [], "settings": []},
+    {"name": "codex-cli", "installed_scopes": [], "settings": []},
+    {"name": "opencode", "installed_scopes": [], "settings": []}
+  ],
+  "evaluator": "not_running",
+  "telemetry": {
+    "state": "active",
+    "complete": true,
+    "last_decision_at": "2026-11-26T12:35:00Z",
+    "error_counts": {"payload_invalid_json": 2},
+    "rejected_counts": {"input_too_large": 1}
+  }
+}
+```
 
 ## Tamper prevention
 

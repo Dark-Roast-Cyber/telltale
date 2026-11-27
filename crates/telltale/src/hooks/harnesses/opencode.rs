@@ -36,6 +36,16 @@ pub const ADAPTER: Adapter = Adapter {
                 "OpenCode v2 pilot uses an explicit plugin factory, not a shell command. See docs/hooks/harnesses/opencode.md; unmanaged startup cannot fail closed.",
             )
         },
+        user_home: ".config/opencode",
+        user_config_override: None,
+        user_files: &["plugins/telltale.js", "plugin/telltale.js"],
+        project_files: &[
+            ".opencode/plugins/telltale.js",
+            ".opencode/plugin/telltale.js",
+        ],
+        system_files: &[],
+        managed_files: &[],
+        plugin_wrapper: Some(pilot_wrapper),
     },
     nameless_block: NamelessBlock::Exit(1),
     home: None,
@@ -45,6 +55,16 @@ pub const ADAPTER: Adapter = Adapter {
         "the pilot plugin denies a tool call when the hook is unavailable, only where its own options say mode: enforce and leave onError at deny",
     ],
 };
+
+fn pilot_wrapper(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("import { createPlugin } from ") && line.contains("opencode-v2.mjs")
+    }) && text.lines().any(|line| {
+        line.trim_start()
+            .starts_with("export default createPlugin(")
+    })
+}
 
 #[derive(Deserialize)]
 struct Request {

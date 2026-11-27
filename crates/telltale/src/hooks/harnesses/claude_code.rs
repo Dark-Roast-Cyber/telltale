@@ -9,7 +9,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::ClientId;
-use crate::hooks::harness::{Adapter, HostRules, Install, InstallOutput, NamelessBlock, Parsed};
+use crate::hooks::harness::{
+    Adapter, HostRules, Install, InstallOutput, MachineInstallFile, NamelessBlock, Parsed,
+};
 use crate::hooks::harnesses::{copilot_cli, payload};
 use crate::hooks::runtime::{Completion, Context, Event, Response, SettledCall, ToolCall};
 use crate::hooks::state::Verdict;
@@ -356,6 +358,19 @@ pub const ADAPTER: Adapter = Adapter {
                                                   print the Claude Code hooks settings fragment;
                                                   --fail-closed blocks tool calls if the hook fails",
         output: install_output,
+        user_home: ".claude",
+        user_config_override: Some("CLAUDE_CONFIG_DIR"),
+        user_files: &["settings.json"],
+        project_files: &[".claude/settings.json", ".claude/settings.local.json"],
+        system_files: &[],
+        managed_files: &[if cfg!(windows) {
+            MachineInstallFile::WindowsProgramFiles("ClaudeCode/managed-settings.json")
+        } else if cfg!(target_os = "macos") {
+            MachineInstallFile::Standard("ClaudeCode/managed-settings.json")
+        } else {
+            MachineInstallFile::Standard("claude-code/managed-settings.json")
+        }],
+        plugin_wrapper: None,
     },
     // Exit 2 is the only block that does not need the event, but on a Stop it
     // still prompts: the known residual for this harness.

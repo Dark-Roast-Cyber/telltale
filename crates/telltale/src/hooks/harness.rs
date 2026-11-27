@@ -113,6 +113,27 @@ pub struct Install {
     /// The settings document for `command`. `Err` is why nothing can be
     /// printed for this request (a `--fail-closed` the harness cannot honor).
     pub output: fn(command: &str, fail_closed: bool) -> Result<InstallOutput, &'static str>,
+    /// Documented on-disk locations for the supported installation.
+    pub user_home: &'static str,
+    /// An alternate settings root when it differs from [`Adapter::home`].
+    pub user_config_override: Option<&'static str>,
+    pub user_files: &'static [&'static str],
+    pub project_files: &'static [&'static str],
+    /// Relative to the platform's machine-wide settings directory.
+    pub system_files: &'static [MachineInstallFile],
+    /// Relative to the platform's machine-wide settings directory.
+    pub managed_files: &'static [MachineInstallFile],
+    /// File-based plugins have a documented wrapper rather than generated
+    /// shell-hook entries. Inspect it without loading or executing it.
+    pub plugin_wrapper: Option<fn(&str) -> bool>,
+}
+
+#[derive(Clone, Copy)]
+pub enum MachineInstallFile {
+    /// Absolute, or relative to the platform's machine settings directory.
+    Standard(&'static str),
+    /// Relative to the Windows Program Files known folder.
+    WindowsProgramFiles(&'static str),
 }
 
 /// A settings or hooks-file document, and notes for the operator's terminal.

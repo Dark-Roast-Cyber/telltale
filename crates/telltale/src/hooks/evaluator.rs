@@ -25,6 +25,35 @@ pub use unsupported::{UNSUPPORTED_PLATFORM, request, serve, spawn_detached};
 /// the check out and never read the variable.
 pub const FORCE_PANIC_ENV: &str = "TELLTALE_HOOKS_TEST_PANIC";
 
+/// Read-only reachability of the configured local evaluator transport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Probe {
+    NotConfigured,
+    NotRunning,
+    Running,
+    Unreachable,
+    UnsupportedPlatform,
+    ConfigInvalid,
+}
+
+/// Never starts the evaluator or sends a hook request.
+pub fn probe(config: &crate::hooks::config::Config) -> Probe {
+    if !config.evaluator.enabled {
+        return Probe::NotConfigured;
+    }
+    #[cfg(unix)]
+    {
+        config
+            .resolved_socket_path()
+            .map_or(Probe::Unreachable, |path| unix::probe(&path))
+    }
+    #[cfg(not(unix))]
+    {
+        Probe::UnsupportedPlatform
+    }
+}
+
 /// Panic if [`FORCE_PANIC_ENV`] names `site` (debug builds only).
 #[doc(hidden)]
 pub fn panic_if_forced(site: &str) {

@@ -67,16 +67,18 @@ const ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE: u8 = 12;
 /// literal drive, so a system drive other than `C:` and a relocated folder
 /// both resolve.
 pub(super) fn program_data() -> Option<PathBuf> {
+    known_folder(&FOLDERID_ProgramData)
+}
+
+#[cfg(feature = "hooks")]
+pub(super) fn program_files() -> Option<PathBuf> {
+    known_folder(&windows_sys::Win32::UI::Shell::FOLDERID_ProgramFiles)
+}
+
+fn known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
     let mut path = null_mut();
     // SAFETY: a valid known-folder ID and output pointer; no token (current user).
-    let result = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_ProgramData,
-            KF_FLAG_DEFAULT as u32,
-            null_mut(),
-            &mut path,
-        )
-    };
+    let result = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT as u32, null_mut(), &mut path) };
     let resolved = (result >= 0 && !path.is_null()).then(|| {
         // SAFETY: success returns a NUL-terminated wide string.
         let length = (0..).take_while(|&i| unsafe { *path.add(i) } != 0).count();

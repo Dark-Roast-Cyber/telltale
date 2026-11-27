@@ -414,6 +414,32 @@ pub const ADAPTER: Adapter = Adapter {
                                                   on Windows COMMAND runs under PowerShell, so quote a
                                                   path with spaces as '& \"C:\\...\\telltale.exe\" hooks ...'",
         output: install_output,
+        user_home: ".copilot",
+        user_config_override: None,
+        user_files: &["hooks/telltale-hooks.json", "settings.json"],
+        project_files: &[
+            ".github/hooks/telltale-hooks.json",
+            ".github/copilot/settings.json",
+            ".github/copilot/settings.local.json",
+        ],
+        system_files: &[],
+        managed_files: &[
+            if cfg!(windows) {
+            super::super::harness::MachineInstallFile::Standard(
+                "GitHub/Copilot/policy.d/telltale-hooks.json",
+            )
+            } else if cfg!(target_os = "macos") {
+                // Copilot uses its Unix policy path on macOS too.
+            super::super::harness::MachineInstallFile::Standard(
+                "/etc/github-copilot/policy.d/telltale-hooks.json",
+            )
+            } else {
+            super::super::harness::MachineInstallFile::Standard(
+                "github-copilot/policy.d/telltale-hooks.json",
+            )
+            },
+        ],
+        plugin_wrapper: None,
     },
     // Blocks a preToolUse; other events continue (E2E `fail-exit1`).
     nameless_block: NamelessBlock::Exit(1),
