@@ -63,7 +63,7 @@ skip = [
     { crate = "hashbrown@0.16.1", reason = "Live Cargo.lock: rusqlite 0.41 (rsqlite-vfs 0.1.1) uses hashbrown 0.16 while indexmap and hashlink use 0.17." },
     { crate = "r-efi@5.3.0", reason = "Live Cargo.lock: getrandom 0.3 and 0.4 require incompatible r-efi lines." },
     { crate = "windows-sys@0.52.0", reason = "Live Cargo.lock: ring requires 0.52 while direct and notify paths require newer lines." },
-    { crate = "syn@3.0.9", reason = "Live Cargo.lock: clap/serde derive and ref-cast require syn 3 while strum and zerocopy derive retain syn 2." },
+    { crate = "syn@3.0.10", reason = "Live Cargo.lock: clap/serde derive and ref-cast require syn 3 while strum and zerocopy derive retain syn 2." },
     { crate = "windows-sys@0.60.2", reason = "Live Cargo.lock: notify retains 0.60 while direct and terminal dependencies use 0.61." },
     { crate = "windows-targets@0.52.6", reason = "Live Cargo.lock: ring's windows-sys 0.52 retains the 0.52 target family." },
     { crate = "windows_aarch64_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
