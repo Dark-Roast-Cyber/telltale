@@ -128,6 +128,16 @@ the security portion of the gate. Release work remains separate: use
 `make release-preflight` and the release/native workflows when preparing an RC or
 release.
 
+### Test layout
+
+Unit tests that need private items live under the module they test: `src/a/b/tests.rs`
+for either `src/a/b.rs` or `src/a/b/mod.rs`, and `src/tests.rs` for a crate root.
+Declare them with `#[cfg(test)] mod tests;`, without a `#[path]` attribute.
+Split test files larger than about 800 lines by topic under `tests/<topic>.rs`
+within that module's directory.
+Tests of a crate's public contract belong in that crate's top-level `tests/` directory.
+An inline `mod tests { ... }` may remain only when its body is at most 40 lines.
+
 ### Debugging test failures
 
 Start with the focused failing test, logs and backtrace using the normal profile.
