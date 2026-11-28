@@ -22,10 +22,6 @@ use crate::scoring::{
     RiskContribution, canonicalize_terminal_contributions, checked_terminal_risk_sum,
 };
 
-#[cfg(test)]
-#[path = "consumer_field_inventory_tests.rs"]
-mod consumer_field_inventory_tests;
-
 /// The exact Event 3.0 schema used by the consumer boundary.
 pub const EVENT3_SCHEMA: &str = include_str!("../../data/event-3.0.schema.json");
 

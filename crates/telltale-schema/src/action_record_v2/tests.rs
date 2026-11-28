@@ -2,7 +2,7 @@ use super::*;
 use crate::action_record::ACTION_RECORD_V1_SCHEMA;
 use serde_json::json;
 
-const GOLDEN: &[u8] = include_bytes!("fixtures/action-record-v2.json");
+const GOLDEN: &[u8] = include_bytes!("../fixtures/action-record-v2.json");
 
 fn golden() -> Value {
     serde_json::from_slice(GOLDEN).unwrap()

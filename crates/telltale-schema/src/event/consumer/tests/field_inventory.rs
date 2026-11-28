@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde::ser::{Impossible, SerializeStruct, Serializer};
 use serde_json::Value;
 
-use super::{EVENT3_SCHEMA, KNOWN_FIELDS};
+use super::super::{EVENT3_SCHEMA, KNOWN_FIELDS};
 use crate::event::{EventWire, HealthEventInput, health_event_with_metadata};
 
 #[derive(Default)]
