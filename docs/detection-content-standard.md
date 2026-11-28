@@ -281,7 +281,7 @@ Follow this checklist:
 7. Add one or more `telltale.tags` for filtering and documentation.
 8. Create a positive fixture under `tests/fixtures/`.
 9. Create a negative fixture if the rule could false-positive on common activity.
-10. Add a detection test beside what it exercises: the tests of that module (for example `crates/telltale-detect/src/v2/session/tests.rs`), a topic file under `crates/telltale-detect/src/v2/tests/`, or `v2/tests/action.rs` for native action selection.
+10. Add a detection test beside what it exercises: the tests of that module (for example `crates/telltale-detect/src/v2/session/tests.rs`), a topic file under `crates/telltale-detect/src/v2/tests/`, or a topic file under `v2/tests/action/` for native action selection.
 11. Run `telltale rules validate --rules <path>` to check the rule and its patterns, and review any `notices`.
 12. Run `telltale rules test --rules <path> <fixture>` to preview matches.
 13. Run `cargo test` to verify no regressions.
