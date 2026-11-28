@@ -7,12 +7,7 @@ inline-not-named-tests	crates/telltale-sources/src/source_read.rs	Its `bounded_t
 inline-over-40	crates/telltale-discover/src/anchored/windows.rs	The file is itself loaded through #[path], so a child tests.rs would resolve to its sibling's tests file.
 inline-over-40	crates/telltale-discover/src/inventory.rs	One test module in each of two platform-exclusive inline `backend` modules; both would resolve to the same file.
 inline-over-40	crates/telltale-sources/src/source_read.rs	Its `bounded_tests` module moves together with the path-wired production_jsonl_tests.rs, which holds a nested test module.
-oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/process_chain/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/session/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/tests/shell_reading.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-discover/src/discovery/tests.rs	Over 800 lines; to be split by topic.
+oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	One case table shared by four tests makes up the file; splitting by topic would not shorten it.
 oversize-test-file	crates/telltale-sources/src/acquisition/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/acquisition/tests/accounting.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/acquisition/tests/bound.rs	Over 800 lines; to be split by topic.
