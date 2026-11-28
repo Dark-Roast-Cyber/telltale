@@ -331,5 +331,5 @@ The unit-level classes behind these cases are in
 `results_prose_and_authored_content_are_not_commands`,
 `interpreter_code_and_file_heredocs_do_not_supply_shell_actions`,
 `linked_download_completes_repeatedly_not_for_unrelated_execution`) and
-`crates/telltale/src/tests/detailed_scan.rs`
+`crates/telltale/src/tests/detailed_scan/detailed_context.rs`
 (`codex_external_import_turn_is_inert_for_detailed_semantics`).

@@ -16,12 +16,6 @@ oversize-test-file	crates/telltale-sources/src/sources/claude/tests.rs	Over 800 
 oversize-test-file	crates/telltale-sources/src/sources/codex/tests/completed.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/sources/codex/tests/current_format.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/sources/tests/canonical_conformance.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/assignment/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/canonical_runtime/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/investigation/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/local_event_feed/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/tests/detailed_scan.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/tests/rule_content.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/cli/scan/canonical/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/cli/scan/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/cli/scan/tests/activation.rs	Over 800 lines; to be split by topic.
