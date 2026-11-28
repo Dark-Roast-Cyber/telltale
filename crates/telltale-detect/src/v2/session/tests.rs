@@ -1,5 +1,5 @@
-use super::compile_rule_v1;
-use super::session::*;
+use super::super::compile_rule_v1;
+use super::super::session::*;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
@@ -86,7 +86,7 @@ fn work_budget_control_rules_do_not_scan_unrelated_authored_arguments() {
 
 #[test]
 fn work_budget_scalar_controls_preserve_resolution_and_structured_fallback() {
-    use super::{SelectorId, SelectorRegistry};
+    use super::super::{SelectorId, SelectorRegistry};
 
     for structured in [false, true] {
         let facet_value = if structured {
@@ -186,7 +186,10 @@ fn work_budget_scalar_controls_preserve_resolution_and_structured_fallback() {
         let resolution = SelectorRegistry::new()
             .try_resolve(selector, &observation, &mut budget)
             .unwrap();
-        assert_eq!(resolution.presence(), super::SelectorPresence::Absent);
+        assert_eq!(
+            resolution.presence(),
+            super::super::SelectorPresence::Absent
+        );
         assert!(resolution.value().is_none());
         assert!(resolution.metadata().is_none());
     }
@@ -254,16 +257,16 @@ fn tool_control_lookup_does_not_visit_unrelated_large_result() {
     .fact_metadata("tool.result", FactMetadata::reported().unwrap())
     .build()
     .unwrap();
-    let registry = super::SelectorRegistry::new();
+    let registry = super::super::SelectorRegistry::new();
     let mut borrow_budget = RetentionBudget::new();
     borrow_budget
         .charge(MAX_EVALUATION_BYTE_VISITS - 1024)
         .unwrap();
     let (borrowed, presence) =
-        super::selector::borrow_tool_result_text(&observation, &mut borrow_budget)
+        super::super::selector::borrow_tool_result_text(&observation, &mut borrow_budget)
             .unwrap()
             .unwrap();
-    assert_eq!(presence, super::selector::SelectorPresence::Present);
+    assert_eq!(presence, super::super::selector::SelectorPresence::Present);
     let ObservationBody::Tool(tool) = observation.body() else {
         unreachable!()
     };
@@ -286,7 +289,7 @@ fn tool_control_lookup_does_not_visit_unrelated_large_result() {
     assert_eq!(
         registry
             .try_resolve(
-                super::SelectorId::CompatToolName,
+                super::super::SelectorId::CompatToolName,
                 &observation,
                 &mut control_budget
             )
@@ -301,7 +304,7 @@ fn tool_control_lookup_does_not_visit_unrelated_large_result() {
     assert!(
         registry
             .try_resolve(
-                super::SelectorId::CompatToolResult,
+                super::super::SelectorId::CompatToolResult,
                 &observation,
                 &mut result_budget
             )
@@ -552,7 +555,7 @@ fn message_with_correlation(
     builder.build().unwrap()
 }
 
-fn plan(modifier_score: u64) -> super::RuleV1CompatibilityPlan {
+fn plan(modifier_score: u64) -> super::super::RuleV1CompatibilityPlan {
     let document = "title: synthetic\nid: 2f33e0ea-6afb-4a33-84ae-7fa76ce268cb\nname: synthetic.atomic\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n---\ntitle: synthetic\nid: 1ba8e050-4895-4b15-82c3-84ee5647cbc9\nname: chain.synthetic\ntaxonomy: telltale\ncorrelation:\n    type: telltale_chain\n    rules: [synthetic.atomic]\ntelltale:\n    score: 0\n    explanation: 'synthetic'\n    analytic_intent: audit\n    detection_class: security_detection\n    signal_type: chain\n";
     // Rule v2 caps a score at 100; the compiled form takes any score.
     compile_rule_v1(
@@ -566,7 +569,7 @@ fn plan(modifier_score: u64) -> super::RuleV1CompatibilityPlan {
     .unwrap()
 }
 
-fn target_plan(targets: &str, regex: &str) -> super::RuleV1CompatibilityPlan {
+fn target_plan(targets: &str, regex: &str) -> super::super::RuleV1CompatibilityPlan {
     // `targets` lists compiled target names; each reads the Rule v2 field that
     // compiles to it.
     let selection = targets
@@ -604,7 +607,7 @@ fn target_plan(targets: &str, regex: &str) -> super::RuleV1CompatibilityPlan {
 
 fn evaluate(
     observations: &[CanonicalObservationV2],
-    plan: &super::RuleV1CompatibilityPlan,
+    plan: &super::super::RuleV1CompatibilityPlan,
 ) -> Result<CanonicalSourceEvaluation, ProcessingError> {
     let instance = CorrelationId::source_reported("synthetic-source-instance").unwrap();
     evaluate_source(
@@ -619,8 +622,8 @@ fn evaluate(
     )
 }
 
-fn context() -> super::event3::Event3CompatibilityContext<'static> {
-    super::event3::Event3CompatibilityContext {
+fn context() -> super::super::event3::Event3CompatibilityContext<'static> {
+    super::super::event3::Event3CompatibilityContext {
         source_path_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         sessions: &[],
     }
@@ -643,7 +646,7 @@ fn long_message_suffix_matches_with_full_hash_and_safe_bounded_evidence() {
         evaluation.sessions()[0].detectors()[0].evaluated_match_count(),
         1
     );
-    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let projected = super::super::event3::project_event3(&evaluation, &context()).unwrap();
     let json = serde_json::to_string(&projected.events).unwrap();
     assert!(!json.contains("SYNTHETIC-LONG-SECRET"));
     let evidence = projected.events[0]
@@ -675,7 +678,7 @@ fn repeated_punctuation_urls_exhaust_source_work_without_private_output() {
         })
         .collect::<Vec<_>>();
     let evaluation = evaluate(&observations[..1], &plan(0)).unwrap();
-    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let projected = super::super::event3::project_event3(&evaluation, &context()).unwrap();
     let event = serde_json::to_string(&projected.events).unwrap();
     assert!(!event.contains("SYNTHETIC-PUNCT-SECRET"));
     assert!(event.contains(&telltale_schema::event::evidence_hash(&text)));
@@ -779,7 +782,7 @@ fn evaluation_work_is_charged_for_no_matches_and_never_reset_between_detectors()
 
 #[test]
 fn event3_uses_checked_contributions_and_actual_canonical_anchors() {
-    use super::event3::project_event3;
+    use super::super::event3::project_event3;
     let observations = [
         message(
             "match",
@@ -853,10 +856,10 @@ fn capability_limited_completion_is_not_no_match_or_operational_failure() {
         let detector = &evaluation.sessions()[0].detectors()[0];
         assert_eq!(
             detector.outcome(),
-            super::RuleV1DetectorOutcome::Indeterminate
+            super::super::RuleV1DetectorOutcome::Indeterminate
         );
         assert_eq!(detector.non_evaluation_reason_counts()[reason], 1);
-        let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+        let projected = super::super::event3::project_event3(&evaluation, &context()).unwrap();
         assert!(projected.events.is_empty());
         assert_eq!(
             projected.completion,
@@ -873,7 +876,7 @@ fn capability_limited_completion_is_not_no_match_or_operational_failure() {
     assert_eq!(evaluation.completion(), EvaluationCompletion::Complete);
     assert_eq!(
         evaluation.sessions()[0].detectors()[0].outcome(),
-        super::RuleV1DetectorOutcome::NoMatch
+        super::super::RuleV1DetectorOutcome::NoMatch
     );
 }
 
@@ -892,7 +895,7 @@ fn url_target_reads_tool_argument_urls_and_keeps_completion_complete() {
     assert!(evaluation.visibility_limits().is_empty());
     assert_eq!(
         evaluation.sessions()[0].detectors()[0].outcome(),
-        super::RuleV1DetectorOutcome::NoMatch
+        super::super::RuleV1DetectorOutcome::NoMatch
     );
 
     // URL-keyed top-level string arguments (also JSON-encoded) are the URL fact;
@@ -907,12 +910,12 @@ fn url_target_reads_tool_argument_urls_and_keeps_completion_complete() {
     assert_eq!(evaluation.completion(), EvaluationCompletion::Complete);
     assert_eq!(
         evaluation.sessions()[0].detectors()[0].outcome(),
-        super::RuleV1DetectorOutcome::Match
+        super::super::RuleV1DetectorOutcome::Match
     );
     let prompt_only = evaluate(&encoded, &target_plan("url", "other\\.example")).unwrap();
     assert_eq!(
         prompt_only.sessions()[0].detectors()[0].outcome(),
-        super::RuleV1DetectorOutcome::NoMatch
+        super::super::RuleV1DetectorOutcome::NoMatch
     );
 
     // Mixed-target rules evaluate the URL alternative too, still complete.
@@ -920,7 +923,7 @@ fn url_target_reads_tool_argument_urls_and_keeps_completion_complete() {
     assert_eq!(mixed.completion(), EvaluationCompletion::Complete);
     assert_eq!(
         mixed.sessions()[0].detectors()[0].outcome(),
-        super::RuleV1DetectorOutcome::Match
+        super::super::RuleV1DetectorOutcome::Match
     );
 }
 
@@ -934,7 +937,7 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
             0,
         )];
         let instance = CorrelationId::source_reported("synthetic-source-instance").unwrap();
-        let evaluation = super::session::evaluate_source_with_options(
+        let evaluation = super::super::session::evaluate_source_with_options(
             CanonicalSourceInput {
                 client: ClientId::Claude,
                 source_id: "claude.projects",
@@ -943,7 +946,7 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
             },
             &target_plan("url", regex),
             None,
-            &super::DetailedEvaluationOptions::default(),
+            &super::super::DetailedEvaluationOptions::default(),
         )
         .unwrap();
         let session = &evaluation.sessions()[0];
@@ -952,8 +955,8 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
             session.action_findings().len(),
         )
     };
-    let matched = (super::RuleV1DetectorOutcome::Match, 1);
-    let missed = (super::RuleV1DetectorOutcome::NoMatch, 0);
+    let matched = (super::super::RuleV1DetectorOutcome::Match, 1);
+    let missed = (super::super::RuleV1DetectorOutcome::NoMatch, 0);
 
     // An empty URL value is not a URL fact in either view.
     assert_eq!(outcome(r#"{"url":""}"#, "^$"), missed);
@@ -972,7 +975,7 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
     // command text, which the action view (only) also reads as URL text.
     assert_eq!(
         outcome(deep, "skippedmarker"),
-        (super::RuleV1DetectorOutcome::NoMatch, 1)
+        (super::super::RuleV1DetectorOutcome::NoMatch, 1)
     );
     // Nesting beyond the JSON parser's own recursion limit is skipped per
     // member too, rather than rejecting the whole object.
@@ -988,14 +991,14 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
     assert_eq!(outcome(prose, "prosemarker"), missed);
     assert_eq!(
         outcome(prose, "skippedmarker"),
-        (super::RuleV1DetectorOutcome::NoMatch, 1)
+        (super::super::RuleV1DetectorOutcome::NoMatch, 1)
     );
 
     // Intended difference: command text is a URL fact for actions, not for
     // session URL selectors.
     assert_eq!(
         outcome("curl https://fetch.example.invalid/page", "fetch\\.example"),
-        (super::RuleV1DetectorOutcome::NoMatch, 1)
+        (super::super::RuleV1DetectorOutcome::NoMatch, 1)
     );
 }
 
@@ -1015,7 +1018,7 @@ fn event3_aggregates_one_deterministic_anchor_per_occurrence() {
         0,
     )];
     let evaluation = evaluate(&observations, &anchor_plan).unwrap();
-    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let projected = super::super::event3::project_event3(&evaluation, &context()).unwrap();
     let first = &projected.events;
     let first_anchor = &first[0].timeline_anchors[0];
     assert_eq!(first[0].timeline_anchors.len(), 1);
@@ -1072,16 +1075,16 @@ fn overflow_and_projection_failure_never_return_partial_success() {
     ];
     let evaluation = evaluate(&observations, &plan(0)).unwrap();
     assert!(matches!(
-        super::event3::project_event3(&evaluation, &context()),
+        super::super::event3::project_event3(&evaluation, &context()),
         Err(ProcessingError::Projection)
     ));
     let evaluation = evaluate(&observations[..1], &plan(0)).unwrap();
-    let invalid = super::event3::Event3CompatibilityContext {
+    let invalid = super::super::event3::Event3CompatibilityContext {
         source_path_hash: "",
         ..context()
     };
     assert!(matches!(
-        super::event3::project_event3(&evaluation, &invalid),
+        super::super::event3::project_event3(&evaluation, &invalid),
         Err(ProcessingError::Projection)
     ));
 }
@@ -1158,7 +1161,7 @@ fn projected_occurrences_preserve_process_repeats_correlations_and_derived_conte
         Some((&process_rules, &config)),
     )
     .unwrap();
-    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let projected = super::super::event3::project_event3(&evaluation, &context()).unwrap();
     let events = &projected.events;
     for (finding_index, event) in events.iter().enumerate() {
         let occurrences = projected
@@ -1292,7 +1295,7 @@ fn equal_time_and_untimed_ties_preserve_caller_occurrence_order() {
 
 #[test]
 fn session_metadata_is_explicit_scoped_and_not_invented() {
-    use super::event3::{Event3CompatibilityContext, Event3SessionMetadata, project_event3};
+    use super::super::event3::{Event3CompatibilityContext, Event3SessionMetadata, project_event3};
     let observations = [
         message(
             "one",
@@ -1347,7 +1350,7 @@ fn session_metadata_is_explicit_scoped_and_not_invented() {
 
 #[test]
 fn metadata_index_rejects_duplicate_and_event3_ambiguous_session_keys() {
-    use super::event3::{Event3CompatibilityContext, Event3SessionMetadata, project_event3};
+    use super::super::event3::{Event3CompatibilityContext, Event3SessionMetadata, project_event3};
     let source_id =
         CorrelationId::new("same-visible-session", CorrelationOrigin::SourceReported).unwrap();
     let derived_id = CorrelationId::new(
@@ -1446,9 +1449,9 @@ fn canonical_source_hash_is_required_without_normalization() {
     )];
     let evaluation = evaluate(&observations, &plan(0)).unwrap();
     let canonical = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
-    let projected = super::event3::project_event3(
+    let projected = super::super::event3::project_event3(
         &evaluation,
-        &super::event3::Event3CompatibilityContext {
+        &super::super::event3::Event3CompatibilityContext {
             source_path_hash: canonical,
             sessions: &[],
         },
@@ -1464,9 +1467,9 @@ fn canonical_source_hash_is_required_without_normalization() {
         "gbcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
     ] {
         assert!(matches!(
-            super::event3::project_event3(
+            super::super::event3::project_event3(
                 &evaluation,
-                &super::event3::Event3CompatibilityContext {
+                &super::super::event3::Event3CompatibilityContext {
                     source_path_hash: invalid,
                     sessions: &[],
                 }
@@ -1555,9 +1558,11 @@ fn reordered_inputs_have_identical_replay_stable_event3_semantics() {
     ];
     let reversed = [forward[1].clone(), forward[0].clone()];
     let first =
-        super::event3::project_event3(&evaluate(&forward, &plan(0)).unwrap(), &context()).unwrap();
+        super::super::event3::project_event3(&evaluate(&forward, &plan(0)).unwrap(), &context())
+            .unwrap();
     let second =
-        super::event3::project_event3(&evaluate(&reversed, &plan(0)).unwrap(), &context()).unwrap();
+        super::super::event3::project_event3(&evaluate(&reversed, &plan(0)).unwrap(), &context())
+            .unwrap();
     assert_eq!(semantics(&first.events), semantics(&second.events));
 }
 
@@ -1594,15 +1599,15 @@ fn caller_controlled_identity_and_metadata_bounds_fail_without_content_leaks() {
     )
     .unwrap();
     let session_id = CorrelationId::source_reported("session").unwrap();
-    let metadata = [super::event3::Event3SessionMetadata {
+    let metadata = [super::super::event3::Event3SessionMetadata {
         session_id: &session_id,
         agent: Some(&marker),
         model: None,
         provider: None,
     }];
-    let error = match super::event3::project_event3(
+    let error = match super::super::event3::project_event3(
         &evaluation,
-        &super::event3::Event3CompatibilityContext {
+        &super::super::event3::Event3CompatibilityContext {
             sessions: &metadata,
             ..context()
         },
@@ -1651,7 +1656,7 @@ fn event3_projection_budget_failure_is_atomic() {
         .collect::<Vec<_>>();
     let evaluation = evaluate(&observations, &plan(0)).unwrap();
     assert!(matches!(
-        super::event3::project_event3(&evaluation, &context()),
+        super::super::event3::project_event3(&evaluation, &context()),
         Err(ProcessingError::Bounds)
     ));
 }
@@ -1680,7 +1685,7 @@ fn event3_occurrence_modifier_copies_are_preflight_charged() {
         .collect::<Vec<_>>();
     let evaluation = evaluate(&observations, &plan).unwrap();
     assert!(matches!(
-        super::event3::project_event3(&evaluation, &context()),
+        super::super::event3::project_event3(&evaluation, &context()),
         Err(ProcessingError::Bounds)
     ));
 }
@@ -1829,7 +1834,7 @@ correlations:
         Some((&rules, &config)),
     )
     .unwrap();
-    let events = super::event3::project_event3(&output, &context())
+    let events = super::super::event3::project_event3(&output, &context())
         .unwrap()
         .events;
     let atomic = events
@@ -1913,7 +1918,7 @@ correlations: []
     )
     .unwrap();
     let serialized = serde_json::to_string(
-        &super::event3::project_event3(&evaluation, &context())
+        &super::super::event3::project_event3(&evaluation, &context())
             .unwrap()
             .events,
     )
@@ -2080,7 +2085,7 @@ fn oversized_detection_event_keeps_anchors_and_marks_omitted_evidence() {
     use telltale_schema::event::{EVENT3_MAX_INPUT_BYTES, Event3Record, evidence_hash};
     let observations = dense_needles(3_000, &format!("needle {}", "ordinary ".repeat(60)));
     let (evaluation, _) = evaluate_scaled(&observations, 64 << 20);
-    let projected = super::event3::project_event3(&evaluation.unwrap(), &context()).unwrap();
+    let projected = super::super::event3::project_event3(&evaluation.unwrap(), &context()).unwrap();
     let [event] = projected.events.as_slice() else {
         panic!("one detection event");
     };
@@ -2110,7 +2115,7 @@ fn oversized_detection_event_keeps_anchors_and_marks_omitted_evidence() {
     assert_eq!(kept_ids, earliest);
     // Rules and score are those of the same rule in an event that fits.
     let (small, _) = evaluate_scaled(&observations[..1], 64 << 20);
-    let small = super::event3::project_event3(&small.unwrap(), &context()).unwrap();
+    let small = super::super::event3::project_event3(&small.unwrap(), &context()).unwrap();
     assert_eq!(event.rule_ids, small.events[0].rule_ids);
     assert_eq!(event.risk_score, small.events[0].risk_score);
     assert!(omitted_markers(&small.events[0]).is_empty());
@@ -2120,7 +2125,7 @@ fn oversized_detection_event_keeps_anchors_and_marks_omitted_evidence() {
 fn detection_event_within_the_limit_is_not_changed_by_fitting() {
     let observations = dense_needles(200, &format!("needle {}", "ordinary ".repeat(60)));
     let (evaluation, _) = evaluate_scaled(&observations, 64 << 20);
-    let projected = super::event3::project_event3(&evaluation.unwrap(), &context()).unwrap();
+    let projected = super::super::event3::project_event3(&evaluation.unwrap(), &context()).unwrap();
     let event = &projected.events[0];
     let before = serde_json::to_vec(event).unwrap();
     assert!(before.len() <= telltale_schema::event::EVENT3_MAX_INPUT_BYTES);
@@ -2128,8 +2133,12 @@ fn detection_event_within_the_limit_is_not_changed_by_fitting() {
     assert!(omitted_markers(event).is_empty());
     let mut fitted = event.clone();
     let occurrences = (0..observations.len()).collect::<Vec<_>>();
-    super::event3::fit_detection_evidence(&mut fitted, &occurrences, &mut RetentionBudget::new())
-        .unwrap();
+    super::super::event3::fit_detection_evidence(
+        &mut fitted,
+        &occurrences,
+        &mut RetentionBudget::new(),
+    )
+    .unwrap();
     assert_eq!(serde_json::to_vec(&fitted).unwrap(), before);
 }
 
@@ -2138,7 +2147,7 @@ fn detection_event_whose_anchors_alone_exceed_the_limit_fails_projection() {
     let observations = dense_needles(10_000, "needle");
     let (evaluation, _) = evaluate_scaled(&observations, 64 << 20);
     assert!(matches!(
-        super::event3::project_event3(&evaluation.unwrap(), &context()),
+        super::super::event3::project_event3(&evaluation.unwrap(), &context()),
         Err(ProcessingError::Projection)
     ));
 }

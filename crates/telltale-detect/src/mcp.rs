@@ -13,10 +13,6 @@ use telltale_schema::source::Source;
 use telltale_sources::acquisition::SourceAccounting;
 use telltale_sources::mcp::McpServerInventory;
 
-#[cfg(test)]
-#[path = "mcp_canonical_tests.rs"]
-mod mcp_canonical_tests;
-
 /// Configuration-derived inference over one acquisition, not observed server provenance.
 /// No source I/O; the caller discards this output if any source stage fails.
 /// Multiple candidate configurations retain separate, non-additive call counts.

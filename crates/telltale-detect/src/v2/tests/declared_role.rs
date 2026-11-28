@@ -4,9 +4,9 @@
 //! content only when it is one, written paths from a patch stay, and the whole
 //! argument text stays readable by the selectors that read it.
 
-use super::actions::{replay_identity, view_reading};
-use super::selector::{SelectorId, SelectorRegistry};
-use super::written_path_tests::{declared_tool, file_tool};
+use super::super::actions::{replay_identity, view_reading};
+use super::super::selector::{SelectorId, SelectorRegistry};
+use super::super::written_path_tests::{declared_tool, file_tool};
 use serde_json::{Value, json};
 use telltale_schema::observation::{CanonicalObservationV2, JsonValue, ToolKind, ToolOperation};
 

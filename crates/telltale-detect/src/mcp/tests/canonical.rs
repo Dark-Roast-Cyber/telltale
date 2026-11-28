@@ -6,7 +6,7 @@ use telltale_schema::source::Source;
 use telltale_sources::acquisition::{AcquisitionOptions, SourceAccounting, acquire_source};
 use tempfile::tempdir;
 
-use super::{McpServerInventory, project_mcp_usage};
+use super::super::{McpServerInventory, project_mcp_usage};
 
 fn discover_mcp_inventory_servers(root: &std::path::Path) -> Vec<McpServerInventory> {
     telltale_sources::mcp::acquire_mcp_inventory(root)
@@ -64,7 +64,7 @@ fn builds_mcp_tool_index_from_declared_tools() {
     )
     .unwrap();
     let servers = discover_mcp_inventory_servers(temp.path());
-    let index = super::McpToolIndex::from_servers(&servers);
+    let index = super::super::McpToolIndex::from_servers(&servers);
     let matches = index.lookup(ClientId::Claude, "LIST_ISSUES").unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].server_name, "github");

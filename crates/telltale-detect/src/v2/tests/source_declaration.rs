@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use super::actions::view_reading;
+use super::super::actions::view_reading;
 use serde_json::{Value, json};
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{ObservationBody, ObservationStage, ObservedAt};
@@ -236,7 +236,7 @@ fn each_file_source_gives_detection_its_write_read_and_shell_facts() {
 /// its name, so a declaration never narrows what the name alone gave.
 #[test]
 fn every_table_row_agrees_with_the_name_fallback() {
-    use super::tool_arguments::{is_file_read_tool, is_file_write_tool};
+    use super::super::tool_arguments::{is_file_read_tool, is_file_write_tool};
     use telltale_schema::observation::ToolKind;
     let rows = telltale_sources::declared_tools();
     assert!(!rows.is_empty());
@@ -333,7 +333,9 @@ fn restored_rows_add_facts_only_when_the_call_carries_the_operand() {
 /// kept member is read.
 #[test]
 fn a_copilot_request_with_a_replaced_argument_has_no_argument_text_visibility() {
-    use super::{MatchState, MatcherSpec, NonEvaluationReason, SelectorId, SelectorPresence};
+    use super::super::{
+        MatchState, MatcherSpec, NonEvaluationReason, SelectorId, SelectorPresence,
+    };
     let items = json!([{"type":"function_call","name":"bash","call_id":"call-0",
         "arguments":json!({"command":COMMAND,"description":"x".repeat(4_097)}).to_string(),
         "status":"completed"}]);
@@ -360,7 +362,7 @@ fn a_copilot_request_with_a_replaced_argument_has_no_argument_text_visibility() 
         panic!("one request")
     };
     let resolve = |name| {
-        super::SelectorRegistry::new()
+        super::super::SelectorRegistry::new()
             .resolve(SelectorId::parse(name).unwrap(), request)
             .unwrap()
     };

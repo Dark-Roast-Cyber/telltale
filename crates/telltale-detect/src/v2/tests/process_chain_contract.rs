@@ -4,7 +4,7 @@ use telltale_rules::process_chain::load_default_process_chain_rules;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
-use super::{
+use super::super::{
     event3::{Event3CompatibilityContext, project_event3},
     session::{CanonicalSourceInput, evaluate_source},
 };

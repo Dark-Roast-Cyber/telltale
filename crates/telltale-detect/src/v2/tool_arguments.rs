@@ -567,3 +567,6 @@ fn string(value: &JsonValue) -> Option<&str> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;
