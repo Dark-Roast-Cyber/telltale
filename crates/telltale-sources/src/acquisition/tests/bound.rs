@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use serde_json::{Value, json};
 use telltale_schema::observation::{
     BoundDimension, BoundedTarget, CanonicalFieldCategory, JsonValue, ObservationBody,

@@ -183,12 +183,12 @@ fn project_opencode_native(
     parts: &[(&str, &str, i64, serde_json::Value)],
 ) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
     let (directory, source) = opencode_fixture(messages, parts);
-    let native = super::opencode::native::extract_sqlite_native_source(
+    let native = super::super::opencode::native::extract_sqlite_native_source(
         &source,
-        super::opencode::native::OpenCodeSqliteReadOptions::default(),
+        super::super::opencode::native::OpenCodeSqliteReadOptions::default(),
     )
     .expect("OpenCode native vector");
-    let result = super::opencode::canonical::project_opencode_native_records(
+    let result = super::super::opencode::canonical::project_opencode_native_records(
         &native.records,
         &ObservedAt::new(OBSERVED_AT).expect("observed time"),
     )

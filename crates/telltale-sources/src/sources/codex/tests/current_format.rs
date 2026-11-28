@@ -876,7 +876,7 @@ fn inter_agent_response_items_stay_unit_quarantined_not_legacy_events() {
                 );
                 assert_eq!(counts.contributions, Default::default());
                 assert!(!private(&batch));
-                let native = super::native::extract_codex_native_records(source).unwrap();
+                let native = super::super::native::extract_codex_native_records(source).unwrap();
                 assert!(native[2].blocks.is_none() && native[2].message_content.is_none());
                 assert!(native[2].contribution_strings.is_empty());
             }

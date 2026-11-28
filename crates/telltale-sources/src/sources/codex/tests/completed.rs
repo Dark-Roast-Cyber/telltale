@@ -838,7 +838,7 @@ fn completed_native_identity_is_owner_turn_item_scoped_not_file_position() {
                 acquire(source, &[other]).unwrap().observations[0].observation_id()
             );
         }
-        let native = super::native::extract_codex_native_records(source).unwrap();
+        let native = super::super::native::extract_codex_native_records(source).unwrap();
         assert_eq!(native[0].completed.as_ref().unwrap().turn_id, "other-turn");
         let mut stray = first.clone();
         stray["session_meta"] = json!({"id":"poison"});
@@ -1415,7 +1415,7 @@ fn completed_self_contained_ordinals_preserve_accounting_coordinates_and_legacy(
             .collect::<Vec<_>>()
             .join("\n \t\n");
         std::fs::write(&source.path, format!("\n\n{contents}\n \n")).unwrap();
-        let native = super::native::extract_codex_native_records(source).unwrap();
+        let native = super::super::native::extract_codex_native_records(source).unwrap();
         assert_eq!(
             native.iter().map(|r| r.source_sequence).collect::<Vec<_>>(),
             vec![0, 1, 2, 3, 4, 5]
@@ -1586,7 +1586,7 @@ fn completed_world_state_is_opaque_auxiliary_with_truthful_ordinals() {
                     batch.observations[0].observation_id(),
                     replay.observations[0].observation_id()
                 );
-                let records = super::native::extract_codex_native_records(source).unwrap();
+                let records = super::super::native::extract_codex_native_records(source).unwrap();
                 let world = &records[1];
                 assert!(world.auxiliary);
                 assert!(!world.session_metadata);

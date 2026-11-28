@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::source::Source;
 use tempfile::tempdir;
