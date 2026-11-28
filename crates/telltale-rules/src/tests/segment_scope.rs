@@ -1,8 +1,8 @@
 //! Tests pinning the scope modifiers (`|segment`, `|exclusion_segment`,
 //! `|recorded_exclusion`): loading, matching, budget, spans and fingerprints.
 
-use super::test_rules::uuid;
-use super::{
+use super::super::test_rules::uuid;
+use super::super::{
     MatchScope, SEGMENT_SCOPE_TARGETS, load_rule_set_from_documents,
     provenance::rule_v1_fingerprint,
 };
@@ -59,7 +59,7 @@ fn error(document: &str) -> String {
         .to_string()
 }
 
-fn content(document: &str) -> super::RuleV1ContentMatcher {
+fn content(document: &str) -> super::super::RuleV1ContentMatcher {
     load_rule_set_from_documents(&[document], None)
         .expect("rules")
         .compatibility_export()
@@ -123,8 +123,8 @@ fn a_field_and_a_segment_matcher_with_the_same_pattern_both_stay_identified() {
         [MatchScope::Field, MatchScope::Segment]
     );
     assert_ne!(
-        super::provenance::rule_v1_rule_fingerprint(&field),
-        super::provenance::rule_v1_rule_fingerprint(&both)
+        super::super::provenance::rule_v1_rule_fingerprint(&field),
+        super::super::provenance::rule_v1_rule_fingerprint(&both)
     );
 }
 
@@ -137,7 +137,7 @@ fn invalid_scopes_fail_at_load_with_a_clear_error() {
         prose.contains("tool.result") && prose.contains("segment"),
         "{prose}"
     );
-    for (field, target) in super::rule_v2::FIELD_TARGETS {
+    for (field, target) in super::super::rule_v2::FIELD_TARGETS {
         let rule = command_rule("      scope: segment\n", "x", "y")
             .replace("tool.command|", &format!("{field}|"))
             .replace("category: tool_activity", "category: agent_activity");
@@ -155,7 +155,7 @@ fn invalid_scopes_fail_at_load_with_a_clear_error() {
     }
     // The scope modifiers name exactly the non-default scopes.
     assert_eq!(MatchScope::default(), MatchScope::Field);
-    for (value, scope) in super::rule_v2::SCOPE_MODIFIERS.iter().zip([
+    for (value, scope) in super::super::rule_v2::SCOPE_MODIFIERS.iter().zip([
         MatchScope::Segment,
         MatchScope::ExclusionSegment,
         MatchScope::RecordedExclusion,
@@ -400,7 +400,7 @@ fn json_spelling_blanks_each_range_in_every_literal_that_decodes_to_the_text() {
 
 #[test]
 fn exclusion_segment_charges_each_scan_before_it_runs() {
-    let visits = |matcher: &super::RuleV1ContentMatcher, name: &str, value: &str| {
+    let visits = |matcher: &super::super::RuleV1ContentMatcher, name: &str, value: &str| {
         let mut visits = Vec::new();
         matcher
             .try_matching_fields(&[(name, value)], &mut |bytes| {
@@ -506,7 +506,7 @@ fn documented_segment_scope_example_behaves_as_described() {
 /// is placed where its bytes sit in the recorded text.
 #[test]
 fn recorded_exclusion_judges_a_reading_by_the_recorded_text() {
-    use super::QuoteReading;
+    use super::super::QuoteReading;
     let rules = load_rule_set_from_documents(
         &[&command_rule(
             "      scope: recorded_exclusion\n",
@@ -521,7 +521,7 @@ fn recorded_exclusion_judges_a_reading_by_the_recorded_text() {
         .expect("matcher");
     assert!(matcher.reads_quote_free_text());
     let find = |raw: &str| {
-        let (text, origin) = super::unquoted_with_origin(raw);
+        let (text, origin) = super::super::unquoted_with_origin(raw);
         let readings = [QuoteReading {
             raw,
             text: &text,
