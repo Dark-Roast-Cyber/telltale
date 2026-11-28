@@ -644,3 +644,6 @@ pub fn order_canonical_session_observations<T: std::borrow::Borrow<CanonicalObse
         )
     });
 }
+
+#[cfg(test)]
+mod tests;

@@ -1813,36 +1813,6 @@ fn command_runtime(
     matches!(command, Command::Scan(_) | Command::Watch(_)).then(observe)
 }
 
-#[cfg(test)]
-mod runtime_dispatch_tests {
-    use super::*;
-
-    #[test]
-    fn runtime_observation_is_lazy_and_only_for_scan_or_watch() {
-        for (arguments, expected) in [
-            (vec!["telltale", "discover", "--licenses"], false),
-            (vec!["telltale", "discover", "--root", "synthetic"], false),
-            (vec!["telltale", "rules", "list"], false),
-            (vec!["telltale", "config", "show"], false),
-            (vec!["telltale", "status"], false),
-            (vec!["telltale", "export"], false),
-            (vec!["telltale", "scan", "--once"], true),
-            (vec!["telltale", "watch"], true),
-        ] {
-            let args = Args::try_parse_from(arguments).unwrap();
-            let calls = std::cell::Cell::new(0_usize);
-            let runtime = command_runtime(&args.command, || {
-                calls.set(calls.get() + 1);
-                RuntimeSnapshot {
-                    value: serde_json::Value::Null,
-                }
-            });
-            assert_eq!(runtime.is_some(), expected);
-            assert_eq!(calls.get(), usize::from(expected));
-        }
-    }
-}
-
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Diagnostics measure startup from here.
     let command_started = std::time::Instant::now();
@@ -2243,39 +2213,4 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    use super::observe_executable;
-
-    #[test]
-    fn executable_observation_streams_a_sha256_digest() {
-        let observation = observe_executable(Ok(std::path::PathBuf::from("/tmp/telltale")), |_| {
-            Ok(Box::new(Cursor::new(b"telltale-test".to_vec())))
-        });
-
-        assert_eq!(observation.status, "complete");
-        assert_eq!(observation.path_hash.as_deref().unwrap().len(), 64);
-        assert_eq!(
-            observation.sha256.as_deref(),
-            Some("95b5d3baf14cb332b2b1c62ca30438787685666fd1be1817bd469a845f4425c7")
-        );
-    }
-
-    #[test]
-    fn executable_observation_degrades_without_error_text() {
-        let unavailable = observe_executable(
-            Err(std::io::Error::other("private failure detail")),
-            |_| unreachable!(),
-        );
-        assert_eq!(unavailable.status, "current_exe_unavailable");
-        assert_eq!(unavailable.path_hash, None);
-        assert_eq!(unavailable.sha256, None);
-
-        let unreadable = observe_executable(Ok(std::path::PathBuf::from("/tmp/telltale")), |_| {
-            Err(std::io::Error::other("private failure detail"))
-        });
-        assert_eq!(unreadable.status, "executable_read_failed");
-        assert_eq!(unreadable.sha256, None);
-    }
-}
+mod tests;

@@ -23,4 +23,4 @@ pub(crate) mod qwen;
 pub mod registry;
 
 #[cfg(test)]
-mod canonical_conformance;
+mod tests;

@@ -1725,5 +1725,4 @@ fn emit_body(
 }
 
 #[cfg(test)]
-#[path = "local_event_feed_tests.rs"]
 mod tests;

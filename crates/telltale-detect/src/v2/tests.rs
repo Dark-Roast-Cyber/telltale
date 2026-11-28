@@ -2979,3 +2979,24 @@ fn replace_metadata(
     }
     builder.build().expect("replacement observation")
 }
+
+#[cfg(test)]
+mod chain_link;
+
+#[cfg(test)]
+mod cloud_credential;
+
+#[cfg(test)]
+mod declared_operation;
+
+#[cfg(test)]
+mod declared_role;
+
+#[cfg(test)]
+mod process_chain_contract;
+
+#[cfg(test)]
+mod shell_reading;
+
+#[cfg(all(test, feature = "source-io"))]
+mod source_declaration;

@@ -138,6 +138,9 @@ within that module's directory.
 Tests of a crate's public contract belong in that crate's top-level `tests/` directory.
 An inline `mod tests { ... }` may remain only when its body is at most 40 lines.
 
+`tests/test_layout.rs` checks these rules. A known exception is listed with its
+reason in `tests/test_layout_exceptions.txt`; that list may only shrink.
+
 ### Debugging test failures
 
 Start with the focused failing test, logs and backtrace using the normal profile.

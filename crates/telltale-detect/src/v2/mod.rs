@@ -8,8 +8,7 @@
 pub mod actions;
 #[cfg(feature = "source-io")]
 pub mod activity;
-#[cfg(all(test, feature = "source-io"))]
-mod activity_tests;
+
 mod classification;
 pub use actions::{
     ActionContextEntry, ActionContextKind, ActionContribution, ActionCoordinate, ActionEvidence,
@@ -19,16 +18,10 @@ pub use actions::{
 };
 #[cfg(test)]
 mod action_tests;
-#[cfg(test)]
-mod chain_link_tests;
-#[cfg(test)]
-mod cloud_credential_tests;
-#[cfg(test)]
-mod declared_operation_tests;
+
 #[cfg(test)]
 pub(crate) mod declared_role_selector_tests;
-#[cfg(test)]
-mod declared_role_tests;
+
 pub(crate) mod destinations;
 #[cfg(test)]
 mod download_link_tests;
@@ -36,26 +29,21 @@ pub mod event3;
 mod http;
 mod matcher;
 mod modifier_link;
-#[cfg(test)]
-mod modifier_link_tests;
+
 mod observation_match;
 pub mod policy_accounting;
 pub(crate) mod process_chain;
-#[cfg(test)]
-mod process_chain_contract_tests;
+
 pub(crate) mod rule_v1;
 mod selector;
 pub mod session;
-#[cfg(test)]
-mod shell_reading_tests;
+
 mod shell_text;
-#[cfg(all(test, feature = "source-io"))]
-mod source_declaration_tests;
+
 mod tool_arguments;
 #[cfg(test)]
 mod tool_kind_tests;
-#[cfg(test)]
-mod tool_reading_tests;
+
 mod types;
 #[cfg(test)]
 mod written_path_tests;
@@ -154,7 +142,5 @@ pub(crate) fn bundled_plan() -> &'static RuleV1CompatibilityPlan {
     &PLAN
 }
 
-#[cfg(test)]
-mod session_tests;
 #[cfg(test)]
 mod tests;

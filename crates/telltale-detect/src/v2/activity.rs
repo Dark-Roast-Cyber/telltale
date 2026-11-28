@@ -226,3 +226,6 @@ fn activity_from_counts(
     input.risk_contributions = risk_contributions;
     activity_event(input)
 }
+
+#[cfg(all(test, feature = "source-io"))]
+mod tests;

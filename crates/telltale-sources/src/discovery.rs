@@ -12,7 +12,6 @@ use telltale_schema::{clients::ClientId, source::Source};
 pub use shared::{BoundedDiscoveryError, DiscoveryError};
 
 #[cfg(test)]
-#[path = "discovery_contract_tests.rs"]
 mod tests;
 
 pub fn discover_sources(root: &Path) -> Result<Vec<Source>, DiscoveryError> {

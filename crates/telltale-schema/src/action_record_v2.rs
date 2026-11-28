@@ -263,5 +263,4 @@ fn check_schema(value: &Value) -> Result<(), ActionRecordError> {
 }
 
 #[cfg(test)]
-#[path = "action_record_v2_tests.rs"]
 mod tests;
