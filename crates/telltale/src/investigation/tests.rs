@@ -1,4 +1,4 @@
-use super::investigation::*;
+use super::super::investigation::*;
 use std::fs;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::event::{ActivityEventInput, Event3Record, activity_event, path_hash};
@@ -66,7 +66,7 @@ fn investigation_context_scan_order_matches_occurrence_and_emitted_index() {
         format!("{row}\n")
     }).collect::<String>();
     let source = claude(dir.path(), &payload);
-    let pipeline = super::Pipeline::builder().without_bundled_defaults().rules_document(
+    let pipeline = super::super::Pipeline::builder().without_bundled_defaults().rules_document(
         "title: synthetic\nid: cc602218-b8b2-46e8-8dda-440c104a500a\nname: synthetic.order\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n"
     ).build().unwrap();
     let scans = pipeline.scan_sources_with_occurrences(&[source]).unwrap();
@@ -437,7 +437,7 @@ fn investigation_context_occurrences_are_exact_source_facts() {
     )
     .unwrap();
     let rule = "title: synthetic\nid: 1523429f-99fb-4ca1-85ff-dfa1ea08477d\nname: synthetic.target\ntaxonomy: telltale\nlogsource:\n    product: ai_agent\n    category: message\ndetection:\n    selection:\n        - message.user_text|re: 'needle'\n    condition: selection\nlevel: low\ntelltale:\n    category: synthetic\n    score: 1\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n";
-    let pipeline = super::Pipeline::builder()
+    let pipeline = super::super::Pipeline::builder()
         .without_bundled_defaults()
         .rules_document(rule)
         .build()
@@ -522,7 +522,7 @@ fn investigation_context_duplicate_native_coordinates_are_ambiguous() {
     let backend = SessionInvestigator::new(config);
     let request = ContextInvestigationRequest {
         event: &input,
-        anchor: ContextAnchor::Occurrence(super::OccurrenceId(id.to_owned())),
+        anchor: ContextAnchor::Occurrence(super::super::OccurrenceId(id.to_owned())),
         before: 32,
         after: 32,
         content: ContextContent {
@@ -1076,7 +1076,7 @@ fn investigation_opencode_is_deferred_without_launch_or_artifact_changes() {
             ])
             .arg(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("src/investigation_tests/helper.rs")
+                    .join("src/investigation/tests/helper.rs")
             )
             .arg("-o")
             .arg(&executable)
@@ -1111,7 +1111,7 @@ fn investigation_opencode_is_deferred_without_launch_or_artifact_changes() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "investigation_tests::investigation_opencode_deferred_probe",
+            "investigation::tests::investigation_opencode_deferred_probe",
             "--ignored",
         ])
         .env("PATH", &bin)

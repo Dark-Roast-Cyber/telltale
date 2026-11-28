@@ -1343,17 +1343,7 @@ impl Pipeline {
 }
 
 #[cfg(test)]
-mod canonical_embedding_tests;
-#[cfg(test)]
-mod detailed_scan_tests;
-#[cfg(test)]
-mod rule_content_tests;
-
-#[cfg(test)]
 mod test_support;
-
-#[cfg(test)]
-mod investigation_tests;
 
 #[cfg(test)]
 mod tests;

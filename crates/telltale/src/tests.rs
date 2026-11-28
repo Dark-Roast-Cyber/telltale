@@ -317,3 +317,12 @@ fn rule_catalog_attributes_community_entries_to_their_package() {
             .any(|entry| entry.id() == "secret.env.read" && entry.package_id().is_none())
     );
 }
+
+#[cfg(test)]
+mod canonical_embedding;
+
+#[cfg(test)]
+mod detailed_scan;
+
+#[cfg(test)]
+mod rule_content;
