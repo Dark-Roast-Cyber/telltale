@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use crate::test_support::tree_snapshot;
 
 #[test]

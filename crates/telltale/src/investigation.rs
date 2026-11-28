@@ -579,3 +579,6 @@ fn source_hash(event: &Event3Record) -> Option<&str> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;

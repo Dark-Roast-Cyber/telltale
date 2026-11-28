@@ -140,5 +140,4 @@ impl SourceScan {
 }
 
 #[cfg(test)]
-#[path = "action_record_tests.rs"]
 mod tests;

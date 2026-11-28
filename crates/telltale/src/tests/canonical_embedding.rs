@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use crate::test_support::tree_snapshot;
 use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::observation::ObservedAt;
