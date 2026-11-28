@@ -8,7 +8,7 @@
 //! `TELLTALE_TOOL_READING_REPORT=<path> cargo test -p telltale-detect --lib
 //! tool_reading`. The new reading must keep every fact the old one has.
 
-use super::written_path_tests::file_tool;
+use super::super::super::written_path_tests::file_tool;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use telltale_schema::observation::ObservationBody;
@@ -135,11 +135,11 @@ fn line(name: &str, arguments: Value) -> String {
     let ObservationBody::Tool(tool) = observation.body() else {
         unreachable!("a tool observation");
     };
-    let urls = super::tool_arguments::tool_argument_urls(tool, true);
-    let written = super::tool_arguments::tool_written_paths(tool, true);
+    let urls = super::super::super::tool_arguments::tool_argument_urls(tool, true);
+    let written = super::super::super::tool_arguments::tool_written_paths(tool, true);
     format!(
         "{name} {arguments} => {} | urls={urls:?} written={written:?}\n",
-        super::actions::view_facts(&observation)
+        super::super::super::actions::view_facts(&observation)
     )
 }
 

@@ -3,13 +3,13 @@
 //! the text already read keeps its bytes, and the replay identity is the one
 //! the call has without the declaration.
 
-use super::actions::{
+use super::super::actions::{
     assert_one_reading_matches_two, replay_identity, view_reading, view_readings, view_work,
 };
-use super::selector::{SelectorId, SelectorRegistry};
-use super::session::RetentionBudget;
-use super::tool_arguments::{is_file_read_tool, is_file_write_tool};
-use super::written_path_tests::{declared_tool, file_tool};
+use super::super::selector::{SelectorId, SelectorRegistry};
+use super::super::session::RetentionBudget;
+use super::super::tool_arguments::{is_file_read_tool, is_file_write_tool};
+use super::super::written_path_tests::{declared_tool, file_tool};
 use serde_json::{Value, json};
 use telltale_schema::observation::{CanonicalObservationV2, JsonValue, ToolKind, ToolOperation};
 

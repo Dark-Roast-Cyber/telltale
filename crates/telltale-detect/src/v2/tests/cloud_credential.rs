@@ -1,4 +1,4 @@
-use super::written_path_tests::{action_rule_ids, file_tool, session_rule_ids, shell};
+use super::super::written_path_tests::{action_rule_ids, file_tool, session_rule_ids, shell};
 
 const HARVEST: &str = "credential.cloud_harvest";
 
@@ -172,7 +172,7 @@ fn every_cloud_credential_path_list_names_the_same_files() {
     let rules = telltale_rules::load_default_rule_set()
         .unwrap()
         .compatibility_export();
-    let native = super::actions::CLOUD_CREDENTIAL_PATH.trim_start_matches("(?i)");
+    let native = super::super::actions::CLOUD_CREDENTIAL_PATH.trim_start_matches("(?i)");
     let mut lists = vec![("native", native.to_owned())];
     for rule in rules.rules() {
         if rule.id == UPLOAD || rule.id == HARVEST {

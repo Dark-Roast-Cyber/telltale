@@ -1,7 +1,7 @@
 //! Which command text action rules read, decided by shell grammar. These strings
 //! are data for the evaluator: no test here hands one to a shell. `K` in a form
 //! stands for a family's command.
-use super::*;
+use super::super::*;
 use std::collections::BTreeSet;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
@@ -682,7 +682,7 @@ fn reader_holds_its_offsets_on_any_text() {
         "(", ";",
     ];
     fn check(text: &str) {
-        let shell = super::shell_text::read(text);
+        let shell = super::super::shell_text::read(text);
         assert_eq!(shell.command.len(), shell.code.len(), "{text:?}");
         for (command, code) in shell.command.bytes().zip(shell.code.bytes()) {
             assert!(command == code || code == b' ', "{text:?}");
@@ -760,7 +760,7 @@ fn reader_work_stays_linear_on_adversarial_text() {
     check(&layered);
     fn check(text: &str) {
         let started = std::time::Instant::now();
-        let shell = super::shell_text::read(text);
+        let shell = super::super::shell_text::read(text);
         let shape = &text[..text.len().min(24)];
         assert!(shell.work <= 80 * text.len(), "{shape:?}: {}", shell.work);
         assert!(
@@ -776,7 +776,11 @@ fn reader_work_stays_linear_on_adversarial_text() {
 fn an_opener_too_long_to_classify_leaves_later_bodies_in_doubt() {
     let padding = "\\\n".repeat(128);
     let text = format!("{{{padding} true; cat <<'E'\nbody\nE\n}} | sh");
-    assert!(super::shell_text::read(&text).command.contains("body"));
+    assert!(
+        super::super::shell_text::read(&text)
+            .command
+            .contains("body")
+    );
 }
 
 #[test]
@@ -784,7 +788,7 @@ fn redirection_targets_are_found_in_linear_work() {
     for piece in [">", "> ", ">a", ">a "] {
         let text = piece.repeat((1 << 22) / piece.len());
         let started = std::time::Instant::now();
-        let _ = super::actions::without_written(&text);
+        let _ = super::super::actions::without_written(&text);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(20),
             "{piece:?}: {:?}",
@@ -795,44 +799,44 @@ fn redirection_targets_are_found_in_linear_work() {
 
 #[test]
 fn reader_separates_comments_bodies_and_code() {
-    let shell = super::shell_text::read("cat > a <<'EOF' # c\nbody\nEOF\nnext # don't\n");
+    let shell = super::super::shell_text::read("cat > a <<'EOF' # c\nbody\nEOF\nnext # don't\n");
     assert_eq!(shell.command, "cat > a <<'EOF' # c\nnext # don't");
     assert_eq!(shell.code, "cat > a <<'EOF'    \nnext        ");
     assert_eq!(shell.authored, "body\n");
-    let shell = super::shell_text::read("# see <<EOF\nnext");
+    let shell = super::super::shell_text::read("# see <<EOF\nnext");
     assert_eq!(shell.command, "# see <<EOF\nnext");
     assert_eq!(shell.code, "           \nnext");
-    let shell = super::shell_text::read("cat <<NOPE\nnext\ncat <<A\nb\nA");
+    let shell = super::super::shell_text::read("cat <<NOPE\nnext\ncat <<A\nb\nA");
     assert_eq!(shell.command, "cat <<NOPE\nnext\ncat <<A\nb\nA");
     // Array-form commands are joined with a trailing space.
-    let shell = super::shell_text::read("cat <<EOF\nbody\nEOF ");
+    let shell = super::super::shell_text::read("cat <<EOF\nbody\nEOF ");
     assert_eq!(shell.command, "cat <<EOF");
-    let shell = super::shell_text::read("cat <<EOF\r\nbody\r\nEOF\r\nnext\r\n");
+    let shell = super::super::shell_text::read("cat <<EOF\r\nbody\r\nEOF\r\nnext\r\n");
     assert_eq!(shell.command, "cat <<EOF\nnext");
     // A command before the one holding the body never sees it.
-    let shell = super::shell_text::read("bash -s | cat <<'EOF'\nbody\nEOF");
+    let shell = super::super::shell_text::read("bash -s | cat <<'EOF'\nbody\nEOF");
     assert_eq!(shell.command, "bash -s | cat <<'EOF'");
     // The word after `>|` is a file.
-    let shell = super::shell_text::read("cat <<'EOF' >| bash\nbody\nEOF");
+    let shell = super::super::shell_text::read("cat <<'EOF' >| bash\nbody\nEOF");
     assert_eq!(shell.command, "cat <<'EOF' >| bash");
     // A body holding a `case` is kept whole, because its patterns could close a
     // substitution early to this reader. Its substitution is also lifted.
-    let shell = super::shell_text::read("cat <<EOF\n$(case x in x) true;; esac)\nbody\nEOF");
+    let shell = super::super::shell_text::read("cat <<EOF\n$(case x in x) true;; esac)\nbody\nEOF");
     assert_eq!(
         shell.command,
         "cat <<EOF\n$(case x in x) true;; esac)\nbody\ncase x in x) true;; esac"
     );
     // A group makes every later body in the text doubtful, even a closed group,
     // because no closer of one can be told from a word.
-    let shell = super::shell_text::read("{ a; }\ncat <<'EOF'\nbody\nEOF");
+    let shell = super::super::shell_text::read("{ a; }\ncat <<'EOF'\nbody\nEOF");
     assert_eq!(shell.command, "{ a; }\ncat <<'EOF'\nbody");
     // An `if` or a loop closed before the body has no hold on it.
-    let shell = super::shell_text::read("if a; then b; fi\ncat <<'EOF'\nbody\nEOF");
+    let shell = super::super::shell_text::read("if a; then b; fi\ncat <<'EOF'\nbody\nEOF");
     assert_eq!(shell.command, "if a; then b; fi\ncat <<'EOF'");
     // A stage that was split inside a substitution ends with the substitution,
     // and each of its commands is a stage too, quoted or not.
     let stages = |text: &str| {
-        let shell = super::shell_text::read(text);
+        let shell = super::super::shell_text::read(text);
         shell
             .stages
             .iter()
@@ -1265,7 +1269,7 @@ fn a_body_inside_a_body_reads_in_step_with_the_text() {
     let text = format!(
         "bash <<A\n$(bash <<B\n$(bash <<C\n$(bash <<D\n$(bash <<F\nrm -rf /\n{words}\nF\n)\nD\n)\nC\n)\nB\n)\nA"
     );
-    let shell = super::shell_text::read(&text);
+    let shell = super::super::shell_text::read(&text);
     assert!(
         shell.code.len() <= 5 * text.len(),
         "{} of {}",
@@ -1281,7 +1285,7 @@ fn a_body_inside_a_body_reads_in_step_with_the_text() {
     );
     // A short one is read both ways at each level.
     let text = "bash <<A\n$(bash <<B\nit's $(rm -rf /) it's\nB\n)\nA";
-    let shell = super::shell_text::read(text);
+    let shell = super::super::shell_text::read(text);
     assert!(
         shell
             .stages
@@ -1361,7 +1365,7 @@ fn a_command_is_a_stage_at_any_depth() {
 fn nested_commands_are_read_on_their_own_only_so_far() {
     let pad = "a ".repeat(32 * 1024);
     let text = format!("x=$(cat .env $(true $({pad})))");
-    let shell = super::shell_text::read(&text);
+    let shell = super::super::shell_text::read(&text);
     let inner: Vec<&str> = shell
         .inner_commands
         .iter()
@@ -1372,7 +1376,7 @@ fn nested_commands_are_read_on_their_own_only_so_far() {
     for depth in [1, 3, 8, 64, 4096] {
         for pad in ["", pad.as_str()] {
             let text = format!("{}a {pad}{}", "$(a ".repeat(depth), ")".repeat(depth));
-            let shell = super::shell_text::read(&text);
+            let shell = super::super::shell_text::read(&text);
             let total: usize = shell.inner_commands.iter().map(|span| span.len()).sum();
             assert!(
                 total <= 3 * text.len(),
@@ -1387,13 +1391,13 @@ fn nested_commands_are_read_on_their_own_only_so_far() {
         format!("$(a {}", "${".repeat(65)).repeat(320),
         format!("{})", "}".repeat(65)).repeat(320)
     );
-    let shell = super::shell_text::read(&text);
+    let shell = super::super::shell_text::read(&text);
     let total: usize = shell.inner_commands.iter().map(|span| span.len()).sum();
     assert!(total <= 3 * text.len(), "{total} of {}", text.len());
     // Past the bound a command keeps its own words, up to what it holds.
     let open = "$(cat .env ".repeat(4096);
     let text = format!("{open}a{}", ")".repeat(4096));
-    let shell = super::shell_text::read(&text);
+    let shell = super::super::shell_text::read(&text);
     assert!(
         shell
             .inner_commands

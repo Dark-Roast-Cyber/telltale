@@ -141,3 +141,6 @@ fn mcp_inventory_summary_hashes_the_established_safe_command_value() {
     assert!(summary.redacted_value.contains("[redacted-command]"));
     assert_eq!(summary.hash.as_deref(), Some(expected_hash.as_str()));
 }
+
+#[cfg(test)]
+mod canonical;

@@ -1,6 +1,6 @@
-use super::rule_v1::evaluate_rule_v1_session_with_budget;
-use super::session::RetentionBudget;
-use super::*;
+use super::super::rule_v1::evaluate_rule_v1_session_with_budget;
+use super::super::session::RetentionBudget;
+use super::super::*;
 use std::collections::BTreeSet;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
@@ -349,7 +349,7 @@ fn results_and_messages_add_no_distance() {
     ];
     let refs = observations.iter().collect::<Vec<_>>();
     assert_eq!(
-        super::modifier_link::call_positions(&refs, &mut RetentionBudget::new()).unwrap(),
+        super::super::modifier_link::call_positions(&refs, &mut RetentionBudget::new()).unwrap(),
         [0, 1, 0, 1, 1]
     );
     assert!(session_chains(&observations).contains("chain.unordered"));
@@ -361,7 +361,7 @@ fn results_and_messages_add_no_distance() {
     ];
     let refs = observations.iter().collect::<Vec<_>>();
     assert_eq!(
-        super::modifier_link::call_positions(&refs, &mut RetentionBudget::new()).unwrap(),
+        super::super::modifier_link::call_positions(&refs, &mut RetentionBudget::new()).unwrap(),
         [0, 0, 1]
     );
 }
