@@ -11,12 +11,7 @@ inline-over-40	crates/telltale-sources/src/source_read.rs	Its `bounded_tests` mo
 inline-over-40	src/settings.rs	Several test modules in one file; they become tests.rs and topic files.
 inline-over-40	src/sink/mod.rs	Two test modules under different platform gates; they become one topic file each under a plain router.
 inline-over-40	src/state.rs	Its tests include fixture data by file-relative path; the paths change with the move.
-oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/process_chain/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/session/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-detect/src/v2/tests/shell_reading.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-discover/src/discovery/tests.rs	Over 800 lines; to be split by topic.
+oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	One case table shared by four tests makes up the file; splitting by topic would not shorten it.
 oversize-test-file	crates/telltale-rules/src/rule_v2/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-rules/src/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/consumer/tests.rs	Over 800 lines; to be split by topic.
