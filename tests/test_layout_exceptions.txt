@@ -23,16 +23,6 @@ oversize-test-file	crates/telltale/src/investigation/tests.rs	Over 800 lines; to
 oversize-test-file	crates/telltale/src/local_event_feed/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale/src/tests/detailed_scan.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale/src/tests/rule_content.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/cli/scan/canonical/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/cli/scan/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/cli/scan/tests/activation.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/cli/scan/watch/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/rules/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/sink/config/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/sink/jsonl/tests/privacy.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/sink/outbox/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/sink/tests/delivery.rs	Over 800 lines; to be split by topic.
-oversize-test-file	src/state/tests.rs	Over 800 lines; to be split by topic.
 path-wired-test-module	crates/telltale-sources/src/source_read.rs	production_jsonl_tests.rs holds a nested test module; it moves together with `bounded_tests`.
 sibling-test-file	crates/telltale-sources/src/production_jsonl_tests.rs	Loaded through #[path] from source_read.rs and holds a nested test module; moves with `bounded_tests`.
 sibling-test-file	crates/telltale-sources/src/sources/opencode/v2_tests.rs	Its pub(super) helpers would change visibility one level deeper.
