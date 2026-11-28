@@ -325,8 +325,8 @@ fixture through the detailed facade and pins its exact action findings.
 | BC-PREC-WRITTEN-TEST-KEY-001 | A requested test-fixture private key written by a Claude `Write` call | Private key 55; TN | None |
 | BC-PREC-CODEX-IMPORT-001 | Another agent's transcript inside a Codex external-import turn, then `cargo test` | Key read 55 + upload 60 + shell 15 + `chain.secret_then_network` 35, score 165; FP | None |
 
-The unit-level classes behind these cases are in
-`crates/telltale-detect/src/v2/tests/action.rs`
+The unit-level classes behind these cases are in topic files under
+`crates/telltale-detect/src/v2/tests/action/`
 (`native_precision_positive_and_negative_classes`,
 `results_prose_and_authored_content_are_not_commands`,
 `interpreter_code_and_file_heredocs_do_not_supply_shell_actions`,
