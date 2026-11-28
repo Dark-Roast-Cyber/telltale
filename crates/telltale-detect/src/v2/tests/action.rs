@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
@@ -9,18 +9,18 @@ fn sanitizer_budget_rules() -> telltale_rules::RuleV1CompatibilityExport {
 #[test]
 fn action_evidence_sanitizer_reservation_uses_shared_budget() {
     let export = sanitizer_budget_rules();
-    let compiled = super::actions::compile(&export).unwrap();
+    let compiled = super::super::actions::compile(&export).unwrap();
     let observation = tool(
         "encoded-evidence",
         &format!("echo MATCH {}", "%25".repeat(1333)),
         None,
     );
-    let mut budget = super::session::RetentionBudget::new();
+    let mut budget = super::super::session::RetentionBudget::new();
     budget
-        .charge(super::session::MAX_EVALUATION_BYTE_VISITS - 1024 * 1024)
+        .charge(super::super::session::MAX_EVALUATION_BYTE_VISITS - 1024 * 1024)
         .unwrap();
     assert!(matches!(
-        super::actions::evaluate(
+        super::super::actions::evaluate(
             &export,
             &compiled,
             &[&observation],
@@ -49,13 +49,14 @@ fn action_context_sanitizer_reservation_fails_source_atomically() {
         source_instance: Some(&instance),
         observations: &observations,
     };
-    let used = super::session::MAX_EVALUATION_BYTE_VISITS - 1024 * 1024;
+    let used = super::super::session::MAX_EVALUATION_BYTE_VISITS - 1024 * 1024;
     let ordinary = EvaluationWorkBudget::with_used_bytes(used);
-    super::session::evaluate_source_with_work_budget(input(), &plan, None, &ordinary).unwrap();
+    super::super::session::evaluate_source_with_work_budget(input(), &plan, None, &ordinary)
+        .unwrap();
     assert!(!ordinary.is_exhausted());
     let work = EvaluationWorkBudget::with_used_bytes(used);
     assert!(matches!(
-        super::session::evaluate_source_with_options_and_work_budget(
+        super::super::session::evaluate_source_with_options_and_work_budget(
             input(),
             &plan,
             None,
@@ -72,14 +73,14 @@ fn action_nonmatches_exhaust_the_shared_work_budget() {
     let export = telltale_rules::load_default_rule_set()
         .unwrap()
         .compatibility_export();
-    let compiled = super::actions::compile(&export).unwrap();
+    let compiled = super::super::actions::compile(&export).unwrap();
     let observation = tool("nonmatch", &"x".repeat(4096), None);
-    let mut budget = super::session::RetentionBudget::new();
+    let mut budget = super::super::session::RetentionBudget::new();
     budget
-        .charge(super::session::MAX_EVALUATION_BYTE_VISITS - 1024)
+        .charge(super::super::session::MAX_EVALUATION_BYTE_VISITS - 1024)
         .unwrap();
     assert!(matches!(
-        super::actions::evaluate(
+        super::super::actions::evaluate(
             &export,
             &compiled,
             &[&observation],
@@ -103,11 +104,11 @@ fn each_reached_nonmatching_action_matcher_charges_work() {
     };
     let observation = tool("nonmatch", &"x".repeat(4096), None);
     let one = document(1);
-    let mut measured = super::session::RetentionBudget::new();
+    let mut measured = super::super::session::RetentionBudget::new();
     assert!(
-        super::actions::evaluate(
+        super::super::actions::evaluate(
             &one,
-            &super::actions::compile(&one).unwrap(),
+            &super::super::actions::compile(&one).unwrap(),
             &[&observation],
             &DetailedEvaluationOptions::default(),
             &mut measured
@@ -120,14 +121,14 @@ fn each_reached_nonmatching_action_matcher_charges_work() {
         .work_bytes
         .load(std::sync::atomic::Ordering::Relaxed);
     let two = document(2);
-    let mut budget = super::session::RetentionBudget::new();
+    let mut budget = super::super::session::RetentionBudget::new();
     budget
-        .charge(super::session::MAX_EVALUATION_BYTE_VISITS - used)
+        .charge(super::super::session::MAX_EVALUATION_BYTE_VISITS - used)
         .unwrap();
     assert!(matches!(
-        super::actions::evaluate(
+        super::super::actions::evaluate(
             &two,
-            &super::actions::compile(&two).unwrap(),
+            &super::super::actions::compile(&two).unwrap(),
             &[&observation],
             &DetailedEvaluationOptions::default(),
             &mut budget
@@ -151,7 +152,7 @@ fn detailed_source_work_failure_returns_no_partial_evaluation() {
         source_instance: Some(&instance),
         observations: &observations,
     };
-    let complete = super::session::evaluate_source_with_options_and_work_budget(
+    let complete = super::super::session::evaluate_source_with_options_and_work_budget(
         input(),
         plan,
         None,
@@ -161,10 +162,10 @@ fn detailed_source_work_failure_returns_no_partial_evaluation() {
     .unwrap();
     assert!(!complete.sessions()[0].action_findings().is_empty());
     let work = EvaluationWorkBudget::with_used_bytes(
-        super::session::MAX_EVALUATION_BYTE_VISITS - measured.used_bytes() + 1,
+        super::super::session::MAX_EVALUATION_BYTE_VISITS - measured.used_bytes() + 1,
     );
     assert!(matches!(
-        super::session::evaluate_source_with_options_and_work_budget(
+        super::super::session::evaluate_source_with_options_and_work_budget(
             input(),
             plan,
             None,
@@ -414,7 +415,7 @@ fn second_review_native_findings_own_identity_classification_and_risk() {
         .iter()
         .find(|r| r.id == "network.download")
         .unwrap();
-    let metadata = super::rule_v1::rule_metadata(rule)
+    let metadata = super::super::rule_v1::rule_metadata(rule)
         .unwrap()
         .with_semantic_identity(
             compile_rule_v1(&export)
@@ -601,7 +602,7 @@ fn chain_in_both_views(observations: &[CanonicalObservationV2], chain: &str) -> 
 }
 
 fn chain_in_both_views_with(
-    plan: &super::RuleV1CompatibilityPlan,
+    plan: &super::super::RuleV1CompatibilityPlan,
     observations: &[CanonicalObservationV2],
     chain: &str,
 ) -> (bool, bool) {
@@ -745,10 +746,10 @@ const REGISTRY_READ: &str = "credential.package_registry_read";
 /// credential read in one call.
 fn registry_read_in_both_views(observation: CanonicalObservationV2) -> (bool, bool) {
     (
-        super::written_path_tests::session_rule_ids(&observation)
+        super::written_path::session_rule_ids(&observation)
             .iter()
             .any(|id| id == REGISTRY_READ),
-        super::written_path_tests::action_rule_ids(observation)
+        super::written_path::action_rule_ids(observation)
             .iter()
             .any(|id| id == REGISTRY_READ),
     )
@@ -832,9 +833,7 @@ fn writing_a_registry_credential_file_is_not_a_read() {
         ),
     ] {
         assert_eq!(
-            registry_read_in_both_views(super::written_path_tests::file_tool(
-                "write", name, arguments
-            )),
+            registry_read_in_both_views(super::written_path::file_tool("write", name, arguments)),
             (false, false),
             "{name}"
         );
@@ -869,7 +868,7 @@ fn reading_or_copying_out_a_registry_credential_file_matches() {
         assert_eq!((command, read), (command, (true, true)));
     }
     assert_eq!(
-        registry_read_in_both_views(super::written_path_tests::file_tool(
+        registry_read_in_both_views(super::written_path::file_tool(
             "read",
             "Read",
             serde_json::json!({"file_path": "/home/synthetic/.npmrc"}),
@@ -881,8 +880,7 @@ fn reading_or_copying_out_a_registry_credential_file_matches() {
 #[test]
 fn a_file_tool_names_a_registry_credential_read_only_when_it_reads_files() {
     let chain = "chain.credential_then_publish";
-    let tool =
-        |name: &str, arguments| super::written_path_tests::file_tool("tool", name, arguments);
+    let tool = |name: &str, arguments| super::written_path::file_tool("tool", name, arguments);
     let publish = || parsed_shell_call("publish", "npm publish");
     let read = || {
         tool(
@@ -1028,7 +1026,7 @@ fn an_mcp_http_call_to_the_controlled_domain_supplies_the_egress_step_of_a_chain
 
 /// An opener rule, two custom exfiltration rules on tool-call fields and a
 /// chain over their categories.
-fn custom_exfiltration_plan() -> super::RuleV1CompatibilityPlan {
+fn custom_exfiltration_plan() -> super::super::RuleV1CompatibilityPlan {
     let telltale = |category: &str, score: u32| {
         format!(
             "telltale:\n    category: {category}\n    score: {score}\n    explanation: 'synthetic'\n    analytic_intent: alert\n    detection_class: security_detection\n    signal_type: atomic\n    tags: [synthetic]\n"
@@ -1324,7 +1322,7 @@ fn actions(observations: &[CanonicalObservationV2]) -> CanonicalSourceEvaluation
 
 fn actions_with(
     observations: &[CanonicalObservationV2],
-    plan: &super::RuleV1CompatibilityPlan,
+    plan: &super::super::RuleV1CompatibilityPlan,
 ) -> CanonicalSourceEvaluation {
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
     evaluate_source_with_options(
@@ -1826,7 +1824,7 @@ fn transfer_commands_keep_their_session_and_action_readings() {
 
 /// A Python one-liner that runs a fetched response is a download linked to
 /// its execution in the action view, as in session events
-/// (`download_link_tests`).
+/// (`download_link`).
 #[test]
 fn a_python_one_liner_that_runs_a_fetched_response_links_in_the_action_view() {
     let output = actions(&[tool(
@@ -1966,9 +1964,9 @@ fn the_typed_reading_of_an_imported_command_finds_only_an_upload() {
             "2026-09-18T00:00:00Z",
             IngestionMode::Import,
         );
-        super::actions::observation_requests_outbound_transfer(
+        super::super::actions::observation_requests_outbound_transfer(
             &observation,
-            &super::session::RetentionBudget::new(),
+            &super::super::session::RetentionBudget::new(),
         )
         .expect("within budget")
     };
@@ -2299,7 +2297,7 @@ fn decode_piped_to_a_shell_keeps_its_review_score_in_both_views() {
     );
 }
 
-pub(super) fn parsed_shell_call(id: &str, command: &str) -> CanonicalObservationV2 {
+pub(in crate::v2) fn parsed_shell_call(id: &str, command: &str) -> CanonicalObservationV2 {
     CanonicalObservationV2::builder(
         ObservationBody::Tool(
             ToolObservation::new()

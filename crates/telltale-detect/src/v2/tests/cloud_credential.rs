@@ -1,4 +1,4 @@
-use super::super::written_path_tests::{action_rule_ids, file_tool, session_rule_ids, shell};
+use super::written_path::{action_rule_ids, file_tool, session_rule_ids, shell};
 
 const HARVEST: &str = "credential.cloud_harvest";
 
