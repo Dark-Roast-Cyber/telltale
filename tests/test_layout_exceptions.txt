@@ -6,9 +6,3 @@
 inline-over-40	crates/telltale-discover/src/anchored/windows.rs	The file is itself loaded through #[path], so a child tests.rs would resolve to its sibling's tests file.
 inline-over-40	crates/telltale-discover/src/inventory.rs	One test module in each of two platform-exclusive inline `backend` modules; both would resolve to the same file.
 oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	One case table shared by four tests makes up the file; splitting by topic would not shorten it.
-oversize-test-file	crates/telltale/src/assignment/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/canonical_runtime/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/investigation/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/local_event_feed/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/tests/detailed_scan.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale/src/tests/rule_content.rs	Over 800 lines; to be split by topic.
