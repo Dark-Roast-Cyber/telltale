@@ -24,13 +24,13 @@ fn no_table_row_on_the_old_shell_name_list_declares_another_kind() {
     }
 }
 
-fn plan() -> super::super::RuleV1CompatibilityPlan {
+fn plan() -> super::super::super::RuleV1CompatibilityPlan {
     let rules = telltale_rules::load_default_rule_set().expect("bundled rules");
     compile_rule_v1(&rules.compatibility_export()).expect("bundled plan")
 }
 
 fn fires(
-    plan: &super::super::RuleV1CompatibilityPlan,
+    plan: &super::super::super::RuleV1CompatibilityPlan,
     rule: &str,
     o: &CanonicalObservationV2,
 ) -> bool {

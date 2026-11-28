@@ -9,7 +9,7 @@ use super::super::actions::{
 use super::super::selector::{SelectorId, SelectorRegistry};
 use super::super::session::RetentionBudget;
 use super::super::tool_arguments::{is_file_read_tool, is_file_write_tool};
-use super::super::written_path_tests::{declared_tool, file_tool};
+use super::written_path::{declared_tool, file_tool};
 use serde_json::{Value, json};
 use telltale_schema::observation::{CanonicalObservationV2, JsonValue, ToolKind, ToolOperation};
 

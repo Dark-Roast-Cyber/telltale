@@ -16,15 +16,7 @@ pub use actions::{
     ContextOptions, DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions,
     NativeProfileNotice, ReplayIdentity, SemanticProvenance, native_profile_notices,
 };
-#[cfg(test)]
-mod action_tests;
-
-#[cfg(test)]
-pub(crate) mod declared_role_selector_tests;
-
 pub(crate) mod destinations;
-#[cfg(test)]
-mod download_link_tests;
 pub mod event3;
 mod http;
 mod matcher;
@@ -41,12 +33,7 @@ pub mod session;
 mod shell_text;
 
 mod tool_arguments;
-#[cfg(test)]
-mod tool_kind_tests;
-
 mod types;
-#[cfg(test)]
-mod written_path_tests;
 
 pub use event3::{
     Event3CompatibilityContext, Event3SessionMetadata, ProjectedSource, project_event3,

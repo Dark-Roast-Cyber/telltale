@@ -1,4 +1,4 @@
-use super::super::download_link_tests::session;
+use super::download_link::session;
 
 fn chains(steps: &[(&str, Option<&str>)]) -> Vec<String> {
     session(steps)

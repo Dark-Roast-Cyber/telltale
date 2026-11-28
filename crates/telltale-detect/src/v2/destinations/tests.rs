@@ -6,7 +6,7 @@ use telltale_schema::observation::CorrelationId;
 
 fn facts(command: &str) -> Option<DestinationFacts> {
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
-    let observations = [crate::v2::action_tests::parsed_shell_call("call", command)];
+    let observations = [crate::v2::tests::action::parsed_shell_call("call", command)];
     let output = crate::v2::evaluate_source_with_options(
         crate::v2::CanonicalSourceInput {
             client: ClientId::Claude,

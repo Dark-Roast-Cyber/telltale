@@ -5,7 +5,7 @@
 //! selectors keep the arguments. A call with no role, or a member no row names,
 //! reads as it always did.
 
-use super::{SelectorId, SelectorRegistry};
+use super::super::{SelectorId, SelectorRegistry};
 use serde_json::{Value, json};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, Fidelity,
@@ -327,7 +327,9 @@ fn a_member_no_declaration_names_reads_as_it_did() {
 /// not-exists condition does not match.
 #[test]
 fn selectors_reading_an_omitted_searchable_text_are_not_evaluated() {
-    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason, SelectorPresence};
+    use super::super::{
+        MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason, SelectorPresence,
+    };
     let observation = |omitted: bool| omitted_text_call(omitted, "kept output");
     let omitted = observation(true);
     let kept = observation(false);
@@ -390,7 +392,7 @@ fn selectors_reading_an_omitted_searchable_text_are_not_evaluated() {
 /// both hold is not evaluated rather than matched.
 #[test]
 fn rule_v1_content_on_an_omitted_searchable_text_is_not_evaluated() {
-    use super::{MatchState, NonEvaluationReason};
+    use super::super::{MatchState, NonEvaluationReason};
     let matcher = telltale_rules::load_default_rule_set()
         .unwrap()
         .compatibility_export()
@@ -403,12 +405,12 @@ fn rule_v1_content_on_an_omitted_searchable_text_is_not_evaluated() {
     let token = "AKIA2E0A8F3B244C9986";
     let targets = ["tool_result".to_owned(), "arguments".to_owned()];
     let evaluate = |omitted| {
-        super::rule_v1::evaluate_content_matcher(
+        super::super::rule_v1::evaluate_content_matcher(
             &matcher,
             &targets,
             Default::default(),
             &omitted_text_call(omitted, token),
-            &mut super::session::RetentionBudget::new(),
+            &mut super::super::session::RetentionBudget::new(),
         )
         .unwrap()
     };
@@ -477,7 +479,7 @@ fn omitted_text_call(omitted: bool, kept: &str) -> CanonicalObservationV2 {
 /// call. A not-exists condition and a positive condition are not evaluated.
 #[test]
 fn selectors_over_values_replaced_whole_are_not_evaluated() {
-    use super::{MatchState, MatcherSpec, NonEvaluationReason, SelectorPresence};
+    use super::super::{MatchState, MatcherSpec, NonEvaluationReason, SelectorPresence};
     let replaced = bounded_call(
         json!({"url": "https://kept.example.invalid/", "command": "echo kept"}),
         json!("kept"),
@@ -522,7 +524,7 @@ fn selectors_over_values_replaced_whole_are_not_evaluated() {
 /// A call that kept its values reads a missing fact as absent, as before.
 #[test]
 fn a_fact_missing_from_a_call_with_kept_values_is_absent() {
-    use super::{MatchState, MatcherSpec};
+    use super::super::{MatchState, MatcherSpec};
     let kept = bounded_call(
         json!({"url": "https://kept.example.invalid/", "command": "echo kept"}),
         json!("kept"),
@@ -540,7 +542,7 @@ fn a_fact_missing_from_a_call_with_kept_values_is_absent() {
 /// all there: a condition on them is decided as for any call.
 #[test]
 fn argument_keys_beside_a_replaced_member_are_exact() {
-    use super::{MatchState, MatcherOperator, MatcherSpec};
+    use super::super::{MatchState, MatcherOperator, MatcherSpec};
     let call = bounded_call(
         json!({"url": "https://kept.example.invalid/", "pad": "x".repeat(4_097)}),
         json!("kept"),
@@ -568,7 +570,7 @@ fn argument_keys_beside_a_replaced_member_are_exact() {
 /// argument keys may miss it: a no-match on them is not evaluated.
 #[test]
 fn argument_keys_missing_a_dropped_key_are_partial() {
-    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
+    use super::super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
     let call = bounded_call(
         json!({"url": "https://kept.example.invalid/", "k".repeat(65): "v"}),
         json!("kept"),
@@ -596,7 +598,7 @@ fn argument_keys_missing_a_dropped_key_are_partial() {
 /// no-match or a negated condition is not evaluated.
 #[test]
 fn a_fact_derived_beside_a_replaced_member_counts_only_its_matches() {
-    use super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
+    use super::super::{MatchState, MatcherOperator, MatcherSpec, NonEvaluationReason};
     let call = bounded_call(
         json!({"url": "https://kept.example.invalid/", "pad": "x".repeat(4_097)}),
         json!({"out": "x".repeat(4_097)}),
@@ -666,7 +668,7 @@ fn a_fact_derived_beside_a_replaced_member_counts_only_its_matches() {
 /// member a match counts while a no-match is not evaluated.
 #[test]
 fn rule_v1_content_over_replaced_values_is_not_evaluated() {
-    use super::{MatchState, NonEvaluationReason};
+    use super::super::{MatchState, NonEvaluationReason};
     let rules = telltale_rules::load_default_rule_set().unwrap();
     let export = rules.compatibility_export();
     let evaluate = |id: &str, targets: &[&str], observation: &CanonicalObservationV2| {
@@ -681,12 +683,12 @@ fn rule_v1_content_over_replaced_values_is_not_evaluated() {
             .iter()
             .map(|target| (*target).to_owned())
             .collect::<Vec<_>>();
-        super::rule_v1::evaluate_content_matcher(
+        super::super::rule_v1::evaluate_content_matcher(
             &matcher,
             &targets,
             Default::default(),
             observation,
-            &mut super::session::RetentionBudget::new(),
+            &mut super::super::session::RetentionBudget::new(),
         )
         .unwrap()
         .0

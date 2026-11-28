@@ -1,5 +1,5 @@
-use super::rule_v1::evaluate_rule_v1_session_with_budget;
-use super::session::RetentionBudget;
+use super::super::rule_v1::evaluate_rule_v1_session_with_budget;
+use super::super::session::RetentionBudget;
 use telltale_schema::observation::*;
 
 const CHAIN: &str = "chain.download_then_execute";
@@ -45,7 +45,7 @@ fn tool(id: &str, command: &str, time: Option<&str>) -> CanonicalObservationV2 {
     builder.build().unwrap()
 }
 
-pub(super) fn session(steps: &[(&str, Option<&str>)]) -> (u64, Vec<String>) {
+pub(in crate::v2) fn session(steps: &[(&str, Option<&str>)]) -> (u64, Vec<String>) {
     let observations = steps
         .iter()
         .enumerate()
