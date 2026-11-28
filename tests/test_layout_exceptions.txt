@@ -4,16 +4,10 @@
 # Sorted by kind, then path. The reason is required (at least 20 characters).
 # Remove an entry when its violation is fixed; the test fails on stale entries.
 inline-not-named-tests	crates/telltale-sources/src/source_read.rs	Its `bounded_tests` module moves together with the path-wired production_jsonl_tests.rs, which holds a nested test module.
-inline-not-named-tests	src/sink/mod.rs	Two test modules under different platform gates; they become one topic file each under a plain router.
 inline-over-40	crates/telltale-discover/src/anchored/windows.rs	The file is itself loaded through #[path], so a child tests.rs would resolve to its sibling's tests file.
 inline-over-40	crates/telltale-discover/src/inventory.rs	One test module in each of two platform-exclusive inline `backend` modules; both would resolve to the same file.
 inline-over-40	crates/telltale-sources/src/source_read.rs	Its `bounded_tests` module moves together with the path-wired production_jsonl_tests.rs, which holds a nested test module.
-inline-over-40	src/settings.rs	Several test modules in one file; they become tests.rs and topic files.
-inline-over-40	src/sink/mod.rs	Two test modules under different platform gates; they become one topic file each under a plain router.
-inline-over-40	src/state.rs	Its tests include fixture data by file-relative path; the paths change with the move.
 oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	One case table shared by four tests makes up the file; splitting by topic would not shorten it.
-oversize-test-file	crates/telltale-rules/src/rule_v2/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-rules/src/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/consumer/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/redaction/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/tests.rs	Over 800 lines; to be split by topic.
@@ -42,6 +36,8 @@ oversize-test-file	src/rules/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/sink/config/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/sink/jsonl/tests/privacy.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/sink/outbox/tests.rs	Over 800 lines; to be split by topic.
+oversize-test-file	src/sink/tests/delivery.rs	Over 800 lines; to be split by topic.
+oversize-test-file	src/state/tests.rs	Over 800 lines; to be split by topic.
 path-wired-test-module	crates/telltale-sources/src/source_read.rs	production_jsonl_tests.rs holds a nested test module; it moves together with `bounded_tests`.
 sibling-test-file	crates/telltale-detect/src/v2/action_tests.rs	Other test modules call helpers defined here; moving it needs those callers changed.
 sibling-test-file	crates/telltale-detect/src/v2/declared_role_selector_tests.rs	Other test modules call helpers defined here; moving it needs those callers changed.
