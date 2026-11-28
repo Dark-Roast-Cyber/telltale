@@ -452,6 +452,8 @@ fn replace_metadata(
     builder.build().expect("replacement observation")
 }
 
+pub(super) mod action;
+
 #[cfg(test)]
 mod chain_link;
 
@@ -464,6 +466,10 @@ mod declared_operation;
 #[cfg(test)]
 mod declared_role;
 
+pub(super) mod declared_role_selector;
+
+mod download_link;
+
 #[cfg(test)]
 mod process_chain_contract;
 
@@ -472,6 +478,10 @@ mod shell_reading;
 
 #[cfg(all(test, feature = "source-io"))]
 mod source_declaration;
+
+mod tool_kind;
+
+pub(super) mod written_path;
 
 mod capability_and_provenance;
 mod materialization;

@@ -8,7 +8,7 @@
 //! `TELLTALE_TOOL_READING_REPORT=<path> cargo test -p telltale-detect --lib
 //! tool_reading`. The new reading must keep every fact the old one has.
 
-use super::super::super::written_path_tests::file_tool;
+use super::super::super::tests::written_path::file_tool;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use telltale_schema::observation::ObservationBody;

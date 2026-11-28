@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn a_declared_role_keeps_authored_text_out_of_the_command_candidates() {
-    use crate::v2::declared_role_selector_tests::Call;
+    use crate::v2::tests::declared_role_selector::Call;
     use serde_json::{Value, json};
     use telltale_schema::observation::{ToolKind, ToolOperation};
 

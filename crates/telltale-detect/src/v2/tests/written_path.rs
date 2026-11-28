@@ -1,6 +1,6 @@
-use super::rule_v1::evaluate_rule_v1_session_with_budget;
-use super::session::RetentionBudget;
-use super::*;
+use super::super::rule_v1::evaluate_rule_v1_session_with_budget;
+use super::super::session::RetentionBudget;
+use super::super::*;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
@@ -8,7 +8,7 @@ const PERSISTENCE: &str = "persistence.shell_profile";
 const AGENT_INSTRUCTION_WRITE: &str = "persistence.agent_instruction_write";
 
 /// A native file-tool call with the given name and JSON arguments.
-pub(super) fn file_tool(
+pub(in crate::v2) fn file_tool(
     id: &str,
     name: &str,
     arguments: serde_json::Value,
@@ -17,7 +17,7 @@ pub(super) fn file_tool(
 }
 
 /// A shell call, with the command facet adapters derive from its arguments.
-pub(super) fn shell(id: &str, command: &str) -> CanonicalObservationV2 {
+pub(in crate::v2) fn shell(id: &str, command: &str) -> CanonicalObservationV2 {
     call(
         id,
         "Bash",
@@ -27,7 +27,7 @@ pub(super) fn shell(id: &str, command: &str) -> CanonicalObservationV2 {
 }
 
 /// A tool call whose source declared its operation.
-pub(super) fn declared_tool(
+pub(in crate::v2) fn declared_tool(
     id: &str,
     name: &str,
     arguments: serde_json::Value,
@@ -125,7 +125,7 @@ fn written_path(observation: &CanonicalObservationV2) -> Option<String> {
     }
 }
 
-pub(super) fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<String> {
+pub(in crate::v2) fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<String> {
     let plan = crate::v2::bundled_plan();
     evaluate_rule_v1_session_with_budget(plan, &[observation], &mut RetentionBudget::new())
         .unwrap()
@@ -133,7 +133,7 @@ pub(super) fn session_rule_ids(observation: &CanonicalObservationV2) -> Vec<Stri
         .to_vec()
 }
 
-pub(super) fn action_rule_ids(observation: CanonicalObservationV2) -> Vec<String> {
+pub(in crate::v2) fn action_rule_ids(observation: CanonicalObservationV2) -> Vec<String> {
     let plan = crate::v2::bundled_plan();
     let instance = CorrelationId::source_reported("synthetic-source").unwrap();
     let output = evaluate_source_with_options(
