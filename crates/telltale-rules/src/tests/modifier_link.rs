@@ -1,5 +1,5 @@
-use super::test_rules::{chain, file, rule};
-use super::{ModifierLink, ModifierLinkOrder, load_rule_set_from_documents};
+use super::super::test_rules::{chain, file, rule};
+use super::super::{ModifierLink, ModifierLinkOrder, load_rule_set_from_documents};
 
 /// A rule in category `alpha` and a chain on it whose correlation adds `link`.
 fn document(link: &str) -> String {

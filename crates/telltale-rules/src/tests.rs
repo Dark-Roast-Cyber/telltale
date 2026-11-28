@@ -1081,3 +1081,9 @@ fn policy_name_normalizes_blank_names_to_none() {
         .expect("compile rules");
     assert_eq!(compiled.policy_name(), Some("named-policy"));
 }
+
+#[cfg(test)]
+mod modifier_link;
+
+#[cfg(test)]
+mod segment_scope;
