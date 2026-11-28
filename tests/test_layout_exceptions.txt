@@ -17,8 +17,6 @@ oversize-test-file	crates/telltale-detect/src/v2/session/tests.rs	Over 800 lines
 oversize-test-file	crates/telltale-detect/src/v2/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-detect/src/v2/tests/shell_reading.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-discover/src/discovery/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-rules/src/rule_v2/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-rules/src/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/consumer/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/redaction/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-schema/src/event/tests.rs	Over 800 lines; to be split by topic.
