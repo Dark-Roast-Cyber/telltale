@@ -22,6 +22,10 @@ tasks/
 !crates/*/tests/fixtures/**/tasks/**
 !tests/fixtures/**/*.log
 !crates/*/tests/fixtures/**/*.log
+# Source trees are never generated data: a module may be named `state`,
+# `runtime`, `tasks`, `logs` or `tmp`.
+!/src/**
+!/crates/*/src/**
 
 # Local agent tooling, specifications, and internal notes.
 /AGENTS.md
