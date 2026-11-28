@@ -458,3 +458,5 @@ fn read_snapshot_excludes_concurrent_message_and_part_updates() {
         }
     }
 }
+
+mod v2;

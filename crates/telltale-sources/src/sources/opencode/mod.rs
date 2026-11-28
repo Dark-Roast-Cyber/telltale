@@ -20,8 +20,6 @@ pub(crate) mod tools;
 
 #[cfg(all(test, feature = "opencode-sqlite"))]
 mod tests;
-#[cfg(all(test, feature = "opencode-sqlite"))]
-mod v2_tests;
 
 pub(crate) use install::INSTALL;
 pub(crate) use install::desktop_install_signals;

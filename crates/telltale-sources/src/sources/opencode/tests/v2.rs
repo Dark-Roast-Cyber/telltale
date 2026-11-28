@@ -9,8 +9,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::native::{SqliteAdmission, on_next_incremental_page};
-use super::session_message::extract_incremental_messages;
+use super::super::native::{SqliteAdmission, on_next_incremental_page};
+use super::super::session_message::extract_incremental_messages;
 use crate::acquisition::{
     AccountingCoverage, AcquisitionBatch, AcquisitionError, AcquisitionOptions,
     AcquisitionProgress, AttestedValue, BoundedReadError, OpenCodeSqliteReadOptions,

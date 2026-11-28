@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use std::io::Write;
 use telltale_schema::clients::SourceKind;
 
