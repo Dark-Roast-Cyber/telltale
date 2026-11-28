@@ -8,6 +8,7 @@ inline-over-40	crates/telltale-discover/src/anchored/windows.rs	The file is itse
 inline-over-40	crates/telltale-discover/src/inventory.rs	One test module in each of two platform-exclusive inline `backend` modules; both would resolve to the same file.
 inline-over-40	crates/telltale-sources/src/source_read.rs	Its `bounded_tests` module moves together with the path-wired production_jsonl_tests.rs, which holds a nested test module.
 oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	One case table shared by four tests makes up the file; splitting by topic would not shorten it.
+oversize-test-file	crates/telltale-detect/src/v2/tests/action.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/acquisition/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/acquisition/tests/accounting.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale-sources/src/acquisition/tests/bound.rs	Over 800 lines; to be split by topic.
@@ -33,10 +34,5 @@ oversize-test-file	src/sink/outbox/tests.rs	Over 800 lines; to be split by topic
 oversize-test-file	src/sink/tests/delivery.rs	Over 800 lines; to be split by topic.
 oversize-test-file	src/state/tests.rs	Over 800 lines; to be split by topic.
 path-wired-test-module	crates/telltale-sources/src/source_read.rs	production_jsonl_tests.rs holds a nested test module; it moves together with `bounded_tests`.
-sibling-test-file	crates/telltale-detect/src/v2/action_tests.rs	Other test modules call helpers defined here; moving it needs those callers changed.
-sibling-test-file	crates/telltale-detect/src/v2/declared_role_selector_tests.rs	Other test modules call helpers defined here; moving it needs those callers changed.
-sibling-test-file	crates/telltale-detect/src/v2/download_link_tests.rs	Other test modules call helpers defined here; moving it needs those callers changed.
-sibling-test-file	crates/telltale-detect/src/v2/tool_kind_tests.rs	Its nested module reaches the file's own items through `super`; one level deeper those paths change.
-sibling-test-file	crates/telltale-detect/src/v2/written_path_tests.rs	Other test modules call helpers defined here; moving it needs those callers changed.
 sibling-test-file	crates/telltale-sources/src/production_jsonl_tests.rs	Loaded through #[path] from source_read.rs and holds a nested test module; moves with `bounded_tests`.
 sibling-test-file	crates/telltale-sources/src/sources/opencode/v2_tests.rs	Its pub(super) helpers would change visibility one level deeper.

@@ -2,12 +2,12 @@
 //! source's tool table, else the kind of a native tool name, else nothing. The
 //! session selectors and the action view give the same value for the same call.
 
-use super::actions::{self, view_tool_kind};
-use super::selector::{SelectorId, SelectorRegistry};
-use super::session::RetentionBudget;
-use super::tool_arguments::is_shell_tool;
-use super::written_path_tests::{declared_tool, file_tool};
-use super::{DetailedEvaluationOptions, EvaluationStatus, compile_rule_v1};
+use super::super::actions::{self, view_tool_kind};
+use super::super::selector::{SelectorId, SelectorRegistry};
+use super::super::session::RetentionBudget;
+use super::super::tool_arguments::is_shell_tool;
+use super::super::{DetailedEvaluationOptions, EvaluationStatus, compile_rule_v1};
+use super::written_path::{declared_tool, file_tool};
 use regex::Regex;
 use serde_json::json;
 use telltale_schema::observation::{CanonicalObservationV2, JsonValue, ToolKind, ToolOperation};
@@ -211,12 +211,12 @@ fn a_record_that_names_no_tool_has_no_kind_and_is_credited_by_its_command_only()
     let plain = nameless("printf synthetic");
     assert_eq!(selector_kind(&plain), None);
     assert_eq!(view_tool_kind(&plain), None);
-    assert!(!super::written_path_tests::session_rule_ids(&plain).contains(&SHELL.to_owned()));
-    assert!(!super::written_path_tests::action_rule_ids(plain).contains(&SHELL.to_owned()));
+    assert!(!super::written_path::session_rule_ids(&plain).contains(&SHELL.to_owned()));
+    assert!(!super::written_path::action_rule_ids(plain).contains(&SHELL.to_owned()));
     let wrapped = nameless("bash -lc 'printf synthetic'");
     assert_eq!(selector_kind(&wrapped), None);
     assert_eq!(view_tool_kind(&wrapped), None);
-    assert!(super::written_path_tests::session_rule_ids(&wrapped).contains(&SHELL.to_owned()));
+    assert!(super::written_path::session_rule_ids(&wrapped).contains(&SHELL.to_owned()));
 }
 
 const SHELL: &str = "execution.shell";
