@@ -1,4 +1,4 @@
-use super::{append_jsonl_events, serialize_jsonl_events};
+use super::super::{append_jsonl_events, serialize_jsonl_events};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -206,7 +206,7 @@ fn canonical_jsonl_sanitizes_source_hash_and_mitre_techniques() {
     assert_eq!(serialized["mitre_attack_techniques"][1], "T1059");
 
     let schema: serde_json::Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json"))
+        serde_json::from_str(include_str!("../../../../schemas/event.schema.json"))
             .expect("Event 3.0 schema");
     let validator = jsonschema::validator_for(&schema).expect("schema validator");
     assert!(validator.is_valid(&serialized));

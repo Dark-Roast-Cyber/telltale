@@ -463,3 +463,6 @@ fn date_from_days_since_epoch_matches_known_dates() {
     // 2000-02-29 = 10957 + 31 + 29 - 1 = 11016
     assert_eq!(date_from_days_since_epoch(11_016), "2000-02-29");
 }
+
+#[cfg(test)]
+mod privacy;

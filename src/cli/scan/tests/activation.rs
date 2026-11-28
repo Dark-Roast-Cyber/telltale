@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use crate::baseline::{BaselineKey, BaselineSummary};
 use crate::sink::{EventSink, LocalJsonlSink};
 use std::fs;
@@ -725,7 +725,7 @@ impl ThresholdHarness {
         fs::create_dir_all(malformed.parent().expect("sessions parent")).expect("sessions dir");
         fs::write(
             &malformed,
-            include_str!("../../../tests/fixtures/rule_samples/malformed-source.jsonl"),
+            include_str!("../../../../tests/fixtures/rule_samples/malformed-source.jsonl"),
         )
         .expect("malformed fixture");
         let clients = vec![ClientId::Codex];
