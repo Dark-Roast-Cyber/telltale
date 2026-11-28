@@ -67,4 +67,5 @@ fn pure_durable_sink_set(
 mod building;
 mod durable_mode;
 mod parsing;
+#[cfg(unix)]
 mod path_aliases;
