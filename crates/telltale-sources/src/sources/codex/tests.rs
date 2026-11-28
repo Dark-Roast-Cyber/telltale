@@ -30,3 +30,9 @@ fn non_object_envelope_is_schema_drift() {
     assert!(message.contains("schema drift"));
     assert!(!message.contains(source.path.to_string_lossy().as_ref()));
 }
+
+#[cfg(test)]
+mod completed;
+
+#[cfg(test)]
+mod current_format;

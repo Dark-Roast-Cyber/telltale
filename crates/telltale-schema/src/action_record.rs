@@ -584,5 +584,4 @@ fn valid_optional_tool(value: Option<&str>) -> bool {
 }
 
 #[cfg(test)]
-#[path = "action_record_tests.rs"]
 mod tests;

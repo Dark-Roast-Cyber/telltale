@@ -935,5 +935,4 @@ impl HooksLifecycle {
 }
 
 #[cfg(test)]
-#[path = "hooks_record_tests.rs"]
 mod tests;

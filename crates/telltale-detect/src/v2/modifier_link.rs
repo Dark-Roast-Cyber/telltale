@@ -277,3 +277,6 @@ pub(super) fn linked_in_session(
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests;

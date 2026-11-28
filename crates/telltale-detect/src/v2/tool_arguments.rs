@@ -30,7 +30,7 @@
 //! selectors, which return the arguments as reported, and the action view's
 //! authored content are unchanged and still see the text.
 //!
-//! `tool_reading_tests` pins the reading of every key and name below for calls
+//! `tests::tool_reading` pins the reading of every key and name below for calls
 //! with no declaration.
 
 use std::borrow::Cow;
@@ -567,3 +567,6 @@ fn string(value: &JsonValue) -> Option<&str> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -523,5 +523,4 @@ fn finish_batch_with_work(
 }
 
 #[cfg(test)]
-#[path = "canonical_runtime_tests.rs"]
 mod tests;

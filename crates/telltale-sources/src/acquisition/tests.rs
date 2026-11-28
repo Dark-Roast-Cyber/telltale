@@ -1496,3 +1496,9 @@ fn acquisition_errors_do_not_expose_source_details() {
         assert!(!rendered.contains(marker));
     }
 }
+
+#[cfg(test)]
+mod accounting;
+
+#[cfg(test)]
+mod bound;

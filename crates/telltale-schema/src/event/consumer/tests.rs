@@ -1233,3 +1233,6 @@ fn accepts_override_timing_with_retained_event_time() {
     );
     assert_eq!(record.common().timestamp, record.common().observed_at);
 }
+
+#[cfg(test)]
+mod field_inventory;
