@@ -1413,3 +1413,6 @@ fn explicit_roots_report_unused_session_store_variables_for_selected_clients() {
         &opencode
     ));
 }
+
+#[cfg(test)]
+mod activation;

@@ -361,8 +361,4 @@ fn date_from_days_since_epoch(days: i64) -> String {
 }
 
 #[cfg(test)]
-#[path = "jsonl_privacy_tests.rs"]
-mod privacy_tests;
-
-#[cfg(test)]
 mod tests;

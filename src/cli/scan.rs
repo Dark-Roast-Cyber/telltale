@@ -48,8 +48,6 @@ const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 /// never resumes, regress-checks or skips `session_message` history.
 const OPENCODE_SQLITE_SESSION_MESSAGE_TABLE: &str = "session_message";
 
-#[cfg(test)]
-mod activation_tests;
 mod canonical;
 mod diagnostics;
 mod discovery;

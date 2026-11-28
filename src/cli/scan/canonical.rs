@@ -385,5 +385,4 @@ fn adapt_result(
 }
 
 #[cfg(test)]
-#[path = "canonical_tests.rs"]
 mod tests;
