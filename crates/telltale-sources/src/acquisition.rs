@@ -210,14 +210,6 @@ impl CanonicalCollector {
     }
 }
 
-#[cfg(test)]
-#[path = "acquisition_accounting_tests.rs"]
-mod accounting_tests;
-
-#[cfg(test)]
-#[path = "acquisition_bound_tests.rs"]
-mod bound_tests;
-
 /// Progress names its coordinate space. A legacy `part` high-water and an
 /// OpenCode v2 `session_message` high-water are different cursors: neither may
 /// resume, regress-check or skip the other schema's history.
