@@ -8,14 +8,6 @@ inline-over-40	crates/telltale-discover/src/anchored/windows.rs	The file is itse
 inline-over-40	crates/telltale-discover/src/inventory.rs	One test module in each of two platform-exclusive inline `backend` modules; both would resolve to the same file.
 inline-over-40	crates/telltale-sources/src/source_read.rs	Its `bounded_tests` module moves together with the path-wired production_jsonl_tests.rs, which holds a nested test module.
 oversize-test-file	crates/telltale-detect/src/v2/destinations/tests.rs	One case table shared by four tests makes up the file; splitting by topic would not shorten it.
-oversize-test-file	crates/telltale-sources/src/acquisition/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/acquisition/tests/accounting.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/acquisition/tests/bound.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/sources/claude/canonical/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/sources/claude/tests.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/sources/codex/tests/completed.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/sources/codex/tests/current_format.rs	Over 800 lines; to be split by topic.
-oversize-test-file	crates/telltale-sources/src/sources/tests/canonical_conformance.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale/src/assignment/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale/src/canonical_runtime/tests.rs	Over 800 lines; to be split by topic.
 oversize-test-file	crates/telltale/src/investigation/tests.rs	Over 800 lines; to be split by topic.
